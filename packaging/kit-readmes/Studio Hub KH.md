@@ -18,7 +18,7 @@ A Mac running Studio Hub is one of three things, chosen in **Connections → Rol
   never talk to GatewayKH.
 - **Standalone** — a Mac on its own, not part of a group.
 
-Work is placed by memory: **voice, music and video** go to the Macs with the most memory,
+Work is placed by memory: **voice and music** go to the Macs with the most memory,
 while **images and subtitles** prefer the smaller ones, so a big Mac stays free for audio.
 If the preferred Mac is busy the job goes to another; nothing waits.
 
@@ -117,7 +117,7 @@ you can read rather than guess.
 
 ## The model library
 
-The kit carries **28 model packages** (about 103.5 GB). `2 - Copy the models.command` copies
+The kit carries **27 model packages** (about 84.4 GB). `2 - Copy the models.command` copies
 only what the Mac's memory can run, so an 8 GB Mac gets the image models and a 16 GB+ Mac
 gets the audio ones too. Voices you have saved are copied at the same time. The library on
 a drive is the library the Mac gets — there is no download step.

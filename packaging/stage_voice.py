@@ -55,6 +55,14 @@ IMAGE_RUNTIME_SUPERSEDED = {
 # arm64) that Story Studio ships, verifies its sha256, and refuses to build a runtime that cannot
 # answer for `libx264`.
 VIDEO_RUNTIME_SHA256 = '27304a7a42a17cec3ee9c6acd22a9133794b8bdd331f2e18fa134db513cc2ad7'
+# **LTX-2.3 is retired (`components/retired_models.py`), and so is shipping this runtime.** The Video
+# worker exists only to run that one model (`hub_worker._video_spec` and `video_worker.py` both pin
+# its manifest by name), and a retired manifest is never staged, so a bundle that carried the worker
+# would stop the whole Hub at start-up ("Incomplete Video worker"). While the package is on the retired
+# list `stage()` therefore drops `--video-runtime` and the release has no `video` component: no
+# `runtimes/video` (517 MB), no `video_worker.py`, no `components/video`. Taking the two ids off the
+# retired list (and passing the flag again) is all it takes to ship Video again.
+VIDEO_MODEL_PACKAGE = 'ltx-2-3-22b-ram-12gb-mlx'
 
 # The Music lane's second engine. YuE2 needs its own interpreter because `mlx-Yue` pins
 # `mlx==0.32.2` while the Voice runtime the Music worker uses carries `mlx==0.31.2`; the worker
@@ -247,9 +255,39 @@ def _stage_music(context: dict) -> dict | None:
     shutil.copyfile(ROOT / 'packaging/music_worker.py', resources / 'music_worker.py')
     # Stable Audio 3 runs in the shared Voice runtime and YuE2 in its own (`runtimes/music-yue2`),
     # so Music carries no runtime of its own: its identity is the base runtime's.
+    #
+    # The YuE2 tree is staged HERE, with the studio that runs it. It used to be staged inside
+    # `_stage_video` (after that function's "no video runtime" early return), so a build handed
+    # `--yue2-runtime` without `--video-runtime` - which is every build once Video is retired -
+    # silently shipped Music with no sung-song engine. Its record moved from `components.video`
+    # to `components.music`; nothing else read it.
+    yue2_note = {}
+    if context.get('yue2_runtime') is not None:
+        yue2_found = tree_digest(context['yue2_runtime'])
+        yue2_reason = context.get('unqualified_yue2_runtime')
+        if yue2_found != YUE2_RUNTIME_SHA256 and not yue2_reason:
+            raise SystemExit(
+                'The YuE2 runtime is not the one this release was qualified against.\n'
+                f'  required: {YUE2_RUNTIME_SHA256}\n'
+                f'  handed:   {yue2_found}\n'
+                f'            {context["yue2_runtime"]}\n'
+                '  rebuild it with: bash packaging/yue2-runtime/build.sh\n'
+                '            Python 3.12 + mlx-Yue 9253ed133343406947bde7b67d43c7a63fb39d99 + '
+                'MLX 0.32.2,\n'
+                '  pass --yue2-runtime .build/yue2-runtime, or update this pin with the '
+                'qualification that moved it.')
+        shutil.copytree(context['yue2_runtime'], resources / 'runtimes/music-yue2', symlinks=True)
+        # The bridge runs *inside* that runtime, so it is staged beside it rather than inside the
+        # worker's own tree: `generation.yue2_runtime_python()` finds the interpreter, and the
+        # bridge is spawned from the worker's component directory.
+        bridge_source = ROOT / 'components' / 'music' / 'app' / 'backend' / 'yue2_runner.py'
+        if bridge_source.is_file():
+            shutil.copyfile(bridge_source, resources / 'yue2_runner.py')
+        yue2_note = {'yue2_runtime_sha256': yue2_found,
+                     'yue2_runtime_qualified': yue2_found == YUE2_RUNTIME_SHA256}
     return {
         'source_sha256': tree_digest(music_source), 'runtime': 'voice',
-        'runtime_sha256': context['runtime_hash'],
+        'runtime_sha256': context['runtime_hash'], **yue2_note,
     }
 
 
@@ -302,7 +340,8 @@ def _stage_video(context: dict) -> dict | None:
 
     Returns None when this build does not include a video runtime, so a Voice-only or Image-only
     proof build keeps working; a build that *does* pass one gets the pin checked before anything
-    is copied.
+    is copied. **Since LTX-2.3 was retired `stage()` never passes one** (`VIDEO_MODEL_PACKAGE`), so
+    today this returns None and the release has no `video` component.
     """
     if context['video_runtime'] is None:
         return None
@@ -327,33 +366,6 @@ def _stage_video(context: dict) -> dict | None:
     shutil.copytree(context['video_runtime'], resources / 'runtimes/video', symlinks=True)
     shutil.copyfile(ROOT / 'packaging/video_worker.py', resources / 'video_worker.py')
 
-    # The Music lane's second engine, staged the same way and for the same reason: a different
-    # interpreter, selected per model by the engine its manifest declares.
-    yue2_note = None
-    if context.get('yue2_runtime') is not None:
-        yue2_found = tree_digest(context['yue2_runtime'])
-        yue2_reason = context.get('unqualified_yue2_runtime')
-        if yue2_found != YUE2_RUNTIME_SHA256 and not yue2_reason:
-            raise SystemExit(
-                'The YuE2 runtime is not the one this release was qualified against.\n'
-                f'  required: {YUE2_RUNTIME_SHA256}\n'
-                f'  handed:   {yue2_found}\n'
-                f'            {context["yue2_runtime"]}\n'
-                '  rebuild it with: bash packaging/yue2-runtime/build.sh\n'
-                '            Python 3.12 + mlx-Yue 9253ed133343406947bde7b67d43c7a63fb39d99 + '
-                'MLX 0.32.2,\n'
-                '  pass --yue2-runtime .build/yue2-runtime, or update this pin with the '
-                'qualification that moved it.')
-        shutil.copytree(context['yue2_runtime'], resources / 'runtimes/music-yue2', symlinks=True)
-        # The bridge runs *inside* that runtime, so it is staged beside it rather than inside the
-        # worker's own tree: `generation.yue2_runtime_python()` finds the interpreter, and the
-        # bridge is spawned from the worker's component directory.
-        bridge_source = ROOT / 'components' / 'music' / 'app' / 'backend' / 'yue2_runner.py'
-        if bridge_source.is_file():
-            shutil.copyfile(bridge_source, resources / 'yue2_runner.py')
-        yue2_note = {'yue2_runtime_sha256': yue2_found,
-                     'yue2_runtime_qualified': yue2_found == YUE2_RUNTIME_SHA256}
-
     matched = {'runtime_qualified': True}
     if found != VIDEO_RUNTIME_SHA256:
         matched = {
@@ -364,7 +376,6 @@ def _stage_video(context: dict) -> dict | None:
         }
     return {
         **matched,
-        **({k: v for k, v in (yue2_note or {}).items()}),
         # BRIDGE (revert to 'video' only once NO Mac still runs < 0.6.121): every Mac already installed
         # (0.6.119/0.6.120) verifies a staged update with ITS OWN `runtimePaths`, which has no
         # `video`, so it refuses any release that says 'video' here and can never update itself.
@@ -498,15 +509,24 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     if output.exists():
         raise FileExistsError(f'Refusing to replace existing artifact: {output}')
     validate_runtime(runtime)
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from components import retired_models
+    if video_runtime is not None and retired_models.is_retired(VIDEO_MODEL_PACKAGE):
+        print(f'NOTE: {VIDEO_MODEL_PACKAGE} is retired, so --video-runtime is ignored: this release '
+              'ships no Video component.', file=sys.stderr)
+        video_runtime = None
     if image_runtime is not None:
         image_runtime = image_runtime.expanduser().resolve()
         validate_runtime(image_runtime)
         include_hub = True
     if video_runtime is not None:
         video_runtime = video_runtime.expanduser().resolve()
+        validate_runtime(video_runtime)
+        include_hub = True
     if yue2_runtime is not None:
         yue2_runtime = yue2_runtime.expanduser().resolve()
-        validate_runtime(video_runtime)
+        validate_runtime(yue2_runtime)
         include_hub = True
     if native_shell is not None:
         native_shell = native_shell.expanduser().resolve()

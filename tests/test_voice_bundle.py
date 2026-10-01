@@ -565,7 +565,18 @@ class StagingTests(unittest.TestCase):
         self.assertRegex(image['runtime_sha256_found'], r'^[0-9a-f]{64}$')
         self.assertNotEqual(image['runtime_sha256_found'], image['runtime_sha256_qualified'])
 
-    def _native_stage(self, image=False):
+    def test_retired_video_is_not_staged_but_yue2_still_is(self):
+        """LTX-2.3 is retired: `--video-runtime` is ignored, the release has no Video component, and
+        the YuE2 sung-song runtime (which used to be staged inside the Video stager, so it vanished
+        with it) still ships, recorded on Music."""
+        manifest = self._native_stage(video=True)
+        self.assertNotIn('video', manifest['components'])
+        self.assertIn('music', manifest['components'])
+        music = manifest['components']['music']
+        self.assertRegex(music['yue2_runtime_sha256'], r'^[0-9a-f]{64}$')
+        self.assertIs(music['yue2_runtime_qualified'], False)   # the fixture tree is synthetic
+
+    def _native_stage(self, image=False, video=False):
         spec = importlib.util.spec_from_file_location('stage_voice', ROOT / 'packaging/stage_voice.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -631,7 +642,12 @@ class StagingTests(unittest.TestCase):
                     module.stage(runtime, artifact, native_shell=native,
                                  **({'image_runtime': runtime,
                                      'unqualified_image_runtime': 'synthetic staging fixture'}
-                                    if image else {}))
+                                    if image else {}),
+                                 **({'video_runtime': runtime,
+                                     'unqualified_video_runtime': 'synthetic staging fixture',
+                                     'yue2_runtime': runtime,
+                                     'unqualified_yue2_runtime': 'synthetic staging fixture'}
+                                    if video else {}))
                 except TypeError as exc:
                     self.fail(f'stage must accept native_shell: {exc}')
             contents = artifact / 'Contents'
@@ -671,6 +687,13 @@ class StagingTests(unittest.TestCase):
                 self.assertTrue((contents / 'Resources/runtimes/image/bin/python3').is_file())
             else:
                 self.assertNotIn('image', manifest['components'])
+            if video:
+                # Retired: no Video component, runtime, worker or source - and Music keeps YuE2.
+                resources = contents / 'Resources'
+                self.assertFalse((resources / 'runtimes/video').exists())
+                self.assertFalse((resources / 'video_worker.py').exists())
+                self.assertFalse((resources / 'components/video').exists())
+                self.assertTrue((resources / 'runtimes/music-yue2/bin/python3').is_file())
             self.assertEqual(manifest['payload_sha256'], module.tree_digest(
                 contents, exclude={Path('Resources/release-manifest.json'), Path('Resources/file-manifest')}))
             # The per-file manifest a delta update is diffed against: present, self-consistent, and

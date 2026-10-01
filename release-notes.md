@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## Unreleased - 2026-10-01
+
+### Video (LTX-2.3) is retired
+
+**There is no video model any more.** The local video model, LTX-2.3, did not make good enough clips, so it is no longer offered, no
+longer put on the install drives, and no longer part of the app. The app gets about 0.5 GB smaller, and the model kit goes from 28
+to 27 model packages (about 19 GB less). The Video page now simply says there is no video model, instead of showing an empty list.
+Story Studio never asks for it: it uses a cloud video service if one is set up, and otherwise the scenes stay still.
+Clips you already made stay where they are on disk. The Gemma text model that used to ride along with LTX is not removed: it
+stays available in case we use it for chat later. Music is unaffected, including sung songs.
+
 ## 0.6.126 - 2026-10-01
 
 ### Long voice-overs: even pauses, and short lines no longer jump in volume

@@ -87,9 +87,13 @@ MODALITY_OF_ENGINE = {
 
 
 def load_manifests() -> list[dict[str, Any]]:
+    from components import retired_models  # the one retired list; a retired model has no row
+
     rows = []
     for path in sorted(MANIFESTS.glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
+        if retired_models.manifest_retired(data, path.stem):
+            continue
         rows.append(data)
     return rows
 
@@ -146,6 +150,13 @@ def label_map(manifests: list[dict[str, Any]], readings: dict[str, Any]) -> dict
                  or subtitle_labels.get(package_id))
         if label:
             labels[package_id] = label
+    # A package whose engine no studio ships any more (Video, since LTX-2.3 was retired: Gemma 3 12B
+    # 4-bit stays in the catalog but nothing runs it) has no producer to name it. Say so in its name
+    # rather than invent a model name or drop the row.
+    for manifest in manifests:
+        if manifest.get("engine") == "video-ltx" and manifest["package_id"] not in labels:
+            labels[manifest["package_id"]] = (
+                f"{manifest['package_id']} (no studio runs it yet)")
     # Chat has no static label — its worker names the model from the loaded engine — so a recorded
     # reading supplies it. That is a stated name with a source, not a name guessed here.
     for row in readings.get("readings", []):

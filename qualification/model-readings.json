@@ -102,28 +102,6 @@
       "source_path": "qualification/z-image-turbo-2026-09-24.md"
     },
     {
-      "package_id": "ltx-2-3-22b-ram-12gb-mlx",
-      "model": "LTX-2.3 22B MLX mixed 2–8 bit (RAM-12GB)",
-      "quantization": "mixed 2–8 bit MLX (per-tensor, the pack's own loader)",
-      "engine": "video-ltx",
-      "machine": "32 GiB · Apple M2 Max",
-      "tier_gb": 24,
-      "outcome": "image-to-video at the true-16:9 canvas the owner accepts — 1024×576, 49 frames at 24 fps, 2.04 s of output with audio, through the Video worker's own job path (job e9caa8c4ce2a4074a29d2349a99193ce)",
-      "metrics": {
-        "peak_footprint_gb_default": 16.92,
-        "peak_mlx_gb_default": 10.05,
-        "peak_process_rss_gb": 9.25,
-        "generation_seconds_default": 258.0,
-        "weights_on_disk_gb": 17.81,
-        "resolution": "1024x576",
-        "frames": 49,
-        "audio": "yes (one audio track verified in the produced MP4)"
-      },
-      "evidence": "M",
-      "source": "the worker's own job receipt, footprint sampled ri_phys_footprint at 1 Hz in the process doing the work; the earlier 448p canvas measured 13.19 GB MLX / 15.71 GB footprint in 304.0 s",
-      "source_path": "qualification/ltx-video-worker-results-20260928-004554/measurement.json"
-    },
-    {
       "package_id": "yue2-3b-mlx",
       "model": "YuE2 3B Music (8-bit AR + bf16 NAR)",
       "quantization": "8-bit AR + bf16 NAR + bf16 VAE (MLX)",
