@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import stat
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -176,11 +178,53 @@ def cleanup_interval_seconds() -> float:
     return value if value > 0 else float(DEFAULT_CLEANUP_INTERVAL_SECONDS)
 
 
-def _settings() -> dict[str, int | bool]:
+log = logging.getLogger("studiohub.settings")
+# Read-modify-write of device_settings.json comes from threadpool routes (PUT, restore-defaults) and
+# the background cleanup loop: serialised so one writer cannot overwrite another's field with the
+# value it read before the other wrote (a toggled keep_all_models was the one at risk).
+_SETTINGS_LOCK = threading.RLock()
+_logged_problem: str | None = None
+
+
+def _read_settings() -> tuple[dict, str | None]:
+    """The saved settings and, when the file exists but is damaged, what is wrong with it.
+
+    An absent file is not a problem (defaults). A file that is unreadable, not JSON or not an object
+    is: the values fall back to defaults, **except keep_all_models, which fails safe to true** (see
+    `_settings`), and the problem is logged loudly once and surfaced by `settings_warnings`.
+    """
+    global _logged_problem
+    problem: str | None = None
+    value: Any = {}
     try:
         value = json.loads(_settings_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
+    except FileNotFoundError:
         value = {}
+    except OSError as exc:
+        value, problem = {}, f"device_settings.json could not be read ({exc})"
+    except ValueError:
+        value, problem = {}, "device_settings.json is not valid JSON"
+    if problem is None and not isinstance(value, dict):
+        value, problem = {}, "device_settings.json is not a JSON object"
+    if problem is None and "keep_all_models" in value and not isinstance(value["keep_all_models"], bool):
+        problem = "keep_all_models in device_settings.json is neither true nor false"
+    if problem != _logged_problem:
+        _logged_problem = problem
+        if problem:
+            log.error("%s: this Mac keeps ALL models until the file is fixed (nothing is shelved or "
+                      "moved to the Trash Folder), and other settings use their defaults", problem)
+    return value, problem
+
+
+def settings_warnings() -> list[str]:
+    """Plain-language warnings about this Mac's settings file, for the Hub's settings route."""
+    problem = _read_settings()[1]
+    return [f"{problem}. This Mac is keeping all models and using default storage limits until it "
+            f"is repaired (save the settings again to rewrite it)."] if problem else []
+
+
+def _settings() -> dict[str, int | bool]:
+    value, problem = _read_settings()
     if isinstance(value, dict) and "defaults_version" not in value:
         value = {key: item for key, item in value.items() if _LEGACY_DEFAULTS.get(key) != item}
     max_bytes = value.get("max_bytes", DEFAULT_MAX_BYTES) if isinstance(value, dict) else DEFAULT_MAX_BYTES
@@ -188,14 +232,15 @@ def _settings() -> dict[str, int | bool]:
     enabled = value.get("cleanup_enabled", DEFAULT_CLEANUP_ENABLED) if isinstance(value, dict) else DEFAULT_CLEANUP_ENABLED
     interval = value.get("cleanup_interval_seconds", DEFAULT_CLEANUP_INTERVAL_SECONDS) if isinstance(value, dict) else DEFAULT_CLEANUP_INTERVAL_SECONDS
     minimum_free = value.get("minimum_free_bytes", DEFAULT_MINIMUM_FREE_BYTES) if isinstance(value, dict) else DEFAULT_MINIMUM_FREE_BYTES
-    keep_all = value.get("keep_all_models", DEFAULT_KEEP_ALL_MODELS) if isinstance(value, dict) else DEFAULT_KEEP_ALL_MODELS
+    # Damage never reads as "not keep-all": that would move a keep-all Mac's shelved models away.
+    keep_all = True if problem else value.get("keep_all_models", DEFAULT_KEEP_ALL_MODELS)
     return {
         "max_bytes": max_bytes if isinstance(max_bytes, int) and max_bytes > 0 else DEFAULT_MAX_BYTES,
         "retention_days": retention_days if isinstance(retention_days, int) and retention_days > 0 else DEFAULT_RETENTION_DAYS,
         "cleanup_enabled": enabled if isinstance(enabled, bool) else DEFAULT_CLEANUP_ENABLED,
         "cleanup_interval_seconds": interval if isinstance(interval, int) and interval >= 60 else DEFAULT_CLEANUP_INTERVAL_SECONDS,
         "minimum_free_bytes": minimum_free if isinstance(minimum_free, int) and minimum_free >= 0 else DEFAULT_MINIMUM_FREE_BYTES,
-        "keep_all_models": keep_all if isinstance(keep_all, bool) else DEFAULT_KEEP_ALL_MODELS,
+        "keep_all_models": keep_all,
     }
 
 
@@ -230,30 +275,40 @@ def preview_device_settings(**changes: object) -> dict[str, int | bool]:
     return value
 
 
+def update_device_settings(**changes: object) -> dict[str, dict[str, int | bool]]:
+    """Change only the named settings, atomically: read, validate, write under one lock.
+
+    The route used to resolve every field from a read made before the write, so two concurrent
+    changes (the output limits and the keep-all toggle) could undo each other.
+    """
+    with _SETTINGS_LOCK:
+        value = preview_device_settings(**changes)
+        _atomic_write(_settings_path(), value | {"defaults_version": _DEFAULTS_VERSION})
+        return load_device_settings()
+
+
 def save_device_settings(*, max_bytes: int, retention_days: int, cleanup_enabled: bool = DEFAULT_CLEANUP_ENABLED,
                          cleanup_interval_seconds: int = DEFAULT_CLEANUP_INTERVAL_SECONDS,
                          minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES,
                          keep_all_models: bool | None = None) -> dict[str, dict[str, int | bool]]:
-    value = preview_device_settings(max_bytes=max_bytes, retention_days=retention_days,
-                                    cleanup_enabled=cleanup_enabled,
-                                    cleanup_interval_seconds=cleanup_interval_seconds,
-                                    minimum_free_bytes=minimum_free_bytes,
-                                    **({} if keep_all_models is None else {"keep_all_models": keep_all_models}))
-    _atomic_write(_settings_path(), value | {"defaults_version": _DEFAULTS_VERSION})
-    return load_device_settings()
+    return update_device_settings(
+        max_bytes=max_bytes, retention_days=retention_days, cleanup_enabled=cleanup_enabled,
+        cleanup_interval_seconds=cleanup_interval_seconds, minimum_free_bytes=minimum_free_bytes,
+        **({} if keep_all_models is None else {"keep_all_models": keep_all_models}))
 
 
 def restore_device_defaults() -> dict[str, dict[str, int]]:
-    _atomic_write(_settings_path(), {
-        "max_bytes": DEFAULT_MAX_BYTES,
-        "retention_days": DEFAULT_RETENTION_DAYS,
-        "cleanup_enabled": DEFAULT_CLEANUP_ENABLED,
-        "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
-        "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
-        "keep_all_models": _settings()["keep_all_models"],   # about models, not output limits: not reset here
-        "defaults_version": _DEFAULTS_VERSION,
-    })
-    return load_device_settings()
+    with _SETTINGS_LOCK:
+        _atomic_write(_settings_path(), {
+            "max_bytes": DEFAULT_MAX_BYTES,
+            "retention_days": DEFAULT_RETENTION_DAYS,
+            "cleanup_enabled": DEFAULT_CLEANUP_ENABLED,
+            "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
+            "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
+            "keep_all_models": _settings()["keep_all_models"],   # about models, not output limits: not reset here
+            "defaults_version": _DEFAULTS_VERSION,
+        })
+        return load_device_settings()
 
 
 def _version_parts(value: object) -> tuple[int, ...]:

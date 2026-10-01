@@ -1163,19 +1163,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     @app.get("/api/hub/settings")
     def settings() -> dict[str, Any]:
         # The same `_bind_facts()` the health route publishes, so the two cannot disagree.
-        return {**standalone_config.load_device_settings(), "bind": _bind_facts()}
+        return {**standalone_config.load_device_settings(), "bind": _bind_facts(),
+                "warnings": standalone_config.settings_warnings()}
 
     @app.put("/api/hub/settings")
     def save_settings(body: dict[str, Any]) -> dict[str, dict[str, int | bool]]:
         try:
-            value = standalone_config.preview_device_settings(**body)
-            return standalone_config.save_device_settings(
-                max_bytes=value["max_bytes"], retention_days=value["retention_days"],
-                cleanup_enabled=value["cleanup_enabled"],
-                cleanup_interval_seconds=value["cleanup_interval_seconds"],
-                minimum_free_bytes=value["minimum_free_bytes"],
-                keep_all_models=value["keep_all_models"],
-            )
+            return standalone_config.update_device_settings(**body)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 

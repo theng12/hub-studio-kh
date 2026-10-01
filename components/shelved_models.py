@@ -10,7 +10,7 @@ not carry it by default:
 * the Hub refuses to download or import one onto such a Mac, so nothing brings it back by itself.
 
 A Mac marked **keep all models** (``"keep_all_models": true`` in the Hub's ``device_settings.json``,
-default false) is exempt from all three: it copies, keeps and downloads shelved models like any other.
+default false) is exempt from all three (so is a Mac whose settings file is damaged: see ``keep_all_state``): it copies, keeps and downloads shelved models like any other.
 
 Shelving a model is one line here: its package id (and the repo id its jobs name it by).
 """
@@ -46,12 +46,37 @@ def manifest_shelved(manifest: object, stem: str | None = None) -> bool:
                       *(manifest.get("aliases") or []))
 
 
-def keep_all_models(settings_file: str | os.PathLike[str]) -> bool:
-    """Is this Mac marked keep-all? Only a literal ``true`` in the settings file says so."""
+def keep_all_state(settings_file: str | os.PathLike[str]) -> tuple[bool, str | None]:
+    """(keep_all, problem) for a Mac's settings file.
+
+    Fails safe: **a file that exists but cannot be read, is not JSON, is not an object or holds a
+    non-boolean ``keep_all_models`` reads as keep-all**, with the problem named, because the
+    alternative - reading damage as "false" - moves a keep-all Mac's shelved models into the Trash
+    Folder at the next start. Only an absent file, or a file that does not mention the key, is the
+    default (false).
+    """
     try:
-        return json.loads(Path(settings_file).read_text(encoding="utf-8")).get("keep_all_models") is True
-    except (OSError, ValueError, AttributeError):
-        return False
+        text = Path(settings_file).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False, None
+    except OSError as exc:
+        return True, f"the settings file could not be read ({exc})"
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return True, "the settings file is not valid JSON"
+    if not isinstance(value, dict):
+        return True, "the settings file is not a JSON object"
+    if "keep_all_models" not in value:
+        return False, None
+    if isinstance(value["keep_all_models"], bool):
+        return value["keep_all_models"], None
+    return True, "keep_all_models in the settings file is neither true nor false"
+
+
+def keep_all_models(settings_file: str | os.PathLike[str]) -> bool:
+    """Is this Mac marked keep-all? See `keep_all_state` for what a damaged file means."""
+    return keep_all_state(settings_file)[0]
 
 
 def shelve_installed(library: str | os.PathLike[str], manifests, trash_root: str | os.PathLike[str],

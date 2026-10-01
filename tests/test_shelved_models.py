@@ -61,15 +61,24 @@ class ListTests(unittest.TestCase):
 
 
 class KeepAllSettingTests(unittest.TestCase):
-    def test_only_a_literal_true_marks_a_mac_keep_all(self):
+    def test_a_literal_true_marks_keep_all_and_damage_fails_safe(self):
         with TemporaryDirectory() as tmp:
             file = Path(tmp) / "device_settings.json"
-            self.assertFalse(shelved_models.keep_all_models(file))
+            self.assertFalse(shelved_models.keep_all_models(file), "no file is the default")
             for text, expected in (('{"keep_all_models": true}', True), ('{"keep_all_models": false}', False),
-                                   ('{"keep_all_models": "true"}', False), ('{"keep_all_models": 1}', False),
-                                   ("{}", False), ("not json", False), ("[]", False)):
+                                   ("{}", False),
+                                   # damage must never read as "not keep-all"
+                                   ('{"keep_all_models": "true"}', True), ('{"keep_all_models": 1}', True),
+                                   ("not json", True), ("[]", True), ("", True)):
                 file.write_text(text)
                 self.assertIs(shelved_models.keep_all_models(file), expected, text)
+            file.write_text("not json")
+            keep, problem = shelved_models.keep_all_state(file)
+            self.assertTrue(keep)
+            self.assertIn("JSON", problem)
+            file.unlink()
+            file.mkdir()                   # exists but cannot be read as a file
+            self.assertTrue(shelved_models.keep_all_models(file))
 
 
 class CopyStepTests(unittest.TestCase):
@@ -230,7 +239,9 @@ class HubTests(unittest.TestCase):
 
     def test_the_settings_route_saves_the_keep_all_choice(self):
         source = (ROOT / "components/hub/standalone.py").read_text()
-        self.assertIn('keep_all_models=value["keep_all_models"]', source)
+        # The route hands the body to one locked read-modify-write, so keep_all_models is saved with
+        # the rest and only when named (tests/test_device_settings_safety.py proves the behaviour).
+        self.assertIn("standalone_config.update_device_settings(**body)", source)
 
     def test_the_hub_sheds_shelves_keeps_the_catalog_and_never_fetches_them_back(self):
         env = dict(os.environ)
