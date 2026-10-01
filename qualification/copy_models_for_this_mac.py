@@ -209,6 +209,9 @@ def prune_old_revisions(target: Path, keep: str) -> int:
 #: the operator's, `_trash` is his to empty, and a model reinstated in a later kit is still there.
 TRASH_FOLDER = "_trash"
 
+#: The Hub's device settings, relative to the home folder: where a Mac is marked "keep all models".
+HUB_SETTINGS_RELATIVE = Path("Library/Application Support/StudioHub Standalone/hub/device_settings.json")
+
 #: The app's receipt log, relative to the library it belongs to.
 INDEX_RELATIVE = Path(".studiohub") / "installed.json"
 
@@ -512,6 +515,15 @@ def main() -> int:
         from retired_models import manifest_retired  # type: ignore
     except ImportError:
         manifest_retired = lambda manifest, stem=None: False  # noqa: E731
+    # The shelved-models list (`components/shelved_models.py`) ships there too. A shelved model stays
+    # in the kit - this step just does not copy it - unless this Mac is marked "keep all models" in the
+    # Hub's device settings. An app that predates the list shelves nothing.
+    try:
+        from shelved_models import keep_all_models, manifest_shelved  # type: ignore
+    except ImportError:
+        manifest_shelved = lambda manifest, stem=None: False  # noqa: E731
+        keep_all_models = lambda settings_file: False  # noqa: E731
+    keep_all = keep_all_models(Path.home() / HUB_SETTINGS_RELATIVE)
     manifests = {m["package_id"]: m for m in
                  (json.loads(p.read_text()) for p in sorted(manifests_dir.glob("*.json")))
                  if not manifest_retired(m)}
@@ -528,8 +540,11 @@ def main() -> int:
     print(f"  This Mac has {memory} GB of memory.")
     print()
 
-    chosen, skipped = [], []
+    chosen, skipped, shelved = [], [], []
     for package_id, manifest in sorted(manifests.items()):
+        if not keep_all and manifest_shelved(manifest):
+            shelved.append(package_id)
+            continue
         needs = required_gb(manifest)
         (chosen if needs <= memory else skipped).append((package_id, needs, manifest))
 
@@ -597,6 +612,11 @@ def main() -> int:
     if absent:
         names = ", ".join(package_id for package_id, _n, _m, _how in absent)
         print(f"  Not on this SSD, so not copied ({len(absent)}): {names}")
+        print()
+    if shelved:
+        print(f"  Shelved, not copied ({len(shelved)}): {', '.join(shelved)}")
+        print("  They stay on the SSD. To keep them on this Mac, set keep_all_models in the Hub's "
+              "settings (see the release notes), then run this again.")
         print()
     if skipped:
         skip_gb = sum(size_gb(m) for _p, _n, m in skipped)

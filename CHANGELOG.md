@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.6.123 — 2026-10-01 · An update can never leave a Mac stuck; shelved models
+
+Two owner-approved changes.
+
+**A. Relaunch safety net** (owner: "can we remove that barrier?"). 0.6.122 fixed the hang; this makes sure no
+future bug can strand a Mac. The helper `relaunchAfterUpdate` starts (`/bin/sh`, now `RelaunchHelper` in
+`native/StudioHub.swift`) waits for the old app pid; if it is still alive after **120 s** it sends SIGTERM, waits
+**10 s**, sends SIGKILL, then runs `open` on the new app. The normal path (the old app exits by itself) is
+unchanged: no signal is sent. The helper is now spawned with `posix_spawn` in **its own session**
+(`POSIX_SPAWN_SETSID`) with **no inherited descriptors** (`POSIX_SPAWN_CLOEXEC_DEFAULT`, stdio on /dev/null): the
+login launch agent (`KeepAlive`, no `AbandonProcessGroup`) makes launchd kill what is left in the app's process
+group when it exits, which would have taken the helper with it, and an inherited data-folder lock descriptor would
+have kept the new copy out. Seam `spawnRelaunchHelper` now takes `(pid, app path)`.
+`tests/native/lifecycle_main.swift` `relaunch-helper` runs the real helper against stand-in old apps: one that exits
+by itself (opened, never signalled), one that never exits (SIGTERM), one that ignores SIGTERM (SIGKILL); each must
+open the new app only after the old pid is gone, and the helper must be its own session leader.
+Mutation-proved: no escalation, no SIGKILL step, no SETSID, kill straight away - each fails an assertion.
+A Mac on 0.6.119-0.6.122 still relaunches with its own old helper when it takes THIS update (no safety net
+until it is on 0.6.123).
+
+**B. Shelved models** (owner, 2026-09-30). `components/shelved_models.py` (`SHELVED_MODELS`), beside
+`retired_models.py`, seeded with Whisper base (`whisper-base`, `mlx-community/whisper-base-mlx`), Whisper small
+(`whisper-small`, `mlx-community/whisper-small-mlx`), VoxCPM2 bf16 (`voxcpm2-bf16`,
+`mlx-community/VoxCPM2-bf16`) and Fish S2 Pro bf16 (`fish-audio-s2-pro-bf16`,
+`mlx-community/fish-audio-s2-pro-bf16`). Whisper turbo is not shelved.
+- **Still in the catalog**, offered and usable wherever the files are. Manifests are still staged; the kit's
+  model library on the SSDs keeps the weights (the simplest thing the kit tooling already supports: the shelf is
+  "the library the copy step skips").
+- **Kit copy step** (`qualification/copy_models_for_this_mac.py`): skips shelved models ("Shelved, not copied")
+  unless the Mac is marked keep-all. It never removes one already on the Mac.
+- **Hub**: at start-up, on a Mac not marked keep-all, an installed shelved model's folder is moved (same-volume
+  rename; a failure is skipped) into the Trash Folder `trash/<UTC date>/shelved-models/<package>-<time>/`, which
+  the Hub purges after 15 days. The row then reads `state: not_installed`, `shelved: true`, reason "Not on this
+  Mac: ... is a shelved model ..." (never `invalid`); `dispatch_state` stays `ineligible`. `POST
+  /api/hub/model-packages/{id}/download` and `/import` answer 409 with that reason for a shelved model on such a
+  Mac, so nothing brings one back by itself (a moved one would be moved out again at the next start).
+- **Keep-all device setting**: `keep_all_models` in `device_settings.json` (default **false**; read by the Hub and
+  by the copy step). `PUT /api/hub/settings {"keep_all_models": true}` (Hub token) or add `"keep_all_models":
+  true` to `~/Library/Application Support/StudioHub Standalone/hub/device_settings.json`. "Restore defaults"
+  keeps it (it is about models, not output limits); a save that does not name it keeps it. **THIS Mac must be
+  marked keep-all BEFORE it starts 0.6.123, or its Whisper base/small, VoxCPM2 bf16 and Fish S2 Pro bf16 folders
+  move to the Trash Folder at that first start** (recoverable for 15 days, then purged).
+- Whisper turbo is already the Subtitle default (`"default": true` in its manifest, the only one); the Gateway /
+  Story selection of the subtitle model is separate.
+- Tests: `tests/test_shelved_models.py` (list vs manifests, turbo not shelved and the default, no kept model needs
+  a shelved one, keep-all parsing, copy step skip / keep-all / not pruned, Hub sweep / Trash layout / 15-day purge /
+  not-on-this-Mac row / refusals / catalog / default false / survives restore-defaults). Mutation-proved (8 mutants).
+- Bridge kept: the video component is still labelled `runtime: "voice"`.
+
 ## 0.6.122 — 2026-10-01 · Updates restart the app by themselves
 
 Found in the 0.6.121 rollout: four controllers that took 0.6.119 -> 0.6.121 installed it and then sat

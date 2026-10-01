@@ -413,7 +413,7 @@ struct NativeLifecycleTests {
             delegate.controller = controller
             controller.onStopped = { delegate.engineStopped() }
             var helpers = 0, quits = 0, runningAtQuit = true
-            delegate.spawnRelaunchHelper = { _ in helpers += 1 }
+            delegate.spawnRelaunchHelper = { _, _ in helpers += 1 }
             delegate.terminateApp = { quits += 1; runningAtQuit = controller.running }
             delegate.relaunchAfterUpdate()
             requireLifecycle(helpers == 1, "relaunch-update: the reopen helper must be started once, got \(helpers)")
@@ -425,6 +425,52 @@ struct NativeLifecycleTests {
             // With no engine running there is nothing to wait for: it quits straight away.
             delegate.relaunchAfterUpdate()
             requireLifecycle(quits == 2 && helpers == 2, "relaunch-update: an idle app must quit at once, got \(quits) quits")
+        }
+
+
+        // The relaunch helper's safety net: whatever keeps the old app alive (any future hang), the helper ends
+        // it - SIGTERM, then SIGKILL once the grace is over - and still opens the new app. A normal exit is
+        // left alone. The helper must survive its parent, so it is spawned in its own session.
+        if runs("relaunch-helper") {
+            let folder = temporary.appendingPathComponent("relaunch-helper")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            func orphan(_ body: String) throws -> Int32 {   // a process that is nobody's child, like the old app
+                let shell = Process(), out = Pipe()
+                shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+                shell.arguments = ["-c", "( \(body) ) >/dev/null 2>&1 </dev/null & echo $!"]
+                shell.standardOutput = out
+                try shell.run(); shell.waitUntilExit()
+                return Int32(String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines))!
+            }
+            func alive(_ pid: Int32) -> Bool { kill(pid, 0) == 0 }
+            func scenario(_ name: String, stub: String, wait: Int, grace: Int, expectKilled: Bool) async throws {
+                let marker = folder.appendingPathComponent("\(name)-opened").path
+                let opener = folder.appendingPathComponent("\(name)-open.sh")
+                try "#!/bin/sh\necho \"$1\" > \"\(marker)\"\n".write(to: opener, atomically: true, encoding: .utf8)
+                chmod(opener.path, 0o755)
+                let old = try orphan(stub)
+                let began = Date()
+                let helper = try RelaunchHelper.spawn(pid: old, app: "/Apps/New.app", wait: wait, grace: grace, opener: opener.path)
+                requireLifecycle(getsid(helper) == helper && helper != getsid(0),
+                                 "\(name): the helper must run in its own session, or it dies with the app's launchd job")
+                let opened = await waitUntil(timeout: 40) { FileManager.default.fileExists(atPath: marker) }
+                requireLifecycle(opened, "\(name): the helper never opened the new app")
+                requireLifecycle(!alive(old), "\(name): the new app was opened while the old one was still alive")
+                let target = try String(contentsOfFile: marker, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+                requireLifecycle(target == "/Apps/New.app",
+                                 "\(name): the helper opened the wrong app")
+                let took = Date().timeIntervalSince(began)
+                requireLifecycle(expectKilled ? took >= Double(wait) : took < Double(wait),
+                                 "\(name): opened after \(took)s; wait was \(wait)s")
+            }
+            // Normal path: the old app exits by itself well inside the bound; the helper must not touch it.
+            let termMarker = folder.appendingPathComponent("normal-got-term").path
+            try await scenario("normal", stub: "trap 'touch \(termMarker)' TERM; sleep 1.5", wait: 30, grace: 5, expectKilled: false)
+            requireLifecycle(!FileManager.default.fileExists(atPath: termMarker), "normal: an app that exits by itself was sent SIGTERM")
+            // Hung app that honours SIGTERM, and one that ignores it (needs the SIGKILL step).
+            try await scenario("hung-term", stub: "while :; do sleep 1; done", wait: 2, grace: 5, expectKilled: true)
+            try await scenario("hung-kill", stub: "trap '' TERM; while :; do sleep 1; done", wait: 2, grace: 2, expectKilled: true)
         }
 
         print("Native lifecycle checks passed")

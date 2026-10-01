@@ -40,6 +40,16 @@ class NoDialogOnTheUnattendedPath(unittest.TestCase):
         force = _body(hub, "private func scheduleForceStop")
         self.assertRegex(force, r"if self\.forceStopWithoutAsking \{ self\.forceStop\(\) \} else \{ self\.confirmForceStop\(\) \}")
 
+    def test_the_relaunch_helper_ends_a_hung_old_app_and_outlives_it(self):
+        # The behaviour is proved live by tests/native/lifecycle_main.swift `relaunch-helper`; this pins the
+        # numbers and the two spawn flags a refactor must not lose (own session, no inherited descriptors).
+        hub = (NATIVE / "StudioHub.swift").read_text()
+        helper = _body(hub, "enum RelaunchHelper")
+        self.assertIn("static let waitSeconds = 120", helper)
+        self.assertIn("static let graceSeconds = 10", helper)
+        self.assertRegex(helper, r"kill -TERM[\s\S]+kill -KILL[\s\S]+exec \"\$opener\"")
+        self.assertIn("POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT", helper)
+
     def test_quit_asks_only_over_running_work_and_never_while_relaunching(self):
         hub = (NATIVE / "StudioHub.swift").read_text()
         quit_ = _body(hub, "func applicationShouldTerminate")

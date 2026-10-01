@@ -19,6 +19,7 @@ DEFAULT_RETENTION_DAYS = 3
 DEFAULT_CLEANUP_ENABLED = True
 DEFAULT_CLEANUP_INTERVAL_SECONDS = 300
 DEFAULT_MINIMUM_FREE_BYTES = 5_000_000_000
+DEFAULT_KEEP_ALL_MODELS = False             # True: this Mac keeps shelved models (components/shelved_models.py)
 # `_REQUIRED_WORKERS` (worker id -> modality) is the inverse of the Hub's modality vocabulary,
 # derived in `backend/vocabulary.py` rather than restated here. It is kept as a module attribute
 # because it is the inverse table, but `_worker()` no longer looks a descriptor's id up in it:
@@ -187,12 +188,14 @@ def _settings() -> dict[str, int | bool]:
     enabled = value.get("cleanup_enabled", DEFAULT_CLEANUP_ENABLED) if isinstance(value, dict) else DEFAULT_CLEANUP_ENABLED
     interval = value.get("cleanup_interval_seconds", DEFAULT_CLEANUP_INTERVAL_SECONDS) if isinstance(value, dict) else DEFAULT_CLEANUP_INTERVAL_SECONDS
     minimum_free = value.get("minimum_free_bytes", DEFAULT_MINIMUM_FREE_BYTES) if isinstance(value, dict) else DEFAULT_MINIMUM_FREE_BYTES
+    keep_all = value.get("keep_all_models", DEFAULT_KEEP_ALL_MODELS) if isinstance(value, dict) else DEFAULT_KEEP_ALL_MODELS
     return {
         "max_bytes": max_bytes if isinstance(max_bytes, int) and max_bytes > 0 else DEFAULT_MAX_BYTES,
         "retention_days": retention_days if isinstance(retention_days, int) and retention_days > 0 else DEFAULT_RETENTION_DAYS,
         "cleanup_enabled": enabled if isinstance(enabled, bool) else DEFAULT_CLEANUP_ENABLED,
         "cleanup_interval_seconds": interval if isinstance(interval, int) and interval >= 60 else DEFAULT_CLEANUP_INTERVAL_SECONDS,
         "minimum_free_bytes": minimum_free if isinstance(minimum_free, int) and minimum_free >= 0 else DEFAULT_MINIMUM_FREE_BYTES,
+        "keep_all_models": keep_all if isinstance(keep_all, bool) else DEFAULT_KEEP_ALL_MODELS,
     }
 
 
@@ -201,7 +204,8 @@ def load_device_settings() -> dict[str, dict[str, int | bool]]:
         "defaults": {"max_bytes": DEFAULT_MAX_BYTES, "retention_days": DEFAULT_RETENTION_DAYS,
                      "cleanup_enabled": DEFAULT_CLEANUP_ENABLED,
                      "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
-                     "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES},
+                     "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
+                     "keep_all_models": DEFAULT_KEEP_ALL_MODELS},
         "effective": _settings(),
     }
 
@@ -221,16 +225,20 @@ def preview_device_settings(**changes: object) -> dict[str, int | bool]:
         raise ValueError("cleanup_interval_seconds must be at least 60")
     if isinstance(minimum_free, bool) or not isinstance(minimum_free, int) or minimum_free < 0:
         raise ValueError("minimum_free_bytes must be a non-negative integer")
+    if not isinstance(value["keep_all_models"], bool):
+        raise ValueError("keep_all_models must be a boolean")
     return value
 
 
 def save_device_settings(*, max_bytes: int, retention_days: int, cleanup_enabled: bool = DEFAULT_CLEANUP_ENABLED,
                          cleanup_interval_seconds: int = DEFAULT_CLEANUP_INTERVAL_SECONDS,
-                         minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES) -> dict[str, dict[str, int | bool]]:
+                         minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES,
+                         keep_all_models: bool | None = None) -> dict[str, dict[str, int | bool]]:
     value = preview_device_settings(max_bytes=max_bytes, retention_days=retention_days,
                                     cleanup_enabled=cleanup_enabled,
                                     cleanup_interval_seconds=cleanup_interval_seconds,
-                                    minimum_free_bytes=minimum_free_bytes)
+                                    minimum_free_bytes=minimum_free_bytes,
+                                    **({} if keep_all_models is None else {"keep_all_models": keep_all_models}))
     _atomic_write(_settings_path(), value | {"defaults_version": _DEFAULTS_VERSION})
     return load_device_settings()
 
@@ -242,6 +250,7 @@ def restore_device_defaults() -> dict[str, dict[str, int]]:
         "cleanup_enabled": DEFAULT_CLEANUP_ENABLED,
         "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
         "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
+        "keep_all_models": _settings()["keep_all_models"],   # about models, not output limits: not reset here
         "defaults_version": _DEFAULTS_VERSION,
     })
     return load_device_settings()

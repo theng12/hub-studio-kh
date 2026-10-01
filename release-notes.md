@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.123 - 2026-10-01
+
+### Updates can no longer leave a Mac stuck; a few big models are shelved
+
+**An update can no longer leave a Mac stuck.** If the old app ever fails to close after an update, the update
+now closes it for you after two minutes and opens the new one. Nothing to do.
+
+**Some models are "shelved".** Whisper base, Whisper small, VoxCPM2 bf16 and Fish S2 Pro bf16 are still listed and
+still work wherever they are installed, but they are no longer copied onto other Macs from the drives, and a Mac
+that has one now moves it into the Hub's Trash Folder (emptied after 15 days). A Mac you mark "keep all models"
+in its settings keeps them all. Whisper turbo is the subtitle model to use.
+
 ## 0.6.122 - 2026-10-01
 
 ### Updates restart the app by themselves

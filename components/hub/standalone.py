@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
+from components import shelved_models
 from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
 from .backend import app_release, chat_jobs, release_sync, shared_voices, transcription_jobs, update_drain, vocabulary
@@ -403,6 +404,28 @@ def _contract_for(manifest: dict[str, Any],
     return None
 
 
+def _keep_all_models() -> bool:
+    return standalone_config.load_device_settings()["effective"]["keep_all_models"]
+
+
+def _shelved_reason(manifest: dict[str, Any]) -> str:
+    return (f"Not on this Mac: {manifest['package_id']} is a shelved model, which this Mac does not keep. "
+            f"It stays on the SSD kits and works on a Mac marked \"keep all models\" "
+            f"(Hub setting keep_all_models).")
+
+
+def _shelved_refusal(manifest: dict[str, Any]) -> None:
+    """A shelved model is not brought onto a Mac that does not keep it (it would be moved out again)."""
+    if shelved_models.manifest_shelved(manifest) and not _keep_all_models():
+        raise HTTPException(409, _shelved_reason(manifest))
+
+
+def shelve_installed_models() -> list[str]:
+    """At start-up, a Mac that is not marked keep-all moves its installed shelved models to the Trash Folder."""
+    return shelved_models.shelve_installed(_model_library(), _model_catalog().values(),
+                                           output_storage.trash_root(), _keep_all_models())
+
+
 def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
                  monitor: StudioMonitor,
                  lane_contracts: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -424,8 +447,14 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
     # circuit breaker that refuses it. Without this the app showed every gate open and the job was
     # then declined before dispatch, which read as the model silently not working.
     paused = broker.model_block_state(worker_id, manifest["model_id"])
+    shelved = shelved_models.manifest_shelved(manifest)
+    away = shelved and receipt["state"] == "not_installed" and not _keep_all_models()
     return {
         **receipt,
+        # A shelved model is still offered and usable where it is; on a Mac that does not keep it, its
+        # absence is "not on this Mac", not a fault (and it is never downloaded back by itself).
+        "shelved": shelved,
+        **({"reason": _shelved_reason(manifest)} if away else {}),
         **standalone_config.model_readiness({
             "files_state": receipt["state"],
             "minimum_macos": manifest["minimum_macos"],
@@ -1054,6 +1083,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             peer_lease_sweep = _asyncio.create_task(_peer_lease_loop())
             # A node fetches the release its controller holds; a no-op on any Mac that is not one.
             release_mirror = _asyncio.create_task(release_sync.loop())
+            try:
+                moved = shelve_installed_models()
+                if moved:
+                    print(f"[hub] moved shelved models to the Trash Folder: {', '.join(moved)}", flush=True)
+            except (OSError, ValueError):
+                pass
             output_storage.start_background(
                 lambda: {worker.get("machine", "local") for worker in monitor.registry},
                 standalone_config.load_device_settings,
@@ -1135,6 +1170,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 cleanup_enabled=value["cleanup_enabled"],
                 cleanup_interval_seconds=value["cleanup_interval_seconds"],
                 minimum_free_bytes=value["minimum_free_bytes"],
+                keep_all_models=value["keep_all_models"],
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -2049,6 +2085,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         try:
             catalog = _model_catalog()
             manifest = catalog[package_id]
+            _shelved_refusal(manifest)
             model_packages.import_folder(manifest, Path(body.get("source_folder", "")), _model_library())
             return _model_state(manifest, catalog, monitor)
         except KeyError as exc:
@@ -2062,6 +2099,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         try:
             catalog = _model_catalog()
             manifest = catalog[package_id]
+            _shelved_refusal(manifest)
             sources = body.get("sources")
             if sources is not None and not isinstance(sources, dict):
                 raise ValueError("sources must be a map of model paths to HTTPS mirrors")

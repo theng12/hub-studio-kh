@@ -831,6 +831,51 @@ final class StudioController: ObservableObject {
     }
 }
 
+/// The helper that reopens the app after an update, as its own `/bin/sh`. It waits for the old
+/// process to exit and then runs `open`. **Safety net:** if the old process is still alive after
+/// `waitSeconds` (a hung quit, any future bug) it is sent SIGTERM, then SIGKILL after `graceSeconds`,
+/// so an update can never leave a Mac without its Hub. It is spawned in its own session, with no
+/// inherited descriptors: a launchd job (the login agent) kills what is left in its process group
+/// when the app exits, and an inherited data-folder lock descriptor would keep the new copy out.
+enum RelaunchHelper {
+    static let waitSeconds = 120
+    static let graceSeconds = 10
+    static let script = """
+    pid=$1; app=$2; wait=$3; grace=$4; opener=$5
+    gone() { ! kill -0 "$pid" 2>/dev/null; }
+    end=$((SECONDS + wait)); while ! gone && [ "$SECONDS" -lt "$end" ]; do sleep 0.5; done
+    if ! gone; then
+      kill -TERM "$pid" 2>/dev/null
+      end=$((SECONDS + grace)); while ! gone && [ "$SECONDS" -lt "$end" ]; do sleep 0.5; done
+      if ! gone; then
+        kill -KILL "$pid" 2>/dev/null
+        end=$((SECONDS + 5)); while ! gone && [ "$SECONDS" -lt "$end" ]; do sleep 0.2; done
+      fi
+    fi
+    exec "$opener" "$app"
+    """
+
+    /// Start the helper and return its pid. `wait`, `grace` and `opener` are parameters for the lifecycle test.
+    static func spawn(pid: Int32, app: String, wait: Int = waitSeconds, grace: Int = graceSeconds,
+                      opener: String = "/usr/bin/open") throws -> Int32 {
+        var attributes: posix_spawnattr_t? = nil
+        var actions: posix_spawn_file_actions_t? = nil
+        posix_spawnattr_init(&attributes); posix_spawn_file_actions_init(&actions)
+        defer { posix_spawnattr_destroy(&attributes); posix_spawn_file_actions_destroy(&actions) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
+        for descriptor in 0...2 {
+            posix_spawn_file_actions_addopen(&actions, Int32(descriptor), "/dev/null", descriptor == 0 ? O_RDONLY : O_WRONLY, 0)
+        }
+        let arguments: [UnsafeMutablePointer<CChar>?] =
+            ["sh", "-c", script, "sh", String(pid), app, String(wait), String(grace), opener].map { strdup($0) } + [nil]
+        defer { arguments.forEach { free($0) } }
+        var child: pid_t = 0
+        let status = posix_spawn(&child, "/bin/sh", &actions, &attributes, arguments, environ)
+        guard status == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(status)) }
+        return child
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var controller: StudioController!
@@ -968,11 +1013,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// then never quit, the helper below waited on it for ever and the Mac stayed without a Hub
     /// (seen live 2026-10-01: four controllers after 0.6.119 -> 0.6.121).
     func relaunchAfterUpdate() {
-        let script = "while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.5; done; /usr/bin/open \"$0\""
-        let helper = Process()
-        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
-        helper.arguments = ["-c", script, Bundle.main.bundleURL.path]
-        do { try spawnRelaunchHelper(helper) } catch {
+        do { try spawnRelaunchHelper(ProcessInfo.processInfo.processIdentifier, Bundle.main.bundleURL.path) } catch {
             // Could not arrange a reopen: leave the app running rather than quit and not come back.
             controller.failure = "The update is installed, but Studio Hub could not relaunch itself (\(error.localizedDescription)). Quit and open it again."
             return
@@ -987,7 +1028,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         else if relaunching { terminateApp() }
     }
     /// Seams for the lifecycle test: starting the reopen helper and quitting the app.
-    var spawnRelaunchHelper: (Process) throws -> Void = { try $0.run() }
+    var spawnRelaunchHelper: (Int32, String) throws -> Void = { _ = try RelaunchHelper.spawn(pid: $0, app: $1) }
     var terminateApp: () -> Void = { NSApp.terminate(nil) }
     @objc func openWindow() {
         window?.makeKeyAndOrderFront(nil)
