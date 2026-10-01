@@ -34,7 +34,7 @@ assert marker in text, "the app entry point moved; update render-page.sh"
 path.write_text(text.replace(marker, "struct StudioHubApplication", 1))
 PY
 
-python3 "$ROOT_DIR/tests/native/render_fixture_patch.py" "$WORK/StudioAPI.swift" "$WORK/StudioViews.swift"
+python3 "$ROOT_DIR/tests/native/render_fixture_patch.py" "$WORK/StudioAPI.swift" "$WORK/StudioViews.swift" "$WORK/ReleaseNotes.swift"
 
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -parse-as-library \
   "$WORK"/*.swift "$ROOT_DIR/tests/native/render_main.swift" -o "$WORK/render-page"
