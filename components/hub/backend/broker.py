@@ -3617,6 +3617,9 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
     body[prompt_field] = item["prompt"]
     if b["modality"] == "voice":
         body["client_request_id"] = f"studiohub:{b['id']}:{item['index']}"
+        floor = memory_admission.override_free_gb(b["model"])
+        if floor is not None:   # the worker's own preflight must honour the same override
+            body["memory_floor_gb"] = floor
     if item["seed"] is not None:
         body["seed"] = item["seed"]
     # Reference-image jobs use multipart. Image Studio accepts ``image`` on

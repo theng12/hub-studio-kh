@@ -18,6 +18,7 @@ import subprocess
 
 import psutil
 
+from components import host_memory
 from .registry import DATA_DIR
 
 _proc_cache: dict[int, psutil.Process] = {}
@@ -96,7 +97,7 @@ def host_stats() -> dict:
         "machine_type": apple_machine_type(),
         "total_gb": round(vm.total / 1e9, 2),
         "used_gb": round(vm.used / 1e9, 2),
-        "available_gb": round(vm.available / 1e9, 2),
+        "available_gb": round(host_memory.available_bytes(vm) / 1e9, 2),
         "percent": vm.percent,
         "cpu_percent": psutil.cpu_percent(interval=None),
         "cpu_count": psutil.cpu_count(),

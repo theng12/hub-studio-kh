@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.125 — 2026-10-01 · The Hub's "free memory" matches what macOS can give; the 8 GB TTS runner measures held models (branch `fix/macos-free-memory`; not yet built or installed)
+
+**Cause (real 8 GB Mac "1101", Hub 0.6.122):** the Hub held Qwen3-TTS 0.6B 8-bit ~11 min ("waiting for memory: needs ~3.2GB, ~3.0GB
+free") on a Mac macOS itself called healthy (pressure normal, swap 0). `host_stats()["available_gb"]` was psutil's `available`,
+which on macOS is free + speculative + inactive pages: it leaves out the file cache that is *active* (macOS gives it up on demand,
+never to swap) and purgeable pages, so it ran 1-2 GB short of what a new job could really use.
+
+**Fix:** one helper, `components/host_memory.py` `available_bytes()` = max(psutil's figure, free + file-backed + purgeable pages), less
+the kernel's own free-page target (`kern.vm_page_free_target`), never more than total - wired - compressor; read from the kernel
+counters (`vm.page_free_count`, `vm.page_pageable_external_count`, `vm.page_purgeable_count`, `vm.compressor_bytes_used`) with no
+subprocess, and psutil's figure on any other platform or a missing counter. Used by `resources.host_stats()` (Hub gate, model health
+"fits now", capabilities, metrics, peers), the Voice worker's `_memory_snapshot()` (preflight, "fits now" inventory) and its resource
+telemetry, and the 8 GB TTS runner's records. The 3.2 GB requirement itself is unchanged. Note `memory_pressure`'s "free percentage"
+(`kern.memorystatus_level`) is NOT headroom: it is (active + inactive + free + speculative) / total, so it stays at 87% on a 32 GB
+Mac while free pages fall to near zero (measured by allocating 12 GB); it only drops as wired or compressed memory grows.
+
+**Measure a model the guard would refuse** (owner: "do this along with the 8 GB TTS runs"): `PUT /api/hub/memory/admission`
+`{model, min_free_memory_gb | null}` (and `GET ...?model=`) sets/clears the existing operator override
+(`memory_admission.set_override`, which had no route). While one is set the Hub forwards it to the Voice worker as `memory_floor_gb`
+(`Txt2SpeechBody`), and `GenerationManager._memory_preflight` uses it instead of its own size + headroom estimate, so the two guards
+never disagree. `qualification/eight-gb-tts-run.sh`: a model held for memory is cancelled, then re-run with that model's requirement
+lowered to `TTS8_RELAX_FREE_GB` (0.5) and a safety net (cancel if swap grows > 1.5 GB or pressure reaches urgent); the override is put
+back after the model, on any exit (finally / atexit / SIGTERM / SIGHUP), and at the next start from `tts8-guard-restore.json` if a run
+died. New `results.csv` columns `guard_relaxed`, `override_used_gb`, `measured_peak_gb`, `swap_delta_gb`, `hub_free_floor_gb`,
+`verdict`; `summary.txt` recommends a requirement = measured peak + 0.25 GB, labelled as measured on that Mac. An older Hub without the
+route is skipped as before.
+
+Tests (each mutation-proved): `tests/test_host_memory.py` (recorded 32 GB Mac + synthetic 8 GB 1101-shaped / tight / wired-heavy
+fixtures), `tests/test_hub_jobs.py` (override route + forwarding + clearing), `tests/test_tts_8gb_runner.py` (`MeasureAnywayTests`),
+`components/voice/app/tests/test_priority_mlx_models.py` and `test_model_defaults.py` (worker honours `memory_floor_gb`; snapshot uses the helper).
+
 ## 0.6.124 — 2026-10-01 · Chatterbox is shelved; the 8 GB text-to-speech test (supersedes 0.6.123, never published)
 
 0.6.123 was never published or installed anywhere; this release carries everything in it (relaunch safety net,

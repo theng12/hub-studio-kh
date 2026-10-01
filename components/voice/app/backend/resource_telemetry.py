@@ -78,6 +78,7 @@ def _mlx_snapshot(*, reset_peak: bool = False) -> dict[str, Any]:
 def _snapshot(*, reset_mlx_peak: bool = False) -> Optional[dict[str, Any]]:
     try:
         import psutil
+        from components import host_memory
 
         vm = psutil.virtual_memory()
         swap = psutil.swap_memory()
@@ -98,7 +99,7 @@ def _snapshot(*, reset_mlx_peak: bool = False) -> Optional[dict[str, Any]]:
             "at": time.time(),
             "host": {
                 "total_gb": _gb(vm.total),
-                "available_gb": _gb(vm.available),
+                "available_gb": _gb(host_memory.available_bytes(vm)),
                 "used_gb": _gb(vm.used),
                 "used_percent": round(float(vm.percent), 2),
                 "pressure": _pressure_level(),

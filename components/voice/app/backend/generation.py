@@ -212,10 +212,11 @@ def _memory_snapshot() -> Optional[dict]:
     """Return live host memory, or None when the optional probe is unavailable."""
     try:
         import psutil
+        from components import host_memory
         vm = psutil.virtual_memory()
         return {
             "total_gb": round(vm.total / 1e9, 2),
-            "available_gb": round(vm.available / 1e9, 2),
+            "available_gb": round(host_memory.available_bytes(vm) / 1e9, 2),
             "used_gb": round(vm.used / 1e9, 2),
             "percent": float(vm.percent),
         }
@@ -2258,7 +2259,7 @@ class GenerationManager:
         actions.append("cleared Python, PyTorch, MLX and Metal allocator caches")
         return {"released": bool(loaded), "models": loaded, "actions": actions, "reason": reason}
 
-    def _memory_preflight(self, model_entry) -> None:
+    def _memory_preflight(self, model_entry, job=None) -> None:
         """Refuse a job that cannot safely fit in currently available memory."""
         snapshot = _memory_snapshot()
         if snapshot is None:
@@ -2292,6 +2293,12 @@ class GenerationManager:
                 and getattr(self, "_khmer_onnx_model", None) is not None)
         )
         required = _required_free_memory_gb(model_entry, loaded=cached)
+        # The operator's per-model free-memory override, forwarded by the Hub only while one is set
+        # (`PUT /api/hub/memory/admission`). It replaces this estimate, as it replaces the Hub's
+        # floor, so the two guards can never disagree about the same job.
+        floor = ((getattr(job, "params", None) or {}).get("memory_floor_gb"))
+        if floor is not None:
+            required = float(floor)
         available = float(snapshot["available_gb"])
         if available < required:
             raise MemoryGuardError(
@@ -3087,7 +3094,7 @@ class GenerationManager:
 
         family = model.family
         engine = engine_for_family(family)
-        self._memory_preflight(model)
+        self._memory_preflight(model, job)
         if not self.runtime_ready_for_family(family):
             raise RuntimeError(
                 f"The `{_ENGINE_RUNTIME_LABEL[engine]}` runtime is unavailable in this packaged "

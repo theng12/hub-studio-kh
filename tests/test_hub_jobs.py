@@ -340,6 +340,32 @@ class HubJobProofTests(unittest.TestCase):
             self.assertEqual((artifact.status_code, artifact.content), (200, _AUDIO))
             self.assertEqual(hashlib.sha256(artifact.content).hexdigest(), _AUDIO_SHA)
 
+            # The operator's free-memory override (`PUT /api/hub/memory/admission`, how the 8 GB runner
+            # measures a model the guard would refuse) is forwarded to the worker's own preflight, and
+            # only while it is set.
+            from components.hub.backend import memory_admission
+            route = "/api/hub/memory/admission"
+            self.assertEqual(client.put(route, json={}, headers=headers).status_code, 400)
+            self.assertEqual(client.put(route, json={"model": "no/such", "min_free_memory_gb": 1},
+                                        headers=headers).status_code, 404)
+            try:
+                set_ = client.put(route, json={"model": "fixture/voice", "min_free_memory_gb": 0.5}, headers=headers)
+                self.assertEqual(set_.status_code, 200, set_.text)
+                self.assertEqual(set_.json()["effective_min_free_memory_gb"], 0.5)
+                self.assertTrue(client.get(route, params={"model": "fixture/voice"}, headers=headers).json()["overridden"])
+                first = client.post("/api/hub/jobs", json={"modality": "voice", "model": "fixture/voice",
+                    "clientRequestId": "override-0001", "items": [{"text": "hello"}]}, headers=headers).json()["batch_id"]
+                self._wait_for(client, first, "done")
+                self.assertEqual(list(self.worker.jobs.values())[-1]["params"].get("memory_floor_gb"), 0.5)
+                cleared = client.put(route, json={"model": "fixture/voice", "min_free_memory_gb": None}, headers=headers)
+                self.assertFalse(cleared.json()["overridden"])
+                second = client.post("/api/hub/jobs", json={"modality": "voice", "model": "fixture/voice",
+                    "clientRequestId": "override-0002", "items": [{"text": "hello"}]}, headers=headers).json()["batch_id"]
+                self._wait_for(client, second, "done")
+                self.assertNotIn("memory_floor_gb", list(self.worker.jobs.values())[-1]["params"])
+            finally:
+                memory_admission.reset_override("fixture/voice", {})
+
             held = client.post("/api/hub/jobs", json={"modality": "voice", "model": "fixture/voice",
                 "clientRequestId": "cancel-0001", "items": [{"text": "hold"}]}, headers=headers).json()["batch_id"]
             self._wait_for(client, held, "running")

@@ -298,8 +298,8 @@ esac
 # purgeable, which is what the model has to work with before macOS starts compressing and
 # swapping. The floor is the model's own published min_free_memory_gb (3.0), the same number the
 # Hub's admission governor enforces before it dispatches a job — and it is compared in decimal
-# GB, exactly as the Hub does (components/hub/backend/resources.py: vm.available / 1e9), so a
-# machine this script passes is a machine the Hub would dispatch to.
+# GB. Since 0.6.125 the Hub's own figure (components/host_memory.py) also counts the file cache, so it
+# can be higher than this one: a machine this script passes is a machine the Hub would dispatch to.
 vm_pages() {
   [ -n "$VMSTAT" ] || return 1
   "$VMSTAT" 2>/dev/null | awk -F: -v want="$1" '

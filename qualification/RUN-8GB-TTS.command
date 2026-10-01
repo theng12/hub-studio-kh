@@ -29,8 +29,9 @@ echo "Studio Hub - 8 GB text-to-speech test"
 echo
 echo "This measures three voice models on this Mac: Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit and OmniVoice"
 echo "bf16, each reading the same two texts in the two owner voices. It takes one to a few hours on an"
-echo "8 GB Mac, writes a results folder beside this file, and changes nothing on this Mac: no setting,"
-echo "no install, nothing deleted (it only asks Studio Hub to let idle models go before each model)."
+echo "8 GB Mac, writes a results folder beside this file, installs nothing and deletes nothing. It asks"
+echo "Studio Hub to let idle models go before each model; if a model is held back for lack of free memory it"
+echo "lowers that one model's memory requirement temporarily to measure it (with a safety stop) and puts it back."
 echo
 echo "Before you go on: close your other apps, keep the Mac on power, and make sure Studio Hub is open."
 echo

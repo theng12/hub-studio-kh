@@ -3,11 +3,24 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.124** (Chatterbox shelved + the 8 GB text-to-speech test; supersedes the never-published 0.6.123; 2026-10-01).
+Last updated: **0.6.125** on branch `fix/macos-free-memory` (not built/installed; see the first block) over **0.6.124** (Chatterbox shelved + the 8 GB text-to-speech test; 2026-10-01).
+
+> **0.6.125 on branch `fix/macos-free-memory` (VERSION bumped; DMG/install/main NOT done - the coordinator rolls it out) - macOS free memory + measure-anyway runner.**
+> `components/host_memory.py` is now the ONE answer to "what can a new job use?" (Hub `resources.host_stats`, Voice `_memory_snapshot`
+> + resource telemetry, the TTS runner): max(psutil available, free + file-backed + purgeable pages) - `kern.vm_page_free_target`,
+> capped at total - wired - compressor, via sysctl counters. Measured on this 32 GB Mac: `memory_pressure -Q` / `kern.memorystatus_level`
+> = (active + inactive + free + speculative) / total (87% constant while free pages fell to ~0 under a 12 GB allocation), so it is a
+> pressure signal, NOT headroom - never gate on it. 1101's run.log has no vm_stat, so its "would have yielded" figure is an estimate:
+> psutil said 3.0 GB; the new figure adds the active file cache + purgeable pages and is >= 3.0 (admitted if file cache + purgeable +
+> free >= ~3.4 GB). New `PUT/GET /api/hub/memory/admission` exposes the (previously route-less) operator free-memory override; the Hub
+> forwards it to the Voice worker as `memory_floor_gb` and `_memory_preflight` honours it. The 8 GB TTS runner measures a held model with
+> the guard lowered (0.5 GB, safety net: swap > 1.5 GB or urgent pressure), always restores it (`tts8-guard-restore.json` beside
+> `hub-ready.json` for a dead run), and recommends measured peak + 0.25 GB. The 3.2 GB floor is unchanged. The chat-tier and z-image
+> runners still use their own (stricter) figure; harmonise if their floors start refusing healthy Macs.
 
 > **8 GB TTS runner - memory stall handling (kit-only, after 0.6.124, 2026-10-01; no app change, no version bump).** The owner's
 > real 8 GB Mac (node 1101, Hub 0.6.122) sat forever on Qwen3-TTS 0.6B 8-bit: the Hub holds a job back until
-> `host_stats()["available_gb"]` (psutil macOS: free + speculative + inactive pages; compressed/wired not counted) is at least
+> `host_stats()["available_gb"]` (until 0.6.125: psutil macOS = free + speculative + inactive pages; see the block below) is at least
 > the model's floor, here **3.2 GB** (`components/voice/app/backend/catalog.py` `min_free_memory_gb=3.2` -> `workload_policy` ->
 > `memory_admission.describe` -> `broker._memory_gate`, `broker.py` ~296), and the Mac had 3.0. The 3.2 is the Voice worker's own
 > formula (`generation.py` `_required_free_memory_gb`: catalog `size_gb` 1.9 + `MEMORY_HEADROOM_GB` 1.25 = 3.15, rounded up) -

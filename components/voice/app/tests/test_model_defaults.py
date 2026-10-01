@@ -703,3 +703,11 @@ class TestLaneDecidesBoundary:
             in_force={"preset_speaker": "Sohee"},
             body=self._body(preset_speaker="Aiden"))
         assert params["preset_speaker"] == "Aiden", "a supplied value is the caller's own answer"
+
+
+def test_the_operator_memory_floor_the_hub_forwards_reaches_the_job_params():
+    """`memory_floor_gb` is a real request field, so it lands in `job.params` where
+    `GenerationManager._memory_preflight` reads it; an unknown field would be dropped silently."""
+    body = main.Txt2SpeechBody(repo=SECTIONING, text="A sentence.", memory_floor_gb=1.5)
+    assert main._job_parameters(body, catalog.get_model(SECTIONING))["memory_floor_gb"] == 1.5
+    assert main.Txt2SpeechBody(repo=SECTIONING, text="x").memory_floor_gb is None

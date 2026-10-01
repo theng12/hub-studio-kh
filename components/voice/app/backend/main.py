@@ -421,6 +421,9 @@ class Txt2SpeechBody(BaseModel):
     # Optional caller idempotency key. Studio Hub sends one stable value per
     # batch item so a lost submit response returns the original job.
     client_request_id: Optional[str] = Field(default=None, max_length=200)
+    # The operator's live-free-memory override for this model, sent by the Hub only while one is set;
+    # it replaces the worker's own estimate in `GenerationManager._memory_preflight`.
+    memory_floor_gb: Optional[float] = Field(default=None, ge=0, le=512)
     # ── Kokoro fields ──
     voice: Optional[str] = None         # preset voice name (Kokoro)
     # ── language (also implicit for some engines) ──

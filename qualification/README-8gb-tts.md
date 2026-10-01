@@ -58,8 +58,17 @@ compressed memory, the biggest processes, each Studio worker named) and what the
 counts is at least the model's floor (Qwen3-TTS 0.6B 8-bit: 3.2 GB). A job it holds back shows the reason on the
 job (`governor_note`, the red "waiting for memory" note in the app). The script reads that reason while the clip
 is queued; if the Hub has waited on memory for more than **5 minutes** (`TTS8_MEM_WAIT=300`) it records the clip as
-**`did not start` - needs X GB free, had Y GB** (the Hub's own numbers), cancels that job through the Hub, skips
-that model's other clips and goes on to the next model. `summary.txt` states it per model.
+**`did not start` - needs X GB free, had Y GB** (the Hub's own numbers) and cancels that job through the Hub.
+Then it **measures the model anyway** (Hub 0.6.125 or later): it lowers that one model's free-memory requirement to
+0.5 GB (`TTS8_RELAX_FREE_GB`) through the Hub's operator override (`PUT /api/hub/memory/admission`; the Voice worker's
+own memory check honours the same number) and runs the clip again with a safety net - it is cancelled if swap grows by
+more than 1.5 GB or memory pressure reaches urgent, recorded as "needs more than this Mac can give: peak X GB, swap +Y GB",
+and the next model goes on. The requirement is put back exactly as it was after that model, on any exit (Ctrl-C, closing
+the window) and, if a run was killed, at the start of the next run (what to put back is kept in `tts8-guard-restore.json`
+beside the Hub's `hub-ready.json`). `results.csv` has `guard_relaxed`, `override_used_gb`, `measured_peak_gb`,
+`swap_delta_gb`, `hub_free_floor_gb` and `verdict` (`fits at default guard` / `fits only with relaxed guard - real need
+about X GB` / `does not fit`); `summary.txt` gives each model a **recommended requirement = measured peak + 0.25 GB**,
+labelled as measured on this Mac. The Hub's own default numbers are never edited. On an older Hub the model is skipped as before.
 
 Per clip it records: completed or failed (with the error text), wall time, audio length, RTF (wall
 time / audio time), the **peak memory of the voice worker** (macOS `footprint`, every second, over the

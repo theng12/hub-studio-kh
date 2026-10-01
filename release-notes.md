@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.125 - 2026-10-01
+
+### A Mac that is fine is no longer told it is short of memory
+
+The Hub used to count only part of what macOS can free up, so a healthy
+8 GB Mac could have a voice job held for ever with "waiting for memory". It now counts what macOS can really give. The 8 GB voice test
+can also measure a model the Hub would hold back (with a safety stop, putting the setting back afterwards) and recommends a number from what it saw.
+
 ## 0.6.124 - 2026-10-01
 
 ### Chatterbox is shelved; a text-to-speech test for the 8 GB Macs

@@ -2071,6 +2071,40 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @app.get("/api/hub/memory/admission")
+    def get_memory_admission(model: str) -> dict[str, Any]:
+        from .backend import memory_admission
+        return memory_admission.describe(model, _admission_entry(model))
+
+    @app.put("/api/hub/memory/admission")
+    def set_memory_admission(body: dict[str, Any]) -> dict[str, Any]:
+        """Set (or, with ``min_free_memory_gb: null``, clear) the operator's live-free-memory
+        override for one model. Dispatch and the worker's own preflight both honour it."""
+        from .backend import memory_admission
+        model = str(body.get("model") or "").strip()
+        if not model:
+            raise HTTPException(400, "model is required")
+        entry = _admission_entry(model)
+        if body.get("min_free_memory_gb") is None:
+            return memory_admission.reset_override(model, entry)
+        try:
+            free = float(body["min_free_memory_gb"])
+            total = body.get("min_total_memory_gb")
+            total = (memory_admission.requirement_gb(model, entry, use_override=False)[0] or 0.0
+                     if total is None else float(total))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "memory values must be numbers") from exc
+        if not (free >= 0 and total >= 0):
+            raise HTTPException(400, "memory values must not be negative")
+        return memory_admission.set_override(model, min_total_memory_gb=total,
+                                             min_free_memory_gb=free, catalog_entry=entry)
+
+    def _admission_entry(model: str) -> dict[str, Any]:
+        for row in monitor.cached_aggregate_catalog().get("models") or []:
+            if row.get("repo") == model:
+                return row
+        raise HTTPException(404, "unknown model")
+
     @app.post("/api/hub/memory/release")
     async def release_memory(body: dict[str, Any] | None = None) -> dict[str, Any]:
         from .backend.memory_control import FleetMemoryControl

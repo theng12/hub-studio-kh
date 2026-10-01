@@ -294,6 +294,12 @@ def set_override(model: str, *, min_total_memory_gb: float,
     return describe(model, catalog_entry)
 
 
+def override_free_gb(model: str) -> float | None:
+    """The operator's live-free floor for this model, or ``None`` when none is set."""
+    override = _read().get(_normalized(model))
+    return override["min_free_memory_gb"] if override else None
+
+
 def reset_override(model: str, catalog_entry: dict) -> dict:
     key = _normalized(model)
     values = dict(_read())

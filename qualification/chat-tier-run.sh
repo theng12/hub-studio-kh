@@ -262,8 +262,8 @@ MODEL_FILES="$(find "$MODEL_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')"
 # speculative and purgeable pages are reclaimable. Available = free + inactive + speculative +
 # purgeable, which is what the model has to work with before macOS compresses and swaps. The floor
 # is the checkpoint's own bytes (the app's manifest states them) plus a small working margin, and
-# it is compared in decimal GB, exactly as the Hub's own governor does (components/hub/backend/
-# resources.py: vm.available / 1e9).
+# it is compared in decimal GB. Since 0.6.125 the Hub's own figure (components/host_memory.py) also counts the
+# file cache, so it can be higher than this one: a Mac this gate passes is one the Hub would dispatch to.
 vm_pages() {
   [ -n "$VMSTAT" ] || return 1
   "$VMSTAT" 2>/dev/null | awk -F: -v want="$1" '

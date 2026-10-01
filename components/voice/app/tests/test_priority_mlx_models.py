@@ -197,6 +197,31 @@ def test_memory_preflight_refuses_when_live_headroom_is_too_low(monkeypatch) -> 
         manager._memory_preflight(SimpleNamespace(repo="repo", family="voxcpm-mlx", size_gb=2.3))
 
 
+def test_memory_preflight_honours_the_operator_floor_the_hub_forwards(monkeypatch) -> None:
+    """The Hub forwards its per-model free-memory override as ``memory_floor_gb`` (only while one is
+    set). The worker's own estimate (size + headroom) must give way to it, in both directions, or the
+    two guards disagree about one job."""
+    manager = object.__new__(generation.GenerationManager)
+    manager._mlx_audio_model = None
+    manager._mlx_audio_model_repo = None
+    model = SimpleNamespace(repo="repo", family="qwen3-tts", size_gb=1.9)   # estimate: 3.15 GB
+    monkeypatch.setattr(
+        generation, "_memory_snapshot",
+        lambda: {"total_gb": 8.0, "available_gb": 2.0, "used_gb": 6.0, "percent": 75.0},
+    )
+    with pytest.raises(generation.MemoryGuardError):
+        manager._memory_preflight(model, SimpleNamespace(params={}))
+    manager._memory_preflight(model, SimpleNamespace(params={"memory_floor_gb": 1.0}))
+    with pytest.raises(generation.MemoryGuardError, match="2.5 GB free is needed"):
+        manager._memory_preflight(model, SimpleNamespace(params={"memory_floor_gb": 2.5}))
+
+
+def test_worker_memory_snapshot_uses_the_shared_available_figure(monkeypatch) -> None:
+    from components import host_memory
+    monkeypatch.setattr(host_memory, "available_bytes", lambda vm: 3_650_000_000)
+    assert generation._memory_snapshot()["available_gb"] == 3.65
+
+
 def test_a_model_above_the_machines_tier_still_runs_when_memory_is_free(
     monkeypatch,
 ) -> None:
