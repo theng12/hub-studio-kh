@@ -9,6 +9,7 @@ import contextlib
 import csv
 import io
 import json
+import plistlib
 import re
 import sys
 import tempfile
@@ -23,6 +24,8 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 QUAL = ROOT / "qualification"
 SOURCE = (QUAL / "eight-gb-tts-run.sh").read_text()
+sys.path.insert(0, str(QUAL))
+import ssd_wear   # noqa: E402 - the helper the runner imports from beside itself
 
 
 def program():
@@ -60,7 +63,7 @@ class RunnerTests(unittest.TestCase):
             self.skipTest("prepare-kit.sh is local to the release Mac")
         text = prepare.read_text().replace("\\\n", " ")
         managed = re.search(r'MANAGED="(.*?)"', text, re.S).group(1).split()
-        for name in ("RUN-8GB-TTS.command", "eight-gb-tts-run.sh", "README-8gb-tts.md", "tts-script-S2.txt", "tts-script-S4.txt"):
+        for name in ("RUN-8GB-TTS.command", "eight-gb-tts-run.sh", "README-8gb-tts.md", "tts-script-S2.txt", "tts-script-S4.txt", "ssd_wear.py"):
             self.assertTrue((QUAL / name).is_file(), name)
             self.assertIn(f'"$ROOT/qualification/{name}" "$KIT/Technical/{name}"', text, f"{name} never reaches a drive")
             self.assertIn(name, managed, f"{name} would be moved to _trash by the Technical prune")
@@ -78,7 +81,25 @@ def runner():
         exec(compile(program(), "eight-gb-tts-run", "exec"), ns)
     real = time
     ns["time"] = types.SimpleNamespace(time=real.time, sleep=lambda s: real.sleep(0.01), strftime=real.strftime)
+    ns["ssd_wear"] = fake_ssd_wear()
     return ns
+
+
+def fake_ssd_wear():
+    """ssd_wear with the two functions that read the Mac replaced: no ioreg, no vm_stat, no 30 s wait. Each snapshot is
+    one step later: +3 GB written to the internal SSD, +1 GB swapped out, +60 s; the idle baseline is 0.6 GB per minute."""
+    fake = types.SimpleNamespace(**{k: v for k, v in vars(ssd_wear).items() if not k.startswith("__")})
+    state = {"n": 0, "baselines": 0}
+
+    def snapshot():
+        state["n"] += 1
+        return {"t": 1000.0 + 60 * state["n"], "ssd": 5e9 + 3e9 * state["n"], "swapouts": 2e9 + 1e9 * state["n"]}
+
+    def baseline(seconds, **_):
+        state["baselines"] += 1
+        return 0.6
+    fake.snapshot, fake.baseline_gb_per_min, fake.state = snapshot, baseline, state
+    return fake
 
 
 class MemoryStallTests(unittest.TestCase):
@@ -178,6 +199,96 @@ class MemoryStallTests(unittest.TestCase):
 
 QWEN = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
 
+# --- fixtures: what `ioreg -a -c IOBlockStorageDevice -r -l -d 2` and `vm_stat` print on a Mac with an external kit SSD attached
+def ioreg_device(interconnect, location, written, product="x"):
+    return {"IOObjectClass": "IOBlockStorageDevice", "Device Characteristics": {"Product Name": product},
+            "Protocol Characteristics": {"Physical Interconnect": interconnect, "Physical Interconnect Location": location},
+            "IORegistryEntryChildren": [{"IOObjectClass": "IOBlockStorageDriver", "Statistics": {
+                "Bytes (Write)": written, "Bytes (Read)": 990_000_000_000, "Operations (Write)": 14675448}}]}
+
+
+IOREG_FIXTURE = plistlib.dumps([
+    ioreg_device("Secure Digital", "Internal", 0, "Built In SDXC Reader"),
+    ioreg_device("Apple Fabric", "Internal", 638_973_984_768, "APPLE SSD AP0512Z"),
+    ioreg_device("USB", "External", 17_216_610_304, "ORICO-1T B"),            # the kit SSD the runner lives on
+    ioreg_device("USB", "External", 9_670_848_512, "ORICO"),
+    ioreg_device("PCI-Express", "External", 4_000_000_000_000, "Thunderbolt NVMe"),
+])
+
+VM_STAT_FIXTURE = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                   566265.
+Pages wired down:                             385412.
+"Translation faults":                      803171829.
+Pageouts:                                      42961.
+Swapins:                                    11673995.
+Swapouts:                                   20938938.
+"""
+
+
+class SsdWearParsingTests(unittest.TestCase):
+    """The SSD-write and swapout readers, on fixture text: no sudo, no real disk."""
+
+    def test_only_the_internal_apple_fabric_disk_is_counted(self):
+        self.assertEqual(ssd_wear.internal_ssd_written(IOREG_FIXTURE), 638_973_984_768,
+                         "the SD reader, the USB kit SSDs and a Thunderbolt NVMe must not be counted")
+
+    def test_two_internal_nand_drivers_are_added_and_no_internal_disk_is_none(self):
+        two = plistlib.dumps([ioreg_device("Apple Fabric", "Internal", 10), ioreg_device("Apple Fabric", "Internal", 5)])
+        self.assertEqual(ssd_wear.internal_ssd_written(two), 15)
+        self.assertIsNone(ssd_wear.internal_ssd_written(plistlib.dumps([ioreg_device("USB", "External", 7)])))
+        self.assertIsNone(ssd_wear.internal_ssd_written(b"not a plist"))
+        self.assertIsNone(ssd_wear.internal_ssd_written(b""))
+        self.assertIsNone(ssd_wear.internal_ssd_written(plistlib.dumps({"a": 1})))
+
+    def test_swapouts_pages_are_multiplied_by_the_page_size(self):
+        self.assertEqual(ssd_wear.swapouts_bytes(VM_STAT_FIXTURE, "16384\n"), 20938938 * 16384)
+        self.assertEqual(ssd_wear.swapouts_bytes(VM_STAT_FIXTURE), 20938938 * 16384, "the vm_stat header is the fallback")
+        self.assertEqual(ssd_wear.swapouts_bytes(VM_STAT_FIXTURE, "4096"), 20938938 * 4096, "`pagesize` wins")
+        self.assertEqual(ssd_wear.swapouts_bytes("Swapouts: 10.\n"), 10 * 16384, "no header at all: Apple Silicon's 16384")
+        self.assertIsNone(ssd_wear.swapouts_bytes("Pages free: 1.\n"))
+        self.assertIsNone(ssd_wear.swapouts_bytes(""))
+
+    def test_a_clip_gets_gross_swapouts_and_net_after_the_idle_baseline(self):
+        a = {"t": 100.0, "ssd": 10e9, "swapouts": 1e9}
+        b = {"t": 160.0, "ssd": 13e9, "swapouts": 3.5e9}
+        self.assertEqual(ssd_wear.clip_columns(a, b, 0.6),
+                         {"ssd_written_gb": 3.0, "swapouts_gb": 2.5, "ssd_written_baseline_gb_per_min": 0.6, "ssd_written_net_gb": 2.4})
+        self.assertEqual(ssd_wear.clip_columns(a, {**b, "t": 100.0 + 600}, 0.6)["ssd_written_net_gb"], 0.0, "net never goes below zero")
+        none = ssd_wear.clip_columns(a, b, None)
+        self.assertEqual((none["ssd_written_gb"], none["ssd_written_net_gb"], none["ssd_written_baseline_gb_per_min"]), (3.0, "", ""))
+        back = ssd_wear.clip_columns(b, a, 0.6)   # a reboot between the readings: the counter went backwards
+        self.assertEqual((back["ssd_written_gb"], back["swapouts_gb"], back["ssd_written_net_gb"]), ("", "", ""))
+        missing = ssd_wear.clip_columns({"t": 1.0, "ssd": None, "swapouts": None}, b, 0.6)
+        self.assertEqual((missing["ssd_written_gb"], missing["swapouts_gb"]), ("", ""))
+        self.assertEqual(list(ssd_wear.clip_columns(a, b, 0.6)), ssd_wear.COLUMNS)
+
+    def test_the_idle_baseline_is_gb_per_minute_over_the_real_elapsed_time(self):
+        snaps = iter([{"t": 0.0, "ssd": 1e9, "swapouts": 0}, {"t": 30.0, "ssd": 1.3e9, "swapouts": 0}])
+        slept = []
+        with mock.patch.object(ssd_wear, "snapshot", lambda: next(snaps)):
+            self.assertAlmostEqual(ssd_wear.baseline_gb_per_min(30, sleep=slept.append), 0.6)
+        self.assertEqual(slept, [30])
+        snaps = iter([{"t": 0.0, "ssd": None, "swapouts": 0}, {"t": 30.0, "ssd": 1e9, "swapouts": 0}])
+        with mock.patch.object(ssd_wear, "snapshot", lambda: next(snaps)):
+            self.assertIsNone(ssd_wear.baseline_gb_per_min(30, sleep=lambda s: None))
+
+    def test_the_summary_lines_say_gb_per_minute_of_audio_and_tb_per_year(self):
+        rows = [{"ssd_written_net_gb": "2.4", "audio_seconds": "30", "generation_seconds": "90", "swapouts_gb": "1.0"},
+                {"ssd_written_net_gb": "3.6", "audio_seconds": "30", "generation_seconds": "90", "swapouts_gb": "2.0"},
+                {"ssd_written_net_gb": "", "audio_seconds": "30", "generation_seconds": "90"}]   # unmeasured: left out
+        per_min, year = ssd_wear.wear_lines(rows)
+        self.assertIn("About 6.00 GB written to this Mac's SSD per minute of audio", per_min)   # 6.0 GB over 1 minute of audio
+        self.assertIn("swapouts 3.00 GB", per_min)
+        # 6.0 GB per 180 s = 120 GB per hour of generation; x 8 h x 365 days = 350.4 TB
+        self.assertIn("At 8 hours of generation a day, \u2248 350.4 TB/year", year)
+        self.assertIn("120.0 GB per hour of generation", year)
+        self.assertEqual(ssd_wear.wear_lines([]), [])
+        self.assertEqual(ssd_wear.wear_lines([{"ssd_written_net_gb": "", "audio_seconds": "1", "generation_seconds": "1"}]), [])
+        self.assertAlmostEqual(ssd_wear.tb_per_year(6.0, 180, 8), 350.4)
+        # another runner reuses it per image
+        img = ssd_wear.wear_lines([{"ssd_written_net_gb": "1.5", "images": "3", "generation_seconds": "60"}], unit="image", units_key="images", units_per=1.0)
+        self.assertIn("About 0.50 GB written to this Mac's SSD per image", img[0])
+
 
 class BypassTests(unittest.TestCase):
     """The guard is bypassed at once, nothing waits or aborts for swap, a hung or dead model is recorded and skipped, and the guard is put back."""
@@ -225,6 +336,34 @@ class BypassTests(unittest.TestCase):
         self.assertIn("FITS WITH THE GUARD BYPASSED", summary)
         self.assertIn("Recommended free-memory requirement: 2.6 GB (worker peak 2.35 GB + 0.25 GB margin; the Hub's default is 3.2 GB)", summary)
         self.assertEqual(json.loads(ns["RESTORE"].read_text()), {})
+
+    def test_every_clip_records_ssd_writes_swapouts_the_baseline_and_net_and_the_summary_says_it_in_words(self):
+        ns, log, rows, summary, status = self.run_main({"admission": True}, models=("qwen3",))
+        self.assertEqual(ns["ssd_wear"].state["baselines"], 1, "one idle baseline per run, before the first clip")
+        for r in rows:   # fake: 3 GB written, 1 GB swapped out, 60 s per clip window, idle baseline 0.6 GB/min
+            self.assertEqual((r["ssd_written_gb"], r["swapouts_gb"], r["ssd_written_baseline_gb_per_min"], r["ssd_written_net_gb"]),
+                             ("3.0", "1.0", "0.6", "2.4"))
+        # 2 clips x 2.4 GB net over 2 x 1 s of audio = 144 GB per minute of audio
+        self.assertIn("About 144.00 GB written to this Mac's SSD per minute of audio", summary)
+        self.assertRegex(summary, r"At 8 hours of generation a day, \u2248 [\d.]+ TB/year")
+        self.assertIn("INTERNAL disk", summary)
+
+    def test_when_the_internal_disk_cannot_be_read_the_columns_are_blank_and_the_summary_says_so(self):
+        ns = runner()
+        ns["ssd_wear"].snapshot = lambda: {"t": time.time(), "ssd": None, "swapouts": None}
+        ns["ssd_wear"].baseline_gb_per_min = lambda seconds, **_: None
+        call, log = MemoryStallTests.fake_hub(self, {QWEN}, restore_file=ns["RESTORE"], admission=True)
+        chosen = [m for m in ns["MODELS"] if m["key"] == "qwen3"]
+        out = tempfile.mkdtemp()
+        ns.update(call=call, voice_pids=lambda rows: [1], pressure_level=lambda: 1, footprint=lambda pid: (1e9, 1e9), swap_gb=lambda: 0.0,
+                  precheck=lambda: ("0.6.125", chosen, {"S2": "hello", "S4": "hello"}))
+        with mock.patch.dict("os.environ", {"TTS8_OUT": out}), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ns["main"](), 0)
+        folder = next(Path(out).iterdir())
+        rows = list(csv.DictReader(io.StringIO((folder / "results.csv").read_text())))
+        self.assertEqual({tuple(r[c] for c in ssd_wear.COLUMNS) for r in rows}, {("", "", "", "")})
+        self.assertEqual([r["status"] for r in rows], ["completed"] * 2)
+        self.assertIn("SSD writes: not measured", (folder / "summary.txt").read_text())
 
     def test_s4_is_opt_in(self):
         ns, log, rows, summary, status = self.run_main({"admission": True}, models=("voxcpm2",), with_s4=True)

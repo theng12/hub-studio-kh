@@ -18,8 +18,8 @@ APP="${STUDIOHUB_APP:-/Applications/Studio Hub.app}"
 if [ ! -f "$TARGET" ]; then
     echo "eight-gb-tts-run.sh is not beside this file."
     echo
-    echo "Keep RUN-8GB-TTS.command, eight-gb-tts-run.sh, tts-script-S2.txt and tts-script-S4.txt in the"
-    echo "same folder - the kit's Technical folder has all four."
+    echo "Keep RUN-8GB-TTS.command, eight-gb-tts-run.sh, ssd_wear.py, tts-script-S2.txt and tts-script-S4.txt in the"
+    echo "same folder - the kit's Technical folder has all five."
     echo
     echo "Looked in: $HERE"
     exit 1
@@ -32,7 +32,8 @@ echo "bf16, each reading the same short text in the two owner voices. It does NO
 echo "Studio Hub to bypass its free-memory guard for each model and just runs it. A clip that runs longer than"
 echo "8 minutes is stopped and recorded as 'timed out'; a model that crashes is recorded and the next one goes"
 echo "on. It writes a results folder beside this file, installs nothing and deletes nothing, and puts the Hub's"
-echo "memory setting back at the end (even if you close this window). Expect roughly 10 to 30 minutes."
+echo "memory setting back at the end (even if you close this window). It also records how much each clip writes to this Mac's"
+echo "own SSD (after a 30-second idle sample). Expect roughly 10 to 30 minutes."
 echo "(The 3-minute text is off; in Terminal, \"bash eight-gb-tts-run.sh --with-s4\" adds it. Slow on 8 GB.)"
 echo
 echo "Before you go on: close your other apps, keep the Mac on power, and make sure Studio Hub is open."

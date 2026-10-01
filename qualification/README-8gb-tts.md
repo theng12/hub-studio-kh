@@ -12,8 +12,8 @@ can be laid beside the 32 GB Mac's. Labels: **[M]** measured, **[I]** inference.
 3. Leave the Mac alone. When it says "Finished", read `summary.txt` in the new results folder beside
    the script (or send the whole folder back).
 
-Keep `RUN-8GB-TTS.command`, `eight-gb-tts-run.sh`, `tts-script-S2.txt` and `tts-script-S4.txt` together
-(the kit's Technical folder has all four). If Finder refuses the double-click ("unidentified
+Keep `RUN-8GB-TTS.command`, `eight-gb-tts-run.sh`, `ssd_wear.py`, `tts-script-S2.txt` and `tts-script-S4.txt` together
+(the kit's Technical folder has all five). If Finder refuses the double-click ("unidentified
 developer"), right-click it > Open, once.
 
 ## What it does now (short version)
@@ -34,7 +34,7 @@ developer"), right-click it > Open, once.
 - **The 3-minute text (S4) is off.** On 8 GB it ran 45 minutes without finishing. To add it anyway, open Terminal in the
   `Technical` folder and run `bash eight-gb-tts-run.sh --with-s4` (the S4 limit is 3 x 8 = 24 minutes per clip).
 
-**How long:** usually **10 to 30 minutes** for the whole thing. The worst case is about 8 minutes per model (one
+**How long:** usually **10 to 30 minutes** for the whole thing, plus 30 seconds at the start while the Mac sits idle (the SSD baseline below). The worst case is about 8 minutes per model (one
 timed-out clip per model, then it moves on) plus loading, so about 25 minutes. Closing the window stops it;
 whatever finished is already saved. It loads each model from cold, which is part of what is being measured.
 
@@ -74,6 +74,25 @@ memory pressure (normal / warning / critical), swap before / after / peak, how m
 Mac stayed responsive (a poll or sampling pass that stalls for 20 s+ counts as not responsive). A clip over 3x its 32 GB
 time is flagged.
 
+**SSD wear (how much each clip writes to this Mac's own SSD).** The point is to estimate wear from swap, so per clip it also
+records, in `results.csv` (decimal GB, 1 GB = 1e9 bytes; read with no sudo and nothing installed):
+
+- `ssd_written_gb` - bytes written to the **internal** boot disk during the clip (the "Bytes (Write)" counter that
+  `ioreg -c IOBlockStorageDriver` shows), after minus before. The internal disk is the block device on **Apple Fabric**
+  (the Apple NVMe) whose location is **Internal**. The external kit SSD the script lives on (USB or Thunderbolt: location
+  External) and the built-in SD card reader are not counted. If the results folder lands on the Desktop (drive read-only),
+  its few MB of audio count as internal writes.
+- `swapouts_gb` - `vm_stat` "Swapouts" pages, after minus before, times the page size (`pagesize`, 16384 on Apple Silicon).
+- `ssd_written_baseline_gb_per_min` - what this Mac writes to the internal SSD per minute while idle, from a 30 s sample after
+  the "no active Hub jobs" check and before the first clip (same value on every row; `TTS8_BASELINE_S=0` skips it).
+- `ssd_written_net_gb` - `ssd_written_gb` less baseline x the clip's duration, never below 0. This is the one to use.
+
+Everything the Mac writes in that window counts, not only swap (the Hub's own files, logs, caches), which is why the baseline is
+taken off; it is still not "swap only". `summary.txt` turns the completed clips into words, per model: *about X GB written to this
+Mac's SSD per minute of audio*, and *at 8 hours of generation a day, about Y TB/year* (net GB per hour of generation x 8 h x 365).
+That is a rough one-run estimate. If the internal disk cannot be found the columns stay empty and the summary says so.
+The code is `ssd_wear.py`, beside the script (the Image runner reuses it).
+
 ## What you get
 
 A folder named `TTS 8GB Run <date-time>` beside the script (on the drive; `~/Desktop` if the drive is read-only), holding:
@@ -86,7 +105,7 @@ A folder named `TTS 8GB Run <date-time>` beside the script (on the drive; `~/Des
   peak + 0.25 GB**, labelled as measured on this Mac.
 - `results.csv` - one row per clip: the same columns as the 32 GB `summary.csv`, plus status, error, memory pressure, swap
   before/after/peak, machine RAM, macOS and app version, chip, the 32 GB reference time and the ratio, `guard_relaxed`,
-  `override_used_gb`, `measured_peak_gb`, `swap_delta_gb`, `worker_restarts`, `verdict` and a few more.
+  `override_used_gb`, `measured_peak_gb`, `swap_delta_gb`, `worker_restarts`, `verdict`, the four SSD columns above and a few more.
 - the WAVs, to listen to; `run.log`, a copy of what was printed.
 
 **Two things to know when reading the memory.** The 32 GB Mac reported 17-22 GB for the Qwen and VoxCPM2 workers
@@ -104,7 +123,7 @@ Runs S2 in Chris's voice for each model (three clips, a few minutes on a 32 GB M
 evidence). Other switches: `--models qwen3,voxcpm2,omnivoice` picks models; `--with-s4` adds the 3-minute text.
 
 Settings (all optional, set in Terminal before the command): `TTS8_TIMEOUT=480` seconds per short clip (the 3-minute text gets
-3x); `TTS8_RELAX_FREE_GB=0` the free-memory requirement during a model; `TTS8_S4=1` same as `--with-s4`. `TTS8_MEM_WAIT=300`
+3x); `TTS8_RELAX_FREE_GB=0` the free-memory requirement during a model; `TTS8_S4=1` same as `--with-s4`; `TTS8_BASELINE_S=30` seconds of idle SSD-write sampling before the first clip (0 skips it). `TTS8_MEM_WAIT=300`
 only matters on a Hub older than 0.6.125 that cannot bypass: a job held for memory that long is recorded `did not start`.
 
 Note: the Hub keeps the audio of each job like any other job and cleans it by its own retention rule.

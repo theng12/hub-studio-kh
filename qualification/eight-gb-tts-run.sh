@@ -22,6 +22,11 @@
 # than 3x the 32 GB time is flagged. It writes a timestamped folder beside this script (or on the
 # Desktop when the drive is read-only): the WAVs, results.csv and a short plain-English summary.txt.
 #
+# SSD wear (for estimating wear from swap): per clip, the GB written to this Mac's INTERNAL SSD (ssd_written_gb; ioreg, no sudo,
+# the external kit SSD is excluded), the swapouts (swapouts_gb; vm_stat) and, from a 30 s idle sample before the first clip, the
+# background write rate (ssd_written_baseline_gb_per_min) and the clip's net writes (ssd_written_net_gb). The summary says it in
+# words (GB per minute of audio, TB/year at 8 h of generation a day). The code is in ssd_wear.py, which must sit beside this script.
+#
 # Before each model it asks the Hub to release the idle Studios' models (never a running job) and records the
 # free memory the Hub sees and what holds the rest. Then it BYPASSES the Hub's free-memory guard for that model
 # (PUT /api/hub/memory/admission, Hub 0.6.125+: the free-memory requirement goes to TTS8_RELAX_FREE_GB, default 0)
@@ -43,7 +48,7 @@
 # Nothing to edit. Knobs (all optional): TTS8_TIMEOUT=480 (seconds per short clip; S4 gets 3x), TTS8_RELAX_FREE_GB=0
 # (the free-memory requirement while a model is measured), TTS8_S4=1 (also run the 3-minute text), TTS8_MEM_WAIT=300
 # (only for a Hub that cannot bypass), TTS8_OUT=<folder> (where the results folder goes), TTS8_READY_FILE=<hub-ready.json>,
-# STUDIOHUB_APP=<app>.
+# TTS8_BASELINE_S=30 (seconds of idle SSD-write sampling before the first clip; 0 skips it), STUDIOHUB_APP=<app>.
 set -u
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 SELF="${BASH_SOURCE[0]}"
@@ -77,6 +82,12 @@ import atexit, csv, json, os, re, signal, subprocess, sys, threading, time, urll
 from pathlib import Path
 
 HERE, APP, ARGS = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3:]
+sys.path.insert(0, str(HERE))
+try:
+    import ssd_wear   # beside this script: reads the internal SSD's write counter and swapouts (shared with the other 8 GB runners)
+except ImportError:
+    print(f"\nSTOPPED: ssd_wear.py is not beside this script.\n\n  Keep it in the same folder (the kit's Technical folder has it).\n  Looked in: {HERE}\n\nNothing was run and no results were written.", file=sys.stderr)
+    sys.exit(3)
 QUICK = "--quick" in ARGS or os.environ.get("TTS8_QUICK") == "1"
 ALLOW_NON_TARGET = "--allow-non-target" in ARGS or os.environ.get("TTS8_ALLOW_NON_TARGET") == "1"
 ONLY = None
@@ -94,6 +105,8 @@ MARGIN_GB = 0.25         # the recommended requirement is the measured peak plus
 MIN_VERSION = (0, 6, 125)   # the per-model override route (the bypass) arrived in 0.6.125
 SLOW_FACTOR = 3.0
 STALL_S = 20.0           # a poll or a sampling pass that takes this long means the Mac was not responsive
+BASELINE_S = float(os.environ.get("TTS8_BASELINE_S", "30"))   # idle seconds measured before the first clip to learn this Mac's background SSD writes (0 = skip)
+DAY_HOURS = 8.0          # the extrapolation: hours of generation a day
 
 # Order matters: smallest first. `repo` is the id the Hub's jobs name the model by.
 MODELS = [
@@ -121,7 +134,8 @@ COLUMNS = ["model", "quant", "voice", "script", "audio_seconds", "generation_sec
            "ref_32gb_seconds", "vs_32gb", "slow_flag", "cold_start", "responsive", "max_stall_s",
            "queue_seconds", "footprint_before_gb", "worker_lifetime_peak_gb", "mlx_peak_active_gb", "mem_free_pct_min",
            "free_gb_before", "memory_released", "memory_holders", "needed_free_gb", "had_free_gb", "hub_reason",
-           "guard_relaxed", "override_used_gb", "measured_peak_gb", "swap_delta_gb", "hub_free_floor_gb", "verdict", "worker_restarts"]
+           "guard_relaxed", "override_used_gb", "measured_peak_gb", "swap_delta_gb", "hub_free_floor_gb", "verdict", "worker_restarts",
+           ] + ssd_wear.COLUMNS
 
 LOG = None
 def say(msg=""):
@@ -531,6 +545,7 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
     rec["free_gb_before"] = "" if fg is None else fg
     say(f"    Free memory as the Hub counts it: {rec['free_gb_before']} GB")
     swap0, fp0 = swap_gb(), worker_footprint_now()
+    snap0 = ssd_wear.snapshot()   # internal-SSD writes and swapouts at the moment the job is sent
     rec["swap_before_gb"] = "" if swap0 is None else swap0
     rec["footprint_before_gb"] = round(fp0 / 1e9, 2)
     sampler = Sampler(); sampler.start()
@@ -598,6 +613,7 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
                        verdict=("does not fit - even with the guard lowered to %g GB the Hub held the job back" % RELAX_GB
                                 if relaxed else "held back at the default guard"))
             sampler.halt = True; sampler.join(60)
+            rec.update(ssd_wear.clip_columns(snap0, ssd_wear.snapshot(), ctx.get("ssd_base")))
             return rec
         if state == "done":
             s, data = call("GET", f"/api/hub/jobs/{bid}/items/0/artifact", raw=True, timeout=300)
@@ -622,6 +638,7 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
         rec["status"] = "failed"; rec["error"] = err_text(str(e))
     sampler.halt = True; sampler.join(60)
     swap1 = swap_gb()
+    rec.update(ssd_wear.clip_columns(snap0, ssd_wear.snapshot(), ctx.get("ssd_base")))
     ru = (item.get("resource_usage") or {}) if isinstance(item, dict) else {}
     cpu = sampler.other_cpu
     mean_cpu = sum(cpu) / len(cpu) if cpu else 0
@@ -725,6 +742,11 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
             lines.append(f"    Recommended free-memory requirement: {measured + MARGIN_GB:.1f} GB (worker peak {measured:.2f} GB + {MARGIN_GB:g} GB margin; "
                          f"the Hub's default is {floor or 'not recorded'} GB). Measured on this {RAM_GB} GB Mac, in this run only"
                          + ("" if ON_TARGET else " - and it is not an 8 GB Mac, so not 8 GB evidence") + ".")
+        wear = ssd_wear.wear_lines(done, hours_per_day=DAY_HOURS)
+        if wear:
+            lines += ["    " + l for l in wear]
+        elif done:
+            lines.append("    SSD writes: not measured (the internal disk was not found, or a counter was missing) - see results.csv.")
         for r in mine:
             if r["status"] not in ("completed", "skipped") and not (refused and r is refused) and not (failed and not done and r is failed):
                 lines.append(f"    {r['voice']} {r['script']}: {r['status']} - {r.get('error') or 'no reason given'}")
@@ -733,6 +755,9 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
               "Peak is the largest memory the voice worker used (macOS 'footprint', sampled every second, so a very short",
               "spike can be missed; worker_lifetime_peak_gb in results.csv is macOS's own all-time peak for that process).",
               "The first clip of each model includes loading it. results.csv has every number per clip.",
+              "SSD writes: bytes written to this Mac's INTERNAL disk during the clip (ioreg, no sudo; the external kit SSD is excluded), swapouts from vm_stat,",
+              f"and the idle baseline measured for {BASELINE_S:g} s before the first clip; net = gross less baseline x the clip's duration. Decimal GB. Everything the Mac writes",
+              "in that window counts, not only swap (the Hub's own files too), which is why the baseline is taken off.",
               f"Memory guard: before each model the Hub's free-memory requirement was bypassed (set to {RELAX_GB:g} GB, TTS8_RELAX_FREE_GB) with no waiting, and put back after",
               "the model and on any exit. Nothing is cancelled for swap or memory pressure - they are recorded. Every clip has a hard time limit; one that",
               "runs over is 'timed out' (cancelled), one that dies is 'failed' with the error, and the model's remaining clips are skipped.",
@@ -784,6 +809,13 @@ def main():
         return 3
     say("                OK - no active Hub jobs.")
     say("")
+    ctx0_base = None
+    if BASELINE_S > 0:
+        say(f"Measuring this Mac's background SSD writes for {BASELINE_S:g} s while it is idle (so they can be taken off each clip) ...")
+        ctx0_base = ssd_wear.baseline_gb_per_min(BASELINE_S)
+        say("  internal SSD, idle: " + ("not measurable here (internal disk or counter not found); the ssd_* columns stay empty"
+                                         if ctx0_base is None else f"{ctx0_base:.3f} GB per minute"))
+        say("")
     say(f"{len(jobs)} clip(s), one at a time" + ("" if WITH_S4 or QUICK else " (the 3-minute text is off; --with-s4 adds it)")
         + f". The 32 GB Mac needed about {max(ref_total / 60, 1):.0f} minute(s) of generation for the same work.")
     worst = sum(clip_limit(s[0]) for s in scripts) / 60 * len(models)   # one clip per model can time out, then the model's others are skipped
@@ -797,7 +829,7 @@ def main():
     say(f"Results go to: {out}")
     started = time.strftime("%Y-%m-%d %H:%M:%S")
     rows = []; finished = False
-    ctx = {"hub_ver": hub_ver, "floors": {}}
+    ctx = {"hub_ver": hub_ver, "floors": {}, "ssd_base": ctx0_base}
     for m in models:   # the Hub's own requirement for each model, for the summary (Hub 0.6.125+; blank on an older one)
         d = guard.info(m["repo"])
         if d:
@@ -835,7 +867,9 @@ def main():
                 if rec["status"] == "completed":
                     say(f"    completed: {rec['generation_seconds']} s for {rec['audio_seconds']} s of audio (RTF {rec['rtf']}), "
                         f"peak {rec['peak_memory_gb']} GB, swap {rec['swap_before_gb']} -> {rec['swap_after_gb']} GB, "
-                        f"pressure {rec['memory_pressure']}" + (f", SLOW: {rec['vs_32gb']}x the 32 GB time" if rec.get("slow_flag") == "yes" else "")
+                        f"pressure {rec['memory_pressure']}"
+                        + (f", SSD written {rec['ssd_written_gb']} GB (net {'n/a' if rec['ssd_written_net_gb'] == '' else rec['ssd_written_net_gb']}), swapouts {rec['swapouts_gb']} GB" if rec.get("ssd_written_gb") != "" else "")
+                        + (f", SLOW: {rec['vs_32gb']}x the 32 GB time" if rec.get("slow_flag") == "yes" else "")
                         + ("" if rec.get("responsive") == "yes" else ", Mac stopped responding for a while"))
                 else:
                     say(f"    {rec['status'].upper()}: {rec.get('error')}")
