@@ -1639,19 +1639,25 @@ def item_errors(b: dict) -> list[dict]:
     return rows
 
 
-def _batch_stalled_seconds(active: bool, activity_at: list, now: float) -> float | None:
+def _batch_stalled_seconds(active: bool, activity_at: list, now: float,
+                           capacity_waiting_s: float | None = None) -> float | None:
     """Seconds this batch has been silent while active, or ``None`` when it has not been.
 
     Reuses `stall.STALL_AFTER_S` rather than inventing a second threshold: one number decides
     how long silence has to last before it means something, whether the clock being read is a
-    worker's report receipt or a batch's own progress.
+    worker's report receipt or a batch's own progress. ``capacity_waiting_s`` is the other way a
+    batch is silent: refused for memory, attempt after attempt - each attempt re-stamps the
+    progress clock, so that wait is measured from its first refusal instead.
     """
     if not active:
         return None
+    candidates = []
     stamps = [v for v in activity_at if isinstance(v, (int, float)) and v > 0]
-    if not stamps:
-        return None
-    silent_for = now - max(stamps)
+    if stamps:
+        candidates.append(now - max(stamps))
+    if capacity_waiting_s is not None:
+        candidates.append(capacity_waiting_s)
+    silent_for = max(candidates, default=0.0)
     return round(silent_for, 1) if silent_for > stall.STALL_AFTER_S else None
 
 
@@ -1736,11 +1742,7 @@ def batch_summary(b: dict) -> dict:
         # OWN progress clock (`last_progress_at` and friends), because that is what the Jobs page
         # shows and what "has anything moved?" means to the person watching it.
         # **Visible, never destructive**: nothing is cancelled on the strength of this.
-        "stalled_seconds": max(
-            (value for value in (_batch_stalled_seconds(active, activity_at, now),
-                                 capacity_waiting_s if capacity_waiting_s is not None
-                                 and capacity_waiting_s > stall.STALL_AFTER_S else None)
-             if value is not None), default=None),
+        "stalled_seconds": _batch_stalled_seconds(active, activity_at, now, capacity_waiting_s),
         "capacity_waiting_s": capacity_waiting_s,
         "capacity_refusals": max((int(i.get("capacity_failures") or 0) for i in items), default=0),
         # Same rule as the transcription summary: a note explains a job that is waiting, and a
