@@ -39,7 +39,7 @@ from . import routing as routing_rule
 from .memory_control import FleetMemoryControl, SUPPORTED_MODALITIES
 from .peers import studio_request
 from .monitor import is_cached
-from .registry import DATA_DIR, base_url, machine_enabled, studio_enabled
+from .registry import DATA_DIR, base_url, label_for, machine_enabled, studio_enabled
 from .resources import host_stats
 from . import stall
 from . import update_drain
@@ -223,6 +223,11 @@ INFRA_RETRY_DELAYS_S = (5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 300.0)
 CAPACITY_RETRY_S = 30.0
 CAPACITY_RETRY_MAX_S = 300.0
 CAPACITY_RELEASE_ATTEMPTS = 3
+# The owner's rule (2026-10-01): a Mac that has refused the same job for memory this many times does
+# not keep it. The Hub hands it back with the typed error below so the Gateway can route it to
+# another Mac (a pinned job fails with the same, clear, error). ~4 minutes with the back-off.
+CAPACITY_HANDBACK_AFTER = 3
+INSUFFICIENT_MEMORY = "INSUFFICIENT_MEMORY"
 # A Mac another queue has reserved is not free *yet*. It is not a reason to park the item: the
 # refusal takes that machine out of selection for this long - for every item aimed at it, through
 # `_machine_reserved_until` - and the dispatcher's own heartbeat retries after that. It keeps its
@@ -890,6 +895,25 @@ def _is_capacity_failure(message: str) -> bool:
         "memoryguarderror", "memory guard paused", "waiting for memory",
         "not enough memory", "insufficient memory",
     ))
+
+
+async def _insufficient_memory_text(b: dict, studio: dict, failures: int) -> str:
+    """The sentence an operator (and the Gateway's user) reads when a Mac hands a job back: which Mac,
+    how much it needs and how much it has - from the Hub's own admission policy and host snapshot."""
+    machine = label_for(studio.get("machine", "local"))
+    need = free = None
+    try:
+        entry = await _catalog_entry(studio, b["model"])
+        mem = _admission_requirements(b["model"], entry) if entry else None
+        need = _required_free_memory(mem) if mem else None
+        host = _host_for_studio(studio)
+        free = float(host["available_gb"]) if host else None
+    except (KeyError, TypeError, ValueError):
+        pass
+    numbers = (f"needs about {need:.1f} GB free and has about {free:.1f} GB free"
+               if need is not None and free is not None else "does not have enough free memory")
+    return (f"{machine} {numbers} for {b['model']} (it refused {failures} times). "
+            f"Another Mac with more free memory can run this job.")
 
 
 def _is_transport_failure(exc: BaseException, message: str) -> bool:
@@ -4104,12 +4128,20 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             # attempt. Avoid this Mac briefly so another healthy worker can
             # steal the item; if none can, keep it queued until memory clears.
             #
-            # Not bounded (the owner wants the work queued, not failed - see the MACHINE_BUSY
-            # note below), but it backs off: the first refusals release idle siblings and retry
-            # soon, a repeating one stops unloading the Mac's other studios every cycle and
-            # retries at most every CAPACITY_RETRY_MAX_S.
+            # Bounded by the owner's rule: after CAPACITY_HANDBACK_AFTER refusals the job is handed
+            # back (below). Until then it backs off: the first refusals release idle siblings and
+            # retry soon, the next one waits longer (CAPACITY_RETRY_S doubling, at most
+            # CAPACITY_RETRY_MAX_S). A reserved Mac (MACHINE_BUSY, below) is a different wait and
+            # is still unbounded.
             failures = int(item.get("capacity_failures") or 0) + 1
             item["capacity_failures"] = failures
+            if failures >= CAPACITY_HANDBACK_AFTER:
+                # Hand it back, typed: not retryable on this Mac, and not this Mac's failure either
+                # (no machine penalty) - the Gateway re-routes it to another eligible Mac.
+                item.update(state="error", retry_at=None, error_code=INSUFFICIENT_MEMORY,
+                            error=await _insufficient_memory_text(b, studio, failures))
+                item["tries"] = max(0, int(item.get("tries") or 0) - 1)
+                return
             handoff = (await release_idle_siblings(client, studio)
                        if failures <= CAPACITY_RELEASE_ATTEMPTS else {"released": 0})
             item["tries"] = max(0, int(item.get("tries") or 0) - 1)
