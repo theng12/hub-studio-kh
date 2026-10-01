@@ -627,6 +627,20 @@ def _last_known_startup(row: dict[str, Any]) -> dict[str, Any] | None:
             "services_running": None, "app_reporting": False}
 
 
+_CURRENT_JOB_KEYS = ("job_id", "modality", "model", "label", "started_at")
+
+
+def _current_job_of(value: object) -> dict[str, Any] | None:
+    """The job a node reports it is on, cut to the five fields the fleet views publish.
+
+    A node is another machine's word, so nothing beyond the contract is carried through: no
+    prompt text or extra fields a future node might add reach the controller's own answers.
+    """
+    if not isinstance(value, dict) or not value.get("job_id"):
+        return None
+    return {key: value.get(key) for key in _CURRENT_JOB_KEYS}
+
+
 def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     """A probe result derived from a peer poll's snapshot.
 
@@ -637,7 +651,8 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
     """
     host = snapshot.get("host") if isinstance(snapshot.get("host"), dict) else {}
     carried = {"host": host, "version": snapshot.get("version"),
-               "startup": _startup_of(snapshot.get("startup"), row)}
+               "startup": _startup_of(snapshot.get("startup"), row),
+               "current_job": _current_job_of(snapshot.get("current_job"))}
     if snapshot.get("auth") is False:
         return {**row, **carried, "state": "unauthorized",
                 "detail": _CREDENTIAL_DETAIL.format(
@@ -713,7 +728,8 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         host = body.get("host") if isinstance(body.get("host"), dict) else {}
         return {**row, "state": "reachable", "detail": None, "host": host,
                 "version": body.get("version"), "source": body.get("source"),
-                "startup": _startup_of(body.get("startup"), row)}
+                "startup": _startup_of(body.get("startup"), row),
+                "current_job": _current_job_of(body.get("current_job"))}
     except (httpx.HTTPError, OSError) as exc:
         # A message that stops at the colon ("could not reach the node: ") reads as though the
         # reason were withheld, and it happens whenever the exception carries an empty message -
@@ -904,6 +920,9 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
         "studios": row.get("studios") or [],
         # What starts when that Mac starts - its own report, or the last one this side heard.
         "startup": row.get("startup") if isinstance(row.get("startup"), dict) else None,
+        # What that Mac said it is working on in the snapshot this row came from; None when idle
+        # or when it runs a Hub that does not report one.
+        "current_job": row.get("current_job") if isinstance(row.get("current_job"), dict) else None,
     }
 
 

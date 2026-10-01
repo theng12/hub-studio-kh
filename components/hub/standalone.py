@@ -1282,8 +1282,20 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # does: it is the only thing a controller has to go on for a Mac it does not own, and "will
         # this Mac serve after a reboot" is the question a fleet owner asks of every one of them.
         # Not on `/api/health`, which is public: a person's login settings are not for strangers.
+        # What this Mac is working on right now, so a controller (and the Gateway through it) can
+        # say which job a node is running instead of only that it is busy. `None` when idle.
+        try:
+            from .backend import activity as activity_view
+            from .backend import peers as peer_view
+            local_jobs = activity_view.current_jobs(
+                [worker for worker in monitor.registry if peer_view.is_local_studio(worker)],
+                monitor.status, activity_view.live_batches())
+            local_job = next(iter(local_jobs.values()), None)
+        except Exception:
+            local_job = None
         return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version(),
-                "disk": host.get("disk"), "startup": _startup_snapshot()}
+                "disk": host.get("disk"), "startup": _startup_snapshot(),
+                "current_job": local_job}
 
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:
@@ -1467,8 +1479,17 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         from .backend import fleet_nodes as fleet
         from .backend import ledger, peers
         from .backend import resources as resource_stats
+        from .backend import activity as activity_view
         measured = ledger.stats().get("by_machine") or {}
         local_role = str(control_plane.load_settings().get("role") or "standalone")
+        # The job each machine is on right now, from the activity this Hub already holds for every
+        # registered studio, local or remote. A machine absent here is not working (or not known to
+        # be): the field is None rather than a guess.
+        try:
+            working_on = activity_view.current_jobs(
+                monitor.registry, monitor.status, activity_view.live_batches())
+        except Exception:
+            working_on = {}
         pool = await fleet.pool()
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -1555,6 +1576,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"),
                 "disk": host.get("disk"),
+                "current_job": working_on.get(machine) or (member or {}).get("current_job"),
                 "chip": host.get("chip"),
                 "jobs": stats.get("count", 0),
                 "average_seconds": stats.get("avg_s"),
@@ -1591,6 +1613,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "memory_gb": host.get("total_gb"), "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"), "disk": host.get("disk"),
+                "current_job": working_on.get(machine) or member.get("current_job"),
                 "chip": host.get("chip"),
                 "jobs": (measured.get(machine) or {}).get("count", 0),
                 "average_seconds": (measured.get(machine) or {}).get("avg_s"),

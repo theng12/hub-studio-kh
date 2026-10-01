@@ -26,6 +26,7 @@ REPORTER_CLOCK_SKEW_S = 5 * 60
 _MAX_ID = 160
 _MAX_MODEL = 500
 _MAX_ERROR_CODE = 80
+_MAX_LABEL = 120
 VALID_ORIGINS = frozenset({"hub", "local_ui", "api", "unknown"})
 # A worker names itself with the modality the Hub registers it under, so the
 # Subtitle worker reports "transcription" (its registry modality) and Music
@@ -222,6 +223,8 @@ def _broker_jobs(registry: list[dict], batches: dict,
             result[job_id].append({
                 "id": job_id, "state": state, "studio": studio_id,
                 "machine": studio.get("machine", "local"),
+                "modality": studio.get("modality"),
+                "label": _text(batch.get("label"), _MAX_LABEL),
                 "model": model, "operation": operation, "source": "job",
                 "progress": _finite(item.get("progress"), minimum=0),
                 "origin": "hub", "origin_device": hub_origin_device,
@@ -356,6 +359,7 @@ def _observed_jobs(registry: list[dict], statuses: dict, batches: dict,
                 **job,
                 "machine": studio.get("machine", "local"),
                 "studio": studio_id,
+                "modality": studio.get("modality"),
                 "observed_at": received_at,
                 "activity_received_at": received_at,
                 "reported_at": snapshot["observed_at"],
@@ -363,6 +367,7 @@ def _observed_jobs(registry: list[dict], statuses: dict, batches: dict,
             if owned:
                 row["source"] = "job"
                 row["model"] = owned.get("model") or row["model"]
+                row["label"] = owned.get("label")
                 row["origin"] = "hub"
                 row["origin_device"] = hub_origin_device
             elif ledger.activity_job_is_hub_owned(
@@ -463,6 +468,50 @@ def _state_at(machine: str, statuses: dict, studios: list[dict], live: list[dict
     if reachable and support == {"available"}:
         return "ready", now, None, latest
     return "unknown", now, None, latest
+
+
+def _current_job(row: dict | None) -> dict | None:
+    """The one job a working machine is on, as the fleet views publish it.
+
+    ``{job_id, modality, model, label, started_at}`` and nothing else: ids, the studio's modality,
+    the model's name, who submitted it (the Hub's own batch ``label``, e.g. ``storystudio``) and
+    when it started. No prompt text ever travels here. ``None`` for a machine that is not working,
+    so a reader never has to guess whether an absent job means idle or unknown.
+    """
+    if not row or row.get("state") not in ACTIVE_STATES:
+        return None
+    return {
+        "job_id": row.get("job_id") or row.get("id"),
+        "modality": row.get("modality"),
+        "model": row.get("model"),
+        "label": row.get("label"),
+        "started_at": row.get("started_at"),
+    }
+
+
+def _active_for(live: list[dict], machine: str) -> dict | None:
+    # The same ordering `_state_at` uses, so "the job a machine is working on" has one meaning.
+    active = [row for row in live if row["machine"] == machine and row["state"] in ACTIVE_STATES]
+    active.sort(key=lambda row: (row["state"] != "running",
+                                 -(row.get("updated_at") or row.get("observed_at") or 0)))
+    return active[0] if active else None
+
+
+def current_jobs(registry: list[dict], statuses: dict, batches: dict,
+                 now: float | None = None) -> dict[str, dict]:
+    """machine -> its current job, for every registered machine that is working right now.
+
+    Cheap enough for the node snapshot and the fleet overview: it reads only what the monitor
+    already holds (no ledger history), so a Mac can say what it is doing without a second poll.
+    """
+    now = float(time.time() if now is None else now)
+    live = _observed_jobs(registry, statuses, batches, now)
+    result: dict[str, dict] = {}
+    for machine in _machine_groups(registry):
+        job = _current_job(_active_for(live, machine))
+        if job:
+            result[machine] = job
+    return result
 
 
 def _utilization(machine: str, since_s: float, now: float, *, partial: bool,
@@ -654,6 +703,9 @@ def fleet_snapshot(registry: list[dict], statuses: dict, batches: dict,
             "machine": machine, "state": state, "state_since": state_since,
             "state_duration_s": round(max(0.0, now - state_since), 1),
             "studio": (current or latest or {}).get("studio"),
+            # What this machine is on right now, in one object a Gateway can read without
+            # guessing which of the fields below describe the live job and which the last one.
+            "current_job": _current_job(current),
             "model": (current or latest or {}).get("model"),
             "operation": (current or latest or {}).get("operation"),
             "job_id": (current or latest or {}).get("job_id") or (current or latest or {}).get("id"),
