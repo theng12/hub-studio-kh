@@ -922,6 +922,9 @@ struct StudioContent: View {
                         Text(updating).font(.caption).foregroundStyle(.blue)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    // MERGE POINT (feat/remote-startup): one self-contained line. Keep it, and the
+                    // `StartupSidebarNote` struct at the end of this file, when merging the footer.
+                    StartupSidebarNote(studio: studio)
                     Text("Studio Hub \(appVersion)")
                         .font(.caption2).foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -4126,19 +4129,40 @@ struct StudioContent: View {
         catch { workspace.voiceError = error.localizedDescription }
     }
 
+    /// The two choices that decide whether this Mac is ready after a restart, each with the state it is
+    /// actually in - and the Gateway reads and changes the same two from the fleet. They are separate
+    /// on purpose: the first opens the app, the second brings the Hub and its Studios up with it, and
+    /// a Mac with only the first is open but silent to its controller.
+    @ViewBuilder private var startupSettings: some View {
+        Toggle("Start at login", isOn: Binding(get: { studio.loginStatus == .enabled }, set: { studio.setLogin($0) }))
+        Text(studio.loginStatus == .enabled
+             ? "On: Studio Hub opens by itself when you sign in and relaunches if it crashes. A normal Quit leaves it stopped until you open it or sign in again."
+             : "Off: Studio Hub does not open by itself after a restart.")
+            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        Toggle("Start services on startup", isOn: Binding(
+            get: { studio.configuration.startServicesAtLogin },
+            set: { studio.setStartServicesAtLogin($0) }))
+        Text(studio.configuration.startServicesAtLogin
+             ? "On: signing in brings the Hub and its Studios up on their own, so this Mac is ready for work without anyone opening the app."
+             : "Off: after a restart the app opens but the Hub and its Studios stay stopped until you press Start Services. A Mac in a fleet cannot be reached by its controller while they are stopped.")
+            .font(.callout).foregroundStyle(studio.servicesWillNotAutoStart ? Color.orange : Color.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        if studio.servicesWillNotAutoStart {
+            Text("This Mac belongs to a fleet. Turn this on so it serves again after every restart.")
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+        }
+        Text("A fleet's Gateway can also see and change both settings, and restart the services, from its Fleet page.")
+            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    }
+
     private var settings: some View {
         VStack(alignment: .leading, spacing: 0) {
             heading("Settings", "App behavior, local storage and service controls.").padding(28)
             Form {
+                Section("Startup") {
+                    startupSettings
+                }
                 Section("General") {
-                    Toggle("Start at login", isOn: Binding(get: { studio.loginStatus == .enabled }, set: { studio.setLogin($0) }))
-                    Text("One login item starts Studio Hub at login and relaunches it if it crashes. A normal Quit leaves it stopped until you open it again or next sign in.")
-                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Toggle("Start services at login", isOn: Binding(
-                        get: { studio.configuration.startServicesAtLogin },
-                        set: { studio.setStartServicesAtLogin($0) }))
-                    Text("Off by default. With this on, signing in brings the Hub and its Studios up on their own, so this Mac is ready for work without anyone opening the app. Leave it off and services start when you open the app or press Start Services.")
-                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Text("Closing the window keeps local jobs running. Quit stops the app and its services.").foregroundStyle(.secondary)
                 }
                 Section("Model library") {
@@ -5914,5 +5938,24 @@ struct StudioContent: View {
         let alert = NSAlert(); alert.messageText = "Remove downloaded model?"; alert.informativeText = "Remove \(model.label) from this library. Existing generated files are kept. Models in use or required by another installed model cannot be removed."
         alert.addButton(withTitle: "Keep Model"); alert.addButton(withTitle: "Remove Download")
         if alert.runModal() == .alertSecondButtonReturn { Task { await workspace.removeModel(model) } }
+    }
+}
+
+/// The sidebar's one line about startup: shown only when this Mac is in a fleet and will not bring its
+/// services up after a restart. Such a Mac is silent to its controller until somebody opens it, which
+/// is the thing nobody notices, so it says so beside the status and offers the one click that fixes it.
+struct StartupSidebarNote: View {
+    @ObservedObject var studio: StudioController
+    var body: some View {
+        if studio.servicesWillNotAutoStart {
+            Button { studio.setStartServicesAtLogin(true) } label: {
+                Label("Services won't start after restart. Turn on", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .buttonStyle(.plain).foregroundStyle(Color.orange)
+            .help("This Mac belongs to a fleet but \"Start services on startup\" is off. Click to turn it on.")
+            .accessibilityLabel("Services will not start after a restart. Turn on Start services on startup.")
+        }
     }
 }

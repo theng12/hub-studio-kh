@@ -30,7 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from components import shelved_models
 from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
-from .backend import app_release, chat_jobs, peers, release_sync, shared_voices, transcription_jobs, update_drain, vocabulary
+from .backend import app_release, chat_jobs, peers, release_sync, shared_voices, startup_control, transcription_jobs, update_drain, vocabulary
 from .backend.monitor import StudioMonitor
 
 # The key one unusable manifest carries into the catalog so its row can say what is wrong
@@ -1199,6 +1199,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     def restore_settings() -> dict[str, dict[str, int]]:
         return standalone_config.restore_device_defaults()
 
+    def _startup_snapshot() -> dict[str, Any]:
+        return startup_control.snapshot(startup_control.studio_states(monitor),
+                                        app_version=_app_version())
+
     @app.get("/api/hub/resources")
     def resources(local_only: bool = True) -> dict[str, Any]:
         """This Mac's host and studio snapshot, as a peer Hub reads it.
@@ -1236,7 +1240,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # The version travels with the host snapshot because it is what tells an operator
         # whether a node is running the build they think it is, and a snapshot is the only
         # thing a controller has to go on for a Mac it does not own.
-        return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version()}
+        # What starts when this Mac starts travels with the snapshot for the same reason the version
+        # does: it is the only thing a controller has to go on for a Mac it does not own, and "will
+        # this Mac serve after a reboot" is the question a fleet owner asks of every one of them.
+        # Not on `/api/health`, which is public: a person's login settings are not for strangers.
+        return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version(),
+                "startup": _startup_snapshot()}
 
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:
@@ -1463,6 +1472,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     "studios": {"total": len(on_this_machine),
                                 "up": sum((monitor.status.get(item["id"]) or {}).get("status") == "up"
                                           for item in on_this_machine)},
+                    "startup": _startup_snapshot(),
                 }
             else:
                 snapshot = peers.cached(machine) or {}
@@ -1478,7 +1488,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     detail = member.get("detail")
                     version = member.get("version")
                     host = member.get("host") or {}
+                    startup = member.get("startup")
                 else:
+                    startup = snapshot.get("startup") if isinstance(snapshot.get("startup"), dict) else None
                     reachable = bool(snapshot.get("reachable") and snapshot.get("auth"))
                     health = ("up" if snapshot.get("status") == "connected"
                               else str(snapshot.get("status") or "unknown"))
@@ -1494,6 +1506,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     "version": version,
                     "health": health,
                     "detail": detail,
+                    "startup": startup,
                 }
             stats = measured.get(machine) or {}
             rows.append({
@@ -1535,6 +1548,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "version": member.get("version"),
                 "health": "up" if reachable else str(member.get("state") or "unknown"),
                 "detail": member.get("detail"),
+                "startup": member.get("startup"),
                 "memory_gb": host.get("total_gb"), "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"), "chip": host.get("chip"),
@@ -2029,6 +2043,67 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         """The app on this Mac asks to stop taking new work for an update (``want: true``, renewed
         while it waits) or to resume (``false``). Hub token only. See ``update_drain``."""
         return await update_drain.request(bool(body.get("want")), release_sync.controller_target())
+
+    @app.get("/api/hub/startup")
+    def startup_state() -> dict[str, Any]:
+        """What starts when this Mac starts, and the last things the fleet asked of it."""
+        return {"startup": _startup_snapshot(), "audit": startup_control.recent_audit(20)}
+
+    @app.post("/api/hub/startup/sync")
+    def startup_sync(body: dict[str, Any]) -> dict[str, Any]:
+        """The app on this Mac reports its settings and collects what the fleet asked for.
+
+        The owner's route, and deliberately **not** in the fleet allowlist: it is how this Mac's own
+        app talks to its own Hub, and a fleet credential must not be able to read or answer for it.
+        """
+        return startup_control.sync(body, role=str(control_plane.load_settings().get("role") or "standalone"))
+
+    async def _startup_request(body: dict[str, Any], request: Request, *, actor: str) -> JSONResponse:
+        try:
+            result = await startup_control.request(
+                str(body.get("action") or ""), body.get("value"), force=body.get("force", False),
+                actor=actor, requested_by=body.get("requested_by"),
+                studios=startup_control.studio_states(monitor))
+        except startup_control.StartupRefused as refusal:
+            return JSONResponse(refusal.body(), status_code=refusal.status)
+        return JSONResponse(result)
+
+    @app.post("/api/hub/startup/request")
+    async def startup_request(body: dict[str, Any], request: Request) -> JSONResponse:
+        """Change a startup setting or restart the services on this Mac.
+
+        The Hub token (this Mac's owner) and the Fleet token (its controller, acting for the Gateway)
+        may call it; a node's own credential may not - one Mac must not command another. The change
+        is the app's to make, so this queues it and answers with what the app did. A restart is
+        refused while work is running or waiting, unless ``force`` is true.
+        """
+        from .backend import auth as hub_auth
+        kind = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        if kind == "node":
+            raise HTTPException(403, "a node's own credential cannot change another Mac's startup")
+        return await _startup_request(body, request, actor=kind)
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/startup")
+    async def fleet_node_startup(node_id: str, body: dict[str, Any], request: Request) -> JSONResponse:
+        """A controller passes a startup request to one of its nodes - or applies it to itself.
+
+        ``node_id`` is a joined node's id, or this controller's own (or ``local``). Controller only:
+        the Gateway reaches nodes through here with the Fleet token it already holds.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        kind = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        if kind == "node":
+            raise HTTPException(403, "a node's own credential cannot change another Mac's startup")
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            return await _startup_request(body, request, actor=kind)
+        if control_plane.load_settings().get("role") != "controller":
+            raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+        try:
+            return JSONResponse(await fleet.relay_startup(wanted, body, actor=kind))
+        except fleet.StartupRelayError as error:
+            return JSONResponse(error.body, status_code=error.status)
 
     @app.post("/api/hub/fleet/update-slot")
     def update_slot(body: dict[str, Any], request: Request) -> dict[str, Any]:

@@ -189,7 +189,7 @@ def verify_node_credential(node_id: str, offered: str | None) -> bool:
     return hmac.compare_digest(stored, hash_credential(offered))
 
 
-def note_seen(node_ids: list[str]) -> float | None:
+def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = None) -> float | None:
     """Stamp `last_seen_at` for the nodes that just answered. Returns the stamp, or `None`.
 
     Batched deliberately: `inventory()` probes every node on every fleet read, and a write
@@ -213,6 +213,15 @@ def note_seen(node_ids: list[str]) -> float | None:
         if row is None:
             continue
         row["last_seen_at"] = now
+        known = (startups or {}).get(node_id)
+        if isinstance(known, dict):
+            # Kept so a Mac that later goes quiet is still described by what it last said about its
+            # own startup - the Macs that matter most here are the ones nobody can ask any more.
+            row["last_startup"] = {
+                "open_at_login": known.get("open_at_login"),
+                "start_services_on_launch": known.get("start_services_on_launch"),
+                "observed_at": now,
+            }
         changed = True
     if changed:
         _write(nodes)
@@ -599,6 +608,25 @@ def _unreachable_reason(exc: BaseException) -> str:
     return "unreachable"
 
 
+def _startup_of(value: object, row: dict[str, Any]) -> dict[str, Any] | None:
+    """The ``startup`` object a node reported, or - when it said nothing - what it last said."""
+    return value if isinstance(value, dict) else _last_known_startup(row)
+
+
+def _last_known_startup(row: dict[str, Any]) -> dict[str, Any] | None:
+    """What this controller last heard about the node's startup settings, marked stale.
+
+    ``None`` when it never heard: unknown is shown as unknown, never as off.
+    """
+    known = row.get("last_startup")
+    if not isinstance(known, dict):
+        return None
+    return {"open_at_login": known.get("open_at_login"),
+            "start_services_on_launch": known.get("start_services_on_launch"),
+            "stale": True, "observed_at": known.get("observed_at"),
+            "services_running": None, "app_reporting": False}
+
+
 def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     """A probe result derived from a peer poll's snapshot.
 
@@ -608,14 +636,15 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
     The host facts travel with it, so a roster read still shows what the node is.
     """
     host = snapshot.get("host") if isinstance(snapshot.get("host"), dict) else {}
-    carried = {"host": host, "version": snapshot.get("version")}
+    carried = {"host": host, "version": snapshot.get("version"),
+               "startup": _startup_of(snapshot.get("startup"), row)}
     if snapshot.get("auth") is False:
         return {**row, **carried, "state": "unauthorized",
                 "detail": _CREDENTIAL_DETAIL.format(
                     why=str(snapshot.get("status") or "the credential was refused"))}
     if snapshot.get("reachable") and snapshot.get("auth", True):
         return {**row, **carried, "state": "reachable", "detail": None}
-    return {**row, **carried, "state": "unreachable",
+    return {**row, **carried, "state": "unreachable", "startup": _last_known_startup(row),
             "reason": str(snapshot.get("status") or "unreachable"),
             "detail": f"could not reach the node ({snapshot.get('status') or 'unreachable'})"}
 
@@ -641,6 +670,7 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
     row = {key: node.get(key) for key in ("id", "name", "address", "role", "studios",
                                           "joined_at", "last_seen_at", "updated_at")}
     row["credential_issued_at"] = node.get("credential_issued_at")
+    row["last_startup"] = node.get("last_startup")
     # Whether this controller holds a credential for the machine, never the credential. A
     # roster row with no hash is a row from before per-node credentials existed, and it reads
     # as "the next join of this id has to prove itself" rather than as "trusted".
@@ -682,7 +712,8 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         # one pass over the roster feeds both routes rather than the page waiting for the poll.
         host = body.get("host") if isinstance(body.get("host"), dict) else {}
         return {**row, "state": "reachable", "detail": None, "host": host,
-                "version": body.get("version"), "source": body.get("source")}
+                "version": body.get("version"), "source": body.get("source"),
+                "startup": _startup_of(body.get("startup"), row)}
     except (httpx.HTTPError, OSError) as exc:
         # A message that stops at the colon ("could not reach the node: ") reads as though the
         # reason were withheld, and it happens whenever the exception carries an empty message -
@@ -692,7 +723,8 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         detail = f"could not reach {node.get('address') or 'the node'} ({PROBE_PATH}): {type(exc).__name__}"
         if reason:
             detail = f"{detail}: {reason}"
-        return {**row, "state": "unreachable", "reason": _unreachable_reason(exc), "detail": detail}
+        return {**row, "state": "unreachable", "reason": _unreachable_reason(exc), "detail": detail,
+                "startup": _last_known_startup(row)}
     finally:
         if owned:
             await client.aclose()
@@ -709,7 +741,11 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     # **Last seen.** One batched write for the machines that answered, so a page refresh is not
     # one file rewrite per Mac — and so "switched off" and "gone a month" stop looking the same
     # (M20/B1). The rows being published carry the same stamp, so this read reports it.
-    seen_at = note_seen([row["id"] for row in rows if row.get("state") == "reachable"])
+    seen_at = note_seen(
+        [row["id"] for row in rows if row.get("state") == "reachable"],
+        {row["id"]: row["startup"] for row in rows
+         if row.get("state") == "reachable" and isinstance(row.get("startup"), dict)
+         and not row["startup"].get("stale")})
     if seen_at is not None:
         for row in rows:
             if row.get("state") == "reachable":
@@ -866,7 +902,77 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
         # and memory from the same read that decided it was reachable.
         "host": row.get("host") or {},
         "studios": row.get("studios") or [],
+        # What starts when that Mac starts - its own report, or the last one this side heard.
+        "startup": row.get("startup") if isinstance(row.get("startup"), dict) else None,
     }
+
+
+STARTUP_RELAY_TIMEOUT = httpx.Timeout(30.0, connect=4.0)
+
+
+class StartupRelayError(Exception):
+    def __init__(self, status: int, body: dict[str, Any]) -> None:
+        super().__init__(str(body.get("detail") or body.get("code") or status))
+        self.status, self.body = status, body
+
+
+async def relay_startup(node_id: str, payload: dict[str, Any], *, actor: str = "fleet",
+                        client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Pass a startup request to one joined node, with the credential a controller holds.
+
+    The same Fleet token, on the same header, that every other controller-to-node call presents:
+    nothing new is trusted and the node's own allowlist decides whether to accept. Raises
+    ``StartupRelayError`` with the status and body the caller should return - including the one case
+    that has no remedy from here: a node whose Studio Hub is not running (``no_hub``), because
+    nothing is listening to receive the request.
+    """
+    from . import startup_control
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        raise StartupRelayError(404, {"ok": False, "code": "UNKNOWN_NODE",
+                                      "detail": f"this controller has no joined Mac {node_id!r}"})
+    address = str(node.get("address") or "")
+    fields = {key: payload.get(key) for key in ("action", "value", "force", "requested_by")
+              if key in payload}
+    startup_control.audit("relay", {"node": wanted, "action": fields.get("action"),
+                                    "value": fields.get("value"), "force": fields.get("force"),
+                                    "by": fields.get("requested_by"), "actor": actor})
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        response = await client.post(f"{address}/api/hub/startup/request", json=fields,
+                                     timeout=STARTUP_RELAY_TIMEOUT)
+    except httpx.HTTPError as exc:
+        reason = _unreachable_reason(exc)
+        detail = ("no Studio Hub is running on that Mac, so nothing can receive the request - its "
+                  "services are off. Start Studio Hub there once (Start Services); a joined Mac "
+                  "then keeps them on."
+                  if reason == "no_hub" else
+                  "that Mac did not answer - it is asleep, off or off the network")
+        startup_control.audit("relay_failed", {"node": wanted, "reason": reason})
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE", "reason": reason,
+                                      "detail": detail}) from exc
+    finally:
+        if owned:
+            await client.aclose()
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    if response.status_code in (401, 403):
+        raise StartupRelayError(response.status_code if response.status_code == 403 else 502, {
+            "ok": False, "code": "NODE_REFUSED",
+            "detail": "that Mac refused this controller's credential for startup changes "
+                      "(an older Studio Hub, or a rotated credential)"})
+    if not response.is_success:
+        body.setdefault("ok", False)
+        body.setdefault("detail", f"that Mac answered HTTP {response.status_code}")
+        raise StartupRelayError(response.status_code, body)
+    return {**body, "node": wanted}
 
 
 async def pool(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
