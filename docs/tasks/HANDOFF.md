@@ -3,7 +3,39 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.123** (relaunch safety net + shelved models; 2026-10-01).
+Last updated: **0.6.124** (Chatterbox shelved + the 8 GB text-to-speech test; supersedes the never-published 0.6.123; 2026-10-01).
+
+> **0.6.124 - Chatterbox shelved + the 8 GB TTS test** (owner, 2026-10-01; **supersedes 0.6.123, which was never published or
+> installed - roll out 0.6.124**). Read `CHANGELOG.md` 0.6.124; what to know:
+>
+> - **Shelved, added:** `chatterbox-4bit`, `chatterbox-8bit` and `s3tokenizerv2` (+ repo ids) in `SHELVED_MODELS`. S3TokenizerV2
+>   is required only by the two Chatterboxes (checked in every manifest's `requires_packages`), so it goes with them; the
+>   existing "no kept model needs a shelved one" test guards that. Same semantics as the others (catalog yes, kit copy step
+>   skips, non-keep-all Hub moves installed copies to `hub/trash/<date>/shelved-models/`, 15 days). **Mark the owner's own Mac
+>   keep-all BEFORE it starts 0.6.124** or its Chatterbox folders move at first start. Weights stay on the SSD model library.
+> - **8 GB TTS test:** `qualification/RUN-8GB-TTS.command` (double-click; in the kit's `Technical` folder) -> `eight-gb-tts-run.sh`
+>   (shell shim + embedded Python run by the installed app's own `runtimes/voice/bin/python3`) + `README-8gb-tts.md` +
+>   `tts-script-S2.txt` / `tts-script-S4.txt` (the 32 GB test's texts). Qwen3-TTS 0.6B 8-bit -> VoxCPM2 4-bit -> OmniVoice bf16
+>   x Chris (`cd07b21a2ccf`) / Christian (`0616aec33b41`) x S2/S4 through the local Hub `POST /api/hub/jobs` (modality `voice`;
+>   token from `hub-ready.json`, never printed). Pre-checks (RAM, Hub >= 0.6.122, three packages `files_verified`+`eligible`,
+>   two voices, no active Hub jobs) refuse in plain words and write nothing. Results folder `TTS 8GB Run <stamp>` beside the
+>   script (Desktop fallback): WAVs, `results.csv` (32 GB `summary.csv` columns + status/error/memory_pressure/swap/RAM/macOS/
+>   app version/...), `summary.txt`. `--quick` (S2, Chris, per model) is the self-test; `--models`, `--allow-non-target`,
+>   `TTS8_TIMEOUT`, `TTS8_OUT`, `TTS8_READY_FILE`. Verified on this 32 GB Mac against the live 0.6.122 Hub (quick, all three
+>   models, S2 audio 68.4 / 78.8 / 68.08 s = the 32 GB test's; 38.9 / 91.4 / 63.4 s vs 42.5 / 97.0 / 80.3 s). **Nothing has been run on
+>   an 8 GB Mac yet.** The kit step lives in the gitignored `.build/prepare-kit.sh` (copies the five files, `chmod`, and lists
+>   them in the Technical folder's MANAGED set so the prune keeps them) - **a fresh checkout loses it**; `tests/test_tts_8gb_runner.py`
+>   pins it where the file exists. The drives are NOT refreshed - the coordinator does that.
+> - **Gate / DMG / delta:** `unittest discover` -> **1615 tests, OK (13 skipped), 565 s, exit 0**; `native/build.sh` green (boundary,
+>   API contract, lifecycle). **Delta 0.6.122 -> 0.6.124: 9 files, 9 blobs, 13,692,433 B to send** (native binary, `Info.plist`,
+>   `hub/standalone.py`, `hub/standalone_config.py`, `shelved_models.py`, `release-manifest.json`, `release-notes.md`,
+>   `voice/CHANGELOG.md`, `voice/VERSION`); 0 removed; totals 77,467 files, 4,202,366,624 B. **DMG**
+>   `dist/StudioHub-0.6.124-87e1ebc.dmg` (1,568,108,537 B, SHA-256
+>   `9064c8c45d1f865cb9708a17f229b1a8ae1f846e0659fda81d1d9548dafff4b8`, `hdiutil verify` valid, `bytes-wasted: 0`); the first
+>   output carried 403 MB of dead space (kept as `_trash/dist/StudioHub-0.6.124-87e1ebc-wasted403MB.dmg`), re-compacted with
+>   `hdiutil convert -format UDZO`. The 0.6.123 DMG is in `_trash/dist/`. Installable app:
+>   `.build/StudioHub-0124/Studio Hub.app` (manifest `0.6.124` / `87e1ebc73630bbc6f1f7fc14c7738905cb936c5c`). **Not installed, not
+>   on the drives, nothing pushed to controllers.** (The 0.6.123 stage `.build/StudioHub-0123` is superseded; do not install it.)
 
 > **0.6.123 - Relaunch safety net + SHELVED MODELS** (owner-approved 2026-09-30/10-01). Read `CHANGELOG.md` 0.6.123; what to know:
 >
