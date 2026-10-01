@@ -303,6 +303,108 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertTrue(all(all(flags) for flags in state['clears']),
                         'the cache was cleared while the model was still referenced')
 
+    # ── output_format: compress at source (2026-10-01 plan) ─────────────────────────────────
+    def run_image(self, **changes):
+        host = patch('components.image.app.backend.main._host_eligibility',
+                     return_value={'eligible': True, 'macos': '26.6.2'})
+        with patch.dict(sys.modules, fake_mflux()), host:
+            response = self.client.post('/api/generate/txt2img', json=self.request(**changes),
+                                        headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            return self.wait(response.json()['job']['id'])
+
+    def test_a_request_without_output_format_still_delivers_the_png_unchanged(self):
+        job = self.run_image()
+        self.assertEqual(job['media_type'], 'image/png')
+        self.assertEqual(job['format'], 'png')
+        self.assertNotIn('delivery', job)
+        self.assertNotIn('output_format', job['params'])
+        path = self.manager.outputs / f"{job['id']}.png"
+        self.assertEqual(job['output_path'], str(path))
+        self.assertTrue(path.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'))
+
+    def test_jpeg_delivers_a_verified_jpeg_and_no_png(self):
+        job = self.run_image(output_format='jpeg')
+        self.assertEqual(job['state'], 'done', job.get('error'))
+        path = self.manager.outputs / f"{job['id']}.jpg"
+        data = path.read_bytes()
+        self.assertTrue(data.startswith(b'\xff\xd8\xff'))
+        self.assertEqual(job['output_path'], str(path))
+        self.assertEqual((job['media_type'], job['format']), ('image/jpeg', 'jpeg'))
+        self.assertEqual((job['bytes'], job['sha256']), (len(data), sha256(data).hexdigest()))
+        self.assertEqual((job['width'], job['height']), (1024, 1024))
+        with Image.open(path) as image:
+            self.assertEqual((image.format, image.size, image.mode), ('JPEG', (1024, 1024), 'RGB'))
+            self.assertTrue(image.info.get('progressive'))
+        self.assertEqual(job['delivery']['applied'], 'jpeg')
+        self.assertEqual(job['delivery']['master_media_type'], 'image/png')
+        self.assertNotIn('delivery_fallback_reason', job)
+        # The lossless master was never published and nothing hidden is left behind.
+        self.assertEqual([entry.name for entry in self.manager.outputs.iterdir()],
+                         [path.name])
+        # Route, ack and a worker restart all follow the delivered file.
+        artifact = self.client.get(f"/api/generate/jobs/{job['id']}/image", headers=self.headers)
+        self.assertEqual(artifact.status_code, 200)
+        self.assertEqual(artifact.headers['content-type'], 'image/jpeg')
+        self.assertEqual(artifact.headers['x-content-sha256'], job['sha256'])
+        self.assertTrue(self.client.post(f"/api/generate/jobs/{job['id']}/ack",
+                                         headers=self.headers).json()['ok'])
+        restarted = GenerationManager(self.data, self.library, self.manifest, RUNTIME_ID)
+        self.assertEqual(restarted.get(job['id'])['state'], 'done')
+        self.assertEqual(restarted.get(job['id'])['output_path'], str(path))
+
+    def test_a_failed_jpeg_encode_delivers_the_png_and_says_why(self):
+        with patch('components.image.app.backend.generation.encode_jpeg',
+                   side_effect=RuntimeError('JPEG encode did not produce a JPEG')):
+            job = self.run_image(output_format='jpeg')
+        self.assertEqual(job['state'], 'done')
+        self.assertEqual((job['media_type'], job['format']), ('image/png', 'png'))
+        self.assertIn('did not produce', job['delivery_fallback_reason'])
+        self.assertEqual(job['delivery']['applied'], 'png')
+        self.assertTrue((self.manager.outputs / f"{job['id']}.png").is_file())
+        self.assertTrue(self.client.post(f"/api/generate/jobs/{job['id']}/ack",
+                                         headers=self.headers).json()['ok'])
+
+    def test_the_jpeg_is_encoded_after_the_inference_lock_is_released(self):
+        from components.image.app.backend import generation
+        seen = {}
+        real = generation.encode_jpeg
+
+        def spy(*args, **kwargs):
+            seen['locked'] = self.manager.inference_lock.locked()
+            return real(*args, **kwargs)
+
+        with patch('components.image.app.backend.generation.encode_jpeg', spy):
+            job = self.run_image(output_format='jpeg')
+        self.assertEqual(job['format'], 'jpeg')
+        self.assertIs(seen['locked'], False)
+
+    def test_a_thumbnail_request_with_no_field_stays_png(self):
+        with (patch.dict(sys.modules, fake_mflux()),
+              patch('components.image.app.backend.main._host_eligibility',
+                    return_value={'eligible': True, 'macos': '26.6.2'})):
+            response = self.client.post('/api/generate/txt2img', json=self.z_request(),
+                                        headers=self.headers)
+            job = self.wait(response.json()['job']['id'])
+        self.assertEqual((job['state'], job['media_type']), ('done', 'image/png'))
+
+    def test_the_lane_publishes_output_format_and_refuses_an_unknown_one(self):
+        from components.image.app.backend.generation import lane_contract
+        for model in MODELS.values():
+            parameter = next(p for p in lane_contract(model)['parameters']
+                             if p['name'] == 'output_format')
+            self.assertEqual(parameter['enum'], ['png', 'jpeg'])
+            self.assertTrue(parameter['request_only'])
+            self.assertNotIn('default', parameter)
+        self.assertNotIn('output_format', validate_request(
+            {'repo': MODEL_ID, 'prompt': 'x', 'aspect_ratio': '1:1'}))
+        self.assertEqual(validate_request(
+            {'repo': MODEL_ID, 'prompt': 'x', 'aspect_ratio': '1:1',
+             'output_format': 'jpeg'})['output_format'], 'jpeg')
+        with self.assertRaisesRegex(ValueError, 'output_format must be'):
+            validate_request({'repo': MODEL_ID, 'prompt': 'x', 'aspect_ratio': '1:1',
+                              'output_format': 'webp'})
+
     def test_cancelled_generation_never_publishes_final_png(self):
         with (patch.dict(sys.modules, fake_mflux(save_delay=0.1)),
               patch('components.image.app.backend.main._host_eligibility',

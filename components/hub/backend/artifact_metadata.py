@@ -72,6 +72,9 @@ def sniff_media_type(data: bytes | None) -> str | None:
             return "video/x-msvideo"
         if head[4:8] == b"ftyp":
             brand = head[8:12]
+            if brand in (b"M4A ", b"M4B "):
+                # The brand ffmpeg's iPod/M4A muxer writes: an audio-only AAC file, not a video.
+                return "audio/mp4"
             return "video/quicktime" if brand.startswith(b"qt") else "video/mp4"
     if head.startswith(b"\x1aE\xdf\xa3"):
         return "video/webm"

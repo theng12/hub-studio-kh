@@ -165,6 +165,40 @@ that table on purpose, because they have their own job modules (`transcription_j
 `uncertain`; `broker.discard_uncertain_item` refuses any item that is not already uncertain; and
 `auth.FLEET_ALLOWED` names the cancel request as `DELETE /api/hub/jobs/{batch_id}`.
 
+### `output_format` — compress at source (image, music, voice)
+
+*(Not in the 0.6.126 build; lands with the build that adds `components/audio_encode.py`.)*
+
+`image`, `music` and `voice` publish an optional per-job parameter `output_format` in
+`parameters`, marked **`request_only`** (a per-job choice, never an operator default; the model
+defaults editor does not offer it). A request that omits it gets today's file, byte for byte; a
+request that sets it asks the worker to deliver the compressed file instead:
+
+| Lane | `enum` | native (omitted) | compressed |
+| --- | --- | --- | --- |
+| `image` | `png`, `jpeg` | PNG | JPEG quality 90, 4:2:0, progressive (`image/jpeg`) |
+| `music` Stable Audio 3 | `wav`, `m4a` | WAV (`audio/wav`) | AAC-LC 256 kbps `.m4a` (`audio/mp4`) |
+| `music` YuE2 | `flac`, `m4a` | FLAC (`audio/flac`) | AAC-LC 256 kbps `.m4a` (`audio/mp4`) |
+| `voice` | `wav`, `m4a` | WAV (`audio/wav`) | AAC-LC 128 kbps mono `.m4a` (`audio/mp4`) |
+
+Rules a scheduler can rely on:
+
+- **The worker encodes after the lossless step, outside its inference lock**, so the next
+  generation starts while this one compresses. The job record, receipt and artifact headers always
+  describe **the delivered file** (`media_type`, `format`, `bytes`, `sha256`); `audio_duration_s`,
+  `sample_rate_hz`, `channels`, `width` and `height` describe the audio or image and come from the
+  lossless master.
+- **An encode failure delivers the native file** and records `delivery_fallback_reason` (and a
+  `delivery` block with the master's own bytes and sha256). A paid job is never failed by
+  compression, so a caller must read `media_type`, not assume it got what it asked for.
+- **Send it only to a lane that publishes it.** The controller strips `output_format` from the
+  worker body when the target worker's `lane_contract` does not list the value (an older node), and
+  leaves it out of the recovery request comparison, so adoption of a finished job is unaffected.
+- The Hub controller accepts `image/png|image/jpeg` and `audio/wav|audio/flac|audio/mp4` receipts.
+  A compressed voice artifact is streamed through a SHA-256 and byte count (never buffered) and the
+  worker's decoded duration, rate and channels are kept.
+- Gateway idempotency replays by key alone, so a caller that changes the format must change the key.
+
 Two notes a gateway must not skip:
 
 - **`render` is local-only** (`monitor.LOCAL_ONLY_MODALITIES = {"render"}`). It is in the table

@@ -47,6 +47,16 @@ from .loading_mode import MODES as LOADING_MODES
 # exactly one load path, and nothing downstream has to know which publisher used which shape.
 WEIGHTS_SUBDIRECTORY = 'model'
 
+# Optional request field ``output_format``. Absent = the PNG mflux wrote (today's behaviour).
+# ``jpeg`` is one fixed, measured preset (2026-10-01 compression plan: 1280x720 FLUX.2 Klein
+# 1,737 KB PNG -> 263 KB, PSNR 37.6 dB): RGB, quality 90, 4:2:0, progressive, optimised, no EXIF.
+OUTPUT_FORMATS = ('png', 'jpeg')
+JPEG_QUALITY = 90
+MEDIA_TYPE_BY_FORMAT = {'png': 'image/png', 'jpeg': 'image/jpeg'}
+EXTENSION_BY_FORMAT = {'png': 'png', 'jpeg': 'jpg'}
+MEDIA_TYPE_BY_SUFFIX = {'.png': 'image/png', '.jpg': 'image/jpeg'}
+_DELIVERED_SUFFIXES = tuple(MEDIA_TYPE_BY_SUFFIX)
+
 # The engine this worker serves. It is compared against a manifest's own ``engine`` field in
 # exactly one place - ``load_image_manifests`` - which is how a bundled manifest belonging to
 # another studio is recognised and reported instead of being loaded. Named once so the fact has
@@ -691,6 +701,12 @@ def lane_parameters(model: ImageModel) -> list[dict]:
         {'name': 'seed', 'type': 'integer', 'required': False,
          'minimum': model.limits['min_seed'], 'maximum': model.limits['max_seed'],
          'default': model.defaults['seed'], 'note': '-1 draws a random seed'},
+        # A per-job choice, never an operator default (``model_defaults.editable`` skips
+        # ``request_only``): omitting it always means the PNG.
+        {'name': 'output_format', 'type': 'string', 'required': False,
+         'enum': list(OUTPUT_FORMATS), 'request_only': True,
+         'note': ('omit for the PNG mflux wrote; jpeg delivers JPEG quality 90, 4:2:0, '
+                  'progressive (about 6.6x smaller) and falls back to the PNG if encoding fails')},
     ]
 
 
@@ -770,9 +786,17 @@ def validate_request(raw: dict, data_dir=None) -> dict:
         seed = -1
     if type(seed) is not int or not model.limits['min_seed'] <= seed <= model.limits['max_seed']:
         raise ValueError('Seed must be -1 or a 32-bit unsigned integer')
-    return {'repo': model.repo, 'model_revision': model.revision, 'prompt': prompt.strip(),
-            'aspect_ratio': ratio, 'resolution': '1K', 'width': width, 'height': height,
-            'steps': steps, 'guidance': float(guidance), 'seed': seed}
+    normalized = {'repo': model.repo, 'model_revision': model.revision, 'prompt': prompt.strip(),
+                  'aspect_ratio': ratio, 'resolution': '1K', 'width': width, 'height': height,
+                  'steps': steps, 'guidance': float(guidance), 'seed': seed}
+    # Echoed only when supplied, so the params an older caller compares on recovery are unchanged.
+    output_format = raw.get('output_format')
+    if output_format is not None:
+        if (not isinstance(output_format, str)
+                or output_format.strip().lower() not in OUTPUT_FORMATS):
+            raise ValueError('output_format must be ' + ' or '.join(OUTPUT_FORMATS))
+        normalized['output_format'] = output_format.strip().lower()
+    return normalized
 
 
 LANE_CONTRACT_SCHEMA = 'studiohub.lane-contract.v1'
@@ -987,16 +1011,17 @@ class GenerationManager:
             if not isinstance(job, dict) or job_id != job.get('id'):
                 continue
             if job.get('state') not in TERMINAL:
-                uncertain_output = (self.outputs / f'{job_id}.png').exists()
+                uncertain_output = any((self.outputs / f'{job_id}{suffix}').exists()
+                                       for suffix in _DELIVERED_SUFFIXES)
                 job.update(state='error',
                     error=('Final PNG exists without a durable completion receipt; reconcile before retry'
                            if uncertain_output else 'Worker restarted before completion'),
                     error_code=('JOB_PERSISTENCE_UNCERTAIN' if uncertain_output
                                 else 'WORKER_RESTART_UNCERTAIN'), finished_at=time.time())
             if job.get('state') == 'done':
-                path = self.outputs / f'{job_id}.png'
+                path = self.final_path(job)
                 if not final_matches(job, path):
-                    job.update(state='error', error='Final PNG is unavailable after restart',
+                    job.update(state='error', error='Final image is unavailable after restart',
                                error_code='OUTPUT_UNAVAILABLE', output_path=None, output_url=None)
             if job_history.expired(job):
                 continue                  # finished more than 90 days ago: the record goes
@@ -1183,7 +1208,7 @@ class GenerationManager:
             job = self.jobs.get(job_id)
             if job is None or job['state'] != 'done':
                 return None
-            if not final_matches(job, self.outputs / f'{job_id}.png'):
+            if not final_matches(job, self.final_path(job)):
                 return None
             if not job['acknowledged']:
                 job['acknowledged'] = True
@@ -1196,9 +1221,23 @@ class GenerationManager:
                     raise
             return {'ok': True, 'job_id': job_id, 'sha256': job['sha256']}
 
+    def final_path(self, job: dict) -> Path:
+        """The delivered file this job's record names, only ever inside this worker's outputs.
+
+        Not ``{id}.png``: a job that asked for ``output_format: jpeg`` delivers ``{id}.jpg``. An
+        old or foreign record falls back to the PNG name.
+        """
+        recorded = job.get('output_path')
+        if isinstance(recorded, str) and recorded:
+            path = Path(recorded)
+            if path.parent == self.outputs and path.suffix in _DELIVERED_SUFFIXES:
+                return path
+        return self.outputs / f"{job['id']}.png"
+
     def _run(self, job_id: str, model_folder: str) -> None:
         staged = self.outputs / f'.{job_id}.png'
-        final = self.outputs / f'{job_id}.png'
+        staged_jpeg = self.outputs / f'.{job_id}.jpg'
+        pending = None
         with self.inference_lock:
             with self.lock:
                 event = self.cancel_events[job_id]
@@ -1283,49 +1322,112 @@ class GenerationManager:
                 content = staged.read_bytes()
                 if not content.startswith(b'\x89PNG\r\n\x1a\n'):
                     raise RuntimeError('mflux PNG signature is invalid')
-                with self.lock:
-                    if event.is_set():
-                        job.update(state='cancelled', finished_at=time.time())
-                    else:
-                        os.replace(staged, final)
-                        now = time.time()
-                        job.update(state='done', progress=1.0, finished_at=now,
-                            generated_at=now, duration_seconds=now-job['started_at'],
-                            output_path=str(final),
-                            output_url=f'/api/generate/jobs/{job_id}/image',
-                            sha256=sha256(content).hexdigest(), bytes=len(content),
-                            media_type='image/png', width=dimensions[0],
-                            height=dimensions[1], steps=job['params']['steps'],
-                            peak_mlx_bytes=peak,
-                            peak_process_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-                    try:
-                        self._persist()
-                    except Exception:
-                        job.update(state='error', output_path=None, output_url=None,
-                                   sha256=None, bytes=None, media_type=None,
-                                   error='Final output could not be persisted; reconcile before retry',
-                                   error_code='JOB_PERSISTENCE_UNCERTAIN')
-                        try:
-                            final.unlink(missing_ok=True)
-                            job.update(error='Final output could not be persisted; generation was discarded',
-                                       error_code='JOB_PERSISTENCE_FAILED')
-                        except OSError:
-                            pass
-                        raise
+                pending = (content, dimensions, peak)
             except Exception as exc:
-                with self.lock:
-                    if event.is_set():
-                        job.update(state='cancelled', error=None, error_code=None)
-                    else:
-                        detail = str(exc)
-                        if job.get('error_code') not in ('JOB_PERSISTENCE_FAILED',
-                                                         'JOB_PERSISTENCE_UNCERTAIN'):
-                            job.update(state='error', error=detail[:500],
-                                       error_code=('MODEL_FILES_UNAVAILABLE' if 'MODEL_FILES_UNAVAILABLE' in detail
-                                                   else 'IMAGE_GENERATION_FAILED'))
-                    job['finished_at'] = time.time()
-                    job['duration_seconds'] = job['finished_at'] - job['started_at']
-                    self._persist()
-            finally:
-                staged.unlink(missing_ok=True)
-                self.cancel_events.pop(job_id, None)
+                self._record_failure(job, event, exc)
+        # The inference lock is released: the model is gone and the next job may start while this
+        # one's PNG is compressed (if asked) and published.
+        try:
+            if pending is not None:
+                self._deliver(job_id, job, event, staged, staged_jpeg, *pending)
+        except Exception as exc:
+            self._record_failure(job, event, exc)
+        finally:
+            staged.unlink(missing_ok=True)
+            staged_jpeg.unlink(missing_ok=True)
+            self.cancel_events.pop(job_id, None)
+
+    def _record_failure(self, job: dict, event: threading.Event, exc: Exception) -> None:
+        with self.lock:
+            if event.is_set():
+                job.update(state='cancelled', error=None, error_code=None)
+            else:
+                detail = str(exc)
+                if job.get('error_code') not in ('JOB_PERSISTENCE_FAILED',
+                                                 'JOB_PERSISTENCE_UNCERTAIN'):
+                    job.update(state='error', error=detail[:500],
+                               error_code=('MODEL_FILES_UNAVAILABLE' if 'MODEL_FILES_UNAVAILABLE' in detail
+                                           else 'IMAGE_GENERATION_FAILED'))
+            job['finished_at'] = time.time()
+            job['duration_seconds'] = job['finished_at'] - job['started_at']
+            self._persist()
+
+    def _deliver(self, job_id: str, job: dict, event: threading.Event, staged: Path,
+                 staged_jpeg: Path, content: bytes, dimensions: tuple, peak) -> None:
+        """Publish the finished image: the PNG as made, or the JPEG the job asked for.
+
+        The PNG master is the hidden staged file and is never published when the JPEG is: it is
+        removed by the caller once this returns. An encode that fails delivers the PNG and records
+        why, because a paid generation is never failed by compression.
+        """
+        delivered, source, fmt = self.outputs / f'{job_id}.png', staged, 'png'
+        body = content
+        delivery = None
+        if job['params'].get('output_format') == 'jpeg':
+            delivery = {'requested': 'jpeg', 'master_media_type': 'image/png',
+                        'master_bytes': len(content), 'master_sha256': sha256(content).hexdigest()}
+            try:
+                body = encode_jpeg(staged, staged_jpeg, expected_size=dimensions)
+            except Exception as exc:  # noqa: BLE001 - deliver the PNG, never fail the paid job
+                body = content
+                delivery.update(applied='png', delivery_fallback_reason=str(exc)[:400])
+            else:
+                delivered, source, fmt = self.outputs / f'{job_id}.jpg', staged_jpeg, 'jpeg'
+                delivery.update(applied='jpeg', quality=JPEG_QUALITY, subsampling='4:2:0',
+                                progressive=True)
+        with self.lock:
+            if event.is_set():
+                job.update(state='cancelled', finished_at=time.time())
+            else:
+                os.replace(source, delivered)
+                now = time.time()
+                job.update(state='done', progress=1.0, finished_at=now,
+                    generated_at=now, duration_seconds=now-job['started_at'],
+                    output_path=str(delivered),
+                    output_url=f'/api/generate/jobs/{job_id}/image',
+                    sha256=sha256(body).hexdigest(), bytes=len(body),
+                    media_type=MEDIA_TYPE_BY_FORMAT[fmt], format=fmt, width=dimensions[0],
+                    height=dimensions[1], steps=job['params']['steps'],
+                    peak_mlx_bytes=peak,
+                    peak_process_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+                if delivery is not None:
+                    job['delivery'] = delivery
+                    if delivery.get('delivery_fallback_reason'):
+                        job['delivery_fallback_reason'] = delivery['delivery_fallback_reason']
+            try:
+                self._persist()
+            except Exception:
+                job.update(state='error', output_path=None, output_url=None,
+                           sha256=None, bytes=None, media_type=None, format=None,
+                           error='Final output could not be persisted; reconcile before retry',
+                           error_code='JOB_PERSISTENCE_UNCERTAIN')
+                try:
+                    delivered.unlink(missing_ok=True)
+                    job.update(error='Final output could not be persisted; generation was discarded',
+                               error_code='JOB_PERSISTENCE_FAILED')
+                except OSError:
+                    pass
+                raise
+
+
+def encode_jpeg(source: Path, destination: Path, *, expected_size: tuple) -> bytes:
+    """Encode the verified PNG master to the fixed JPEG preset and return the verified bytes.
+
+    RGB (no generated image has alpha), quality 90, 4:2:0, progressive, optimised, no EXIF. The
+    result is reopened and must be a JPEG of the master's exact dimensions, or this raises and the
+    caller delivers the PNG.
+    """
+    destination.unlink(missing_ok=True)
+    with Image.open(source) as image:
+        image.convert('RGB').save(destination, format='JPEG', quality=JPEG_QUALITY,
+                                  optimize=True, progressive=True, subsampling='4:2:0')
+    body = destination.read_bytes()
+    if not body.startswith(b'\xff\xd8\xff'):
+        raise RuntimeError('JPEG encode did not produce a JPEG')
+    with Image.open(destination) as image:
+        image.verify()
+    with Image.open(destination) as image:
+        if image.format != 'JPEG' or image.size != tuple(expected_size):
+            raise RuntimeError('JPEG encode changed the image dimensions')
+    return body
+

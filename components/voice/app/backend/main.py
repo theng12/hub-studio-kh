@@ -28,7 +28,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -412,6 +412,10 @@ def _job_parameters(body: "Txt2SpeechBody", model: catalog.ModelEntry) -> dict:
         if params[name] is None and lane.get(name) == value:
             continue
         params[name] = value
+    # Absent means the WAV, exactly as before: the key is not recorded at all, so an older
+    # caller's retried `client_request_id` still compares equal to its stored request.
+    if params.get("output_format") is None:
+        params.pop("output_format", None)
     return params
 
 
@@ -424,6 +428,10 @@ class Txt2SpeechBody(BaseModel):
     # The operator's live-free-memory override for this model, sent by the Hub only while one is set;
     # it replaces the worker's own estimate in `GenerationManager._memory_preflight`.
     memory_floor_gb: Optional[float] = Field(default=None, ge=0, le=512)
+    # Optional delivery format. Absent = the WAV, as always. `m4a` = AAC-LC 128 kbps mono, encoded
+    # from the finished lossless WAV after the model lock is released; an encode that cannot run
+    # delivers the WAV and records why.
+    output_format: Optional[Literal["wav", "m4a"]] = None
     # ── Kokoro fields ──
     voice: Optional[str] = None         # preset voice name (Kokoro)
     # ── language (also implicit for some engines) ──

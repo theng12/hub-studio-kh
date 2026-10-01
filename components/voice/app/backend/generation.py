@@ -1794,6 +1794,11 @@ class GenerationJob:
     audio_duration_ms: Optional[int] = None
     sample_rate_hz: Optional[int] = None
     channels: Optional[int] = None
+    # Set only for a job that asked for `output_format` (compression at source): what was asked,
+    # what was delivered, the lossless master's own bytes/sha256, and why a failed encode fell
+    # back to the WAV. `delivery_fallback_reason` repeats that reason at the top level.
+    delivery: Optional[dict] = None
+    delivery_fallback_reason: Optional[str] = None
     resource_usage: Optional[dict] = None  # worker-owned per-job resource evidence
     quality_validation: Optional[dict] = None  # redacted model-owned acceptance evidence
     quality_retry_count: int = 0
@@ -1858,6 +1863,10 @@ class GenerationJob:
             "reference_profile_audited": self.params.get("_reference_profile_audited"),
             "reference_profile_sources": self.params.get("_reference_profile_sources"),
         }
+        if self.delivery is not None:
+            result["delivery"] = self.delivery
+            if self.delivery_fallback_reason:
+                result["delivery_fallback_reason"] = self.delivery_fallback_reason
         return {
             **result,
             **final_tts_result(
@@ -2755,6 +2764,9 @@ class GenerationManager:
                 return
 
             output_path: Optional[Path] = None
+            # A job that asked for `m4a` leaves the loop holding its verified WAV master here and
+            # is delivered after this lock is released, so the next generation starts at once.
+            held_master: Optional[Path] = None
             memory_retries = 0
             quality_retries = 0
             while True:
@@ -2775,10 +2787,14 @@ class GenerationManager:
                     )
                     self._record_local_revision_evidence(job)
                     self._record_final_audio_evidence(job, output_path)
-                    output_path = self._promote_or_cancel_output(
-                        job, output_path, final_output_path,
-                    )
-                    if output_path is not None:
+                    if job.params.get("output_format") == "m4a":
+                        output_path = self._hold_master_or_cancel(job, output_path)
+                        held_master = output_path
+                    else:
+                        output_path = self._promote_or_cancel_output(
+                            job, output_path, final_output_path,
+                        )
+                    if output_path is not None and held_master is None:
                         print(f"[gen] done {job.job_id} → {output_path}", flush=True)
                     break
                 except Exception as e:
@@ -2879,18 +2895,23 @@ class GenerationManager:
                     break
             job.finished_at = time.time()
             self._last_model_activity_at = job.finished_at
-            if job.state != "done":
+            # A held master is a finished generation whose file is still being compressed: for
+            # the model and the resource record it is "done".
+            outcome_state = "done" if held_master is not None else job.state
+            if outcome_state != "done":
                 self._evict_loaded_models("failed-or-cancelled-generation")
             self._finish_native_resource_usage(
                 job,
-                state=job.state,
+                state=outcome_state,
                 memory_failure=memory_failure_seen,
                 restart_scheduled=self._restart_scheduled,
                 model_retained=(
-                    job.state == "done" and self.has_loaded_model()
+                    outcome_state == "done" and self.has_loaded_model()
                 ),
             )
             self._persist()
+        if held_master is not None:
+            self._deliver_m4a(job, held_master)
 
     def _promote_or_cancel_output(self, job: GenerationJob, partial_output: Path,
                                   final_output: Path) -> Path | None:
@@ -2908,6 +2929,97 @@ class GenerationManager:
             job.state = "done"
             self._consecutive_memory_failures = 0
             return final_output
+
+    def _hold_master_or_cancel(self, job: GenerationJob, partial_output: Path) -> Path | None:
+        """The ``m4a`` twin of :meth:`_promote_or_cancel_output`: keep the master, publish nothing.
+
+        Cancel acceptance is still serialized with the one irreversible step. The verified WAV is
+        renamed to a hidden master name and the job stays ``running`` until
+        :meth:`_deliver_m4a` publishes the file the caller will actually fetch; recording the
+        master as ``partial_output_path`` means a worker restart removes it with the other partials.
+        """
+        with self._lock:
+            if job.cancel_event.is_set():
+                partial_output.unlink(missing_ok=True)
+                job.partial_output_path = None
+                job.state = "cancelled"
+                return None
+            master = OUTPUT_DIR / f".{job.job_id}.master.wav"
+            os.replace(partial_output, master)
+            job.partial_output_path = str(master)
+            job.progress = 0.97
+            return master
+
+    def _deliver_m4a(self, job: GenerationJob, master: Path) -> None:
+        """Compress the held WAV master to AAC and publish it; run **outside** ``_GEN_LOCK``.
+
+        The facts of the audio (duration, rate, channels) stay the master's. Any failure to encode
+        publishes the WAV instead and records ``delivery_fallback_reason``: a finished generation
+        is never failed by compression. The master is this worker's own temporary file, removed
+        only after the encoded file is verified and in place.
+        """
+        from components import audio_encode
+
+        wav_final = OUTPUT_DIR / f"{job.job_id}.wav"
+        m4a_final = OUTPUT_DIR / f"{job.job_id}.m4a"
+        encoded_path = OUTPUT_DIR / f".{job.job_id}.{uuid.uuid4().hex}.encoded.m4a"
+        record = {"requested": "m4a", "master_media_type": job.media_type,
+                  "master_bytes": job.bytes, "master_sha256": job.sha256}
+        encoded = None
+        try:
+            encoded = audio_encode.encode_m4a(
+                master, encoded_path, profile="narration",
+                expected_seconds=job.audio_duration_s)
+        except Exception as exc:  # noqa: BLE001 - deliver the WAV, never fail the finished job
+            record.update(applied="wav", delivery_fallback_reason=str(exc)[:400])
+            print(f"[gen] m4a encode failed for {job.job_id}; delivering WAV: {exc}",
+                  file=sys.stderr, flush=True)
+        try:
+            with self._lock:
+                if job.cancel_event.is_set():
+                    for path in (master, encoded_path):
+                        path.unlink(missing_ok=True)
+                    job.partial_output_path = None
+                    job.state = "cancelled"
+                    job.finished_at = time.time()
+                    self._persist()
+                    return
+                if encoded is not None:
+                    os.replace(encoded_path, m4a_final)
+                    master.unlink(missing_ok=True)
+                    job.output_path = str(m4a_final.resolve())
+                    job.media_type = encoded["media_type"]
+                    job.format = encoded["format"]
+                    job.bytes = encoded["bytes"]
+                    job.sha256 = encoded["sha256"]
+                    record.update(applied="m4a", codec=encoded["codec"],
+                                  bitrate_kbps=encoded["bitrate_kbps"], channels=1)
+                else:
+                    os.replace(master, wav_final)
+                    job.output_path = str(wav_final.resolve())
+                    job.delivery_fallback_reason = record["delivery_fallback_reason"]
+                job.delivery = record
+                job.partial_output_path = None
+                job.progress = 1.0
+                job.state = "done"
+                job.finished_at = time.time()
+                self._last_model_activity_at = job.finished_at
+                self._consecutive_memory_failures = 0
+                print(f"[gen] done {job.job_id} → {job.output_path}", flush=True)
+                self._persist()
+        except Exception as exc:  # noqa: BLE001 - the job must reach a terminal state
+            for path in (master, encoded_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            with self._lock:
+                job.partial_output_path = None
+                job.output_path = None
+                job.state = "error"
+                job.error = f"{type(exc).__name__}: {exc}"
+                job.finished_at = time.time()
+                self._persist()
 
     @staticmethod
     def _record_local_revision_evidence(job: GenerationJob) -> None:
@@ -4284,6 +4396,8 @@ class GenerationManager:
             "audio_duration_ms": job.audio_duration_ms,
             "sample_rate_hz": job.sample_rate_hz,
             "channels": job.channels,
+            "delivery": job.delivery,
+            "delivery_fallback_reason": job.delivery_fallback_reason,
             "resource_usage": job.resource_usage,
             "quality_validation": job.quality_validation,
             "quality_retry_count": job.quality_retry_count,
@@ -4337,6 +4451,8 @@ class GenerationManager:
                 audio_duration_ms=raw.get("audio_duration_ms"),
                 sample_rate_hz=raw.get("sample_rate_hz"),
                 channels=raw.get("channels"),
+                delivery=raw.get("delivery"),
+                delivery_fallback_reason=raw.get("delivery_fallback_reason"),
                 resource_usage=raw.get("resource_usage"),
                 quality_validation=raw.get("quality_validation"),
                 quality_retry_count=int(raw.get("quality_retry_count") or 0),

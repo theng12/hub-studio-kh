@@ -69,6 +69,16 @@ ARTIFACT = {
     "extension": "wav",
     "per_item": 1,
 }
+# Optional per-job delivery format. Absent = the WAV every caller has always received. `m4a` is
+# AAC-LC 128 kbps mono (`components/audio_encode.py`, profile "narration"), encoded from the finished
+# lossless WAV after the model lock is released; it is transport compression, and a caller that
+# needs the WAV simply omits the field. `request_only`: never an operator default.
+OUTPUT_FORMAT_PARAMETER = {
+    "name": "output_format", "type": "string", "required": False,
+    "enum": ["wav", "m4a"], "request_only": True,
+    "note": ("omit for the WAV; m4a delivers AAC-LC 128 kbps mono (about 4-6x smaller) and falls "
+             "back to the WAV if encoding fails"),
+}
 # Quoted verbatim from the spec / `broker`: done, error, cancelled are terminal;
 # `uncertain` is NOT terminal - an item whose outcome the Hub cannot establish is
 # held for an operator decision - and this lane can release one.
@@ -418,6 +428,7 @@ def parameters_for(model: catalog.ModelEntry,
         if any(parameter["name"] == name for parameter in parameters):
             continue
         parameters.append({"name": name, **shape})
+    parameters.append(dict(OUTPUT_FORMAT_PARAMETER))
     return _with_resolved_defaults(parameters, defaults)
 
 

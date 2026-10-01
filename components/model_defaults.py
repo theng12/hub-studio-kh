@@ -90,6 +90,8 @@ def editable(parameters: Iterable[dict]) -> list[dict]:
 
     * a ``required`` parameter is per-request content the caller supplies, and a stored default for
       one would answer with something nobody wrote this time;
+    * a ``request_only`` parameter (``output_format``) is a per-job choice the caller makes, and a
+      stored default would quietly change what every caller without that field receives;
     * a parameter whose ``enum`` holds exactly one value has nothing to choose between. Chat
       publishes ``model`` that way — the worker serves one model, ``required: false`` with a
       one-entry enum, which is honest in the contract and pointless as a control. Excluding it here
@@ -102,7 +104,7 @@ def editable(parameters: Iterable[dict]) -> list[dict]:
     for parameter in parameters:
         if not isinstance(parameter, dict) or not parameter.get("name"):
             continue
-        if parameter.get("required"):
+        if parameter.get("required") or parameter.get("request_only"):
             continue
         options = parameter.get("enum")
         if isinstance(options, list) and len(options) == 1:
