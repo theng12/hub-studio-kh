@@ -2295,6 +2295,10 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
             value = job.get(field)
             if value is not None:
                 item[field] = value
+    # A job that asked for `output_format` and got its native file instead says why, so a caller
+    # reading the item sees the fallback rather than inferring it from the media type.
+    if isinstance(job.get("delivery_fallback_reason"), str):
+        item["delivery_fallback_reason"] = job["delivery_fallback_reason"][:400]
     item["finished_at"] = time.time()
     item["last_progress_at"] = item["finished_at"]
     item["asset_id"] = ledger.record_asset(
