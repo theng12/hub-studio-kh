@@ -30,7 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from components import shelved_models
 from . import output_storage, standalone_config
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
-from .backend import app_release, chat_jobs, release_sync, shared_voices, transcription_jobs, update_drain, vocabulary
+from .backend import app_release, chat_jobs, peers, release_sync, shared_voices, transcription_jobs, update_drain, vocabulary
 from .backend.monitor import StudioMonitor
 
 # The key one unusable manifest carries into the catalog so its row can say what is wrong
@@ -588,8 +588,12 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
     # envelopes; readiness applies only once a model was actually requested.
     if not envelope.get("model"):
         return None
-    if update_drain.draining():
+    if update_drain.draining() and not any(
+            worker.get("modality") == envelope.get("modality") and not peers.is_local_studio(worker)
+            for worker in monitor.registry):
         # Re-routable: the gateway files MACHINE_BUSY as a location refusal and tries another Mac.
+        # Not while a joined node can serve the modality: only this Mac's own work drains, and the
+        # controller keeps dispatching to its nodes.
         return {"code": "MACHINE_BUSY",
                 "detail": "this Mac is finishing its current work to install an update"}
     if (retired := _retired_refusal(envelope.get("model"))):

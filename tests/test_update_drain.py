@@ -63,6 +63,43 @@ class DrainRefusesNewWork(unittest.TestCase):
             self.assertFalse(update_drain.draining(), "a Mac whose app died must take work again")
 
 
+class _GroupMonitor:
+    """A controller (local voice studio) with one joined node."""
+    registry = [{"id": "voice-1", "modality": "voice", "local": True, "machine": "local"},
+                {"id": "node-1:voice", "modality": "voice", "local": False, "machine": "node-1"}]
+    status = {"voice-1": {"status": "up"}, "node-1:voice": {"status": "up"}}
+
+
+class DrainingControllerKeepsServingItsNodes(unittest.TestCase):
+    def setUp(self):
+        _reset()
+        self.addCleanup(_reset)
+
+    def test_only_the_controllers_own_machine_is_taken(self):
+        with mock.patch.object(broker, "_monitor", lambda: _GroupMonitor()):
+            update_drain._set_draining(True)
+            busy = broker.busy_machines()
+            self.assertIn("local", busy)
+            self.assertNotIn("node-1", busy, "a draining controller stopped dispatching to its idle node")
+            self.assertFalse(broker.acquire_external_machine("local", "chat"))
+
+    def test_the_scheduler_still_offers_work_to_a_node_and_not_to_the_draining_mac(self):
+        with mock.patch.object(broker, "_monitor", lambda: _GroupMonitor()), \
+             mock.patch.object(broker.peers, "dispatch_ready", lambda studio, generation=None: True):
+            update_drain._set_draining(True)
+            ids = [s["id"] for s in broker._eligible_studios("voice", "pool", None)]
+        self.assertEqual(ids, ["node-1:voice"])
+
+    def test_a_submission_is_accepted_while_a_node_can_serve_it(self):
+        with mock.patch.object(standalone, "_model_catalog", lambda: CATALOG), \
+             mock.patch.object(standalone, "_model_state",
+                               lambda manifest, catalog, mon, lane_contracts=None: {"dispatch_state": "eligible"}):
+            update_drain._set_draining(True)
+            self.assertIsNone(standalone._submission_readiness(ENVELOPE, _GroupMonitor()))
+            refusal = standalone._submission_readiness(ENVELOPE, _Monitor())
+        self.assertEqual(refusal["code"], "MACHINE_BUSY", "a Mac with no node still refuses while it drains")
+
+
 class OneMacPerGroup(unittest.TestCase):
     def setUp(self):
         _reset()

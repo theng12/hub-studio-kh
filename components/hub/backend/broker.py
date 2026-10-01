@@ -1490,8 +1490,12 @@ def busy_machines() -> set[str]:
     """Physical machines holding a non-preemptive heavy-work lease."""
     by_id = {s["id"]: s for s in _monitor().registry}
     if update_drain.draining():
-        # This Mac is finishing its work to install an update: every machine is taken.
-        return {s.get("machine", "local") for s in by_id.values()} | {"local"}
+        # This Mac is finishing its work to install an update: its own machine is taken. A
+        # controller's joined nodes are other Macs and keep taking work - only this Mac's own
+        # work drains (it used to name every machine, so a draining controller left its idle
+        # nodes idle for the whole drain).
+        return {s.get("machine", "local") for s in by_id.values()
+                if peers.is_local_studio(s)} | {"local"}
     occupied = set(_external_machine_leases) | {
         by_id[sid].get("machine", "local")
         for sid in _busy
