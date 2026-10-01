@@ -899,7 +899,7 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/fleet/overview"):
             Self.lock.lock(); Self.fleetCalls.append("overview"); let overviewFails = Self.overviewFails; Self.lock.unlock()
             if overviewFails { result = (500, "application/json", Data(#"{"detail":"fixture: a node timed out"}"#.utf8)); break }
-            result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","role":"agent","address":null,"reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","role":"agent","address":"http://192.168.1.20:47873","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"role":"agent","controller":{"machine":"controller-mac","label":"Control Mac","role":"controller","address":"http://192.168.1.21:47873","state":"reachable","detail":null,"version":"0.4.0"},"roster_readable":true,"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
+            result = (200, "application/json", Data(#"{"machines":[{"machine":"local","label":"This Mac","role":"agent","address":null,"reachable":true,"version":"0.4.0","health":"up","detail":null,"memory_gb":16.0,"available_gb":9.5,"disk_free_gb":220.0,"disk_total_gb":494.0,"disk":{"state":"green","free_gb":220.0,"total_gb":494.0,"free_percent":44.5,"warnings":[]},"startup":{"open_at_login":true,"start_services_on_launch":false,"services_running":{"up":3,"total":4},"app_reporting":true},"current_job":{"job_id":"job-1","modality":"image","model":"black-forest-labs/FLUX.2-klein-4B","label":"storystudio","started_at":1750000000.0},"chip":"Apple M4","jobs":12,"average_seconds":41.5,"modalities":{"image":9,"transcription":3}},{"machine":"studio-3","label":"Studio 3","role":"agent","address":"http://192.168.1.20:47873","reachable":false,"version":null,"health":"unknown","detail":"this Mac has not reported in yet","memory_gb":null,"available_gb":null,"disk_free_gb":null,"disk_total_gb":null,"chip":null,"jobs":0,"average_seconds":null,"modalities":{}}],"role":"agent","controller":{"machine":"controller-mac","label":"Control Mac","role":"controller","address":"http://192.168.1.21:47873","state":"reachable","detail":null,"version":"0.4.0"},"roster_readable":true,"summary":{"total":2,"reachable":1,"unreachable":1}}"#.utf8))
         case ("GET", "/api/hub/controller"):
             Self.lock.lock()
             let roleNow = Self.currentRole
@@ -2491,6 +2491,45 @@ struct NativeAPITests {
         require(sorted.map(\.machine) == ["studio-3", "local"], "unreachable machines float to the top")
         require(NativeWorkspaceStore.unreachableFirst([1, 2, 3, 4], reachable: { $0 % 2 == 0 }) == [1, 3, 2, 4],
                 "the order within each group is the Hub's")
+        // One table of Macs: the overview's row and the roster's row for the same Mac are joined on
+        // its id, so no Mac is listed twice and none from either side is dropped.
+        let tableRows = NativeFleetRow.rows(overview: store.fleetOverview, nodes: store.fleetNodes)
+        let tableIDs = tableRows.map(\.id)
+        require(Set(tableIDs).count == tableIDs.count, "a Mac must be one row, not two: \(tableIDs)")
+        for machine in store.fleetOverview?.machines ?? [] {
+            require(tableIDs.contains(machine.machine), "overview Mac \(machine.machine) missing from the table")
+        }
+        for node in store.fleetNodes?.nodes ?? [] {
+            require(tableIDs.contains(node.id), "roster node \(node.id) missing from the table")
+        }
+        // What a Mac reports about itself reaches the table: its disk word, what starts with it, and
+        // the job it is on - the three things the old two lists never showed.
+        let ownRow = tableRows.first { $0.id == "local" }
+        require(ownRow?.machine?.disk?.state == "green" && ownRow?.machine?.diskTier == .ok,
+                "the governor's disk object must decode and read as ok")
+        require(ownRow?.currentJob?.jobId == "job-1" && ownRow?.currentJob?.label == "storystudio",
+                "the job a Mac is on must decode: \(String(describing: ownRow?.currentJob))")
+        require(ownRow?.state(readiness: nil) == .working, "a Mac with a current job reads as working")
+        require(ownRow?.startupText == "Services 3 of 4 up" && ownRow?.startupNeedsAttention == true,
+                "a Studio that is down is a startup state worth a look: \(String(describing: ownRow?.startupText))")
+        require(tableRows.first { $0.id == "studio-3" }?.state(readiness: nil) == .offline,
+                "a Mac that does not answer reads as offline")
+        require(tableRows.first.map { !$0.isReachable } ?? true, "a Mac that does not answer sorts first")
+        // Disk tiers are the governor's: amber below 12 % free, red below 6 %, stop below 5 GB; its own
+        // word wins when it gives one. Memory (owner decision 2026-10-02): amber below 20 % free, red
+        // below 10 % or below 1.5 GB.
+        require(NativeResourceTier.disk(state: "green", freeGB: 1, totalGB: 100) == .ok, "the governor's word wins")
+        require(NativeResourceTier.disk(state: "stop", freeGB: 400, totalGB: 500) == .bad, "stop is red")
+        require(NativeResourceTier.disk(state: nil, freeGB: 200, totalGB: 460) == .ok, "43 % free is fine")
+        require(NativeResourceTier.disk(state: nil, freeGB: 50, totalGB: 460) == .warn, "11 % free is amber")
+        require(NativeResourceTier.disk(state: nil, freeGB: 20, totalGB: 460) == .bad, "4 % free is red")
+        require(NativeResourceTier.disk(state: nil, freeGB: 4, totalGB: 2000) == .bad, "under 5 GB is red whatever the size")
+        require(NativeResourceTier.disk(state: nil, freeGB: nil, totalGB: nil) == .unknown, "no figure is unknown, never green")
+        require(NativeResourceTier.memory(availableGB: 8, totalGB: 16) == .ok, "half free is fine")
+        require(NativeResourceTier.memory(availableGB: 3, totalGB: 16) == .warn, "19 % free is amber")
+        require(NativeResourceTier.memory(availableGB: 1.4, totalGB: 8) == .bad, "under 1.5 GB is red")
+        require(NativeResourceTier.memory(availableGB: 1.2, totalGB: 24) == .bad, "5 % free is red")
+        require(NativeResourceTier.memory(availableGB: nil, totalGB: 16) == .unknown, "no figure is unknown")
         // A read that fails keeps the last good list and says what failed (F10).
         FixtureProtocol.mutate { FixtureProtocol.overviewFails = true }
         await store.refreshFleetNodes()

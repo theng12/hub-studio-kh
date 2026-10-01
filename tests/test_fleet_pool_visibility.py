@@ -182,6 +182,21 @@ class FleetPoolVisibility(PoolCase):
         self.assertEqual(2, body["summary"]["total"],
                          "the summary counts the controller but not the node it took in")
 
+    def test_every_overview_row_and_the_node_snapshot_say_what_the_mac_is_on(self):
+        """`current_job` is on every row, None while idle, so a Gateway reads it without guessing."""
+        node = self.add_node("node")
+        node_id = self.join(node)
+        body = self.overview(self.controller, "controller-hub-token")
+        for row in body["machines"]:
+            self.assertIn("current_job", row, f"{row['machine']} has no current_job field")
+            self.assertIsNone(row["current_job"], "an idle Mac must not claim a job")
+        status, snapshot = self.request(node, "/api/hub/resources?local_only=true",
+                                        token=self.controller_fleet)
+        self.assertEqual(200, status, snapshot)
+        self.assertIn("current_job", snapshot, "the node snapshot never says what the Mac is on")
+        self.assertIsNone(snapshot["current_job"])
+        self.assertIn(node_id, {row["machine"] for row in body["machines"]})
+
     def test_a_just_joined_node_is_reachable_on_the_first_read(self):
         """0.6.57: a join makes a node visible now, not at the next peer poll.
 

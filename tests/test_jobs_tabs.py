@@ -155,8 +155,10 @@ class JobsTabTests(unittest.TestCase):
         """The honest empty state, for a build running before the Hub records any."""
         jobs = VIEWS[VIEWS.index("private var jobsWorkspace"):]
         jobs = jobs[:jobs.index("\n    private func")]
-        self.assertIn('Text("No \\(history.function.rawValue.lowercased()) jobs yet.")', jobs,
-                      "an empty section must still say so per Studio")
+        # Named by the sidebar's own word ("No subtitle jobs yet", not "No transcription jobs yet").
+        self.assertIn('jobs yet.', jobs)
+        self.assertIn("StudioPage.page(for: history.function)?.title", jobs,
+                      "an empty section must still say so per Studio, in the sidebar's name for it")
 
     def test_the_chat_row_is_a_text_row(self) -> None:
         """Prompt, model, state, time and the answer — and no artifact affordance it has none."""

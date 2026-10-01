@@ -79,13 +79,16 @@ struct MarkdownText: View {
     let markdown: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(Self.blocks(from: markdown).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .heading(let level, let text):
                     Text(Self.inline(text))
-                        .font(level <= 1 ? .title2.bold() : (level == 2 ? .title3.bold() : .headline))
-                        .padding(.top, level <= 2 ? 10 : 4)
+                        // 15 semibold for the release headings, 13 semibold under them: the type
+                        // scale every other page uses, written out here because this file is built
+                        // without the design file.
+                        .font(level <= 2 ? .system(size: 15, weight: .semibold) : .system(size: 13, weight: .semibold))
+                        .padding(.top, level <= 2 ? 12 : 4)
                 case .bullet(let text):
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("•").foregroundStyle(.secondary)

@@ -88,6 +88,7 @@ struct PageRenderHarness {
         // fetch. It needs render_fixture_patch.py, which render-page.sh applies to its copy.
         if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" {
             seedFixtures(studio.workspace, scratch: scratch)
+            seedLibrary(studio.workspace)
         }
 
         // `STUDIOHUB_RENDER_ROLES=controller,node,node-offline,standalone` renders every page once per
@@ -95,15 +96,27 @@ struct PageRenderHarness {
         // fixture seams: render-page.sh applies them with STUDIOHUB_RENDER_FIXTURES=1.
         let roles: [String?] = (ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_ROLES"] ?? "")
             .split(separator: ",").map { String($0) }
+        // `STUDIOHUB_RENDER_APPEARANCE=light|dark|both` renders in that appearance (files gain a
+        // `-light` / `-dark` suffix); unset keeps the system's. `STUDIOHUB_RENDER_BORDERLESS=1` draws
+        // the window without a title bar so a tall render is only the page.
+        let mode = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_APPEARANCE"] ?? ""
+        let appearances: [String?] = mode == "both" ? ["light", "dark"] : (mode.isEmpty ? [nil] : [mode])
+        let borderless = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_BORDERLESS"] == "1"
+        for appearance in appearances {
+        if let appearance { app.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua) }
         for role in (roles.isEmpty ? [nil] : roles) {
         if let role { applyRole(role, to: studio.workspace) }
         for page in pages {
         studio.selection = page
         for size in sizes {
-            let hosting = NSHostingView(rootView: StudioWindow(studio: studio))
+            // `.key` because a window on no screen is never the key window, and controls draw their
+            // inactive look (a grey "prominent" button) otherwise, which is not what a person sees.
+            let hosting = NSHostingView(rootView: StudioWindow(studio: studio)
+                .environment(\.controlActiveState, .key))
             hosting.frame = NSRect(x: 0, y: 0, width: size.0, height: size.1)
             let window = NSWindow(contentRect: hosting.frame,
-                                  styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+                                  styleMask: borderless ? [.borderless] : [.titled, .resizable],
+                                  backing: .buffered, defer: false)
             window.contentView = hosting
             window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
             window.orderFront(nil)
@@ -123,7 +136,7 @@ struct PageRenderHarness {
                 print("could not encode \(Int(size.0))x\(Int(size.1))")
                 continue
             }
-            let path = "\(output)/\(fileName(for: page))\(role.map { "-" + $0 } ?? "")-\(Int(size.0))x\(Int(size.1)).png"
+            let path = "\(output)/\(fileName(for: page))\(role.map { "-" + $0 } ?? "")-\(Int(size.0))x\(Int(size.1))\(appearance.map { "-" + $0 } ?? "").png"
             do {
                 try png.write(to: URL(fileURLWithPath: path))
                 print("wrote \(path)")
@@ -134,32 +147,177 @@ struct PageRenderHarness {
         }
         }
         }
+        }
         try? FileManager.default.removeItem(at: scratch)
     }
 
+    @MainActor private static func decode<T: Decodable>(_ type: T.Type, _ json: String) -> T {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try! decoder.decode(T.self, from: Data(json.utf8))
+    }
+
+    /// One fleet machine as the Hub's overview publishes it, including the `disk`, `startup` and
+    /// `current_job` objects a controller's Connections page draws.
+    private static func machineJSON(_ id: String, _ label: String, role: String, reachable: Bool = true,
+                                    chip: String, memory: Double, available: Double, disk: Double,
+                                    total: Double, diskState: String, jobs: Int, version: String = "0.6.126",
+                                    job: String? = nil, servicesUp: Int = 4, startOnLaunch: Bool = true,
+                                    address: String? = nil) -> String {
+        let startup = reachable ? """
+            {"open_at_login": true, "start_services_on_launch": \(startOnLaunch), "services_running": {"up": \(servicesUp), "total": 4},
+             "app_reporting": true}
+            """ : "null"
+        let diskObject = reachable ? """
+            {"state": "\(diskState)", "free_gb": \(disk), "total_gb": \(total), "free_percent": \(((disk / total) * 1000).rounded() / 10), "warnings": []}
+            """ : "null"
+        return """
+            {"machine":"\(id)","label":"\(label)","role":"\(role)","address":\(address.map { "\"" + $0 + "\"" } ?? "null"),
+             "reachable":\(reachable),"version":"\(version)","health":"\(reachable ? "up" : "down")","detail":null,
+             "memory_gb":\(reachable ? "\(memory)" : "null"),"available_gb":\(reachable ? "\(available)" : "null"),
+             "disk_free_gb":\(reachable ? "\(disk)" : "null"),"disk_total_gb":\(reachable ? "\(total)" : "null"),
+             "disk":\(diskObject),"startup":\(startup),"current_job":\(job ?? "null"),
+             "chip":\(reachable ? "\"\(chip)\"" : "null"),"jobs":\(jobs),"average_seconds":44.0,"modalities":{"image":\(jobs / 2),"voice":\(jobs - jobs / 2)}}
+            """
+    }
+
+    private static func nodeJSON(_ id: String, _ state: String, _ detail: String?, seen: Double,
+                                 version: String = "0.6.126", now: Double) -> String {
+        """
+        {"id":"\(id)","name":"\(id)","address":"http://100.64.0.\(10 + abs(id.hashValue) % 80):47873","state":"\(state)",
+         "detail":\(detail.map { "\"\($0)\"" } ?? "null"),"version":"\(version)","role":"agent",
+         "studios":[{"id":"voice","modality":"voice"},{"id":"image","modality":"image"}],
+         "joined_at":\(now - 30 * 86400),"last_seen_at":\(now - seen),"credential_issued_at":\(now - 30 * 86400),"has_credential":true}
+        """
+    }
+
+    /// `controller`, `node`, `node-offline` or `standalone`: the Hub's identity and the fleet answers a
+    /// Mac in that role would have. A controller has four joined Macs in four different conditions
+    /// (working, low on disk and memory, off, refusing the credential) so every state is on screen.
     @MainActor private static func applyRole(_ role: String, to workspace: NativeWorkspaceStore) {
         let wire = role.hasPrefix("node") ? "agent" : role
-        func decode<T: Decodable>(_ json: String) -> T {
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            return try! decoder.decode(T.self, from: Data(json.utf8))
-        }
-        workspace.controllerIdentity = decode("""
-            {"settings": {"role": "\(wire)", "site_id": "site", "site_name": "Studio", "controller_id": "studio-mac-1503",
-                          "machine_name": "studio-mac-1503-m4-24-256", "database_mode": "sqlite"},
-             "readiness": {"ready": true}}
+        let now = Date().timeIntervalSince1970
+        let working = """
+            {"job_id":"job-4821","modality":"image","model":"black-forest-labs/FLUX.2-klein-4B","label":"storystudio","started_at":\(now - 95)}
+            """
+        let voiceJob = """
+            {"job_id":"job-77","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit","label":"genstudio-kh","started_at":\(now - 640)}
+            """
+        workspace.controllerIdentity = decode(NativeControllerIdentity.self, """
+            {"settings": {"role": "\(wire)", "site_id": "site-blue", "site_name": "Blue Room", "controller_id": "studio-mac-1503",
+                          "machine_name": "studio-mac-1503-m4-24-256", "database_mode": "sqlite",
+                          "fleet_credential_origin": "\(wire == "agent" ? "adopted" : "minted")"},
+             "readiness": {"ready": true, "role": "\(wire)"}}
             """)
         workspace.controllerAddress = wire == "agent" ? "100.64.0.12:47873" : ""
         workspace.controllerReachable = wire == "agent" ? role != "node-offline" : nil
-        workspace.fleetOverview = decode("""
-            {"machines": [], "summary": {"total": 0, "reachable": 0, "unreachable": 0}, "role": "\(wire)",
-             "controller": \(wire == "agent" ? "{\"machine\": \"c\", \"label\": \"studio-mac-1500-m4-16-256-controller\", \"role\": \"controller\"}" : "null")}
-            """)
-        workspace.fleetNodes = decode("""
-            {"role": "\(wire)", "summary": {"total": 2, "reachable": 2, "unreachable": 0, "error": 0},
-             "nodes": [{"id": "a", "name": "node-a", "address": "x", "state": "reachable"},
-                       {"id": "b", "name": "node-b", "address": "y", "state": "reachable"}]}
-            """)
+        switch wire {
+        case "controller":
+            workspace.fleetOverview = decode(NativeFleetOverview.self, """
+                {"machines":[\(machineJSON("local", "This Mac", role: "controller", chip: "Apple M4", memory: 24, available: 11.8, disk: 188, total: 460, diskState: "green", jobs: 40, job: voiceJob)),
+                   \(machineJSON("blue-1", "Blue Room 1", role: "agent", chip: "Apple M4", memory: 16, available: 9.8, disk: 142, total: 460, diskState: "green", jobs: 61, job: working, address: "100.64.0.21:47873")),
+                   \(machineJSON("blue-2", "Blue Room 2", role: "agent", chip: "Apple M2", memory: 8, available: 1.2, disk: 21, total: 256, diskState: "amber", jobs: 30, version: "0.6.120", startOnLaunch: false, address: "100.64.0.22:47873")),
+                   \(machineJSON("blue-3", "Blue Room 3", role: "agent", reachable: false, chip: "Apple M2", memory: 8, available: 0, disk: 0, total: 256, diskState: "unknown", jobs: 12, address: "100.64.0.23:47873"))],
+                 "summary":{"total":4,"reachable":3,"unreachable":1},"role":"controller","roster_readable":true}
+                """)
+            workspace.fleetNodes = decode(NativeFleetInventory.self, """
+                {"role":"controller","nodes":[\(nodeJSON("blue-1", "reachable", nil, seen: 4, now: now)),\(nodeJSON("blue-2", "reachable", nil, seen: 11, version: "0.6.120", now: now)),
+                  \(nodeJSON("blue-3", "unreachable", "could not reach the node: All connection attempts failed", seen: 190000, now: now)),
+                  \(nodeJSON("blue-4", "unauthorized", "that Mac refused this controller's credential", seen: 7200, now: now))],
+                 "summary":{"total":4,"reachable":2,"unreachable":1,"error":0,"unauthorized":1,"removed":0}}
+                """)
+        case "agent":
+            workspace.fleetOverview = decode(NativeFleetOverview.self, """
+                {"machines":[\(machineJSON("local", "This Mac", role: "agent", chip: "Apple M4", memory: 24, available: 11.8, disk: 188, total: 460, diskState: "green", jobs: 40, job: working)),
+                   \(machineJSON("c", "studio-mac-1500-m4-16-256-controller", role: "controller", reachable: role != "node-offline", chip: "Apple M4", memory: 16, available: 9.8, disk: 142, total: 460, diskState: "green", jobs: 61, address: "100.64.0.12:47873")),
+                   \(machineJSON("blue-2", "Blue Room 2", role: "agent", chip: "Apple M2", memory: 8, available: 1.2, disk: 21, total: 256, diskState: "amber", jobs: 30, address: "100.64.0.22:47873"))],
+                 "summary":{"total":3,"reachable":\(role == "node-offline" ? 2 : 3),"unreachable":\(role == "node-offline" ? 1 : 0)},"role":"agent",
+                 "controller": {"machine": "c", "label": "studio-mac-1500-m4-16-256-controller", "role": "controller", "address": "100.64.0.12:47873", "state": "\(role == "node-offline" ? "unreachable" : "reachable")"},
+                 "roster_readable": true}
+                """)
+            workspace.fleetNodes = decode(NativeFleetInventory.self, """
+                {"role":"agent","nodes":[],"summary":{"total":0,"reachable":0,"unreachable":0,"error":0}}
+                """)
+        default:
+            workspace.fleetOverview = decode(NativeFleetOverview.self, """
+                {"machines":[\(machineJSON("local", "This Mac", role: "standalone", chip: "Apple M4", memory: 24, available: 11.8, disk: 188, total: 460, diskState: "green", jobs: 40))],
+                 "summary":{"total":1,"reachable":1,"unreachable":0},"role":"standalone"}
+                """)
+            workspace.fleetNodes = decode(NativeFleetInventory.self, """
+                {"role":"standalone","nodes":[],"summary":{"total":0,"reachable":0,"unreachable":0,"error":0}}
+                """)
+        }
+    }
+
+    /// The Models, Voices and Connections fixtures: a small library, five saved voices and a controller
+    /// with four Macs in different conditions. Only in the throwaway copy render-page.sh builds.
+    @MainActor private static func seedLibrary(_ workspace: NativeWorkspaceStore) {
+        func model(_ repo: String, _ label: String, _ family: String, _ function: StudioFunction, cached: Bool,
+                   size: Double, block: String? = nil, memory: String? = nil) -> NativeModel {
+            var item = NativeModel(id: repo, repo: repo, label: label, family: family, function: function,
+                                   cached: cached, supported: block == nil, supportNote: "", sizeGB: size,
+                                   capabilities: ["clone", "design"], languages: ["en", "es", "ja"],
+                                   runtimeReady: true, supportsWordTimestamps: function == .transcription)
+            item.blockReason = block
+            item.memoryWarning = memory
+            return item
+        }
+        workspace.models = [
+            model("mlx-community/Kokoro-82M-bf16", "Kokoro 82M bf16", "Kokoro", .audio, cached: true, size: 0.4),
+            model("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "Qwen3 TTS 0.6B Base 4-bit", "Qwen3-TTS", .audio, cached: true, size: 1.7),
+            model("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16", "Qwen3 TTS 1.7B Base bf16", "Qwen3-TTS", .audio, cached: false, size: 4.6,
+                  memory: "This Mac has 16 GB; this model is qualified at 24 GB."),
+            model("mlx-community/whisper-large-v3-turbo", "Whisper large v3 turbo", "Whisper", .transcription, cached: true, size: 1.6),
+            model("mlx-community/whisper-small-mlx", "Whisper small", "Whisper", .transcription, cached: true, size: 0.5),
+            model("black-forest-labs/FLUX.2-klein-4B", "FLUX.2 Klein 4B MLX 4-bit", "FLUX", .image, cached: true, size: 8.0),
+            model("Tongyi-MAI/Z-Image-Turbo", "Z-Image-Turbo 6B MLX 4-bit", "Z-Image", .image, cached: false, size: 12.4,
+                  block: "Needs 24 GB of memory; this Mac has 16 GB."),
+            model("stabilityai/stable-audio-3-optimized", "Stable Audio 3", "Stable Audio", .music, cached: true, size: 6.1),
+            model("vanch007/mlx-Yue2-3B", "YuE 2 3B", "YuE", .music, cached: false, size: 7.2),
+            model("mlx-community/Qwen3-4B-Instruct-4bit", "Qwen3 4B Instruct 4-bit", "Qwen3", .chat, cached: true, size: 2.4),
+            model("mlx-community/gemma-3-12b-it-4bit", "Gemma 3 12B 4-bit", "Gemma", .chat, cached: false, size: 7.6,
+                  memory: "Close other apps before loading."),
+        ]
+        workspace.voices = [
+            ("Marlowe", "en", "f", true, 42.0), ("Ines", "es", "f", true, 31.5), ("Okafor", "en", "m", true, 58.2),
+            ("Hana", "ja", "f", false, 19.0), ("Brightwater (narrator)", "en", "m", true, 120.4),
+        ].enumerated().map { index, row in
+            decode(NativeVoice.self, """
+                {"id":"voice-\(index)","name":"\(row.0)","language":"\(row.1)","gender":"\(row.2)","notes":"Studio reference, room tone removed.",
+                 "license":"self-owned","permission_acknowledged":true,"has_transcript":\(row.3),"transcript":\(row.3 ? "\"The quick brown fox jumps over the lazy dog.\"" : "null"),
+                 "audio_extension":"wav","duration_seconds":\(row.4),"sample_rate":24000,"channels":1,"fleet_managed":\(index % 2 == 0)}
+                """)
+        }
+        workspace.hubVersion = decode(NativeVersion.self, #"{"version":"0.6.126","build":"a1b2c3d","source":"app"}"#)
+        // One job in every live or failed state, so the badges and progress lines are looked at too.
+        func live(_ id: String, _ state: String, _ model: String, _ prompt: String, progress: Double = 0,
+                  stage: String? = nil, error: String? = nil, stalled: Double? = nil) -> NativeJob {
+            var item = NativeJob(id: id, state: state, progress: progress, text: prompt, model: model,
+                                 createdAt: Date().timeIntervalSince1970 - 90, outputURL: nil, error: error)
+            item.progressStage = stage
+            item.stalledSeconds = stalled
+            item.machine = "local"
+            return item
+        }
+        workspace.imageJobs = [
+            live("image-run", "running", "black-forest-labs/FLUX.2-klein-4B", "A lighthouse in a storm, long exposure",
+                 progress: 0.45, stage: "DiT sampling", stalled: 140),
+            live("image-queue", "queued", "black-forest-labs/FLUX.2-klein-4B", "A quiet harbour at first light"),
+            live("image-fail", "error", "black-forest-labs/FLUX.2-klein-4B", "A glass city under a copper sky",
+                 error: "The worker ran out of memory while loading the model."),
+            live("image-unsure", "uncertain", "black-forest-labs/FLUX.2-klein-4B", "A red kite over a salt flat"),
+        ] + workspace.imageJobs
+        workspace.audioJobs = [
+            live("audio-run", "running", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "Welcome back. Your previous session is exactly where you left it.",
+                 progress: 0.6, stage: "section 3 of 5"),
+        ] + workspace.audioJobs
+        // A model chosen on every page, so the primary buttons render enabled, as they do on a Mac that has one.
+        workspace.audioModel = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"
+        workspace.transcriptionModel = "mlx-community/whisper-large-v3-turbo"
+        workspace.imageModel = "black-forest-labs/FLUX.2-klein-4B"
+        workspace.musicModel = "stabilityai/stable-audio-3-optimized"
+        workspace.chatModel = "mlx-community/Qwen3-4B-Instruct-4bit"
+        applyRole("controller", to: workspace)
     }
 
     private static let longPrompts = [
