@@ -309,11 +309,26 @@ private struct JobThumbnail: View {
 /// the column is the same on every row of every Studio and on the Jobs tab.
 private struct RowActionButton: ViewModifier {
     func body(content: Content) -> some View {
-        content
+        content.buttonStyle(RowButtonStyle())
+    }
+}
+
+/// The button itself is 104 points wide, not a 104-point frame around a bezel as wide as its label:
+/// `Play` and `Show in Folder` are the same size on the screen, which is what the owner asked for.
+private struct RowButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
             .font(.callout)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
-            .frame(width: 104)
+            .foregroundStyle(configuration.role == .destructive ? Color.red : Color.primary)
+            .frame(width: 104, height: 24)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(configuration.isPressed ? 0.22 : 0.12)))
+            .opacity(isEnabled ? 1 : 0.4)
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 }
 
@@ -322,21 +337,133 @@ private extension View {
     func rowAction() -> some View { modifier(RowActionButton()) }
 }
 
-/// The trailing actions of one row, in a column of a fixed width.
+/// The actions of one row: a block of fixed width, two buttons across, as many rows as it takes.
 ///
-/// The width is the two buttons a finished row can carry plus their spacing, so a row with one
-/// action and a row with three both keep the same right edge and the same left edge.
+/// The block used to be one `HStack` in a 214-point frame, which is two buttons and their spacing.
+/// A finished Music row has four (Preview, Play, Save…, Show in Folder) and an Image or Voice row
+/// three, so the buttons overflowed that frame to the left and sat on top of the row's text — the
+/// owner's report, *"Play sits on the text"*. Two across, wrapping, makes the block's width true
+/// for any number of buttons, so there is nothing left to overflow.
 private struct RowActions<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        HStack(spacing: 6) { content }
-            .frame(width: 214, alignment: .trailing)
-            // The column is laid out before the row's text, so a long prompt wraps inside what is
-            // left instead of running under the buttons. Without this the text — which asks for
-            // `maxWidth: .infinity` to wrap at all — was given its ideal width and the two
-            // overlapped on the Jobs tab, where the prompts are longest.
-            .layoutPriority(1)
+        TwoAcrossLayout { content }
+            .layoutValue(key: RowSlotKey.self, value: .actions)
+    }
+}
+
+private enum RowSlot { case content, actions }
+
+private struct RowSlotKey: LayoutValueKey { static let defaultValue = RowSlot.content }
+
+/// Two fixed-width columns, filled left to right. The width is the same for one button and for
+/// four, so every row's block has the same edges.
+private struct TwoAcrossLayout: Layout {
+    static let column: CGFloat = 104
+    static let gap: CGFloat = 6
+    static var width: CGFloat { column * 2 + gap }
+
+    private func rows(_ subviews: Subviews) -> [[LayoutSubviews.Element]] {
+        stride(from: 0, to: subviews.count, by: 2).map { Array(subviews[$0..<min($0 + 2, subviews.count)]) }
+    }
+
+    private func heights(_ rows: [[LayoutSubviews.Element]]) -> [CGFloat] {
+        rows.map { row in
+            row.map { $0.sizeThatFits(.init(width: Self.column, height: nil)).height }.max() ?? 0
+        }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let heights = heights(rows(subviews))
+        guard !heights.isEmpty else { return .zero }
+        return CGSize(width: Self.width, height: heights.reduce(0, +) + Self.gap * CGFloat(heights.count - 1))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let grouped = rows(subviews)
+        let heights = heights(grouped)
+        var y = bounds.minY
+        for (index, row) in grouped.enumerated() {
+            for (column, subview) in row.enumerated() {
+                subview.place(at: CGPoint(x: bounds.minX + CGFloat(column) * (Self.column + Self.gap), y: y),
+                              anchor: .topLeading, proposal: .init(width: Self.column, height: heights[index]))
+            }
+            y += heights[index] + Self.gap
+        }
+    }
+}
+
+/// One finished-work row: an optional leading mark, the text, and the actions.
+///
+/// **The text and the actions never share space.** Wide enough, the actions are a column at the
+/// trailing edge and the text takes what is left of the row. Not wide enough — the right-hand column
+/// of the Image and Music pages is a few hundred points — the actions sit under the text, so a long
+/// prompt wraps or truncates in its own column at any window width instead of running under a
+/// button. This is the one place that decides, so every Studio's list and the Jobs tab agree.
+///
+/// Children are the leading mark (optional), the text, and a `RowActions` (optional), in that order.
+private struct ActionRow: Layout {
+    private let spacing: CGFloat = 12
+    private let narrowestText: CGFloat = 280
+
+    private struct Parts {
+        var lead: LayoutSubviews.Element?
+        var text: LayoutSubviews.Element?
+        var actions: LayoutSubviews.Element?
+    }
+
+    private func parts(_ subviews: Subviews) -> Parts {
+        let plain = subviews.filter { $0[RowSlotKey.self] == .content }
+        return Parts(lead: plain.count > 1 ? plain.first : nil, text: plain.last,
+                     actions: subviews.first { $0[RowSlotKey.self] == .actions })
+    }
+
+    private struct Plan {
+        var leadSize = CGSize.zero
+        var textWidth: CGFloat = 0
+        var textSize = CGSize.zero
+        var actionsSize = CGSize.zero
+        var trailing = true
+        var size = CGSize.zero
+    }
+
+    private func plan(_ parts: Parts, width proposed: CGFloat?) -> Plan {
+        var plan = Plan()
+        let width = proposed ?? 760
+        plan.leadSize = parts.lead?.sizeThatFits(.unspecified) ?? .zero
+        plan.actionsSize = parts.actions?.sizeThatFits(.unspecified) ?? .zero
+        let lead = parts.lead == nil ? 0 : plan.leadSize.width + spacing
+        let actions = parts.actions == nil ? 0 : plan.actionsSize.width + spacing
+        plan.trailing = lead + narrowestText + actions <= width
+        plan.textWidth = max(0, width - lead - (plan.trailing ? actions : 0))
+        plan.textSize = parts.text?.sizeThatFits(.init(width: plan.textWidth, height: nil)) ?? .zero
+        let head = max(plan.leadSize.height, plan.textSize.height)
+        let height = plan.trailing ? max(head, plan.actionsSize.height)
+            : head + (parts.actions == nil ? 0 : spacing / 2 + plan.actionsSize.height)
+        plan.size = CGSize(width: width, height: height)
+        return plan
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        plan(parts(subviews), width: proposal.width).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let parts = parts(subviews)
+        let plan = plan(parts, width: bounds.width)
+        let lead = parts.lead == nil ? 0 : plan.leadSize.width + spacing
+        parts.lead?.place(at: bounds.origin, anchor: .topLeading, proposal: .init(plan.leadSize))
+        parts.text?.place(at: CGPoint(x: bounds.minX + lead, y: bounds.minY), anchor: .topLeading,
+                          proposal: .init(width: plan.textWidth, height: plan.textSize.height))
+        if plan.trailing {
+            parts.actions?.place(at: CGPoint(x: bounds.maxX - plan.actionsSize.width, y: bounds.minY),
+                                 anchor: .topLeading, proposal: .init(plan.actionsSize))
+        } else {
+            let head = max(plan.leadSize.height, plan.textSize.height)
+            parts.actions?.place(at: CGPoint(x: bounds.minX + lead, y: bounds.minY + head + spacing / 2),
+                                 anchor: .topLeading, proposal: .init(plan.actionsSize))
+        }
     }
 }
 
@@ -487,6 +614,10 @@ struct StudioContent: View {
     @State private var savingToken = false
     @State private var imagePreview: NSImage?
     @State private var selectedImageID: String?
+    /// The image shown large, over the page. Nil is closed. It is a view over the page rather than a
+    /// separate window so it is the same size as the page the operator is on and Esc closes it.
+    @State private var imageModalID: String?
+    @State private var imageModalImage: NSImage?
     @State private var selectedMusicID: String?
     /// The clip the operator asked to preview, by job id. Nil shows the list as it was.
     @State private var previewVideoID: String?
@@ -969,7 +1100,9 @@ struct StudioContent: View {
             // of the status, under the sidebar, so everything an operator needs to identify this
             // Mac - mode, what it offers, whether it is up, which build - is in one place.
             .clipped()
+            .overlay { imageLightbox }
         }
+        .onChange(of: studio.selection) { _, _ in imageModalID = nil }
         // A floor that matches the window's own minimum, not the sum of every column: the
         // columns are allowed to compress below their ideal so nothing has to be cropped.
         .frame(minWidth: 720, minHeight: 520)
@@ -1416,27 +1549,50 @@ struct StudioContent: View {
                         Button("Manage Image Models") { modelFilter = "Image"; studio.select(.models) }
                     }.padding(.trailing, 20).padding(.bottom, 20)
                 }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Text("Preview").font(.headline)
                         Spacer()
-                        if let job = previewImageJob { Button("Save Image…") { saveImage(job) }.disabled(!connected || loadingImage) }
+                        if let job = previewImageJob {
+                            Button("Save Image…") { saveImage(job) }.disabled(!connected || loadingImage)
+                            revealButton(job)
+                        }
                     }
+                    // A card, not a pane: the picture is a fixed height so the prompt, its settings
+                    // and the history below it keep the room. Click it for the large view.
                     ActiveAura(active: !activeImages.isEmpty) {
                         Group {
                             if loadingImage { ProgressView("Loading image…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-                            else if let imagePreview {
-                                Image(nsImage: imagePreview).resizable().scaledToFit()
-                                    .accessibilityLabel(previewImageJob?.text ?? "Generated image")
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            else if let imagePreview, let job = previewImageJob {
+                                Button { imageModalID = job.id } label: {
+                                    Image(nsImage: imagePreview).resizable().scaledToFit()
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        .overlay(alignment: .bottomTrailing) {
+                                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                                .font(.caption.weight(.semibold)).padding(6)
+                                                .background(.regularMaterial, in: Circle()).padding(8)
+                                        }
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help("View large")
+                                .accessibilityLabel("View \(job.text.isEmpty ? "generated image" : job.text) large")
                             } else { empty("Your image will appear here", "Enter a prompt and generate an image. Completed images stay in Jobs.", symbol: "photo") }
-                        }.frame(minHeight: 200).background(Color(nsColor: .controlBackgroundColor))
+                        }
+                        .frame(height: previewImageJob == nil ? 150 : 230)
+                        .frame(maxWidth: .infinity)
+                        .background(Color(nsColor: .controlBackgroundColor))
                     }
-                    if let job = previewImageJob { Text(job.text).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                    if let job = previewImageJob {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(job.text).font(.callout).lineLimit(4).textSelection(.enabled)
+                            Text(imageMeta(job)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                    }
                     Divider()
                     HStack { Text("Recent images").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
                     ScrollView { RecentRows(items: workspace.imageJobs) { imageJobRow($0) } }
-                        .frame(minHeight: 80, maxHeight: 150)
+                        .frame(minHeight: 80, maxHeight: .infinity)
                 }
                 .padding(.leading, 20)
                 // The same house frame as Audio and Subtitle, so the three workspace pages cannot
@@ -1556,6 +1712,16 @@ struct StudioContent: View {
         }
     }
 
+    private func jobMetaParts(_ job: NativeJob) -> [String] {
+        var parts = ["\(modelName(job.model))\(job.generationSuffix)"]
+        if let made = job.generatedAtLabel { parts.append(made) }
+        if let machine = job.machine, !machine.isEmpty {
+            parts.append("on \(machine == "local" ? "this Mac" : workspace.fleetMachineName(machine))")
+        }
+        if job.state == "error", let tries = job.tries, tries > 1 { parts.append("after \(tries) tries") }
+        return parts
+    }
+
     /// The line under a row's prompt: what made it, whether it finished, and when.
     ///
     /// Six row builders each hand-wrote this `HStack`, so a fact added to one was missing from the
@@ -1564,27 +1730,20 @@ struct StudioContent: View {
     /// the next fact lands on every row of every Studio at once.
     @ViewBuilder
     private func jobMetaLine(_ job: NativeJob) -> some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             stateBadge(job.state)
-            // The model's own published label, which carries its quantization — the same name the
-            // picker on the Chat page offered.
-            Text("\(modelName(job.model))\(job.generationSuffix)")
-                .font(.caption).foregroundStyle(.secondary)
-            // When it was made. Absent when the Hub stamped no time, which is a different fact from
-            // "a long time ago" and is not invented.
-            if let made = job.generatedAtLabel {
-                Text(made).font(.caption).foregroundStyle(.secondary)
-                    .accessibilityLabel("Generated \(made)")
-            }
-            // Which Mac ran or holds it: on a controller the operator otherwise cannot tell where
-            // a job went, or which node keeps failing it.
-            if let machine = job.machine, !machine.isEmpty {
-                Text("on \(machine == "local" ? "this Mac" : workspace.fleetMachineName(machine))")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if job.state == "error", let tries = job.tries, tries > 1 {
-                Text("after \(tries) tries").font(.caption).foregroundStyle(.secondary)
-            }
+            // One line of text that wraps as a line, not four texts that each wrap inside their own
+            // sliver: in the narrow column beside a Studio page "FLUX.2-klein-4B" broke across three
+            // lines. The model's own published label carries its quantization, and the date is absent
+            // when the Hub stamped no time — a different fact from "a long time ago". Which Mac ran
+            // or holds it matters on a controller, where it is otherwise unclear which node keeps
+            // failing a job.
+            let parts = jobMetaParts(job)
+            Text(parts.joined(separator: " · "))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(job.generatedAtLabel.map { "Generated \($0). \(parts.joined(separator: ", "))" }
+                                    ?? parts.joined(separator: ", "))
         }
     }
 
@@ -1626,11 +1785,88 @@ struct StudioContent: View {
         Button("Retry") { Task { await workspace.retryJob(job) } }.disabled(!connected).rowAction()
     }
 
+    /// "FLUX.2 klein 4B · 1536×1024 · 4 steps · guidance 1 · seed 48201": the facts that identify an
+    /// image and let it be made again, in one line. Nothing is invented: a job another client filed
+    /// states what it states.
+    private func imageMeta(_ job: NativeJob) -> String {
+        var parts = [modelName(job.model)]
+        if let width = job.clipWidth ?? job.requestedWidth ?? job.imageSettings?.width,
+           let height = job.clipHeight ?? job.requestedHeight ?? job.imageSettings?.height {
+            parts.append("\(width)×\(height)")
+        }
+        let facts = job.requestFacts(for: .image)
+        if !facts.isEmpty { parts.append(facts) }
+        return parts.joined(separator: " · ")
+    }
+
+    private var imageModalJob: NativeJob? {
+        guard let imageModalID else { return nil }
+        return workspace.imageJobs.first { $0.id == imageModalID && $0.state == "done" }
+    }
+
+    /// One image, as large as the window allows, with what made it and what to do with it.
+    ///
+    /// Esc and the Close button close it, and so does a click outside the card. It is drawn over the
+    /// page rather than as a sheet, so it fits the window the operator has instead of a sheet's fixed
+    /// size, and it needs no second window.
+    @ViewBuilder private var imageLightbox: some View {
+        if let job = imageModalJob {
+            ZStack {
+                Color.black.opacity(0.6).onTapGesture { imageModalID = nil }
+                VStack(alignment: .leading, spacing: 12) {
+                    Group {
+                        if let image = imageModalImage {
+                            Image(nsImage: image).resizable().scaledToFit()
+                                .accessibilityLabel(job.text.isEmpty ? "Generated image" : job.text)
+                        } else {
+                            ProgressView("Loading image…")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(job.text.isEmpty ? modelName(job.model) : job.text)
+                            .font(.callout).lineLimit(3).textSelection(.enabled)
+                        Text(imageMeta(job)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    HStack(spacing: 8) {
+                        Button("Save…") { saveImage(job) }.disabled(!connected || imageModalImage == nil)
+                        revealButton(job)
+                        Spacer()
+                        Button("Close") { imageModalID = nil }
+                            .keyboardShortcut(.cancelAction)
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(16)
+                .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                .shadow(radius: 24)
+                .padding(28)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Image")
+            .task(id: job.id) {
+                imageModalImage = job.id == previewImageJob?.id ? imagePreview : nil
+                guard imageModalImage == nil else { return }
+                do {
+                    let data = try await workspace.imageData(for: job)
+                    guard !Task.isCancelled, let image = NSImage(data: data) else { return }
+                    imageModalImage = image
+                } catch { if !Task.isCancelled { fileActionError = error.localizedDescription; imageModalID = nil } }
+            }
+        }
+    }
+
     private func imageJobRow(_ job: NativeJob) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 10) {
+            ActionRow {
                 if job.state == "done" {
-                    JobThumbnail(job: job, connected: connected, store: thumbnails, workspace: workspace)
+                    Button { imageModalID = job.id } label: {
+                        JobThumbnail(job: job, connected: connected, store: thumbnails, workspace: workspace)
+                    }
+                    .buttonStyle(.plain)
+                    .help("View large")
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
@@ -1642,7 +1878,6 @@ struct StudioContent: View {
                             .accessibilityLabel("Result details: \(job.assetFacts)")
                     }
                 }
-                Spacer()
                 RowActions {
                     if job.state == "done" {
                         Button("Preview") { selectedImageID = job.id; studio.select(.image) }.rowAction()
@@ -1728,33 +1963,16 @@ struct StudioContent: View {
                         Button("Manage Music Models") { modelFilter = "Music"; studio.select(.models) }
                     }.padding(.trailing, 20).padding(.bottom, 20)
                 }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Text("Preview").font(.headline)
-                        Spacer()
-                        if player.playing { Button("Stop Playback") { player.stop() } }
-                        if let job = previewMusicJob { Button("Save Audio…") { saveMusic(job) }.disabled(!connected) }
-                    }
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Preview").font(.headline)
                     ActiveAura(active: !activeMusic.isEmpty) {
-                        Group {
-                            if let job = previewMusicJob {
-                                VStack(spacing: 12) {
-                                    Image(systemName: "music.note").font(.system(size: 32, weight: .light)).foregroundStyle(.secondary)
-                                    Text(job.text.isEmpty ? modelName(job.model) : job.text)
-                                        .font(.headline).multilineTextAlignment(.center).lineLimit(3)
-                                    if let length = clipLength(job) {
-                                        Text("Clip length \(length)").font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    if !job.assetFacts.isEmpty {
-                                        Text(job.assetFacts).font(.caption).foregroundStyle(.secondary)
-                                            .accessibilityLabel("Result details: \(job.assetFacts)")
-                                    }
-                                    musicTransport(job)
-                                }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                            } else {
-                                empty("Your music will appear here", "Describe the music and generate it. Completed music stays in Jobs.", symbol: "music.note")
-                            }
-                        }.frame(minHeight: 200).background(Color(nsColor: .controlBackgroundColor))
+                        if let job = previewMusicJob {
+                            musicPlayerCard(job)
+                        } else {
+                            empty("Your music will appear here", "Describe the music and generate it. Completed music stays in Jobs.", symbol: "music.note")
+                                .frame(height: 150).frame(maxWidth: .infinity)
+                                .background(Color(nsColor: .controlBackgroundColor))
+                        }
                     }
                     Divider()
                     HStack { Text("Recent music").font(.headline); Spacer(); Button("All Jobs") { studio.select(.jobs) } }
@@ -1763,7 +1981,7 @@ struct StudioContent: View {
                         Spacer(minLength: 0)
                     } else {
                         ScrollView { RecentRows(items: workspace.musicJobs) { musicJobRow($0) } }
-                        .frame(minHeight: 80, maxHeight: 170)
+                        .frame(minHeight: 80, maxHeight: .infinity)
                     }
                 }
                 .padding(.leading, 20)
@@ -1775,58 +1993,100 @@ struct StudioContent: View {
         // Duration, steps, guidance, shift and seed open on the operator's saved default for this
         // model when there is one. Read when the page opens, once per connection.
         .task(id: modelDefaultsLoadKey) { await workspace.loadModelDefaultsIfNeeded(for: selectedMusicModel) }
-        .onChange(of: previewMusicJob?.id) { _, _ in
-            // A different clip is showing, so the transport must not pretend to control the old one.
+        .onChange(of: previewMusicJob?.id) { _, shown in
+            // A different clip is showing, so the player must not pretend to control the old one. A
+            // clip that was just started for the one now showing (the row's Play) is not the old one.
+            guard loadedMusicJobID != shown else { return }
             player.stop()
             loadedMusicJobID = nil
         }
     }
 
-    /// A conventional transport for the previewed Music clip: play/pause, a stop, a scrub bar and
-    /// the elapsed time of the audio actually loaded. Nothing starts on its own.
-    @ViewBuilder private func musicTransport(_ job: NativeJob) -> some View {
+    /// "ACE-Step 1.5 · 1:34 · 1.8 MB · seed 7700": which model, how long, how big, and the seed.
+    private func musicMeta(_ job: NativeJob) -> String {
+        var parts = [modelName(job.model)]
+        if let length = clipLength(job) { parts.append(length) }
+        if let bytes = job.bytes, bytes > 0 {
+            parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+        }
+        if let seed = job.musicSettings?.seed, seed >= 0 { parts.append("seed \(seed)") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The previewed Music clip as one compact player: what it is, one play/pause control, a scrub
+    /// bar with the elapsed and total time, and what to do with the file. Nothing starts on its own.
+    ///
+    /// This was a panel the height of the column — a note icon, the prompt, the length, a full-width
+    /// Play and Stop, and the bar, centred in a field of nothing — which left the history a strip.
+    /// It is the height of its content now, and the history takes the rest.
+    @ViewBuilder private func musicPlayerCard(_ job: NativeJob) -> some View {
         let loaded = loadedMusicJobID == job.id && player.hasAudio
-        VStack(spacing: 6) {
-            HStack(spacing: 12) {
+        let playing = loaded && player.playing
+        let name = job.text.isEmpty ? "generated music" : job.text
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 14) {
                 Button {
-                    if loaded && player.playing { player.pause() }
+                    if playing { player.pause() }
                     else if loaded { player.resume() }
                     else { startPreviewMusic(job) }
                 } label: {
-                    Label(loaded && player.playing ? "Pause" : "Play",
-                          systemImage: loaded && player.playing ? "pause.fill" : "play.fill")
+                    Image(systemName: playing ? "pause.fill" : "play.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Color.accentColor))
+                        .opacity(connected ? 1 : 0.4)
+                        .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
                 .disabled(!connected)
-                .accessibilityLabel(loaded && player.playing
-                                    ? "Pause \(job.text.isEmpty ? "generated music" : job.text)"
-                                    : "Play \(job.text.isEmpty ? "generated music" : job.text)")
-                Button {
-                    player.stop()
-                    loadedMusicJobID = nil
-                } label: {
-                    Label("Stop", systemImage: "stop.fill")
+                .accessibilityLabel(playing ? "Pause \(name)" : "Play \(name)")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(job.text.isEmpty ? modelName(job.model) : job.text)
+                        .font(.headline).lineLimit(2).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(musicMeta(job)).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
                 }
-                .disabled(!loaded)
-                Spacer()
-                Text(loaded ? player.timeLabel : "0:00 / 0:00")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Elapsed and total time")
             }
-            Slider(value: Binding(get: { loaded ? player.position : 0 },
-                                  set: { player.seek(to: $0) }),
-                   in: 0...max(loaded ? player.duration : 1, 0.001))
-                .disabled(!loaded)
-                .accessibilityLabel("Playback position")
+            HStack(spacing: 10) {
+                Text(loaded ? PreviewPlayer.clock(player.position) : "0:00")
+                    .accessibilityLabel("Elapsed time")
+                Slider(value: Binding(get: { loaded ? player.position : 0 },
+                                      set: { player.seek(to: $0) }),
+                       in: 0...max(loaded ? player.duration : 1, 0.001))
+                    .disabled(!loaded)
+                    .accessibilityLabel("Playback position")
+                Text(loaded ? PreviewPlayer.clock(player.duration)
+                     : PreviewPlayer.clock(job.durationSeconds ?? job.musicSettings?.durationSeconds ?? 0))
+                    .accessibilityLabel("Total time")
+            }
+            .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Button("Save…") { saveMusic(job) }.disabled(!connected).rowAction()
+                revealButton(job)
+                Spacer(minLength: 0)
+            }
         }
+        .padding(14)
+        // A player is a card, not a banner: it stops growing where a long line stops being readable.
+        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
     }
 
     private func startPreviewMusic(_ job: NativeJob) {
+        // Claimed before the bytes arrive, so the player card and the history agree on which clip
+        // this is the moment Play is pressed; given back if the clip cannot be played.
+        player.stop()
+        loadedMusicJobID = job.id
         Task {
-            do {
-                try await workspace.playMusic(job, with: player)
-                loadedMusicJobID = job.id
-            } catch { fileActionError = error.localizedDescription }
+            do { try await workspace.playMusic(job, with: player) }
+            catch {
+                if loadedMusicJobID == job.id { loadedMusicJobID = nil }
+                fileActionError = error.localizedDescription
+            }
         }
     }
 
@@ -1966,7 +2226,7 @@ struct StudioContent: View {
 
     private func musicJobRow(_ job: NativeJob) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 12) {
+            ActionRow {
                 Image(systemName: active(job.state) ? "music.note" : job.state == "done"
                       ? "checkmark.circle" : "exclamationmark.circle")
                     .foregroundStyle(stateColor(job.state))
@@ -1987,13 +2247,11 @@ struct StudioContent: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Spacer()
                 RowActions {
                     if job.state == "done" {
                         Button("Preview") { selectedMusicID = job.id; studio.select(.music) }.rowAction()
-                        Button("Play") {
-                            Task { do { try await workspace.playMusic(job, with: player) } catch { fileActionError = error.localizedDescription } }
-                        }.disabled(!connected).rowAction()
+                        Button("Play") { selectedMusicID = job.id; startPreviewMusic(job) }
+                            .disabled(!connected).rowAction()
                         Button("Save…") { saveMusic(job) }.disabled(!connected).rowAction()
                         revealButton(job)
                     } else if job.state == "uncertain" {
@@ -2277,7 +2535,7 @@ struct StudioContent: View {
 
     private func videoJobRow(_ job: NativeJob) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 12) {
+            ActionRow {
                 // A still from the clip itself, the way an Image result shows a thumbnail. A video
                 // row was a line of text with a film icon, so the only way to see what had been
                 // generated was to save it and open it somewhere else.
@@ -2299,7 +2557,6 @@ struct StudioContent: View {
                             .accessibilityLabel("Result details: \(job.assetFacts)")
                     }
                 }
-                Spacer()
                 RowActions {
                     if job.state == "done" {
                         Button("Preview") { previewVideoID = job.id }.rowAction()
@@ -3627,7 +3884,7 @@ struct StudioContent: View {
     /// failure for a transcript that was perfectly fine. Text gets text actions.
     private func subtitleJobRow(_ job: NativeJob) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 12) {
+            ActionRow {
                 Image(systemName: active(job.state) ? "waveform" : job.state == "done"
                       ? "checkmark.circle" : "exclamationmark.circle")
                     .foregroundStyle(stateColor(job.state))
@@ -3639,7 +3896,6 @@ struct StudioContent: View {
                         Text("Transcript").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Spacer()
                 RowActions {
                     if job.state == "done" {
                         // Opens the Subtitle page, where the transcript is exported and delivery is
@@ -3673,7 +3929,7 @@ struct StudioContent: View {
     /// itself as the item's text, so this shows it and saves it directly.
     private func chatJobRow(_ job: NativeJob) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 12) {
+            ActionRow {
                 Image(systemName: active(job.state) ? "bubble.left.and.bubble.right"
                       : job.state == "done" ? "checkmark.circle" : "exclamationmark.circle")
                     .foregroundStyle(stateColor(job.state))
@@ -3698,7 +3954,6 @@ struct StudioContent: View {
                                         in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
-                Spacer()
                 // Only a real answer has anything to copy or save. A failed attempt offers
                 // neither, because there is nothing there to offer.
                 if job.state == "done", !job.answer.isEmpty {
@@ -3731,7 +3986,7 @@ struct StudioContent: View {
 
     private func jobRow(_ job: NativeJob, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 12) {
+            ActionRow {
                 Image(systemName: active(job.state) ? "waveform" : job.state == "done" ? "checkmark.circle" : "exclamationmark.circle")
                     .foregroundStyle(stateColor(job.state))
                 VStack(alignment: .leading, spacing: 5) {
@@ -3746,7 +4001,6 @@ struct StudioContent: View {
                             .accessibilityLabel("Result details: \(job.assetFacts)")
                     }
                 }
-                Spacer()
                 RowActions {
                     if job.state == "done" {
                         Button("Play") {
