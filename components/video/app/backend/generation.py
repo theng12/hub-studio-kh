@@ -1220,6 +1220,7 @@ class GenerationManager:
         return index
 
     def _restore(self) -> None:
+        from components import job_history
         try:
             saved = json.loads(self.state_file.read_text())
             if not isinstance(saved, dict):
@@ -1242,6 +1243,8 @@ class GenerationManager:
                 if not final_matches(job, path):
                     job.update(state='error', error='Final MP4 is unavailable after restart',
                                error_code='OUTPUT_UNAVAILABLE', output_path=None, output_url=None)
+            if job_history.expired(job):
+                continue                  # finished more than 90 days ago: the record goes
             self.jobs[job_id] = job
         self._persist()
 

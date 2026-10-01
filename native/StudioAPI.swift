@@ -7264,15 +7264,15 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     /// After a completed install, everything under `Updates/` - the download just installed and any
-    /// older one an earlier attempt left - moves to the Hub's Trash Folder, which empties itself
-    /// after 15 days. Nothing pruned these before, so each full download (about 1.9 GB) built up
-    /// for good. A move that fails leaves the download where it is: never a delete.
+    /// older one an earlier attempt left - is deleted at once. It is a 1.9 GB copy of an app that is
+    /// already installed, so nothing is gained by keeping it for the Trash Folder's 15 days (nothing
+    /// pruned these before, and each full download built up for good). A delete that fails leaves the
+    /// download where it is; the Hub's disk governor removes any left over (`disk_governor.py`).
     func retireReleaseArtifacts() {
         guard let base = dataDirectory else { return }
         let updates = base.appendingPathComponent("Updates", isDirectory: true)
-        let trash = base.appendingPathComponent("hub/trash", isDirectory: true)
         let entries = (try? FileManager.default.contentsOfDirectory(at: updates, includingPropertiesForKeys: nil)) ?? []
-        for entry in entries { HubTrash.move(entry, into: trash, label: "release-download") }
+        for entry in entries { try? FileManager.default.removeItem(at: entry) }
     }
 
     /// The folder the Hub staged an update in (`.studiohub-staged-<id>`, beside the installed app),

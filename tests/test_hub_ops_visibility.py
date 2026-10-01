@@ -94,7 +94,8 @@ now = 100 * day
 add("old.png", 10, 10 * day, "old")           # past retention
 add("mid.png", 20, 90 * day, "mid")           # inside retention
 add("new.png", 30, 99 * day, "new")           # inside retention
-add("held.png", 40, 1 * day, "held", protected=True)   # never acknowledged: never deleted
+# never acknowledged and under 7 days old: never moved (premise changed 2026-10-02: unacked for 7+ days goes to the Trash Folder)
+add("held.png", 40, 98 * day, "held", protected=True)
 
 # Retention only: the old file is the only one past 30 days that may go.
 snap = output_storage.preview(machine="m", max_bytes=10_000, retention_days=30, now=now)

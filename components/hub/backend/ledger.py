@@ -521,6 +521,42 @@ def prune_activity(before_s: float, *, conn: sqlite3.Connection | None = None) -
             conn.close()
 
 
+def compact_history(*, now: float | None = None, days: int = 90) -> dict:
+    """Job history older than `days` is dropped, then the file is vacuumed if a quarter of it is free pages.
+
+    Only finished batches (and their idempotency records) and output groups that were already
+    deleted: an unfinished batch is live work and is never touched.  Called daily by the disk governor.
+    """
+    now = time.time() if now is None else float(now)
+    cutoff = now - days * 86400
+    result = {"batches": 0, "output_groups": 0, "vacuumed": False}
+    if not DB_FILE.exists():
+        return result
+    conn = _conn()
+    try:
+        result["batches"] = conn.execute(
+            "DELETE FROM batches WHERE finished = 1 AND created_at < ?", (cutoff,)).rowcount
+        conn.execute("DELETE FROM batch_requests WHERE created_at < ? "
+                     "AND batch_id NOT IN (SELECT id FROM batches)", (cutoff,))
+        try:
+            conn.execute("DELETE FROM output_files WHERE group_id IN (SELECT id FROM output_groups "
+                         "WHERE state = 'deleted' AND generated_at < ?)", (cutoff,))
+            result["output_groups"] = conn.execute(
+                "DELETE FROM output_groups WHERE state = 'deleted' AND generated_at < ?", (cutoff,)).rowcount
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+        conn.commit()
+        pages = conn.execute("PRAGMA page_count").fetchone()[0]
+        free = conn.execute("PRAGMA freelist_count").fetchone()[0]
+        if pages and free / pages > 0.25:
+            conn.execute("VACUUM")
+            result["vacuumed"] = True
+    finally:
+        conn.close()
+    return result
+
+
 def _is_corruption_error(exc: sqlite3.DatabaseError) -> bool:
     if getattr(exc, "sqlite_errorname", None) in {"SQLITE_CORRUPT", "SQLITE_NOTADB"}:
         return True

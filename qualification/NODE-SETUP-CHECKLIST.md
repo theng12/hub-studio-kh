@@ -38,6 +38,13 @@ Do NOT enrol all the machines yet. Do this first:
 machine with an empty roster. That is the single biggest unknown, and it is the thing you are about
 to do — so do it once, carefully, before doing it forty-nine times.
 
+## On every node, in macOS System Settings (owner decision, 2026-10-02)
+
+- [ ] Turn **off** macOS automatic update *downloads* (System Settings > General > Software Update >
+  Automatic Updates > "Download new updates when available" off) and turn **Time Machine off**.
+  A downloaded macOS update is 8-15 GB and local Time Machine snapshots take space the Hub cannot free;
+  on a 256 GB node either one alone can push it into the Hub's amber/red disk tiers. Apply macOS updates by hand, when chosen.
+
 ## Retiring, moving or selling a Mac
 
 1. **If it is a node:** **Connections → Leave this group**. This Mac stops using the group's token

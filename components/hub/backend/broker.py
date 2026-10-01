@@ -234,6 +234,10 @@ INSUFFICIENT_MEMORY = "INSUFFICIENT_MEMORY"
 # own constant rather than borrowing FAILED_WORKER_AVOID_S, because a reservation is a busy Mac,
 # not a broken one, and the moment it is free it must take work again.
 MACHINE_RESERVED_AVOID_S = 5.0
+# A Mac whose disk is full refuses work with 507 / OUTPUT_STORAGE_BLOCKED. Its governor frees space
+# on a 5-minute timer, so the Mac is left out of selection for that long - and the refusal is not a
+# generation attempt, so it never uses up one of the item's MAX_TRIES.
+DISK_FULL_AVOID_S = 300.0
 HANDOFF_RETRY_S = 15.0
 FAILED_WORKER_AVOID_S = 90.0
 MACHINE_FAILURE_THRESHOLD = 2
@@ -946,6 +950,14 @@ def _is_machine_reservation_refusal(exc: BaseException) -> bool:
     """
     return (getattr(exc, "status_code", None) == 409
             and str(getattr(exc, "error_code", "") or "") == "MACHINE_BUSY")
+
+
+def _is_disk_full_refusal(exc: BaseException) -> bool:
+    """Whether a Mac answered "my disk is full": HTTP 507, or the OUTPUT_STORAGE_BLOCKED /
+    DISK_FULL code (`standalone._peer_refusal_response` writes both for a full node). Nothing was
+    submitted, so nothing was attempted."""
+    return (getattr(exc, "status_code", None) == 507
+            or str(getattr(exc, "error_code", "") or "") in {"OUTPUT_STORAGE_BLOCKED", "DISK_FULL"})
 
 
 def _item_allows_studio(item: dict, studio: dict, now: float) -> bool:
@@ -4186,6 +4198,16 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             machine = studio.get("machine", "local")
             item.setdefault("avoid_machines", {})[machine] = now + MACHINE_RESERVED_AVOID_S
             _machine_reserved_until[machine] = now + MACHINE_RESERVED_AVOID_S
+        elif _is_disk_full_refusal(e) and not b["cancelled"]:
+            # The Mac refused at the door because its disk is full: not a failure of the work and not
+            # an attempt. Keep the item queued, restore the try it was charged, and leave that Mac out of
+            # selection for DISK_FULL_AVOID_S so another one takes it. If every Mac is full it waits
+            # here (the same queue-wait as a reserved Mac) and is offered again when the window ends.
+            item["tries"] = max(0, int(item.get("tries") or 0) - 1)
+            item["state"] = "queued"
+            item["error"] = f"waiting for a Mac with free disk space: {message}"
+            item["retry_at"] = None
+            item.setdefault("avoid_machines", {})[studio.get("machine", "local")] = now + DISK_FULL_AVOID_S
         elif retryable and _is_transport_failure(e, message) and not b["cancelled"]:
             # Infrastructure failures get a longer bounded healing window than
             # genuine generation errors. The stable worker job id was already
