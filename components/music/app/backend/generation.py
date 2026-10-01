@@ -24,7 +24,7 @@ import threading
 import time
 from uuid import uuid4
 
-from components import model_defaults
+from components import audio_encode, model_defaults
 
 from . import catalog, yue2, cache as cache_module, stable_audio
 
@@ -37,6 +37,15 @@ DEFAULT_MODEL = catalog.require_model(catalog.DEFAULT_REPO)
 MODEL_ID = DEFAULT_MODEL.repo
 AUDIO_FORMAT = "wav"
 MEDIA_TYPE = "audio/wav"
+# What each engine writes natively (Stable Audio 3 -> WAV, YuE2 -> FLAC); every job record and the
+# artifact route read the delivered file's own type, never one constant for both engines.
+YUE2_AUDIO_FORMAT = "flac"
+YUE2_MEDIA_TYPE = yue2.MEDIA_TYPE
+MEDIA_TYPE_BY_SUFFIX = {".wav": "audio/wav", ".flac": "audio/flac",
+                        ".m4a": audio_encode.MEDIA_TYPE}
+# Optional request field. Absent = the engine's native lossless file (today's behaviour).
+# ``wav`` / ``flac`` name that native file; ``m4a`` is AAC-LC 256 kbps (audio_encode "music").
+OUTPUT_FORMATS = ("wav", "flac", "m4a")
 
 # Single-pass ceiling a caller gets when it does not name the host's cap.  The Hub
 # canonicalises a Music request before a worker sees it, so both sides need one
@@ -91,6 +100,20 @@ def _limit(model: catalog.ModelEntry, key: str):
     return model.limits[key]
 
 
+def _output_format(raw: dict) -> dict:
+    """The request's optional ``output_format``, echoed only when it was supplied.
+
+    Echoing nothing for an absent field keeps the normalised params (which the Hub compares on
+    recovery, ``params == accepted_params``) identical to what an older caller always got.
+    """
+    value = raw.get("output_format")
+    if value is None:
+        return {}
+    if not isinstance(value, str) or value.strip().lower() not in OUTPUT_FORMATS:
+        raise ValueError("output_format must be " + ", ".join(OUTPUT_FORMATS))
+    return {"output_format": value.strip().lower()}
+
+
 def _validate_stable_audio(raw: dict, model: catalog.ModelEntry, *,
                            tier_cap_seconds: int = DEFAULT_TIER_CAP_SECONDS,
                            data_dir=None) -> dict:
@@ -113,6 +136,7 @@ def _validate_stable_audio(raw: dict, model: catalog.ModelEntry, *,
     duration = _finite_number(duration, name="duration",
                               low=float(_limit(model, "min_duration_seconds")),
                               high=float(_limit(model, "max_duration_seconds")))
+    output_format = _output_format(raw)
     steps = raw.get("steps", raw.get("inference_steps", defaults["steps"]))
     if (type(steps) is not int or not _limit(model, "min_steps")
             <= steps <= _limit(model, "max_steps")):
@@ -139,6 +163,7 @@ def _validate_stable_audio(raw: dict, model: catalog.ModelEntry, *,
         "dit_model": _default(model, "dit_model"), "lm_model": "",
         "tier_cap_seconds": int(_limit(model, "single_pass_max_seconds")),
         "exceeds_single_pass": False,
+        **output_format,
     }
 
 
@@ -211,6 +236,7 @@ def _validate_yue2(raw: dict, model: catalog.ModelEntry, *,
     # The port stops at its own end token, so a request can come back shorter than asked and never
     # longer — said here because the caller's seconds are a budget, not a promise.
     max_tokens = max(1, min(int(round(duration * catalog.YUE2_TOKENS_PER_SECOND)), 24576))
+    output_format = _output_format(raw)
     return {
         "repo": model.repo,
         "model_revision": model.revision,
@@ -225,6 +251,7 @@ def _validate_yue2(raw: dict, model: catalog.ModelEntry, *,
         "dit_model": "", "lm_model": "",
         "tier_cap_seconds": int(_limit(model, "single_pass_max_seconds")),
         "exceeds_single_pass": False,
+        **output_format,
     }
 
 
@@ -368,6 +395,24 @@ def defaults_in_force(model: catalog.ModelEntry, data_dir=None) -> dict:
     return resolved
 
 
+def output_format_parameter(model: catalog.ModelEntry) -> dict:
+    """The optional delivery format this lane honours, published so a caller can see it.
+
+    ``request_only``: a per-job choice (Story asks per asset type), never an operator default —
+    ``model_defaults.editable`` leaves it out, so omitting the field always means the native file.
+    """
+    native = _native_format(model)
+    return {"name": "output_format", "type": "string", "required": False,
+            "enum": [native, "m4a"], "request_only": True,
+            "note": (f"omit for the engine's native lossless {native.upper()}; m4a delivers "
+                     "AAC-LC 256 kbps (about 5x smaller) encoded after generation, and falls "
+                     "back to the native file if encoding fails")}
+
+
+def _native_format(model: catalog.ModelEntry) -> str:
+    return YUE2_AUDIO_FORMAT if model.runtime == catalog.RUNTIME_YUE2 else AUDIO_FORMAT
+
+
 def lane_parameters(model: catalog.ModelEntry) -> list[dict]:
     """The parameters this model's lane publishes, from its own limits and defaults.
 
@@ -401,6 +446,7 @@ def lane_parameters(model: catalog.ModelEntry) -> list[dict]:
         {"name": "seed", "type": "integer", "required": False,
          "minimum": _limit(model, "min_seed"), "maximum": _limit(model, "max_seed"),
          "default": _default(model, "seed"), "note": "-1 draws a random seed"},
+        output_format_parameter(model),
     ]
     for extra in _CONTRACT_EXTRAS.get(model.runtime, ()):
         entry = dict(extra)
@@ -444,8 +490,10 @@ def lane_contract(model: catalog.ModelEntry, data_dir=None) -> dict:
         # spelling is the one a reader can join on.
         "operation": "music.generation",
         "parameters": parameters,
-        "artifact": {"modality": "music", "media_type": MEDIA_TYPE,
-                     "extension": AUDIO_FORMAT, "per_item": 1},
+        "artifact": {"modality": "music",
+                     "media_type": (YUE2_MEDIA_TYPE if model.runtime == catalog.RUNTIME_YUE2
+                                    else MEDIA_TYPE),
+                     "extension": _native_format(model), "per_item": 1},
         "states": {
             "accepted": ["queued"],
             "active": ["running", "cancel_requested"],
@@ -592,8 +640,8 @@ class GenerationManager:
                 job.update(state="error",
                            error="Worker restarted before completion",
                            error_code="WORKER_RESTART_UNCERTAIN", finished_at=time.time())
-            if job.get("state") == "done" and not final_matches(job, self.outputs / f"{job_id}.wav"):
-                job.update(state="error", error="Final WAV is unavailable after restart",
+            if job.get("state") == "done" and not final_matches(job, self.final_path(job)):
+                job.update(state="error", error="Final audio is unavailable after restart",
                            error_code="OUTPUT_UNAVAILABLE", output_path=None, output_url=None)
             self.jobs[job_id] = job
         self._persist()
@@ -806,7 +854,7 @@ class GenerationManager:
             job = self.jobs.get(job_id)
             if job is None or job["state"] != "done":
                 return None
-            if not final_matches(job, self.outputs / f"{job_id}.wav"):
+            if not final_matches(job, self.final_path(job)):
                 return None
             if not job["acknowledged"]:
                 previous_ack = job["acknowledged"]
@@ -825,13 +873,102 @@ class GenerationManager:
             return {"ok": True, "job_id": job_id, "sha256": job["sha256"]}
 
     # -- the run -------------------------------------------------------------
+    def final_path(self, job: dict) -> Path:
+        """The delivered file this job's record names, only ever inside this worker's outputs.
+
+        Not ``{id}.wav``: a YuE2 song is FLAC and a compressed job is M4A, and a path built from
+        one hard-coded extension is how a finished YuE2 job answered 409 and was marked
+        ``OUTPUT_UNAVAILABLE`` after a restart. An old or foreign record falls back to the WAV name.
+        """
+        recorded = job.get("output_path")
+        if isinstance(recorded, str) and recorded:
+            path = Path(recorded)
+            if path.parent == self.outputs and path.suffix in MEDIA_TYPE_BY_SUFFIX:
+                return path
+        return self.outputs / f"{job['id']}.wav"
+
+    def _unlink_audio(self, job_id: str) -> None:
+        """Remove every audio file this worker itself wrote for a job that did not complete."""
+        for suffix in MEDIA_TYPE_BY_SUFFIX:
+            (self.outputs / f"{job_id}{suffix}").unlink(missing_ok=True)
+
+    def _deliver_audio(self, job_id: str, job: dict, master: Path, facts: dict, *,
+                       media_type: str, audio_format: str) -> tuple[Path, dict, dict | None]:
+        """Compress the finished master when the job asked for ``m4a``; otherwise leave it.
+
+        Runs **after** the inference lock is released, so the next job's model starts while this
+        one encodes. The master stays until the encode is verified, then this worker's own
+        temporary master is unlinked. Any encode failure delivers the master unchanged and records
+        why: a paid generation is never failed by compression.
+
+        Returns ``(delivered path, delivered facts, delivery record or None)``. The decoded facts
+        (duration, rate, channels, frames) always describe the audio and come from the master.
+        """
+        delivered = dict(facts, media_type=media_type, format=audio_format)
+        if job["params"].get("output_format") != "m4a":
+            return master, delivered, None
+        record = {"requested": "m4a", "master_media_type": media_type,
+                  "master_bytes": facts["bytes"], "master_sha256": facts["sha256"]}
+        self._progress(job_id, 0.97, "Compressing to AAC")
+        try:
+            encoded = audio_encode.encode_m4a(
+                master, self.outputs / f"{job_id}.m4a", profile="music",
+                expected_seconds=facts.get("audio_duration_s"))
+        except Exception as exc:  # noqa: BLE001 - deliver the master, never fail the paid job
+            record.update(applied=audio_format, delivery_fallback_reason=str(exc)[:400])
+            return master, delivered, record
+        master.unlink(missing_ok=True)
+        delivered.update(bytes=encoded["bytes"], sha256=encoded["sha256"],
+                         media_type=encoded["media_type"], format=encoded["format"])
+        record.update(applied="m4a", codec=encoded["codec"],
+                      bitrate_kbps=encoded["bitrate_kbps"])
+        return Path(encoded["path"]), delivered, record
+
+    def _complete(self, job: dict, sidecar: Path, request: dict, delivered_path: Path,
+                  delivered: dict, delivery: dict | None, *, engine_seconds, extra: dict,
+                  runner: dict | None = None) -> None:
+        """Write the sidecar and mark the job done, describing the file actually delivered."""
+        job_id = job["id"]
+        with self.lock:
+            now = time.time()
+            body = {
+                "schema": "studiohub.music-artifact", "schema_version": 1,
+                "job_id": job_id, "created_at": job["created_at"], "generated_at": now,
+                "request": request,
+                "artifact": {key: delivered[key] for key in (
+                    "bytes", "sha256", "audio_duration_s", "sample_rate_hz",
+                    "channels", "frames")},
+            }
+            if delivery is not None:
+                body["delivery"] = dict(delivery, media_type=delivered["media_type"],
+                                        format=delivered["format"])
+            if runner is not None:
+                body["runner"] = runner
+            _atomic_json(sidecar, body)
+            job.update(
+                state="done", progress=1.0, finished_at=now, generated_at=now,
+                duration_seconds=now - job["started_at"], engine_seconds=engine_seconds,
+                output_path=str(delivered_path),
+                output_url=f"/api/generate/jobs/{job_id}/audio",
+                sidecar_path=str(sidecar), sha256=delivered["sha256"],
+                bytes=delivered["bytes"], media_type=delivered["media_type"],
+                format=delivered["format"],
+                sample_rate_hz=delivered["sample_rate_hz"], channels=delivered["channels"],
+                audio_duration_s=delivered["audio_duration_s"], frames=delivered["frames"],
+                **extra)
+            if delivery is not None:
+                job["delivery"] = delivery
+                if delivery.get("delivery_fallback_reason"):
+                    job["delivery_fallback_reason"] = delivery["delivery_fallback_reason"]
+            self._persist()
+
     def _run_sa3(self, job_id: str) -> None:
         """Render one Stable Audio 3 clip; a short-lived MLX subprocess per job."""
         final = self.outputs / f"{job_id}.wav"
         sidecar = self.outputs / f"{job_id}.json"
-        with self.inference_lock:
-            job = None
-            try:
+        job = None
+        try:
+            with self.inference_lock:
                 with self.lock:
                     event = self.cancel_events.get(job_id)
                     job = self.jobs.get(job_id)
@@ -866,52 +1003,35 @@ class GenerationManager:
                     cancel_event=self.cancel_events.get(job_id),
                     on_progress=lambda ratio, label: self._progress(
                         job_id, ratio, label))
-                with self.lock:
-                    now = time.time()
-                    _atomic_json(sidecar, {
-                        "schema": "studiohub.music-artifact", "schema_version": 1,
-                        "job_id": job_id, "created_at": job["created_at"],
-                        "generated_at": now,
-                        "request": {
-                            "repo": params["repo"], "prompt": params["prompt"],
-                            "duration_seconds": params["duration_seconds"],
-                            "steps": params["steps"], "seed": seed,
-                            "guidance_scale": params["guidance_scale"]},
-                        "artifact": {key: facts[key] for key in (
-                            "bytes", "sha256", "audio_duration_s", "sample_rate_hz",
-                            "channels", "frames")},
-                    })
-                    job.update(
-                        state="done", progress=1.0, finished_at=now, generated_at=now,
-                        duration_seconds=now - job["started_at"],
-                        engine_seconds=facts["engine_seconds"],
-                        output_path=str(final),
-                        output_url=f"/api/generate/jobs/{job_id}/audio",
-                        sidecar_path=str(sidecar), sha256=facts["sha256"],
-                        bytes=facts["bytes"], media_type=MEDIA_TYPE,
-                        sample_rate_hz=facts["sample_rate_hz"],
-                        channels=facts["channels"],
-                        audio_duration_s=facts["audio_duration_s"],
-                        frames=facts["frames"],
-                        peak_process_rss_bytes=resource.getrusage(
-                            resource.RUSAGE_SELF).ru_maxrss)
-                    self._persist()
-            except stable_audio.Sa3Cancelled:
-                final.unlink(missing_ok=True)
-                sidecar.unlink(missing_ok=True)
-                self._finish_failure(job, {"state": "cancelled"})
-            except _JobFailed as failure:
-                self._finish_failure(job, failure.outcome)
-            except Exception as exc:  # noqa: BLE001 - report the engine's own text
-                final.unlink(missing_ok=True)
-                sidecar.unlink(missing_ok=True)
-                # The artifact is gone, so the record must stop pointing at it: a persist failure
-                # after the job was marked done otherwise leaves an `output_url` for a missing file.
-                self._finish_failure(job, {
-                    "state": "error", "error": f"{type(exc).__name__}: {exc}",
-                    "clear_artifacts": True})
-            finally:
-                self.cancel_events.pop(job_id, None)
+            # The inference lock is released: compressing never delays the next generation.
+            delivered_path, delivered, delivery = self._deliver_audio(
+                job_id, job, final, facts, media_type=MEDIA_TYPE, audio_format=AUDIO_FORMAT)
+            self._complete(
+                job, sidecar,
+                {"repo": params["repo"], "prompt": params["prompt"],
+                 "duration_seconds": params["duration_seconds"],
+                 "steps": params["steps"], "seed": seed,
+                 "guidance_scale": params["guidance_scale"]},
+                delivered_path, delivered, delivery,
+                engine_seconds=facts["engine_seconds"],
+                extra={"peak_process_rss_bytes": resource.getrusage(
+                    resource.RUSAGE_SELF).ru_maxrss})
+        except stable_audio.Sa3Cancelled:
+            self._unlink_audio(job_id)
+            sidecar.unlink(missing_ok=True)
+            self._finish_failure(job, {"state": "cancelled"})
+        except _JobFailed as failure:
+            self._finish_failure(job, failure.outcome)
+        except Exception as exc:  # noqa: BLE001 - report the engine's own text
+            self._unlink_audio(job_id)
+            sidecar.unlink(missing_ok=True)
+            # The artifact is gone, so the record must stop pointing at it: a persist failure
+            # after the job was marked done otherwise leaves an `output_url` for a missing file.
+            self._finish_failure(job, {
+                "state": "error", "error": f"{type(exc).__name__}: {exc}",
+                "clear_artifacts": True})
+        finally:
+            self.cancel_events.pop(job_id, None)
 
     def _run_yue2(self, job_id: str) -> None:
         """Render one YuE2 song in the engine's own runtime, through the app's runner bridge.
@@ -927,9 +1047,9 @@ class GenerationManager:
         """
         final = self.outputs / f"{job_id}.flac"
         sidecar = self.outputs / f"{job_id}.json"
-        with self.inference_lock:
-            job = None
-            try:
+        job = None
+        try:
+            with self.inference_lock:
                 with self.lock:
                     event = self.cancel_events.get(job_id)
                     job = self.jobs.get(job_id)
@@ -976,59 +1096,42 @@ class GenerationManager:
                     seed=seed, interpreter=interpreter,
                     cancel_event=self.cancel_events.get(job_id),
                     on_progress=lambda ratio, label: self._progress(job_id, ratio, label))
-                with self.lock:
-                    now = time.time()
-                    _atomic_json(sidecar, {
-                        "schema": "studiohub.music-artifact", "schema_version": 1,
-                        "job_id": job_id, "created_at": job["created_at"],
-                        "generated_at": now,
-                        "request": {
-                            "repo": params["repo"], "prompt": params["prompt"],
-                            "mode": params["mode"], "precision": params["precision"],
-                            "duration_seconds": params["duration_seconds"],
-                            "max_tokens": params["max_tokens"], "steps": params["steps"],
-                            "seed": seed, "guidance_scale": params["guidance_scale"]},
-                        "artifact": {key: facts[key] for key in (
-                            "bytes", "sha256", "audio_duration_s", "sample_rate_hz",
-                            "channels", "frames")},
-                        "runner": {"engine": "mlx-yue", "python": str(interpreter),
-                                   "load_seconds": facts["load_seconds"],
-                                   "generate_seconds": facts["generate_seconds"]},
-                    })
-                    job.update(
-                        state="done", progress=1.0, finished_at=now, generated_at=now,
-                        duration_seconds=now - job["started_at"],
-                        engine_seconds=facts["generate_seconds"],
-                        output_path=str(final),
-                        output_url=f"/api/generate/jobs/{job_id}/audio",
-                        sidecar_path=str(sidecar), sha256=facts["sha256"],
-                        bytes=facts["bytes"], media_type=MEDIA_TYPE,
-                        sample_rate_hz=facts["sample_rate_hz"],
-                        channels=facts["channels"],
-                        audio_duration_s=facts["audio_duration_s"],
-                        frames=facts["frames"],
-                        # The bridge measured itself; the worker's own sampler would report this
-                        # process, where the memory is not.
-                        peak_footprint_bytes=facts["peak_footprint_bytes"],
-                        peak_rss_bytes=facts["peak_rss_bytes"],
-                        footprint_method=facts["footprint_method"])
-                    self._persist()
-            except yue2.Yue2Cancelled:
-                final.unlink(missing_ok=True)
-                sidecar.unlink(missing_ok=True)
-                self._finish_failure(job, {"state": "cancelled"})
-            except _JobFailed as failure:
-                _finish = failure.outcome
-                final.unlink(missing_ok=True)
-                sidecar.unlink(missing_ok=True)
-                self._finish_failure(job, _finish)
-            except Exception as exc:  # noqa: BLE001 - report the engine's own text
-                final.unlink(missing_ok=True)
-                sidecar.unlink(missing_ok=True)
-                self._finish_failure(job, {
-                    "state": "error", "error": f"{type(exc).__name__}: {exc}"})
-            finally:
-                self.cancel_events.pop(job_id, None)
+            # The inference lock is released: compressing never delays the next generation.
+            delivered_path, delivered, delivery = self._deliver_audio(
+                job_id, job, final, facts, media_type=YUE2_MEDIA_TYPE,
+                audio_format=YUE2_AUDIO_FORMAT)
+            self._complete(
+                job, sidecar,
+                {"repo": params["repo"], "prompt": params["prompt"],
+                 "mode": params["mode"], "precision": params["precision"],
+                 "duration_seconds": params["duration_seconds"],
+                 "max_tokens": params["max_tokens"], "steps": params["steps"],
+                 "seed": seed, "guidance_scale": params["guidance_scale"]},
+                delivered_path, delivered, delivery,
+                engine_seconds=facts["generate_seconds"],
+                runner={"engine": "mlx-yue", "python": str(interpreter),
+                        "load_seconds": facts["load_seconds"],
+                        "generate_seconds": facts["generate_seconds"]},
+                # The bridge measured itself; the worker's own sampler would report this
+                # process, where the memory is not.
+                extra={"peak_footprint_bytes": facts["peak_footprint_bytes"],
+                       "peak_rss_bytes": facts["peak_rss_bytes"],
+                       "footprint_method": facts["footprint_method"]})
+        except yue2.Yue2Cancelled:
+            self._unlink_audio(job_id)
+            sidecar.unlink(missing_ok=True)
+            self._finish_failure(job, {"state": "cancelled"})
+        except _JobFailed as failure:
+            self._unlink_audio(job_id)
+            sidecar.unlink(missing_ok=True)
+            self._finish_failure(job, failure.outcome)
+        except Exception as exc:  # noqa: BLE001 - report the engine's own text
+            self._unlink_audio(job_id)
+            sidecar.unlink(missing_ok=True)
+            self._finish_failure(job, {
+                "state": "error", "error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            self.cancel_events.pop(job_id, None)
 
     def _progress(self, job_id: str, ratio, desc) -> None:
         with self.lock:

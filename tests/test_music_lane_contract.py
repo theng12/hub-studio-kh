@@ -88,7 +88,8 @@ class TheContractCoversEveryModelTests(unittest.TestCase):
                     declared <= published,
                     f"{model.runtime} declares {sorted(declared - published)} but publishes none "
                     "of them; a parameter the lane reads must be offered")
-                shared = {"prompt", "duration_seconds", "steps", "guidance_scale", "seed"}
+                shared = {"prompt", "duration_seconds", "steps", "guidance_scale", "seed",
+                          "output_format"}
                 self.assertEqual(
                     published - shared, declared,
                     f"{model.runtime} publishes {sorted((published - shared) - declared)} that its "
@@ -248,7 +249,8 @@ class EverySettableParameterPublishesADefaultTests(unittest.TestCase):
                 published = generation.lane_parameters(model)
                 self.assertTrue(published)
                 for parameter in published:
-                    if parameter.get("required"):
+                    if parameter.get("required") or parameter.get("request_only"):
+                        # A per-request choice is not defaultable: omitting it means native.
                         self.assertNotIn("default", parameter)
                         continue
                     self.assertIn("default", parameter, parameter["name"])
@@ -265,12 +267,16 @@ class EverySettableParameterPublishesADefaultTests(unittest.TestCase):
         for model in catalog.CATALOG:
             parameters = generation.lane_parameters(model)
             settable = {parameter["name"]: parameter["default"]
-                        for parameter in parameters if not parameter.get("required")}
+                        for parameter in parameters
+                        if not parameter.get("required") and not parameter.get("request_only")}
             with self.subTest(repo=model.repo):
                 self.assertTrue(settable)
                 accepted, refusals = validate_defaults(parameters, settable)
                 self.assertEqual(refusals, {})
                 self.assertEqual(set(accepted), set(settable))
+                # `output_format` is published (a caller can see it) but never defaultable.
+                _accepted, refused = validate_defaults(parameters, {"output_format": "m4a"})
+                self.assertIn("output_format", refused)
                 # Control: a control this runtime does not publish has nothing to default.
                 for name in sorted(set(samples) - set(settable)):
                     _accepted, refused = validate_defaults(parameters, {name: samples[name]})

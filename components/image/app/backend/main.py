@@ -11,9 +11,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import loading_mode, memory_policy
-from .generation import (MODEL_ID, MODELS, QUALIFIED_MINIMUM_MEMORY_BYTES, SIZE_PRESETS,
-                         GenerationManager, defaults_in_force, final_matches, lane_contract,
-                         lane_parameters, loading_modes, missing_runtime_model_reason)
+from .generation import (MEDIA_TYPE_BY_SUFFIX, MODEL_ID, MODELS, QUALIFIED_MINIMUM_MEMORY_BYTES,
+                         SIZE_PRESETS, GenerationManager, defaults_in_force, final_matches,
+                         lane_contract, lane_parameters, loading_modes,
+                         missing_runtime_model_reason)
 
 from components import app_version, model_defaults
 
@@ -273,11 +274,12 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
     def image(job_id: str):
         value = manager.get(job_id)
         if value is None or value['state'] != 'done':
-            raise HTTPException(404, 'final PNG is unavailable')
-        path = manager.outputs / f'{job_id}.png'
+            raise HTTPException(404, 'final image is unavailable')
+        # The delivered file is the one the job names: the PNG, or the JPEG a job asked for.
+        path = manager.final_path(value)
         if not final_matches(value, path):
-            raise HTTPException(409, 'final PNG changed after generation')
-        return FileResponse(path, media_type='image/png',
+            raise HTTPException(409, 'final image changed after generation')
+        return FileResponse(path, media_type=MEDIA_TYPE_BY_SUFFIX.get(path.suffix, 'image/png'),
                             headers={'X-Content-SHA256': value['sha256']})
 
     @app.post('/api/generate/jobs/{job_id}/ack')

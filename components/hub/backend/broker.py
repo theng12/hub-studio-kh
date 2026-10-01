@@ -981,6 +981,23 @@ async def _catalog_entry(studio: dict, model: str) -> dict | None:
     return None
 
 
+async def _lane_accepts_output_format(studio: dict, model: str, value: object) -> bool:
+    """Does this worker's published lane contract list ``value`` for ``output_format``?
+
+    The field is optional per job and an older worker silently drops what it does not know, which
+    would make recovery's request comparison fail on a perfectly good job. So it is sent only to a
+    worker whose own catalog says it honours that value; anything else (no catalog, no parameter,
+    a value outside its enum) is treated as "not supported" and the job runs as it always has.
+    """
+    entry = await _catalog_entry(studio, model)
+    contract = (entry or {}).get("lane_contract")
+    for parameter in (contract.get("parameters") if isinstance(contract, dict) else None) or ():
+        if isinstance(parameter, dict) and parameter.get("name") == "output_format":
+            options = parameter.get("enum")
+            return not isinstance(options, list) or value in options
+    return False
+
+
 def _normalized_immutable_revision(value: object) -> str | None:
     text = str(value or "").strip()
     if not _IMMUTABLE_MODEL_REVISION.fullmatch(text):
@@ -2079,12 +2096,25 @@ def _sanitize_public_error_code(value: object) -> str:
 
 async def _cache_voice_artifact_metadata(client: httpx.AsyncClient, item: dict,
                                          studio: dict, worker_url: str,
-                                         expected_bytes, expected_sha256) -> None:
-    """Fetch and decode a terminal voice artifact once, then persist its facts.
+                                         expected_bytes, expected_sha256,
+                                         job: dict | None = None) -> None:
+    """Verify a terminal voice artifact once, then persist its facts.
 
     A metadata failure never retries an already-completed generation: the
     result remains available but is marked unverified and therefore unbillable.
+
+    The artifact's format decides how. A WAV (the default) is decoded here, because the Hub
+    derives its billable duration from the bytes themselves. A compressed artifact (``m4a``,
+    delivered by a worker that was asked for ``output_format``) is **streamed through a SHA-256 and
+    a byte count** and never held in memory: the worker already decoded the lossless master it
+    encoded from and reports the duration, rate and channels of that, which the Hub keeps once the
+    delivered bytes are proven to be the ones the worker described.
     """
+    reported = (job or {}).get("media_type")
+    if isinstance(reported, str) and reported.split(";", 1)[0].strip().lower() != "audio/wav":
+        await _verify_compressed_voice_artifact(
+            client, item, studio, worker_url, expected_bytes, expected_sha256, job or {})
+        return
     try:
         url, headers = studio_request(studio, worker_url)
         # Long-form 40k narration can produce a 100–160 MB PCM WAV. Give an
@@ -2104,6 +2134,60 @@ async def _cache_voice_artifact_metadata(client: httpx.AsyncClient, item: dict,
         item["artifact_metadata_error"] = str(exc)
         return
     item.update(metadata)
+    item.pop("artifact_metadata_error", None)
+
+
+async def _verify_compressed_voice_artifact(client: httpx.AsyncClient, item: dict,
+                                            studio: dict, worker_url: str,
+                                            expected_bytes, expected_sha256,
+                                            job: dict) -> None:
+    """Prove a non-WAV voice artifact is the one the worker described, without buffering it."""
+    try:
+        media_type = artifact_metadata.trusted_media_type(job.get("media_type"), "voice")
+        if media_type is None:
+            raise ValueError("worker reported an unsupported voice media type")
+        if type(expected_bytes) is not int or expected_bytes <= 0:
+            raise ValueError("worker byte count is not a positive integer")
+        digest = str(expected_sha256 or "").lower()
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            raise ValueError("worker checksum is not a SHA-256")
+        duration_s = job.get("audio_duration_s")
+        rate = job.get("sample_rate_hz")
+        channels = job.get("channels")
+        if (type(duration_s) not in (int, float) or not math.isfinite(float(duration_s))
+                or duration_s <= 0 or type(rate) is not int or rate <= 0
+                or type(channels) is not int or channels not in (1, 2)):
+            raise ValueError("worker did not report the decoded duration, rate and channels")
+        url, headers = studio_request(studio, worker_url)
+        hasher = hashlib.sha256()
+        received = 0
+        head = b""
+        async with client.stream("GET", url, headers=headers, timeout=600.0) as response:
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes(1024 * 1024):
+                if not head:
+                    head = chunk[:16]
+                hasher.update(chunk)
+                received += len(chunk)
+        if received != expected_bytes:
+            raise ValueError("worker byte count does not match downloaded artifact")
+        if hasher.hexdigest() != digest:
+            raise ValueError("worker checksum does not match downloaded artifact")
+        proven = artifact_metadata.sniff_media_type(head)
+        if proven not in (media_type, None) and not (
+                media_type == "audio/mp4" and proven == "video/mp4"):
+            raise ValueError("downloaded artifact is not the media type the worker reported")
+    except (OverflowError, TypeError, ValueError, httpx.HTTPError) as exc:
+        item["artifact_metadata_error"] = str(exc)
+        return
+    item.update({
+        "media_type": media_type, "format": str(job.get("format") or media_type.split("/")[-1]),
+        "bytes": received, "sha256": digest,
+        "audio_duration_s": round(float(duration_s), 6),
+        "audio_duration_ms": (job.get("audio_duration_ms") if type(job.get("audio_duration_ms")) is int
+                              else round(float(duration_s) * 1000)),
+        "sample_rate_hz": rate, "channels": channels,
+    })
     item.pop("artifact_metadata_error", None)
 
 
@@ -2195,7 +2279,7 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     item["duration_s"] = runtime  # compatibility: historic duration_s meant runtime
     if b["modality"] == "voice" and worker_url:
         await _cache_voice_artifact_metadata(
-            client, item, studio, worker_url, job.get("bytes"), job.get("sha256"))
+            client, item, studio, worker_url, job.get("bytes"), job.get("sha256"), job)
         if _voice_recovery_owns(item) and not recovery:
             return
     else:
@@ -2314,9 +2398,17 @@ def _validate_voice_worker_job(item: dict, job: object, *,
             )
 
 
+# The delivered file's media type a completed worker job may carry. Absent `output_format` is the
+# lane's native lossless file (PNG; WAV, or FLAC for YuE2); a job that asked for compression at
+# source delivers JPEG or AAC in an MP4 container instead. The receipt still names the file that
+# will actually be served, with its own bytes and sha256.
+_IMAGE_RECEIPT_MEDIA_TYPES = frozenset({"image/png", "image/jpeg"})
+_MUSIC_RECEIPT_MEDIA_TYPES = frozenset({"audio/wav", "audio/flac", "audio/mp4"})
+
+
 def _validate_image_worker_job(item: dict, job: object, *,
                                remote: bool = False) -> None:
-    """Reject a changed Image identity or a completion without a PNG receipt."""
+    """Reject a changed Image identity or a completion without a PNG or JPEG receipt."""
     if not isinstance(job, dict) or job.get("id") != item.get("studio_job_id"):
         raise ValueError("Image worker status did not match the accepted job ID")
     state = job.get("state")
@@ -2341,15 +2433,15 @@ def _validate_image_worker_job(item: dict, job: object, *,
                 or any(ch not in "0123456789abcdef" for ch in digest)
                 or job.get("output_url") != f"/api/generate/jobs/{job['id']}/image"
                 or not isinstance(job.get("output_path"), str) or not job["output_path"]
-                or job.get("media_type") != "image/png"
+                or job.get("media_type") not in _IMAGE_RECEIPT_MEDIA_TYPES
                 or type(generated_at) not in (int, float)
                 or not math.isfinite(float(generated_at)) or generated_at <= 0):
-            raise ValueError("Image worker completion lacks a final PNG receipt")
+            raise ValueError("Image worker completion lacks a final PNG or JPEG receipt")
 
 
 def _validate_music_worker_job(item: dict, job: object, *,
                                remote: bool = False) -> None:
-    """Reject a changed Music identity or a completion without a WAV receipt."""
+    """Reject a changed Music identity or a completion without a WAV, FLAC or M4A receipt."""
     if not isinstance(job, dict) or job.get("id") != item.get("studio_job_id"):
         raise ValueError("Music worker status did not match the accepted job ID")
     state = job.get("state")
@@ -2373,10 +2465,10 @@ def _validate_music_worker_job(item: dict, job: object, *,
                 or any(ch not in "0123456789abcdef" for ch in digest)
                 or job.get("output_url") != f"/api/generate/jobs/{job['id']}/audio"
                 or not isinstance(job.get("output_path"), str) or not job["output_path"]
-                or job.get("media_type") != "audio/wav"
+                or job.get("media_type") not in _MUSIC_RECEIPT_MEDIA_TYPES
                 or type(generated_at) not in (int, float)
                 or not math.isfinite(float(generated_at)) or generated_at <= 0):
-            raise ValueError("Music worker completion lacks a final WAV receipt")
+            raise ValueError("Music worker completion lacks a final audio receipt")
 
 
 def _validate_video_worker_job(item: dict, job: object, *,
@@ -2582,10 +2674,13 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
                 "The accepted Music canonical request settings are missing; "
                 "manual reconciliation is required."
             )
+        # A worker that predates `output_format` never echoes it, and the dispatcher withheld it
+        # from such a worker, so it is not part of the identity being compared for image/video.
         params_match = (
             params == accepted_params if modality == "music"
             else isinstance(params, dict)
-            and all(params.get(key) == value for key, value in body.items())
+            and all(params.get(key) == value for key, value in body.items()
+                    if key != "output_format")
         )
         if (any(job.get(key) != value for key, value in accepted.items()
                 if value is not None) or not params_match):
@@ -3622,6 +3717,11 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             body["memory_floor_gb"] = floor
     if item["seed"] is not None:
         body["seed"] = item["seed"]
+    # `output_format` (compress at source) reaches only a worker that advertises it; the rest keep
+    # producing their native file, which the caller's own fallback handles.
+    if "output_format" in body and not await _lane_accepts_output_format(
+            studio, b["model"], body["output_format"]):
+        body.pop("output_format")
     # Reference-image jobs use multipart. Image Studio accepts ``image`` on
     # img2img/edit; Video Studio accepts ``file`` on video2video with
     # mode=img2video. One exact source image is used per stable scene id.

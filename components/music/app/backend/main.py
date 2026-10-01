@@ -20,8 +20,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import catalog, memory_policy
-from .generation import (GenerationManager, defaults_in_force, final_matches, lane_contract,
-                         lane_parameters)
+from .generation import (MEDIA_TYPE_BY_SUFFIX, GenerationManager, defaults_in_force,
+                         final_matches, lane_contract, lane_parameters)
 
 from components import app_version, model_defaults
 
@@ -227,12 +227,15 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
     def audio(job_id: str):
         value = manager.get(job_id)
         if value is None or value["state"] != "done":
-            raise HTTPException(404, "final WAV is unavailable")
-        path = manager.outputs / f"{job_id}.wav"
+            raise HTTPException(404, "final audio is unavailable")
+        # The delivered file is the one the job names: WAV (Stable Audio 3), FLAC (YuE2) or M4A
+        # (a job that asked for `output_format: m4a`). Its type comes from the file, so an older
+        # record that said WAV for a FLAC is still served as what it is.
+        path = manager.final_path(value)
         if not final_matches(value, path):
-            raise HTTPException(409, "final WAV changed after generation")
-        return FileResponse(path, media_type="audio/wav",
-                            filename=f"{job_id}.wav",
+            raise HTTPException(409, "final audio changed after generation")
+        media_type = MEDIA_TYPE_BY_SUFFIX.get(path.suffix, value.get("media_type") or "audio/wav")
+        return FileResponse(path, media_type=media_type, filename=path.name,
                             headers={"X-Content-SHA256": value["sha256"]})
 
     @app.get("/api/generate/jobs/{job_id}/metadata")
