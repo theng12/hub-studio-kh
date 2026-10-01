@@ -44,9 +44,10 @@ def test_repeated_memory_refusals_back_off_and_do_not_count_as_progress(fixture_
         assert item["state"] == "queued"
         assert item["tries"] == 0, "a capacity wait must not consume a generation attempt"
         delays.append(item["retry_at"] - clock[0])
+        assert item["avoid_machines"]["local"] - clock[0] >= max(broker.FAILED_WORKER_AVOID_S, delays[-1])
         clock[0] += 1000.0
 
-    assert delays == [30.0, 60.0, 120.0, 120.0, 120.0, 120.0]
+    assert delays == [30.0, 60.0, 120.0, 240.0, 300.0, 300.0]
     assert len(releases) == broker.CAPACITY_RELEASE_ATTEMPTS, \
         "a repeating refusal kept unloading the Mac's other studios"
     assert item["capacity_failures"] == 6

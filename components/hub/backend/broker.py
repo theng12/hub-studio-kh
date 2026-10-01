@@ -221,7 +221,7 @@ RECOVERY_WINDOW_S = 120.0  # cover a full slow M1 generation after a dropped con
 RETRY_DELAYS_S = (3.0, 10.0)
 INFRA_RETRY_DELAYS_S = (5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 300.0)
 CAPACITY_RETRY_S = 30.0
-CAPACITY_RETRY_MAX_S = 120.0
+CAPACITY_RETRY_MAX_S = 300.0
 CAPACITY_RELEASE_ATTEMPTS = 3
 # A Mac another queue has reserved is not free *yet*. It is not a reason to park the item: the
 # refusal takes that machine out of selection for this long - for every item aimed at it, through
@@ -4096,13 +4096,13 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             item["tries"] = max(0, int(item.get("tries") or 0) - 1)
             item["state"] = "queued"
             item["error"] = f"waiting for capacity: {message} (refused {failures}x)"
-            item["retry_at"] = now + (
-                3.0 if handoff["released"]
-                else min(CAPACITY_RETRY_S * 2 ** min(failures - 1, 6), CAPACITY_RETRY_MAX_S))
+            delay = (3.0 if handoff["released"]
+                     else min(CAPACITY_RETRY_S * 2 ** min(failures - 1, 6), CAPACITY_RETRY_MAX_S))
+            item["retry_at"] = now + delay
             item.setdefault("capacity_wait_started_at", now)
             item.setdefault("avoid_machines", {})[
                 studio.get("machine", "local")
-            ] = now + FAILED_WORKER_AVOID_S
+            ] = now + max(FAILED_WORKER_AVOID_S, delay)
         elif _is_machine_reservation_refusal(e) and not b["cancelled"]:
             # Another queue holds the Mac the pool chose. That answer arrives before this
             # item's worker saw the request, so nothing was submitted and no attempt was
