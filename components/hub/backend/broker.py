@@ -221,6 +221,8 @@ RECOVERY_WINDOW_S = 120.0  # cover a full slow M1 generation after a dropped con
 RETRY_DELAYS_S = (3.0, 10.0)
 INFRA_RETRY_DELAYS_S = (5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 300.0)
 CAPACITY_RETRY_S = 30.0
+CAPACITY_RETRY_MAX_S = 120.0
+CAPACITY_RELEASE_ATTEMPTS = 3
 # A Mac another queue has reserved is not free *yet*. It is not a reason to park the item: the
 # refusal takes that machine out of selection for this long - for every item aimed at it, through
 # `_machine_reserved_until` - and the dispatcher's own heartbeat retries after that. It keeps its
@@ -1694,6 +1696,14 @@ def batch_summary(b: dict) -> dict:
         })
     retrying = [i for i in items if i["state"] == "queued"
                 and (i.get("retry_at") or 0) > now]
+    # How long an item has been refused for memory, from its first refusal. Every attempt
+    # re-stamps the item's own progress clock, so a worker that keeps dying for lack of memory
+    # (45 minutes of ~92 s requeues on an 8 GB Mac) always looked recently active; this clock is
+    # not reset by the retries, only by the item finishing. Visible, never destructive.
+    capacity_since = [i["capacity_wait_started_at"] for i in items
+                      if i["state"] in ("queued", "running") and i.get("capacity_failures")
+                      and isinstance(i.get("capacity_wait_started_at"), (int, float))]
+    capacity_waiting_s = round(max(0.0, now - min(capacity_since)), 1) if capacity_since else None
     active = bool(states.count("queued") or states.count("running") or states.count("cancel_requested") or states.count("uncertain"))
     processing_started_at = min(started_at) if started_at else None
     last_activity_at = max(activity_at)
@@ -1718,7 +1728,13 @@ def batch_summary(b: dict) -> dict:
         # OWN progress clock (`last_progress_at` and friends), because that is what the Jobs page
         # shows and what "has anything moved?" means to the person watching it.
         # **Visible, never destructive**: nothing is cancelled on the strength of this.
-        "stalled_seconds": _batch_stalled_seconds(active, activity_at, now),
+        "stalled_seconds": max(
+            (value for value in (_batch_stalled_seconds(active, activity_at, now),
+                                 capacity_waiting_s if capacity_waiting_s is not None
+                                 and capacity_waiting_s > stall.STALL_AFTER_S else None)
+             if value is not None), default=None),
+        "capacity_waiting_s": capacity_waiting_s,
+        "capacity_refusals": max((int(i.get("capacity_failures") or 0) for i in items), default=0),
         # Same rule as the transcription summary: a note explains a job that is waiting, and a
         # finished job is not waiting for anything.
         "governor_note": (b.get("governor_note")
@@ -1743,8 +1759,10 @@ def batch_summary(b: dict) -> dict:
         "last_activity_at": last_activity_at,
         "no_progress_s": no_progress_s,
         "stalled_after_s": stalled_after_s,
-        "stalled": bool(active and no_progress_s is not None
-                        and no_progress_s >= stalled_after_s),
+        "stalled": bool(active and ((no_progress_s is not None
+                                     and no_progress_s >= stalled_after_s)
+                                    or (capacity_waiting_s is not None
+                                        and capacity_waiting_s >= stalled_after_s))),
     }
 
 
@@ -4058,11 +4076,21 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             # Memory pressure is a capacity wait, not a consumed generation
             # attempt. Avoid this Mac briefly so another healthy worker can
             # steal the item; if none can, keep it queued until memory clears.
-            handoff = await release_idle_siblings(client, studio)
+            #
+            # Not bounded (the owner wants the work queued, not failed - see the MACHINE_BUSY
+            # note below), but it backs off: the first refusals release idle siblings and retry
+            # soon, a repeating one stops unloading the Mac's other studios every cycle and
+            # retries at most every CAPACITY_RETRY_MAX_S.
+            failures = int(item.get("capacity_failures") or 0) + 1
+            item["capacity_failures"] = failures
+            handoff = (await release_idle_siblings(client, studio)
+                       if failures <= CAPACITY_RELEASE_ATTEMPTS else {"released": 0})
             item["tries"] = max(0, int(item.get("tries") or 0) - 1)
             item["state"] = "queued"
-            item["error"] = f"waiting for capacity: {message}"
-            item["retry_at"] = now + (3.0 if handoff["released"] else CAPACITY_RETRY_S)
+            item["error"] = f"waiting for capacity: {message} (refused {failures}x)"
+            item["retry_at"] = now + (
+                3.0 if handoff["released"]
+                else min(CAPACITY_RETRY_S * 2 ** min(failures - 1, 6), CAPACITY_RETRY_MAX_S))
             item.setdefault("capacity_wait_started_at", now)
             item.setdefault("avoid_machines", {})[
                 studio.get("machine", "local")
@@ -4135,6 +4163,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             item["retry_at"] = None
     finally:
         if item["state"] in ("done", "error", "cancelled"):
+            item.pop("capacity_failures", None)
+            item.pop("capacity_wait_started_at", None)
             item.setdefault("machine", str(studio.get("machine") or "local")[:500])
             item.setdefault("worker_id", str(studio.get("id") or "unknown")[:500])
             if item["state"] == "error":
