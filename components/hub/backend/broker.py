@@ -4178,6 +4178,10 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         _reserved["gb"] = max(0.0, _reserved["gb"] - item.get("_reserved", 0.0))
         item["_reserved"] = 0.0
         item.pop("_dispatch_generation", None)
+        # The Mac is free and the item's state is final: let the scheduler offer it the next item
+        # now. The per-item webhook below can take seconds (a slow or restarting callback target
+        # costs up to its 5 s connect / 60 s read timeout), and the wake used to wait for it.
+        _wakeup.set()
         if b.get("modality") in DURABLE_ASYNC_MODALITIES:
             publication_state = {
                 key: b[key] for key in ("done_notified", "finished_at")
