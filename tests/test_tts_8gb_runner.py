@@ -91,7 +91,7 @@ class MemoryStallTests(unittest.TestCase):
         self.assertIsNone(ns["memory_wait"]("voice: needs a ~16GB machine; this one has 8GB"))
         self.assertIsNone(ns["memory_wait"](None))
 
-    def fake_hub(self, stalled, admission=False, was=None, crash_while_relaxed=False, restore_file=None):
+    def fake_hub(self, stalled, admission=False, was=None, crash_while_relaxed=False, restore_file=None, hung=(), broken=()):
         """A Hub whose `stalled` models stay queued behind the memory guard until the operator override lowers it.
         `admission=False` is a Hub older than 0.6.125 (no override route); `was` is an override already in force."""
         wav = io.BytesIO()
@@ -135,6 +135,10 @@ class MemoryStallTests(unittest.TestCase):
                 raise KeyboardInterrupt   # the owner presses Ctrl-C (or closes the window) mid-measurement
             if bid in log["deleted"]:
                 state = "cancelled"
+            elif log["jobs"][bid] in hung:   # a thrashing model: running, never finishes
+                state = "running"
+            elif log["jobs"][bid] in broken:   # a model whose worker dies
+                state = "error"
             elif log["jobs"][bid] in stalled and not (log["override"] and log["override"]["free"] is not None
                                                       and log["override"]["free"] <= 1.0):
                 state = "queued" if log["polls"] < 400 else "error"   # never ends by itself; the cap only stops a hung test
@@ -144,7 +148,7 @@ class MemoryStallTests(unittest.TestCase):
             else:
                 state = "done"
             return 200, {"governor_note": NOTE if state == "queued" else None, "created_at": 0,
-                         "items": [{"state": state, "chunk_total": 1, "error": "the cap" if state == "error" else None}]}
+                         "items": [{"state": state, "chunk_total": 1, "error": ("worker died" if log["jobs"][bid] in broken else "the cap") if state == "error" else None}]}
         return call, log
 
     def test_a_stalled_model_is_recorded_cancelled_skipped_and_the_next_model_still_runs(self):
@@ -153,14 +157,14 @@ class MemoryStallTests(unittest.TestCase):
         models = [m for m in ns["MODELS"] if m["key"] in ("qwen3", "voxcpm2")]
         out = tempfile.mkdtemp()
         ns.update(call=call, MEM_WAIT_S=0.0, QUICK=False, ONLY=None,
-                  precheck=lambda: ("0.6.124", models, {"S2": "hello", "S4": "hello"}))
+                  precheck=lambda: ("0.6.124", models, {"S2": "hello", "S4": "hello"}))   # a Hub with no override route: it cannot bypass
         with mock.patch.dict("os.environ", {"TTS8_OUT": out}), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(ns["main"](), 0)
         folder = next(Path(out).iterdir())
         rows = list(csv.DictReader(io.StringIO((folder / "results.csv").read_text())))
         qwen = [r["status"] for r in rows if r["model"] == "Qwen3-TTS 0.6B"]
-        self.assertEqual(qwen, ["did not start", "skipped", "skipped", "skipped"])
-        self.assertEqual([r["status"] for r in rows if r["model"] == "VoxCPM2"], ["completed"] * 4)
+        self.assertEqual(qwen, ["did not start", "skipped"])
+        self.assertEqual([r["status"] for r in rows if r["model"] == "VoxCPM2"], ["completed"] * 2)
         first = rows[0]
         self.assertEqual((first["needed_free_gb"], first["had_free_gb"], first["hub_reason"]), ("3.2", "3.0", NOTE))
         self.assertEqual(log["posts"].count("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"), 1, "skipped clips were queued anyway")
@@ -169,24 +173,26 @@ class MemoryStallTests(unittest.TestCase):
         summary = (folder / "summary.txt").read_text()
         self.assertIn("DID NOT START", summary)
         self.assertIn("needs 3.2 GB free, had 3 GB", summary)
-        self.assertIn("VoxCPM2 4-bit: completed 4/4", summary)
+        self.assertIn("VoxCPM2 4-bit: completed 2/2", summary)
 
 
 QWEN = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
 
 
-class MeasureAnywayTests(unittest.TestCase):
-    """A model the default guard holds back is measured with the guard lowered, safely, and the guard is always put back."""
+class BypassTests(unittest.TestCase):
+    """The guard is bypassed at once, nothing waits or aborts for swap, a hung or dead model is recorded and skipped, and the guard is put back."""
 
-    def run_main(self, hub_kwargs, swap=None, models=("qwen3", "voxcpm2")):
+    def run_main(self, hub_kwargs, swap=None, models=("qwen3", "voxcpm2"), timeout=None, with_s4=False):
         ns = runner()
         call, log = MemoryStallTests.fake_hub(self, {QWEN}, restore_file=ns["RESTORE"], **hub_kwargs)
         chosen = [m for m in ns["MODELS"] if m["key"] in models]
         out = tempfile.mkdtemp()
-        ns.update(call=call, MEM_WAIT_S=0.0, QUICK=False, ONLY=None, voice_pids=lambda rows: [1], pressure_level=lambda: 1,
+        ns.update(call=call, MEM_WAIT_S=0.0, QUICK=False, ONLY=None, WITH_S4=with_s4, voice_pids=lambda rows: [1], pressure_level=lambda: 1,
                   footprint=lambda pid: (2.35e9, 2.6e9),
                   swap_gb=(lambda: swap(log)) if swap else (lambda: 0.0),
                   precheck=lambda: ("0.6.125", chosen, {"S2": "hello", "S4": "hello"}))
+        if timeout is not None:
+            ns["TIMEOUT"] = timeout
         status = "not run"
         with mock.patch.dict("os.environ", {"TTS8_OUT": out}), contextlib.redirect_stdout(io.StringIO()):
             try:
@@ -197,53 +203,76 @@ class MeasureAnywayTests(unittest.TestCase):
         rows = list(csv.DictReader(io.StringIO((folder / "results.csv").read_text())))
         return ns, log, rows, (folder / "summary.txt").read_text(), status
 
-    def test_a_held_model_is_measured_with_the_guard_lowered_and_the_guard_is_put_back(self):
+    def test_a_held_model_runs_at_once_with_the_guard_bypassed_and_the_guard_is_put_back(self):
         ns, log, rows, summary, status = self.run_main({"admission": True})
         self.assertEqual(status, 0)
         qwen = [r for r in rows if r["model"] == "Qwen3-TTS 0.6B"]
-        self.assertEqual([r["status"] for r in qwen], ["did not start"] + ["completed"] * 4)
-        self.assertEqual([r["guard_relaxed"] for r in qwen], ["no"] + ["yes"] * 4)
-        self.assertEqual(qwen[1]["override_used_gb"], "0.5")
-        self.assertEqual(qwen[1]["measured_peak_gb"], "2.35")
-        self.assertEqual(qwen[1]["verdict"], "fits only with relaxed guard - real need about 2.6 GB")
-        self.assertEqual(qwen[1]["hub_free_floor_gb"], "3.2")
-        vox = [r for r in rows if r["model"] == "VoxCPM2"]
-        self.assertEqual({r["guard_relaxed"] for r in vox}, {"no"})
-        self.assertEqual({r["verdict"] for r in vox}, {"fits at default guard"})
-        # set once for the held model, put back (cleared: there was no override) before the next model; nothing else touched
-        self.assertEqual(log["puts"], [(QWEN, 0.5, 8.0), (QWEN, None, None)])
+        self.assertEqual([r["status"] for r in qwen], ["completed"] * 2, "no 'did not start' wait row: the bypass is set before the first clip")
+        self.assertEqual([r["guard_relaxed"] for r in qwen], ["yes"] * 2)
+        self.assertEqual(qwen[0]["override_used_gb"], "0.0")
+        self.assertEqual(qwen[0]["measured_peak_gb"], "2.35")
+        self.assertEqual(qwen[0]["verdict"], "fits only with relaxed guard - real need about 2.6 GB")
+        self.assertEqual(qwen[0]["hub_free_floor_gb"], "3.2")
+        self.assertEqual(qwen[0]["script"], "S2")
+        self.assertEqual({r["script"] for r in rows}, {"S2"}, "the 3-minute text is opt-in")
+        self.assertEqual(len(log["posts"]), 4)
+        # every model is bypassed before its first clip and put back before the next one
+        self.assertEqual(log["puts"][:2], [(QWEN, 0.0, 8.0), (QWEN, None, None)])
+        self.assertEqual({p[1] for p in log["puts"] if p[1] is not None}, {0.0})
         self.assertIsNone(log["override"])
-        self.assertEqual(log["file_at_lowering"], {QWEN: None}, "what to put back must be saved before the Hub is changed")
-        vox_posts = [o for m, o in log["override_at_post"] if "VoxCPM2" in m]
-        self.assertTrue(vox_posts and all(o is None for o in vox_posts), "the next model ran with the guard still lowered")
-        self.assertIn("FITS ONLY WITH THE GUARD RELAXED", summary)
+        self.assertEqual(log["file_at_lowering"] is not None, True, "what to put back must be saved before the Hub is changed")
+        self.assertEqual([o for m, o in log["override_at_post"] if m == QWEN and o is not None][:1], [{"free": 0.0, "total": 8.0}])
+        self.assertIn("FITS WITH THE GUARD BYPASSED", summary)
         self.assertIn("Recommended free-memory requirement: 2.6 GB (worker peak 2.35 GB + 0.25 GB margin; the Hub's default is 3.2 GB)", summary)
         self.assertEqual(json.loads(ns["RESTORE"].read_text()), {})
 
+    def test_s4_is_opt_in(self):
+        ns, log, rows, summary, status = self.run_main({"admission": True}, models=("voxcpm2",), with_s4=True)
+        self.assertEqual([r["script"] for r in rows], ["S2", "S4", "S2", "S4"])
+
     def test_an_operator_override_that_was_already_there_is_restored_exactly(self):
         ns, log, rows, summary, status = self.run_main({"admission": True, "was": {"free": 4.0, "total": 8.0}})
-        self.assertEqual(log["puts"], [(QWEN, 0.5, 8.0), (QWEN, 4.0, 8.0)])
+        self.assertEqual(log["puts"][:2], [(QWEN, 0.0, 8.0), (QWEN, 4.0, 8.0)])
         self.assertEqual(log["override"], {"free": 4.0, "total": 8.0})
 
-    def test_a_clip_that_swaps_hard_is_cancelled_recorded_and_the_next_model_still_runs(self):
+    def test_heavy_swap_is_recorded_not_a_reason_to_abort(self):
         grow = {"n": 0}
-        def swap(log):   # swap rises 0.5 GB per reading once the guard is lowered
+        def swap(log):   # swap rises 0.5 GB per reading once the guard is bypassed
             if log["override"]:
                 grow["n"] += 1
                 return 0.5 * grow["n"]
             return 0.0
         ns, log, rows, summary, status = self.run_main({"admission": True}, swap=swap)
         qwen = [r for r in rows if r["model"] == "Qwen3-TTS 0.6B"]
-        self.assertEqual([r["status"] for r in qwen], ["did not start", "stopped for safety", "skipped", "skipped", "skipped"])
-        self.assertTrue(qwen[1]["error"].startswith("needs more than this Mac can give: peak 2.4 GB, swap +"), qwen[1]["error"])
-        self.assertEqual(qwen[1]["verdict"], "does not fit - needs more than this Mac can give")
-        self.assertEqual([r["status"] for r in rows if r["model"] == "VoxCPM2"], ["completed"] * 4)
-        self.assertEqual(len(log["deleted"]), 2, "the held job and the unsafe job are both cancelled")
-        self.assertIsNone(log["override"], "the guard must be put back")
-        self.assertIn("DOES NOT FIT: needs more than this Mac can give", summary)
+        self.assertEqual([r["status"] for r in qwen], ["completed"] * 2)
+        self.assertGreater(float(qwen[0]["swap_delta_gb"]), 1.5)
+        self.assertEqual(log["deleted"], [], "nothing is cancelled for swap")
+
+    def test_a_clip_that_never_finishes_is_timed_out_the_model_skipped_and_the_next_model_runs(self):
+        ns, log, rows, summary, status = self.run_main({"admission": True, "hung": {QWEN}}, timeout=0.3)
+        self.assertEqual(status, 0)
+        qwen = [r for r in rows if r["model"] == "Qwen3-TTS 0.6B"]
+        self.assertEqual([r["status"] for r in qwen], ["timed out", "skipped"])
+        self.assertTrue(qwen[0]["error"].startswith("timed out: not finished within"), qwen[0]["error"])
+        self.assertEqual(qwen[0]["verdict"], "does not fit - too slow, timed out")
+        self.assertEqual([r["status"] for r in rows if r["model"] == "VoxCPM2"], ["completed"] * 2)
+        self.assertEqual(len(log["deleted"]), 1, "the hung job is cancelled")
+        self.assertIsNone(log["override"])
+        self.assertIn("DOES NOT FIT", summary)
+        self.assertIn("VoxCPM2 4-bit: completed 2/2", summary)
+
+    def test_a_model_whose_worker_dies_is_recorded_with_the_error_and_the_next_model_runs(self):
+        ns, log, rows, summary, status = self.run_main({"admission": True, "broken": {QWEN}})
+        qwen = [r for r in rows if r["model"] == "Qwen3-TTS 0.6B"]
+        self.assertEqual([r["status"] for r in qwen], ["failed", "skipped"])
+        self.assertEqual(qwen[0]["error"], "worker died")
+        self.assertEqual([r["status"] for r in rows if r["model"] == "VoxCPM2"], ["completed"] * 2)
+        self.assertIsNone(log["override"])
+        self.assertIn("worker died", summary)
 
     def test_ctrl_c_in_the_middle_of_a_measurement_puts_the_guard_back(self):
         ns, log, rows, summary, status = self.run_main({"admission": True, "crash_while_relaxed": True}, models=("qwen3",))
+        self.assertIn(status, (130, "interrupted"))
         self.assertIsNone(log["override"])
         self.assertEqual(log["puts"][-1], (QWEN, None, None))
 
@@ -259,7 +288,7 @@ class MeasureAnywayTests(unittest.TestCase):
 
     def test_an_older_hub_without_the_override_route_still_skips_the_model_as_before(self):
         ns, log, rows, summary, status = self.run_main({"admission": False})
-        self.assertEqual([r["status"] for r in rows if r["model"] == "Qwen3-TTS 0.6B"], ["did not start", "skipped", "skipped", "skipped"])
+        self.assertEqual([r["status"] for r in rows if r["model"] == "Qwen3-TTS 0.6B"], ["did not start", "skipped"])
         self.assertEqual(log["puts"], [])
 
     def test_the_runners_free_figure_is_the_hubs(self):

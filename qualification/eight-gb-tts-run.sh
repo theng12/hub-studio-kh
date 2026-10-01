@@ -1,7 +1,8 @@
 #!/bin/bash
 # Text-to-speech on an 8 GB Mac: Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit, OmniVoice bf16.
 #
-#   bash eight-gb-tts-run.sh                 the whole test (two voices x S2 and S4, three models)
+#   bash eight-gb-tts-run.sh                 the test (two voices x the short text S2, three models; guard bypassed)
+#   bash eight-gb-tts-run.sh --with-s4       also the 3-minute text S4 (slow: can take hours on 8 GB)
 #   bash eight-gb-tts-run.sh --quick         a short check (S2, Chris only) - the script's own self-test
 #   bash eight-gb-tts-run.sh --models qwen3,voxcpm2   only these (qwen3, voxcpm2, omnivoice)
 #   bash eight-gb-tts-run.sh --allow-non-target       run the full test on a Mac that is not 8 GB
@@ -21,24 +22,28 @@
 # than 3x the 32 GB time is flagged. It writes a timestamped folder beside this script (or on the
 # Desktop when the drive is read-only): the WAVs, results.csv and a short plain-English summary.txt.
 #
-# Before each model it asks the Hub to release the idle Studios' models (never a running job) and records
-# the free memory the Hub sees and what holds the rest. If a clip's job sits queued because the Hub is
-# waiting for free memory for more than TTS8_MEM_WAIT seconds (default 300) it records "did not start -
-# needs X GB free, had Y GB" (the Hub's own reason) and cancels that job. Then, so the model is still MEASURED,
-# it lowers THAT model's free-memory requirement to TTS8_RELAX_FREE_GB (default 0.5) through the Hub's operator
-# override (PUT /api/hub/memory/admission, Hub 0.6.125+) and runs the clip again, cancelling it if swap grows by
-# more than 1.5 GB or memory pressure reaches urgent. The requirement is put back after that model, on any exit
-# (Ctrl-C, closing the window), and at the next start if a run died. results.csv gains guard_relaxed,
-# override_used_gb, measured_peak_gb, swap_delta_gb and verdict; summary.txt gives each model's recommended
-# requirement (measured peak + 0.25 GB), labelled as measured on this Mac. On an older Hub the model is skipped
-# as before. The Hub's own default requirements are never edited.
+# Before each model it asks the Hub to release the idle Studios' models (never a running job) and records the
+# free memory the Hub sees and what holds the rest. Then it BYPASSES the Hub's free-memory guard for that model
+# (PUT /api/hub/memory/admission, Hub 0.6.125+: the free-memory requirement goes to TTS8_RELAX_FREE_GB, default 0)
+# with no waiting, and just runs it: the point is to find out what the Mac really does, so it never aborts a clip
+# for swap or memory pressure - it records the peak, the swap and the pressure. Every clip has a hard wall-clock
+# limit (TTS8_TIMEOUT, default 480 s for a short text; a 3-minute text gets 3x): a clip that thrashes is cancelled and
+# recorded as "timed out", a clip that crashes (worker died, out of memory, error) is recorded with the error, and in
+# both cases the model's remaining clips are skipped and the next model goes on. The original requirement is put back
+# after each model and on any exit (Ctrl-C, closing the window, an error), and at the next start if a run was killed
+# (kept in tts8-guard-restore.json beside the Hub's hub-ready.json). If this Hub cannot bypass (older than 0.6.125) the
+# old behaviour applies: a job held for memory longer than TTS8_MEM_WAIT seconds is recorded "did not start".
+#
+# Default clips: the 175-word text (S2) in both owner voices, per model. The 3-minute text (S4) is OFF unless you ask
+# (--with-s4 or TTS8_S4=1): on 8 GB it ran 45 minutes without finishing.
 #
 # It installs nothing and deletes nothing. It asks the Hub for audio (and keeps the Mac awake while it runs);
 # the only setting it touches is that temporary per-model override. Safe to run again; each run gets its own folder.
 #
-# Nothing to edit. Knobs (all optional): TTS8_TIMEOUT=2700 (seconds per clip), TTS8_MEM_WAIT=300 (seconds
-# a job may wait for memory before it is given up on), TTS8_RELAX_FREE_GB=0.5, TTS8_OUT=<folder> (where the
-# results folder goes), TTS8_READY_FILE=<hub-ready.json>, STUDIOHUB_APP=<app>.
+# Nothing to edit. Knobs (all optional): TTS8_TIMEOUT=480 (seconds per short clip; S4 gets 3x), TTS8_RELAX_FREE_GB=0
+# (the free-memory requirement while a model is measured), TTS8_S4=1 (also run the 3-minute text), TTS8_MEM_WAIT=300
+# (only for a Hub that cannot bypass), TTS8_OUT=<folder> (where the results folder goes), TTS8_READY_FILE=<hub-ready.json>,
+# STUDIOHUB_APP=<app>.
 set -u
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 SELF="${BASH_SOURCE[0]}"
@@ -80,12 +85,13 @@ for i, a in enumerate(ARGS):
         ONLY = [x.strip() for x in ARGS[i + 1].split(",") if x.strip()]
     elif a.startswith("--models="):
         ONLY = [x.strip() for x in a.split("=", 1)[1].split(",") if x.strip()]
-TIMEOUT = float(os.environ.get("TTS8_TIMEOUT", "2700"))
-MEM_WAIT_S = float(os.environ.get("TTS8_MEM_WAIT", "300"))   # a job the Hub holds back for memory this long is given up on
-RELAX_GB = float(os.environ.get("TTS8_RELAX_FREE_GB", "0.5"))   # the free-memory requirement a model is measured at when the default holds it back
-SWAP_ABORT_GB = 1.5      # a relaxed clip is cancelled if swap grows by more than this ...
-MARGIN_GB = 0.25         # ... and the recommended requirement is the measured peak plus this
-MIN_VERSION = (0, 6, 122)
+WITH_S4 = "--with-s4" in ARGS or os.environ.get("TTS8_S4") == "1"   # the 3-minute text is opt-in: on 8 GB it can run for hours
+TIMEOUT = float(os.environ.get("TTS8_TIMEOUT", "480"))   # hard wall-clock limit for a short clip; the 3-minute text gets S4_FACTOR times this
+S4_FACTOR = 3.0
+MEM_WAIT_S = float(os.environ.get("TTS8_MEM_WAIT", "300"))   # only on a Hub that cannot bypass: a job held for memory this long is given up on
+RELAX_GB = float(os.environ.get("TTS8_RELAX_FREE_GB", "0"))  # the free-memory requirement while a model is measured (0 = guard bypassed)
+MARGIN_GB = 0.25         # the recommended requirement is the measured peak plus this
+MIN_VERSION = (0, 6, 125)   # the per-model override route (the bypass) arrived in 0.6.125
 SLOW_FACTOR = 3.0
 STALL_S = 20.0           # a poll or a sampling pass that takes this long means the Mac was not responsive
 
@@ -115,7 +121,7 @@ COLUMNS = ["model", "quant", "voice", "script", "audio_seconds", "generation_sec
            "ref_32gb_seconds", "vs_32gb", "slow_flag", "cold_start", "responsive", "max_stall_s",
            "queue_seconds", "footprint_before_gb", "worker_lifetime_peak_gb", "mlx_peak_active_gb", "mem_free_pct_min",
            "free_gb_before", "memory_released", "memory_holders", "needed_free_gb", "had_free_gb", "hub_reason",
-           "guard_relaxed", "override_used_gb", "measured_peak_gb", "swap_delta_gb", "hub_free_floor_gb", "verdict"]
+           "guard_relaxed", "override_used_gb", "measured_peak_gb", "swap_delta_gb", "hub_free_floor_gb", "verdict", "worker_restarts"]
 
 LOG = None
 def say(msg=""):
@@ -261,9 +267,9 @@ RESTORE = READY.parent / "tts8-guard-restore.json"   # what to put back if this 
 ADMISSION = "/api/hub/memory/admission"              # Hub 0.6.125+: the per-model free-memory override
 
 class Guard:
-    """The Hub's per-model free-memory requirement, lowered only to measure a model the default guard holds back, and
-    always put back: after the model, on any exit (finally, atexit, Ctrl-C, closing the window), and at the next start if
-    an earlier run died. Never touches the 3.2 GB (or any) default - it sets and clears the operator override."""
+    """The Hub's per-model free-memory requirement, bypassed (lowered to RELAX_GB, default 0) while a model is measured,
+    and always put back: after the model, on any exit (finally, atexit, Ctrl-C, closing the window), and at the next start if
+    an earlier run died. Never touches the default (e.g. 3.2 GB) - it sets and clears the operator override."""
     def __init__(self):
         self.active = {}   # repo -> the override that was there before (None = no override)
 
@@ -290,7 +296,7 @@ class Guard:
             pass
 
     def relax(self, repo):
-        """Lower the requirement to RELAX_GB for this model. False if this Hub cannot (older than 0.6.125)."""
+        """Bypass the guard for this model (requirement -> RELAX_GB). False if this Hub cannot (older than 0.6.125)."""
         d = self.info(repo)
         if not d:
             return False
@@ -307,7 +313,13 @@ class Guard:
         if repo not in self.active:
             return
         was = self.active[repo]
-        if self._put(repo, *( [was["free"], was["total"]] if was else [None] )):
+        args = [was["free"], was["total"]] if was else [None]
+        ok = self._put(repo, *args)
+        for _ in range(0 if ok else 6):   # the Hub may be restarting after a crash: give it a minute before giving up
+            time.sleep(10)
+            if self._put(repo, *args):
+                ok = True; break
+        if ok:
             self.active.pop(repo); self._save()
             say(f"    Guard put back for {repo}: " + (f"your override ({was['free']:g} GB)" if was else "the Hub's own requirement"))
         else:
@@ -372,7 +384,7 @@ def precheck():
              "Open Studio Hub (Applications > Studio Hub), wait until its window says it is ready, then run this again.")
     hub_ver = d.get("version") or app_version()
     if ver_tuple(hub_ver) < MIN_VERSION:
-        stop(3, f"the Studio Hub running here is version {hub_ver}; this test needs 0.6.122 or later.",
+        stop(3, f"the Studio Hub running here is version {hub_ver}; this test needs 0.6.125 or later (it bypasses the memory guard through a route that arrived in 0.6.125).",
              "Update this Mac from the kit (double-click 'Update this Mac'), open Studio Hub, then run this again.")
     models = [m for m in MODELS if ONLY is None or m["key"] in ONLY]
     if not models:
@@ -493,6 +505,9 @@ def wav_seconds(b):
 def err_text(e):
     return re.sub(r"\s+", " ", e if isinstance(e, str) else json.dumps(e) if e else "")[:300]
 
+def clip_limit(script_key):
+    return TIMEOUT * (S4_FACTOR if script_key == "S4" else 1.0)
+
 def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
     vkey, vid, _ = voice
     ref = REF32.get((model["key"], vkey, script_key))
@@ -520,7 +535,8 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
     rec["footprint_before_gb"] = round(fp0 / 1e9, 2)
     sampler = Sampler(); sampler.start()
     t0 = time.time(); bid = None; state = None; item = {}; batch = {}; poll_max = 0.0; down_since = None
-    mem_since = None; mem_need = None; hub_note = ""
+    mem_since = None; mem_need = None; hub_note = ""; restarts = 0; was_running = False
+    limit = clip_limit(script_key)
     try:
         env = {"modality": "voice", "model": model["repo"], "label": "tts-8gb-run", "voice_library_id": vid,
                "clientRequestId": "tts-8gb-" + uuid.uuid4().hex[:12],
@@ -546,6 +562,10 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
             state = item.get("state") or (batch.get("state") if isinstance(batch, dict) else None)
             if state != last:
                 say(f"    {state} at {time.time() - t0:.0f} s"); last = state
+                if state == "running":
+                    was_running = True
+                elif state == "queued" and was_running:
+                    restarts += 1   # started, then put back in the queue: the Hub restarted the job (the worker died or was evicted)
             if state in ("done", "error", "cancelled", "failed", "uncertain"):
                 break
             note = (batch.get("governor_note") or "") if isinstance(batch, dict) else ""
@@ -559,13 +579,11 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
                     call("DELETE", f"/api/hub/jobs/{bid}"); state = "no_memory"; break
             else:
                 mem_since = None
-            if relaxed and (sampler.swap_peak - (swap0 or 0) > SWAP_ABORT_GB or sampler.max_level >= 4):
-                call("DELETE", f"/api/hub/jobs/{bid}"); state = "unsafe"; break   # the guard was lowered on purpose; this is the net
-            if time.time() - t0 > TIMEOUT:
+            if time.time() - t0 > limit:
                 call("DELETE", f"/api/hub/jobs/{bid}"); state = "timeout"; break
         wall = time.time() - t0
         audio_s = None
-        if state in ("no_memory", "unsafe"):
+        if state in ("no_memory", "timeout"):
             for _ in range(30):   # let the cancel settle so the next clip does not see a live job
                 time.sleep(1)
                 try:
@@ -587,13 +605,12 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
                 raise RuntimeError(f"the finished audio could not be fetched ({s})")
             wav.write_bytes(data)
             audio_s = wav_seconds(data)
-        rec["status"] = "completed" if state == "done" else "stopped for safety" if state == "unsafe" else "failed"
-        if state == "unsafe":
-            rec["error"] = (f"needs more than this Mac can give: peak {sampler.max_total / 1e9:.1f} GB, swap "
-                            f"+{max(sampler.swap_peak - (swap0 or 0), 0):.1f} GB, pressure level {sampler.max_level}; job cancelled")
+        rec["status"] = "completed" if state == "done" else "timed out" if state == "timeout" else "failed"
+        if state == "timeout":
+            rec["error"] = (f"timed out: not finished within {int(limit)} s, job cancelled"
+                            + (f" (the Hub restarted the job {restarts} time(s): the voice worker kept dying)" if restarts else ""))
         elif state != "done":
-            rec["error"] = (f"no answer within {int(TIMEOUT)} s, job cancelled" if state == "timeout"
-                            else err_text(item.get("error") or state))
+            rec["error"] = err_text(item.get("error") or state) + (f" (the Hub restarted the job {restarts} time(s) first)" if restarts else "")
     except KeyboardInterrupt:
         if bid:
             try: call("DELETE", f"/api/hub/jobs/{bid}")
@@ -625,14 +642,14 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
                responsive="yes" if stall <= STALL_S else "NO", max_stall_s=round(stall, 1),
                worker_lifetime_peak_gb=round(sampler.lifetime_peak / 1e9, 2) if sampler.lifetime_peak else "",
                mlx_peak_active_gb=(ru.get("mlx") or {}).get("peak_active_gb", ""),
-               mem_free_pct_min="" if sampler.min_free is None else sampler.min_free)
+               mem_free_pct_min="" if sampler.min_free is None else sampler.min_free, worker_restarts=restarts)
     peak = max(fnum(rec.get("peak_memory_gb")) or 0, fnum(rec.get("mlx_peak_active_gb")) or 0)
     rec.update(measured_peak_gb=round(peak, 2) if peak else "", swap_delta_gb=round(max(sampler.swap_peak - (swap0 or 0), 0), 3))
     if rec["status"] == "completed":
         rec["verdict"] = ("fits at default guard" if not relaxed
                           else f"fits only with relaxed guard - real need about {peak + MARGIN_GB:.1f} GB")
-    elif rec["status"] == "stopped for safety":
-        rec["verdict"] = "does not fit - needs more than this Mac can give"
+    elif rec["status"] in ("timed out", "failed"):
+        rec["verdict"] = "does not fit - " + ("too slow, timed out" if rec["status"] == "timed out" else "crashed or errored")
     if isinstance(batch, dict) and isinstance(item, dict) and item.get("run_started") and batch.get("created_at"):
         rec["queue_seconds"] = round(item["run_started"] - batch["created_at"], 1)
     return rec
@@ -655,9 +672,9 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
             continue
         done = [r for r in mine if r["status"] == "completed"]
         relaxed_rows = [r for r in mine if r.get("guard_relaxed") == "yes"]
-        stopped = next((r for r in mine if r["status"] == "stopped for safety"), None)
-        # held for memory and never rescued: no lowered-guard attempt was possible (an older Hub) or the Hub held that one too
-        refused = next((r for r in mine if r["status"] == "did not start" and (r.get("guard_relaxed") == "yes" or not relaxed_rows)), None)
+        failed = next((r for r in mine if r["status"] in ("timed out", "failed")), None)
+        # held for memory and never rescued: this Hub cannot bypass the guard (older than 0.6.125) or held the job even with it bypassed
+        refused = next((r for r in mine if r["status"] == "did not start"), None)
         first = mine[0]
         if first.get("memory_holders") or first.get("free_gb_before") != "":
             lines.append(f"{m['name']} - before loading: {first.get('free_gb_before')} GB free as the Hub counts it "
@@ -680,17 +697,23 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
             facts.append(f"Mac stopped responding for 20 s+ during {len(stalled)} clip(s)")
         measured = max([fnum(r.get("measured_peak_gb")) or 0 for r in done] or [0])
         floor = first.get("hub_free_floor_gb")
-        if stopped:
-            verdict = (f"DOES NOT FIT: needs more than this Mac can give with the guard lowered to {RELAX_GB:g} GB - {stopped['error']}; "
-                       f"the model's other {sum(r['status'] == 'skipped' for r in mine)} clip(s) were skipped")
+        skipped = sum(r["status"] == "skipped" for r in mine)
+        if failed and not done:
+            verdict = (f"DOES NOT FIT: {failed['voice']} {failed['script']} {failed['status']} with the memory guard bypassed - {failed['error']}"
+                       + (f"; the model's other {skipped} clip(s) were skipped" if skipped else ""))
         elif refused:
             verdict = (f"DID NOT START on this Mac: the Hub held the job back for lack of free memory - needs {refused['needed_free_gb']:g} GB free, "
                        f"had {refused['had_free_gb']:g} GB; waited {float(refused['generation_seconds']) / 60:.0f} min, then the job was cancelled "
-                       f"and the model's other {sum(r['status'] == 'skipped' for r in mine)} clip(s) were skipped"
-                       + (f" (still held with the guard lowered to {RELAX_GB:g} GB)" if relaxed_rows else ""))
-        elif relaxed_rows and done:
-            verdict = (f"FITS ONLY WITH THE GUARD RELAXED: the Hub's default requirement ({floor or '?'} GB free) held it back here; "
-                       f"it ran with the requirement at {RELAX_GB:g} GB and needed about {measured + MARGIN_GB:.1f} GB")
+                       f"and the model's other {skipped} clip(s) were skipped"
+                       + (f" (still held with the guard bypassed)" if relaxed_rows else " (this Hub is too old to bypass the guard)"))
+        elif failed:
+            verdict = f"did not complete on this Mac (guard bypassed): {failed['voice']} {failed['script']} {failed['status']}"
+        elif relaxed_rows and len(done) == len(mine) and (slow or stalled or level >= 4 or grow > 2):
+            verdict = (f"RAN, BUT ONLY WITH THE MEMORY GUARD BYPASSED (the Hub's own requirement is {floor or '?'} GB free) and it strained this Mac; "
+                       f"it needed about {measured + MARGIN_GB:.1f} GB")
+        elif relaxed_rows and len(done) == len(mine):
+            verdict = (f"FITS WITH THE GUARD BYPASSED: the Hub's own requirement is {floor or '?'} GB free; "
+                       f"it needed about {measured + MARGIN_GB:.1f} GB")
         elif len(done) < len(mine):
             verdict = "did not complete on this Mac"
         elif slow or stalled or level >= 4 or grow > 2:
@@ -703,19 +726,18 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
                          f"the Hub's default is {floor or 'not recorded'} GB). Measured on this {RAM_GB} GB Mac, in this run only"
                          + ("" if ON_TARGET else " - and it is not an 8 GB Mac, so not 8 GB evidence") + ".")
         for r in mine:
-            if r["status"] not in ("completed", "skipped") and not (refused and r is refused):
+            if r["status"] not in ("completed", "skipped") and not (refused and r is refused) and not (failed and not done and r is failed):
                 lines.append(f"    {r['voice']} {r['script']}: {r['status']} - {r.get('error') or 'no reason given'}")
     lines += ["", "How to read it: 'fits' means every clip completed, memory pressure never reached critical, swap grew by",
               "no more than 2 GB, no clip took over 3x its 32 GB time and the Mac kept answering. Anything else is stated.",
               "Peak is the largest memory the voice worker used (macOS 'footprint', sampled every second, so a very short",
               "spike can be missed; worker_lifetime_peak_gb in results.csv is macOS's own all-time peak for that process).",
               "The first clip of each model includes loading it. results.csv has every number per clip.",
-              f"'DID NOT START' means the Hub kept the job queued waiting for free memory for more than {MEM_WAIT_S / 60:g} min (TTS8_MEM_WAIT); the number",
-              "after 'needs' is the Hub's own admission floor for that model and 'had' is what it counted as free at that moment.",
-              f"When that happens the model is measured anyway: its free-memory requirement is lowered to {RELAX_GB:g} GB for that model only (TTS8_RELAX_FREE_GB),",
-              f"the clip is cancelled if swap grows by more than {SWAP_ABORT_GB:g} GB or memory pressure reaches urgent, and the requirement is put back after the model",
-              "(and on any exit, and at the next start if this run died). 'Recommended requirement' is the measured peak plus a small margin; it is one Mac's",
-              "measurement, not a decision - nothing here changes the Hub's own number."]
+              f"Memory guard: before each model the Hub's free-memory requirement was bypassed (set to {RELAX_GB:g} GB, TTS8_RELAX_FREE_GB) with no waiting, and put back after",
+              "the model and on any exit. Nothing is cancelled for swap or memory pressure - they are recorded. Every clip has a hard time limit; one that",
+              "runs over is 'timed out' (cancelled), one that dies is 'failed' with the error, and the model's remaining clips are skipped.",
+              "'Recommended requirement' is the measured peak plus a small margin; it is one Mac's measurement, not a decision - nothing here changes the Hub's own number.",
+              f"'DID NOT START' only appears on a Hub that cannot bypass the guard: the job waited more than {MEM_WAIT_S / 60:g} min for free memory (TTS8_MEM_WAIT)."]
     return "\n".join(lines) + "\n"
 
 # ---------------------------------------------------------------- main
@@ -729,7 +751,7 @@ def main():
     signal.signal(signal.SIGHUP, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))    # run the clean-up below, not die in the middle
     guard.restore_stale()
     atexit.register(guard.restore_all)
-    scripts = [(k, n, d) for k, n, d in SCRIPT_FILES if not QUICK or k == "S2"]
+    scripts = [(k, n, d) for k, n, d in SCRIPT_FILES if k == "S2" or (WITH_S4 and not QUICK)]
     voices = VOICES[:1] if QUICK else VOICES
     jobs = [(m, v, s) for m in models for v in voices for s in scripts]
     ref_total = sum(REF32.get((m["key"], v[0], s[0]), 0) for m, v, s in jobs)
@@ -762,12 +784,16 @@ def main():
         return 3
     say("                OK - no active Hub jobs.")
     say("")
-    say(f"{len(jobs)} clip(s), one at a time. The 32 GB Mac needed about {max(ref_total / 60, 1):.0f} minute(s) of generation for the same work;")
+    say(f"{len(jobs)} clip(s), one at a time" + ("" if WITH_S4 or QUICK else " (the 3-minute text is off; --with-s4 adds it)")
+        + f". The 32 GB Mac needed about {max(ref_total / 60, 1):.0f} minute(s) of generation for the same work.")
+    worst = sum(clip_limit(s[0]) for s in scripts) / 60 * len(models)   # one clip per model can time out, then the model's others are skipped
+    say(f"The Hub's free-memory guard is bypassed for each model while it is measured (put back afterwards); nothing is aborted for swap.")
+    say(f"Every clip is stopped after {TIMEOUT / 60:g} min" + (f" ({TIMEOUT * S4_FACTOR / 60:g} min for the 3-minute text)" if WITH_S4 and not QUICK else "")
+        + f"; a model whose clip times out or crashes is skipped and the next model goes on. At worst about {worst:.0f} minutes.")
     if QUICK:
         say("expect a few minutes here, mostly loading each model.")
     else:
-        say(f"on 8 GB allow {2 * ref_total / 60:.0f}-{4 * ref_total / 60:.0f} minutes, and longer if the Mac swaps. Leave the Mac alone, close other apps,")
-        say("keep it on power. You can stop any time by closing this window; what finished is already saved.")
+        say("Leave the Mac alone, close other apps, keep it on power. You can stop any time by closing this window; what finished is already saved.")
     say(f"Results go to: {out}")
     started = time.strftime("%Y-%m-%d %H:%M:%S")
     rows = []; finished = False
@@ -778,26 +804,32 @@ def main():
             ctx["floors"][m["repo"]] = d.get("effective_min_free_memory_gb")
     with open(out / "results.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, COLUMNS, extrasaction="ignore"); w.writeheader()
-        seen = set(); refused = {}; relaxed = None   # relaxed: the model whose guard is lowered right now
+        seen = set(); refused = {}; relaxed = None   # refused: models that did not run to the end; relaxed: the model whose guard is bypassed right now
         try:
             for n, (m, v, s) in enumerate(jobs, 1):
                 cold = m["key"] not in seen; seen.add(m["key"])
                 if relaxed and relaxed["key"] != m["key"]:   # next model: this one's guard goes back first
                     guard.restore(relaxed["repo"]); relaxed = None
                 say(f"\n[{n}/{len(jobs)}] {m['name']} - {v[2]} - {s[0]} ({s[2]})" + ("  [first clip: includes loading the model]" if cold else ""))
-                if m["key"] in refused:   # this model cannot run here: do not queue its other clips behind the same wait
+                if m["key"] in refused:   # this model cannot run here: do not spend more time on its other clips
                     rec = dict(model=m["csv_model"], quant=m["quant"], voice=v[0], script=s[0], status="skipped",
                                error=f"skipped - {m['name']} did not run: {refused[m['key']]['error']}",
                                machine_ram_gb=RAM_GB, macos_version=OSV, app_version=hub_ver, chip=CHIP)
                 else:
-                    rec = clip(m, v, s[0], texts[s[0]], out, cold, ctx, relaxed=bool(relaxed))
-                    if rec["status"] == "did not start" and not relaxed and guard.relax(m["repo"]):
-                        relaxed = m
-                        rows.append(rec); w.writerow(rec); fh.flush()   # the held attempt stays as its own row
-                        say(f"    Held back at the default guard. Measuring with the free-memory requirement lowered to {RELAX_GB:g} GB "
-                            f"(cancelled if swap grows by more than {SWAP_ABORT_GB:g} GB or memory pressure reaches urgent); it is put back afterwards.")
-                        rec = clip(m, v, s[0], texts[s[0]], out, False, ctx, relaxed=True)
-                    if rec["status"] in ("did not start", "stopped for safety"):
+                    if cold:   # bypass the Hub's free-memory guard for this model now, no waiting (False: a Hub that cannot)
+                        if guard.relax(m["repo"]):
+                            relaxed = m
+                            say(f"    Memory guard bypassed for {m['name']} (free-memory requirement {RELAX_GB:g} GB; put back afterwards).")
+                        else:
+                            say(f"    This Hub cannot bypass the memory guard (needs 0.6.125+): {m['name']} runs at the Hub's own requirement.")
+                    try:
+                        rec = clip(m, v, s[0], texts[s[0]], out, cold, ctx, relaxed=bool(relaxed))
+                    except HubDown as e:   # the Hub died under the load: record it, carry on
+                        rec = dict(model=m["csv_model"], quant=m["quant"], voice=v[0], script=s[0], status="failed",
+                                   error=f"Studio Hub stopped answering ({e}) - probably crashed", machine_ram_gb=RAM_GB,
+                                   macos_version=OSV, app_version=hub_ver, chip=CHIP, guard_relaxed="yes" if relaxed else "no",
+                                   verdict="does not fit - crashed or errored")
+                    if rec["status"] != "completed":
                         refused[m["key"]] = rec
                 rows.append(rec); w.writerow(rec); fh.flush()
                 if rec["status"] == "completed":

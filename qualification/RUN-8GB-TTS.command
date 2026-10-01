@@ -28,16 +28,18 @@ fi
 echo "Studio Hub - 8 GB text-to-speech test"
 echo
 echo "This measures three voice models on this Mac: Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit and OmniVoice"
-echo "bf16, each reading the same two texts in the two owner voices. It takes one to a few hours on an"
-echo "8 GB Mac, writes a results folder beside this file, installs nothing and deletes nothing. It asks"
-echo "Studio Hub to let idle models go before each model; if a model is held back for lack of free memory it"
-echo "lowers that one model's memory requirement temporarily to measure it (with a safety stop) and puts it back."
+echo "bf16, each reading the same short text in the two owner voices. It does NOT wait for memory: it tells"
+echo "Studio Hub to bypass its free-memory guard for each model and just runs it. A clip that runs longer than"
+echo "8 minutes is stopped and recorded as 'timed out'; a model that crashes is recorded and the next one goes"
+echo "on. It writes a results folder beside this file, installs nothing and deletes nothing, and puts the Hub's"
+echo "memory setting back at the end (even if you close this window). Expect roughly 10 to 30 minutes."
+echo "(The 3-minute text is off; in Terminal, \"bash eight-gb-tts-run.sh --with-s4\" adds it. Slow on 8 GB.)"
 echo
 echo "Before you go on: close your other apps, keep the Mac on power, and make sure Studio Hub is open."
 echo
 if [ -f "$APP/Contents/Info.plist" ]; then
     VER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null)
-    echo "Studio Hub installed here: version ${VER:-unknown} (this test needs 0.6.122 or later)."
+    echo "Studio Hub installed here: version ${VER:-unknown} (this test needs 0.6.125 or later)."
 else
     echo "No Studio Hub app found at: $APP"
     echo "Install one from the kit (double-click '1 - Install the app' at the kit's root), or set"
