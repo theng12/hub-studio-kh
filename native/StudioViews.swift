@@ -12,6 +12,7 @@ struct StudioWindow: View {
         GeometryReader { proxy in
             StudioContent(studio: studio, workspace: studio.workspace)
                 .environment(\.hubWindowWidth, proxy.size.width)
+                .environment(\.hubWindowHeight, proxy.size.height)
         }
         .frame(minWidth: 720, minHeight: 520)
     }
@@ -696,6 +697,7 @@ struct StudioContent: View {
     /// The window's width, from the one `GeometryReader` at the root of `body`, which decides whether
     /// the node table is one line per Mac or a card per Mac.
     @Environment(\.hubWindowWidth) private var windowWidth
+    @Environment(\.hubWindowHeight) private var windowHeight
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
@@ -1002,6 +1004,9 @@ struct StudioContent: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // The list takes the height that is left and scrolls; the footer is its own row beneath it,
+            // never a layer over it, so a short window cannot draw the footer on top of the last items.
+            VStack(spacing: 0) {
             List(selection: Binding<StudioPage?>(get: { studio.selection }, set: { if let value = $0 { studio.select(value) } })) {
                 Label("Overview", systemImage: StudioPage.overview.symbol).tag(StudioPage.overview)
                 // An empty section is not drawn: "Coming later" is a real section with no pages
@@ -1023,8 +1028,8 @@ struct StudioContent: View {
                 }
             }
             .listStyle(.sidebar)
-            .safeAreaInset(edge: .bottom) {
-                VStack(alignment: .leading, spacing: HubSpace.tight) {
+            Divider()
+            VStack(alignment: .leading, spacing: HubSpace.tight) {
                     // The working mode, as a pill. One glance answers "what is this Mac doing?" -
                     // Controller, Node or Standalone - with the dot beside it saying whether the
                     // group it belongs to is actually answering.
@@ -1049,7 +1054,8 @@ struct StudioContent: View {
                     .accessibilityElement(children: .combine)
                     // What this Mac can actually take: one count per kind of generator it is
                     // running, so a worker that failed to start is visible here.
-                    if !generatorSummary.isEmpty {
+                    // Hidden in a short window, where the footer must give height back to the list.
+                    if !generatorSummary.isEmpty, windowHeight >= 760 {
                         Text(generatorSummary)
                             .font(HubType.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1071,7 +1077,10 @@ struct StudioContent: View {
                         .font(HubType.caption).foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .accessibilityLabel("Studio Hub version \(appVersion)")
-                }.padding(HubSpace.l)
+            }
+            .padding(HubSpace.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.bar)
             }
             // Not a fixed width: a fixed column cannot give anything back, so when the window is
             // squeezed (Split View, most obviously) the layout overflowed and macOS clipped it -
