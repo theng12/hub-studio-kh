@@ -1,13 +1,25 @@
 # Changelog
 
-## Unreleased — 2026-10-02 · Gemma 3 12B 4-bit is shelved: it stays on the SSD, not on fleet Macs (VERSION not bumped)
+## 0.6.127 — 2026-10-02 · Disk protection, remote startup, compression at source, memory hand-back, real cancel, design refresh
+
+Release of `integrate/0.6.127` (audit 2026-10-01 follow-ups). Highlights; the per-feature engineering notes follow.
+- **Disk governor:** a Mac keeps its own disk from filling (tiers, ordered reclaim, output caps, preflight, log rotation, 90-day Voice history, periodic job-history trim); `disk` object in `/api/hub/resources`.
+- **Remote startup control + auto-start:** each Mac reports what it starts at login (`startup` object in `/api/hub/resources`) and the fleet can change it; joined Macs serve by default; kit install/update open the app with `--fleet-mode`.
+- **Compress at source:** optional `output_format` for music, voice and image (m4a / jpeg), forwarded from the Gateway.
+- **LTX retired + no Video worker:** app ~0.5 GB smaller; Gemma kept in the catalog but shelved (stays on the SSD / "keep all models" Macs only).
+- **INSUFFICIENT_MEMORY hand-back:** after 3 memory refusals the job is returned to the Gateway so it can re-route; capacity back-off up to 300 s.
+- **Cancel:** a cancel the worker confirms is `cancelled`, not uncertain (image/music/video/subtitle); delivery_fallback_reason carried onto the job item.
+- **Speed/health:** cheaper resources and jobs listing, quieter service log, voice artifacts verified while streaming, device_settings atomic read-modify-write (a damaged file fails safe to keep all models), update drain keeps dispatching to idle nodes.
+- **UI:** sidebar names this Mac and its place in the group; Music player card and row actions fixed; Hub reports each machine's current job; design refresh (type scale, spacing, status colours, one page scaffold, aligned tables).
+
+### Gemma 3 12B 4-bit is shelved: it stays on the SSD, not on fleet Macs
 
 Owner: Gemma 3 12B 4-bit (`gemma-3-12b-it-4bit`) is no longer carried by every Mac. It stays in the catalog, on the SSD kits and on any Mac
 marked "keep all models", so it can still become a chat model later; it is just not copied to fleet Macs any more, and a fleet Mac that
 already has it moves it into the self-cleaning Trash Folder (emptied after 15 days) the next time the Hub starts. One line in
 `components/shelved_models.py`; the kit's copy step, the start-up sweep and the "do not fetch it back" rule all read that list.
 
-## Unreleased — 2026-10-01 · LTX-2.3 video is retired; the release ships no Video worker (VERSION not bumped; the coordinator bundles it)
+### LTX-2.3 video is retired; the release ships no Video worker
 
 Owner: LTX-2.3 is "bad quality, can't use it" - retired exactly like Lance (0.6.120) and ACE-Step 1.5 (0.6.116), by one line in
 `components/retired_models.py`: `ltx-2-3-22b-ram-12gb-mlx` and `baa-ai/LTX-2.3-22B-RAM-12GB-MLX` (LTX-2.3 22B MLX mixed 2-8 bit, RAM-12GB).

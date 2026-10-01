@@ -2,7 +2,30 @@
 
 Written to be read by the person using the app. Newest first.
 
-## Unreleased - 2026-10-01
+## 0.6.127 - 2026-10-02
+
+### A Mac protects its own disk, starts by itself, and the app looks tidier
+
+**Your Mac's disk is protected.** Each Mac now watches its own free space, clears old finished work in a safe order (into a Trash
+Folder, never straight to deletion), and warns before the disk gets full. The Gateway shows a Disk column for every Mac.
+
+**Macs start the Hub by themselves.** Each Mac reports whether it starts Studio Hub when you log in, and you can change that from
+the Gateway without walking over to it. Macs set up from the drive start serving automatically.
+
+**Smaller files straight from the Hub.** Music, voice-overs and images can come out already compressed (m4a audio, JPEG images)
+when the caller asks for it, so less data travels and less disk is used.
+
+**Out of memory? The job moves on.** If a Mac keeps saying it does not have enough memory for a job, the Hub now hands the job back
+so another Mac can take it, instead of leaving it waiting.
+
+**Cancel means cancelled.** When you cancel a running job and the Mac confirms it stopped, the job shows as cancelled.
+
+**Video is gone, the app is smaller.** The LTX video model is retired and its engine is no longer part of the app (about 0.5 GB
+smaller). The Gemma text model stays available on the install drives and on any Mac set to keep all models, but fleet Macs no longer
+copy it.
+
+**Easier to read.** The sidebar says which Mac this is and whether it is a controller, a joined node or standalone. Pages share one
+layout, type and set of status colours; tables line up; the Music player and row buttons no longer overlap text.
 
 ### Video (LTX-2.3) is retired
 
