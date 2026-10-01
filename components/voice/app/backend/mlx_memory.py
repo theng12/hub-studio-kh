@@ -112,7 +112,7 @@ class _StagedEncoder:
 def bound_qwen3_encoder(model) -> bool:
     """Bound the memory of encoding the clone reference (it grew ~0.1 GB per second of reference)."""
     try:
-        tokenizer = model.speech_tokenizer
+        tokenizer = getattr(model, "speech_tokenizer", None) or model.audio_tokenizer   # Qwen3 / Breeze
         encoder = tokenizer.encoder_model.encoder
     except AttributeError:
         return False
@@ -342,3 +342,98 @@ def bound_omnivoice(model) -> bool:
 
     tokenizer.encode = cached_encode
     return True
+
+
+BREEZE_DECODE_SLAB = 8   # Breeze's weights are 3.1 GB, so its codec slab is smaller than Qwen's (24)
+
+
+class _StagedBackbone:
+    """Breeze's Qwen3 backbone with a sync after every layer while it prefills a prompt (+0.85 GB otherwise)."""
+
+    def __init__(self, backbone):
+        self._backbone = backbone
+
+    def __getattr__(self, name):
+        return getattr(self._backbone, name)
+
+    def __call__(self, input_ids=None, *, input_embeddings=None, cache=None):
+        import mlx.core as mx
+        from mlx_audio.lm.models.base import create_attention_mask
+
+        backbone = self._backbone
+        if (input_ids is None) == (input_embeddings is None):
+            raise ValueError("Pass exactly one of input_ids or input_embeddings.")
+        hidden = input_embeddings if input_embeddings is not None else backbone.embed_tokens(input_ids)
+        if cache is None:
+            cache = [None] * len(backbone.layers)
+        mask = create_attention_mask(hidden, cache[0])
+        stage = hidden.shape[1] > 1          # prefill only: a one-token step is already tiny
+        for layer, layer_cache in zip(backbone.layers, cache):
+            hidden = layer(hidden, mask, layer_cache)
+            if stage:
+                mx.eval(hidden)
+        return backbone.norm(hidden)
+
+
+def bound_breeze(model) -> bool:
+    """Breeze TTS 2 shares Qwen3's speech tokenizer: same decode and encoder bounds, plus a reference cache."""
+    global QWEN3_DECODE_SLAB
+    QWEN3_DECODE_SLAB = BREEZE_DECODE_SLAB
+    ok = bound_qwen3_decoder()
+    ok = bound_qwen3_encoder(model) and ok
+    backbone = getattr(model, "backbone_model", None)
+    if backbone is not None and hasattr(backbone, "layers") and not isinstance(backbone, _StagedBackbone):
+        model.backbone_model = _StagedBackbone(backbone)
+    encode_reference = getattr(model, "_encode_reference", None)
+    if encode_reference is None or getattr(model, "_studiohub_ref_cached", False):
+        return ok
+    memo: dict = {}
+
+    def cached_reference(ref_audio):
+        if not isinstance(ref_audio, (str, os.PathLike)):
+            return encode_reference(ref_audio)
+        try:
+            stat = os.stat(ref_audio)
+        except OSError:
+            return encode_reference(ref_audio)
+        key = (str(ref_audio), stat.st_mtime_ns, stat.st_size)
+        if key not in memo:
+            if len(memo) >= 4:
+                memo.pop(next(iter(memo)))
+            memo[key] = encode_reference(ref_audio)
+        return memo[key]
+
+    model._encode_reference = cached_reference
+    model._studiohub_ref_cached = True
+    return ok
+
+
+# ---- Registry: every MLX engine family must say how its memory is bounded (tests/test_mlx_memory_registry.py) ----
+
+def _bound_qwen3(model) -> None:
+    global QWEN3_DECODE_SLAB
+    QWEN3_DECODE_SLAB = 24
+    bound_qwen3_decoder()
+    bound_qwen3_encoder(model)
+
+
+# family -> (kind, how, bounder). kind "bounded": codec/VAE decode slabbed + reference encode staged/cached,
+# measured peak in docs/mlx-memory-discipline.md. kind "cache-only": only the MLX cache cap applies; `how`
+# must say why that is enough (or why nothing more is feasible) and what was measured.
+PROFILES: dict[str, tuple[str, str, object]] = {
+    "qwen3-tts": ("bounded", "speech-tokenizer decode in 24-token slabs, encoder synced per layer; S2 peak 7.3 -> 3.06 GB", _bound_qwen3),
+    "voxcpm-mlx": ("bounded", "audio-VAE decode slabbed, encoders synced, reference features cached; S2 peak 9.2 -> 3.3 GB", lambda m: bound_voxcpm_vae(m)),
+    "omnivoice": ("bounded", "Higgs codec decode slabbed, reference tokens cached; S2 peak 5.4 -> 2.7 GB (3.4 first section)", lambda m: bound_omnivoice(m)),
+    "breeze-tts": ("bounded", "shares Qwen3's speech tokenizer: same decode/encoder bounds, reference tokens cached", lambda m: bound_breeze(m)),
+    "chatterbox-mlx": ("cache-only", "not profiled on a codec decode; cache cap only (owner decision 2026-10-02)", None),
+    "pocket-tts": ("cache-only", "tiny model (4-bit, streaming mimi decode); cache cap only (owner decision 2026-10-02)", None),
+    "fish-audio-mlx": ("cache-only", "5B model, 6.7 GB of weights alone: it can never meet the 8 GB tier (catalog floor stays 24 GB), so its DAC codec decode is not slabbed; cache cap only. 13.3 GB peak measured on the fleet 2026-08-07", None),
+}
+
+
+def bound_model(family: str, model) -> str:
+    """Apply the family's registered bounds to a freshly loaded model; returns its profile kind."""
+    kind, _, bounder = PROFILES[family]
+    if bounder is not None:
+        bounder(model)
+    return kind

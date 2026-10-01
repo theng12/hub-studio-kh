@@ -128,3 +128,25 @@ def test_omnivoice_slabbed_codec_decode_matches_the_original(monkeypatch) -> Non
     model = type("Model", (), {"audio_tokenizer": tokenizer})()
     assert mlx_memory.bound_omnivoice(model) is True
     _same(tokenizer.decode(tokens), expected)
+
+
+def test_breeze_staged_backbone_matches_the_original_for_prefill_and_steps() -> None:
+    pytest.importorskip("mlx_audio.tts.models.breeze_tts")   # Breeze needs mlx-audio >= 0.5.7
+    from mlx_audio.tts.models.breeze_tts.breeze_tts import _Backbone
+    from mlx_audio.tts.models.breeze_tts.config import ModelConfig
+
+    backbone_config = dict(hidden_size=32, num_hidden_layers=2, intermediate_size=64, num_attention_heads=4,
+                           num_key_value_heads=2, head_dim=8, vocab_size=40)
+    config = ModelConfig.from_dict(dict(
+        model_type="breeze_tts", audio_num_codebooks=4, audio_vocab_size=40, audio_embed_size=32, hidden_size=32,
+        num_hidden_layers=2, intermediate_size=64, num_attention_heads=4, num_key_value_heads=2, head_dim=8,
+        vocab_size=40, text_vocab_size=50, max_position_embeddings=128, rope_theta=10000.0, num_codebooks=4,
+        backbone_config=backbone_config))
+    backbone = _Backbone(config)
+    mx.eval(backbone.parameters())
+    staged = mlx_memory._StagedBackbone(backbone)
+    prompt = mx.array(np.random.RandomState(6).randn(1, 9, 32).astype("float32"))
+    step = mx.array(np.random.RandomState(7).randn(1, 1, 32).astype("float32"))
+    plain_cache, staged_cache = backbone.make_cache(), backbone.make_cache()
+    _same(staged(input_embeddings=prompt, cache=staged_cache), backbone(input_embeddings=prompt, cache=plain_cache), 1e-6)
+    _same(staged(input_embeddings=step, cache=staged_cache), backbone(input_embeddings=step, cache=plain_cache), 1e-6)

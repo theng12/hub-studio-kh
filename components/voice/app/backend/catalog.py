@@ -663,6 +663,9 @@ class ModelEntry:
     # measurement says otherwise); this one stops a job starting into a nearly-full Mac, so it
     # is a different fact and is published under its own name.
     min_free_memory_gb: Optional[float] = None
+    # What the floor above was measured from (Mac, build, date). Required whenever a floor is set:
+    # a floor is a measurement, never a formula (docs/mlx-memory-discipline.md).
+    min_free_memory_note: str = ""
     recommended_hardware: str = ""
     capabilities: tuple[str, ...] = ("tts",)
     best_for: str = ""
@@ -707,6 +710,12 @@ CATALOG: tuple[ModelEntry, ...] = (
         # run swapping. The output is correct either way (93% transcribe-back),
         # which is exactly why the old 8 GB floor looked fine on paper.
         min_unified_memory_gb=16,
+        min_free_memory_gb=4.6,
+        min_free_memory_note=(
+            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 4.1-4.3 GB (up to 4.9 GB "
+            "in earlier runs with the 18.9 s Christian reference) with the mlx_memory bounds "
+            "(S2/S4, 2026-10-02, 32 GB M2 Max) + 0.25 GB margin. MLX peak 3.3 GB, was 9.2 GB."
+        ),
         recommended_hardware="24 GB unified memory. Measured at 3.95x realtime on 16 GB; an 8 GB Mac swaps and drops to 47x realtime.",
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
         license_name="Apache-2.0",
@@ -798,12 +807,17 @@ CATALOG: tuple[ModelEntry, ...] = (
         gated=False,
         min_unified_memory_gb=8,
         # Owner-approved production floor for the 8 GB voice-cloning tier: this model reserves
-        # 3.2 GB of live free memory. Measured cold requirement is 3.15 GB, so 3.2 is the
-        # rounded-up guard the owner accepted. It used to live in the Hub
+        # 3.2 GB of live free memory (cold requirement 3.15 GB). Raised to 4.2 GB on 2026-10-02:
+        # with the load-time bounds the measured peak footprint is 3.8-3.9 GB, above 3.2. It used to live in the Hub
         # (`workload_policy._HUB_PRODUCTION_FREE_GB`, keyed by this exact repo id) because this
         # row published no floor; a model-keyed table in a consumer is the defect this release
         # removes, so the fact lives with the model that has it.
-        min_free_memory_gb=3.2,
+        min_free_memory_gb=4.2,
+        min_free_memory_note=(
+            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 3.8-3.9 GB with the "
+            "mlx_memory bounds (S2/S4, both owner voices, 2026-10-02, 32 GB M2 Max) + 0.25 GB margin. "
+            "Before the bounds the worker peaked at 7.3-8.0 GB MLX active and 7.7 GB on the 8 GB mini."
+        ),
         recommended_hardware=(
             "Apple Silicon with 8 GB unified memory minimum; 16 GB preferred "
             "for normal memory pressure and faster generation."
@@ -821,6 +835,39 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("good",  "Multilingual cloning across the ten upstream-supported languages"),
             ("good",  "MLX-native — no PyTorch install needed"),
             ("weak",  "Less prosodic nuance than the 1.7B tier — voice character may sound flatter"),
+        ),
+    ),
+    # The lighter 4-bit twin of the 8 GB cloning model (owner decision 2026-10-02: keep both; the
+    # 8-bit stays the default). Same family, same clone path, same voices; the speech tokenizer
+    # files are byte-identical to the 8-bit build's (sha256), so only the talker is quantized
+    # harder: 1.0 GB of weights instead of 1.3 GB. Quality is the owner's call by ear.
+    ModelEntry(
+        repo="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+        label="Qwen3-TTS 0.6B Base 4-bit (MLX) — lighter",
+        family="qwen3-tts",
+        size_gb=1.7,
+        gated=False,
+        min_unified_memory_gb=8,
+        min_free_memory_gb=4.1,
+        min_free_memory_note=(
+            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 3.6-3.8 GB with the "
+            "mlx_memory bounds (S2 both owner voices, S4 chris, 2026-10-02, 32 GB M2 Max) + 0.25 GB "
+            "margin. MLX peak 2.8-3.2 GB, was 7.17 GB without them."
+        ),
+        recommended_hardware=(
+            "Apple Silicon with 8 GB unified memory minimum; 16 GB preferred. About 0.3 GB less "
+            "weights than the 8-bit build, with the same codec and the same clone path."
+        ),
+        capabilities=("tts", "voice-cloning", "multilingual"),
+        license_name="Apache-2.0",
+        license_source="components/voice/app/backend/catalog.py family note: 'Apache-2.0'",
+        best_for="The lighter build of the 8 GB cloning model: same reference-clip cloning and the same ten languages, with 4-bit weights. Choose it when memory is tighter than the 8-bit build allows; the 8-bit stays the default.",
+        sample_rate_hz=24000,
+        languages=("en", "zh", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"),
+        use_cases=(
+            ("good",  "Voice cloning on 8 GB Macs with a little more room than the 8-bit build"),
+            ("good",  "Multilingual cloning across the ten upstream-supported languages"),
+            ("weak",  "4-bit quantization: the 8-bit build is the quality reference; compare by ear"),
         ),
     ),
     # 4-bit Base pair: half the weight bytes of the 8-bit builds, so the larger model
@@ -923,6 +970,12 @@ CATALOG: tuple[ModelEntry, ...] = (
         size_gb=2.0,
         gated=False,
         min_unified_memory_gb=8,
+        min_free_memory_gb=4.4,
+        min_free_memory_note=(
+            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 3.4-4.1 GB with the "
+            "mlx_memory bounds (S2/S4, 2026-10-02, 32 GB M2 Max) + 0.25 GB margin. MLX peak 3.44 GB "
+            "in the first section (reference encode), 2.7 GB after; was 5.4 GB."
+        ),
         recommended_hardware="M1 Pro / M2 16 GB recommended.",
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
         license_name="Apache-2.0",
@@ -1179,6 +1232,12 @@ CATALOG: tuple[ModelEntry, ...] = (
         # so the claim is the tier that is not at risk. 16 GB is also where 50 of the owner's ~53
         # machines sit.
         min_unified_memory_gb=16,
+        min_free_memory_gb=5.1,
+        min_free_memory_note=(
+            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 4.85 GB (S2 chris, full "
+            "reference; S1 4.45-4.6 GB) with the mlx_memory bounds (2026-10-02, 32 GB M2 Max) + 0.25 GB "
+            "margin. MLX peak 4.2 GB, was 9.9 GB; the 3.1 GB of weights keep it above the 4.5 GB 8 GB target."
+        ),
         recommended_hardware=(
             "16 GB or more. Measured ~3.3 GB resident in every mode; the kernel peak footprint "
             "reading was unsettled between 5.41 and 23.93 GB, so 16 GB is claimed rather than 8."

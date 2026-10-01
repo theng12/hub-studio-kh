@@ -4,7 +4,7 @@
 #   bash eight-gb-tts-run.sh                 the test (two voices x the short text S2, three models; guard bypassed)
 #   bash eight-gb-tts-run.sh --with-s4       also the 3-minute text S4 (slow: can take hours on 8 GB)
 #   bash eight-gb-tts-run.sh --quick         a short check (S2, Chris only) - the script's own self-test
-#   bash eight-gb-tts-run.sh --models qwen3,voxcpm2   only these (qwen3, voxcpm2, omnivoice)
+#   bash eight-gb-tts-run.sh --models qwen3,voxcpm2   only these (qwen3, qwen3-4bit, voxcpm2, omnivoice)
 #   bash eight-gb-tts-run.sh --allow-non-target       run the full test on a Mac that is not 8 GB
 #
 # (Easier: double-click RUN-8GB-TTS.command, which runs this.)
@@ -99,6 +99,8 @@ STALL_S = 20.0           # a poll or a sampling pass that takes this long means 
 MODELS = [
     dict(key="qwen3", name="Qwen3-TTS 0.6B 8-bit", csv_model="Qwen3-TTS 0.6B", quant="8bit",
          pkg="qwen3-tts-12hz-0-6b-base-8bit", repo="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"),
+    dict(key="qwen3-4bit", name="Qwen3-TTS 0.6B 4-bit", csv_model="Qwen3-TTS 0.6B", quant="4bit",
+         pkg="qwen3-tts-12hz-0-6b-base-4bit", repo="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"),
     dict(key="voxcpm2", name="VoxCPM2 4-bit", csv_model="VoxCPM2", quant="4bit",
          pkg="voxcpm2-4bit", repo="mlx-community/VoxCPM2-4bit"),
     dict(key="omnivoice", name="OmniVoice bf16", csv_model="OmniVoice", quant="bf16",
@@ -108,6 +110,7 @@ VOICES = [("chris", "cd07b21a2ccf", "Chris - Soft and Soothing"),
           ("christian", "0616aec33b41", "Christian - Slow & Calming")]
 SCRIPT_FILES = [("S2", "tts-script-S2.txt", "about 175 words"), ("S4", "tts-script-S4.txt", "about 3 minutes")]
 # Generation seconds on the 32 GB M2 Max (audit-20260930/tts-samples/summary.csv), same texts and voices.
+# qwen3-4bit has no 32 GB reference time yet, so its clips are never flagged "slow" against one.
 REF32 = {("qwen3", "chris", "S2"): 42.5, ("qwen3", "chris", "S4"): 105.1,
          ("qwen3", "christian", "S2"): 44.4, ("qwen3", "christian", "S4"): 126.0,
          ("voxcpm2", "chris", "S2"): 97.0, ("voxcpm2", "chris", "S4"): 270.5,

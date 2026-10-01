@@ -35,11 +35,12 @@ class RunnerTests(unittest.TestCase):
         ast.parse(program())
         self.assertEqual(subprocess.run(["bash", "-n", str(QUAL / "eight-gb-tts-run.sh")]).returncode, 0)
 
-    def test_the_three_models_are_the_catalog_ones_in_the_owner_order(self):
+    def test_the_models_are_the_catalog_ones_in_the_owner_order(self):
         manifests = {m["package_id"]: m for m in (json.loads(p.read_text()) for p in (ROOT / "model-manifests").glob("*.json"))}
         found = re.findall(r'pkg="([^"]+)", repo="([^"]+)"', program())
         self.assertEqual([p for p, _ in found],
-                         ["qwen3-tts-12hz-0-6b-base-8bit", "voxcpm2-4bit", "omnivoice-bfloat16"])
+                         ["qwen3-tts-12hz-0-6b-base-8bit", "qwen3-tts-12hz-0-6b-base-4bit",
+                          "voxcpm2-4bit", "omnivoice-bfloat16"])
         for package_id, repo in found:
             self.assertEqual(manifests[package_id]["model_id"], repo)
 

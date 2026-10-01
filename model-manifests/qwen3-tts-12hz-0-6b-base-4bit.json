@@ -1,0 +1,153 @@
+{
+  "defaults": {
+    "parameters_source": "model/generation_config.json"
+  },
+  "engine": "voice-mlx",
+  "files": [
+    {
+      "path": "model/config.json",
+      "sha256": "ba59b8d2d47746e844f6a96e2232a969d8d89dcc34450fbad94d912bb9ee2e27",
+      "size": 5522,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/config.json"
+      ]
+    },
+    {
+      "path": "model/generation_config.json",
+      "sha256": "f1b90b4513f3b34c62851049e2492d7b4c5940daf1276f89c82b8ef04127f3aa",
+      "size": 245,
+      "source_path": "generation_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/generation_config.json"
+      ]
+    },
+    {
+      "path": "model/merges.txt",
+      "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+      "size": 1671839,
+      "source_path": "merges.txt",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/merges.txt"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "07dcb37b323614af64624af687876edd5c9a8b442da2a7b549d62f9ba2770ec1",
+      "size": 1024490700,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "sha256": "86f65f69204f3fb9dc5ec22ed94da4865594c901b45d2508c60a5931d12787d4",
+      "size": 77731,
+      "source_path": "model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/preprocessor_config.json",
+      "sha256": "efdde1022ea9d76928bf7a9cd53139138f5ba2e466e837f08f6105ab1af1c119",
+      "size": 127,
+      "source_path": "preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/speech_tokenizer/config.json",
+      "sha256": "ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167",
+      "size": 2336,
+      "source_path": "speech_tokenizer/config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/speech_tokenizer/config.json"
+      ]
+    },
+    {
+      "path": "model/speech_tokenizer/configuration.json",
+      "sha256": "6bc26d64eb5024b4d1dab5a52371958b429256d6c9d59787f1f5294a54e0cebd",
+      "size": 76,
+      "source_path": "speech_tokenizer/configuration.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/speech_tokenizer/configuration.json"
+      ]
+    },
+    {
+      "path": "model/speech_tokenizer/model.safetensors",
+      "sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258",
+      "size": 682293092,
+      "source_path": "speech_tokenizer/model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/speech_tokenizer/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/speech_tokenizer/preprocessor_config.json",
+      "sha256": "fcb3805e597e786d4067706e602f6688524640f8d3396790e2e09b5942fcbdfb",
+      "size": 234,
+      "source_path": "speech_tokenizer/preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/speech_tokenizer/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670",
+      "size": 7344,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/vocab.json",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "size": 2776833,
+      "source_path": "vocab.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/resolve/0d6bb6fe33f92d47a507e23b9148940e8366ab5b/vocab.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+  "package_id": "qwen3-tts-12hz-0-6b-base-4bit",
+  "qualification": {
+    "memory_evidence": "The lighter 4-bit twin of the 8 GB cloning model: same speech tokenizer (byte-identical codec files), 1.0 GB of weights instead of 1.3 GB. 8 GB tier by the same reasoning as the 8-bit; peak footprint measured on a 32 GB Mac only, awaiting the 8 GB runner.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
+  },
+  "quantization": "MLX 4-bit",
+  "quantization_source": "the publisher's model id states it: mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+  "requires_packages": [
+    "whisper-turbo"
+  ],
+  "revision": "0d6bb6fe33f92d47a507e23b9148940e8366ab5b",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-10-02",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+        "revision": "0d6bb6fe33f92d47a507e23b9148940e8366ab5b"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit",
+        "revision": "0d6bb6fe33f92d47a507e23b9148940e8366ab5b",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/revision/0d6bb6fe33f92d47a507e23b9148940e8366ab5b",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit/tree/0d6bb6fe33f92d47a507e23b9148940e8366ab5b?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

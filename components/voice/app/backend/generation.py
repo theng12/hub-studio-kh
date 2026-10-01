@@ -3307,13 +3307,9 @@ class GenerationManager:
         # See v1.2.8 fix.
         entry = catalog.get_model(repo)
         model = load_model(snapshot_path)
-        if entry is not None and entry.family == "qwen3-tts":
-            mlx_memory.bound_qwen3_decoder()
-            mlx_memory.bound_qwen3_encoder(model)
-        if entry is not None and entry.family == "omnivoice":
-            mlx_memory.bound_omnivoice(model)
+        if entry is not None and entry.family in mlx_memory.PROFILES:
+            mlx_memory.bound_model(entry.family, model)   # docs/mlx-memory-discipline.md
         if entry is not None and entry.family == "voxcpm-mlx":
-            mlx_memory.bound_voxcpm_vae(model)
             # Backport mlx-audio 3b37f335 without advancing the shared pin by
             # 93 unrelated commits: materialize this lazy constant before the
             # cached model is reused by a later generation worker thread.

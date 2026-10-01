@@ -211,3 +211,13 @@ on its side. `docs/lane-execution-contract.md` is the shape; `docs/tasks/ST-20.m
   sends and the lane silently drops is a lie with a schema.
 - `deadline_seconds` belongs to the **Hub** (it is the Hub's own proxy timeout, one constant);
   `runtime_seconds` belongs to the **worker** and only where measured.
+
+## MLX memory discipline — 2026-10-02
+
+An 8 GB Mac mini peaked at 6-7.7 GB on 2 GB models and wrote 100+ GB/hour of swap to its SSD. The cause was never the weights: one section's codec/VAE decode and an unbounded MLX buffer cache.
+Read `docs/mlx-memory-discipline.md` before adding or changing any MLX model. The rules, in short:
+
+- Cap the MLX cache (`mlx_memory.bound_cache`), never decode a whole section in one pass (slab it with context and `mx.eval` per layer), encode a reference once per script, clear the cache between stages.
+- A new voice engine is not done until its family is in `mlx_memory.PROFILES` (bounded, or `cache-only` with the reason) - `components/voice/app/tests/test_mlx_memory_registry.py` fails otherwise.
+- `min_free_memory_gb` is the **measured** peak process footprint on the 8 GB runner plus ~0.25 GB, with a `min_free_memory_note` saying what was measured. A floor must never be a formula; the same test fails a floor with no note.
+- The target is a worker peak of about 4.5 GB or less on an 8 GB Mac. Peaks are exact on a busy machine, timings are not.

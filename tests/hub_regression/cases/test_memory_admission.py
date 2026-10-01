@@ -152,8 +152,8 @@ def test_the_owner_approved_floor_has_a_producer_home(reset):
                 if m.repo == "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"), None)
     assert row is not None, "the 8 GB production voice-cloning tier left the voice catalog"
     published = voice_catalog.serialize_model(row)
-    assert published["min_free_memory_gb"] == 3.2, (
-        "the Voice worker no longer publishes the owner-approved 3.2 GB live-free floor for "
+    assert published["min_free_memory_gb"] == 4.2, (
+        "the Voice worker no longer publishes the owner-approved 4.2 GB live-free floor for "
         f"{row.repo}; the Hub now has no source for it and would fall back to 2.0 GB")
     assert published["min_unified_memory_gb"] == 8
     # And the Hub reads exactly that, with no table of its own.
