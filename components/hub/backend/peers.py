@@ -266,6 +266,8 @@ async def _refresh_stale(machines, stale, client, now):
                 "studios": data.get("studios", {}),
                 "proxy": data.get("proxy"),
                 "version": data.get("version"),
+                # What starts when that Mac starts, as it reported it. Absent from an older Hub.
+                "startup": data.get("startup") if isinstance(data.get("startup"), dict) else None,
                 "reachable": True, "auth": True, "status": "connected",
             }
             clears_rejection = False

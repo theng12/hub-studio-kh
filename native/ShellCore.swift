@@ -187,6 +187,15 @@ struct ShellConfiguration {
     /// that is only ever used in person should not hold its Studios open all night, while a
     /// fleet node that must be ready for work the moment it wakes should.
     var startServicesAtLogin: Bool
+    /// Whether "Start services on startup" has been decided by something other than the bare default:
+    /// the owner toggled it, `--fleet-mode` set it, or the fleet default below was applied.
+    ///
+    /// **Why this exists (owner, 2026-10-02):** about thirty Macs were set up without ticking
+    /// "Start services on startup", and a Mac whose services are off is silent to its controller
+    /// after every reboot. A Mac that belongs to a fleet exists to serve, so the default is applied
+    /// to it once - and only once, so an owner who later turns it off on purpose is not overridden
+    /// by the next launch.
+    var startServicesChoiceRecorded: Bool
     /// The address the Hub binds. Loopback keeps the Hub reachable from this Mac only.
     var listenHost: String
     /// Whether `listenHost` is recomputed from this Mac's own addresses on every launch. See
@@ -254,6 +263,36 @@ struct ShellConfiguration {
         if offline { arguments.append("--offline") }
         return arguments
     }
+    /// Whether this Mac has joined a controller: it holds the address it joined.
+    var isJoinedNode: Bool {
+        guard let address = controllerAddress else { return false }
+        return !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Turn "Start services on startup" on, once, for a Mac that belongs to a fleet.
+    ///
+    /// `inFleet` is true for a node that holds a controller address, and for a Hub that reports
+    /// itself a controller or a node (a running Hub tells the app its role). A Mac that is not in a
+    /// fleet is left exactly as it is: one that is only used in person should not hold its Studios
+    /// open all night. Returns true when the configuration changed (the setting, or only the record
+    /// that the default has been applied), so the caller knows to save.
+    ///
+    /// Recorded the first time it runs for a fleet Mac, whether or not it had to change anything, so
+    /// the owner's later choice (a deliberate off) is never undone by a launch.
+    @discardableResult
+    mutating func applyFleetServicesDefault(inFleet: Bool) -> Bool {
+        guard inFleet, !startServicesChoiceRecorded else { return false }
+        startServicesChoiceRecorded = true
+        guard !startServicesAtLogin else { return true }
+        startServicesAtLogin = true
+        return true
+    }
+
+    /// The owner's own choice: remembered as a choice, so the fleet default never overrides it.
+    mutating func chooseStartServices(_ enabled: Bool) {
+        startServicesAtLogin = enabled
+        startServicesChoiceRecorded = true
+    }
     var readyFile: URL { dataDirectory.appendingPathComponent("hub-ready.json") }
     var logFile: URL { dataDirectory.appendingPathComponent("hub-worker.log") }
     var preferencesFile: URL { dataDirectory.appendingPathComponent("app-preferences.json") }
@@ -265,6 +304,7 @@ struct ShellConfiguration {
         offline = false
         startAtLogin = true
         startServicesAtLogin = false
+        startServicesChoiceRecorded = false
         listenHost = "127.0.0.1"
         listenHostAutomatic = true
         preferencesWriteFailure = nil
@@ -321,6 +361,7 @@ struct ShellConfiguration {
             offline = saved.offline
             startAtLogin = saved.startAtLogin
             startServicesAtLogin = saved.startServicesAtLogin
+            startServicesChoiceRecorded = saved.startServicesChoiceRecorded ?? false
             listenHost = saved.listenHost
             listenHostAutomatic = saved.listenHostAutomatic ?? true
             port = saved.port ?? Self.defaultPort
@@ -351,6 +392,7 @@ struct ShellConfiguration {
             listenHostAutomatic = true
             startAtLogin = true
             startServicesAtLogin = true
+            startServicesChoiceRecorded = true
         }
         if explicitAutomatic { listenHostAutomatic = true }
         if let explicitHost {
@@ -586,6 +628,7 @@ struct ShellConfiguration {
         let data = try JSONEncoder().encode(Preferences(modelsPath: modelsDirectory?.path ?? "", offline: offline,
                                                         startAtLogin: startAtLogin,
                                                         startServicesAtLogin: startServicesAtLogin,
+                                                        startServicesChoiceRecorded: startServicesChoiceRecorded,
                                                         listenHost: listenHost,
                                                         listenHostAutomatic: listenHostAutomatic,
                                                         port: port,
@@ -606,6 +649,8 @@ struct ShellConfiguration {
         /// Absent in every preferences file written before this setting existed, and absent
         /// means off: the default is the conservative one.
         let startServicesAtLogin: Bool
+        /// Absent in every file written before the fleet default existed: absent means "not decided".
+        let startServicesChoiceRecorded: Bool?
         let listenHost: String
         /// Whether the listen list is recomputed from this Mac's own addresses on every launch,
         /// or pinned to exactly `listenHost`.
@@ -644,7 +689,7 @@ struct ShellConfiguration {
         let loginMigrationComplete: Bool
 
         init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
-             listenHost: String, listenHostAutomatic: Bool?, port: Int?, controllerAddress: String?,
+             startServicesChoiceRecorded: Bool?, listenHost: String, listenHostAutomatic: Bool?, port: Int?, controllerAddress: String?,
              nodeCredential: String?,
              releasePublisherPublicKey: String?, releasePublisherFingerprint: String?,
              recoveryMaxAttempts: Int,
@@ -654,6 +699,7 @@ struct ShellConfiguration {
             self.offline = offline
             self.startAtLogin = startAtLogin
             self.startServicesAtLogin = startServicesAtLogin
+            self.startServicesChoiceRecorded = startServicesChoiceRecorded
             self.listenHost = listenHost
             self.listenHostAutomatic = listenHostAutomatic
             self.port = port
@@ -675,6 +721,7 @@ struct ShellConfiguration {
             // Older previews did not persist this preference; the first-release default is on.
             startAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? true
             startServicesAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startServicesAtLogin) ?? false
+            startServicesChoiceRecorded = try values.decodeIfPresent(Bool.self, forKey: .startServicesChoiceRecorded)
             // Every build before fleet support was loopback-only. The address itself is kept as
             // written; whether it is the *whole* list is what `listenHostAutomatic` decides, and
             // an absent flag means automatic — see the field's own comment.

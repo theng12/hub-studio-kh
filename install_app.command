@@ -18,6 +18,55 @@ APP="${APP:-$HERE/Studio Hub.app}"
 # leaving a second copy beside it.
 NAME="Studio Hub.app"
 
+# **Make this Mac serve after a restart (owner, 2026-10-02).** The app starts at login by default but
+# its services do not: "Start services on startup" is off unless the app was opened once with
+# `--fleet-mode`, which no kit step did - so every Mac set up from the drive stayed silent to its
+# controller after a reboot. Opening the app this way writes the setting down (and starts the services
+# now). A running app ignores arguments, so it is closed first - gracefully, never killed: if it is busy
+# or waiting for an answer it is left alone and the Mac is told to run this again.
+#
+# The `STUDIOHUB_*` names are for testing this against a scratch folder with stand-in commands; nobody
+# sets them in real use. A test that points the install at a scratch folder never opens the real app.
+fleet_mode_open() {
+  app="$1"
+  if [ -n "${STUDIOHUB_INSTALL_TARGET:-}" ] && [ -z "${STUDIOHUB_OPEN_CMD:-}" ]; then return 0; fi
+  opener="${STUDIOHUB_OPEN_CMD:-/usr/bin/open}"
+  prefs="${STUDIOHUB_PREFS:-$HOME/Library/Application Support/StudioHub Standalone/app-preferences.json}"
+  is_running() { set -- ${STUDIOHUB_PGREP:-/usr/bin/pgrep -x StudioHub}; "$@" >/dev/null 2>&1; }
+  already=$(/usr/bin/plutil -extract startServicesAtLogin raw "$prefs" 2>/dev/null || echo "")
+  if is_running; then
+    if [ "$already" = "true" ]; then
+      echo "  Studio Hub is running and already starts its services after a restart."
+      return 0
+    fi
+    echo "  Closing Studio Hub so it can be reopened in fleet mode..."
+    set -- ${STUDIOHUB_OSASCRIPT:-/usr/bin/osascript}
+    "$@" -e 'with timeout of 20 seconds' -e 'quit app "Studio Hub"' -e 'end timeout' >/dev/null 2>&1 || true
+    waited=0
+    while is_running && [ "$waited" -lt "${STUDIOHUB_QUIT_WAIT:-40}" ]; do sleep 1; waited=$((waited + 1)); done
+    if is_running; then
+      echo
+      echo "  Studio Hub did not close - it may be busy with a job or waiting for an answer, so it was"
+      echo "  left alone. Close it yourself, then run this file again so this Mac is set to start its"
+      echo "  services after a restart."
+      return 1
+    fi
+  fi
+  if /usr/bin/xattr -p com.apple.quarantine "$app" >/dev/null 2>&1; then
+    echo
+    echo "  macOS has not opened this app before: if it asks, right-click Studio Hub in Applications and"
+    echo "  choose Open (once), then run this file again."
+  fi
+  echo "  Opening Studio Hub in fleet mode: it starts its services now, at every login and after a restart."
+  if "$opener" -a "$app" --args --fleet-mode; then
+    return 0
+  fi
+  echo
+  echo "  macOS would not open Studio Hub. Right-click it in Applications and choose Open (once), then run"
+  echo "  this file again so this Mac is set to start its services after a restart."
+  return 1
+}
+
 clear
 echo "============================================================"
 echo "  Studio Hub - installing the app"
@@ -150,8 +199,13 @@ echo
 echo "  Installed Studio Hub $VERSION"
 echo "  Installed to:  $TARGET/$NAME"
 echo
-echo "  NEXT:  open it once (right-click it and choose Open), then double-click"
-echo "         '2 - Copy the models.command' to bring over the models."
+# When `Update this Mac.command` is driving, it opens the app itself once the models are copied: opening
+# it now would start the services while the models are still arriving.
+if [ "${STUDIOHUB_UNATTENDED:-}" != "1" ]; then
+  fleet_mode_open "$TARGET/$NAME" || true
+  echo
+fi
+echo "  NEXT:  double-click '2 - Copy the models.command' to bring over the models."
 echo
 echo "  Running this file again replaces the installed copy with the one in this kit, which is"
 echo "  how an update is applied. Your models, settings and output are not touched."

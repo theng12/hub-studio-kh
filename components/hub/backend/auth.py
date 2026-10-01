@@ -553,6 +553,16 @@ FLEET_ALLOWED = (
     # One Mac per group drains for an update at a time: a node asks its controller for the slot.
     ("POST", r"^/api/hub/fleet/update-slot$"),
     ("PUT", r"^/api/hub/release/blob/[0-9a-f]{64}$"),
+    # **Startup control (owner request 2026-10-02: see and change, from the Gateway, whether a Mac
+    # starts its services after a reboot).** A controller relays the Gateway's request to a node
+    # (`.../fleet/nodes/{id}/startup`) and the node accepts it on `/api/hub/startup/request`. The
+    # requests are narrow - two booleans and a restart - validated by the route, refused for a
+    # restart while work is running, and written to an audit log. `/api/hub/startup/sync` is the
+    # app's own exchange and is deliberately NOT here: it stays Hub-token only. Neither route is in
+    # `NODE_ALLOWED`, so a node's own credential cannot command another Mac.
+    ("GET", r"^/api/hub/startup$"),
+    ("POST", r"^/api/hub/startup/request$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/startup$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
     # statement — here is your new credential, and here is your new head — so they are one route.
     # A controller pushes it to a node with the Fleet token; the *operator* calls it with the Hub

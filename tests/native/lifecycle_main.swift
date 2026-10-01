@@ -300,6 +300,79 @@ struct NativeLifecycleTests {
                 "late health response overwrote terminal state: \(controller.status)")
         }
 
+        // Startup settings (owner, 2026-10-02): the fleet default for "Start services on startup", the
+        // requests the fleet sends, and the sidebar's one-line warning. The login agent itself is not
+        // touched here: toggling it would run launchctl against the real user session.
+        if runs("startup") {
+            let root = temporary.appendingPathComponent("startup")
+            let models = root.appendingPathComponent("models")
+            try FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
+            let bundle = URL(fileURLWithPath: "/Applications/StudioHubFixture.app")
+            func make(data: URL) throws -> StudioController {
+                let configuration = try ShellConfiguration(
+                    arguments: ["lifecycle-tests", "--data-dir", data.path, "--models-dir", models.path], bundle: bundle)
+                return StudioController(configuration: configuration,
+                                        serviceExecutable: root.appendingPathComponent("StudioHubService"),
+                                        loginAgentStatus: { _ in .disabled },
+                                        legacyLoginItemStatus: { .notRegistered },
+                                        legacyLoginItemUnregister: {}, now: Date.init)
+            }
+            let standaloneData = root.appendingPathComponent("standalone")
+            let joinedData = root.appendingPathComponent("joined")
+            for directory in [standaloneData, joinedData] {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            do {
+                let alone = try make(data: standaloneData)
+                alone.applyFleetServicesDefaultAtLaunch()
+                requireLifecycle(!alone.configuration.startServicesAtLogin && !alone.servicesWillNotAutoStart,
+                                 "a Mac in no fleet keeps services off and the sidebar says nothing")
+                let report = alone.startupReport()
+                requireLifecycle(!report.openAtLogin && report.openAtLoginSaved && !report.startServicesOnLaunch,
+                                 "the report is the actual login state, the saved choice and the services setting")
+                alone.observeFleetRole("standalone")
+                requireLifecycle(!alone.configuration.startServicesAtLogin, "a standalone Hub changes nothing")
+            }
+            do {
+                let joined = try make(data: joinedData)
+                joined.configuration.controllerAddress = "100.64.0.9:47873"
+                requireLifecycle(joined.servicesWillNotAutoStart,
+                                 "a joined Mac with services off is the one state the sidebar warns about")
+                joined.applyFleetServicesDefaultAtLaunch()
+                requireLifecycle(joined.configuration.startServicesAtLogin && !joined.servicesWillNotAutoStart,
+                                 "the first launch after the update turns services on for a joined Mac")
+                // The owner turns it off on purpose through a fleet request; the next launch respects it.
+                let off = joined.applyStartupRequest(NativeWorkspaceStore.StartupRequest(id: "r1", action: "set_start_services_on_launch", value: false))
+                requireLifecycle(off == NativeWorkspaceStore.StartupOutcome(id: "r1", ok: true, detail: nil) && !joined.configuration.startServicesAtLogin,
+                                 "a request to turn services off is applied and answered")
+                requireLifecycle(joined.failure == nil, "a fleet request never raises the banner on the Mac")
+                joined.applyFleetServicesDefaultAtLaunch()
+                requireLifecycle(!joined.configuration.startServicesAtLogin,
+                                 "a recorded choice is never overridden by the default")
+                let on = joined.applyStartupRequest(NativeWorkspaceStore.StartupRequest(id: "r2", action: "set_start_services_on_launch", value: true))
+                requireLifecycle(on?.ok == true && joined.configuration.startServicesAtLogin, "and back on")
+                let missing = joined.applyStartupRequest(NativeWorkspaceStore.StartupRequest(id: "r3", action: "set_start_services_on_launch", value: nil))
+                requireLifecycle(missing?.ok == false, "a request with no value is refused, not guessed")
+                let unknown = joined.applyStartupRequest(NativeWorkspaceStore.StartupRequest(id: "r4", action: "format_disk", value: true))
+                requireLifecycle(unknown?.ok == false && unknown?.detail?.contains("format_disk") == true,
+                                 "an unknown request is refused by name")
+                requireLifecycle(joined.applyStartupRequest(NativeWorkspaceStore.StartupRequest(id: "r5", action: "restart_services", value: nil)) == nil,
+                                 "a restart has no outcome to report: the Hub it would answer to is restarting")
+            }
+            // The choice made above survived: a relaunch reads it from the preferences file.
+            let relaunched = try make(data: joinedData)
+            requireLifecycle(relaunched.configuration.startServicesAtLogin && relaunched.configuration.startServicesChoiceRecorded,
+                             "the setting and the record of the choice survive a relaunch")
+            // A controller has no controller address; the running Hub says what it is.
+            let controllerData = root.appendingPathComponent("controller")
+            try FileManager.default.createDirectory(at: controllerData, withIntermediateDirectories: true)
+            let head = try make(data: controllerData)
+            requireLifecycle(!head.servicesWillNotAutoStart, "before a Hub reports, nothing is known")
+            head.observeFleetRole("controller")
+            requireLifecycle(head.configuration.startServicesAtLogin && head.fleetRoleIsMember && !head.servicesWillNotAutoStart,
+                             "a Hub that reports itself a controller turns services on for that Mac")
+        }
+
         // The one-time move off the old SMAppService login item. The reader and the unregister are
         // injected, so neither branch touches the real system; driving it through a real
         // StudioController proves the persisted flag across two launches.

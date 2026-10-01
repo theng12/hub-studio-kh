@@ -31,10 +31,16 @@ what you should see.
    the models it can run, plus your saved voices. Give it several minutes the first time.
    It is safe to run again: it adds what is missing and leaves the rest alone.
 2. **`1 - Install the app.command`** — puts the app in **Applications**. It will ask for
-   your password once. It closes and replaces any older copy for you; quit and reopen the
-   app afterwards to be sure you are running the new build.
-3. Open **Studio Hub** from Applications. The first time, **right-click → Open** (the app
-   is not signed).
+   your password once. It closes and replaces any older copy for you, then **opens the app
+   in fleet mode** (`--fleet-mode`): the Mac starts Studio Hub's services now, at every login
+   and after every restart, with nobody at the keyboard - so its controller can always reach
+   it. This sets **Settings → Startup → Start services on startup**; without it the app opens
+   after a restart but serves nothing. If Studio Hub is busy with a job it is left running and
+   the file tells you to run it again when it is idle.
+3. The first time macOS opens the app you may need to **right-click → Open** (the app is not
+   signed); if so the install file says so, and asks you to run it again.
+   **`Update this Mac.command`** does the same at the end of every update, whether or not the
+   app itself changed.
 4. Allow the local-network and incoming-connection prompts, and wait for
    **Local services ready**.
 

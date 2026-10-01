@@ -3277,7 +3277,68 @@ final class NativeWorkspaceStore: ObservableObject {
     func pollOnce(now: Date = Date()) async {
         if isWindowVisible() { await refresh(reportErrors: false) }
         await membershipTick(now: now)
+        await startupSyncTick()
         await releaseTick(now: now)
+    }
+
+    // MARK: - Startup settings: reported to the Hub, changed from the fleet
+
+    /// What this Mac starts when it starts, as the app knows it and the Hub publishes it up the fleet.
+    ///
+    /// `openAtLogin` is the **actual** state (the launch agent is in place), `openAtLoginSaved` the
+    /// owner's saved choice, and the two differ on a copy that cannot register itself (outside
+    /// /Applications). Keys are snake-cased by the shared encoder: `open_at_login`,
+    /// `open_at_login_saved`, `start_services_on_launch`, `app_version`.
+    struct StartupReport: Encodable {
+        let openAtLogin: Bool
+        let openAtLoginSaved: Bool
+        let startServicesOnLaunch: Bool
+        let appVersion: String
+        var applied: [StartupOutcome] = []
+    }
+    /// What the app did with one request the fleet sent, reported on the next call.
+    struct StartupOutcome: Codable, Equatable {
+        let id: String
+        let ok: Bool
+        let detail: String?
+    }
+    /// One thing the fleet asked for: `set_start_services_on_launch` / `set_open_at_login` (with a
+    /// value), or `restart_services`. The Hub has already checked it against running work.
+    struct StartupRequest: Decodable, Equatable {
+        let id: String
+        let action: String
+        let value: Bool?
+    }
+    private struct StartupAnswer: Decodable {
+        let requests: [StartupRequest]
+        let role: String?
+    }
+    /// The app's current settings. Set by the app; a workspace with no app around it (tests) does not
+    /// sync, so nothing here reaches a Hub it was not meant to.
+    var startupReportProvider: (@MainActor () -> StartupReport)?
+    /// Applies one request and says what happened (nil for a restart: the Hub it would answer to is
+    /// the one being restarted). The app owns the preferences and the launch agent.
+    var onStartupRequest: (@MainActor (StartupRequest) -> StartupOutcome?)?
+    /// The Hub's own role (`controller`, `agent`, `standalone`), which the app cannot know while the
+    /// services are off. A Mac in a fleet turns "Start services on startup" on once from this.
+    var onFleetRoleObserved: (@MainActor (String) -> Void)?
+    private var startupOutcomesToReport: [StartupOutcome] = []
+
+    /// One exchange with the Hub: send the settings and last outcomes, take whatever is waiting.
+    /// Best effort - a failed call is simply repeated on the next poll, and the outcomes are kept
+    /// until a call succeeds.
+    func startupSyncTick() async {
+        guard let provider = startupReportProvider, connectionID != nil else { return }
+        var report = provider()
+        let sent = startupOutcomesToReport
+        report.applied = sent
+        guard let answer: StartupAnswer = try? await sendJSON(["api", "hub", "startup", "sync"],
+                                                                method: "POST", body: report) else { return }
+        startupOutcomesToReport.removeAll { sent.contains($0) }
+        if let role = answer.role { onFleetRoleObserved?(role) }
+        for request in answer.requests {
+            if let outcome = onStartupRequest?(request) { startupOutcomesToReport.append(outcome) }
+        }
     }
 
     /// Work an update, or a relaunch, would interrupt: jobs of every kind that are waiting or

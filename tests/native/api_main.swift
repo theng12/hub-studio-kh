@@ -302,6 +302,14 @@ final class FixtureProtocol: URLProtocol {
         lock.lock(); defer { lock.unlock() }; updateDrainWants = []; updateDrainReply = reply
     }
     static func drainWants() -> [Bool] { lock.lock(); defer { lock.unlock() }; return updateDrainWants }
+    /// What the app sent to `POST /api/hub/startup/sync`, and what the Hub hands back (the requests the
+    /// fleet queued, and the role the Hub is in). Every call is recorded; the answer is scripted.
+    static var startupSyncBodies: [[String: Any]] = []
+    static var startupSyncAnswer: [String: Any] = ["requests": [], "role": "standalone"]
+    static func resetStartupSync(answer: [String: Any] = ["requests": [], "role": "standalone"]) {
+        lock.lock(); defer { lock.unlock() }; startupSyncBodies = []; startupSyncAnswer = answer
+    }
+    static func startupSyncs() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return startupSyncBodies }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -1297,6 +1305,10 @@ final class FixtureProtocol: URLProtocol {
             } else {
                 result = (404, "application/json", Data(#"{"detail":"Not Found"}"#.utf8))
             }
+        case ("POST", "/api/hub/startup/sync"):
+            let body = ((try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any]) ?? [:]
+            Self.lock.lock(); Self.startupSyncBodies.append(body); let answer = Self.startupSyncAnswer; Self.lock.unlock()
+            result = (200, "application/json", (try? JSONSerialization.data(withJSONObject: answer)) ?? Data())
         case ("POST", "/api/hub/update/drain"):
             let want = ((try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any])?["want"] as? Bool ?? false
             Self.lock.lock(); Self.updateDrainWants.append(want); let reply = Self.updateDrainReply; Self.lock.unlock()
@@ -5500,6 +5512,53 @@ struct NativeAPITests {
         require(!updateStore.updateDraining && FixtureProtocol.drainWants().last == false,
                 "no pending update means no drain")
         FixtureProtocol.setMemoryPolicyOverride(nil)
+
+        // ── Startup settings: reported to the Hub on every poll, requests from the fleet applied ──
+        let startupStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await startupStore.connect(baseURL: URL(string: "http://127.0.0.1:45690")!,
+                                   dataDirectory: updateDirectory, token: "native-test-token")
+        FixtureProtocol.resetStartupSync()
+        await startupStore.startupSyncTick()
+        require(FixtureProtocol.startupSyncs().isEmpty,
+                "a workspace with no app around it reports nothing to the Hub it is connected to")
+        var applied: [NativeWorkspaceStore.StartupRequest] = []
+        var roles: [String] = []
+        startupStore.startupReportProvider = {
+            NativeWorkspaceStore.StartupReport(openAtLogin: true, openAtLoginSaved: true,
+                                               startServicesOnLaunch: false, appVersion: "0.6.127")
+        }
+        startupStore.onStartupRequest = { request in
+            applied.append(request)
+            return request.action == "restart_services" ? nil
+                : NativeWorkspaceStore.StartupOutcome(id: request.id, ok: request.action != "set_open_at_login",
+                                                       detail: request.action == "set_open_at_login" ? "not in /Applications" : nil)
+        }
+        startupStore.onFleetRoleObserved = { roles.append($0) }
+        await startupStore.startupSyncTick()
+        let first = FixtureProtocol.startupSyncs()
+        require(first.count == 1, "one sync per poll: \(first.count)")
+        require(first[0]["open_at_login"] as? Bool == true && first[0]["open_at_login_saved"] as? Bool == true
+                && first[0]["start_services_on_launch"] as? Bool == false && first[0]["app_version"] as? String == "0.6.127",
+                "the settings travel under the names the Hub reads: \(first[0])")
+        require((first[0]["applied"] as? [Any])?.isEmpty == true, "nothing to report back yet")
+        require(roles == ["standalone"], "the Hub's role reaches the app: \(roles)")
+        FixtureProtocol.resetStartupSync(answer: ["role": "agent", "requests": [
+            ["id": "su-1", "action": "set_start_services_on_launch", "value": true],
+            ["id": "su-2", "action": "set_open_at_login", "value": true],
+            ["id": "su-3", "action": "restart_services", "value": NSNull()]]])
+        await startupStore.startupSyncTick()
+        require(applied.map(\.id) == ["su-1", "su-2", "su-3"] && applied[0].value == true && applied[2].value == nil,
+                "every request the fleet queued is handed to the app: \(applied)")
+        require(roles.last == "agent", "a node reports its role")
+        FixtureProtocol.resetStartupSync()
+        await startupStore.startupSyncTick()
+        let second = FixtureProtocol.startupSyncs()[0]["applied"] as? [[String: Any]] ?? []
+        require(second.count == 2 && second[0]["id"] as? String == "su-1" && second[0]["ok"] as? Bool == true
+                && second[1]["ok"] as? Bool == false && second[1]["detail"] as? String == "not in /Applications",
+                "the outcomes come back on the next call, a restart has none: \(second)")
+        await startupStore.startupSyncTick()
+        require((FixtureProtocol.startupSyncs()[1]["applied"] as? [Any])?.isEmpty == true,
+                "an outcome is reported once, not on every poll")
 
         // ── The unattended path pins its own Hub's key on first read, then verifies on the next tick ──
         FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)

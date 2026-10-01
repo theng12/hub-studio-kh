@@ -185,6 +185,15 @@ final class StudioController: ObservableObject {
         workspace.onReleasePublisherKeyChanged = { [weak self] key in
             self?.rememberReleasePublisherKey(key)
         }
+        // What this Mac starts when it starts, reported up the fleet and changeable from it. The
+        // preferences and the launch agent are this app's, so a request from the Gateway arrives
+        // here (through the Hub's sync route) and is applied here.
+        workspace.startupReportProvider = { [weak self] in
+            self?.startupReport() ?? NativeWorkspaceStore.StartupReport(
+                openAtLogin: false, openAtLoginSaved: false, startServicesOnLaunch: false, appVersion: "")
+        }
+        workspace.onStartupRequest = { [weak self] request in self?.applyStartupRequest(request) }
+        workspace.onFleetRoleObserved = { [weak self] role in self?.observeFleetRole(role) }
         workspace.onReleaseRestartRequested = { [weak self] in
             // An installed update replaces the app on disk, so the window in front of the operator
             // is still the old binary and its version label stays stale. The app relaunches; with
@@ -688,8 +697,72 @@ final class StudioController: ObservableObject {
     /// has to be re-read or the app would keep showing a token the Hub no longer accepts.
     func rememberController(_ address: String?) {
         configuration.controllerAddress = address
+        // A Mac that joins a fleet is there to serve: turn "Start services on startup" on, once.
+        configuration.applyFleetServicesDefault(inFleet: configuration.isJoinedNode)
         readFleetToken()
         do { try configuration.save() } catch { failure = error.localizedDescription }
+    }
+
+    /// Once per Mac, at launch: a Mac that already holds a controller address gets the fleet
+    /// default (owner, 2026-10-02: every installed fleet Mac should serve after a reboot). Runs
+    /// before the launch decides whether to start the services, so the first launch after the update
+    /// already does. A Mac that is not in a fleet, or whose owner has chosen, is left alone.
+    func applyFleetServicesDefaultAtLaunch() {
+        guard configuration.applyFleetServicesDefault(inFleet: configuration.isJoinedNode) else { return }
+        do { try configuration.save() } catch { /* retried next launch; not startup-critical */ }
+    }
+
+    /// The Hub's own role, learned while the services run. A controller has no controller address,
+    /// and a node's may predate the preference, so the running Hub is the one who knows.
+    func observeFleetRole(_ role: String) {
+        fleetRoleIsMember = role == "controller" || role == "agent"
+        guard fleetRoleIsMember else { return }
+        guard configuration.applyFleetServicesDefault(inFleet: true) else { return }
+        do { try configuration.save() } catch { /* retried at the next report */ }
+    }
+
+    /// What the Settings page, the sidebar and the Gateway all read: the actual login state, the
+    /// saved choices and this build.
+    func startupReport() -> NativeWorkspaceStore.StartupReport {
+        NativeWorkspaceStore.StartupReport(
+            openAtLogin: loginStatus == .enabled,
+            openAtLoginSaved: configuration.startAtLogin,
+            startServicesOnLaunch: configuration.startServicesAtLogin,
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+    }
+
+    /// True when this Mac is in a fleet but will not bring its services up after a restart - the one
+    /// state the sidebar says out loud, because such a Mac is silent to its controller until
+    /// somebody opens the app.
+    var servicesWillNotAutoStart: Bool {
+        !configuration.startServicesAtLogin && (configuration.isJoinedNode || fleetRoleIsMember)
+    }
+    /// Set from the Hub's own report of its role; false until a running Hub says so.
+    @Published var fleetRoleIsMember = false
+
+    /// Apply one request from the fleet. Never raises the failure banner: the person at this Mac did
+    /// not ask for it, and a refusal is reported back to whoever did.
+    func applyStartupRequest(_ request: NativeWorkspaceStore.StartupRequest) -> NativeWorkspaceStore.StartupOutcome? {
+        func outcome(_ ok: Bool, _ detail: String? = nil) -> NativeWorkspaceStore.StartupOutcome {
+            NativeWorkspaceStore.StartupOutcome(id: request.id, ok: ok, detail: detail)
+        }
+        switch request.action {
+        case "set_start_services_on_launch":
+            guard let value = request.value else { return outcome(false, "no value was sent") }
+            configuration.chooseStartServices(value)
+            do { try configuration.save(); return outcome(true) }
+            catch { return outcome(false, "could not save the setting: \(error.localizedDescription)") }
+        case "set_open_at_login":
+            guard let value = request.value else { return outcome(false, "no value was sent") }
+            if let message = changeLogin(value) { return outcome(false, message) }
+            return outcome(true)
+        case "restart_services":
+            // The Hub checked that nothing is running (or that this was forced) before asking.
+            restartServices()
+            return nil
+        default:
+            return outcome(false, "unknown request \(request.action)")
+        }
     }
 
     /// Persist this Mac's own node credential, or clear it when the membership ends.
@@ -778,18 +851,24 @@ final class StudioController: ObservableObject {
     /// Turn the one login mechanism on or off: the launchd agent that starts the app at login and
     /// relaunches it after a crash. A normal Quit exits 0, so `KeepAlive` leaves the app stopped.
     func setLogin(_ enabled: Bool) {
+        if let message = changeLogin(enabled) { failure = message }
+    }
+    /// The login change itself, answering with the reason it failed (nil on success) instead of
+    /// raising the banner - so the owner's toggle and a request from the fleet share one path.
+    func changeLogin(_ enabled: Bool) -> String? {
         configuration.startAtLogin = enabled
         do {
             try applyLoginAgent(enabled: enabled)
             try configuration.save()
             refreshLoginStatus()
+            return nil
         } catch {
             // The preference is remembered even when the plist cannot be written, so a refusal is
             // not silently forgotten; the toggle state and the banner report the truth.
-            failure = (error as? ShellFailure)?.message
-                ?? "Could not change login startup: \(error.localizedDescription)"
             try? configuration.save()
             refreshLoginStatus()
+            return (error as? ShellFailure)?.message
+                ?? "Could not change login startup: \(error.localizedDescription)"
         }
     }
     /// The live login-agent side effects. Enabling writes the plist only: bootstrapping a
@@ -807,7 +886,7 @@ final class StudioController: ObservableObject {
     /// Saving is enough: the choice is read on the next launch. Turning it on while the app is
     /// already running changes nothing about the services that are running now.
     func setStartServicesAtLogin(_ enabled: Bool) {
-        configuration.startServicesAtLogin = enabled
+        configuration.chooseStartServices(enabled)
         do { try configuration.save() } catch { failure = error.localizedDescription }
     }
     private func enableLoginByDefault() {
@@ -922,6 +1001,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // is still on does not lose login startup when the old item is removed. This writes the
             // plist only; it must not bootstrap a RunAtLoad job while the app is running.
             controller.reconcileLoginAgent()
+            // And, once, give a Mac that belongs to a fleet "Start services on startup": it is there
+            // to serve, and a Mac whose services are off is silent to its controller after a reboot.
+            controller.applyFleetServicesDefaultAtLaunch()
         } catch {
             let alert = NSAlert(); alert.messageText = "Studio Hub could not open"; alert.informativeText = error.localizedDescription; alert.runModal(); NSApp.terminate(nil); return
         }
@@ -999,7 +1081,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // A login launch starts the Studios only when the owner asked for it; the default is
         // off, so a Mac that signs in overnight stays idle until someone sends it work. Every
         // other launch starts them, because opening the app is the intent to use it.
-        if controller.hasLibrary && controller.canConfigure && (!loginLaunch || config.startServicesAtLogin) {
+        if controller.hasLibrary && controller.canConfigure && (!loginLaunch || controller.configuration.startServicesAtLogin) {
             controller.start()
         }
     }

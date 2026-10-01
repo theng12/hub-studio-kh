@@ -90,5 +90,123 @@ class InstallAppTests(unittest.TestCase):
         self.assertEqual(self.leftovers(), [])
 
 
+class FleetModeOpenTests(unittest.TestCase):
+    """The kit install step ends by opening the app with `--fleet-mode` (owner, 2026-10-02).
+
+    Every Mac set up from the drive had "Start services on startup" off because no kit step ever
+    opened the app that way. These run the real script with stand-in `open`, `pgrep` and `osascript`
+    (never the Mac's own) and check what it asks of each.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="studiohub-fleetmode-"))
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        self.kit = self.tmp / "kit"
+        self.kit.mkdir()
+        shutil.copy(ROOT / "install_app.command", self.kit / "install_app.command")
+        build_app(self.kit / "Studio Hub.app", {"Contents/Resources/a.py": b"new"})
+        self.applications = self.tmp / "Applications"
+        self.applications.mkdir()
+        self.log = self.tmp / "calls.log"
+        self.running = self.tmp / "running"        # exists while the stand-in app is "running"
+        self.prefs = self.tmp / "app-preferences.json"
+        self.make("open", f'echo "open $*" >> "{self.log}"; exit "${{OPEN_STATUS:-0}}"')
+        self.make("osascript", f'echo "osascript $*" >> "{self.log}"; [ -n "${{STAYS_OPEN:-}}" ] || rm -f "{self.running}"')
+        self.make("pgrep", f'[ -e "{self.running}" ]')
+
+    def make(self, name: str, body: str) -> Path:
+        path = self.tmp / name
+        path.write_text("#!/bin/sh\n" + body + "\n")
+        path.chmod(0o755)
+        return path
+
+    def run_installer(self, *, unattended: bool = False, **extra: str) -> subprocess.CompletedProcess:
+        env = {**os.environ, "STUDIOHUB_INSTALL_TARGET": str(self.applications), "TERM": "dumb",
+               "STUDIOHUB_OPEN_CMD": str(self.tmp / "open"), "STUDIOHUB_PGREP": str(self.tmp / "pgrep"),
+               "STUDIOHUB_OSASCRIPT": str(self.tmp / "osascript"), "STUDIOHUB_PREFS": str(self.prefs),
+               "STUDIOHUB_QUIT_WAIT": "2", **extra}
+        if unattended:
+            env["STUDIOHUB_UNATTENDED"] = "1"
+        else:
+            env.pop("STUDIOHUB_UNATTENDED", None)
+        return subprocess.run(["/bin/sh", str(self.kit / "install_app.command")], env=env, input="\n",
+                              capture_output=True, text=True, timeout=120)
+
+    def calls(self) -> list[str]:
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def test_a_fresh_install_opens_the_installed_app_in_fleet_mode(self) -> None:
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls(), [f"open -a {self.applications / 'Studio Hub.app'} --args --fleet-mode"])
+        self.assertIn("fleet mode", result.stdout)
+
+    def test_a_running_app_is_closed_gracefully_first_because_a_running_app_ignores_arguments(self) -> None:
+        self.running.write_text("")
+        self.prefs.write_text('{"startServicesAtLogin": false}')
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls()
+        self.assertTrue(calls[0].startswith("osascript") and "quit app" in calls[0], calls)
+        self.assertIn("--fleet-mode", calls[-1])
+
+    def test_a_running_app_that_already_starts_its_services_is_left_alone(self) -> None:
+        self.running.write_text("")
+        self.prefs.write_text('{"startServicesAtLogin": true}')
+        result = self.run_installer()
+        self.assertEqual(self.calls(), [], "no needless restart of a Mac that is already serving")
+        self.assertIn("already starts its services", result.stdout)
+
+    def test_an_app_that_will_not_close_is_never_forced_and_the_mac_is_told(self) -> None:
+        self.running.write_text("")
+        result = self.run_installer(STAYS_OPEN="1")
+        self.assertEqual(result.returncode, 0, "the install itself succeeded")
+        self.assertFalse(any(call.startswith("open ") for call in self.calls()), self.calls())
+        self.assertIn("left alone", result.stdout)
+        self.assertIn("run this file again", result.stdout)
+
+    def test_when_macos_refuses_to_open_it_says_what_to_do_once(self) -> None:
+        result = self.run_installer(OPEN_STATUS="1")
+        self.assertEqual(result.stdout.count("Right-click it in Applications and choose Open"), 1, result.stdout)
+        self.assertIn("this file again", result.stdout)
+
+    def test_when_another_script_is_driving_it_does_not_open_the_app_yet(self) -> None:
+        result = self.run_installer(unattended=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls(), [], "Update this Mac opens it after the models are copied")
+
+    def test_a_scratch_install_never_touches_the_real_app(self) -> None:
+        env = {**os.environ, "STUDIOHUB_INSTALL_TARGET": str(self.applications), "STUDIOHUB_UNATTENDED": "1",
+               "TERM": "dumb", "STUDIOHUB_OPEN_CMD": "", "STUDIOHUB_PGREP": str(self.tmp / "pgrep")}
+        env.pop("STUDIOHUB_OPEN_CMD")
+        result = subprocess.run(["/bin/sh", str(self.kit / "install_app.command")], env=env,
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls(), [])
+
+
+class UpdateCommandOpensFleetModeTests(unittest.TestCase):
+    def test_the_update_opens_the_app_in_fleet_mode_after_the_models_even_when_the_app_is_current(self) -> None:
+        text = (ROOT / "Update this Mac.command").read_text()
+        self.assertIn("fleet_mode_open", text)
+        models = text.index('/bin/sh "$HERE/2 - Copy the models.command"')
+        opened = text.index('fleet_mode_open "$FLEET_TARGET"')
+        self.assertLess(models, opened, "the services must start on a finished library")
+        skip = text.index("SKIP_APP=1")
+        self.assertLess(skip, opened, "the open must not live only inside the replace-the-app branch")
+        self.assertIn("--args --fleet-mode", text)
+
+    def test_both_launchers_define_the_same_function(self) -> None:
+        def body(name: str) -> str:
+            text = (ROOT / name).read_text()
+            return text[text.index("fleet_mode_open() {"):text.index("\n}\n", text.index("fleet_mode_open() {"))]
+        self.assertEqual(body("install_app.command"), body("Update this Mac.command"))
+
+    def test_the_kit_readme_says_what_the_install_does(self) -> None:
+        readme = (ROOT / "packaging" / "kit-readmes" / "Studio Hub KH.md").read_text()
+        self.assertIn("--fleet-mode", readme.split("## Setting up a controller")[0])
+        self.assertIn("Start services on startup", readme)
+
+
 if __name__ == "__main__":
     unittest.main()

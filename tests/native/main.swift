@@ -50,6 +50,35 @@ try legacyPreferences.write(to: legacyState.appendingPathComponent("app-preferen
 let legacyConfig = try ShellConfiguration(arguments: ["app", "--data-dir", legacyState.path], bundle: bundle)
 require(legacyConfig.startAtLogin && legacyConfig.recoveryMaxAttempts == 5, "legacy preferences must use safe defaults")
 require(!legacyConfig.startServicesAtLogin, "preferences written before this setting must not start services")
+// The fleet default for "Start services on startup" (owner, 2026-10-02): a Mac that belongs to a fleet
+// gets it once, a Mac that does not is left alone, and an owner's later choice is never undone.
+require(!legacyConfig.startServicesChoiceRecorded, "an old preferences file has not decided the setting")
+var standaloneDefault = legacyConfig
+require(!standaloneDefault.isJoinedNode, "no controller address means not joined")
+require(!standaloneDefault.applyFleetServicesDefault(inFleet: standaloneDefault.isJoinedNode)
+        && !standaloneDefault.startServicesAtLogin && !standaloneDefault.startServicesChoiceRecorded,
+        "a Mac that is not in a fleet keeps services off and records nothing")
+var joinedDefault = legacyConfig
+joinedDefault.controllerAddress = "100.64.0.9:47873"
+require(joinedDefault.isJoinedNode, "a controller address means joined")
+require(joinedDefault.applyFleetServicesDefault(inFleet: joinedDefault.isJoinedNode)
+        && joinedDefault.startServicesAtLogin && joinedDefault.startServicesChoiceRecorded,
+        "a joined Mac gets services on at startup")
+try joinedDefault.save()
+let joinedRestored = try ShellConfiguration(arguments: ["app", "--data-dir", legacyState.path], bundle: bundle)
+require(joinedRestored.startServicesAtLogin && joinedRestored.startServicesChoiceRecorded,
+        "the default and the record that it was applied survive a restart")
+var ownerOff = joinedRestored
+ownerOff.chooseStartServices(false)
+require(!ownerOff.applyFleetServicesDefault(inFleet: true) && !ownerOff.startServicesAtLogin,
+        "an owner's deliberate off is never overridden by the default")
+var emptyAddress = legacyConfig
+emptyAddress.controllerAddress = "   "
+require(!emptyAddress.isJoinedNode, "a blank address is not a membership")
+var roleReported = legacyConfig
+require(roleReported.applyFleetServicesDefault(inFleet: true) && roleReported.startServicesAtLogin,
+        "a Hub that reports itself a controller or node turns it on too")
+require(!roleReported.applyFleetServicesDefault(inFleet: true), "and only once")
 // A preferences file written before the port was pinned must use the Hub's own default rather
 // than a number the operating system happened to hand out, and must not claim a controller.
 require(legacyConfig.port == ShellConfiguration.defaultPort,
