@@ -1633,10 +1633,195 @@ struct NativeFleetMachine: Decodable, Equatable, Identifiable {
     let jobs: Int
     let averageSeconds: Double?
     let modalities: [String: Int]
+    /// The Hub's own disk answer (`disk.state` green/amber/red/stop with the free figures). Absent
+    /// from a Hub older than the disk governor, and from a machine that has not reported in.
+    let disk: NativeFleetDisk?
+    /// What starts when that Mac starts, and how many of its Studios are up. Absent from an older Hub.
+    let startup: NativeFleetStartup?
+    /// The job that Mac is working on right now. Absent while it is idle and from an older Hub.
+    let currentJob: NativeCurrentJob?
 
     var id: String { machine }
     var isLocal: Bool { machine == "local" }
     var isController: Bool { role == "controller" }
+
+    /// Free disk: the governor's own answer when there is one, otherwise the same tiers worked out
+    /// from the free and total figures, so a Hub without the governor still gets a colour.
+    var diskTier: NativeResourceTier {
+        NativeResourceTier.disk(state: disk?.state, freeGB: disk?.freeGb ?? diskFreeGb,
+                                totalGB: disk?.totalGb ?? diskTotalGb)
+    }
+    var memoryTier: NativeResourceTier {
+        NativeResourceTier.memory(availableGB: availableGb, totalGB: memoryGb)
+    }
+    /// "142 GB free", or nil when the Mac has not reported a figure.
+    var diskText: String? {
+        guard let free = disk?.freeGb ?? diskFreeGb else { return nil }
+        return String(format: "%.0f GB free", free)
+    }
+    var memoryText: String? {
+        guard let free = availableGb else { return nil }
+        return String(format: "%.1f GB free", free)
+    }
+    var diskFreeFraction: Double? {
+        guard let free = disk?.freeGb ?? diskFreeGb, let total = disk?.totalGb ?? diskTotalGb, total > 0 else { return nil }
+        return free / total
+    }
+    var memoryFreeFraction: Double? {
+        guard let free = availableGb, let total = memoryGb, total > 0 else { return nil }
+        return free / total
+    }
+}
+
+/// How a resource reads at a glance. One vocabulary for disk and memory, shared by the Connections
+/// table and (through `HubStatus`) every other place a resource is coloured.
+enum NativeResourceTier: Equatable {
+    case ok, warn, bad, unknown
+
+    /// The Hub disk governor's tiers (`components/hub/disk_governor.py`): amber below 12 % free, red
+    /// below 6 %, stop below 5 GB. `state` is the governor's own word; without it the tier is worked out
+    /// from the figures with the same thresholds.
+    static func disk(state: String?, freeGB: Double?, totalGB: Double?) -> NativeResourceTier {
+        switch state {
+        case "green": return .ok
+        case "amber": return .warn
+        case "red", "stop": return .bad
+        default: break
+        }
+        guard let freeGB else { return .unknown }
+        if freeGB < 5 { return .bad }
+        guard let totalGB, totalGB > 0 else { return .unknown }
+        let fraction = freeGB / totalGB
+        if fraction < 0.06 { return .bad }
+        if fraction < 0.12 { return .warn }
+        return .ok
+    }
+
+    /// Memory (owner decision 2026-10-02): amber below 20 % of the Mac's memory free, red below 10 % or
+    /// below 1.5 GB. Informational: a Mac with little free memory is working, not broken.
+    static func memory(availableGB: Double?, totalGB: Double?) -> NativeResourceTier {
+        guard let availableGB else { return .unknown }
+        if availableGB < 1.5 { return .bad }
+        guard let totalGB, totalGB > 0 else { return .unknown }
+        let fraction = availableGB / totalGB
+        if fraction < 0.10 { return .bad }
+        if fraction < 0.20 { return .warn }
+        return .ok
+    }
+}
+
+/// `disk` on a fleet row: the governor's state and the figures behind it.
+struct NativeFleetDisk: Decodable, Equatable {
+    let state: String?
+    let freeGb: Double?
+    let totalGb: Double?
+    let freePercent: Double?
+}
+
+/// `startup` on a fleet row.
+struct NativeFleetStartup: Decodable, Equatable {
+    let openAtLogin: Bool?
+    let startServicesOnLaunch: Bool?
+    let servicesRunning: NativeFleetServices?
+    let appReporting: Bool?
+    /// True when the controller is repeating what that Mac last said rather than a fresh answer.
+    let stale: Bool?
+}
+
+struct NativeFleetServices: Decodable, Equatable {
+    let up: Int
+    let total: Int
+}
+
+/// The job a Mac is on right now: ids, the Studio's modality, the model, who submitted it (the Hub's
+/// own batch label) and when it started. The Hub never sends prompt text here.
+struct NativeCurrentJob: Decodable, Equatable {
+    let jobId: String
+    let modality: String?
+    let model: String?
+    let label: String?
+    let startedAt: Double?
+}
+
+/// What one row of the Connections node table says about a Mac's state, in words.
+enum NativeFleetRowState: Equatable {
+    case working, ready, attention, offline, refused, error, unknown
+
+    var title: String {
+        switch self {
+        case .working: return "Working"
+        case .ready: return "Ready"
+        case .attention: return "Attention"
+        case .offline: return "Offline"
+        case .refused: return "Credential refused"
+        case .error: return "Error"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+
+/// One Mac in the Connections table: the fleet overview's row and the roster's row for the same Mac,
+/// joined on its id. The two answers used to be two lists of the same Macs in two styles; this is the
+/// one list. Either half may be missing: a roster node the overview has no studio for has no machine,
+/// and the overview's own Mac and a controller read back by a node have no roster row.
+struct NativeFleetRow: Identifiable, Equatable {
+    let id: String
+    let machine: NativeFleetMachine?
+    let node: NativeFleetNode?
+
+    var isLocal: Bool { machine?.isLocal == true }
+    var name: String { isLocal ? "This Mac" : (machine?.label ?? node?.name ?? id) }
+    /// Whether the Mac answers: the roster's probe when there is one, else the overview's.
+    var isReachable: Bool { node?.isReachable ?? machine?.reachable ?? false }
+    var role: String? { node?.role ?? machine?.role }
+    var version: String? { node?.version ?? machine?.version }
+    var address: String? { isLocal ? nil : (node?.address ?? machine?.address) }
+    var currentJob: NativeCurrentJob? { machine?.currentJob }
+
+    func state(readiness: NativeMachineReadiness?) -> NativeFleetRowState {
+        if let node {
+            if node.isUnauthorized { return .refused }
+            if node.isFaulted { return .error }
+        }
+        guard isReachable else { return .offline }
+        if currentJob != nil { return .working }
+        if readiness?.cannotRunAnything == true { return .attention }
+        if let machine, machine.health != "up" {
+            return ["degraded", "down"].contains(machine.health) ? .attention : .unknown
+        }
+        return .ready
+    }
+
+    /// "Services 4 of 4 up", "Won't start after restart", or nil when the Mac has not said.
+    var startupText: String? {
+        guard let startup = machine?.startup ?? nil else { return nil }
+        if let running = startup.servicesRunning, running.total > 0, running.up < running.total {
+            return "Services \(running.up) of \(running.total) up"
+        }
+        if startup.startServicesOnLaunch == false { return "Won't start services after a restart" }
+        if let running = startup.servicesRunning, running.total > 0 {
+            return "Services \(running.up) of \(running.total) up"
+        }
+        return nil
+    }
+    /// A startup state worth a second look: some Studio down, or services that will not come back.
+    var startupNeedsAttention: Bool {
+        guard let startup = machine?.startup else { return false }
+        if let running = startup.servicesRunning, running.total > 0, running.up < running.total { return true }
+        return startup.startServicesOnLaunch == false
+    }
+
+    /// The overview's Macs, then roster nodes the overview does not list, unreachable first.
+    @MainActor static func rows(overview: NativeFleetOverview?, nodes: NativeFleetInventory?) -> [NativeFleetRow] {
+        var result = (overview?.machines ?? []).map { machine in
+            NativeFleetRow(id: machine.machine, machine: machine,
+                           node: nodes?.nodes.first { $0.id == machine.machine })
+        }
+        let known = Set(result.map(\.id))
+        result += (nodes?.nodes ?? []).filter { !known.contains($0.id) }
+            .map { NativeFleetRow(id: $0.id, machine: nil, node: $0) }
+        return NativeWorkspaceStore.unreachableFirst(result, reachable: \.isReachable)
+    }
 }
 
 /// The controller this Mac joined, as its own Hub reports it.
