@@ -107,6 +107,7 @@ from . import (
     cache,
     long_form_policy,
     media_tools,
+    mlx_memory,
     model_audits,
     qwen_quality,
     reference_audio,
@@ -3291,6 +3292,7 @@ class GenerationManager:
             _release_device_memory("mps")
 
         from mlx_audio.tts.utils import load_model
+        mlx_memory.bound_cache()
         snapshot_path = self._mlx_audio_snapshot_path(repo)
         print(f"[gen] loading mlx-audio model from {snapshot_path}", flush=True)
         # IMPORTANT: pass the Path object, NOT str(snapshot_path).
@@ -3305,7 +3307,13 @@ class GenerationManager:
         # See v1.2.8 fix.
         entry = catalog.get_model(repo)
         model = load_model(snapshot_path)
+        if entry is not None and entry.family == "qwen3-tts":
+            mlx_memory.bound_qwen3_decoder()
+            mlx_memory.bound_qwen3_encoder(model)
+        if entry is not None and entry.family == "omnivoice":
+            mlx_memory.bound_omnivoice(model)
         if entry is not None and entry.family == "voxcpm-mlx":
+            mlx_memory.bound_voxcpm_vae(model)
             # Backport mlx-audio 3b37f335 without advancing the shared pin by
             # 93 unrelated commits: materialize this lazy constant before the
             # cached model is reused by a later generation worker thread.
