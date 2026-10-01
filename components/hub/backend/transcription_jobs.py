@@ -1018,6 +1018,12 @@ async def _run_item(monitor, batch: dict, item: dict, studio: dict, owner: str,
         payload = response.json()
         if _expire_genstudio_batch(batch):
             return
+        if batch.get("cancelled"):
+            # The owner cancelled while the worker was transcribing; it has now answered, so the
+            # outcome is known. Nothing is kept.
+            item.update(state="cancelled", error="cancelled", cancel_requested=False,
+                        finished_at=time.time())
+            return
         srt = str(payload.get("srt") or "")
         if not srt.strip():
             raise ValueError("Voice Studio returned an empty SRT artifact")
@@ -1187,9 +1193,18 @@ async def cancel_batch(batch_id: str) -> dict | None:
         if item["state"] == "queued":
             item.update(state="cancelled", error="cancelled")
         elif item["state"] == "running":
+            task = _item_tasks.get((batch_id, item["index"]))
+            if _packaged() and task is not None and not task.done():
+                # **Let the request finish instead of abandoning it.** The Subtitle worker cannot
+                # be interrupted mid-transcription, and dropping the connection made the outcome
+                # genuinely unknown (and fenced the Mac for fifteen minutes). Waiting for the
+                # answer it is already producing makes it known: the item is cancelled when the
+                # worker returns, the result is discarded, and the Mac is released at the moment
+                # it is actually free. `cancel_requested` is what a reader sees meanwhile.
+                item["cancel_requested"] = True
+                continue
             if _packaged():
                 _mark_uncertain(item, "Cancellation lost contact with a possibly accepted Subtitle worker attempt")
-            task = _item_tasks.get((batch_id, item["index"]))
             if task:
                 task.cancel()
     batches[batch_id] = batch
