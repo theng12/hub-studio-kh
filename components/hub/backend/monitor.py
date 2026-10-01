@@ -299,6 +299,25 @@ class StudioMonitor:
         self._catalog_task: asyncio.Task | None = None
         self._catalog_refresh_lock: asyncio.Lock | None = None
         self._load_catalog_state()
+        self._forget_unregistered()
+
+    def _forget_unregistered(self) -> None:
+        """Drop everything held for a studio or machine that is no longer in the registry.
+
+        `forget_studios` existed and nothing called it, so a node the operator removed (or that left)
+        kept its status row, its cached catalogs - rewritten into `catalog_observations.json` every
+        minute for ever - and its peer-resource snapshot. A removal has to leave nothing behind on
+        the controller, whichever end made it.
+        """
+        known = {studio["id"] for studio in self.registry}
+        stale = (set(self.status) | set(self._catalog_cache) | set(self._transcribe_cache)
+                 | set(self._catalog_meta) | set(self._restart_alerts)) - known
+        if stale:
+            self.forget_studios(stale)
+        from . import peers
+        machines = {studio.get("machine", "local") for studio in self.registry}
+        for machine in [machine for machine in peers._cache if machine not in machines]:
+            peers.forget_machine(machine)
 
     def _reconcile_registration_epochs(self) -> None:
         from . import ledger
@@ -333,6 +352,7 @@ class StudioMonitor:
                 s["id"],
                 {"status": "unknown", "last_seen": None, "last_checked": None},
             )
+        self._forget_unregistered()
 
     def forget_studios(self, studio_ids: set[str]) -> None:
         """Drop removed Studios from status and all live inventory caches."""
