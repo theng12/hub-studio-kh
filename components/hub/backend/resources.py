@@ -15,6 +15,7 @@ import json
 import shutil
 import socket
 import subprocess
+import time
 
 import psutil
 
@@ -26,6 +27,15 @@ _proxy_alert_state = {"degraded": False}
 
 CADDY_RSS_WARN_GB = 1.0
 CADDY_FD_WARN = 1000
+
+# Both answers below were recomputed on every call: `proxy_stats` walks every process on the Mac
+# (~50 ms, every 5 s poll, for a Pinokio Caddy the standalone app does not run) and each studio's
+# listener was found with an `lsof` subprocess (~90 ms x 6 studios), which made
+# `/api/hub/resources` - read by every controller for every node - take ~0.6 s of CPU.
+PROXY_STATS_TTL_S = 60.0
+LISTENER_TTL_S = 30.0
+_proxy_stats_cache: tuple[float, dict] | None = None
+_listener_cache: dict[int, tuple[float, list[int]]] = {}
 
 
 @lru_cache(maxsize=1)
@@ -120,6 +130,17 @@ def host_stats() -> dict:
 
 
 def _listening_pids(port: int) -> list[int]:
+    """The processes listening on `port`, remembered for LISTENER_TTL_S while they are alive."""
+    cached = _listener_cache.get(port)
+    if cached is not None and time.monotonic() - cached[0] < LISTENER_TTL_S and cached[1]:
+        if all(psutil.pid_exists(pid) for pid in cached[1]):
+            return list(cached[1])
+    pids = _lsof_listening_pids(port)
+    _listener_cache[port] = (time.monotonic(), pids)
+    return list(pids)
+
+
+def _lsof_listening_pids(port: int) -> list[int]:
     try:
         out = subprocess.run(
             ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
@@ -184,6 +205,18 @@ def studio_process_stats(port: int) -> dict | None:
 
 
 def proxy_stats() -> dict:
+    """`_proxy_stats` remembered for PROXY_STATS_TTL_S: a Caddy that appears or degrades is still
+    reported within a minute, and the process walk no longer runs on every poll."""
+    global _proxy_stats_cache
+    now = time.monotonic()
+    if _proxy_stats_cache is not None and now - _proxy_stats_cache[0] < PROXY_STATS_TTL_S:
+        return dict(_proxy_stats_cache[1])
+    stats = _proxy_stats()
+    _proxy_stats_cache = (now, stats)
+    return dict(stats)
+
+
+def _proxy_stats() -> dict:
     """Inspect Pinokio's Caddy reverse proxy without requiring root.
 
     Normal Caddy usage is small. A very large descriptor count or RSS is a
