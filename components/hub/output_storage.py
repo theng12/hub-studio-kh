@@ -11,6 +11,7 @@ removed, and that purge is the only hard delete here.  `max_bytes` counts live o
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import copy
@@ -25,6 +26,12 @@ from pathlib import Path
 from .backend import ledger
 
 TRASH_DAYS = 15
+# Where a managed output root that is on another volume than the Hub's data folder keeps its own
+# Trash Folder: inside the root itself, so the move is always a same-volume rename.
+FALLBACK_TRASH_NAME = ".studiohub-trash"
+log = logging.getLogger("studiohub.output_storage")
+_TRASH_STATS = {"move_failures": 0, "fallback_moves": 0, "last_failure": None}
+_FALLBACK_LOGGED: set[str] = set()
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _START_LOCK = threading.Lock()
 _LOCK = threading.RLock()
@@ -76,13 +83,37 @@ def trash_root() -> Path:
     return ledger.DATA_DIR / "trash"
 
 
+def trash_stats() -> dict:
+    """Counters since this Hub started: moves that fell back to a root's own Trash Folder, and moves
+    that failed outright (the file stays live and is retried). Published with the retention status."""
+    return dict(_TRASH_STATS)
+
+
+def _trash_bases() -> list[Path]:
+    """Every Trash Folder: the Hub's, and the one inside each managed root that needed its own."""
+    bases = [trash_root()]
+    if ledger.DB_FILE.exists():
+        try:
+            with ledger._conn() as conn:
+                roots = [row[0] for row in conn.execute("SELECT DISTINCT managed_root FROM output_files")]
+        except sqlite3.Error:
+            roots = []
+        for root in roots:
+            fallback = Path(root) / FALLBACK_TRASH_NAME
+            if fallback.is_dir() and not fallback.is_symlink():
+                bases.append(fallback)
+    return bases
+
+
 def _trash_days() -> list[Path]:
     """Dated Trash Folder subfolders, oldest first.  Anything not named like a date is not ours."""
-    try:
-        days = [p for p in trash_root().iterdir() if _DAY.fullmatch(p.name) and p.is_dir() and not p.is_symlink()]
-    except OSError:
-        return []
-    return sorted(days)
+    days: list[Path] = []
+    for base in _trash_bases():
+        try:
+            days += [p for p in base.iterdir() if _DAY.fullmatch(p.name) and p.is_dir() and not p.is_symlink()]
+        except OSError:
+            continue
+    return sorted(days, key=lambda p: (p.name, str(p)))
 
 
 _TRASH_SIZE: tuple[float, int] = (0.0, 0)
@@ -121,16 +152,44 @@ def purge_trash(now: float | None = None) -> int:
     return purged
 
 
-def _to_trash(path: Path, group, file_id: int, now: float) -> bool:
-    """Move one output into today's Trash Folder.  False (file untouched) if the rename fails."""
+def _to_trash(path: Path, group, file_id: int, now: float, managed_root: object = None) -> bool:
+    """Move one output into today's Trash Folder.  False (file untouched) if the rename fails.
+
+    The Hub's Trash Folder is tried first (a same-volume rename). When that fails - a managed output
+    root on another volume is the usual reason - the file goes to a Trash Folder inside its own root,
+    which is the same volume by construction and is purged like the other. A move that fails both
+    ways is counted and logged, never silent.
+    """
     batch = re.sub(r"[^A-Za-z0-9._-]", "_", str(group["batch_id"] or group["job_id"]))
-    target = trash_root() / time.strftime("%Y-%m-%d", time.gmtime(now)) / batch / f"{file_id}-{path.name}"
+    day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    leaf = Path(day) / batch / f"{file_id}-{path.name}"
     try:
+        target = trash_root() / leaf
         target.parent.mkdir(parents=True, exist_ok=True)
         os.rename(path, target)                 # same volume or it fails; never a delete
-    except OSError:
-        return False
-    return True
+        return True
+    except OSError as primary:
+        error = primary
+    if managed_root:
+        fallback_root = Path(str(managed_root)) / FALLBACK_TRASH_NAME
+        try:
+            target = fallback_root / leaf
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(path, target)
+        except OSError as secondary:
+            error = secondary
+        else:
+            _TRASH_STATS["fallback_moves"] += 1
+            if str(managed_root) not in _FALLBACK_LOGGED:
+                _FALLBACK_LOGGED.add(str(managed_root))
+                log.warning("output cleanup: %s is not on the Hub's volume (%s), so its expired outputs go to "
+                            "%s instead", managed_root, error, fallback_root)
+            return True
+    _TRASH_STATS["move_failures"] += 1
+    _TRASH_STATS["last_failure"] = f"{path}: {error}"
+    log.error("output cleanup could not move %s to a Trash Folder (%s); it stays in live output, "
+              "counts against the limit and will be retried", path, error)
+    return False
 
 
 def _root_for(path: Path, roots: list[Path]) -> Path | None:
@@ -427,7 +486,10 @@ def preview(*, machine: str, max_bytes: int, retention_days: int,
             "max_bytes": max_bytes, "retention_days": retention_days, "enabled": enabled,
             "minimum_free_bytes": minimum_free_bytes, "would_delete_bytes": would_delete,
             "over_limit": used > max_bytes, "free_bytes": min(free) if free else None,
-            "expired_before": cutoff}
+            "expired_before": cutoff,
+            "trash_move_failures": _TRASH_STATS["move_failures"],
+            "trash_fallback_moves": _TRASH_STATS["fallback_moves"],
+            "trash_last_failure": _TRASH_STATS["last_failure"]}
 
 
 def enforce(*, machine: str, max_bytes: int, retention_days: int,
@@ -468,7 +530,7 @@ def enforce(*, machine: str, max_bytes: int, retention_days: int,
                     if state != "ok" or info is None or not _same_file(info, file) or _sha256(Path(file["path"])) != file["sha256"]:
                         conn.execute("UPDATE output_groups SET state='uncertain' WHERE id=?", (group["id"],))
                         continue
-                    if not _to_trash(Path(file["path"]), group, file["id"], now):
+                    if not _to_trash(Path(file["path"]), group, file["id"], now, file["managed_root"]):
                         continue
                     conn.execute("UPDATE output_files SET present=0 WHERE id=?", (file["id"],))
                     deleted += 1
