@@ -134,8 +134,8 @@ class OverviewTests(unittest.TestCase):
     def test_in_progress_includes_video_and_subtitle_work(self):
         overview = body(VIEWS, "private var overview: some View", 2600)
         self.assertIn("activeVideo.isEmpty && activeSubtitles.isEmpty", overview)
-        self.assertIn("ForEach(activeVideo)", overview)
-        self.assertIn("ForEach(activeSubtitles)", overview)
+        self.assertIn("activeVideo.map { AnyView(videoJobRow($0)) }", overview)
+        self.assertIn("activeSubtitles.map { AnyView(subtitleJobRow($0)) }", overview)
 
 
 class DownloadTests(unittest.TestCase):
