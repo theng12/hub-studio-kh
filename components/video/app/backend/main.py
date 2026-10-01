@@ -156,7 +156,6 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'memory_policy': {
                 'low_memory': model.memory.low_memory,
                 'low_ram_streaming': model.memory.low_ram_streaming,
-                'relay_below_bytes': model.memory.relay_on_below_bytes,
                 'total_memory_bytes': host.get('unified_memory_bytes'),
                 'measured_peak_gb': (model.qualification.get('measured_runs') or [{}])[0]
                                     .get('peak_process_footprint_gb'),

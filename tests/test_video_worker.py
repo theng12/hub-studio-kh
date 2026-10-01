@@ -498,5 +498,23 @@ class CompanionRowTests(unittest.TestCase):
                       "a manifest nothing requires is still reported when no model serves it")
 
 
+class CatalogRouteTests(unittest.TestCase):
+    def test_the_catalog_route_answers_for_every_registered_model(self) -> None:
+        """0.6.120 removed MemoryPolicy.relay_on_below_bytes but the catalog row still read it,
+        so /api/catalog answered HTTP 500 (and a traceback in the log) on every Mac."""
+        from fastapi.testclient import TestClient
+        from components.video.app.backend import main
+        manager = unittest.mock.MagicMock()
+        manager.preflight.return_value = {"state": "files_verified"}
+        manager.runtime_sha256 = "c" * 64
+        manager.packages_without_a_runtime_model.return_value = []
+        client = TestClient(main.create_app(manager, "tok"), raise_server_exceptions=False)
+        response = client.get("/api/catalog", headers={"x-hub-token": "tok"})
+        self.assertEqual(response.status_code, 200, response.text)
+        rows = response.json()["models"]
+        self.assertEqual({row["repo"] for row in rows},
+                         {model.repo for model in generation.MODELS.values()})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
