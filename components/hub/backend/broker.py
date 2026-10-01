@@ -2114,22 +2114,35 @@ async def _cache_voice_artifact_metadata(client: httpx.AsyncClient, item: dict,
                                          expected_bytes, expected_sha256) -> None:
     """Fetch and decode a terminal voice artifact once, then persist its facts.
 
+    One download, verified as it streams (`artifact_metadata.WavStreamVerifier`): the hash and the
+    WAV facts are computed on the fly and the item fails verification on a size, hash or decode
+    mismatch exactly as before - but nothing is held in memory and the transfer that proves the
+    artifact is the only one, so the node is freed the moment it ends.
+
     A metadata failure never retries an already-completed generation: the
     result remains available but is marked unverified and therefore unbillable.
     """
     try:
         url, headers = studio_request(studio, worker_url)
+        verifier = artifact_metadata.WavStreamVerifier()
         # Long-form 40k narration can produce a 100–160 MB PCM WAV. Give an
         # authenticated fleet transfer enough time on slower Tailscale links;
         # generation remains protected by the renewable GenStudio lease.
-        response = await client.get(url, headers=headers, timeout=600.0)
-        response.raise_for_status()
-        metadata = artifact_metadata.wav_metadata(response.content)
+        if hasattr(client, "stream"):
+            async with client.stream("GET", url, headers=headers, timeout=600.0) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes(1024 * 1024):
+                    verifier.feed(chunk)
+        else:   # a client double that only buffers; verified by the same code
+            response = await client.get(url, headers=headers, timeout=600.0)
+            response.raise_for_status()
+            verifier.feed(response.content)
+        metadata = verifier.finish()
         if expected_bytes is not None:
             if type(expected_bytes) is not int or expected_bytes <= 0:
                 raise ValueError("worker byte count is not a positive integer")
-            if expected_bytes != metadata["bytes"]:
-                raise ValueError("worker byte count does not match downloaded artifact")
+        if expected_bytes is not None and expected_bytes != metadata["bytes"]:
+            raise ValueError("worker byte count does not match downloaded artifact")
         if expected_sha256 and str(expected_sha256).lower() != metadata["sha256"]:
             raise ValueError("worker checksum does not match downloaded artifact")
     except (OverflowError, TypeError, ValueError, httpx.HTTPError) as exc:

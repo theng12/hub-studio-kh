@@ -155,3 +155,84 @@ def wav_metadata(data: bytes) -> dict:
         "sample_rate_hz": sample_rate_hz,
         "channels": channels,
     }
+
+
+class WavStreamVerifier:
+    """`wav_metadata` over a download that is never held whole: hash and measure as the bytes pass.
+
+    The Hub verifies every voice artifact (size, sha256, a decodable PCM WAV whose declared frames
+    are all present) before the item may finish. That used to be ``response.content`` - the whole
+    100-160 MB file in memory, then ``readframes`` copying it again - after which the node still
+    waited. This does the same checks in one pass with constant memory, so the transfer that
+    verifies the artifact is the only transfer and the node frees as soon as it ends.
+    Same refusals as `wav_metadata`, same fields.
+    """
+
+    _HEAD_LIMIT = 1 << 20          # a WAV header (even with metadata chunks) is far smaller
+
+    def __init__(self) -> None:
+        self._digest = hashlib.sha256()
+        self.total = 0
+        self._head = bytearray()
+        self._fmt: tuple[int, int, int, int] | None = None   # tag, channels, rate, sample width
+        self._data_offset: int | None = None
+        self._data_size = 0
+
+    def feed(self, chunk: bytes) -> None:
+        self._digest.update(chunk)
+        self.total += len(chunk)
+        if self._data_offset is None:
+            self._head += chunk
+            self._scan_head()
+
+    def _scan_head(self) -> None:
+        head = self._head
+        if len(head) >= 12 and (not head.startswith(b"RIFF") or head[8:12] != b"WAVE"):
+            raise ValueError("artifact is not a RIFF/WAVE file")
+        position = 12
+        while len(head) >= position + 8:
+            name = bytes(head[position:position + 4])
+            size = int.from_bytes(head[position + 4:position + 8], "little")
+            body = position + 8
+            if name == b"data":
+                self._data_offset, self._data_size = body, size
+                self._head = bytearray()
+                return
+            if name == b"fmt ":
+                if len(head) < body + 16:
+                    return
+                tag, channels, rate, _bytes_rate, _align, bits = (
+                    int.from_bytes(head[body + o:body + o + n], "little")
+                    for o, n in ((0, 2), (2, 2), (4, 4), (8, 4), (12, 2), (14, 2)))
+                self._fmt = (tag, channels, rate, (bits + 7) // 8)
+            position = body + size + (size & 1)
+        if len(head) > self._HEAD_LIMIT:
+            raise ValueError("invalid WAV artifact: no audio data chunk in its header")
+
+    def finish(self) -> dict:
+        if self.total < 12 or self._data_offset is None:
+            if self.total >= 12 and not self._head.startswith(b"RIFF"):
+                raise ValueError("artifact is not a RIFF/WAVE file")
+            raise ValueError("invalid WAV artifact: truncated before its audio data")
+        if self._fmt is None:
+            raise ValueError("invalid WAV artifact: no fmt chunk before the audio data")
+        tag, channels, rate, width = self._fmt
+        if tag not in (1, 0xFFFE):
+            raise ValueError("compressed WAV is not supported for billing metadata")
+        block = channels * width
+        frames = self._data_size // block if block else 0
+        if frames <= 0 or rate <= 0 or channels not in (1, 2):
+            raise ValueError("WAV has invalid duration, sample rate, or channel count")
+        if self.total - self._data_offset < frames * block:
+            raise ValueError("WAV artifact is truncated before its declared frames end")
+        duration_s = frames / rate
+        return {
+            "media_type": "audio/wav",
+            "format": "wav",
+            "bytes": self.total,
+            "sha256": self._digest.hexdigest(),
+            "audio_duration_s": round(duration_s, 6),
+            "audio_duration_ms": round(duration_s * 1000),
+            "sample_rate_hz": rate,
+            "channels": channels,
+        }
