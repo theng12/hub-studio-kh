@@ -87,6 +87,8 @@ class ShippingTests(unittest.TestCase):
             self.assertTrue((QUAL / name).is_file(), name)
             self.assertIn(f'"$ROOT/qualification/{name}" "$KIT/Technical/{name}"', text, f"{name} never reaches a drive")
             self.assertIn(name, managed, f"{name} would be moved to _trash by the Technical prune")
+        for pattern in ('"TTS 8GB Run "*', '"Image 8GB Run "*', '*" Quick Check "*'):
+            self.assertIn(pattern, text, f"the prune would move {pattern} result folders, which are evidence")
 
 
 class WhatItRunsTests(unittest.TestCase):

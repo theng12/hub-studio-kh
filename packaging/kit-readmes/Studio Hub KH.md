@@ -128,8 +128,7 @@ app's record is updated, so a model cut from a release does not sit on the Mac f
 space comes back when you empty that folder — that is your call, and the step says where it
 went. Models the kit *does* ship are never removed, including ones this Mac is too small to
 run: those are listed as left behind and stay. **Z-Image-Turbo 6B MLX 4-bit** is carried on
-the 8 GB Macs at your request, and the app still shows its below-tier warning while its 8 GB
-run is being measured.
+the 8 GB Macs: it is qualified there (measured on an 8 GB M1 Mac mini, low-RAM mode).
 
 ## Other files here
 
