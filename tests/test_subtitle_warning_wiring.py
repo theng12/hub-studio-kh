@@ -63,14 +63,17 @@ class SubtitleWarningWiringTests(unittest.TestCase):
     def test_the_render_site_matches_the_image_pages_shape(self) -> None:
         page = body(VIEWS, "private var transcriptionWorkspace: some View", stop="\n    private var")
         block = page[page.index("if let warning = selectedTranscriptionModel?.memoryWarning"):]
-        block = block[:block.index("VStack(alignment: .leading, spacing: 6)")]
-        self.assertIn('Image(systemName: "exclamationmark.triangle.fill")', block)
-        self.assertIn("foregroundStyle(.orange)", block)
-        self.assertIn(".font(.callout)", block)
-        self.assertIn("fixedSize(horizontal: false, vertical: true)", block)
+        block = block[:block.index('LabeledRow(label: "Language"')]
+        # Every page draws the published sentence through the one `advisory` helper (triangle, warning
+        # colour, wraps), so the five pages cannot drift apart one fix at a time.
+        self.assertIn("advisory(warning)", block)
         self.assertIn("if let warning", block,
                       "the page must render nothing at all when no warning was published")
         self.assertNotIn("else", block, "a machine at the tier must not get a reassuring message")
+        helper = body(VIEWS, "private func advisory", stop="\n    private func")
+        self.assertIn('Image(systemName: "exclamationmark.triangle.fill")', helper)
+        self.assertIn("HubStatus.warn", helper)
+        self.assertIn("fixedSize(horizontal: false, vertical: true)", helper)
 
     def test_the_fixture_runs_both_answers(self) -> None:
         self.assertIn("setSubtitleMemoryWarning", NATIVE,

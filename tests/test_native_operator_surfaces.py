@@ -36,8 +36,12 @@ class JobRowTests(unittest.TestCase):
 class FleetTests(unittest.TestCase):
     def test_health_is_runnability_not_just_an_answering_hub(self):
         self.assertIn('get(["api", "hub", "model-health"])', API)
-        machine = body(VIEWS, "private func machineTint", 500)
-        self.assertIn("machineCannotRun", machine)
+        # The Connections table's state word: a Mac that answers but cannot run anything reads as
+        # Attention, never as Ready. The decision lives with the row (`NativeFleetRow.state`).
+        state = body(API, "func state(readiness: NativeMachineReadiness?)", 700)
+        self.assertIn("cannotRunAnything", state)
+        self.assertIn(".attention", state)
+        self.assertIn("workspace.fleetReadiness[row.id]", VIEWS)
         self.assertIn("cannotRunAnything", API)
 
     def test_the_sidebar_counts_models_that_can_run(self):
@@ -57,11 +61,15 @@ class FleetTests(unittest.TestCase):
         self.assertIn("(offline)", chip)
 
     def test_the_fleet_page_reads_as_a_dated_report_that_says_what_failed(self):
-        self.assertNotIn("unavailable in this build", body(VIEWS, "@ViewBuilder private var fleetOverview", 3000))
-        self.assertNotIn("unavailable in this build", body(VIEWS, "@ViewBuilder private var joinedNodes", 3000))
+        # One table of Macs (0.6.127 design pass): the overview and the roster are one list now.
+        nodes = body(VIEWS, "@ViewBuilder private var nodesSection", 3000)
+        self.assertNotIn("unavailable in this build", nodes)
+        self.assertNotIn("fleetOverview: some View", VIEWS, "the second list of the same Macs is back")
+        self.assertNotIn("private var joinedNodes", VIEWS, "the second list of the same Macs is back")
         self.assertIn("as of", body(VIEWS, "private var fleetRefreshStatus", 500))
-        self.assertIn("unreachableFirst", VIEWS)
-        self.assertIn("workspace.fleetRefreshing", body(VIEWS, "@ViewBuilder private var joinedNodes", 800))
+        self.assertIn("unreachableFirst", API)
+        self.assertIn("workspace.fleetRefreshing", nodes)
+        self.assertIn("workspace.fleetReadError", nodes)
 
 
 class ConfirmationTests(unittest.TestCase):

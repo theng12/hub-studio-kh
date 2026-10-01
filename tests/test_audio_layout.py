@@ -28,7 +28,7 @@ API = (ROOT / "native" / "StudioAPI.swift").read_text()
 
 # What the two-column pages need, in points: the sidebar, the page padding, and the two columns at
 # their minimums. The window's floor has to be at least this or a column is clipped.
-SIDEBAR = 260
+SIDEBAR = 220
 PAGE_PADDING = 28 * 2
 SCRIPT_COLUMN = 300
 CONTROLS_COLUMN = 330
@@ -149,9 +149,14 @@ class AudioLayoutTests(unittest.TestCase):
                            ("image", imageWorkspace()), ("music", musicWorkspace()),
                            ("chat", chatWorkspace())):
             with self.subTest(page=name):
-                self.assertIn(".padding(28)", body,
+                self.assertIn("PageScaffold(", body,
                               f"{name} has no outer margin: its columns meet the window's top and "
                               f"left edges while every other workspace page has 28 pt")
+                self.assertNotIn(".padding(28)", body,
+                                 f"{name} pads itself: the margin is PageScaffold's, one for every page")
+        design = (ROOT / "native" / "Design.swift").read_text()
+        self.assertIn("static let page: CGFloat = 28", design, "the one page margin moved")
+        self.assertIn(".padding(HubSpace.page)", design, "PageScaffold no longer applies the page margin")
 
     def test_the_result_column_holds_the_result(self) -> None:
         """The history/preview belongs to the result side, and the form to the form side."""
