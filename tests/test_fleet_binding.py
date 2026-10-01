@@ -8,6 +8,7 @@ rather than guessed at.
 from __future__ import annotations
 
 import inspect
+import logging
 from pathlib import Path
 import sys
 import unittest
@@ -18,7 +19,23 @@ for extra in (PROJECT_ROOT, PROJECT_ROOT / "packaging"):
         sys.path.insert(0, str(extra))
 
 from hub_worker import _bind_host
-from voice_worker import LOOPBACK, bind_hosts, run_server
+from voice_worker import LOOPBACK, QuietReadAccessLog, bind_hosts, run_server
+
+
+class AccessLogTests(unittest.TestCase):
+    def _kept(self, method: str, status: int) -> bool:
+        record = logging.LogRecord(
+            "uvicorn.access", logging.INFO, __file__, 1,
+            '%s - "%s %s HTTP/%s" %d', ("127.0.0.1:1", method, "/api/health", "1.1", status), None)
+        return QuietReadAccessLog().filter(record)
+
+    def test_successful_reads_are_not_logged_but_everything_else_is(self) -> None:
+        self.assertFalse(self._kept("GET", 200))
+        self.assertTrue(self._kept("GET", 500))
+        self.assertTrue(self._kept("GET", 401))
+        self.assertTrue(self._kept("POST", 200))
+        other = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, "plain", (), None)
+        self.assertTrue(QuietReadAccessLog().filter(other))
 
 
 class BindHostTests(unittest.TestCase):

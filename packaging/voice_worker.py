@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -238,6 +239,24 @@ def bind_hosts(value: object) -> list[str]:
     return hosts
 
 
+class QuietReadAccessLog(logging.Filter):
+    """Drop uvicorn's access line for a successful GET; keep every other line.
+
+    The Hub polls each worker's health, activity, catalog and job status every few seconds, and
+    its own app polls a dozen read routes. Those answered 200 lines were ~95% of the service log
+    (about 70 lines a second on a controller, ~20 MB an hour) and carry no timestamp, so they
+    cannot even be used to time anything. Errors, POSTs and other verbs still log.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) == 5:
+            method, status = args[1], args[4]
+            if method == 'GET' and isinstance(status, int) and status < 400:
+                return False
+        return True
+
+
 def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token=None, factory=False,
                shutdown_callback=None, host='127.0.0.1'):
     """Shared owned-process lifecycle for the private Voice worker and local Hub.
@@ -264,6 +283,8 @@ def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token
         options = {'factory': True} if factory else {}
         hosts = bind_hosts(host)
         config = uvicorn.Config(app, host=hosts[0], port=port, log_level='info', **options)
+        # After Config: it applies uvicorn's logging configuration in its constructor.
+        logging.getLogger('uvicorn.access').addFilter(QuietReadAccessLog())
         # Bind every socket up front and keep them, so the reported port is exact and nothing
         # else can take it between selection and startup. Binding all of them before serving
         # also means a failure to bind one address stops the start rather than leaving a Hub
