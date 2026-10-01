@@ -306,6 +306,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # which is inference data. `LICENSE` and `NOTICE` are kept: a pack's licence travels
             # with it.
             "breeze-tts-2-mlx-4bit": "34c94035fdeffa72f8dd6be7351b8d3acd29a07a02e850df324771735a25b2df",
+            # Qwen3-TTS 0.6B Base 4-bit, added 2026-10-02 (owner: keep both 0.6B builds) at revision
+            # 0d6bb6fe: 12 files, hashed from the local snapshot (its speech_tokenizer files are
+            # byte-identical to the 8-bit package's).
+            "qwen3-tts-12hz-0-6b-base-4bit": "2febc1a5a1184a8e3c5335dca16e62b7db0aa8c863c5deb3d27fe7a8cec212cc",
             "pocket-tts-tokenizer": "24fc05ee633df4219c1bec5480742b1ff5c7d067eb42af4ceba0aa8e547692cd",
             "pocket-tts-preset-voices": "b5c804a1ab6346c1f975690c61ac563c6ff3ad862e44012f1bb52097c571a2c7",
             # ── Video: the LTX pack and its text encoder (Lance retired 0.6.120) ──

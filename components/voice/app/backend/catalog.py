@@ -1232,11 +1232,12 @@ CATALOG: tuple[ModelEntry, ...] = (
         # so the claim is the tier that is not at risk. 16 GB is also where 50 of the owner's ~53
         # machines sit.
         min_unified_memory_gb=16,
-        min_free_memory_gb=5.1,
+        min_free_memory_gb=5.6,
         min_free_memory_note=(
-            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 4.85 GB (S2 chris, full "
-            "reference; S1 4.45-4.6 GB) with the mlx_memory bounds (2026-10-02, 32 GB M2 Max) + 0.25 GB "
-            "margin. MLX peak 4.2 GB, was 9.9 GB; the 3.1 GB of weights keep it above the 4.5 GB 8 GB target."
+            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 4.85 GB (S2 chris, 12 s "
+            "reference) to 5.33 GB (S2 christian, 18.9 s reference; S1 4.45-4.6 GB) with the mlx_memory "
+            "bounds (2026-10-02, 32 GB M2 Max) + 0.25 GB margin. MLX peak 4.2-4.4 GB, was 9.9 GB; the "
+            "3.1 GB of weights keep it above the 4.5 GB 8 GB target."
         ),
         recommended_hardware=(
             "16 GB or more. Measured ~3.3 GB resident in every mode; the kernel peak footprint "

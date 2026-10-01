@@ -35,7 +35,7 @@ Measured 2026-10-01/02 on a 32 GB M2 Max (same code path as the Hub's voice chil
 | VoxCPM2 4-bit | 9.22 | 3.3 | 4.1-4.3 | audio-VAE decode of 25-30 s at 48 kHz in one pass; fp32 weight copies in the local encoder; reference encoded twice per section |
 | OmniVoice bf16 | 5.41 | 2.7 (3.44 first section) | 3.4-4.1 | Higgs codec decode of the whole section; reference re-encoded each section |
 | Qwen3-TTS 0.6B Base 4-bit | 7.17 | 2.8-3.2 | 3.6-3.8 | same speech tokenizer as the 8-bit |
-| Breeze TTS 2 4-bit | 9.9 | BREEZE_AFTER | BREEZE_FP | shares Qwen3's speech tokenizer (decode + reference encode), plus a staged backbone prefill; weights alone are 3.1 GB |
+| Breeze TTS 2 4-bit | 9.9 | 4.2-4.4 | 4.85-5.33 (above the 4.5 GB target: weights are 3.1 GB) | shares Qwen3's speech tokenizer (decode + reference encode), plus a staged backbone prefill; weights alone are 3.1 GB |
 | Fish S2 Pro 8-bit | 13.3 (fleet) | not bounded | - | 6.7 GB of weights: not an 8 GB candidate, registered `cache-only` |
 
 ### Adding a new MLX TTS engine

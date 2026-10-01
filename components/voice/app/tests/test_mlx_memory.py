@@ -1,6 +1,11 @@
 """The bounded-memory codec passes must give the same audio as the originals (and fail soft)."""
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -8,6 +13,25 @@ mx = pytest.importorskip("mlx.core")
 pytest.importorskip("mlx_audio")
 
 from backend import mlx_memory  # noqa: E402
+
+# These tests run real MLX/Metal kernels. In the shared pytest process that leaves a Metal device that
+# intermittently aborts the interpreter at exit ("recursive_mutex lock failed", exit -6) after every test
+# has passed, which fails the product-suite gate. So the parent only runs them in a child process and
+# judges the child by its test summary, not by its exit status.
+_CHILD = os.environ.get("MLX_MEMORY_TESTS_CHILD") == "1"
+
+
+def test_the_mlx_bounds_hold_in_a_child_process() -> None:
+    if _CHILD:
+        pytest.skip("this is the child run")
+    child = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(Path(__file__)), "-k", "not child_process"],
+        env={**os.environ, "MLX_MEMORY_TESTS_CHILD": "1"}, capture_output=True, text=True, timeout=240, check=False,
+    )
+    output = child.stdout + child.stderr
+    summary = [line for line in output.splitlines() if " passed" in line or " failed" in line or " error" in line]
+    assert summary and " failed" not in summary[-1] and " error" not in summary[-1] and " passed" in summary[-1], output[-3000:]
+
 
 
 def _same(a, b, tolerance: float = 1e-5) -> None:
@@ -150,3 +174,10 @@ def test_breeze_staged_backbone_matches_the_original_for_prefill_and_steps() -> 
     plain_cache, staged_cache = backbone.make_cache(), backbone.make_cache()
     _same(staged(input_embeddings=prompt, cache=staged_cache), backbone(input_embeddings=prompt, cache=plain_cache), 1e-6)
     _same(staged(input_embeddings=step, cache=staged_cache), backbone(input_embeddings=step, cache=plain_cache), 1e-6)
+
+
+# Everything except the wrapper only runs in the child.
+_only_in_child = pytest.mark.skipif(not _CHILD, reason="runs in the child process of test_the_mlx_bounds_hold_in_a_child_process")
+for _name, _test in list(globals().items()):
+    if _name.startswith("test_") and _name != "test_the_mlx_bounds_hold_in_a_child_process":
+        globals()[_name] = _only_in_child(_test)
