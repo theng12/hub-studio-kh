@@ -429,7 +429,7 @@ def shelve_installed_models() -> list[str]:
 def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
     """What the disk governor needs from this Hub: its folders, the catalog, the settings, the machines."""
     from . import model_downloads
-    from .backend import release_delta
+    from .backend import job_storage, release_delta
     try:
         library: Path | None = _model_library()
     except ValueError:
@@ -446,7 +446,8 @@ def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
         library=library, manifests=manifests, app_root=release_delta.installed_app_root(),
         machines={worker.get("machine", "local") for worker in monitor.registry if worker.get("local") is True},
         output_roots=roots, settings=standalone_config.load_device_settings()["effective"],
-        running_staging=model_downloads.running_staging)
+        running_staging=model_downloads.running_staging,
+        spool_limit=lambda: job_storage._read()["max_bytes"], spool_enforce=job_storage.enforce_budget)
 
 
 def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],

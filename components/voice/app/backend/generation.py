@@ -184,6 +184,16 @@ _GEN_LOCK = threading.Lock()
 
 OUTPUT_DIR = paths.data_path("output")
 HISTORY_FILE = OUTPUT_DIR / ".history.json"
+# Finished job records are kept 90 days (the same rule as every other worker's jobs.json), then dropped.
+HISTORY_RETENTION_DAYS = 90
+_HISTORY_DONE = {"done", "error", "cancelled", "uncertain"}
+
+
+def _history_expired(job, now: float | None = None) -> bool:
+    stamp = getattr(job, "finished_at", None) or getattr(job, "created_at", None)
+    if getattr(job, "state", None) not in _HISTORY_DONE or not isinstance(stamp, (int, float)):
+        return False
+    return float(stamp) < (time.time() if now is None else now) - HISTORY_RETENTION_DAYS * 86400
 HISTORY_MAX = 200
 _AUDIO_OUTPUT_SUFFIXES = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 
@@ -4179,6 +4189,11 @@ class GenerationManager:
                     "done", "error", "cancelled", "uncertain"
                 }]
                 active.sort(key=lambda j: j.created_at)
+                # Past 90 days a finished record is dropped from memory and from the file; this runs on
+                # every save, so a worker that stays up for weeks trims as it goes, not only at restart.
+                for stale in [j for j in terminal if _history_expired(j)]:
+                    self._jobs.pop(stale.job_id, None)
+                terminal = [j for j in terminal if not _history_expired(j)]
                 terminal.sort(key=lambda j: (j.finished_at or j.created_at), reverse=True)
                 # Losing an old terminal row is routine retention. Losing an
                 # active request loses its idempotency/recovery identity.
@@ -4204,6 +4219,9 @@ class GenerationManager:
             needs_cleanup = False
             for raw in rows:
                 job = self._from_disk(raw)
+                if job is not None and _history_expired(job):
+                    needs_cleanup = True          # finished more than 90 days ago: the record goes
+                    continue
                 if job is not None:
                     if job.state in {"queued", "running", "cancel_requested"}:
                         # A new server cannot prove that the previous native process

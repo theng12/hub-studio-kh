@@ -679,6 +679,7 @@ def test_history_keeps_every_active_job_beyond_terminal_retention_limit(tmp_path
     monkeypatch.setattr(generation, "HISTORY_FILE", history)
     monkeypatch.setattr(generation, "HISTORY_MAX", 2)
     manager = generation.GenerationManager()
+    recent = time.time() - 3600          # (finished records older than 90 days are dropped)
     active = generation.GenerationJob(
         "active-old", "txt2speech",
         {"repo": "local/voice", "client_request_id": "must-survive"},
@@ -687,7 +688,7 @@ def test_history_keeps_every_active_job_beyond_terminal_retention_limit(tmp_path
     terminals = [
         generation.GenerationJob(
             f"done-{index}", "txt2speech", {"repo": "local/voice"},
-            state="done", created_at=float(index), finished_at=float(index),
+            state="done", created_at=recent + index, finished_at=recent + index,
         )
         for index in range(2, 6)
     ]

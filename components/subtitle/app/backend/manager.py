@@ -173,6 +173,8 @@ class SubtitleManager:
     # ── persistence ────────────────────────────────────────────────────────
 
     def _persist(self) -> None:
+        from components import job_history
+        job_history.prune_daily(self, self.jobs)
         try:
             _atomic_json(self.state_file, self.jobs)
         except FileNotFoundError:

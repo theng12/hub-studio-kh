@@ -436,6 +436,30 @@ class SnapshotTests(Fixture):
         self.assertEqual(stats["disk"]["total_gb"], round(self.TOTAL / dg.GB, 2))
 
 
+class SpoolTierTests(Fixture):
+    def asks(self):
+        calls = []
+        return calls, self.ctx(spool_limit=lambda: 80, spool_enforce=lambda target: calls.append(target) or
+                               {"reclaimed_bytes": 5, "cleared": 1})
+
+    def test_amber_halves_the_spool_limit_and_red_empties_what_is_finished(self):
+        self.set_free(100)                                          # amber
+        calls, ctx = self.asks()
+        result = dg.sweep(ctx)
+        self.assertEqual(calls, [40])
+        self.assertIn("transcription spool", [a["step"] for a in result["actions"]])
+        self.set_free(30)                                           # stop tier
+        calls.clear()
+        dg.sweep(ctx)
+        self.assertEqual(calls, [0])
+
+    def test_a_green_disk_does_not_touch_the_spool(self):
+        self.set_free(500)
+        calls, ctx = self.asks()
+        dg.sweep(ctx)
+        self.assertEqual(calls, [])
+
+
 class SystemSettingsWarningTests(Fixture):
     def reads(self, answers: dict):
         return mock.patch.object(dg, "_read", side_effect=lambda command: answers.get(command[-1] if command[1] == "read" else command[1]))

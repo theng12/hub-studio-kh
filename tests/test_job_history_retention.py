@@ -55,6 +55,49 @@ class JobHistoryTests(unittest.TestCase):
             manager._restore()
             self.assertEqual(set(manager.jobs), {"recent"})
 
+    def test_a_running_worker_trims_once_a_day_not_only_at_restart(self):
+        class Owner:
+            pass
+
+        now = time.time()
+        owner = Owner()
+        jobs = {"old": {"state": "done", "finished_at": now - 100 * DAY},
+                "live": {"state": "running", "created_at": now - 100 * DAY},
+                "new": {"state": "done", "finished_at": now - DAY}}
+        self.assertEqual(job_history.prune_daily(owner, jobs, now=now), 1)
+        self.assertEqual(set(jobs), {"live", "new"})
+        jobs["old2"] = {"state": "done", "finished_at": now - 100 * DAY}
+        self.assertEqual(job_history.prune_daily(owner, jobs, now=now + 3600), 0, "pruned twice in one day")
+        self.assertEqual(job_history.prune_daily(owner, jobs, now=now + 86401), 1)
+        self.assertNotIn("old2", jobs)
+
+    def test_every_worker_persist_applies_the_daily_prune(self):
+        for relative in ("components/image/app/backend/generation.py", "components/video/app/backend/generation.py",
+                         "components/music/app/backend/generation.py", "components/subtitle/app/backend/manager.py"):
+            source = (ROOT / relative).read_text()
+            persist = source[source.index("def _persist(self)"):]
+            persist = persist[:persist.index("def ", 10)]
+            self.assertIn("job_history.prune_daily(self, self.jobs)", persist, relative)
+
+    def test_the_voice_history_drops_finished_records_older_than_90_days(self):
+        import types
+        # The module is not imported: its manager loads (and may rewrite) the real voice history at import.
+        source = (ROOT / "components/voice/app/backend/generation.py").read_text()
+        start = source.index("HISTORY_RETENTION_DAYS = 90")
+        namespace = {"time": time}
+        end = source.index("\n\n\n", source.index("def _history_expired", start))
+        exec(source[start:end], namespace)
+        generation = types.SimpleNamespace(_history_expired=namespace["_history_expired"])
+        now = time.time()
+        job = lambda state, age: types.SimpleNamespace(state=state, finished_at=now - age * DAY, created_at=now - age * DAY)
+        self.assertTrue(generation._history_expired(job("done", 91)))
+        self.assertTrue(generation._history_expired(job("uncertain", 200)))
+        self.assertFalse(generation._history_expired(job("done", 89)))
+        self.assertFalse(generation._history_expired(job("running", 400)))
+        persist = source[source.index("def _persist(self, *, strict"):source.index("def _load_history")]
+        self.assertIn("_history_expired", persist)
+        self.assertIn("_history_expired(job)", source[source.index("def _load_history"):])
+
 
 if __name__ == "__main__":
     unittest.main()

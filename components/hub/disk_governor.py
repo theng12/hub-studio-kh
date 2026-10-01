@@ -17,7 +17,7 @@ and red the governor goes on, in this order, and stops the moment free space is 
     2 logs                      5 orphans: snapshot views of absent models, partial model staging,
     3 extra previous apps,        Hugging Face mirror entries of packages that are not installed
       stale Updates, orphan     6 acked outputs, oldest first (red may take ones younger than the
-      .studiohub-old/-staged      retention window)
+      .studiohub-old/-staged      retention window), then the finished transcription spool
 
 It NEVER touches an installed model, an output that is unacked or leased, or any `_trash` folder
 (those are the owner's to empty).
@@ -220,6 +220,10 @@ class Context:
     output_roots: Iterable[Path] = ()               # managed output folders, for partial files
     settings: dict = field(default_factory=dict)    # effective device settings
     running_staging: Callable[[], set] = lambda: set()
+    # The transcription spool (uploaded media and subtitle files, `job_storage`): its own policy runs on
+    # its own timer; under pressure the governor asks it for less. Both None where there is no spool.
+    spool_limit: Callable[[], int] | None = None
+    spool_enforce: Callable[[int | None], dict] | None = None
 
 
 @dataclass
@@ -529,6 +533,16 @@ def _acked_outputs(ctx: Context, now: float, run: _Run, severe: bool, done: Call
             run.note("acked outputs", freed, files)
 
 
+def _spool(ctx: Context, run: _Run, severe: bool, done: Callable[[], bool]) -> None:
+    """Finished transcription jobs' files, oldest first: amber halves the spool's own limit, red empties
+    what is finished. A job still queued or running is never eligible (`job_storage` guarantees it)."""
+    if ctx.spool_limit is None or ctx.spool_enforce is None or done():
+        return
+    target = 0 if severe else int(ctx.spool_limit()) // 2
+    result = ctx.spool_enforce(target)
+    run.note("transcription spool", result.get("reclaimed_bytes", 0), result.get("cleared", 0))
+
+
 def _history(now: float, run: _Run) -> None:
     result = ledger.compact_history(now=now, days=HISTORY_DAYS)
     rows = result["batches"] + result["output_groups"]
@@ -581,6 +595,7 @@ def sweep(ctx: Context, *, now: float | None = None, startup: bool = False) -> d
                 lambda: _trash(ctx, now, run, usage.total, done),
                 lambda: _orphans(ctx, now, run, severe, done),
                 lambda: _acked_outputs(ctx, now, run, severe, done),
+                lambda: _spool(ctx, run, severe, done),
             ]
             for step in ordered:
                 guarded(step)
