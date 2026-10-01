@@ -176,7 +176,8 @@ struct PageRenderHarness {
             return item
         }
         workspace.musicJobs = longPrompts.enumerated().map { index, prompt in
-            var item = job("music-\(index)", prompt, "ace-step/ACE-Step-v1.5", seconds: 94)
+            var item = job("music-\(index)", prompt,
+                           index % 2 == 0 ? "stabilityai/stable-audio-3-optimized" : "vanch007/mlx-Yue2-3B", seconds: 94)
             item.musicSettings = NativeMusicSettings(durationSeconds: 90, steps: 8, guidanceScale: 7,
                                                      shift: 3, seed: Int64(7_700 + index),
                                                      instrumental: nil, lyrics: nil, vocalLanguage: nil)

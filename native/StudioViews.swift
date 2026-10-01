@@ -2069,11 +2069,12 @@ struct StudioContent: View {
             }
         }
         .padding(14)
-        // A player is a card, not a banner: it stops growing where a long line stops being readable.
+        // A player is a card, not a banner: the card itself stops growing where a long line stops
+        // being readable, left-aligned with the page, so its background never outruns its content.
         .frame(maxWidth: 760, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func startPreviewMusic(_ job: NativeJob) {
@@ -2249,8 +2250,13 @@ struct StudioContent: View {
                 }
                 RowActions {
                     if job.state == "done" {
-                        Button("Preview") { selectedMusicID = job.id; studio.select(.music) }.rowAction()
-                        Button("Play") { selectedMusicID = job.id; startPreviewMusic(job) }
+                        Button("Play") {
+                            // Loads the clip into the player card and plays it; from Jobs it also
+                            // opens Music Studio, where the card is, so the clip can be paused.
+                            selectedMusicID = job.id
+                            if studio.selection != .music { studio.select(.music) }
+                            startPreviewMusic(job)
+                        }
                             .disabled(!connected).rowAction()
                         Button("Save…") { saveMusic(job) }.disabled(!connected).rowAction()
                         revealButton(job)
