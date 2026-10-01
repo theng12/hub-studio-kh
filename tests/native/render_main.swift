@@ -83,6 +83,20 @@ struct PageRenderHarness {
             studio.restartPending = true
         }
 
+        // `STUDIOHUB_RENDER_FIXTURES=1` fills the Audio, Image and Music history with jobs whose prompts
+        // are as long as the ones that broke the rows, and serves a generated picture for every image
+        // fetch. It needs render_fixture_patch.py, which render-page.sh applies to its copy.
+        if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" {
+            seedFixtures(studio.workspace, scratch: scratch)
+        }
+
+        // `STUDIOHUB_RENDER_ROLES=controller,node,node-offline,standalone` renders every page once per
+        // role, with the Hub's identity and the fleet answers a Mac in that role would have. Needs the
+        // fixture seams: render-page.sh applies them with STUDIOHUB_RENDER_FIXTURES=1.
+        let roles: [String?] = (ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_ROLES"] ?? "")
+            .split(separator: ",").map { String($0) }
+        for role in (roles.isEmpty ? [nil] : roles) {
+        if let role { applyRole(role, to: studio.workspace) }
         for page in pages {
         studio.selection = page
         for size in sizes {
@@ -109,7 +123,7 @@ struct PageRenderHarness {
                 print("could not encode \(Int(size.0))x\(Int(size.1))")
                 continue
             }
-            let path = "\(output)/\(fileName(for: page))-\(Int(size.0))x\(Int(size.1)).png"
+            let path = "\(output)/\(fileName(for: page))\(role.map { "-" + $0 } ?? "")-\(Int(size.0))x\(Int(size.1)).png"
             do {
                 try png.write(to: URL(fileURLWithPath: path))
                 print("wrote \(path)")
@@ -119,7 +133,94 @@ struct PageRenderHarness {
             window.orderOut(nil)
         }
         }
+        }
         try? FileManager.default.removeItem(at: scratch)
+    }
+
+    @MainActor private static func applyRole(_ role: String, to workspace: NativeWorkspaceStore) {
+        let wire = role.hasPrefix("node") ? "agent" : role
+        func decode<T: Decodable>(_ json: String) -> T {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            return try! decoder.decode(T.self, from: Data(json.utf8))
+        }
+        workspace.controllerIdentity = decode("""
+            {"settings": {"role": "\(wire)", "site_id": "site", "site_name": "Studio", "controller_id": "studio-mac-1503",
+                          "machine_name": "studio-mac-1503-m4-24-256", "database_mode": "sqlite"},
+             "readiness": {"ready": true}}
+            """)
+        workspace.controllerAddress = wire == "agent" ? "100.64.0.12:47873" : ""
+        workspace.controllerReachable = wire == "agent" ? role != "node-offline" : nil
+        workspace.fleetOverview = decode("""
+            {"machines": [], "summary": {"total": 0, "reachable": 0, "unreachable": 0}, "role": "\(wire)",
+             "controller": \(wire == "agent" ? "{\"machine\": \"c\", \"label\": \"studio-mac-1500-m4-16-256-controller\", \"role\": \"controller\"}" : "null")}
+            """)
+        workspace.fleetNodes = decode("""
+            {"role": "\(wire)", "summary": {"total": 2, "reachable": 2, "unreachable": 0, "error": 0},
+             "nodes": [{"id": "a", "name": "node-a", "address": "x", "state": "reachable"},
+                       {"id": "b", "name": "node-b", "address": "y", "state": "reachable"}]}
+            """)
+    }
+
+    private static let longPrompts = [
+        "A sweeping cinematic landscape of a lighthouse on a basalt cliff at dusk, storm clouds breaking over a copper sea, volumetric god rays, a lone fishing boat returning along the Play of light across the swell, ultra detailed, 35mm film grain",
+        "Lo-fi hip hop beat with warm vinyl crackle, mellow Rhodes chords, a slow brushed snare and a walking upright bass, rain on a window in the background, nostalgic and sleepy, perfect for studying late at night along the Play button of a long playlist",
+        "Portrait of an elderly clockmaker in a cluttered workshop, brass gears and loose springs on every surface, soft window light, shallow depth of field",
+        "Short",
+        "An orchestral cue that begins with solo cello, builds through woodwinds and muted brass into a full-string climax, then resolves quietly on a single harp note; slow, hopeful, cinematic, suitable for a documentary ending",
+    ]
+
+    @MainActor private static func seedFixtures(_ workspace: NativeWorkspaceStore, scratch: URL) {
+        // A picture with some structure, so a fit-to-window view shows its own edges.
+        let size = NSSize(width: 1536, height: 1024)
+        let picture = NSImage(size: size)
+        picture.lockFocus()
+        NSGradient(colors: [NSColor(calibratedRed: 0.08, green: 0.12, blue: 0.35, alpha: 1),
+                            NSColor(calibratedRed: 0.95, green: 0.55, blue: 0.25, alpha: 1)])!
+            .draw(in: NSRect(origin: .zero, size: size), angle: 70)
+        NSColor.white.withAlphaComponent(0.85).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 1000, y: 620, width: 220, height: 220)).fill()
+        NSColor.black.withAlphaComponent(0.55).setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: size.width, height: 260)).fill()
+        picture.unlockFocus()
+        let png = NSBitmapImageRep(data: picture.tiffRepresentation!)!.representation(using: .png, properties: [:])!
+        let path = scratch.appendingPathComponent("fixture.png").path
+        try? png.write(to: URL(fileURLWithPath: path))
+        setenv("STUDIOHUB_RENDER_IMAGE", path, 1)
+
+        func job(_ id: String, _ prompt: String, _ model: String, state: String = "done",
+                 seconds: Double? = nil) -> NativeJob {
+            var item = NativeJob(id: id, state: state, progress: 1, text: prompt, model: model,
+                                 createdAt: Date().timeIntervalSince1970 - 600, outputURL: nil, error: nil)
+            item.bytes = 1_843_200
+            item.sha256 = String(repeating: "a", count: 64)
+            item.durationSeconds = seconds
+            item.generationSeconds = 41
+            item.machine = "local"
+            item.artifactPath = "/tmp"
+            return item
+        }
+        workspace.imageJobs = longPrompts.enumerated().map { index, prompt in
+            var item = job("image-\(index)", prompt, "black-forest-labs/FLUX.2-klein-4B")
+            item.requestedWidth = 1536
+            item.requestedHeight = 1024
+            item.imageSettings = NativeImageSettings(width: 1536, height: 1024, steps: 4, guidance: 1,
+                                                     seed: Int64(48_201 + index))
+            return item
+        }
+        workspace.musicJobs = longPrompts.enumerated().map { index, prompt in
+            var item = job("music-\(index)", prompt,
+                           index % 2 == 0 ? "stabilityai/stable-audio-3-optimized" : "vanch007/mlx-Yue2-3B", seconds: 94)
+            item.musicSettings = NativeMusicSettings(durationSeconds: 90, steps: 8, guidanceScale: 7,
+                                                     shift: 3, seed: Int64(7_700 + index),
+                                                     instrumental: nil, lyrics: nil, vocalLanguage: nil)
+            return item
+        }
+        workspace.audioJobs = longPrompts.prefix(3).enumerated().map { index, prompt in
+            var item = job("audio-\(index)", prompt, "kokoro/Kokoro-82M", seconds: 18)
+            item.voiceSettings = nil
+            return item
+        }
     }
 
     /// `whats-new` reads better than the raw `What's New`, which is also a filename hazard.
