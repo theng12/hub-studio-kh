@@ -92,6 +92,16 @@ class ChatContextExceeded(ValueError):
     """
 
 
+class ChatTemplateError(ValueError):
+    """The model's chat template refused the conversation.
+
+    Chat templates (Qwen3.5, Gemma 3) raise on shapes they cannot render - a system message that is
+    not first, roles that do not alternate, no user turn. That is a fault in the request, not in the
+    worker, so it is a typed refusal that quotes the template's own reason (route: 422) instead of
+    escaping as an anonymous 500.
+    """
+
+
 def resolve_model_dir(models_dir: Path, package_id: str, revision: str) -> Path:
     """The library layout every Studio uses: <models>/<package_id>/<revision>/model."""
     return Path(models_dir).expanduser() / package_id / revision / "model"
@@ -425,16 +435,25 @@ class ChatEngine:
     def _prompt(self, messages: list[dict], *, thinking: bool = False) -> str:
         tokenizer = self._tokenizer
         apply = getattr(tokenizer, "apply_chat_template", None)
+        messages = self._with_instruction(messages, None)
         if callable(apply):
             try:
-                # Qwen3.5-9B emits a long "Thinking Process:" trace before the answer when the
-                # template's default is left on, which also breaks JSON mode. Thinking is off by
-                # default and can be requested per call.
-                return apply(messages, tokenize=False, add_generation_prompt=True,
-                             enable_thinking=thinking)
-            except TypeError:
-                # A tokenizer whose chat template takes no `enable_thinking` kwarg.
-                return apply(messages, tokenize=False, add_generation_prompt=True)
+                try:
+                    # Qwen3.5-9B emits a long "Thinking Process:" trace before the answer when the
+                    # template's default is left on, which also breaks JSON mode. Thinking is off
+                    # by default and can be requested per call.
+                    return apply(messages, tokenize=False, add_generation_prompt=True,
+                                 enable_thinking=thinking)
+                except TypeError:
+                    # A tokenizer whose chat template takes no `enable_thinking` kwarg.
+                    return apply(messages, tokenize=False, add_generation_prompt=True)
+            except Exception as exc:
+                # jinja2.TemplateError, matched by name so this module needs no jinja2 import.
+                if any(cls.__name__ == "TemplateError" for cls in type(exc).__mro__):
+                    raise ChatTemplateError(
+                        f"messages: this model's chat template refused the conversation: {exc}"
+                    ) from exc
+                raise
         # Deterministic fallback for a tokenizer without a chat template.
         lines = [f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages]
         lines.append("assistant:")
@@ -464,9 +483,21 @@ class ChatEngine:
 
     @staticmethod
     def _with_instruction(messages: list[dict], instruction: str | None) -> list[dict]:
-        if not instruction:
+        """The conversation with ``instruction`` folded into one leading system message.
+
+        The Qwen3.5 and Gemma chat templates accept a system message only first (and only one), so
+        the engine never *adds* a second: a caller's system text and the JSON contract share one
+        message. Several or late system messages from a caller are gathered into that same leading
+        message in their original order, the other turns keep theirs, and a conversation that
+        already has one leading system message and no instruction comes back untouched.
+        """
+        system = [m for m in messages if m.get("role") == "system"]
+        if not instruction and (not system or (len(system) == 1 and messages[0] is system[0])):
             return messages
-        return [{"role": "system", "content": instruction}, *messages]
+        text = [str(m.get("content") or "").strip() for m in system]
+        merged = "\n\n".join(part for part in [*text, instruction or ""] if part)
+        rest = [m for m in messages if m.get("role") != "system"]
+        return [{"role": "system", "content": merged}, *rest] if merged else rest
 
     @staticmethod
     def _valid_json(text: str) -> bool:

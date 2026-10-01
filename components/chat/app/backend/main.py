@@ -29,6 +29,7 @@ from components import app_version, model_defaults
 from . import memory_policy as memory_policy_module
 from .llm_engine import (DEFAULT_TEMPERATURE, DEFAULT_TOP_P, FALLBACK_MAX_OUTPUT_TOKENS,
                          ChatBusy, ChatContextExceeded, ChatEngine, ChatModelUnavailable,
+                         ChatTemplateError,
                          engine_from_environment)
 
 # One stable creation stamp for the OpenAI model listing.
@@ -732,6 +733,9 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             except ChatContextExceeded as exc:
                 activity.finish(state="error", error_code="context_exceeded")
                 raise HTTPException(422, str(exc)) from exc
+            except ChatTemplateError as exc:
+                activity.finish(state="error", error_code="template_rejected")
+                raise HTTPException(422, str(exc)) from exc
             except Exception:
                 activity.finish(state="error", error_code="generation_failed")
                 raise
@@ -761,6 +765,9 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                                   thinking=parameters["thinking"])
             except ChatContextExceeded as exc:
                 activity.finish(state="error", error_code="context_exceeded")
+                raise HTTPException(422, str(exc)) from exc
+            except ChatTemplateError as exc:
+                activity.finish(state="error", error_code="template_rejected")
                 raise HTTPException(422, str(exc)) from exc
             except ChatModelUnavailable as exc:
                 activity.finish(state="error", error_code="model_unavailable")
@@ -803,7 +810,7 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                                           "finish_reason": None}]}
                     yield f"data: {json.dumps(chunk)}\n\n"
                 final_state, final_error = "done", None
-            except (ChatModelUnavailable, ChatBusy, ChatContextExceeded) as exc:
+            except (ChatModelUnavailable, ChatBusy, ChatContextExceeded, ChatTemplateError) as exc:
                 final_state, final_error = "error", "chat_error"
                 error = {"error": {"message": str(exc), "type": "chat_error"}}
                 yield f"data: {json.dumps(error)}\n\n"
