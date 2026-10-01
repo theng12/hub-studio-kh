@@ -653,11 +653,18 @@ def load_unfinished_batches() -> list[dict]:
     return [json.loads(r[0]) for r in rows]
 
 
-def load_finished_batches() -> list[dict]:
-    """Load terminal broker batches for operator-requested history cleanup."""
+def load_finished_batches(limit: int | None = None) -> list[dict]:
+    """Load terminal broker batches: all of them for operator-requested history cleanup, or only
+    the newest ``limit`` for a listing (the table only grows, and a listing that parses every
+    payload ever stored costs ~0.5 ms per batch on every poll)."""
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT payload FROM batches WHERE finished = 1").fetchall()
+        if limit is None:
+            rows = conn.execute(
+                "SELECT payload FROM batches WHERE finished = 1").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT payload FROM batches WHERE id IN (SELECT id FROM batches "
+                "WHERE finished = 1 ORDER BY created_at DESC LIMIT ?)", (int(limit),)).fetchall()
     return [json.loads(r[0]) for r in rows]
 
 

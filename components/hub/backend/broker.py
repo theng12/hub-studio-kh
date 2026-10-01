@@ -1464,6 +1464,13 @@ UNLISTED_JOB_LANES = {
 }
 
 
+# The Jobs page lists the newest finished batches, not every batch the ledger has ever held: the app
+# re-reads this list every 2-10 s, and the ledger only grows (measured: 248 batches / 6 MB = 0.13 s per
+# read, so a controller with a few thousand would spend seconds, and ship tens of MB, per poll).
+# Older history stays in the ledger, in Stats and behind `GET /api/hub/jobs/{id}`.
+LISTED_FINISHED_LIMIT = 500
+
+
 def listed_batches() -> list[dict]:
     """Every job `GET /api/hub/jobs` shows, newest first, as summaries.
 
@@ -1472,7 +1479,8 @@ def listed_batches() -> list[dict]:
     (including the Chat page's own completions) writes through `ledger.save_batch` - merged with
     the broker's in-memory queue.
     """
-    listed: dict[str, dict] = {batch["id"]: batch for batch in ledger.load_finished_batches()}
+    listed: dict[str, dict] = {batch["id"]: batch
+                               for batch in ledger.load_finished_batches(LISTED_FINISHED_LIMIT)}
     listed.update(batches)
     return [batch_summary(batch) for batch in sorted(
         listed.values(), key=lambda value: -value["created_at"])]
