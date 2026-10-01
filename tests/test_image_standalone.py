@@ -259,8 +259,13 @@ class ImageStandaloneTests(unittest.TestCase):
     def test_a_job_gives_its_model_memory_back_and_reports_its_own_peak(self):
         """Default mode (no MemorySaver) used to leave every freed weight in MLX's buffer cache -
         ~22 GB resident on an idle 32 GB Mac - and `get_peak_memory` is an all-time maximum, so a
-        light job after a heavy one reported the heavy one's peak."""
+        light job after a heavy one reported the heavy one's peak.
+
+        The memory policy is pinned to ``immediate`` (release after every job) - what an 8 GB Mac
+        resolves ``auto`` to - because a larger Mac now keeps the model resident for the idle window
+        (``ResidentModelTests``), and this test is about the release."""
         import weakref
+        (self.data / 'memory_policy.json').write_text('{"mode": "immediate"}', encoding='utf-8')
         mlx = types.ModuleType('mlx.core')
         state = {'peak': 0, 'resets': 0, 'clears': [], 'alive': []}
         mlx.get_peak_memory = lambda: state['peak']
@@ -461,30 +466,36 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertIn('macOS 14', host['reason'])
 
     def test_memory_policy_publishes_the_fleet_contract(self):
-        """Image holds no model between jobs, but the Hub still inventories it.
+        """Image answers the shared five-mode residency contract, and the Hub still inventories it.
 
         The Hub's machine-wide memory inventory and its handoff release pass read every
         Studio through `GET/PUT /api/memory-policy` + `POST /api/memory/release`. Without
         these the app reported Image as "update required" and counted it as a failed
-        release, even though Image is the one Studio that always frees its model.
+        release. Image used to be a one-mode policy; a model whose plan keeps every component
+        loaded now stays resident for the selected mode's idle window.
         """
+        from components import memory_modes
         policy = self.client.get('/api/memory-policy', headers=self.headers)
         self.assertEqual(policy.status_code, 200)
         body = policy.json()
-        self.assertEqual(body['mode'], 'immediate')
-        self.assertTrue(body['fixed'])
+        self.assertEqual(body['mode'], 'auto')
+        self.assertFalse(body['fixed'])
         self.assertEqual(body['loaded_models'], [])
         self.assertFalse(body['resident'])
         self.assertFalse(body['busy'])
-        self.assertEqual([row['mode'] for row in body['options']], ['immediate'])
+        self.assertEqual([row['mode'] for row in body['options']], list(memory_modes.MODES))
+        self.assertIn(body['resolved_mode'], ('balanced', 'immediate'))
 
-        # There is no idle timer to configure, so the honest answer is a refusal.
         rejected = self.client.put('/api/memory-policy', headers=self.headers,
-                                   json={'mode': 'balanced'})
+                                   json={'mode': 'overnight'})
         self.assertEqual(rejected.status_code, 422)
         accepted = self.client.put('/api/memory-policy', headers=self.headers,
-                                   json={'mode': 'immediate'})
+                                   json={'mode': 'memory_saver'})
         self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(accepted.json()['mode'], 'memory_saver')
+        self.assertEqual(accepted.json()['idle_seconds'], 120)
+        self.assertEqual(self.client.get('/api/memory-policy', headers=self.headers).json()['mode'],
+                         'memory_saver')
 
     def test_memory_release_never_reports_a_running_generation_as_freed(self):
         idle = self.client.post('/api/memory/release', headers=self.headers)

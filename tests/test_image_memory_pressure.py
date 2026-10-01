@@ -8,7 +8,10 @@ The worker therefore chooses the bounded configuration from the Mac's actual mem
 tier below the one where the default was measured, and never claims anything for the 8 GB tier,
 which is still being measured.
 
-FLUX.2 Klein is the control: it keeps the configuration it shipped with, on every host.
+FLUX.2 Klein 4-bit followed: its default peaked at 12.1 GB of MLX memory on a 32 GB Mac and 9.8 GB on
+the 8 GB M1 (about 4 GB of swap per image), nine of them in the VAE decode. It runs staged below
+12 GB and lean below 24 GB; 24 GB and up keep the configuration it shipped with
+(``tests/test_image_staging.py`` pins the tiers).
 """
 from __future__ import annotations
 
@@ -29,7 +32,8 @@ from components import model_packages  # noqa: E402
 from components.image.app.backend import main as image_main  # noqa: E402
 from components.image.app.backend.generation import (  # noqa: E402
     FLUX2_KLEIN, MODEL_ID, QUALIFIED_MINIMUM_MEMORY_BYTES, Z_IMAGE_TURBO,
-    Z_IMAGE_LOW_RAM_BELOW_BYTES, GenerationManager, apply_memory_plan, memory_plan,
+    FLUX2_LEAN_BELOW_BYTES, FLUX2_LOW_RAM_BELOW_BYTES, Z_IMAGE_LOW_RAM_BELOW_BYTES,
+    GenerationManager, apply_memory_plan, memory_plan,
 )
 
 GiB = 1024 ** 3
@@ -102,16 +106,17 @@ def fake_z_image_stack(calls: list) -> dict:
 class MemoryPlanTests(unittest.TestCase):
     """The plan itself: pure policy, no model and no host."""
 
-    def test_flux_keeps_the_configuration_it_shipped_with_on_every_host(self):
-        for host in (8 * GiB, 16 * GiB, 24 * GiB, 32 * GiB, 128 * GiB):
+    def test_flux_keeps_the_configuration_it_shipped_with_from_24gb(self):
+        for host in (24 * GiB, 32 * GiB, 128 * GiB):
             plan = memory_plan(FLUX2_KLEIN, host)
             self.assertEqual(plan['mode'], 'default', host)
             self.assertIsNone(plan['mlx_cache_limit_gb'])
             self.assertFalse(plan['vae_tiling'])
-            self.assertIsNone(plan['low_ram_below_bytes'])
+            self.assertFalse(plan['staged'])
+            self.assertFalse(plan['bounded_vae_decode'])
         # And a default plan applies nothing at all - it must not even reach for mflux.
         with patch.dict(sys.modules, {}):
-            self.assertIsNone(apply_memory_plan(object(), memory_plan(FLUX2_KLEIN, 8 * GiB)))
+            self.assertIsNone(apply_memory_plan(object(), memory_plan(FLUX2_KLEIN, 32 * GiB)))
         self.assertNotIn('mflux', sys.modules)
 
     def test_z_image_takes_the_bounded_configuration_below_the_measured_tier(self):
@@ -119,8 +124,8 @@ class MemoryPlanTests(unittest.TestCase):
             plan = memory_plan(Z_IMAGE_TURBO, host)
             self.assertEqual(plan['mode'], 'low-ram', host)
             self.assertTrue(plan['low_ram'])
-            # Exactly what `--low-ram` means to the CLI: a 1 GB MLX cache and implicit tiling.
-            self.assertEqual(plan['mlx_cache_limit_gb'], 1.0)
+            # `--low-ram`'s mapping: implicit tiling, and the model's own MLX cache cap (0.5 GB, measured).
+            self.assertEqual(plan['mlx_cache_limit_gb'], 0.5)
             self.assertTrue(plan['vae_tiling'])
             # No explicit `--vae-tile-size`: low-RAM's own 512-pixel default is what was measured.
             self.assertIsNone(plan['vae_tile_size'])
@@ -135,7 +140,9 @@ class MemoryPlanTests(unittest.TestCase):
         self.assertEqual(Z_IMAGE_TURBO.memory.low_ram_below_bytes, Z_IMAGE_LOW_RAM_BELOW_BYTES)
         self.assertGreater(Z_IMAGE_LOW_RAM_BELOW_BYTES, 16 * GiB)
         self.assertLessEqual(Z_IMAGE_LOW_RAM_BELOW_BYTES, 24 * GiB)
-        self.assertIsNone(FLUX2_KLEIN.memory.low_ram_below_bytes)
+        self.assertEqual(FLUX2_KLEIN.memory.low_ram_below_bytes, FLUX2_LOW_RAM_BELOW_BYTES)
+        self.assertLess(FLUX2_LOW_RAM_BELOW_BYTES, 16 * GiB, 'the 16 GB tier is lean, not staged')
+        self.assertLessEqual(FLUX2_LEAN_BELOW_BYTES, 24 * GiB)
         # A host whose memory could not be read is not below anything: no knobs, no guessing.
         self.assertEqual(memory_plan(Z_IMAGE_TURBO, 0)['mode'], 'default')
 
@@ -149,7 +156,7 @@ class MemoryPlanTests(unittest.TestCase):
         # The four flags the CLI derives from --low-ram, on the instance that was loaded.
         self.assertEqual((applied['low_ram'], applied['mlx_cache_limit_gb'],
                           applied['vae_tiling'], applied['vae_tile_size']),
-                         (True, 1.0, True, None))
+                         (True, 0.5, True, None))
         self.assertEqual(applied['model'], 'model-instance')
 
 

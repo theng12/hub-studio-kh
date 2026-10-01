@@ -456,10 +456,11 @@ class TheTwoAxesStaySeparateTests(ImageModelDefaultsFixture):
                                          json={'mode': 'low'}).status_code, 200)
         policy = self.client.get('/api/memory-policy', headers=self.headers)
         self.assertEqual(policy.status_code, 200)
-        self.assertTrue(policy.json()['fixed'])
-        self.assertEqual([row['mode'] for row in policy.json()['options']], ['immediate'])
+        self.assertFalse(policy.json()['fixed'])
+        self.assertEqual([row['mode'] for row in policy.json()['options']],
+                         ['auto', 'performance', 'balanced', 'memory_saver', 'immediate'])
         self.assertEqual(self.client.put('/api/memory-policy', headers=self.headers,
-                                         json={'mode': 'balanced'}).status_code, 422)
+                                         json={'mode': 'overnight'}).status_code, 422)
 
     def test_setting_a_model_default_does_not_change_which_configuration_loads(self) -> None:
         before = self.catalog()[Z_IMAGE_TURBO.repo]['loading_modes']
