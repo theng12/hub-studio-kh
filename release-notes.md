@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.126 - 2026-10-01
+
+### Long voice-overs: even pauses, and short lines no longer jump in volume
+
+A long script is read in sections. The voice models left up to a second of near-silence at the start or end of each one, so the
+gaps between sections were long and uneven (about a second where about a third of a second was meant). The Hub now trims that
+empty stretch and puts in exactly the pause it is meant to have, for every voice model. A very short line in the middle of a story
+(for example "Father, there is a boat out there!") is also nudged to the volume of the lines around it, instead of coming out
+noticeably louder or quieter.
+
 ## 0.6.125 - 2026-10-01
 
 ### A Mac that is fine is no longer told it is short of memory

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.126 — 2026-10-01 · Long text-to-speech: even pauses between sections, short lines match their neighbours
+
+**Cause (owner: "it's glaring"; audit `_orchestra/audit-20260930/tts-samples`, 300 joins, every engine):** a long script is rendered as
+sections and joined by `_join_long_form_wavs` (`components/voice/app/backend/generation.py`), which wrote each section whole and then
+appended the designed pause as exact zeros. Every engine returns a section with up to ~1.2 s of near-silence at its start and/or end
+(-45 to -60 dBFS), so a designed 0.12-0.6 s pause was heard as median ~1.0 s (OmniVoice 0.98, VoxCPM2 ~1.0, Qwen3 1.7B 1.06, max 2.9 s)
+and uneven from join to join. The one-line S4 section ("Father, there is a boat out there!") also came out 3-8 dB off its neighbours:
+`loudnorm` cannot measure a ~1.5 s section well.
+
+**Fix (all TTS engines, one place, after the existing `loudnorm` pass):** (1) each section is cut back to its speech: first/last run of
+>= 30 ms of 10 ms windows above a threshold relative to the section's own level (95th-percentile window level - 33 dB, clamped to
+-60..-40 dBFS), keeping 30 ms before and 60 ms after, with a 10 ms fade at each real cut; the inserted zeros are the designed pause
+minus the pads kept either side, so the silence between two sections is the designed pause (unchanged values: engine join pause, or the
+OmniVoice / Qwen 1.7B paragraph / sentence / soft sequence). Speech is never cut; a section with no speech-like run, or too short to
+analyse, is joined untouched. (2) a section with < 4 s of voiced audio is moved toward the median voiced level of the sections within two
+places, by at most +/-6 dB and ignoring < 0.5 dB; peaks the gain pushes past the -1.5 dB ceiling are rounded off by a soft knee, so
+nothing clips. Single-section renders are not joined and are not touched.
+
+**Measured on the audit's real clips** (the 36 of 40 long clips whose section sizes add
+up to the file, re-joined from their own sections, 274 joins; `_orchestra/audit-20260930/join-fix/`): audible gap median 0.85 s -> 0.14 s (designed pauses 0.12-0.6 s), max 2.92 s ->
+0.60 s; after-minus-designed median 0 ms, 95th percentile 30 ms, worst 60 ms. Short-section level step vs neighbours: worst 7.3 dB -> 2.0 dB.
+
+Note for the Qwen3-TTS 1.7B Base audit contract: `private_edge_destructive_trim` stays `False` (speech is never cut); this only removes
+near-silence the model itself rendered, as the 0.6B and every other engine's sections already were.
+
+Tests (mutation-proved: 7 of 11 fail on 0.6.125's joiner): `components/voice/app/tests/test_long_form_join_edges.py`: pause equals the
+designed one +/-20 ms at 0.12 / 0.3 / 0.6 s whatever the edges, per-join pauses, whole-render edges, speech samples preserved bit for bit,
+no-speech section untouched, short-section gain (matched, bounded both ways, no clipping, no reference -> left alone).
+
 ## 0.6.125 — 2026-10-01 · The Hub's "free memory" matches what macOS can give; the 8 GB TTS runner measures held models
 
 **Cause (real 8 GB Mac "1101", Hub 0.6.122):** the Hub held Qwen3-TTS 0.6B 8-bit ~11 min ("waiting for memory: needs ~3.2GB, ~3.0GB

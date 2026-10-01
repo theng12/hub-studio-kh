@@ -1021,6 +1021,101 @@ def _safe_audio_info(path: Path):
         return None
 
 
+# --- Section edges and level at the join (0.6.126) ---------------------------------------------
+# Every engine renders a section with up to ~1.2 s of near-silence at its start and/or end, and the
+# joiner appended the designed pause to that, so a designed 0.3 s pause was heard as ~1.0 s and the
+# gaps were uneven (audit 2026-09-30, 300 joins: median 1.0 s on OmniVoice). So each section is cut
+# back to its speech plus a short pad of its own near-silence, and the designed pause is made up of
+# that pad plus inserted zeros: the silence a listener hears between two sections is the designed
+# pause. Speech is never cut: the cut points are the first/last run of >= 30 ms above a threshold
+# relative to the section's own level, with a pad kept beyond them for consonants and breaths.
+_JOIN_WINDOW_S = 0.01
+_JOIN_MIN_RUN_WINDOWS = 3
+_JOIN_HEAD_PAD_S = 0.03
+_JOIN_TAIL_PAD_S = 0.06
+_JOIN_FADE_S = 0.01
+_JOIN_THRESHOLD_BELOW_P95_DB = 33.0
+_JOIN_THRESHOLD_RANGE_DB = (-60.0, -40.0)
+# A one-line section is too short for `loudnorm` to measure well (the audit saw it 3-8 dB off its
+# neighbours), so a section with less than this much voiced audio is matched, gently, to the voiced
+# level of the sections around it. Bounded, and never into clipping: peaks that the gain would push
+# past the levelling ceiling are rounded off by a soft knee (the sections come out of `loudnorm`
+# with their peaks AT the ceiling, so a quiet short section with one tall transient has no headroom).
+_JOIN_SHORT_VOICED_S = 4.0
+_JOIN_MATCH_MAX_GAIN_DB = 6.0
+_JOIN_MATCH_MIN_GAIN_DB = 0.5
+_JOIN_MATCH_NEIGHBOURS = 2
+_JOIN_LIMITER_KNEE = 0.7  # of the ceiling
+
+
+def _analyse_join_section(x, sample_rate: int):
+    """(speech_start, speech_end, voiced_db, voiced_seconds, peak) in frames, or None when the
+    section is too short or has no speech-like run (then it is joined untouched)."""
+    import numpy as np
+    window = max(1, round(sample_rate * _JOIN_WINDOW_S))
+    count = len(x) // window
+    if count < _JOIN_MIN_RUN_WINDOWS * 2:
+        return None
+    power = np.square(x[:count * window], dtype=np.float64).mean(axis=1).reshape(count, window).mean(axis=1)
+    db = 10.0 * np.log10(power + 1e-12)
+    low, high = _JOIN_THRESHOLD_RANGE_DB
+    threshold = float(np.clip(np.percentile(db, 95) - _JOIN_THRESHOLD_BELOW_P95_DB, low, high))
+    on = db >= threshold
+    run = _JOIN_MIN_RUN_WINDOWS
+    starts = np.flatnonzero(np.convolve(on, np.ones(run), "valid") == run)
+    if not len(starts):
+        return None
+    voiced_db = 10.0 * np.log10(float(np.mean(10.0 ** (db[on] / 10.0))))
+    return (int(starts[0] * window), int((starts[-1] + run) * window), voiced_db,
+            float(on.sum() * _JOIN_WINDOW_S), float(np.max(np.abs(x))))
+
+
+def _join_match_gains_db(analyses: list) -> list[float]:
+    """Gain (dB) per section: 0 except for short sections, which move toward the median voiced
+    level of their neighbours by at most `_JOIN_MATCH_MAX_GAIN_DB`."""
+    import numpy as np
+    gains = [0.0] * len(analyses)
+    long_idx = [i for i, a in enumerate(analyses) if a and a[3] >= _JOIN_SHORT_VOICED_S]
+    for i, a in enumerate(analyses):
+        if not a or a[3] >= _JOIN_SHORT_VOICED_S:
+            continue
+        refs = [j for j in long_idx if 0 < abs(j - i) <= _JOIN_MATCH_NEIGHBOURS] or long_idx
+        if not refs:
+            continue
+        wanted = float(np.clip(np.median([analyses[j][2] for j in refs]) - a[2],
+                               -_JOIN_MATCH_MAX_GAIN_DB, _JOIN_MATCH_MAX_GAIN_DB))
+        if abs(wanted) >= _JOIN_MATCH_MIN_GAIN_DB:
+            gains[i] = wanted
+    return gains
+
+
+def _join_cut(x, analysis, gain_db: float, sample_rate: int, ceiling: float = 1.0):
+    """The section cut to speech + pad, faded at each real cut, gained and kept under `ceiling`
+    (linear): (audio, kept_head, kept_tail)."""
+    import numpy as np
+    if analysis is None:
+        return x, 0, 0
+    first, last = analysis[0], analysis[1]
+    start = max(0, first - round(_JOIN_HEAD_PAD_S * sample_rate))
+    end = min(len(x), last + round(_JOIN_TAIL_PAD_S * sample_rate))
+    out = x[start:end].copy()
+    head, tail = first - start, end - last
+    fade = round(_JOIN_FADE_S * sample_rate)
+    if start > 0 and min(fade, head) > 0:
+        n = min(fade, head)
+        out[:n] *= np.linspace(0.0, 1.0, n, dtype=np.float32)[:, None]
+    if end < len(x) and min(fade, tail) > 0:
+        n = min(fade, tail)
+        out[-n:] *= np.linspace(1.0, 0.0, n, dtype=np.float32)[:, None]
+    if gain_db:
+        out *= np.float32(10.0 ** (gain_db / 20.0))
+        knee = _JOIN_LIMITER_KNEE * ceiling
+        over = np.abs(out) > knee
+        if over.any():
+            out[over] = np.sign(out[over]) * (knee + (ceiling - knee) * np.tanh((np.abs(out[over]) - knee) / (ceiling - knee)))
+    return out, head, tail
+
+
 def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
                          family: str, pause_s: float = _LONG_FORM_JOIN_PAUSE_S,
                          pause_sequence_s: Optional[list[float]] = None,
@@ -1039,6 +1134,10 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
     into the join. `_levelled_sections` holds the decision and its fallbacks; the level itself is
     measured by FFmpeg rather than assumed, and the pass chosen is the one the owner's approved
     samples were made with.
+
+    Each section is then cut back to its speech and the pause between sections made exactly the
+    designed one, and a very short section is level-matched to its neighbours (see the
+    `_JOIN_*` constants above): the engines return up to ~1.2 s of near-silence at a section's edges.
     """
     if not segment_paths:
         raise ValueError(f"No {family} audio segments were generated")
@@ -1071,6 +1170,21 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
         f".{output_path.name}.{uuid.uuid4().hex}.joining"
     )
     try:
+        # Pass 1: where each section's speech starts and ends, and how loud its voiced part is.
+        analyses = []
+        for path in levelled:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("long-form join cancelled")
+            audio, _ = sf.read(str(path), dtype="float32", always_2d=True)
+            analyses.append(_analyse_join_section(audio, sample_rate))
+        ceiling = 10.0 ** (float((long_form_policy.policy_for(family, repo) or {}).get(
+            "section_true_peak_ceiling_dbtp", long_form_policy.SECTION_TRUE_PEAK_CEILING_DBTP)) / 20.0)
+        gains = _join_match_gains_db(analyses)
+        if any(gains):
+            print(f"[gen] {family} short sections level-matched to their neighbours: "
+                  + ", ".join(f"#{i + 1} {g:+.1f} dB" for i, g in enumerate(gains) if g), flush=True)
+        # Pass 2: write each section cut to its speech, and make the pause between two sections the
+        # designed one: the pad kept either side of the cut counts toward it.
         with sf.SoundFile(
             str(joining_path),
             mode="w",
@@ -1079,27 +1193,18 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
             format="WAV",
             subtype=first_info.subtype,
         ) as destination:
+            carried_tail = 0
             for index, path in enumerate(levelled):
                 if cancel_event is not None and cancel_event.is_set():
                     raise InterruptedError("long-form join cancelled")
-                with sf.SoundFile(str(path), mode="r") as source:
-                    while True:
-                        if cancel_event is not None and cancel_event.is_set():
-                            raise InterruptedError("long-form join cancelled")
-                        block = source.read(
-                            frames=262_144,
-                            dtype="float32",
-                            always_2d=True,
-                        )
-                        if len(block) == 0:
-                            break
-                        destination.write(block)
-                if index < len(pauses):
-                    pause_frames = round(max(0.0, pauses[index]) * sample_rate)
-                    if pause_frames:
-                        destination.write(
-                            np.zeros((pause_frames, channels), dtype=np.float32)
-                        )
+                audio, _ = sf.read(str(path), dtype="float32", always_2d=True)
+                audio, head, tail = _join_cut(audio, analyses[index], gains[index], sample_rate, ceiling)
+                if index:
+                    pause_frames = round(max(0.0, pauses[index - 1]) * sample_rate) - carried_tail - head
+                    if pause_frames > 0:
+                        destination.write(np.zeros((pause_frames, channels), dtype=np.float32))
+                destination.write(audio)
+                carried_tail = tail
         os.replace(joining_path, output_path)
     finally:
         joining_path.unlink(missing_ok=True)
