@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — 2026-10-02 · Gemma 3 12B 4-bit is shelved: it stays on the SSD, not on fleet Macs (VERSION not bumped)
+
+Owner: Gemma 3 12B 4-bit (`gemma-3-12b-it-4bit`) is no longer carried by every Mac. It stays in the catalog, on the SSD kits and on any Mac
+marked "keep all models", so it can still become a chat model later; it is just not copied to fleet Macs any more, and a fleet Mac that
+already has it moves it into the self-cleaning Trash Folder (emptied after 15 days) the next time the Hub starts. One line in
+`components/shelved_models.py`; the kit's copy step, the start-up sweep and the "do not fetch it back" rule all read that list.
+
 ## Unreleased — 2026-10-01 · LTX-2.3 video is retired; the release ships no Video worker (VERSION not bumped; the coordinator bundles it)
 
 Owner: LTX-2.3 is "bad quality, can't use it" - retired exactly like Lance (0.6.120) and ACE-Step 1.5 (0.6.116), by one line in
