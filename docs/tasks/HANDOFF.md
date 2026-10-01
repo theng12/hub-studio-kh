@@ -5,6 +5,22 @@
 
 Last updated: **0.6.124** (Chatterbox shelved + the 8 GB text-to-speech test; supersedes the never-published 0.6.123; 2026-10-01).
 
+> **8 GB TTS runner - memory stall handling (kit-only, after 0.6.124, 2026-10-01; no app change, no version bump).** The owner's
+> real 8 GB Mac (node 1101, Hub 0.6.122) sat forever on Qwen3-TTS 0.6B 8-bit: the Hub holds a job back until
+> `host_stats()["available_gb"]` (psutil macOS: free + speculative + inactive pages; compressed/wired not counted) is at least
+> the model's floor, here **3.2 GB** (`components/voice/app/backend/catalog.py` `min_free_memory_gb=3.2` -> `workload_policy` ->
+> `memory_admission.describe` -> `broker._memory_gate`, `broker.py` ~296), and the Mac had 3.0. The 3.2 is the Voice worker's own
+> formula (`generation.py` `_required_free_memory_gb`: catalog `size_gb` 1.9 + `MEMORY_HEADROOM_GB` 1.25 = 3.15, rounded up) -
+> labelled "measured" in the catalog comment but **not a measurement**; the worker's own `_memory_preflight` refuses at the same
+> 3.15, so lowering only the Hub number would not start the job. The Hub already asks idle sibling Studios to release before it
+> queues a job (`broker.prepare_machine_memory` -> `release_idle_siblings`); what stays is macOS + apps, which no release frees.
+> The reason is on the job (`GET /api/hub/jobs/<id>` -> `governor_note`, e.g. `voice: waiting for memory: needs ~3.2GB, ~3.0GB free`).
+> `qualification/eight-gb-tts-run.sh` now (a) calls `POST /api/hub/memory/release` before each model and records free memory +
+> what holds it (`free_gb_before`, `memory_released`, `memory_holders`), (b) reads `governor_note` while a clip is queued and, after
+> `TTS8_MEM_WAIT` (default 300 s) of memory waiting, records `did not start - needs X GB free, had Y GB`, cancels the job
+> (`DELETE /api/hub/jobs/<id>`), skips that model's other clips and continues; `summary.txt` says so. Pinned by
+> `tests/test_tts_8gb_runner.py::MemoryStallTests` (fake Hub; mutation-proved). Copy the five TTS files to the drives as before.
+
 > **0.6.124 - Chatterbox shelved + the 8 GB TTS test** (owner, 2026-10-01; **supersedes 0.6.123, which was never published or
 > installed - roll out 0.6.124**). Read `CHANGELOG.md` 0.6.124; what to know:
 >

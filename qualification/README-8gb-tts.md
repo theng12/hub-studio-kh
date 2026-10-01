@@ -19,7 +19,8 @@ developer"), right-click it > Open, once.
 
 **How long:** the 32 GB M2 Max needed about 28 minutes of generation for the whole test **[M]**; on an
 8 GB Mac allow 1 to 2 hours, more if it swaps **[I]** (the script prints its own estimate first). It
-loads each model from cold, which is part of what is being measured. Closing the window stops it;
+loads each model from cold, which is part of what is being measured. A model the Hub will not start for lack of
+memory costs 5 minutes, not hours. Closing the window stops it;
 whatever finished is already saved.
 
 ## What it checks first (and says in plain words if it cannot go on)
@@ -46,6 +47,19 @@ splitting and joins apply as in production. One job at a time. Per model: Chris 
 Christian S2, Christian S4 (S2 is about 175 words, S4 about 3 minutes — `tts-script-S2.txt` and
 `tts-script-S4.txt`, the same text as the 32 GB test). The Hub's token is read from its own file on this
 Mac and is never printed or written down.
+
+**Memory, before each model.** The script asks the Hub (`POST /api/hub/memory/release`) to make every idle
+Studio let go of its model - the Hub never touches a running job - then records the free memory the Hub counts
+(macOS free + inactive pages: the number behind "needs 3.2 GB, 3.0 GB free"), what holds the rest (wired and
+compressed memory, the biggest processes, each Studio worker named) and what the release answered. These go to
+`run.log`, `summary.txt` and the `free_gb_before` / `memory_released` / `memory_holders` columns of `results.csv`.
+
+**If the Hub will not start a model for lack of memory.** The Hub starts a job only when the free memory it
+counts is at least the model's floor (Qwen3-TTS 0.6B 8-bit: 3.2 GB). A job it holds back shows the reason on the
+job (`governor_note`, the red "waiting for memory" note in the app). The script reads that reason while the clip
+is queued; if the Hub has waited on memory for more than **5 minutes** (`TTS8_MEM_WAIT=300`) it records the clip as
+**`did not start` - needs X GB free, had Y GB** (the Hub's own numbers), cancels that job through the Hub, skips
+that model's other clips and goes on to the next model. `summary.txt` states it per model.
 
 Per clip it records: completed or failed (with the error text), wall time, audio length, RTF (wall
 time / audio time), the **peak memory of the voice worker** (macOS `footprint`, every second, over the
@@ -82,6 +96,7 @@ bash eight-gb-tts-run.sh --quick
 Runs S2 in Chris's voice for each model (three clips, a few minutes on a 32 GB Mac) into a folder named
 `TTS 8GB Quick Check ...`. It is the script's own self-test and works on any Mac. `--models
 qwen3,voxcpm2,omnivoice` picks models; `TTS8_TIMEOUT=2700` is the per-clip limit in seconds (a clip that
-runs over is cancelled and recorded as failed).
+runs over is cancelled and recorded as failed); `TTS8_MEM_WAIT=300` is how long a job may wait for memory
+before it is recorded as `did not start` (above).
 
 Note: the Hub keeps the audio of each job like any other job and cleans it by its own retention rule.

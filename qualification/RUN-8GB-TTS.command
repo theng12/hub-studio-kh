@@ -30,7 +30,7 @@ echo
 echo "This measures three voice models on this Mac: Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit and OmniVoice"
 echo "bf16, each reading the same two texts in the two owner voices. It takes one to a few hours on an"
 echo "8 GB Mac, writes a results folder beside this file, and changes nothing on this Mac: no setting,"
-echo "no install, nothing deleted."
+echo "no install, nothing deleted (it only asks Studio Hub to let idle models go before each model)."
 echo
 echo "Before you go on: close your other apps, keep the Mac on power, and make sure Studio Hub is open."
 echo

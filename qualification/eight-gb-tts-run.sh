@@ -21,11 +21,18 @@
 # than 3x the 32 GB time is flagged. It writes a timestamped folder beside this script (or on the
 # Desktop when the drive is read-only): the WAVs, results.csv and a short plain-English summary.txt.
 #
-# It changes nothing: no setting, no install, no delete. It only asks the Hub for audio (and keeps
-# the Mac awake while it runs). Safe to run again; each run gets its own folder.
+# Before each model it asks the Hub to release the idle Studios' models (never a running job) and records
+# the free memory the Hub sees and what holds the rest. If a clip's job sits queued because the Hub is
+# waiting for free memory for more than TTS8_MEM_WAIT seconds (default 300) it records "did not start -
+# needs X GB free, had Y GB" (the Hub's own reason), cancels that job, skips that model's other clips
+# and carries on with the next model; summary.txt says so in plain words.
 #
-# Nothing to edit. Knobs (all optional): TTS8_TIMEOUT=2700 (seconds per clip), TTS8_OUT=<folder>
-# (where the results folder goes), TTS8_READY_FILE=<hub-ready.json>, STUDIOHUB_APP=<app>.
+# It changes no setting, installs nothing and deletes nothing. It asks the Hub for audio (and keeps the
+# Mac awake while it runs). Safe to run again; each run gets its own folder.
+#
+# Nothing to edit. Knobs (all optional): TTS8_TIMEOUT=2700 (seconds per clip), TTS8_MEM_WAIT=300 (seconds
+# a job may wait for memory before it is given up on), TTS8_OUT=<folder> (where the results folder goes),
+# TTS8_READY_FILE=<hub-ready.json>, STUDIOHUB_APP=<app>.
 set -u
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 SELF="${BASH_SOURCE[0]}"
@@ -68,6 +75,7 @@ for i, a in enumerate(ARGS):
     elif a.startswith("--models="):
         ONLY = [x.strip() for x in a.split("=", 1)[1].split(",") if x.strip()]
 TIMEOUT = float(os.environ.get("TTS8_TIMEOUT", "2700"))
+MEM_WAIT_S = float(os.environ.get("TTS8_MEM_WAIT", "300"))   # a job the Hub holds back for memory this long is given up on
 MIN_VERSION = (0, 6, 122)
 SLOW_FACTOR = 3.0
 STALL_S = 20.0           # a poll or a sampling pass that takes this long means the Mac was not responsive
@@ -96,7 +104,8 @@ COLUMNS = ["model", "quant", "voice", "script", "audio_seconds", "generation_sec
            "status", "error", "memory_pressure", "swap_before_gb", "swap_after_gb", "swap_peak_gb",
            "machine_ram_gb", "macos_version", "app_version", "chip",
            "ref_32gb_seconds", "vs_32gb", "slow_flag", "cold_start", "responsive", "max_stall_s",
-           "queue_seconds", "footprint_before_gb", "worker_lifetime_peak_gb", "mlx_peak_active_gb", "mem_free_pct_min"]
+           "queue_seconds", "footprint_before_gb", "worker_lifetime_peak_gb", "mlx_peak_active_gb", "mem_free_pct_min",
+           "free_gb_before", "memory_released", "memory_holders", "needed_free_gb", "had_free_gb", "hub_reason"]
 
 LOG = None
 def say(msg=""):
@@ -138,6 +147,52 @@ PRESSURE_NAME = {1: "normal", 2: "warning", 4: "critical"}
 def free_pct():
     m = re.search(r"free percentage: (\d+)%", run(["memory_pressure", "-Q"]))
     return int(m[1]) if m else None
+
+def free_gb():
+    """The 'free' the Hub's admission reads (psutil on macOS): free + speculative + inactive pages. Compressed and wired memory are not in it."""
+    out = run(["vm_stat"])
+    page = re.search(r"page size of (\d+) bytes", out)
+    pages = {k: int(v) for k, v in re.findall(r"^Pages (free|speculative|inactive):\s+(\d+)\.", out, re.M)}
+    return round(sum(pages.values()) * int(page[1]) / 1e9, 2) if page and pages else None
+
+def holders(n=6):
+    """What holds this Mac's memory right now: wired + compressed, then the biggest processes (resident size; a Studio
+    worker is named by its script). Compressed pages belong to no process, so they are listed on their own."""
+    vm = run(["vm_stat"])
+    page = re.search(r"page size of (\d+) bytes", vm)
+    parts = []
+    if page:
+        for label, key in (("wired", r"Pages wired down"), ("compressed", r"Pages occupied by compressor")):
+            m = re.search(key + r":\s+(\d+)\.", vm)
+            if m:
+                parts.append(f"{label} {int(m[1]) * int(page[1]) / 1e9:.1f} GB")
+    by = {}
+    for l in run(["ps", "-axo", "rss=,command="]).splitlines():
+        m = re.match(r"\s*(\d+)\s+(.*)", l)
+        if not m:
+            continue
+        w = re.search(r"/(\w+_worker)\.py", m[2])
+        name = w[1] if w else (re.match(r"(.*?)(?: -|$)", m[2])[1].rsplit("/", 1)[-1][:40] or "?")
+        by[name] = by.get(name, 0) + int(m[1]) * 1024
+    parts += [f"{k} {v / 1e9:.1f} GB" for k, v in sorted(by.items(), key=lambda kv: -kv[1])[:n]]
+    return "; ".join(parts)
+
+def release_idle():
+    """Ask the Hub to make every idle Studio let go of its model (the Hub never touches a running job). Returns plain words."""
+    try:
+        s, d = call("POST", "/api/hub/memory/release", {}, timeout=120)
+    except HubDown as e:
+        return f"the Hub did not answer ({e})"
+    if s != 200 or not isinstance(d, dict):
+        return f"the Hub refused ({s})"
+    rows = d.get("results") or []
+    return f"asked {len(rows)} Studio(s): " + ", ".join(f"{r.get('id')} {r.get('result')}" for r in rows)
+
+NEEDS = re.compile(r"needs ~([\d.]+) ?GB[^~]*~([\d.]+) ?GB free")
+def memory_wait(note):
+    """(needed GB, had GB) from the Hub's 'waiting for memory: needs ~3.2GB, ~3.0GB free' reason, else None."""
+    m = NEEDS.search(note or "")
+    return (float(m[1]), float(m[2])) if m and "waiting for memory" in note else None
 
 def ver_tuple(v):
     m = re.match(r"(\d+)\.(\d+)\.(\d+)", str(v or ""))
@@ -348,11 +403,21 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx):
     if not wait_idle():
         rec.update(status="not run", error="the Mac stayed busy with other Hub jobs for 30 minutes")
         return rec
+    if cold:   # a new model is about to load: let idle Studios drop theirs first, then record what is free and what holds the rest
+        rec["memory_released"] = release_idle()
+        time.sleep(3)
+        rec["memory_holders"] = holders()
+        say(f"    Hub release of idle Studios: {rec['memory_released']}")
+        say(f"    Memory held by: {rec['memory_holders']}")
+    fg = free_gb()
+    rec["free_gb_before"] = "" if fg is None else fg
+    say(f"    Free memory as the Hub counts it: {rec['free_gb_before']} GB")
     swap0, fp0 = swap_gb(), worker_footprint_now()
     rec["swap_before_gb"] = "" if swap0 is None else swap0
     rec["footprint_before_gb"] = round(fp0 / 1e9, 2)
     sampler = Sampler(); sampler.start()
     t0 = time.time(); bid = None; state = None; item = {}; batch = {}; poll_max = 0.0; down_since = None
+    mem_since = None; mem_need = None; hub_note = ""
     try:
         env = {"modality": "voice", "model": model["repo"], "label": "tts-8gb-run", "voice_library_id": vid,
                "clientRequestId": "tts-8gb-" + uuid.uuid4().hex[:12],
@@ -380,10 +445,34 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx):
                 say(f"    {state} at {time.time() - t0:.0f} s"); last = state
             if state in ("done", "error", "cancelled", "failed", "uncertain"):
                 break
+            note = (batch.get("governor_note") or "") if isinstance(batch, dict) else ""
+            if state == "queued" and memory_wait(note):   # the Hub is holding this job back for free memory
+                if note != hub_note:
+                    say(f"    Hub: {note}")
+                if mem_since is None:
+                    mem_since = time.time()
+                mem_need, hub_note = memory_wait(note), note
+                if time.time() - mem_since > MEM_WAIT_S:
+                    call("DELETE", f"/api/hub/jobs/{bid}"); state = "no_memory"; break
+            else:
+                mem_since = None
             if time.time() - t0 > TIMEOUT:
                 call("DELETE", f"/api/hub/jobs/{bid}"); state = "timeout"; break
         wall = time.time() - t0
         audio_s = None
+        if state == "no_memory":
+            for _ in range(30):   # let the cancel settle so the next clip does not see a live job
+                time.sleep(1)
+                try:
+                    if (call("GET", f"/api/hub/jobs/{bid}")[1].get("items") or [{}])[0].get("state") != "queued":
+                        break
+                except (HubDown, AttributeError):
+                    break
+            rec.update(status="did not start", needed_free_gb=mem_need[0], had_free_gb=mem_need[1], hub_reason=hub_note,
+                       error=f"did not start - needs {mem_need[0]:g} GB free, had {mem_need[1]:g} GB; waited {wall / 60:.0f} min, job cancelled",
+                       generation_seconds=round(wall, 1))
+            sampler.halt = True; sampler.join(60)
+            return rec
         if state == "done":
             s, data = call("GET", f"/api/hub/jobs/{bid}/items/0/artifact", raw=True, timeout=300)
             if s != 200:
@@ -447,6 +536,12 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
         if not mine:
             continue
         done = [r for r in mine if r["status"] == "completed"]
+        refused = next((r for r in mine if r["status"] == "did not start"), None)
+        first = mine[0]
+        if first.get("memory_holders") or first.get("free_gb_before") != "":
+            lines.append(f"{m['name']} - before loading: {first.get('free_gb_before')} GB free as the Hub counts it "
+                         f"(Hub release of idle Studios: {first.get('memory_released') or 'not asked'}); "
+                         f"held by: {first.get('memory_holders') or 'not recorded'}")
         peak = max([fnum(r.get("peak_memory_gb")) or 0 for r in mine] or [0])
         grow = max([(fnum(r.get("swap_peak_gb")) or 0) - (fnum(r.get("swap_before_gb")) or 0) for r in mine] or [0])
         worst = {"normal": 1, "warning": 2, "critical": 4}
@@ -462,7 +557,11 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
             facts.append(f"{len(slow)} clip(s) over {SLOW_FACTOR:.0f}x the 32 GB time")
         if stalled:
             facts.append(f"Mac stopped responding for 20 s+ during {len(stalled)} clip(s)")
-        if len(done) < len(mine):
+        if refused:
+            verdict = (f"DID NOT START on this Mac: the Hub held the job back for lack of free memory - needs {refused['needed_free_gb']:g} GB free, "
+                       f"had {refused['had_free_gb']:g} GB; waited {float(refused['generation_seconds']) / 60:.0f} min, then the job was cancelled "
+                       f"and the model's other {sum(r['status'] == 'skipped' for r in mine)} clip(s) were skipped")
+        elif len(done) < len(mine):
             verdict = "did not complete on this Mac"
         elif slow or stalled or level >= 4 or grow > 2:
             verdict = "completed but strained this Mac"
@@ -470,13 +569,15 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
             verdict = "fits" + (" 8 GB" if ON_TARGET else " this Mac (not 8 GB)")
         lines.append(f"{m['name']}: {', '.join(facts)} -> {verdict}")
         for r in mine:
-            if r["status"] != "completed":
+            if r["status"] not in ("completed", "skipped") and not (refused and r is refused):
                 lines.append(f"    {r['voice']} {r['script']}: {r['status']} - {r.get('error') or 'no reason given'}")
     lines += ["", "How to read it: 'fits' means every clip completed, memory pressure never reached critical, swap grew by",
               "no more than 2 GB, no clip took over 3x its 32 GB time and the Mac kept answering. Anything else is stated.",
               "Peak is the largest memory the voice worker used (macOS 'footprint', sampled every second, so a very short",
               "spike can be missed; worker_lifetime_peak_gb in results.csv is macOS's own all-time peak for that process).",
-              "The first clip of each model includes loading it. results.csv has every number per clip."]
+              "The first clip of each model includes loading it. results.csv has every number per clip.",
+              f"'DID NOT START' means the Hub kept the job queued waiting for free memory for more than {MEM_WAIT_S / 60:g} min (TTS8_MEM_WAIT); the number",
+              "after 'needs' is the Hub's own admission floor for that model and 'had' is what it counted as free at that moment."]
     return "\n".join(lines) + "\n"
 
 # ---------------------------------------------------------------- main
@@ -530,12 +631,20 @@ def main():
     ctx = {"hub_ver": hub_ver}
     with open(out / "results.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, COLUMNS, extrasaction="ignore"); w.writeheader()
-        seen = set()
+        seen = set(); refused = {}
         try:
             for n, (m, v, s) in enumerate(jobs, 1):
                 cold = m["key"] not in seen; seen.add(m["key"])
                 say(f"\n[{n}/{len(jobs)}] {m['name']} - {v[2]} - {s[0]} ({s[2]})" + ("  [first clip: includes loading the model]" if cold else ""))
-                rec = clip(m, v, s[0], texts[s[0]], out, cold, ctx)
+                if m["key"] in refused:   # this model never started: do not queue its other clips behind the same wait
+                    r0 = refused[m["key"]]
+                    rec = dict(model=m["csv_model"], quant=m["quant"], voice=v[0], script=s[0], status="skipped",
+                               error=f"skipped - {m['name']} did not start (needs {r0['needed_free_gb']:g} GB free, had {r0['had_free_gb']:g} GB)",
+                               machine_ram_gb=RAM_GB, macos_version=OSV, app_version=hub_ver, chip=CHIP)
+                else:
+                    rec = clip(m, v, s[0], texts[s[0]], out, cold, ctx)
+                    if rec["status"] == "did not start":
+                        refused[m["key"]] = rec
                 rows.append(rec); w.writerow(rec); fh.flush()
                 if rec["status"] == "completed":
                     say(f"    completed: {rec['generation_seconds']} s for {rec['audio_seconds']} s of audio (RTF {rec['rtf']}), "
