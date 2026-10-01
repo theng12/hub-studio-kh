@@ -185,10 +185,13 @@ def _inspect(path: Path, roots: list[Path]) -> tuple[str, os.stat_result | None,
 
 
 def _same_file(info: os.stat_result, row) -> bool:
-    # Link-count changes update ctime on every remaining hard link.  mtime, size,
-    # device/inode and the checksum recheck below still identify the bytes.
-    return (row["device"], row["inode"], row["bytes"], row["modified_ns"]) == (
-        info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    # Link-count changes update ctime on every remaining hard link.  mtime, size, inode and the
+    # checksum recheck below identify the bytes.  `st_dev` is deliberately not compared: macOS
+    # renumbers a volume's device between boots (measured here: three different values across
+    # three reboots), so comparing it marked every output generated before the last restart
+    # "uncertain" for ever - never moved to the Trash Folder, still counted against `max_bytes`.
+    return (row["inode"], row["bytes"], row["modified_ns"]) == (
+        info.st_ino, info.st_size, info.st_mtime_ns)
 
 
 def _sha256(path: Path) -> str:
@@ -325,10 +328,12 @@ def _reconcile(conn, machine: str | None = None) -> None:
         groups.setdefault(row["group_id"], []).append(row)
     for group_id, files in groups.items():
         group = conn.execute("SELECT state,recoverable FROM output_groups WHERE id=?", (group_id,)).fetchone()
-        recovered = group is not None and group["state"] == "uncertain" and group["recoverable"]
+        was_uncertain = group is not None and group["state"] == "uncertain"
+        recovered = was_uncertain and group["recoverable"]
         safe = True
         uncertain = False
         unavailable = False
+        drifted = False
         for row in files:
             path, root = Path(row["path"]), Path(row["managed_root"])
             state, info, _ = _inspect(path, [root])
@@ -342,20 +347,32 @@ def _reconcile(conn, machine: str | None = None) -> None:
                 unavailable = True
                 continue
             try:
-                matches = _same_file(info, row) and _sha256(path) == row["sha256"]
+                # Identity unchanged (inode, size, mtime) is enough for a group that is already
+                # trusted: hashing every output on every sweep read the whole live library
+                # (20 GB by default, ~12 s at 1.6 GB/s) on the scheduler's event loop each time
+                # admission asked, and pushed the models' pages out of a small Mac's file cache.
+                # A group returning from `uncertain` still has to prove its bytes, and `enforce`
+                # re-hashes each file immediately before it moves it.
+                matches = _same_file(info, row) and (
+                    not was_uncertain or _sha256(path) == row["sha256"])
             except OSError:
                 matches = False
             if not matches:
                 uncertain = True
                 safe = False
                 continue
+            if info.st_dev != row["device"]:
+                drifted = True
+                conn.execute("UPDATE output_files SET device=? WHERE id=?", (info.st_dev, row["id"]))
             conn.execute("UPDATE output_files SET present=1 WHERE id=?", (row["id"],))
         if uncertain:
             conn.execute("UPDATE output_groups SET state='uncertain',recoverable=? WHERE id=?",
                          (1 if unavailable else 0, group_id))
-        elif recovered and safe:
+        elif was_uncertain and safe and (recovered or drifted):
             # A temporarily missing/inaccessible root becomes eligible only when
-            # every original path and checksum has returned unchanged.
+            # every original path and checksum has returned unchanged.  A group parked as
+            # "uncertain" before `st_dev` stopped being compared (same bytes, only the device
+            # number renumbered by a reboot) is released the same way.
             conn.execute("UPDATE output_groups SET state='finalized',recoverable=0 WHERE id=?", (group_id,))
 
 
