@@ -262,18 +262,20 @@ def test_an_unverifiable_m4a_is_marked_unbillable(change):
 
 
 def test_a_wav_report_still_takes_the_decoding_path(monkeypatch):
-    """The default (and an old worker that reports no type) is byte-for-byte the old behaviour."""
+    """The default (and an old worker that reports no type) takes the WAV verifier, not the m4a one.
+
+    The WAV verifier hashes and decodes as it streams (nothing buffered), so the download is a
+    `stream`; the compressed path would have refused these jobs before any request (no decoded
+    duration reported) - a request being made at all is what proves the WAV path ran.
+    """
     calls = []
 
     class Client:
-        async def get(self, *args, **kwargs):
-            calls.append("get")
-            raise httpx.ConnectError("offline")
-
         def stream(self, *args, **kwargs):
-            raise AssertionError("WAV is not streamed")
+            calls.append("stream")
+            raise httpx.ConnectError("offline")
 
     for reported in ({"media_type": "audio/wav"}, {}):
         item = _verify(Client(), {"bytes": 4, "sha256": "a" * 64, **reported})
         assert item["artifact_metadata_error"]
-    assert calls == ["get", "get"]
+    assert calls == ["stream", "stream"]
