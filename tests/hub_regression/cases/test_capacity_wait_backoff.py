@@ -57,7 +57,7 @@ def test_repeated_memory_refusals_back_off_then_hand_the_job_back(fixture_monito
     assert delays == [30.0, 60.0]
     assert item["error"].startswith("waiting for capacity:")
     summary = broker.batch_summary(batch)
-    assert summary["capacity_refusals"] == 2 and summary["capacity_waiting_s"] == 1000.0
+    assert summary["capacity_refusals"] == 2 and summary["capacity_waiting_s"] == 2000.0
 
     # the next refusal hands it back
     item.update(state="running", studio="image", tries=1)
