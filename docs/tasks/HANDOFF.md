@@ -3,7 +3,41 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.122** (updates restart the app by themselves; 2026-10-01).
+Last updated: **0.6.123** (relaunch safety net + shelved models; 2026-10-01).
+
+> **0.6.123 - Relaunch safety net + SHELVED MODELS** (owner-approved 2026-09-30/10-01). Read `CHANGELOG.md` 0.6.123; what to know:
+>
+> - **Relaunch safety net** (`native/StudioHub.swift` `RelaunchHelper`): the helper `relaunchAfterUpdate` starts waits for the old
+>   app pid 120 s, then SIGTERM, 10 s, SIGKILL, then `open`s the new app (normal path unchanged). It is spawned with `posix_spawn`
+>   in its own session (`POSIX_SPAWN_SETSID`) and no inherited descriptors (`POSIX_SPAWN_CLOEXEC_DEFAULT`): the login launch agent
+>   has no `AbandonProcessGroup`, so launchd kills the app's leftover process group at exit and would have taken a same-group
+>   helper with it. Seam `spawnRelaunchHelper: (pid, appPath)`. `lifecycle_main.swift` `relaunch-helper` runs the real helper
+>   against stand-ins (exits by itself / never exits / ignores SIGTERM); mutation-proved (no escalation, no SIGKILL, no SETSID,
+>   kill-at-once each fail). A Mac below 0.6.123 relaunches with its own old helper when it takes this update.
+> - **Shelved models** (`components/shelved_models.py`, `SHELVED_MODELS`): `whisper-base`, `whisper-small`, `voxcpm2-bf16`,
+>   `fish-audio-s2-pro-bf16` (+ their `mlx-community/...` repo ids). Stay in the catalog and usable where present; weights stay in
+>   the kit's SSD model library; `copy_models_for_this_mac.py` skips them ("Shelved, not copied") unless keep-all; the Hub, at
+>   start-up on a Mac not marked keep-all, moves an installed one to `hub/trash/<UTC date>/shelved-models/` (purged after 15
+>   days) and refuses download/import (409, "Not on this Mac: ..."); the row is `not_installed` + `shelved: true`, never `invalid`.
+>   Whisper turbo is the Subtitle default already (`"default": true`, only manifest) and is not shelved.
+> - **KEEP-ALL (device setting `keep_all_models`, default false):** set it with `PUT /api/hub/settings {"keep_all_models": true}`
+>   (Hub token) or by adding `"keep_all_models": true` to `~/Library/Application Support/StudioHub Standalone/hub/device_settings.json`.
+>   Restore-defaults keeps it. **Mark THIS Mac keep-all BEFORE it starts 0.6.123** or its four shelved folders move to the Trash
+>   Folder at that first start (recoverable from `hub/trash/<date>/shelved-models/` for 15 days). The Gateway/Story subtitle model
+>   selection (still Whisper base, 42 jobs) is the coordinator's switch to turbo.
+> - **Limit:** the move is a same-volume rename; a model library on another volume than the Hub data folder is skipped, not copied.
+> - **BRIDGE KEPT** (video `runtime: 'voice'`), unchanged.
+> - **Gate / DMG / delta:** `unittest discover` -> **1610 tests, OK (13 skipped), 649 s, exit 0**
+>   (a first run had 1 failure, the device-settings dict shape pinned in `test_hub_standalone`, updated); `native/build.sh`
+>   green (boundary, API contract, lifecycle incl. `relaunch-helper`). **Delta 0.6.122 -> 0.6.123: 9 files, 9 blobs, 13,687,418 B
+>   to send** (native binary, `Info.plist`, `hub/standalone.py`, `hub/standalone_config.py`, new `shelved_models.py`,
+>   `release-manifest.json`, `release-notes.md`, `voice/CHANGELOG.md`, `voice/VERSION`); 0 removed; totals 77,467 files,
+>   4,202,361,609 B. **DMG** `dist/StudioHub-0.6.123-6af8ae9.dmg` (1,567,659,850 B, SHA-256
+>   `e7799910ca05aae54230193416ed2c4d6608b3f12cc157ce3170959e0eb2a5d9`, `hdiutil verify` valid, `bytes-wasted: 0`); its first
+>   output carried 376 MB of dead space (kept as `_trash/dist/StudioHub-0.6.123-6af8ae9-wasted376MB.dmg`), re-compacted with
+>   `hdiutil convert -format UDZO`. The 0.6.122 DMG moved to `_trash/dist/`. Installable app:
+>   `.build/StudioHub-0123/Studio Hub.app` (manifest `0.6.123` / `6af8ae9295bac17e4c14224ebbd0d227f080b239`). **Not installed, not
+>   on the drives, nothing pushed to controllers.**
 
 > **0.6.122 - Updates restart the app by themselves (relaunch hang fixed; bridge KEPT)** (0.6.119-0.6.121 installs hung
 > half-quit on four controllers, 2026-10-01). Read `CHANGELOG.md` 0.6.122 and
