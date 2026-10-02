@@ -293,7 +293,9 @@ class MemoryCatalogTests(unittest.TestCase):
         self.assertGreater(z_admission['effective_min_free_memory_gb'], 3.2)
 
         flux_admission = memory_admission.describe(MODEL_ID, entries[MODEL_ID])
-        self.assertEqual(flux_admission['effective_min_free_memory_gb'], 3.2)
+        # The catalog row says 3.2 (8 GB-tier footprint 2.93 GB + margin), but the Hub's measured fleet default
+        # for Klein (2.0) outranks it: 8 GB Macs routinely have 2.4-3.0 GB available and an unmet free floor waits.
+        self.assertEqual(flux_admission['effective_min_free_memory_gb'], 2.0)
         self.assertEqual(flux_admission['catalog_min_free_memory_gb'], 3.2)
         self.assertEqual(flux_admission['default_min_total_memory_gb'], 8.0)
 

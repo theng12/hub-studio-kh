@@ -46,9 +46,11 @@ DEFAULT_MIN_FREE_MEMORY_GB = 2.0
 _FLEET_DEFAULTS = {
     "aitrader/flux2-klein-4b-mlx-4bit": {
         "min_total_memory_gb": 8.0,
-        # 3.2 = the worker catalog's floor (staged + streamed footprint 2.93 GB plus margin; 32 GB Mac
-        # emulating 8 GB, 2026-10-02; re-measure on 8 GB runner). It was 2.0, which shadowed the catalog.
-        "min_free_memory_gb": 3.2,
+        # NOT the worker catalog's 3.2 (staged + streamed footprint 2.93 GB plus margin, measured on a 32 GB Mac
+        # emulating 8 GB, 2026-10-02): this measured fleet default wins over the catalog, and 8 GB Macs that have
+        # run thousands of Klein images routinely show 2.4-3.0 GB available, where an unmet free floor means "wait",
+        # not "skip". Raising it is an owner decision after the 8 GB runner re-measure.
+        "min_free_memory_gb": 2.0,
         "reason": "Fleet-qualified on 8 GB Apple-silicon Macs",
     },
 }
