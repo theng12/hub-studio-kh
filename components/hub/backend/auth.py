@@ -563,6 +563,15 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/startup$"),
     ("POST", r"^/api/hub/startup/request$"),
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/startup$"),
+    # **Renaming a Mac from the Gateway (owner request 2026-10-02).** The controller takes the
+    # Gateway's rename (`.../fleet/nodes/{id}/name`) and pushes it to the node's own
+    # `/api/hub/machine-label`, which with a fleet credential accepts a 1-120 character name and
+    # nothing else (no clearing, no other setting). A name is a label, never an identity: routing,
+    # credentials and membership do not read it, so the most a Fleet-token holder can do with this is
+    # relabel a Mac - the same group already trusted to send it work and restart its services.
+    # Neither is in `NODE_ALLOWED`: a node's own credential cannot rename another Mac.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/name$"),
+    ("POST", r"^/api/hub/machine-label$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
     # statement — here is your new credential, and here is your new head — so they are one route.
     # A controller pushes it to a node with the Fleet token; the *operator* calls it with the Hub

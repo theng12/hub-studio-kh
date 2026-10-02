@@ -1068,7 +1068,9 @@ async def _register_with_controller(controller_url: str, token: str, self_addres
             "itself; it will register on its next re-join", controller_url)
         return None
     from .backend import control_plane as _control_plane
-    settings = _control_plane.load_settings()
+    # `public_settings`, not `load_settings`: only the public view carries `machine_name`, so this
+    # introduced every handed-over Mac under its id instead of its name.
+    settings = _control_plane.public_settings()
     studios = [{"id": str(row.get("id")), "modality": str(row.get("modality"))}
                for row in (getattr(monitor, "registry", None) or [])
                if row.get("id") and row.get("modality") and not row.get("fleet_node")]
@@ -1320,9 +1322,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             local_job = next(iter(local_jobs.values()), None)
         except Exception:
             local_job = None
+        # Who this Mac is and what it is called now, so its controller's roster (and the Gateway)
+        # follows a rename instead of keeping the name it joined with.
+        from .backend import fleet_nodes as fleet_view
         return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version(),
                 "disk": host.get("disk"), "startup": _startup_snapshot(),
-                "current_job": local_job}
+                "current_job": local_job, "machine": fleet_view.this_machine()}
 
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:
@@ -2362,7 +2367,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(409, str(exc)) from exc
 
     @app.post("/api/hub/machine-label")
-    def set_machine_label(body: dict[str, Any]) -> dict[str, Any]:
+    def set_machine_label(body: dict[str, Any], request: Request) -> dict[str, Any]:
         """Name this Mac the way the operator wants it shown.
 
         The name is a label, not an identity: the Hub's machine key stays "local", routing and fleet
@@ -2370,12 +2375,45 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         anything. `registry.set_label` has existed for this the whole time; no route exposed it, so
         the only name an operator could ever have was their hostname.
         """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
         from .backend import registry
         name = str(body.get("name") or "").strip()
         if len(name) > 120:
             raise HTTPException(400, "the name must be at most 120 characters")
+        # This Mac's controller may rename it with the Fleet token (a rename from the Gateway is relayed
+        # here, `fleet.relay_name`). Only to a real name: clearing it back to the hostname is the owner's.
+        if hub_auth._fleet_actor(request).get("kind") != "hub":
+            try:
+                name = fleet.valid_name(name)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
         registry.set_label("local", name)
         return {"settings": control_plane.public_settings()}
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/name")
+    async def fleet_node_name(node_id: str, body: dict[str, Any]) -> JSONResponse:
+        """Rename one Mac in this group - a joined node, or this controller itself (its id or ``local``).
+
+        The Gateway's Fleet page reaches it with the Fleet token it holds. A node is renamed **on the
+        node** and then here (see `fleet_nodes.relay_name` for why); a node's own credential cannot call
+        this (it is not in `NODE_ALLOWED`).
+        """
+        from .backend import fleet_nodes as fleet
+        from .backend import registry
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            try:
+                registry.set_label("local", fleet.valid_name(body.get("name")))
+            except ValueError as exc:
+                return JSONResponse({"ok": False, "code": "BAD_NAME", "detail": str(exc)}, status_code=400)
+            return JSONResponse({"ok": True, "node": wanted, "name": fleet.this_machine()["name"]})
+        try:
+            answer = await fleet.relay_name(wanted, body.get("name"))
+        except fleet.StartupRelayError as error:
+            return JSONResponse(error.body, status_code=error.status)
+        monitor.reload_registry()
+        return JSONResponse(answer)
 
     @app.get("/api/hub/shared-voices")
     def shared_voice_list() -> dict[str, Any]:

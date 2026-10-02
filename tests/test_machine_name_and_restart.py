@@ -58,10 +58,15 @@ class MachineNameTests(unittest.TestCase):
                 self.assertEqual(status, 200, cleared)
                 self.assertNotEqual(cleared["settings"]["machine_name"], "")
 
-                status, refused, _ = hub.post_json(
-                    "/api/hub/machine-label", {"name": "Not Yours"},
-                    token=(hub.data / ".fleet_token").read_text().strip())
-                self.assertEqual(status, 403, refused)
+                # The Fleet token may rename this Mac (owner request 2026-10-02: rename from the
+                # Gateway, relayed by the controller) - to a real name only, never clear it.
+                fleet = (hub.data / ".fleet_token").read_text().strip()
+                status, refused, _ = hub.post_json("/api/hub/machine-label", {"name": ""}, token=fleet)
+                self.assertEqual(status, 400, refused)
+                status, relabelled, _ = hub.post_json("/api/hub/machine-label",
+                                                      {"name": "From the Gateway"}, token=fleet)
+                self.assertEqual(status, 200, relabelled)
+                self.assertEqual(relabelled["settings"]["machine_name"], "From the Gateway")
             finally:
                 hub.stop()
 

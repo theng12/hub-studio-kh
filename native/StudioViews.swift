@@ -4796,8 +4796,16 @@ struct StudioContent: View {
                     ValueRow("Role", value: identity.settings.role.capitalized)
                     ValueRow("Station", value: identity.settings.siteName)
                     ValueRow("Station ID", value: identity.settings.siteId)
-                    ValueRow("Controller ID", value: identity.settings.controllerId)
+                    // `controllerId` is this Mac's own fixed id. On a controller it names the group; on
+                    // a node it is the id the controller routes this Mac by, so "Controller ID" there
+                    // read as the controller's id (live 2026-10-02, a renamed node).
+                    let isController = identity.settings.role == "controller"
+                    ValueRow(isController ? "Controller ID" : "Machine ID", value: identity.settings.controllerId)
                     ValueRow("This machine", value: identity.settings.machineName)
+                    if !isController {
+                        Text("The machine ID stays the same when this Mac is renamed; only the name above changes.")
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                    }
                     ValueRow("Accepts customer jobs", value: identity.readiness.ready ? "Yes" : "No")
                     Text("Node-to-node routing is unchanged: GatewayKH sends work to a location controller, and joined nodes keep their existing enrolment. This app does not open a second gateway.")
                         .font(HubType.secondary).foregroundStyle(.secondary)
@@ -4833,7 +4841,7 @@ struct StudioContent: View {
             }
             Text("Give this to GatewayKH so it can send work here and collect the results, and to every Mac that joins this controller. **This is the only token you hand out.**")
                 .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("What it lets the holder do: send work to this Mac, follow that job, download the result, acknowledge it, cancel it or discard an uncertain one, and read the model and fleet lists.")
+            Text("What it lets the holder do: send work to this Mac, follow that job, download the result, acknowledge it, cancel it or discard an uncertain one, read the model and fleet lists, and rename this Mac (its name only).")
                 .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("What it cannot do: change this Mac's settings, install or remove its models, delete its output, manage its shared voices, or make a Mac join or leave. A Mac that holds this token still cannot administer this Mac.")
                 .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

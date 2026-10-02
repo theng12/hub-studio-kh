@@ -604,15 +604,16 @@ class StudioMonitor:
             await asyncio.sleep(POLL_INTERVAL_S)
 
     async def poll_all(self):
-        # A node's studios follow what it says it runs now (an update can stop shipping one), so a
-        # studio no node runs is not polled as a permanently `down` worker. See
-        # `fleet_nodes.sync_studios_from_snapshots`.
+        # A node's studios and name follow what it says now (an update can stop shipping a studio, the
+        # owner can rename a Mac), so a studio no node runs is not polled as a permanently `down`
+        # worker and a renamed Mac is not shown under its old name. See
+        # `fleet_nodes.sync_roster_from_snapshots`.
         from . import fleet_nodes
         try:
-            if await asyncio.to_thread(fleet_nodes.sync_studios_from_snapshots):
+            if await asyncio.to_thread(fleet_nodes.sync_roster_from_snapshots):
                 self.reload_registry()
         except Exception:
-            log.warning("node studio sync failed (continuing)", exc_info=True)
+            log.warning("node roster sync failed (continuing)", exc_info=True)
         await asyncio.gather(*(self._poll_one(s) for s in self.registry))
         # Activity is an optional extension of an already successful health
         # probe. Persisting its compact transitions here keeps Stats entirely

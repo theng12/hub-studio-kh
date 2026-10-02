@@ -60,18 +60,18 @@ class RosterFollowsTheNode(unittest.TestCase):
 
     def test_a_studio_the_node_no_longer_runs_leaves_the_roster(self) -> None:
         with mock.patch.object(fleet_nodes, "fresh_snapshot", return_value=snapshot(*FIVE)):
-            self.assertTrue(fleet_nodes.sync_studios_from_snapshots())
-            self.assertFalse(fleet_nodes.sync_studios_from_snapshots(), "a second pass changes nothing")
+            self.assertTrue(fleet_nodes.sync_roster_from_snapshots())
+            self.assertFalse(fleet_nodes.sync_roster_from_snapshots(), "a second pass changes nothing")
         self.assertEqual(self.studios(), ["chat", "image", "music", "subtitle", "voice"])
         # What the monitor polls (after `reload_registry`) no longer has a worker that does not exist.
         self.assertNotIn("mac-1106:video", [s["id"] for s in fleet_nodes.remote_studios()])
 
     def test_a_studio_that_comes_back_is_offered_again(self) -> None:
         with mock.patch.object(fleet_nodes, "fresh_snapshot", return_value=snapshot(*FIVE)):
-            fleet_nodes.sync_studios_from_snapshots()
+            fleet_nodes.sync_roster_from_snapshots()
         with mock.patch.object(fleet_nodes, "fresh_snapshot",
                                return_value=snapshot(*FIVE, ("video", "video"))):
-            self.assertTrue(fleet_nodes.sync_studios_from_snapshots())
+            self.assertTrue(fleet_nodes.sync_roster_from_snapshots())
         self.assertIn("video", self.studios())
 
     def test_silence_never_empties_a_roster_row(self) -> None:
@@ -79,7 +79,7 @@ class RosterFollowsTheNode(unittest.TestCase):
                      {"reachable": True, "auth": True, "studios": "nonsense"},
                      snapshot(("Bad Id!", "voice"), ("x", "not-a-modality"))):
             with mock.patch.object(fleet_nodes, "fresh_snapshot", return_value=said):
-                self.assertFalse(fleet_nodes.sync_studios_from_snapshots(), said)
+                self.assertFalse(fleet_nodes.sync_roster_from_snapshots(), said)
         self.assertEqual(len(self.studios()), 6)
 
 

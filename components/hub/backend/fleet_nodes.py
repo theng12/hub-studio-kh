@@ -228,6 +228,34 @@ def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = 
     return now
 
 
+def _answered(snapshot: dict[str, Any] | None) -> bool:
+    """Whether this is a snapshot the node answered with this controller's credential."""
+    return isinstance(snapshot, dict) and bool(snapshot.get("reachable")) and snapshot.get("auth") is not False
+
+
+def valid_name(value: object) -> str:
+    """A Mac's display name: 1-120 printable characters, trimmed. Raises `ValueError` otherwise."""
+    name = str(value or "").strip()
+    if not 1 <= len(name) <= 120 or not name.isprintable():
+        raise ValueError("name must be between 1 and 120 printable characters")
+    return name
+
+
+def _name_reported(node_id: str, snapshot: dict[str, Any] | None) -> str | None:
+    """The name a node's own current snapshot gives itself, or `None` when it did not say.
+
+    Only when the snapshot names **this** node id: an address now answered by a different Mac must not
+    hand its name to this row. A Hub older than the field says nothing, and nothing said changes nothing.
+    """
+    machine = snapshot.get("machine") if _answered(snapshot) else None
+    if not isinstance(machine, dict) or str(machine.get("id") or "").strip().lower() != node_id:
+        return None
+    try:
+        return valid_name(machine.get("name"))
+    except ValueError:
+        return None
+
+
 def _studios_reported(snapshot: dict[str, Any] | None) -> list[dict[str, str]] | None:
     """The studios a node's own current snapshot says it runs, or `None` when it did not say.
 
@@ -235,7 +263,7 @@ def _studios_reported(snapshot: dict[str, Any] | None) -> list[dict[str, str]] |
     non-empty list: an older Hub, an error or a Mac mid-start says nothing, and "nothing said" must
     never empty a roster row.
     """
-    if not isinstance(snapshot, dict) or not snapshot.get("reachable") or snapshot.get("auth") is False:
+    if not _answered(snapshot):
         return None
     studios = snapshot.get("studios")
     if not isinstance(studios, dict):
@@ -249,8 +277,9 @@ def _studios_reported(snapshot: dict[str, Any] | None) -> list[dict[str, str]] |
     return reported or None
 
 
-def sync_studios_from_snapshots() -> bool:
-    """Make each node's roster studios what that node currently says it runs. True when one changed.
+def sync_roster_from_snapshots() -> bool:
+    """Make each node's roster row what that node currently says: its studios and its name.
+    True when a row changed.
 
     **The roster was frozen at join time.** A node names its studios once, when it joins, and a Mac
     never re-joins on its own; so when an update stopped shipping a studio (Video, after LTX was
@@ -260,11 +289,24 @@ def sync_studios_from_snapshots() -> bool:
     "partially unavailable" — on a healthy, idle fleet. The node's peer snapshot
     (`/api/hub/resources?local_only=true`, already read every poll for dispatch) names the studios
     it runs, so the roster follows it, in both directions, the same way a join would have recorded.
+
+    **The name follows the Mac the same way (live 2026-10-02).** A Mac renamed after it joined kept
+    its old name here and on the Gateway: the only other path, the node's minute status call, counts
+    only with that Mac's own node credential, and a Mac whose credential this controller no longer
+    recognises falls back to the group token, which may not rename. The node's snapshot names it
+    (`machine`, in the release after 0.6.132), so the name is taken from there. A name set from the Gateway is pushed
+    to the Mac itself first (`relay_name`), so the Mac and its roster row never disagree for long.
     """
     nodes = _read()
     changed = False
     for node_id, row in nodes.items():
-        reported = _studios_reported(fresh_snapshot(node_id))
+        snapshot = fresh_snapshot(node_id)
+        name = _name_reported(node_id, snapshot)
+        if name and row.get("name") != name:
+            log.info("node %s is now called %r (the roster said %r)", node_id, name, row.get("name"))
+            row["name"] = name
+            changed = True
+        reported = _studios_reported(snapshot)
         if reported is None:
             continue
         current = [{"id": str(s.get("id")), "modality": str(s.get("modality"))}
@@ -421,9 +463,7 @@ def join(payload: dict[str, Any], *,
     gone = document["removed"].get(node_id)
     if gone is not None:
         raise NodeRemovedError(node_id, gone.get("removed_at"))
-    name = str(payload.get("name") or "").strip()
-    if not 1 <= len(name) <= 120:
-        raise ValueError("name must be between 1 and 120 characters")
+    name = valid_name(payload.get("name"))
     address = validate_address(payload.get("address"))
     studios = _studios(payload.get("studios"))
     nodes = document["nodes"]
@@ -516,10 +556,13 @@ def revoked_detail(offered: str | None) -> str | None:
 def rename(node_id: str, name: str) -> bool:
     """Refresh a node's stored label. The roster name is written at join, so a rename on the Mac
     reached the controller only when that Mac re-joined. Returns whether anything changed."""
-    name = str(name or "").strip()
+    try:
+        name = valid_name(name)
+    except ValueError:
+        return False
     nodes = _read()
     row = nodes.get(str(node_id or "").lower())
-    if row is None or not 1 <= len(name) <= 120 or row.get("name") == name:
+    if row is None or row.get("name") == name:
         return False
     row["name"] = name
     _write(nodes)
@@ -1059,6 +1102,56 @@ async def relay_startup(node_id: str, payload: dict[str, Any], *, actor: str = "
         body.setdefault("detail", f"that Mac answered HTTP {response.status_code}")
         raise StartupRelayError(response.status_code, body)
     return {**body, "node": wanted}
+
+
+async def relay_name(node_id: str, name: object, *,
+                     client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Rename one joined Mac **on that Mac**, then on this roster. Raises `StartupRelayError`.
+
+    The rule (owner request 2026-10-02, rename from the Gateway): **a Mac's name lives on the Mac.**
+    The roster follows what each Mac reports about itself (`sync_roster_from_snapshots`), so a name
+    written here alone would be overwritten by the Mac's next snapshot. The rename therefore goes to the
+    Mac first (`POST /api/hub/machine-label`, the route its own Connections page uses, with this
+    controller's Fleet token) and the roster row changes only when the Mac took it. A Mac that is off,
+    or on a Hub that does not accept a fleet rename, keeps its name and the caller is told why.
+    """
+    try:
+        clean = valid_name(name)
+    except ValueError as exc:
+        raise StartupRelayError(400, {"ok": False, "code": "BAD_NAME", "detail": str(exc)}) from exc
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        raise StartupRelayError(404, {"ok": False, "code": "UNKNOWN_NODE",
+                                      "detail": f"this controller has no joined Mac {node_id!r}"})
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        response = await client.post(f"{node.get('address') or ''}/api/hub/machine-label",
+                                     json={"name": clean}, timeout=PROBE_TIMEOUT)
+    except httpx.HTTPError as exc:
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
+                                      "reason": _unreachable_reason(exc),
+                                      "detail": "that Mac did not answer, so it was not renamed - "
+                                                "rename it when it is back"}) from exc
+    finally:
+        if owned:
+            await client.aclose()
+    if response.status_code in (401, 403):
+        raise StartupRelayError(502, {
+            "ok": False, "code": "NODE_REFUSED",
+            "detail": "that Mac refused the rename: its Studio Hub is older than fleet renaming, or it "
+                      "holds a different Fleet token. Rename it on that Mac (Connections) instead."})
+    if not response.is_success:
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_ERROR",
+                                      "detail": f"that Mac answered HTTP {response.status_code}"})
+    rename(wanted, clean)
+    # The snapshot already held was taken before the rename; dropped, so the next sync cannot put the
+    # old name back before the next poll reads the new one.
+    from . import peers
+    peers.invalidate(wanted)
+    return {"ok": True, "node": wanted, "name": clean}
 
 
 async def pool(client: httpx.AsyncClient | None = None) -> dict[str, Any]:

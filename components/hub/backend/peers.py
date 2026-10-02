@@ -377,6 +377,8 @@ async def _refresh_stale(machines, stale, client, now):
                 "startup": data.get("startup") if isinstance(data.get("startup"), dict) else None,
                 # The job that Mac is on right now, as it reported it. Absent from an older Hub.
                 "current_job": data.get("current_job") if isinstance(data.get("current_job"), dict) else None,
+                # Who that Mac says it is and what it is called now (`{id, name}`). Absent from an older Hub.
+                "machine": data.get("machine") if isinstance(data.get("machine"), dict) else None,
                 "reachable": True, "auth": True, "status": "connected",
             }
             clears_rejection = False
