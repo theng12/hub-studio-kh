@@ -449,7 +449,14 @@ def _state_at(machine: str, statuses: dict, studios: list[dict], live: list[dict
     terminal.sort(key=lambda row: -(row.get("finished_at") or row.get("observed_at") or 0))
     latest = terminal[0] if terminal else None
     latest_time = ((latest or {}).get("finished_at") or (latest or {}).get("observed_at"))
-    recent_error = latest if latest and latest["state"] == "error" else None
+    # **Recent** means recent. Any error as the newest terminal job used to hold a machine in
+    # `needs_attention` until its next success — on an idle fleet that is for ever, so a routing
+    # refusal from the night before kept a healthy Mac amber all day. The failure stays in
+    # `failed` and the timeline; the state says only what needs someone now.
+    recent_error = latest if (
+        latest and latest["state"] == "error" and latest_time is not None
+        and now - latest_time < JUST_FINISHED_S
+    ) else None
     if health_problem or recent_error:
         return "needs_attention", now, active[0] if active else None, latest
     if active:
@@ -457,7 +464,8 @@ def _state_at(machine: str, statuses: dict, studios: list[dict], live: list[dict
         return "working", now, current, latest
     if all_down:
         return "offline", now, None, latest
-    if latest and latest["state"] in {"done", "cancelled"} and latest_time is not None:
+    # An error older than the attention window ages like any other finished job.
+    if latest and latest["state"] in TERMINAL_STATES and latest_time is not None:
         age = max(0.0, now - latest_time)
         if latest["state"] == "done" and age < JUST_FINISHED_S:
             return "just_finished", latest_time, None, latest

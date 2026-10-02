@@ -228,6 +228,57 @@ def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = 
     return now
 
 
+def _studios_reported(snapshot: dict[str, Any] | None) -> list[dict[str, str]] | None:
+    """The studios a node's own current snapshot says it runs, or `None` when it did not say.
+
+    Only a snapshot the node answered with this controller's credential counts, and only a
+    non-empty list: an older Hub, an error or a Mac mid-start says nothing, and "nothing said" must
+    never empty a roster row.
+    """
+    if not isinstance(snapshot, dict) or not snapshot.get("reachable") or snapshot.get("auth") is False:
+        return None
+    studios = snapshot.get("studios")
+    if not isinstance(studios, dict):
+        return None
+    reported: list[dict[str, str]] = []
+    for modality, row in sorted(studios.items()):
+        worker = str((row or {}).get("id") or "").strip().lower() if isinstance(row, dict) else ""
+        modality = str(modality or "").strip().lower()
+        if ID_PATTERN.fullmatch(worker) and modality in NODE_MODALITIES:
+            reported.append({"id": worker, "modality": modality})
+    return reported or None
+
+
+def sync_studios_from_snapshots() -> bool:
+    """Make each node's roster studios what that node currently says it runs. True when one changed.
+
+    **The roster was frozen at join time.** A node names its studios once, when it joins, and a Mac
+    never re-joins on its own; so when an update stopped shipping a studio (Video, after LTX was
+    retired) every Mac that joined before it kept a `video` entry on its controller for ever. The
+    controller then polled a worker that did not exist: the Gateway showed "10 workers are offline",
+    every idle Mac read "needs attention" (a reachable machine with a studio `down`) and its activity
+    "partially unavailable" — on a healthy, idle fleet. The node's peer snapshot
+    (`/api/hub/resources?local_only=true`, already read every poll for dispatch) names the studios
+    it runs, so the roster follows it, in both directions, the same way a join would have recorded.
+    """
+    nodes = _read()
+    changed = False
+    for node_id, row in nodes.items():
+        reported = _studios_reported(fresh_snapshot(node_id))
+        if reported is None:
+            continue
+        current = [{"id": str(s.get("id")), "modality": str(s.get("modality"))}
+                   for s in (row.get("studios") or []) if isinstance(s, dict)]
+        if sorted(map(str, current)) != sorted(map(str, reported)):
+            log.info("node %s now runs %s (the roster listed %s)", node_id,
+                     [s["id"] for s in reported], [s["id"] for s in current])
+            row["studios"] = reported
+            changed = True
+    if changed:
+        _write(nodes)
+    return changed
+
+
 def validate_address(value: object) -> str:
     """Accept only a plain http address on a private or loopback IP.
 
