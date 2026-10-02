@@ -1008,12 +1008,17 @@ async def _run_item(monitor, batch: dict, item: dict, studio: dict, owner: str,
             if response.status_code == 401 and not peers.is_local_studio(studio):
                 peers.invalidate(studio["machine"], rejected=True,
                                  modality=studio["modality"])
+            code = None
             try:
-                detail = response.json().get("detail")
+                body = response.json()
+                detail = body.get("detail")
+                code = body.get("code")
             except Exception:
                 detail = getattr(response, "text", "")
             error = RuntimeError(f"HTTP {response.status_code}: {detail or 'transcription failed'}")
             error.transient = response.status_code in TRANSIENT_STATUS
+            error.status_code = response.status_code
+            error.error_code = code
             raise error
         payload = response.json()
         if _expire_genstudio_batch(batch):
@@ -1068,11 +1073,22 @@ async def _run_item(monitor, batch: dict, item: dict, studio: dict, owner: str,
             return
         transient = isinstance(exc, (httpx.HTTPError, OSError)) or getattr(exc, "transient", False)
         message = str(exc) or type(exc).__name__
+        machine = studio.get("machine", "local")
+        if broker._is_machine_reservation_refusal(exc) and not batch.get("cancelled"):
+            # A node already running other work answered at its door: nothing was attempted and
+            # the Mac is healthy. The broker has treated this as a wait since 0.6.111; Subtitle
+            # still spent a try, marked the Mac failed and, after three busy nodes, handed the
+            # Gateway "local is reserved for other work on this Mac" as a final error.
+            item["tries"] = max(0, item["tries"] - 1)
+            item.setdefault("avoid_machines", {})[machine] = (
+                time.time() + broker.MACHINE_RESERVED_AVOID_S)
+            item.update(state="queued", studio=None, studio_task_id=None,
+                        error=f"waiting for a free machine: {message}")
+            return
         capacity = broker._is_capacity_failure(message)
         if capacity:
             await broker.release_idle_siblings(monitor._client, studio)
             item["tries"] = max(0, item["tries"] - 1)
-        machine = studio.get("machine", "local")
         history = item.setdefault("attempt_history", [])
         history.append({
             "studio": studio.get("id"), "machine": machine,

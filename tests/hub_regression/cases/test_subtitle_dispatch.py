@@ -145,6 +145,36 @@ def test_subtitle_failure_keeps_the_attempt_and_error_reported(
     assert item.get("manual_action_required") is not True
 
 
+def test_a_reserved_node_is_a_wait_not_a_spent_attempt(fixture_monitor, tmp_path, monkeypatch):
+    """Gateway 2026-10-02/03: transcriptions failed with "HTTP 409: local is reserved for other
+    work on this Mac. Workers attempted: <three nodes>". The peer's MACHINE_BUSY is a door
+    refusal - nothing ran - so it must leave the item queued, keep its tries, avoid that Mac
+    only briefly and never mark it failed, the way the broker has since 0.6.111."""
+    studio = _up_monitor(fixture_monitor)
+    failures = []
+    monkeypatch.setattr(broker, "mark_external_machine_failure",
+                        lambda *args, **kwargs: failures.append(args))
+
+    class BusyNode:
+        async def post(self, url, **kwargs):
+            return response(409, {"detail": "local is reserved for other work on this Mac",
+                                  "code": "MACHINE_BUSY"})
+
+    fixture_monitor._client = BusyNode()
+    batch = _subtitle_batch(tmp_path)
+    item = batch["items"][0]
+    item["tries"] = transcription_jobs.MAX_TRIES   # even on what would be its last try
+    asyncio.run(transcription_jobs._run_item(
+        fixture_monitor, batch, item, studio, "transcription:subtitle:0"))
+    assert item["state"] == "queued", item["error"]
+    assert item["tries"] == transcription_jobs.MAX_TRIES - 1
+    assert "reserved for other work" in item["error"]
+    assert failures == [], "a busy Mac is not a failed Mac"
+    machine = studio.get("machine", "local")
+    assert time.time() < item["avoid_machines"][machine] <= (
+        time.time() + broker.MACHINE_RESERVED_AVOID_S)
+
+
 def test_packaged_uncertainty_is_preserved_for_subtitle(
         fixture_monitor, tmp_path):
     """A lost response still fences the physical machine for reconciliation."""

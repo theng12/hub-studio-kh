@@ -743,7 +743,41 @@ def _prune_peer_leases() -> None:
         _release_peer_lease(owner)
 
 
-async def _peer_lease_loop() -> None:
+async def _release_finished_peer_leases(monitor: StudioMonitor) -> None:
+    """Free every lease whose job this Mac's own worker says is over, whoever stopped polling it.
+
+    A lease used to end only when a controller's poll happened to show the job terminal. A
+    controller that gave up on a job - a dispatch poll that rejected a peer's own machine id, a
+    Wi-Fi drop past its recovery window - never polled again, so this Mac answered every other
+    request with "local is reserved for other work on this Mac" for the six-hour TTL while its
+    worker sat idle. The worker is the authority on whether its job still runs: ask it.
+    """
+    with _PEER_LEASE_LOCK:
+        held = list(_PEER_JOBS)
+    for worker_id, job_id in held:
+        worker = next((row for row in monitor.registry if row["id"] == worker_id), None)
+        if worker is None:
+            continue
+        family = ("generate/transcribe/jobs"
+                  if worker_id == vocabulary.WORKER_FOR_MODALITY["transcription"]
+                  else "generate/jobs")
+        tail = f"/api/{family}/{job_id}"
+        try:
+            response = await monitor._client.get(
+                worker["base_url"] + tail, headers={"X-Hub-Token": worker["hub_token"]},
+                timeout=10.0)
+        except (httpx.HTTPError, OSError):
+            continue  # an unanswered worker proves nothing; the TTL still bounds the lease
+        if response.status_code == 404:
+            with _PEER_LEASE_LOCK:
+                owner = _PEER_JOBS.get((worker_id, job_id))
+            if owner is not None:
+                _release_peer_lease(owner)
+        elif response.status_code < 400:
+            _observe_peer_response(worker_id, tail, response)
+
+
+async def _peer_lease_loop(monitor: StudioMonitor | None = None) -> None:
     """Expire abandoned peer leases even when no further peer request arrives.
 
     Without this, a controller that vanished mid-job would leave this Mac's own
@@ -755,6 +789,12 @@ async def _peer_lease_loop() -> None:
         while True:
             await asyncio.sleep(60.0)
             _prune_peer_leases()
+            if monitor is not None:
+                try:
+                    await _release_finished_peer_leases(monitor)
+                except Exception:
+                    logging.getLogger("studiohub.peer").exception(
+                        "could not check held peer leases against their workers")
     except asyncio.CancelledError:
         return
 
@@ -1143,7 +1183,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             from .backend import job_storage
             storage_sweep = _asyncio.create_task(
                 job_storage.budget_loop(standalone_config.cleanup_interval_seconds()))
-            peer_lease_sweep = _asyncio.create_task(_peer_lease_loop())
+            peer_lease_sweep = _asyncio.create_task(_peer_lease_loop(monitor))
             # A node fetches the release its controller holds; a no-op on any Mac that is not one.
             release_mirror = _asyncio.create_task(release_sync.loop())
             try:

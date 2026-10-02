@@ -2818,8 +2818,9 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
             return pending(f"The original {label} worker response was unavailable or malformed.")
         if not isinstance(job, dict):
             return pending(f"The original {label} worker response was malformed.")
+        remote = not peers.is_local_studio(studio)
         try:
-            _validate_durable_worker_job(modality, item, job)
+            _validate_durable_worker_job(modality, item, job, remote=remote)
         except ValueError:
             return pending(f"The original {label} worker status or final artifact receipt was malformed.")
         params = job.get("params")
@@ -2831,7 +2832,9 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
         accepted = {
             "id": job_id, "model_revision": item.get("model_revision"),
             "runtime_revision": item.get("runtime_revision"),
-            "worker_id": item.get("worker_id"), "machine_id": machine,
+            "worker_id": item.get("worker_id"),
+            # A peer's worker names its own machine, not the node id (see _validate_image_worker_job).
+            "machine_id": None if remote else machine,
         }
         accepted_params = item.get("worker_accepted_params")
         if modality == "music" and not isinstance(accepted_params, dict):
@@ -4214,7 +4217,15 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 payload = jr.json()
                 j = payload.get("job") if isinstance(payload, dict) else None
                 if b["modality"] in DURABLE_ASYNC_MODALITIES:
-                    _validate_durable_worker_job(b["modality"], item, j)
+                    # A peer's worker reports its own machine id, not the node id this item
+                    # routes through. Without `remote` every poll of a peer job raised "changed
+                    # its machine_id"; only `_recover_worker_job` (which passes it) kept the job,
+                    # and only while it finished inside RECOVERY_WINDOW_S - so a Z-Image-Turbo
+                    # 4-bit thumbnail (~300 s on an 8 GB node) was abandoned on three nodes and
+                    # each kept running unpolled, holding that node's peer lease.
+                    _validate_durable_worker_job(
+                        b["modality"], item, j,
+                        remote=not peers.is_local_studio(studio))
             _persist_worker_execution_started_at(b, item, j)
             _record_worker_identity(item, studio, j)
             _record_worker_resource_usage(item, j)

@@ -426,6 +426,41 @@ class StudioProxyTests(unittest.TestCase):
         self.assertNotIn("local", broker.busy_machines(),
                          "an expired lease must free the machine")
 
+    def test_a_lease_ends_with_its_job_even_when_nobody_polls_it(self) -> None:
+        """Gateway 2026-10-03: nodes refused work with "local is reserved for other work on
+        this Mac" while idle. A controller that stopped polling an accepted job (it had rejected
+        the peer's own machine id) left the lease to the six-hour TTL. The node asks its own
+        worker instead, and frees the Mac as soon as that worker says the job is over."""
+        import asyncio
+        from components.hub import standalone
+        from components.hub.backend import broker
+        from components.hub.backend.monitor import StudioMonitor
+
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        accepted = client.post("/studio/image/api/generate/txt2img",
+                               json={"prompt": "x"}, headers=headers)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+
+        async def sweep() -> None:
+            monitor = StudioMonitor()
+            try:
+                await standalone._release_finished_peer_leases(monitor)
+            finally:
+                await monitor._client.aclose()
+
+        original = self.worker.poll_job
+        self.addCleanup(setattr, self.worker, "poll_job", original)
+        self.worker.poll_job = {"id": "job-2", "state": "running"}
+        asyncio.run(sweep())
+        self.assertIn("local", broker.busy_machines(), "a running job keeps its machine")
+        self.assertEqual(self.worker.requests[-1]["path"], "/api/generate/jobs/job-2")
+
+        self.worker.poll_job = {"id": "job-2", "state": "done"}
+        asyncio.run(sweep())
+        self.assertNotIn("local", broker.busy_machines(),
+                         "a finished job must free the machine without a controller poll")
+
 
 if __name__ == "__main__":
     unittest.main()
