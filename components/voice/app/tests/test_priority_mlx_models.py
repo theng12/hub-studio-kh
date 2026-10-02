@@ -36,8 +36,10 @@ def test_priority_catalog_is_focused_and_clone_capable() -> None:
     assert "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit" in qwen
     # Pruned 2026-09-24 (ST-13.B) to the two tiers the owner kept after the
     # listening review: the 1.7B 8-bit, the 0.6B 4-bit and both the CustomVoice
-    # and VoiceDesign tiers were cut.
-    assert len(qwen) == 2
+    # and VoiceDesign tiers were cut. The owner re-added the 0.6B 4-bit on 2026-10-02 as the
+    # lighter twin of the 8-bit default (same speech tokenizer, same clone path).
+    assert "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit" in qwen
+    assert len(qwen) == 3
 
     chatterbox = _repos("chatterbox-mlx")
     assert len(chatterbox) == 2

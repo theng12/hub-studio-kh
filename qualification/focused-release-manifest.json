@@ -78,7 +78,6 @@
    "revision": "6119f7072580cc30c3cbdf496269216b03ad9742"
   },
   {
-   "_stale": "not in model-manifests/ as of 2026-09-25; this package was retired from the catalog. Do not treat this sample as an inventory.",
    "digest": {},
    "engine": "voice-mlx",
    "installed": true,

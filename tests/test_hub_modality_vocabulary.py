@@ -145,7 +145,7 @@ class MemoryPolicyVocabularyTests(unittest.TestCase):
                     self.assertIn("workload_policy.py", str(raised.exception))
 
     def test_the_owner_approved_qwen_floor_is_still_in_force(self) -> None:
-        """Qwen3-TTS 12Hz 0.6B Base 8-bit: 8 GB tier, 3.2 GB live headroom.
+        """Qwen3-TTS 12Hz 0.6B Base 8-bit: 8 GB tier, 4.2 GB live headroom (3.2 until the 2026-10-02 memory bounds raised it to the measured footprint).
 
         Reads the **shipped Voice row**, not a hand-written dict. The floor moved out of the Hub's
         model-keyed table and onto the model, so a version of this test that passed only
@@ -159,12 +159,12 @@ class MemoryPolicyVocabularyTests(unittest.TestCase):
         self.assertIsNotNone(row, "the 8 GB production voice-cloning tier left the voice catalog")
         published = voice_catalog.serialize_model(row)
         self.assertEqual(
-            published.get("min_free_memory_gb"), 3.2,
+            published.get("min_free_memory_gb"), 4.2,
             "the Voice row no longer publishes the owner-approved live-free floor, so the Hub has "
             "no source for it and would fall back to its 2.0 GB default")
         self.assertEqual(published["min_unified_memory_gb"], 8)
         policy = memory_admission.describe(row.repo, published)
-        self.assertEqual(policy["effective_min_free_memory_gb"], 3.2)
+        self.assertEqual(policy["effective_min_free_memory_gb"], 4.2)
         # Was 0.0 ("a tier is not a wall"). Owner decision 2026-09-30: the requirement is enforced,
         # and for this model the manifest's 8 GB qualification is the number.
         self.assertEqual(policy["effective_min_total_memory_gb"], 8.0)
@@ -173,7 +173,7 @@ class MemoryPolicyVocabularyTests(unittest.TestCase):
         self.assertEqual(policy["source"], "catalog")
         self.assertEqual(
             broker._admission_requirements(row.repo, published),
-            {"min_total": 8.0, "min_free": 3.2})
+            {"min_total": 8.0, "min_free": 4.2})
         self.assertEqual(
             memory_admission.describe("org/brand-new-model",
                                       {"repo": "org/brand-new-model"})["effective_min_free_memory_gb"],
