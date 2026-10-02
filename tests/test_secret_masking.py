@@ -1,6 +1,6 @@
 """Every secret the Hub app shows or takes is masked until the eye is pressed (native/Design.swift).
 
-The drawing itself is proved by tests/native/secret_main.swift (run by native/build.sh): two different
+The drawing itself is proved by tests/native/secret_checks.swift (in native/build.sh's lifecycle gate): two different
 secrets draw identical pixels while masked. This pins that the screens use those pieces.
 """
 import re

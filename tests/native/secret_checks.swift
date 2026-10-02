@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 // The masked-secret pieces in native/Design.swift: a hidden secret is never in what the view draws.
-@main
-struct SecretChecks {
-    @MainActor static func main() {
+// Run from the lifecycle gate (tests/native/lifecycle_main.swift), which native/build.sh runs.
+enum SecretChecks {
+    @MainActor static func run() {
         var failures = 0
         func check(_ ok: Bool, _ what: String) { if !ok { failures += 1; print("FAIL: \(what)") } }
         let secret = "hub-test-secret-0123456789abcdef"
@@ -46,6 +46,6 @@ struct SecretChecks {
         check(first != unavailable, "the drawing is live (a missing value draws differently)")
 
         if failures > 0 { exit(1) }
-        print("PASS: secret value")
+        print("Native secret masking checks passed")
     }
 }

@@ -546,6 +546,7 @@ struct NativeLifecycleTests {
             try await scenario("hung-kill", stub: "trap '' TERM; while :; do sleep 1; done", wait: 2, grace: 2, expectKilled: true)
         }
 
+        SecretChecks.run()
         print("Native lifecycle checks passed")
     }
 }
