@@ -126,7 +126,8 @@ Measured 2026-10-01/02 on a 32 GB M2 Max (same code path as the Hub's voice chil
 | OmniVoice bf16 | 5.41 | 2.7 (3.44 first section) | 3.4-4.1 | Higgs codec decode of the whole section; reference re-encoded each section |
 | Qwen3-TTS 0.6B Base 4-bit | 7.17 | 2.8-3.2 | 3.6-3.8 | same speech tokenizer as the 8-bit |
 | Breeze TTS 2 4-bit | 9.9 | 4.2-4.4 | 4.85-5.33 (above the 4.5 GB target: weights are 3.1 GB) | shares Qwen3's speech tokenizer (decode + reference encode), plus a staged backbone prefill; weights alone are 3.1 GB |
-| Fish S2 Pro 8-bit | 13.3 (fleet) | not bounded | - | 6.7 GB of weights: not an 8 GB candidate, registered `cache-only` |
+| Fish S2 Pro 4-bit | 14.14 (S2, footprint 14.61) | 6.2-7.7 | 7.43 (Chris) / 8.10 (Christian) | the Fish S1 DAC decoded a whole ~26 s section in one pass (+10.1 GB on the real codec, 26 s of codes); slabbed: +1.1 GB. Weights ~6 GB resident, so a 24 GB-tier model, not an 8 GB one |
+| Fish S2 Pro 8-bit | 13.3 (fleet) | same bound (shared codec) | S1 9.8 | same codec and code path as the 4-bit; S1 checked (Whisper reads the sentence back exactly) |
 
 ### Adding a new MLX TTS engine
 1. Add the family to `catalog.py` and `MLX_AUDIO_FAMILIES` as usual.
@@ -134,4 +135,7 @@ Measured 2026-10-01/02 on a 32 GB M2 Max (same code path as the Hub's voice chil
 3. If decode dominates: write a slabbed decode in `mlx_memory.py` (copy `_voxcpm_decode` for causal stacks, `_omnivoice_decode` for symmetric ones), pick the slab (24-32 frames) and context (>= receptive field; check that a context of 1 *fails* your equality test), cache the reference encode, add the bounder to `PROFILES`.
 4. Add an exactness test in `tests/test_mlx_memory.py` with a tiny randomly initialised copy of the real classes (see the existing ones).
 5. Measure the peak footprint on the 8 GB runner and set `min_free_memory_gb` **and** `min_free_memory_note`.
-6. If you genuinely will not bound it (weights alone exceed the 8 GB tier, e.g. Fish S2 Pro 5B), register it `cache-only` with that reason.
+6. If you genuinely will not bound it, register it `cache-only` with that reason. (Fish S2 Pro 5B was `cache-only` until 2026-10-02 on the
+   grounds that its weights exceed the 8 GB tier; it is now `bounded` anyway, because its codec decode was half of its 24 GB-tier peak:
+   `mlx_memory._fish_decode` runs the DAC's upsample + decoder convolutions in 64-frame slabs with 16 frames of left context, measured
+   identical to 9.4e-6 on the real codec, and context 8 is *not* enough at 8.5e-5. Its reference encode, +2.2-2.7 GB once per job, is cached.)

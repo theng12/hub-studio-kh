@@ -158,6 +158,20 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # `LICENSE.md` is publisher furniture the selection rule drops by default, but this package
     # ships it - `keep` is the per-package override, so the next capture does not lose the file.
     {"package_id": "fish-audio-s2-pro-bf16", "model_id": "mlx-community/fish-audio-s2-pro-bf16", "revision": "eccd57bf5c1ebc13cb2f993df867f4e49931a36a", "engine": "voice-mlx", "exclude": ("*.gitignore",), "keep": ("LICENSE.md",)},
+    # ── Fish S2 Pro 4-bit (owner request 2026-10-02): a community conversion with a WRONG codec ──
+    # The publisher ships the codec as `codec.pth` (PyTorch). mlx-audio 0.5.7's Fish DAC loader looks
+    # for `codec.safetensors`, then `model.safetensors`, and so loads the 4-bit LLM as codec weights
+    # (strict=False, no error): every job "succeeds" with noise (Whisper WER 1.0, measured
+    # 2026-10-01, `_orchestra/audit-20260930/fish-4bit/`). The codec is the same 1.87 GB fp32 network
+    # in every Fish S2 Pro tier: `codec.pth` converted with the DAC's own `sanitize()` is bit-identical,
+    # tensor for tensor (541 of 541), to `codec.safetensors` in mlx-community/fish-audio-s2-pro-8bit.
+    # So this package drops `codec.pth` and takes that file, at the 8-bit package's pinned revision,
+    # from the 8-bit repository: `foreign_files` records it as a second source with its own
+    # `source.layout` companion entry, so the manifest lists exactly the bytes that ship.
+    # `LICENSE.md` and `NOTICE` ship with it: the Fish Audio Research License requires the NOTICE.
+    {"package_id": "fish-audio-s2-pro-4bit", "model_id": "majentik/fishaudio-s2-pro-MLX-4bit", "revision": "dda28aa6e33fe946826792e3feb643e9c463b75f", "engine": "voice-mlx", "exclude": ("codec.pth",), "keep": ("LICENSE.md",),
+     "foreign_files": ({"repo": "mlx-community/fish-audio-s2-pro-8bit", "revision": "c8d4481b3f7cbfe64d855c8b7cda7739502fc3ff", "path": "codec.safetensors",
+                        "purpose": "Fish S1 DAC codec in the safetensors form mlx-audio loads; replaces the publisher's codec.pth (bit-identical tensors)"},)},
     {"package_id": "s3tokenizerv2", "model_id": "mlx-community/S3TokenizerV2", "revision": "e0c9886f0e1c35ae85b1f27277416fb19fc72bec", "engine": "voice-mlx", "exclude": ("*.gitignore",)},
     # ── Music: the engines the Music Studio ships (Stable Audio 3 and YuE2; ACE-Step 1.5 was
     # retired in 0.6.116) ──
@@ -222,6 +236,7 @@ DETAILS: dict[str, dict[str, Any]] = {
     "chatterbox-8bit": {"defaults": {"parameters_source": "model/CACHEDIR.TAG"}, "memory": (8, 16, "Memory floor taken from the Voice catalogue's declared minimum.")},
     "fish-audio-s2-pro-8bit": {"defaults": {"parameters_source": "model/codec.safetensors"}, "memory": (24, 24, "Memory floor taken from the Voice catalogue's declared minimum.")},
     "fish-audio-s2-pro-bf16": {"defaults": {"parameters_source": "model/LICENSE.md"}, "memory": (32, 32, "Memory floor taken from the Voice catalogue's declared minimum.")},
+    "fish-audio-s2-pro-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (24, 24, "MEASURED here [M] 2026-10-02 on the 32 GB M2 Max through the voice child's own code path (mlx-audio 0.5.7, mlx_memory bounds): S2 (4 sections, 70-75 s of audio) peak process footprint 7.43 GB (Chris reference) / 8.10 GB (Christian), 14.61 GB before the slabbed DAC decode; Whisper WER 0 of 175 words. 24 GB is the tier claimed (owner); no 16 GB or 24 GB Mac has run it yet.")},
     "s3tokenizerv2": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "Memory floor taken from the Voice catalogue's declared minimum.")},
     # ── Music: the Stable Audio 3 Medium engine ──
     "stable-audio-3-medium": {"defaults": {"dit_model": "dit_medium", "decoder": "same-l", "inference_steps": 8, "guidance_scale": 1.0, "audio_format": "wav", "sample_rate_hz": 44100, "channels": 2, "max_duration_seconds": 380}, "memory": (8, 16, "M2 Max 32 GB: 30s clip 3.89 GB peak / 9.26s; 380s clip 5.05 GB peak / 61.58s.")},
@@ -454,6 +469,18 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
                         "tree_api_url": tree_url(processor_repo, processor_revision)})
         layout["companions"] = [{"destination": "companions/processor", "repo": processor_repo,
                                   "revision": processor_revision, "purpose": "Whisper processor/tokenizer"}]
+    # A file the publisher's tree gets wrong is taken from another pinned repository instead, and
+    # recorded as such: its own source, its own layout entry, its own immutable URL.
+    for foreign in choice.get("foreign_files") or ():
+        repo, foreign_revision, path = foreign["repo"], foreign["revision"], foreign["path"]
+        tree = snapshot(repo, foreign_revision)
+        selected.append(captured_file(repo, foreign_revision, path, f"model/{path}", tree))
+        sources.append({"role": "replacement", "repo": repo, "revision": foreign_revision,
+                        "snapshot_api_url": api_url(repo, foreign_revision),
+                        "tree_api_url": tree_url(repo, foreign_revision)})
+        layout.setdefault("companions", []).append(
+            {"destination": f"model/{path}", "repo": repo, "revision": foreign_revision,
+             "purpose": foreign["purpose"]})
     manifest = {
         "schema_version": 1,
         "package_id": choice["package_id"],

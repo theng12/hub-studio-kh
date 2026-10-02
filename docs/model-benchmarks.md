@@ -46,6 +46,7 @@ may still run there, and one at or below may still not (see the peak-memory note
 | Breeze TTS 2 4-bit (MLX) | MLX (speech) | 16 GB | no | yes | yes | yes |
 | VoxCPM2 8-bit (MLX) — balanced | MLX (speech) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
 | VoxCPM2 bf16 (MLX) — full precision | MLX (speech) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
+| Fish Audio S2 Pro 5B 4-bit (MLX) | MLX (speech) | 24 GB | no | no | yes | yes |
 | Fish Audio S2 Pro 5B 8-bit (MLX) — fleet candidate | MLX (speech) | 24 GB | no | no | yes | yes |
 | Fish Audio S2 Pro 5B bf16 (MLX) | MLX (speech) | 32 GB | no | no | no | yes |
 | **Subtitle (speech-to-text)** | | | | | | |
@@ -99,12 +100,12 @@ than a curated one:
 
 ## What is NOT measured
 
-22 of 27 packages have no run behind them — their floor is
+23 of 28 packages have no run behind them — their floor is
 catalog metadata, which is a starting point rather than proof. That is not a defect in any
 one of them; it is the honest state of the record, and it is the list of what a test would
 settle:
 
-`breeze-tts-2-mlx-4bit`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `omnivoice-bfloat16`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-4bit`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
+`breeze-tts-2-mlx-4bit`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-4bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `omnivoice-bfloat16`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-4bit`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
 
 ## Two things that surprise people reading this
 
@@ -137,4 +138,4 @@ So that a future test does not become the thing you cannot remember:
 
 ---
 
-Generated from 27 manifests, 6 recorded readings and 5 voice runtime rows.
+Generated from 28 manifests, 6 recorded readings and 5 voice runtime rows.

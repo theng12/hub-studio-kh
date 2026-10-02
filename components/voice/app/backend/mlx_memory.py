@@ -408,6 +408,94 @@ def bound_breeze(model) -> bool:
     return ok
 
 
+# ---- Fish S2 Pro: its DAC codec decodes a whole 300-character section (~26 s) in one pass: +9.4 GB ----
+
+# Measured on the real codec, 26 s of codes: whole-section decode +10.13 GB in 2.2 s; slab 64 +1.14 GB in 3.2 s,
+# slab 32 +0.73 GB in 3.9 s. Fish is a 24 GB-tier model, so the faster slab. Context 8 differs by 8.5e-5,
+# 12 and 16 by 9.4e-6 (float rounding, 1 LSB of 16-bit audio).
+FISH_DECODE_SLAB = 64   # code frames (2048 samples, ~46 ms at 44.1 kHz) per decoder pass
+_FISH_CONTEXT = 16      # code frames of left context; >= the causal conv stack's receptive field (~12)
+
+
+def _fish_latents(quantizer, indices):
+    """`DownsampleResidualVectorQuantize.decode` up to, not including, its convolutional upsample.
+
+    The windowed post-transformer looks back 128 frames per layer, so it runs on the whole section
+    (it is small); everything after it is causal convolutions, which is what gets slabbed.
+    """
+    import mlx.core as mx
+
+    codes = mx.zeros_like(indices)
+    codes[:, 0] = mx.clip(indices[:, 0], a_min=0, a_max=quantizer.semantic_quantizer.codebook_size - 1)
+    if indices.shape[1] > 1:
+        codes[:, 1:] = mx.clip(indices[:, 1:], a_min=0, a_max=quantizer.quantizer.codebook_size - 1)
+    semantic = quantizer.semantic_quantizer.from_codes(codes[:, :1])[0]
+    residual = (quantizer.quantizer.from_codes(codes[:, 1:])[0] if indices.shape[1] > 1
+                else mx.zeros_like(semantic))
+    return quantizer.post_module(semantic + residual)
+
+
+def _fish_decode(dac, indices, feature_lengths):
+    """`DAC.decode` with the upsample + decoder convolutions run FISH_DECODE_SLAB code frames at a time."""
+    import mlx.core as mx
+    from mlx_audio.codec.models.fish_s1_dac.fish_s1_dac import DecoderBlock
+
+    if indices.ndim == 2:
+        indices = indices[None]
+    z = _fish_latents(dac.quantizer, indices)
+    mx.eval(z)
+    stages = [layer for block in dac.quantizer.upsample for layer in block]
+    for layer in dac.decoder.model:
+        stages.extend(layer.block if isinstance(layer, DecoderBlock) else [layer])
+    parts = []
+    for start in range(0, z.shape[-1], FISH_DECODE_SLAB):
+        context = min(_FISH_CONTEXT, start)
+        x = z[..., start - context:start + FISH_DECODE_SLAB]
+        frames = x.shape[-1]
+        for stage in stages:
+            x = stage(x)
+            mx.eval(x)   # sync so Metal can recycle the previous stage's buffers
+        x = x[..., context * (x.shape[-1] // frames):]
+        mx.eval(x)
+        parts.append(x)
+    return mx.concatenate(parts, axis=-1), feature_lengths * dac.frame_length
+
+
+def bound_fish(model) -> bool:
+    """Bound Fish S2 Pro's codec decode (instance-level, same audio) and reuse the encoded reference."""
+    codec = getattr(model, "codec", None)
+    if codec is None or getattr(codec, "_studiohub_bounded", False):
+        return codec is not None
+    quantizer, decoder = getattr(codec, "quantizer", None), getattr(codec, "decoder", None)
+    if not all(hasattr(quantizer, n) for n in ("semantic_quantizer", "quantizer", "post_module", "upsample")):
+        return False
+    if not hasattr(decoder, "model") or not hasattr(codec, "frame_length"):
+        return False
+    codec.decode = lambda indices, feature_lengths: _fish_decode(codec, indices, feature_lengths)
+    codec._studiohub_bounded = True
+
+    # Every section of a long script re-encodes the same reference clip, which arrives as samples.
+    encode, memo = codec.encode, {}
+
+    def cached_encode(audio_data, *args, **kwargs):
+        import hashlib
+
+        import mlx.core as mx
+        import numpy as np
+
+        data = np.ascontiguousarray(np.asarray(mx.array(audio_data).astype(mx.float32)))
+        key = (data.shape, hashlib.blake2b(data.tobytes(), digest_size=16).hexdigest(), repr(args), repr(kwargs))
+        if key not in memo:
+            if len(memo) >= 4:
+                memo.pop(next(iter(memo)))
+            memo[key] = encode(audio_data, *args, **kwargs)
+            mx.eval(memo[key])
+        return memo[key]
+
+    codec.encode = cached_encode
+    return True
+
+
 # ---- Registry: every MLX engine family must say how its memory is bounded (tests/test_mlx_memory_registry.py) ----
 
 def _bound_qwen3(model) -> None:
@@ -427,7 +515,7 @@ PROFILES: dict[str, tuple[str, str, object]] = {
     "breeze-tts": ("bounded", "shares Qwen3's speech tokenizer: same decode/encoder bounds, reference tokens cached", lambda m: bound_breeze(m)),
     "chatterbox-mlx": ("cache-only", "not profiled on a codec decode; cache cap only (owner decision 2026-10-02)", None),
     "pocket-tts": ("cache-only", "tiny model (4-bit, streaming mimi decode); cache cap only (owner decision 2026-10-02)", None),
-    "fish-audio-mlx": ("cache-only", "5B model, 6.7 GB of weights alone: it can never meet the 8 GB tier (catalog floor stays 24 GB), so its DAC codec decode is not slabbed; cache cap only. 13.3 GB peak measured on the fleet 2026-08-07", None),
+    "fish-audio-mlx": ("bounded", "DAC codec upsample/decoder convolutions slabbed (64 code frames, 16 of left context), reference codes cached; Fish 4-bit S2 footprint 14.6 -> 7.4 GB (Chris) / 8.1 GB (Christian), audio identical to 1 LSB, 2026-10-02", lambda m: bound_fish(m)),
 }
 
 

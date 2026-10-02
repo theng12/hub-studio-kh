@@ -1041,6 +1041,58 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("avoid", "8/16 GB Macs — measured at 13.3 GB peak, so a 16 GB Mac reaches memory-pressure warning"),
         ),
     ),
+    # Fish S2 Pro 4-bit (owner request 2026-10-02). A community conversion
+    # (majentik, revision dda28aa6) whose repository ships the codec as
+    # `codec.pth`, which mlx-audio 0.5.7 cannot read: it silently loads the
+    # 4-bit LLM as codec weights and every job "succeeds" with noise. The
+    # package therefore carries `codec.safetensors` from the 8-bit repository
+    # instead (bit-identical tensors; see model-manifests/fish-audio-s2-pro-4bit.json
+    # and packaging/capture_model_manifests.py). Same engine, codec and section
+    # policy as the 8-bit row; LLM weights 2.57 GB instead of 4.85 GB.
+    ModelEntry(
+        repo="majentik/fishaudio-s2-pro-MLX-4bit",
+        label="Fish Audio S2 Pro 5B 4-bit (MLX)",
+        family="fish-audio-mlx",
+        size_gb=4.45,
+        gated=False,
+        min_unified_memory_gb=24,
+        min_free_memory_gb=8.4,
+        min_free_memory_note=(
+            "Measured 2026-10-02 on the 32 GB M2 Max through the voice child's own code path (mlx-audio 0.5.7, "
+            "mlx_memory bounds: slabbed DAC decode + cached reference): S2 (4 sections, 70-75 s of audio) peak "
+            "process footprint 7.43 GB with the Chris reference (12.1 s) and 8.10 GB with Christian (18.9 s), "
+            "+ 0.25 GB margin. Before the bounds the same S2 peaked at 14.61 GB. Not yet run on a 24 GB Mac."
+        ),
+        recommended_hardware=(
+            "Apple Silicon with 24 GB. Measured 7.4-8.1 GB peak process footprint for a 300-character-section "
+            "script (resident model ~6 GB), so 24 GB has wide headroom."
+        ),
+        capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
+        license_name="Fish Audio Research License",
+        license_source=(
+            "Publisher card (license: other, license_name: fish-audio-research) and the LICENSE.md + NOTICE "
+            "shipped in the package: 'This model is licensed under the Fish Audio Research License. "
+            "Copyright (c) 39 AI, INC. All Rights Reserved.' Research and non-commercial use are free under the "
+            "licence; commercial use (including any product or service that charges a fee or generates revenue) "
+            "needs a separate written agreement with Fish Audio (https://fish.audio, business@fish.audio); outputs "
+            "must not be used to create or improve a foundational generative AI model; any product or interface "
+            "that surfaces model outputs must keep the NOTICE and display 'Built with Fish Audio'."
+        ),
+        best_for="The lighter Fish S2 Pro tier: the same model and codec as the 8-bit build with a 4-bit LLM, about 4.45 GB on disk and about 1.25x faster than 8-bit at the same intelligibility.",
+        sample_rate_hz=44100,
+        languages=(),
+        language_support=LanguageSupport(
+            enumeration_status="claimed_lower_bound",
+            claimed_lower_bound=80,
+        ),
+        use_cases=(
+            ("good",  "High-quality multilingual voice cloning with natural-language style control, faster than the 8-bit build"),
+            ("good",  "Whisper word error rate ~0 on the owner's S2/S4 scripts, the same as 8-bit and bf16 (measured 2026-10-01)"),
+            ("weak",  "A single-person community conversion; its codec is replaced with the 8-bit repository's (bit-identical) because the published codec.pth does not load"),
+            ("weak",  "Fish Audio Research License: non-commercial unless Fish Audio grants a written commercial agreement"),
+            ("avoid", "8/16 GB Macs — the 24 GB tier is the floor this catalogue claims"),
+        ),
+    ),
     ModelEntry(
         repo="mlx-community/fish-audio-s2-pro-bf16",
         label="Fish Audio S2 Pro 5B bf16 (MLX)",
