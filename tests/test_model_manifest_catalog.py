@@ -289,6 +289,11 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "chatterbox-8bit": "1f015b5253fab1ee7c77de1fa7741748552c30b1658d08a8cf6986262d49a0f8",
             "fish-audio-s2-pro-8bit": "f14e76210a087317bd917adae5dd3c4fc5cdc2652b35acdcf19490c1a2df406f",
             "fish-audio-s2-pro-bf16": "9db7d62dc5cb26e170c46108afcd31658eb09cc764868058c436a74fd50a3837",
+            # Fish S2 Pro 4-bit, captured 2026-10-02 at majentik revision dda28aa6: 10 files /
+            # 4,450,615,835 bytes. The publisher's `codec.pth` is NOT listed (mlx-audio 0.5.7 cannot load
+            # it and silently decodes noise); `codec.safetensors` comes from the 8-bit package's pinned
+            # revision instead (bit-identical tensors), recorded as a second source. LICENSE.md + NOTICE kept.
+            "fish-audio-s2-pro-4bit": "a847624a16063a09eb5d146318adb44bb349142a54b62b92bf79aabb36fff747",
             "s3tokenizerv2": "523d8ed23e680e453987d5b0c080db21140e5df867c9990ed34b1c4fc0006ea6",
             # Stable Audio 3's MLX bundle, captured from the ungated optimized repo.
             "stable-audio-3-medium": "e40bdda5250897a7d23cf4d34084eaf26a2188441bfbb546f1dea7e738f982dc",
@@ -337,6 +342,31 @@ class ModelManifestCatalogTests(unittest.TestCase):
         for package_id, manifest in self.manifests.items():
             payload = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
             self.assertEqual(hashlib.sha256(payload).hexdigest(), expected_digests[package_id])
+
+    def test_fish_4bit_ships_the_8bit_codec_instead_of_the_publishers_codec_pth(self):
+        """The 4-bit publisher's `codec.pth` makes mlx-audio 0.5.7 load the LLM as the codec (noise).
+
+        The package must carry the 8-bit package's exact `codec.safetensors` bytes, from its pinned
+        revision, recorded as a second source; and it must never list `codec.pth`.
+        """
+        four, eight = self.manifests["fish-audio-s2-pro-4bit"], self.manifests["fish-audio-s2-pro-8bit"]
+        files = {entry["path"]: entry for entry in four["files"]}
+        self.assertFalse(any(path.endswith("codec.pth") for path in files))
+        codec = files["model/codec.safetensors"]
+        eight_codec = next(e for e in eight["files"] if e["path"] == "model/codec.safetensors")
+        self.assertEqual((codec["sha256"], codec["size"]), (eight_codec["sha256"], eight_codec["size"]))
+        self.assertEqual(codec["urls"], eight_codec["urls"])
+        self.assertIn(f"/resolve/{eight['revision']}/", codec["urls"][0])
+        for entry in four["files"]:
+            if entry is not codec:
+                self.assertIn(f"/majentik/fishaudio-s2-pro-MLX-4bit/resolve/{four['revision']}/", entry["urls"][0])
+        self.assertIn({"destination": "model/codec.safetensors", "repo": eight["model_id"],
+                       "revision": eight["revision"]},
+                      [{k: c[k] for k in ("destination", "repo", "revision")}
+                       for c in four["source"]["layout"].get("companions", [])])
+        self.assertIn(eight["revision"], {s["revision"] for s in four["source"]["sources"]})
+        # The licence travels with the pack: the Fish Audio Research License requires its NOTICE.
+        self.assertTrue({"model/LICENSE.md", "model/NOTICE"} <= set(files))
 
     def test_every_imported_file_has_an_immutable_hash_and_source_mapping(self):
         for manifest in self.manifests.values():

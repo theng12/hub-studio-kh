@@ -154,6 +154,48 @@ def test_omnivoice_slabbed_codec_decode_matches_the_original(monkeypatch) -> Non
     _same(tokenizer.decode(tokens), expected)
 
 
+def _tiny_fish_dac():
+    """The real Fish S1 DAC classes, shrunk (the shipped codec is 1.87 GB of fp32)."""
+    from mlx_audio.codec.models.fish_s1_dac import fish_s1_dac as f
+
+    def transformer(window):
+        return f.WindowLimitedTransformer(causal=True, window_size=window, input_dim=16, config=f.ModelArgs(
+            block_size=512, n_layer=2, n_head=2, dim=16, intermediate_size=32, head_dim=8, channels_first=True))
+
+    quantizer = f.DownsampleResidualVectorQuantize(
+        input_dim=16, n_codebooks=3, codebook_size=32, codebook_dim=4, semantic_codebook_size=64,
+        downsample_factor=(2, 2), pre_module=transformer(8), post_module=transformer(8))
+    dac = f.DAC(encoder_dim=4, encoder_rates=[4, 2], latent_dim=16, decoder_dim=32, decoder_rates=[4, 2],
+                quantizer=quantizer, causal=True, encoder_transformer_layers=[0, 0], decoder_transformer_layers=[0, 0])
+    mx.eval(dac.parameters())
+    return dac
+
+
+def test_fish_slabbed_codec_decode_matches_the_original(monkeypatch) -> None:
+    dac = _tiny_fish_dac()
+    indices = mx.array(np.random.RandomState(8).randint(0, 64, size=(1, 4, 150)).astype("int32"))
+    lengths = mx.array([150], dtype=mx.int32)
+    expected, expected_lengths = dac.decode(indices, lengths)
+    mx.eval(expected)
+
+    monkeypatch.setattr(mlx_memory, "FISH_DECODE_SLAB", 16)
+    audio, audio_lengths = mlx_memory._fish_decode(dac, indices, lengths)
+    _same(audio, expected)
+    assert int(audio_lengths[0]) == int(expected_lengths[0]) == audio.shape[-1]
+    # The context is load-bearing: one frame of it is not enough to reproduce the samples.
+    monkeypatch.setattr(mlx_memory, "_FISH_CONTEXT", 1)
+    short, _ = mlx_memory._fish_decode(dac, indices, lengths)
+    assert float(np.abs(np.array(short) - np.array(expected)).max()) > 1e-4
+    monkeypatch.undo()
+
+    model = type("Model", (), {"codec": dac})()
+    assert mlx_memory.bound_fish(model) is True
+    _same(dac.decode(indices, lengths)[0], expected)
+    audio_in = mx.array(np.random.RandomState(9).randn(1, 1, 4 * dac.frame_length).astype("float32"))
+    first = dac.encode(audio_in)
+    assert dac.encode(audio_in) is first    # the reference is encoded once per clip, not once per section
+
+
 def test_breeze_staged_backbone_matches_the_original_for_prefill_and_steps() -> None:
     pytest.importorskip("mlx_audio.tts.models.breeze_tts")   # Breeze needs mlx-audio >= 0.5.7
     from mlx_audio.tts.models.breeze_tts.breeze_tts import _Backbone

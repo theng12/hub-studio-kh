@@ -21,6 +21,7 @@ from backend import catalog, generation, long_form_policy, model_audits
         ("voxcpm-mlx", "mlx-community/VoxCPM2-bf16", 400, 120, "runtime_default"),
         ("omnivoice", "mlx-community/OmniVoice-bfloat16", 288, 300, "model_audit"),
         ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-8bit", 300, 120, "runtime_default"),
+        ("fish-audio-mlx", "majentik/fishaudio-s2-pro-MLX-4bit", 300, 120, "runtime_default"),
         ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-bf16", 300, 120, "runtime_default"),
         # The Khmer VITS families have no measurement of their own, so they get the
         # conservative default. They are still catalogued, so they still publish one.

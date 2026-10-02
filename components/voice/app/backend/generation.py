@@ -3036,7 +3036,8 @@ class GenerationManager:
         is_qwen = "qwen3-tts" in normalized_repo
         is_voxcpm = "voxcpm2" in normalized_repo
         is_chatterbox = "chatterbox" in normalized_repo
-        is_fish = "fish-audio-s2-pro" in normalized_repo
+        # The 4-bit tier's publisher spells it `fishaudio-s2-pro` (majentik/fishaudio-s2-pro-MLX-4bit).
+        is_fish = "fish-audio-s2-pro" in normalized_repo or "fishaudio-s2-pro" in normalized_repo
         is_omnivoice = "omnivoice" in normalized_repo
         is_pocket = "pocket-tts" in normalized_repo
         if not (

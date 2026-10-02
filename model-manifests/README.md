@@ -1,7 +1,7 @@
 # Studio Hub model manifests
 
-This catalog contains **27** bounded model packages. The files describe
-**78,024,484,788 expected bytes** across the packages; Qwen Base
+This catalog contains **28** bounded model packages. The files describe
+**82,475,100,623 expected bytes** across the packages; Qwen Base
 packages reference the shared `whisper-turbo` package for their internal
 quality check and do not copy its weights again.
 
@@ -32,6 +32,17 @@ The catalog excludes model cards, Git attributes, licenses and example audio;
 it keeps only required generation weights, indexes, configuration and
 tokenizer/codec assets. Full source URLs and the metadata/tree endpoints used
 for the capture remain in each manifest's `source` object.
+
+One package takes a file from a second repository. `fish-audio-s2-pro-4bit`
+(`majentik/fishaudio-s2-pro-MLX-4bit`) publishes its codec as `codec.pth`, which
+the pinned mlx-audio cannot read: it silently loads the 4-bit LLM as the codec
+and produces noise. The package omits `codec.pth` and ships `codec.safetensors`
+from `mlx-community/fish-audio-s2-pro-8bit` at that package's pinned revision
+(the converted tensors are bit-identical). The capture spec's `foreign_files`
+records it as a second `source`, a `source.layout.companions` entry and the
+file's own immutable URL, so the manifest lists exactly the bytes that ship.
+The Fish 4-bit package also keeps the publisher's `LICENSE.md` and `NOTICE`
+(Fish Audio Research License).
 
 ## Refreshing metadata
 

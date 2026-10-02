@@ -55,6 +55,7 @@ def test_priority_catalog_is_focused_and_clone_capable() -> None:
     fish = _repos("fish-audio-mlx")
     assert fish == [
         "mlx-community/fish-audio-s2-pro-8bit",
+        "majentik/fishaudio-s2-pro-MLX-4bit",
         "mlx-community/fish-audio-s2-pro-bf16",
     ]
     assert all(
@@ -1190,3 +1191,38 @@ def test_no_wav_error_names_the_real_cause_not_just_a_temp_dir(monkeypatch, tmp_
         tmp_path, "omnivoice", {"duration_s": 120.0}))
     assert "2250 frames" not in big
     assert "25.8 GB unified memory" in big
+
+
+def test_fish_4bit_is_a_24gb_fish_row_with_its_licence_and_revision_evidence() -> None:
+    """Fish S2 Pro 4-bit rides the 8-bit row's engine, section policy and 24 GB tier.
+
+    Its publisher spells the repo `fishaudio-s2-pro`, so the local-revision evidence branch (keyed on
+    the repo name) must still recognise it: without that a finished clone job has no voice evidence.
+    """
+    import json
+
+    model = catalog.get_model("majentik/fishaudio-s2-pro-MLX-4bit")
+    assert model is not None and model.family == "fish-audio-mlx"
+    assert model.min_unified_memory_gb == 24
+    assert model.sample_rate_hz == 44100
+    assert model.license_name == "Fish Audio Research License"
+    assert "Built with Fish Audio" in model.license_source and "commercial" in model.license_source
+    serialized = catalog.serialize_model(model)
+    assert serialized["license"]["name"] == "Fish Audio Research License"
+
+    manifest = json.loads((Path(__file__).resolve().parents[4] / "model-manifests"
+                           / "fish-audio-s2-pro-4bit.json").read_text())
+    assert manifest["model_id"] == model.repo
+    assert manifest["qualification"]["minimum_unified_memory_gb"] == model.min_unified_memory_gb
+    assert round(sum(f["size"] for f in manifest["files"]) / 1e9, 2) == model.size_gb
+
+    job = generation.GenerationJob(job_id="fish4-evidence", mode="txt2speech", params={
+        "repo": model.repo, "_reference_audio_sha256": "a" * 64})
+    original = generation.cache.snapshot_revision
+    generation.cache.snapshot_revision = lambda repo: manifest["revision"]
+    try:
+        generation.GenerationManager._record_local_revision_evidence(job)
+    finally:
+        generation.cache.snapshot_revision = original
+    assert job.model_revision == manifest["revision"]
+    assert job.voice_revision == "a" * 64
