@@ -579,6 +579,16 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
             f"the app icon is missing: {icon.relative_to(ROOT)}. "
             "Run packaging/make_app_icon.py and commit the result.")
     shutil.copyfile(icon, resources / 'app-icon.icns')
+    # The menu-bar mark: a template image the native shell loads by name (`menubar-icon.png`, plus
+    # `@2x`). Same generator, same rule - a build that lacks them fails here rather than showing the
+    # fallback symbol in the owner's menu bar.
+    for name in ('menubar-icon.png', 'menubar-icon@2x.png'):
+        mark = ROOT / 'assets' / name
+        if not mark.is_file():
+            raise FileNotFoundError(
+                f"the menu-bar icon is missing: {mark.relative_to(ROOT)}. "
+                "Run packaging/make_app_icon.py and commit the result.")
+        shutil.copyfile(mark, resources / name)
     # The owner-facing notes go at the top of Resources, where `Bundle.main` finds them for the
     # app's What's New screen. Bundling the shipped file rather than a second copy means the screen
     # cannot describe a build it is not part of.

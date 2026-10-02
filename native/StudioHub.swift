@@ -984,6 +984,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusObserver: AnyCancellable?
     private var failureObserver: AnyCancellable?
 
+    /// The menu-bar mark: the Wave Frame glyph as a template image (one colour plus alpha, so macOS
+    /// tints it for light and dark bars and for the pressed state). `menubar-icon.png` is 18 px and
+    /// `menubar-icon@2x.png` 36 px, drawn from `assets/logo/menubar-icon.svg` by
+    /// `packaging/make_app_icon.py`; both are added as representations of one 18 pt image so a
+    /// Retina bar uses the 36 px drawing rather than a stretched 1x. The SF Symbol it replaced is the
+    /// fallback only if the bundle somehow lacks the files.
+    static func menuBarMark(bundle: Bundle = .main) -> NSImage? {
+        let image = NSImage(size: NSSize(width: 18, height: 18))
+        for (name, pixels) in [("menubar-icon", 18), ("menubar-icon@2x", 36)] {
+            guard let url = bundle.url(forResource: name, withExtension: "png"),
+                  let data = try? Data(contentsOf: url),
+                  let rep = NSBitmapImageRep(data: data), rep.pixelsWide == pixels else { continue }
+            rep.size = NSSize(width: 18, height: 18)
+            image.addRepresentation(rep)
+        }
+        guard !image.representations.isEmpty else {
+            return NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Studio Hub")
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Studio Hub"
+        return image
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config: ShellConfiguration
         do {
@@ -1052,7 +1075,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         windowMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         NSApp.mainMenu = mainMenu
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Studio Hub")
+        statusItem.button?.image = Self.menuBarMark()
         statusItem.button?.toolTip = "Studio Hub"
         let menu = NSMenu()
         let openItem = NSMenuItem(title: "Open Studio Hub", action: #selector(openWindow), keyEquivalent: ""); openItem.target = self; menu.addItem(openItem)

@@ -3,7 +3,16 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+Last updated: **0.6.132** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+
+> **0.6.132 - Wave Frame icon, fleet-token rotation grace, unregistered voice outputs to the Trash Folder, 16 GB Fish test (`integrate/0.6.132` = 0.6.131 + `fix/small-batch-0132` d9e3534 + `feat/fish-16gb-test` 4fc4694 + the logo commit).**
+> New app icon (owner's pick, concept 2 "Wave Frame"): sources `assets/logo/app-icon.svg` + `menubar-icon.svg`; **`python3 packaging/make_app_icon.py`** renders `assets/app-icon.icns`
+> (every size drawn at its own pixel size), `app-icon-1024.png`, `menubar-icon.png` (18 px) and `menubar-icon@2x.png` (36 px). The menu-bar item loads the two PNGs from
+> `Contents/Resources` as one template image (`AppDelegate.menuBarMark()`); `stage_voice.py` refuses a build without them. The Voice Studio web UI keeps its own
+> `components/voice/app/frontend/icon.png` (a separate product surface, not changed). Fleet-token rotation: nodes that missed it keep the old token 30 days and are handed the
+> new one when they answer (`components/hub/backend/peers.py`, `auth.py`); the disk governor moves never-registered Voice audio to the Trash Folder after the 7-day window.
+> 16 GB Fish test: `qualification/RUN-16GB-FISH.command` + `import_kit_packages.py` (kit script copies both; they are in `prepare-kit`'s MANAGED list).
+> Gate numbers, DMG and checksum: `_orchestra/audit-20261001/release-0132/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.130 - text-led 0.3/0.6 s pauses for Fish/VoxCPM2/Chatterbox/Pocket, Fish 4-bit on the 16 GB tier, Breeze back to 16 GB only (`integrate/0.6.130` = 0.6.129 + `fix/pauses-tiers-0130` 645d542).**
 > Supersedes the 0.6.129 Breeze 8 GB carry and the 24 GB Fish 4-bit tier. Gate numbers, DMG and checksum: `_orchestra/audit-20261001/release-0130/`. Not installed / not published until the coordinator does it.

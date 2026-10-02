@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.132 — 2026-10-02 · New Studio Hub icon (Wave Frame), fleet-password rotation no longer strands offline Macs, unregistered voice outputs cleaned
+
+Release of `integrate/0.6.132` (merges fix/small-batch-0132, commit d9e3534, and feat/fish-16gb-test, commit 4fc4694, on 0.6.131; no conflicts, plus the logo commit).
+- **New app icon: "Wave Frame"** (owner's pick, concept 2 of 6, 2026-10-02): a picture frame holding a wave with a note, on a dark indigo tile.
+  Source of truth is `assets/logo/app-icon.svg` (1024 tile) and `assets/logo/menubar-icon.svg` (18 pt one-colour glyph);
+  `packaging/make_app_icon.py` now renders both with AppKit's SVG renderer (each `.icns` size drawn at its exact pixel size, 16-1024 @1x/@2x,
+  then `iconutil`) and writes `assets/app-icon.icns`, `assets/app-icon-1024.png`, `assets/menubar-icon.png` (18 px) and `assets/menubar-icon@2x.png`
+  (36 px). The Dock, Finder, the About panel and the DMG show the `.icns` (`CFBundleIconFile`, unchanged). The menu-bar item was the SF Symbol
+  `waveform.circle`; it is now the Wave Frame glyph as a template image (tinted for light/dark bars), loaded from the bundle by
+  `AppDelegate.menuBarMark()`; `stage_voice.py` copies the two PNGs into `Resources` and refuses a build without them. The SF Symbol stays only as
+  a fallback if the files are missing. `tests/test_app_icon_assets.py` pins sizes, the `.icns` types and the wiring.
+- **Fleet token rotation grace (30 days):** changing the fleet password used to leave Macs that were offline during the change unable to rejoin.
+  Nodes that missed a rotation keep working with the token they hold for 30 days, are given the new token when they next answer, and then the old
+  one is retired; the app shows how many nodes are still on the previous token. Also fixed: controllers kept the old token in memory until restarted.
+- **Never-recorded voice outputs are cleaned:** the disk governor now moves Voice audio the Hub never registered to the self-cleaning Trash Folder once
+  it is older than the 7-day unacknowledged window. The first run moves any backlog there (nothing is deleted; the Trash Folder purges after 15 days).
+- **16 GB Fish test:** the TTS runner gains Fish S2 Pro 4-bit / 8-bit / bf16 (opt-in via `--models`, `--target-gb`), `RUN-16GB-FISH.command` (refuses a
+  non-16 GB Mac, imports exactly the three packages from the kit with `import_kit_packages.py`, then measures), kit README rows.
+- Removed the unused `NativeWorkspaceStore.maskedToken`; four flaky tests made deterministic (`test_chat_hub_wiring`, `test_tts_8gb_runner` swap step,
+  hub regression timeout, `test_shelved_models` import).
+
 ## 0.6.131 — 2026-10-02 · Passwords and tokens hidden behind an eye icon; memory floors from the real 8 GB measurement
 
 Release of `integrate/0.6.131` (merges feat/secret-protection, commit 4fe6d08, built on 0.6.129; no conflicts).

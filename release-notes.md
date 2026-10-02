@@ -2,6 +2,24 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.132 - 2026-10-02
+
+### A new Studio Hub icon, and changing the fleet password is safe for offline Macs
+
+**A new Studio Hub icon.** The app has a fresh look: a picture frame holding a wave and a note, on a dark blue tile. You will see it in the Dock,
+in Finder, in the About window and in the menu bar, where it follows light and dark mode.
+
+**Changing the fleet password no longer leaves Macs behind.** A Mac that was switched off or away when you changed the password now keeps working
+with its old one for up to 30 days. As soon as it comes back online it is given the new one, and the old one is retired. Connections shows how many
+Macs are still on the previous password. We also fixed a bug where a controller kept the old password until it was restarted.
+
+**Voice recordings that were never saved are tidied up.** Audio the app generated but never recorded is now moved to the Trash Folder after 7 days.
+The first time this runs it moves any backlog there too. Nothing is deleted straight away: the Trash Folder empties itself after 15 days.
+
+**A 16 GB test for Fish voices.** The kit now has a one-click test that measures Fish S2 Pro (4-bit, 8-bit and full precision) on a 16 GB Mac.
+
+**More reliable tests.** A few tests that sometimes failed by chance now give the same answer every time.
+
 ## 0.6.131 - 2026-10-02
 
 ### Passwords and tokens are hidden, and jobs start on 8 GB Macs
