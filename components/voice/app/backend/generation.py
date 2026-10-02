@@ -867,6 +867,20 @@ def _long_form_join_pause_s(family: str, repo: str) -> float:
     return float(policy["join_pause_seconds"])
 
 
+# Families whose section joins follow the text: 0.30 s after a sentence, 0.60 s at a paragraph break.
+# OmniVoice and Qwen3-TTS 1.7B were first; the families that sat on the flat 0.12 s default joined
+# them on the owner's decision (2026-10-02) after Fish joins were heard as having "no proper pause".
+_PRODUCTION_PAUSE_FAMILIES = frozenset(
+    {"omnivoice", "voxcpm-mlx", "fish-audio-mlx", "chatterbox-mlx", "pocket-tts"}
+)
+
+
+def _uses_production_pauses(family: str, repo: str) -> bool:
+    return family in _PRODUCTION_PAUSE_FAMILIES or (
+        family == "qwen3-tts" and "1.7b-base" in repo.lower()
+    )
+
+
 def _production_join_pauses_s(text: str, chunks: list[str], speed: float) -> list[float]:
     """Keep production narration boundaries stable after final tempo adjustment."""
     pauses: list[float] = []
@@ -3285,10 +3299,7 @@ class GenerationManager:
                     _production_join_pauses_s(
                         text, chunks, float(job.params.get("speed") or 1.0),
                     )
-                    if (
-                        model.family == "omnivoice"
-                        or (model.family == "qwen3-tts" and "1.7b-base" in model.repo.lower())
-                    )
+                    if _uses_production_pauses(model.family, model.repo)
                     else None
                 ),
                 cancel_event=job.cancel_event,
@@ -3714,13 +3725,7 @@ class GenerationManager:
                     chunks,
                     float(job.params.get("speed") or 1.0),
                 )
-                if (
-                    family == "omnivoice"
-                    or (
-                        family == "qwen3-tts"
-                        and "1.7b-base" in model_repo.lower()
-                    )
-                )
+                if _uses_production_pauses(family, model_repo)
                 else None
             ),
         )

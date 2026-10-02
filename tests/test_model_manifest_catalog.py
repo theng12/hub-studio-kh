@@ -293,7 +293,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # 4,450,615,835 bytes. The publisher's `codec.pth` is NOT listed (mlx-audio 0.5.7 cannot load
             # it and silently decodes noise); `codec.safetensors` comes from the 8-bit package's pinned
             # revision instead (bit-identical tensors), recorded as a second source. LICENSE.md + NOTICE kept.
-            "fish-audio-s2-pro-4bit": "a847624a16063a09eb5d146318adb44bb349142a54b62b92bf79aabb36fff747",
+            "fish-audio-s2-pro-4bit": "685152d38105e1503c9f867d50d19348a6fb237a876b62aeb2775b6a24ebc679",
             "s3tokenizerv2": "523d8ed23e680e453987d5b0c080db21140e5df867c9990ed34b1c4fc0006ea6",
             # Stable Audio 3's MLX bundle, captured from the ungated optimized repo.
             "stable-audio-3-medium": "e40bdda5250897a7d23cf4d34084eaf26a2188441bfbb546f1dea7e738f982dc",

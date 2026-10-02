@@ -99,8 +99,8 @@
   "model_id": "majentik/fishaudio-s2-pro-MLX-4bit",
   "package_id": "fish-audio-s2-pro-4bit",
   "qualification": {
-    "memory_evidence": "MEASURED here [M] 2026-10-02 on the 32 GB M2 Max through the voice child's own code path (mlx-audio 0.5.7, mlx_memory bounds): S2 (4 sections, 70-75 s of audio) peak process footprint 7.43 GB (Chris reference) / 8.10 GB (Christian), 14.61 GB before the slabbed DAC decode; Whisper WER 0 of 175 words. 24 GB is the tier claimed (owner); no 16 GB or 24 GB Mac has run it yet.",
-    "minimum_unified_memory_gb": 24,
+    "memory_evidence": "MEASURED here [M] 2026-10-02 on the 32 GB M2 Max through the voice child's own code path (mlx-audio 0.5.7, mlx_memory bounds): S2 (4 sections, 70-75 s of audio) peak process footprint 7.43 GB (Chris reference) / 8.10 GB (Christian), 14.61 GB before the slabbed DAC decode; Whisper WER 0 of 175 words. 16 GB tier approved by the owner 2026-10-02 from these measurements; confirm with a real 16 GB run.",
+    "minimum_unified_memory_gb": 16,
     "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
     "recommended_unified_memory_gb": 24,
     "status": "unqualified"

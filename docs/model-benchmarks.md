@@ -44,9 +44,9 @@ may still run there, and one at or below may still not (see the peak-memory note
 | VoxCPM2 4-bit (MLX) — recommended | MLX (speech) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | Qwen3-TTS 1.7B Base — quality voice cloning (MLX 4-bit) | MLX (speech) | 12 GB (recommended 16 GB) | no | yes | yes | yes |
 | Breeze TTS 2 4-bit (MLX) | MLX (speech) | 16 GB | no | yes | yes | yes |
+| Fish Audio S2 Pro 5B 4-bit (MLX) | MLX (speech) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
 | VoxCPM2 8-bit (MLX) — balanced | MLX (speech) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
 | VoxCPM2 bf16 (MLX) — full precision | MLX (speech) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
-| Fish Audio S2 Pro 5B 4-bit (MLX) | MLX (speech) | 24 GB | no | no | yes | yes |
 | Fish Audio S2 Pro 5B 8-bit (MLX) — fleet candidate | MLX (speech) | 24 GB | no | no | yes | yes |
 | Fish Audio S2 Pro 5B bf16 (MLX) | MLX (speech) | 32 GB | no | no | no | yes |
 | **Subtitle (speech-to-text)** | | | | | | |

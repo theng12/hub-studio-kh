@@ -1055,17 +1055,17 @@ CATALOG: tuple[ModelEntry, ...] = (
         family="fish-audio-mlx",
         size_gb=4.45,
         gated=False,
-        min_unified_memory_gb=24,
+        min_unified_memory_gb=16,
         min_free_memory_gb=8.4,
         min_free_memory_note=(
             "Measured 2026-10-02 on the 32 GB M2 Max through the voice child's own code path (mlx-audio 0.5.7, "
             "mlx_memory bounds: slabbed DAC decode + cached reference): S2 (4 sections, 70-75 s of audio) peak "
             "process footprint 7.43 GB with the Chris reference (12.1 s) and 8.10 GB with Christian (18.9 s), "
-            "+ 0.25 GB margin. Before the bounds the same S2 peaked at 14.61 GB. Not yet run on a 24 GB Mac."
+            "+ 0.25 GB margin. Before the bounds the same S2 peaked at 14.61 GB. 16 GB tier owner-approved 2026-10-02 from this measurement; confirm with a real 16 GB run."
         ),
         recommended_hardware=(
-            "Apple Silicon with 24 GB. Measured 7.4-8.1 GB peak process footprint for a 300-character-section "
-            "script (resident model ~6 GB), so 24 GB has wide headroom."
+            "Apple Silicon with 16 GB or more (24 GB recommended). Measured 7.4-8.1 GB peak process footprint for a "
+            "300-character-section script (resident model ~6 GB)."
         ),
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
         license_name="Fish Audio Research License",
@@ -1090,7 +1090,7 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("good",  "Whisper word error rate ~0 on the owner's S2/S4 scripts, the same as 8-bit and bf16 (measured 2026-10-01)"),
             ("weak",  "A single-person community conversion; its codec is replaced with the 8-bit repository's (bit-identical) because the published codec.pth does not load"),
             ("weak",  "Fish Audio Research License: non-commercial unless Fish Audio grants a written commercial agreement"),
-            ("avoid", "8/16 GB Macs — the 24 GB tier is the floor this catalogue claims"),
+            ("avoid", "8 GB Macs — 16 GB is the floor this catalogue claims (owner-approved 2026-10-02)"),
         ),
     ),
     ModelEntry(
