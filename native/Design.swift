@@ -13,9 +13,15 @@ import SwiftUI
 // Nothing here knows about the Hub's data. The tiers that decide a disk or a memory colour live with
 // the data (`NativeFleetMachine.diskTier` / `.memoryTier`); this file only says how a tier looks.
 
+private struct HubWindowHeightKey: EnvironmentKey { static let defaultValue: CGFloat = 10_000 }
 private struct HubWindowWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 
 extension EnvironmentValues {
+    /// The window's height, for the few places that compact when it is short (the sidebar footer).
+    var hubWindowHeight: CGFloat {
+        get { self[HubWindowHeightKey.self] }
+        set { self[HubWindowHeightKey.self] = newValue }
+    }
     /// The width of the window's content (sidebar included), set once at the root of the app's view. A
     /// view that has to choose between two layouts reads it here; nothing measures itself.
     var hubWindowWidth: CGFloat {
