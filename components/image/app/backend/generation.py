@@ -6,9 +6,10 @@ that decides which mflux memory knobs this host needs.  :func:`validate_request`
 runner and ``/api/catalog`` all read that table, so adding a model is one entry plus its
 manifest.
 
-FLUX.2 Klein's entry is the exact behaviour the worker shipped before this table existed:
-4 steps, guidance 1.0, the same family/label/limits, and no mflux memory knobs — it is
-qualified and running on the owner's 8 GB Macs, and nothing here changes what it emits.
+FLUX.2 Klein's entry keeps the behaviour the worker shipped before this table existed (4 steps,
+guidance 1.0, the same family/label/limits) and, from 24 GB up, the same configuration; below that
+it runs in the memory-bounded configurations the policy below describes (``staging``,
+``streaming``, ``vae_bounded``), which change no arithmetic of the sampling loop.
 """
 from __future__ import annotations
 
@@ -20,11 +21,13 @@ import json
 import math
 import os
 from pathlib import Path
+import queue
 import random
 import resource
 import subprocess
 import threading
 import time
+import traceback
 from uuid import uuid4
 
 from PIL import Image
@@ -110,6 +113,18 @@ QUALIFIED_MINIMUM_MEMORY_BYTES = 16_000_000_000
 # this constant is the single tier boundary to move.
 Z_IMAGE_LOW_RAM_BELOW_BYTES = 24_000_000_000
 
+# FLUX.2 Klein 4-bit: the bounded (staged) configuration below 12 GB - the 8 GB tier - and a lean
+# one (cache capped, VAE decode bounded, model still fully loadable and resident) below 24 GB.
+# Its default configuration peaks at 12.1 GB of MLX memory on a 32 GB Mac and 9.8 GB on the 8 GB
+# M1 (3.7-4.1 GB of swap per image), 9 GB of which is the VAE decode of a 0.17 GB decoder.
+# The bounded configurations cap MLX's buffer cache at 0.5 GB (mflux's own --low-ram uses 1 GB). Measured on the
+# streamed 8 GB-tier configuration: FLUX.2 Klein 4-bit 2.3-2.9 GB footprint at 0.25-1 GB with no change in time
+# (79-82 s at 0.25-2 GB, staged), Z-Image-Turbo 4-bit 2.0-4.1 GB.
+BOUNDED_CACHE_LIMIT_GB = 0.5
+STREAM_BELOW_BYTES = 12_000_000_000   # block streaming (`streaming`): the 8 GB tier only
+FLUX2_LOW_RAM_BELOW_BYTES = 12_000_000_000
+FLUX2_LEAN_BELOW_BYTES = 24_000_000_000
+
 
 @dataclass(frozen=True)
 class MemoryPolicy:
@@ -130,6 +145,23 @@ class MemoryPolicy:
     low_ram_vae_tile_size: int | None = None
     # Why this model declares no bounded configuration, in the model's own terms.
     single_mode_reason: str | None = None
+    # The bounded configuration also runs the stage hooks (`staging.apply`): the prompt is encoded
+    # and its encoder freed before the transformer loads, and the transformer is freed before the
+    # VAE decodes. They change no arithmetic; they only stop three components being resident at
+    # once. `bounded_vae_decode` additionally replaces the FLUX.2 VAE's decode (peak 9 GB at
+    # 1280x720) with `vae_bounded.decode`, which cannot be done by tiling on that decoder.
+    bounded_vae_decode: bool = False
+    # A "lean" configuration for the tier above the bounded one: the model stays fully loaded (so it
+    # can stay resident between jobs) but MLX's buffer cache is capped and the VAE decode is bounded.
+    # Below this host memory and at or above `low_ram_below_bytes`. None: no lean tier.
+    lean_below_bytes: int | None = None
+    lean_cache_limit_gb: float | None = 2.0
+    # Stream the blocks of these components one at a time (`streaming`): ``(component, block lists,
+    # multi_pass)``, with ``weight_definition`` ('module:Class') naming mflux's loader for the model. Applies in
+    # the bounded configuration below `stream_below_bytes`; None streams nothing.
+    stream_below_bytes: int | None = None
+    streamed_components: tuple = ()
+    weight_definition: str | None = None
 
 
 @dataclass(frozen=True)
@@ -176,16 +208,27 @@ FLUX2_KLEIN = ImageModel(
               'guidance': 1.0, 'seed': -1},
     limits={'min_steps': 2, 'max_steps': 100, 'min_guidance': 0.0, 'max_guidance': 30.0,
             'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
-    # No memory knobs on purpose.  This model is qualified at 16 GB and has run thousands of
-    # generations on the owner's 8 GB Macs; adding a knob would be an unverified change to a
-    # verified path.  `single_mode_reason` publishes that in the model's own terms, so the
-    # catalog can say why the machine-wide `loading_mode` setting does not apply here instead
-    # of offering a bounded configuration this model does not have.
-    memory=MemoryPolicy(single_mode_reason=(
-        'No memory knobs on purpose: this model is qualified at 16 GB and has run thousands '
-        "of generations on the owner's 8 GB Macs, and adding an mflux memory knob would be "
-        'an unverified change to a verified path.')),
+    # The bounded configurations (tiers in `FLUX2_*_BELOW_BYTES` above) were added after the 8 GB runs showed the
+    # unbounded one at 9.8 GB of MLX memory and ~4 GB of swap per image; 24 GB and up are unchanged.
+    memory=MemoryPolicy(low_ram_below_bytes=FLUX2_LOW_RAM_BELOW_BYTES,
+                        low_ram_cache_limit_gb=BOUNDED_CACHE_LIMIT_GB, bounded_vae_decode=True,
+                        lean_below_bytes=FLUX2_LEAN_BELOW_BYTES, lean_cache_limit_gb=2.0,
+                        stream_below_bytes=STREAM_BELOW_BYTES,
+                        weight_definition=('mflux.models.flux2.weights.flux2_weight_definition:'
+                                           'Flux2KleinWeightDefinition'),
+                        streamed_components=(('text_encoder', ('layers',), False),
+                                             ('transformer', ('transformer_blocks',
+                                                              'single_transformer_blocks'), True))),
     qualification={
+        # Per-stage memory, 1280x720, four steps, seeds 42-44, measured by `qualification/image_memory_probe.py`
+        # on a 32 GiB M2 Max with an 8 GB Mac's MLX limits and mflux's non-compiled (M1/M2) denoise function;
+        # the "before" row reproduced the real 8 GB M1 run (9.8 GB MLX there). `source` holds every figure.
+        'memory_profile': {
+            'before': {'mlx_peak_gb': 9.79, 'footprint_peak_gb': 9.41},
+            'staged_streamed': {'mlx_peak_gb': 1.64, 'footprint_peak_gb': 2.93},
+            'measured_on': '32 GiB M2 Max (Mac14,13) emulating an 8 GB Mac, mflux 0.20.0',
+            'source': 'qualification/evidence/image-memory-2026-10-01.jsonl',
+        },
         'historical_source_workload': '1K, four steps, guidance 1.0 on 16 GB Apple Silicon',
         # This said `pending` while a completed packaged run sat in the tree: one real 1K
         # generation driven through the assembled Hub + Image worker + native UI, job `af4913b2`,
@@ -250,7 +293,14 @@ Z_IMAGE_TURBO = ImageModel(
               'guidance': 1.0, 'seed': -1},
     limits={'min_steps': 2, 'max_steps': 100, 'min_guidance': 0.0, 'max_guidance': 30.0,
             'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
-    memory=MemoryPolicy(low_ram_below_bytes=Z_IMAGE_LOW_RAM_BELOW_BYTES),
+    memory=MemoryPolicy(low_ram_below_bytes=Z_IMAGE_LOW_RAM_BELOW_BYTES,
+                        low_ram_cache_limit_gb=BOUNDED_CACHE_LIMIT_GB,
+                        stream_below_bytes=STREAM_BELOW_BYTES,
+                        weight_definition=('mflux.models.z_image.weights.z_image_weight_definition:'
+                                           'ZImageWeightDefinition'),
+                        streamed_components=(('text_encoder', ('layers',), False),
+                                             ('transformer', ('noise_refiner', 'context_refiner',
+                                                              'layers'), True))),
     # The Hub's live-free floor. It stops a job being started into a nearly-full Mac, which is
     # what turns a slow generation into a killed worker — and nothing more than that.
     #
@@ -269,6 +319,12 @@ Z_IMAGE_TURBO = ImageModel(
     # requirement (measured, else manifest, else this tier) is what gates dispatch, since 2026-09-30.
     min_free_memory_gb=3.0,
     qualification={
+        'memory_profile': {
+            'before': {'mlx_peak_gb': 6.26, 'footprint_peak_gb': 7.46},
+            'staged_streamed': {'mlx_peak_gb': 2.79, 'footprint_peak_gb': 4.13},
+            'measured_on': '32 GiB M2 Max (Mac14,13) emulating an 8 GB Mac, mflux 0.20.0',
+            'source': 'qualification/evidence/image-memory-2026-10-01.jsonl',
+        },
         'measured_on': '32 GiB M2 Max (Mac14,13), mflux 0.20.0, 4-bit pack',
         'measured_resolutions': ['1280x720', '1024x1024'],
         'measured_peak_gb': {'default': 17.67, 'low_ram': 7.12},
@@ -351,6 +407,18 @@ def host_memory_bytes() -> int:
         return 0
 
 
+def _under_memory_pressure() -> bool:
+    """True when macOS reports warning or critical memory pressure (``kern.memorystatus_vm_pressure_level``
+    2 or 4; 1 is normal). A resident model is not reused into a Mac that is already short of memory.
+    An unreadable level is not pressure: the idle window and the Hub's release are the other two guards."""
+    try:
+        level = int(subprocess.check_output(['/usr/sbin/sysctl', '-n', 'kern.memorystatus_vm_pressure_level'],
+                                            text=True, timeout=3).strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return level >= 2
+
+
 def memory_plan(model: ImageModel, total_memory_bytes: int,
                 mode: str = DEFAULT_LOADING_MODE) -> dict:
     """The mflux memory knobs this host gets for this model, under this machine's setting.
@@ -380,22 +448,67 @@ def memory_plan(model: ImageModel, total_memory_bytes: int,
         low_ram = 0 < total_memory_bytes < policy.low_ram_below_bytes
     else:  # unreachable while the vocabulary above is the only source of ids
         raise ValueError(f'unhandled memory mode {mode!r}')
+    # The lean tier sits between the bounded one and the default: only `auto` chooses it, because
+    # `full` is "the default configuration whatever this Mac's memory is" and `low` is the bounded one.
+    lean = (not low_ram and mode == MODE_AUTO and policy.lean_below_bytes is not None
+            and 0 < total_memory_bytes < policy.lean_below_bytes)
+    cache_limit = (policy.low_ram_cache_limit_gb if low_ram
+                   else policy.lean_cache_limit_gb if lean else None)
     return {
         'mode': 'low-ram' if low_ram else 'default',
         # The operator's choice travels with the plan: the catalog publishes it as `selected`
         # and the job receipt records it, so a configuration can be traced to what asked for it.
         'requested_mode': mode,
         'low_ram': low_ram,
-        'mlx_cache_limit_gb': policy.low_ram_cache_limit_gb if low_ram else None,
-        'vae_tiling': low_ram,
+        'mlx_cache_limit_gb': cache_limit,
+        'vae_tiling': low_ram and not policy.bounded_vae_decode,
         'vae_tile_size': policy.low_ram_vae_tile_size if low_ram else None,
+        # The stage hooks and the bounded FLUX.2 decode (see `staging` / `vae_bounded`). `lean`
+        # keeps the model fully loaded and only caps the cache and bounds the decode.
+        'staged': low_ram,
+        'lean': lean,
+        'bounded_vae_decode': (low_ram or lean) and policy.bounded_vae_decode,
+        # A model whose components are freed as the job goes cannot serve a second job.
+        'resident_ok': not low_ram,
+        'stream': (tuple(policy.streamed_components) if low_ram and policy.stream_below_bytes
+                   and 0 < total_memory_bytes < policy.stream_below_bytes else ()),
+        'weight_definition': policy.weight_definition,
         'total_memory_bytes': total_memory_bytes,
         'low_ram_below_bytes': policy.low_ram_below_bytes,
     }
 
 
-def apply_memory_plan(instance: object, plan: dict) -> object | None:
-    """Apply a plan to a loaded mflux model through the CLI's own mapping.
+def _set_mlx_cache_limit(limit_gb: float | None) -> None:
+    """Cap MLX's buffer cache for this job, or put it back to what the process started with.
+
+    MLX keeps freed buffers for reuse, up to the whole memory limit by default; on a small Mac that
+    is how a finished stage's weights stay resident (and get swapped) instead of going back to the
+    OS. ``set_cache_limit`` returns the previous limit, so the first call remembers the original and
+    a job with no cap restores it.
+    """
+    global _ORIGINAL_CACHE_LIMIT
+    module = _loaded_mlx()
+    setter = getattr(module, 'set_cache_limit', None) if module is not None else None
+    if not callable(setter):
+        return
+    try:
+        if limit_gb is None:
+            if _ORIGINAL_CACHE_LIMIT is not None:
+                setter(_ORIGINAL_CACHE_LIMIT)
+                _ORIGINAL_CACHE_LIMIT = None
+            return
+        previous = setter(int(limit_gb * 1000 ** 3))
+        if _ORIGINAL_CACHE_LIMIT is None:
+            _ORIGINAL_CACHE_LIMIT = previous
+    except Exception:  # noqa: BLE001 - a memory knob must never fail a job
+        pass
+
+
+_ORIGINAL_CACHE_LIMIT: int | None = None
+
+
+def apply_memory_plan(instance: object, plan: dict, on_stage=None, model_dir=None) -> object | None:
+    """Apply a plan to a loaded mflux model through the CLI's own mapping, plus the stage hooks.
 
     ``CallbackManager._register_memory_saver`` is the function the CLI uses to turn those four
     flags into model state (``mflux/callbacks/callback_manager.py:82``): it sets
@@ -406,19 +519,44 @@ def apply_memory_plan(instance: object, plan: dict) -> object | None:
     This deliberately does not call ``CallbackManager.register_callbacks``: that also registers
     mflux's battery saver, and stopping a job at a battery percentage is a policy the owning app
     has never been asked about.  Everything else the CLI does to memory is here.
+
+    ``plan['staged']`` additionally installs :mod:`staging`'s hooks, which is what makes the
+    saver's evictions free memory (see that module); ``plan['lean']`` only caps the cache and
+    bounds the VAE decode, and leaves the model fully loaded.
     """
-    if not plan['low_ram'] and plan['mlx_cache_limit_gb'] is None and not plan['vae_tiling']:
-        return None
-    from argparse import Namespace
+    saver = None
+    # Ours to set in every plan (a plan with no cap restores MLX's own), so the cap never outlives the
+    # configuration that asked for it; mflux's saver sets the same number again below.
+    _set_mlx_cache_limit(plan['mlx_cache_limit_gb'])
+    if plan['low_ram'] or plan['vae_tiling']:
+        from argparse import Namespace
 
-    from mflux.callbacks.callback_manager import CallbackManager
+        from mflux.callbacks.callback_manager import CallbackManager
 
-    register = getattr(CallbackManager, '_register_memory_saver', None)
-    if register is None:
-        raise RuntimeError('mflux no longer exposes the CLI memory mapping this worker pins')
-    args = Namespace(low_ram=plan['low_ram'], mlx_cache_limit_gb=plan['mlx_cache_limit_gb'],
-                     vae_tiling=plan['vae_tiling'], vae_tile_size=plan['vae_tile_size'])
-    return register(args=args, model=instance)
+        register = getattr(CallbackManager, '_register_memory_saver', None)
+        if register is None:
+            raise RuntimeError('mflux no longer exposes the CLI memory mapping this worker pins')
+        args = Namespace(low_ram=plan['low_ram'], mlx_cache_limit_gb=plan['mlx_cache_limit_gb'],
+                         vae_tiling=plan['vae_tiling'], vae_tile_size=plan['vae_tile_size'])
+        saver = register(args=args, model=instance)
+    hooks: list[str] = []
+    if plan.get('staged') or plan.get('bounded_vae_decode'):
+        from . import staging
+        hooks = staging.apply(instance, stages=bool(plan.get('staged')),
+                              bounded_decode=bool(plan.get('bounded_vae_decode')),
+                              uncompiled=bool(plan.get('stream')), on_stage=on_stage)
+    if plan.get('stream') and model_dir is not None and 'encode-then-free' in hooks:
+        from . import streaming
+        for name, groups, multi_pass in plan['stream']:
+            component = getattr(instance, name, None)
+            if not streaming.supports(component, groups):
+                continue
+            loader = (streaming.component_loader(plan['weight_definition'], name, model_dir)
+                      if multi_pass else None)
+            streaming.apply(component, groups, loader=loader)
+            hooks.append(f'stream-{name}')
+    plan['hooks'] = hooks
+    return saver
 
 
 # The two configurations a bounded model can run, named exactly as `measured_runtime`'s rows
@@ -979,6 +1117,12 @@ class GenerationManager:
         self.cancel_events: dict[str, threading.Event] = {}
         self.lock = threading.RLock()
         self.inference_lock = threading.Lock()
+        # The one model kept loaded between jobs (see `_remember`): {'repo', 'instance', 'key',
+        # 'idle_since'}. Only ever touched with `inference_lock` held or from `release_resident`,
+        # which takes it.
+        self._resident: dict | None = None
+        self._work: queue.Queue = queue.Queue()
+        self._inference_thread: threading.Thread | None = None
         self._restore()
 
     @staticmethod
@@ -998,6 +1142,69 @@ class GenerationManager:
             if isinstance(candidate, dict) and candidate.get('package_id'):
                 index[candidate['package_id']] = candidate
         return index
+
+    # ── residency between jobs ──────────────────────────────────────────────
+    # A model whose plan keeps every component loaded (``plan['resident_ok']``) can serve the next
+    # job of the same model without reloading it: measured on a 32 GB M2 Max, the first denoise
+    # step of a freshly loaded FLUX.2 Klein 4-bit costs 15 s more than the next (the weights are
+    # read from disk when first used) and Z-Image-Turbo 4-bit about 9 s. Whether to keep it is the
+    # memory policy's call (``memory_policy.keep_resident``: never on a small Mac, an idle window
+    # on a large one); whether it may stay is the machine's (pressure) and the Hub's (it asks
+    # every Studio to release before another needs the RAM - ``release_resident``).
+
+    @staticmethod
+    def _plan_key(plan: dict) -> tuple:
+        return (plan['mode'], plan['lean'], plan['bounded_vae_decode'], plan['mlx_cache_limit_gb'])
+
+    def _keep_resident(self) -> bool:
+        from . import memory_policy
+        return memory_policy.keep_resident(self)
+
+    def _acquire(self, model: ImageModel, model_folder: str, plan: dict) -> tuple[object, bool]:
+        """The model object for this job, and whether it was already loaded."""
+        resident, self._resident = self._resident, None
+        if (resident is not None and resident['repo'] == model.repo
+                and resident['key'] == self._plan_key(plan) and plan['resident_ok']
+                and not _under_memory_pressure()):
+            return resident['instance'], True
+        if resident is not None:
+            # A different model, a different configuration, or a Mac that is short of memory: the
+            # old one goes before the new one loads, never alongside it.
+            del resident
+            release_mlx_memory()
+        return model_class(model)(
+            model_path=str(Path(model_folder) / WEIGHTS_SUBDIRECTORY), quantize=None,
+            lora_paths=None, lora_scales=None), False
+
+    def _remember(self, repo: str, instance: object, plan: dict) -> None:
+        self._resident = {'repo': repo, 'instance': instance, 'key': self._plan_key(plan),
+                          'idle_since': time.time()}
+
+    def _forget_resident(self) -> None:
+        self._resident = None
+
+    def resident_models(self) -> list[str]:
+        resident = self._resident
+        return [resident['repo']] if resident else []
+
+    def resident_idle_seconds(self) -> float | None:
+        resident = self._resident
+        return max(0.0, time.time() - resident['idle_since']) if resident else None
+
+    def release_resident(self, reason: str = 'manual') -> list[str]:
+        """Drop the resident model; refuses (``RuntimeError``) while a generation is running."""
+        if not self.inference_lock.acquire(blocking=False):
+            raise RuntimeError('image generation is active; memory was not released')
+        try:
+            if any(job.get('state') == 'running' for job in self.list()):
+                raise RuntimeError('image generation is active; memory was not released')
+            released = self.resident_models()
+            self._resident = None
+            if released:
+                release_mlx_memory()
+            return released
+        finally:
+            self.inference_lock.release()
 
     def _restore(self) -> None:
         from components import job_history
@@ -1177,6 +1384,7 @@ class GenerationManager:
                'media_type': None, 'error': None, 'error_code': None,
                'model_revision': params['model_revision'], 'runtime_revision': self.runtime_sha256,
                'memory_mode': None, 'loading_mode_setting': None, 'peak_mlx_bytes': None,
+               'model_reused': None, 'memory_hooks': None,
                'worker_id': 'image', 'machine_id': self.machine, 'acknowledged': False}
         with self.lock:
             self.jobs[job_id] = job
@@ -1187,9 +1395,32 @@ class GenerationManager:
                 self.jobs.pop(job_id, None)
                 self.cancel_events.pop(job_id, None)
                 raise
-        threading.Thread(target=self._run, args=(job_id, files['folder']), daemon=True,
-                         name=f'image-{job_id[:8]}').start()
+        self._enqueue(self._run, job_id, files['folder'])
         return dict(job)
+
+    def _enqueue(self, function, *args) -> None:
+        """Run ``function`` on the one inference thread, in submission order.
+
+        Every job used to get its own thread. MLX keeps its default stream per thread, so an array or
+        module built on one job's thread cannot be used from another's ("There is no Stream(cpu, 0) in
+        current thread" - measured the first time a model was reused for a second job). A model that stays
+        resident across jobs therefore needs every job on the same thread; so, for one generation at a time
+        anyway, every job runs on this one daemon thread.
+        """
+        with self.lock:
+            if self._inference_thread is None:
+                self._inference_thread = threading.Thread(target=self._inference_loop, daemon=True,
+                                                          name='image-inference')
+                self._inference_thread.start()
+        self._work.put((function, args))
+
+    def _inference_loop(self) -> None:
+        while True:
+            function, args = self._work.get()
+            try:
+                function(*args)
+            except Exception:  # noqa: BLE001 - `_run` records its own failures; nothing may end this thread
+                traceback.print_exc()
 
     def cancel(self, job_id: str) -> dict | None:
         with self.lock:
@@ -1289,24 +1520,40 @@ class GenerationManager:
                     self._persist()
                 # Pinned mflux 0.20.0 path, dispatched from the registry. ST-01's verified
                 # package adds one model/ prefix to every pack (see WEIGHTS_SUBDIRECTORY).
-                memory_saver = None
                 start_mlx_measurement()
-                instance = model_class(model)(
-                    model_path=str(Path(model_folder) / WEIGHTS_SUBDIRECTORY), quantize=None,
-                    lora_paths=None, lora_scales=None)
+                instance, reused = self._acquire(model, model_folder, plan)
+                memory_saver = None
+                keep = False
                 try:
-                    memory_saver = apply_memory_plan(instance, plan)
+                    if not reused:
+                        memory_saver = apply_memory_plan(
+                            instance, plan, model_dir=Path(model_folder) / WEIGHTS_SUBDIRECTORY)
                     result = instance.generate_image(seed=seed, prompt=job['params']['prompt'],
                         num_inference_steps=job['params']['steps'], height=job['params']['height'],
                         width=job['params']['width'], guidance=job['params']['guidance'])
                     peak = peak_mlx_bytes()
+                    keep = bool(plan['resident_ok'] and self._keep_resident())
                 finally:
-                    # Image releases its model after every job. mflux registers its MemorySaver
-                    # on the model and the saver holds the model, so without breaking that cycle
-                    # the weights would outlive the job until a gc pass.
-                    instance.callbacks = None
-                    del instance, memory_saver, plan
-                    release_mlx_memory()
+                    if keep:
+                        # Stays loaded for the next job of this model: only what MLX cached beyond
+                        # the weights goes back to macOS. Never kept after a failure - a model that
+                        # raised mid-generation is not known to be in a state worth reusing.
+                        self._remember(model.repo, instance, plan)
+                        del instance, memory_saver
+                        release_mlx_memory()
+                    else:
+                        # Image releases its model after every job unless the memory policy says
+                        # otherwise. mflux registers its MemorySaver on the model and the saver holds
+                        # the model, so without breaking that cycle the weights would outlive the job
+                        # until a gc pass.
+                        instance.callbacks = None
+                        del instance, memory_saver
+                        self._forget_resident()
+                        release_mlx_memory()
+                with self.lock:
+                    job['model_reused'] = reused
+                    job['memory_hooks'] = list(plan.get('hooks') or [])
+                del plan
                 if not hasattr(result, 'save'):
                     raise RuntimeError('mflux did not return a GeneratedImage')
                 result.save(str(staged), overwrite=True)
@@ -1326,7 +1573,17 @@ class GenerationManager:
             except Exception as exc:
                 self._record_failure(job, event, exc)
         # The inference lock is released: the model is gone and the next job may start while this
-        # one's PNG is compressed (if asked) and published.
+        # one's PNG is compressed (if asked) and published. Every job runs on the one inference
+        # thread (`_enqueue`), so a finished PNG is handed to its own short-lived thread: the JPEG
+        # encode is PIL/CPU work that touches no MLX stream, and it must not hold up the next job.
+        if pending is None:
+            self._finish(job_id, job, event, staged, staged_jpeg, None)
+        else:
+            threading.Thread(target=self._finish, args=(job_id, job, event, staged, staged_jpeg, pending),
+                             daemon=True, name=f'image-deliver-{job_id[:8]}').start()
+
+    def _finish(self, job_id: str, job: dict, event: threading.Event, staged: Path, staged_jpeg: Path,
+                pending: tuple | None) -> None:
         try:
             if pending is not None:
                 self._deliver(job_id, job, event, staged, staged_jpeg, *pending)

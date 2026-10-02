@@ -1,9 +1,8 @@
 """The Image worker's per-machine loading-size setting: ``auto``, ``low`` or ``full``.
 
 This is deliberately **not** ``/api/memory-policy``. That route is the fleet's *release*
-policy - when a resident model is dropped - and Image's answer there is fixed, because mflux
-is built inside a job and dropped when the job returns. This module is the other axis: which
-mflux memory *configuration* the next job loads with, on this Mac.
+policy - when a resident model is dropped (``memory_policy``). This module is the other axis:
+which mflux memory *configuration* the next job loads with, on this Mac.
 
 It is also not the per-model generation defaults (``model_defaults``,
 ``GET/PUT/DELETE /api/model-defaults``), the third thing a job is shaped by. Those are the numbers

@@ -290,9 +290,10 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         return receipt
 
     # ── model memory policy ────────────────────────────────────────────────
-    # The fleet contract every Studio publishes. Image has no idle timer of its own — mflux
-    # is built inside the job and dropped when it ends — but the Hub's machine-wide memory
-    # inventory and handoff pass read all Studios through this shape.
+    # The fleet contract every Studio publishes: how long a loaded model stays loaded, and the
+    # release the Hub's machine-wide pass and fleet handoff ask for (see `memory_policy`).
+
+    memory_policy.start_background(manager)
 
     @app.get('/api/memory-policy')
     def memory_policy_status() -> dict:
@@ -300,22 +301,21 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
 
     @app.put('/api/memory-policy')
     def memory_policy_save(body: dict | None = None) -> dict:
-        mode = str((body or {}).get('mode') or '')
-        if mode != 'immediate':
-            raise HTTPException(422, 'Image releases its model after every job; '
-                                     'there is no idle policy to change')
-        return memory_policy.status(manager)
+        try:
+            return memory_policy.save(str((body or {}).get('mode') or ''))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.post('/api/memory/release')
     def memory_release() -> dict:
         try:
-            return memory_policy.release(manager)
+            return memory_policy.release_now('manual')
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
 
     # ── loading-size setting (`loading_mode`) ───────────────────────────────
-    # Deliberately separate from `/api/memory-policy` above: that is the release policy, and
-    # Image's answer there is fixed. This is which mflux memory *configuration* the next job
+    # Deliberately separate from `/api/memory-policy` above: that is the release policy. This is
+    # which mflux memory *configuration* the next job
     # loads with - `auto`, `low` or `full`. It is a setting, not a per-model fact: what each
     # model does with it (and whether it has a bounded configuration at all) is published per
     # model in the catalog's `loading_modes`, derived from the model's own MemoryPolicy.

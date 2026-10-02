@@ -128,7 +128,7 @@ class WhatItRunsTests(unittest.TestCase):
                                                       "height": size[1], "steps": steps, "guidance": self.ns["GUIDANCE"]})
                 self.assertEqual((params["width"], params["height"], params["steps"]), (size[0], size[1], steps))
         self.assertEqual(generation.MODELS[ZIMAGE].memory.low_ram_below_bytes, 24_000_000_000, "low-RAM on every Mac below 24 GB is what the summary assumes")
-        self.assertIsNone(generation.MODELS[KLEIN].memory.low_ram_below_bytes)
+        self.assertEqual(generation.MODELS[KLEIN].memory.low_ram_below_bytes, 12_000_000_000, "Klein runs bounded below 12 GB (the 8 GB tier)")
 
     def test_it_asks_for_what_the_default_run_promises(self):
         self.assertEqual(self.ns["IMAGES"], 3)

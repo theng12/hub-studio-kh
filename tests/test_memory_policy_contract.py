@@ -720,41 +720,29 @@ class EveryStudioAnswersTheMemoryContract(unittest.TestCase):
                                  f"{name} does not select the default")
                 self.assertEqual(module.MODES, voice.MODES)
 
-    def test_the_two_fixed_policies_are_the_studios_that_cannot_keep_a_model(self) -> None:
-        """Image and Video are fixed for the same measured reason: the engine exits after each job.
+    def test_the_one_fixed_policy_is_the_studio_that_cannot_keep_a_model(self) -> None:
+        """Video is fixed for a measured reason: the LTX pipeline is built inside the job.
 
-        Image: mflux is built inside the job and dropped when it ends. Video: the LTX pipeline is
-        constructed inside the job and dropped in its own `finally`, and it has to be — the pack's
-        measured process footprint is 16.38 GB, so a resident pipeline would hold half of a 32 GB
-        Mac between jobs.
+        The pack's measured process footprint is 16.38 GB, so a resident pipeline would hold half
+        of a 32 GB Mac between jobs. The Hub renders a one-mode ("fixed") policy as a sentence
+        rather than four buttons that would do nothing, so nobody should "fix" Video by giving it
+        modes - and the *reason* is what qualifies a Studio for this list, not the convenience of
+        skipping the control.
 
-        The Hub renders a one-mode ("fixed") policy as a sentence rather than four buttons that
-        would do nothing, so nobody should "fix" either Studio by giving it modes — and the
-        *reason* is what qualifies a Studio for this list, not the convenience of skipping the
-        control.
+        Image used to be on this list too. It is not any more: a model whose memory plan keeps
+        every component loaded now stays resident for the mode's idle window (a freshly loaded
+        FLUX.2 Klein 4-bit spends 15 s of a ~100 s image reading weights on a 32 GB Mac), and the
+        low-memory configuration - which frees each component as the job goes - is released after
+        every job whatever the mode says. Image therefore answers the shared five-mode contract.
         """
         modules = studio_policy_modules()
         voice = importlib.import_module("components.voice.app.backend.memory_policy")
         fixed = sorted(name for name, module in modules.items()
                        if getattr(module, "FIXED", False))
-        self.assertEqual(fixed, ["image", "video"],
-                         "Image and Video are the documented one-mode exceptions; every other "
-                         "Studio has a real residency choice")
-        image = modules["image"]
-        self.assertEqual(set(image.MODES), {"immediate"})
-        self.assertEqual(image.MODES["immediate"]["idle_seconds"],
-                         voice.MODES["immediate"]["idle_seconds"])
-
-        row = image.status(_NoJobs())
-        self.assertIs(row["fixed"], True)
-        self.assertEqual(row["mode"], "immediate")
-        self.assertEqual(row["idle_seconds"], 0)
-        self.assertEqual(row["options"],
-                         [{"mode": "immediate", "idle_seconds": 0,
-                           "label": "After every job"}])
-        self.assertEqual(row["loaded_models"], [])
-        self.assertEqual(row["release_policy"],
-                         "The model is released when each job finishes.")
+        self.assertEqual(fixed, ["video"],
+                         "Video is the one documented one-mode exception; every other "
+                         "Studio, Image included, has a real residency choice")
+        self.assertIs(modules["image"].MODES, shared_modes().MODES)
 
         video = modules["video"]
         self.assertEqual(set(video.MODES), {"immediate"})

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased - Image: memory-bounded generation for the 8 GB tier, resident models on larger Macs
+
+**Cause (owner's real 8 GB M1 run, Hub 0.6.126, guard bypassed):** FLUX.2 Klein 4B 4-bit peaked at 9.8 GB of MLX memory and
+swapped ~4 GB (3.9 GB written to the SSD) per image; Z-Image-Turbo 4-bit in `--low-ram` swapped 9.6-33 GB per image. Measured per stage:
+FLUX.2's VAE decode alone peaks at 9-12 GB at 1280x720 (convolution/GroupNorm temporaries on a 0.17 GB model); mflux encodes the prompt
+lazily, so the text encoder's weights stay alive into the first denoise step; `generate_image` keeps a closure (and, off M1/M2,
+an `mx.compile` cache) over the transformer, so nothing is freed before the decode; and Z-Image's loop re-touches 3.5 GB of
+transformer weights every step on a Mac with ~4 GB to give, which LRU evicts worst (dirty pages: swap, every step).
+
+**Fix (`components/image/app/backend/`):** `staging.py` (evaluate embeddings then free the encoder; free the transformer when the loop
+ends), `vae_bounded.py` (FLUX.2 decode in bands with global GroupNorm statistics; 12.1 -> 2.5 GB, PSNR ~50 dB vs mflux's decode, no
+seams), `streaming.py` (transformer/encoder blocks loaded from their files one at a time and released: read-only, never swapped; the
+pass over a model whose weights are used once costs nothing, the per-step re-read is ~0-8% of a step), MLX cache cap 0.5 GB. Tiers
+(`generation.memory_plan`): below 12 GB staged + streamed; Klein 12-24 GB lean (cache cap + bounded decode); 24 GB+ unchanged. Image now
+answers the shared five-mode memory policy (`auto` = `balanced` from 16 GB): a model whose plan keeps every component loaded stays
+resident for the idle window (released on idle, the Hub's release, memory pressure, another configuration or a failed job; never
+preempts a running job); all jobs run on one inference thread (MLX streams are per thread). `docs/mlx-memory-discipline.md` records the rules
+for every future model; `tests/test_image_memory_profile_guard.py` requires every image model to have a profile or a documented exemption.
+
+**Measured** (32 GiB M2 Max with an 8 GB Mac's MLX limits; the "before" reproduced the real M1 run's 9.8 GB; `qualification/evidence/image-memory-2026-10-01*`):
+Klein 4-bit footprint 9.4 -> 2.9 GB (MLX 9.8 -> 1.6 GB), Z-Image-Turbo 4-bit 7.5 -> 4.1 GB (MLX 6.3 -> 2.8 GB), same seconds on this Mac;
+Z-Image images byte-identical to before, Klein within bf16 rounding of the decode. Not yet confirmed on a real 8 GB Mac (swap, SSD writes):
+re-run the 8 GB image runner (branch `runner/8gb-image`) with this build.
+
 ## 0.6.127 — 2026-10-02 · Disk protection, remote startup, compression at source, memory hand-back, real cancel, design refresh
 
 Release of `integrate/0.6.127` (audit 2026-10-01 follow-ups). Highlights; the per-feature engineering notes follow.

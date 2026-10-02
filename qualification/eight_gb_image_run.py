@@ -60,7 +60,7 @@ MODELS = [
     dict(key="zimage", name="Z-Image-Turbo 4-bit", csv_model="Z-Image-Turbo", quant="4bit", role="thumbnail", steps=9,
          pkg="z-image-turbo-mflux-4bit", repo="filipstrand/Z-Image-Turbo-mflux-4bit", prompt=THUMB_PROMPT, low_ram_below_gb=24),
     dict(key="klein", name="FLUX.2 Klein 4B 4-bit", csv_model="FLUX.2 Klein 4B", quant="4bit", role="scene", steps=4,
-         pkg="flux2-klein-4b-mlx-4bit", repo="AITRADER/FLUX2-klein-4B-mlx-4bit", prompt=SCENE_PROMPT, low_ram_below_gb=None),
+         pkg="flux2-klein-4b-mlx-4bit", repo="AITRADER/FLUX2-klein-4B-mlx-4bit", prompt=SCENE_PROMPT, low_ram_below_gb=12),
 ]
 # The old standalone 8 GB Z-Image-Turbo run (CHANGELOG, 2026-09-26, M1 8 GB, low-RAM, mflux direct, not through the Hub), for the summary.
 OLD_STANDALONE = {"zimage": "the earlier standalone run (mflux direct, M1 8 GB, low-RAM, 1280x720): 336 s, 5.70 GB peak MLX, swap 1.3-1.9 GB"}

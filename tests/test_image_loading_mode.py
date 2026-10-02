@@ -2,8 +2,8 @@
 
 ``loading_mode`` (``auto`` | ``low`` | ``full``, ``GET/PUT /api/loading-mode``) is the operator's
 control over which mflux memory *configuration* the next job loads with. It is not the release
-policy: ``/api/memory-policy`` stays fixed, because Image drops its model after every job, and
-the two are deliberately separate routes.
+policy (``/api/memory-policy``: how long a loaded model stays loaded), and the two are
+deliberately separate routes.
 
 Everything here is driven against the real ``memory_plan``/``apply_memory_plan`` and the real
 FastAPI app, so the setting is proved where it is enforced rather than in a reimplementation of
@@ -29,6 +29,7 @@ for _path in (str(PROJECT_ROOT), str(Path(__file__).resolve().parent)):
 from fastapi.testclient import TestClient  # noqa: E402
 
 from components.image.app.backend import main as image_main  # noqa: E402
+from components import memory_modes  # noqa: E402
 from components.image.app.backend import loading_mode  # noqa: E402
 from components.image.app.backend.generation import (  # noqa: E402
     DEFAULT_CONFIGURATION, FLUX2_KLEIN, LOW_RAM_CONFIGURATION, MODELS, Z_IMAGE_TURBO,
@@ -41,6 +42,19 @@ from test_image_memory_pressure import fake_z_image_stack, install_tiny_packages
 GiB = 1024 ** 3
 TOKEN = 'imageownercred_' * 3
 RUNTIME_ID = 'a' * 64
+
+# No registered model is single-mode any more (FLUX.2 Klein 4-bit gained a bounded configuration),
+# but the shape is still a contract a future model may use, so it is exercised on a model this
+# build does not ship.
+SINGLE_MODE_MODEL = ImageModel(
+    repo='example/single-mode-4bit', revision='0' * 40, package_id='single-mode-4bit',
+    label='Example single-mode MLX 4-bit', family='example', model_class='example:Model',
+    defaults={'aspect_ratio': '1:1', 'resolution': '1K', 'steps': 4, 'guidance': 1.0, 'seed': -1},
+    limits={'min_steps': 1, 'max_steps': 4, 'min_guidance': 0.0, 'max_guidance': 1.0,
+            'min_seed': -1, 'max_seed': 1, 'max_prompt': 10},
+    memory=MemoryPolicy(single_mode_reason='Example: this model has one loading mode, qualified '
+                                           'at 16 GB, with no memory knob to turn.'),
+    qualification={})
 
 
 class ImageMemoryModeFixture(unittest.TestCase):
@@ -107,13 +121,12 @@ class PublishedOptionsMatchTheModelsOwnPolicy(ImageMemoryModeFixture):
         """A guard so the invariant below cannot pass by covering only one shape."""
         bounded = [model.repo for model in MODELS.values()
                    if model.memory.low_ram_below_bytes is not None]
-        single = [model.repo for model in MODELS.values()
-                  if model.memory.low_ram_below_bytes is None]
         self.assertTrue(bounded, 'no registered model declares a bounded configuration')
-        self.assertTrue(single, 'no registered model exercises the single-mode case')
+        self.assertIsNone(SINGLE_MODE_MODEL.memory.low_ram_below_bytes)
+        self.assertFalse(loading_modes(SINGLE_MODE_MODEL, 8 * GiB, 'auto')['supported'])
 
     def test_every_registered_model_publishes_exactly_the_options_its_policy_supports(self):
-        for model in MODELS.values():
+        for model in (*MODELS.values(), SINGLE_MODE_MODEL):
             supported = model.memory.low_ram_below_bytes is not None
             for host in (0, 8 * GiB, 16 * GiB, 32 * GiB, 128 * GiB):
                 for selected in loading_mode.MODES:
@@ -160,7 +173,7 @@ class PlanAndApplyFollowTheSetting(ImageMemoryModeFixture):
         applied = calls[0]
         self.assertEqual((applied['low_ram'], applied['mlx_cache_limit_gb'],
                           applied['vae_tiling'], applied['vae_tile_size']),
-                         (True, 1.0, True, None))
+                         (True, 0.5, True, None))
         # ...and the default plan never reaches it at all.
         self.assertIsNone(large)
 
@@ -179,9 +192,9 @@ class PlanAndApplyFollowTheSetting(ImageMemoryModeFixture):
         calls: list = []
         with patch.dict(sys.modules, fake_z_image_stack(calls)):
             self.assertIsNone(
-                apply_memory_plan('flux', memory_plan(FLUX2_KLEIN, 8 * GiB, 'low')))
+                apply_memory_plan('single', memory_plan(SINGLE_MODE_MODEL, 8 * GiB, 'low')))
         self.assertEqual(calls, [], 'a single-mode model must not reach the mflux mapping')
-        published = loading_modes(FLUX2_KLEIN, 8 * GiB, 'low')
+        published = loading_modes(SINGLE_MODE_MODEL, 8 * GiB, 'low')
         self.assertFalse(published['supported'])
         self.assertEqual(published['effective'], 'default')
 
@@ -226,12 +239,14 @@ class TheRoutePersistsTheChoiceAndPublishesIt(ImageMemoryModeFixture):
         self.assertEqual(set(rows), {model.repo for model in MODELS.values()})
         self.assertTrue(rows[Z_IMAGE_TURBO.repo]['supported'])
         self.assertEqual(rows[Z_IMAGE_TURBO.repo]['effective'], 'low-ram')
-        self.assertFalse(rows[FLUX2_KLEIN.repo]['supported'])
+        # FLUX.2 Klein 4-bit has a bounded configuration below 12 GB; a 16 GiB Mac is above it.
+        self.assertTrue(rows[FLUX2_KLEIN.repo]['supported'])
         self.assertEqual(rows[FLUX2_KLEIN.repo]['effective'], 'default')
-        # The release policy stays its own fixed thing on its own route.
+        # The release policy is its own thing on its own route: the shared residency modes.
         release = client.get('/api/memory-policy', headers={'X-Studio-Token': TOKEN}).json()
-        self.assertTrue(release['fixed'])
-        self.assertEqual([row['mode'] for row in release['options']], ['immediate'])
+        self.assertFalse(release['fixed'])
+        self.assertEqual([row['mode'] for row in release['options']],
+                         list(memory_modes.MODES))
 
     def test_put_persists_the_choice_and_changes_what_the_catalog_publishes(self):
         manager = self.manager(32 * GiB)
@@ -306,7 +321,9 @@ class TheCatalogIsHonestAboutAModelWithNoBoundedMode(ImageMemoryModeFixture):
         headers = {'X-Studio-Token': TOKEN}
         client.put('/api/loading-mode', headers=headers, json={'mode': 'low'})
 
-        entry = self.catalog(client, 8 * GiB)[FLUX2_KLEIN.repo]
+        with patch.dict(MODELS, {SINGLE_MODE_MODEL.repo: SINGLE_MODE_MODEL}):
+            entry = self.catalog(client, 8 * GiB)[SINGLE_MODE_MODEL.repo]
+            route = client.get('/api/loading-mode', headers=headers).json()
         modes = entry['loading_modes']
         self.assertFalse(modes['supported'])
         self.assertEqual(modes['options'], [], 'no control may be offered for a single-mode model')
@@ -316,12 +333,11 @@ class TheCatalogIsHonestAboutAModelWithNoBoundedMode(ImageMemoryModeFixture):
         reason = modes['reason']
         # The model's own terms, from its own MemoryPolicy, plus the applicability sentence.
         self.assertIn('qualified at 16 GB', reason)
-        self.assertIn('thousands of generations', reason)
+        self.assertIn('no memory knob to turn', reason)
         self.assertIn('does not change how it loads', reason)
         self.assertIn("The setting is 'low' on this Mac", reason)
         # The machine-wide route carries the same answer from the same derivation.
-        route = client.get('/api/loading-mode', headers=headers).json()
-        row = {item['repo']: item for item in route['models']}[FLUX2_KLEIN.repo]
+        row = {item['repo']: item for item in route['models']}[SINGLE_MODE_MODEL.repo]
         self.assertFalse(row['supported'])
         self.assertEqual(row['effective'], 'default')
         self.assertEqual(row['reason'], reason)

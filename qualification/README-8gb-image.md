@@ -29,7 +29,7 @@ the model's published defaults apply):
 | Model | Used for | Size | Steps | Memory mode on this Mac |
 | --- | --- | --- | --- | --- |
 | Z-Image-Turbo 4-bit (`z-image-turbo-mflux-4bit`) | thumbnails | 1280x720 (16:9) | 9 | low-RAM (the Image worker uses it on every Mac below 24 GB) |
-| FLUX.2 Klein 4B 4-bit (`flux2-klein-4b-mlx-4bit`) | scenes | 1280x720 (16:9) | 4 | none - Klein has no low-RAM mode |
+| FLUX.2 Klein 4B 4-bit (`flux2-klein-4b-mlx-4bit`) | scenes | 1280x720 (16:9) | 4 | bounded (staged + streamed; the Image worker uses it below 12 GB, a lean cache-capped one below 24 GB) |
 
 The Image worker drops the model after every job, so every image loads it again; the first image of each model also finds the
 file cache cold. The prompts are fixed (a title-text cover for the thumbnails, a village night scene for the scenes).
