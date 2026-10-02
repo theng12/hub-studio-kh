@@ -144,6 +144,8 @@ the 8 GB Macs: it is qualified there (measured on an 8 GB M1 Mac mini, low-RAM m
 | `NODE-SETUP-CHECKLIST.md` | tick list for setting up a node |
 | `Token and Stuff.md` | a place you have written down this Mac's addresses and tokens |
 | `Technical/verify-kit.sh` | proves this copy installs, starts and answers health |
+| `Technical/RUN-16GB-FISH.command` | the 16 GB Fish test: double-click on the 16 GB Mac. It first puts Fish S2 Pro 4-bit, 8-bit and bf16 on that Mac from this kit's `model-library` (bf16 and 8-bit are not part of the normal copy step), then measures all three; read `README-8gb-tts.md` beside it |
+| `Technical/RUN-8GB-TTS.command` | the 8 GB voice test (Qwen3-TTS 0.6B 8-bit and 4-bit, VoxCPM2 4-bit, OmniVoice bf16, Breeze TTS 2 4-bit) |
 
 Keep your own record of the Fleet token somewhere safe, and use a **different** Fleet
 token per controller.
