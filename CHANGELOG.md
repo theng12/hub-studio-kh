@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.129 — 2026-10-02 · Models can no longer be lost to a test, Fish S2 Pro 4-bit, Fish decodes in far less memory, Breeze on 8 GB Macs
+
+Release of `integrate/0.6.129` (merges fix/library-ownership, feat/breeze-8gb-carry, feat/fish-4bit, in that order; no conflicts).
+- **Library ownership (data-loss fix):** only the Hub that owns a model library may move packages out of it. A Hub started with a throwaway
+  `--data-dir` against the real library (`~/StudioHubModels` or a kit's `model-library`) used to shelve/retire models into the throwaway
+  directory's trash, so deleting the directory destroyed the weights. The library now carries an ownership record and a Hub that does not own
+  it refuses to move anything; `qualification/verify-launch.sh`, `tests/test_peer_path_contract.py` and the other launch tests use a temporary
+  library (`qualification/library_guard.py`, `tests/test_library_ownership.py`, `tests/test_no_real_library_launch.py`).
+- **Fish Audio S2 Pro 4-bit (MLX)** (`majentik/fishaudio-s2-pro-MLX-4bit`, 24 GB tier, ~4.45 GB on disk, Fish Audio Research License recorded
+  in the catalog): the package carries the codec from the 8-bit release (`codec.safetensors`, bit-identical tensors) because the 4-bit
+  repository's own `codec.pth` is read by mlx-audio 0.5.7 as LLM weights and every job would succeed with noise. Free-memory floor 8.4 GB
+  (measured, S2 peak 7.43-8.10 GB + 0.25 GB margin).
+- **Fish decoding is memory-bounded** (`mlx_memory`, Fish family `bounded` profile): slabbed codec decode with context, reference encoded once,
+  MLX cache capped. Fish S2 Pro peak 14.6 -> ~7.4-8.1 GB, same audio. Applies to every Fish tier.
+- **Breeze TTS 2 4-bit is copied to 8 GB Macs** by the kit's copy step (owner-approved trial for the 8 GB TTS run).
+- Merge note: the Fish branch's 8.4 GB free floor and `bounded` profile are kept as written; the Breeze copy rule and the ownership guard are
+  independent of both.
+
 ## 0.6.128 — 2026-10-02 · Image and voice fit 8 GB Macs, Gemma retired, chat JSON fix, sidebar fix
 
 Release of `integrate/0.6.128` (audit 2026-10-01 fixes; merges fix/retire-index, fix/kit-index-retired, fix/chat-json-system, fix/image-memory-8gb,

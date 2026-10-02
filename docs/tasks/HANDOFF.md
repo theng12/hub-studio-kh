@@ -5,6 +5,13 @@
 
 Last updated: **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
 
+> **0.6.129 - library ownership + Fish S2 Pro 4-bit + Fish bounded decode + Breeze 8 GB carry (`integrate/0.6.129`; merges `fix/library-ownership`, `feat/breeze-8gb-carry`, `feat/fish-4bit`, no conflicts).**
+> A Hub only moves packages out of a model library it owns (`components/library_ownership.py`, `<library>/.studiohub/owner.json`; a temp data dir never owns one);
+> the launch tests and `verify-launch.sh` use a temporary library (`tests/test_no_real_library_launch.py` scans for regressions). Fish S2 Pro 4-bit
+> (`majentik/fishaudio-s2-pro-MLX-4bit`, 24 GB tier, floor 8.4 GB measured) carries the 8-bit release's `codec.safetensors`; Fish decoding is `bounded`
+> (S2 peak 14.6 -> 7.4-8.1 GB). Breeze TTS 2 4-bit is copied to 8 GB Macs. Gate numbers, DMG and checksum: `_orchestra/audit-20261001/release-0129/`.
+> Not installed, not on the drives, nothing published until the coordinator does it.
+
 > **0.6.126 - even TTS pauses + short-line level match (from `fix/tts-join-pauses`, code commit `a61c2f0`; NOT installed, NOT published).**
 > Owner: "it's glaring". Cause and fix are in `CHANGELOG.md` 0.6.126: `generation._join_long_form_wavs` (every engine) wrote each
 > section whole then added the designed pause, and every engine returns up to ~1.2 s of near-silence at section edges, so joins

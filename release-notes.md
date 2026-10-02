@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.129 - 2026-10-02
+
+### Models can no longer be lost by a test, and a lighter Fish voice
+
+**Your models are safe from tests.** A test or check that used the real model library could move models into a temporary folder that was then
+deleted, and the models went with it. Now a model library records which Hub owns it, and only that Hub may move anything out of it.
+
+**New: Fish Audio S2 Pro 4-bit.** A lighter Fish voice (about 4.5 GB on disk) for Macs with 24 GB. It is made under the Fish Audio Research
+License. It uses the codec from the 8-bit release, because the 4-bit download's own codec file cannot be read by the Hub's engine.
+
+**Fish now uses far less memory.** Reading out a long script no longer balloons: the biggest memory use of Fish S2 Pro fell from about
+14.6 GB to about 7.4-8.1 GB, with the same sound.
+
+**Breeze on 8 GB Macs.** Breeze TTS 2 4-bit is now copied onto 8 GB Macs by the model copy step, so it can be tested there.
+
 ## 0.6.128 - 2026-10-02
 
 ### Image and voice now fit on 8 GB Macs, and a few things are tidied
