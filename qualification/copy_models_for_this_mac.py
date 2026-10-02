@@ -69,6 +69,10 @@ CARRY_BELOW_TIER = {
     # stays because the mechanism is still needed: carrying a model below its own declared floor
     # to *try* it is a real thing this project does, and it must keep saying so out loud rather
     # than being quietly folded into the proven set. Nothing in here is proof of anything.
+    # Breeze TTS 2 4-bit (manifest floor 16 GB; ~3.3 GB resident, 0.27x realtime): carried to 8 GB Macs on the
+    # owner's request (2026-10-02) so the 8 GB TTS run (qualification/eight-gb-tts-run.sh) can measure it.
+    # Unmeasured there; the 8 GB test decides whether it stays.
+    "breeze-tts-2-mlx-4bit": 8,
 }
 
 
