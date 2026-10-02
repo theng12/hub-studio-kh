@@ -3,7 +3,14 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.133** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+Last updated: **0.6.134** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+
+> **0.6.134 - peer jobs polled to their own answer, leases end with the job, MACHINE_BUSY is a wait everywhere, abandoned peer work cancelled (`release/0.6.134` = 0.6.133 + 2e29bea + ec170ac + 59b6ec6, branch `fix/image-machine-id-reserved`).**
+> `broker.py` dispatch poll + `_reconcile_async_item` pass `remote=not peers.is_local_studio(studio)` to `_validate_durable_worker_job` (was: every peer
+> image/music/video job failed its first poll; only jobs under `RECOVERY_WINDOW_S` survived). `standalone._release_finished_peer_leases` frees a node's lease once
+> its own worker says the job is over/gone. `transcription_jobs._run_item` and `chat_jobs._run_pack` treat `broker._is_machine_reservation_refusal` as a wait.
+> `broker._cancel_abandoned_peer_job` (background task, set `_abandoned_peer_cancels`) DELETEs the abandoned remote Image/Voice job on its node, logged on
+> `studiohub.broker`. Gate numbers, DMG and checksum: `_orchestra/audit-20261001/release-0134/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.133 - fleet health follows each node, renamed Macs keep their new name, rename from the Gateway (`release/0.6.133` = 0.6.132 + 8cff7b1 + 9a7e786 on main).**
 > `fleet_nodes.sync_roster_from_snapshots` (monitor poll) makes a node's roster studios and name follow its authenticated peer snapshot (`machine: {id, name}` now in

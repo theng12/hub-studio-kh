@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.134 — 2026-10-03 · Image, music and video jobs finish on other Macs; a busy Mac is a wait; abandoned peer work is cancelled
+
+Release of `release/0.6.134` (= `fix/image-machine-id-reserved`: 0.6.133 + 2e29bea + ec170ac + 59b6ec6).
+- **Peer jobs are polled to their own answer** (2e29bea). The controller's dispatch poll and the manual reconcile in `broker.py` called
+  `_validate_durable_worker_job` without `remote=`, so a joined node's worker (which reports `machine_id: "local"`) failed the first poll of every peer
+  image/music/video job ("Image worker status changed its machine_id"). Only the recovery poll passed `remote`, so a peer job survived only if it finished
+  inside `RECOVERY_WINDOW_S` (120 s): Z-Image-Turbo 4-bit (~300 s on 8 GB) never finished remotely and was regenerated on node after node.
+- **A node's peer lease ends with its job** (2e29bea): `standalone._release_finished_peer_leases` asks the node's own worker and frees a lease once the job
+  is over or gone, instead of waiting for a controller poll that never came (six-hour TTL, "local is reserved for other work on this Mac" while idle).
+- **MACHINE_BUSY is a wait in Subtitle (2e29bea) and Chat (ec170ac)**, as in the broker since 0.6.111: try restored, Mac not marked failed, retried after
+  `MACHINE_RESERVED_AVOID_S`. Before, three busy nodes ended a transcription, and `MAX_TRIES` busy answers ended a chat pack, as a final error. Any other
+  409 is unchanged.
+- **The controller cancels peer work it gives up on** (59b6ec6): when a remote Image/Voice job is abandoned for regeneration elsewhere,
+  `_cancel_abandoned_peer_job` sends the node the user-cancel route (`DELETE /api/generate/jobs/<id>` via the peer surface) in the background and logs it.
+  Tests: `test_remote_worker_identity.py`, `test_subtitle_dispatch.py`, `test_studio_proxy.py`, `test_chat_hub_wiring.ChatPackMachineBusyTests`.
+
 ## 0.6.133 — 2026-10-03 · Fleet health follows what each Mac really runs; a renamed Mac shows its new name; rename a Mac from the Gateway
 
 Release of `release/0.6.133` (main at 9a7e786 = 0.6.132 + 8cff7b1 fleet health + 9a7e786 node rename; no merge needed).

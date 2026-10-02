@@ -2,6 +2,23 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.134 - 2026-10-03
+
+### Thumbnails, music and video finish on your other Macs
+
+**Jobs sent to another Mac now finish there.** A controller wrongly rejected the first progress update from every image, music or
+video job running on another Mac, so a job that took more than two minutes - such as a Z-Image thumbnail on an 8 GB Mac - was dropped and
+started again on the next Mac, over and over, and never finished. These jobs now run to the end on the Mac that took them.
+
+**A Mac no longer stays "reserved for other work" after its job is done.** A Mac now frees itself as soon as its job ends, instead of
+refusing new work for up to six hours.
+
+**A busy Mac means "wait", not "failed".** Subtitles and Chat now wait for a free Mac instead of giving up with "reserved for other work on
+this Mac" when the Macs they tried were busy.
+
+**Work that is given up on is stopped.** When a controller gives up on a job on another Mac and starts it elsewhere, it now tells that Mac to
+stop, so the Mac is not kept busy on work nobody will use.
+
 ## 0.6.133 - 2026-10-03
 
 ### Fleet health shows real problems only, and renamed Macs show their new name
