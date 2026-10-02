@@ -89,6 +89,15 @@ struct PageRenderHarness {
         if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" {
             seedFixtures(studio.workspace, scratch: scratch)
             seedLibrary(studio.workspace)
+            // Running services and both tokens, so Connections draws its (masked) credential rows.
+            studio.readyURL = URL(string: "http://127.0.0.1:47873")
+            studio.connectionToken = "render-fixture-hub-token-0123456789"
+            let hubState = scratch.appendingPathComponent("hub")
+            try? FileManager.default.createDirectory(at: hubState, withIntermediateDirectories: true)
+            let fleetFile = hubState.appendingPathComponent(".fleet_token")
+            try? Data("render-fixture-fleet-token-0123456789".utf8).write(to: fleetFile)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fleetFile.path)
+            studio.readFleetToken()
         }
 
         // `STUDIOHUB_RENDER_ROLES=controller,node,node-offline,standalone` renders every page once per

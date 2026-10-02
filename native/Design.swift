@@ -399,3 +399,79 @@ extension HubBanner where Actions == EmptyView {
         self.init(status: status, symbol: symbol, title: title, message: message, actions: { EmptyView() })
     }
 }
+
+// MARK: - Secrets
+
+/// How a hidden secret reads: a fixed run of dots. Never a prefix, a suffix or the length, so a glance at the
+/// screen (or a screenshot) gives nothing away. The eye is how the operator checks the value.
+enum SecretMask {
+    static let dots = String(repeating: "•", count: 12)
+
+    /// What a secret row shows: the value only when revealed, the dots otherwise, `missing` when there is none.
+    static func text(_ value: String?, revealed: Bool, missing: String = "Unavailable") -> String {
+        guard let value, !value.isEmpty else { return missing }
+        return revealed ? value : dots
+    }
+}
+
+/// The eye beside a secret: `eye` shows it, `eye.slash` hides it, and the tooltip and VoiceOver say which.
+/// The same control as the Gateway's `SecretField`, so both apps read the same.
+struct RevealButton: View {
+    @Binding var revealed: Bool
+
+    var body: some View {
+        Button { revealed.toggle() } label: {
+            Image(systemName: revealed ? "eye.slash" : "eye")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help(revealed ? "Hide" : "Show")
+        .accessibilityLabel(revealed ? "Hide" : "Show")
+    }
+}
+
+/// A secret the app holds (a token, a key): masked until the eye is pressed, with Copy beside it. Copy works
+/// while it is masked, so handing a token on never needs it on screen. Hidden, the value is not in the view at
+/// all - only the dots are - so it cannot be selected, read by VoiceOver or caught in a screenshot.
+struct SecretValue: View {
+    let value: String?
+    var copyTitle = "Copy"
+    var onCopy: (() -> Void)?
+    @State private var revealed = false
+
+    var body: some View {
+        HStack(spacing: HubSpace.xs) {
+            if revealed, let value, !value.isEmpty {
+                Text(value).font(HubType.mono).textSelection(.enabled)
+            } else {
+                Text(SecretMask.text(value, revealed: false)).font(HubType.mono).foregroundStyle(.secondary)
+            }
+            RevealButton(revealed: $revealed).disabled(value?.isEmpty ?? true)
+            Button(copyTitle) {
+                guard let value, !value.isEmpty else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(value, forType: .string)
+                onCopy?()
+            }
+            .controlSize(.small)
+            .disabled(value?.isEmpty ?? true)
+        }
+    }
+}
+
+/// A secret the operator types or pastes (a token, a key): a secure field until the eye is pressed.
+struct SecretInput: View {
+    let placeholder: String
+    @Binding var text: String
+    @State private var revealed = false
+
+    var body: some View {
+        HStack(spacing: HubSpace.xs) {
+            Group {
+                if revealed { TextField(placeholder, text: $text) } else { SecureField(placeholder, text: $text) }
+            }
+            .textFieldStyle(.roundedBorder)
+            RevealButton(revealed: $revealed)
+        }
+    }
+}
