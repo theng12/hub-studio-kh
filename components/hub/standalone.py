@@ -420,8 +420,25 @@ def _shelved_refusal(manifest: dict[str, Any]) -> None:
         raise HTTPException(409, _shelved_reason(manifest))
 
 
+def _library_may_be_moved_from(what: str) -> bool:
+    """True only when this Hub's data directory owns the model library (components/library_ownership.py).
+
+    A Hub started with a throwaway data directory over a real library used to shelve and retire the
+    real weights into the throwaway directory's Trash Folder; deleting it destroyed them. A Hub that
+    does not own the library logs why and moves nothing.
+    """
+    from components import library_ownership
+    problem = library_ownership.refusal(_model_library(), ledger.DATA_DIR, what)
+    if problem:
+        print(f"[hub] {problem}", flush=True)
+        return False
+    return True
+
+
 def shelve_installed_models() -> list[str]:
     """At start-up, a Mac that is not marked keep-all moves its installed shelved models to the Trash Folder."""
+    if not _keep_all_models() and not _library_may_be_moved_from("shelving models"):
+        return []
     return shelved_models.shelve_installed(_model_library(), _model_catalog().values(),
                                            output_storage.trash_root(), _keep_all_models())
 
@@ -434,6 +451,10 @@ def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
         library: Path | None = _model_library()
     except ValueError:
         library = None                          # no library to verify against: no model orphan is judged
+    if library is not None:
+        from components import library_ownership
+        if not library_ownership.resolve(library, ledger.DATA_DIR).owned:
+            library = None                      # not this Hub's library: the governor never prunes it
     try:
         manifests = [item for item in _model_catalog().values() if not item.get(_MANIFEST_ERROR)]
     except (ValueError, OSError):
@@ -453,6 +474,8 @@ def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
 def retire_installed_models() -> list[str]:
     """At start-up, any installed retired model (`components/retired_models.py`) goes to the Trash Folder."""
     from components import retired_models
+    if not _library_may_be_moved_from("retiring models"):
+        return []
     return retired_models.retire_installed(_model_library(), output_storage.trash_root())
 
 

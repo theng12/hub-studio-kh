@@ -192,7 +192,11 @@ os.environ['STUDIOHUB_MODELS_DIR'] = str(tmp / 'lib')
 os.environ['STUDIOHUB_MODEL_MANIFESTS'] = str(ROOT / 'model-manifests')
 (tmp / 'lib').mkdir()
 
-from components import shelved_models
+from components import library_ownership, shelved_models
+# This proof plays a real fleet Mac, whose data directory is not under a temp folder. The directories
+# here are, so say so: otherwise the Hub (rightly) treats the library as not its own.
+# tests/test_library_ownership.py proves the other side.
+library_ownership.temp_roots = lambda: []
 from components.hub import output_storage, standalone, standalone_config
 from fastapi import HTTPException
 

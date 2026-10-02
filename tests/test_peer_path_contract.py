@@ -123,17 +123,12 @@ class LiveRouterTests(unittest.TestCase):
     INSTALLED = tuple(Path(folder) / f"Studio Hub{version}.app"
                       for folder in (Path.home() / "Applications", Path("/Applications"))
                       for version in ("", " 0.4.0"))
-    # The library lives outside the home folder because macOS protects ~/Downloads; the old
-    # location is still accepted so this probe keeps working on a Mac the earlier kit filled in.
-    LIBRARIES = (Path.home() / "StudioHubModels",
-                 Path.home() / "Downloads" / "model-library")
-
-    @classmethod
-    def _library(cls):
-        for candidate in cls.LIBRARIES:
-            if candidate.is_dir():
-                return candidate
-        return None
+    # NEVER point this probe at a real model library (~/StudioHubModels, a kit's model-library). The
+    # installed app's Hub runs here with a throwaway data directory, and an installed build older than
+    # components/library_ownership.py shelves and retires whatever library it is given into that
+    # throwaway directory's Trash Folder - deleting the directory then destroys the real weights
+    # (2026-10-01: Gemma, LTX and Whisper base/small). Routing needs no models, so the library is an
+    # empty fake inside the same temp folder.
 
     def _bundle(self):
         for candidate in self.INSTALLED:
@@ -145,9 +140,8 @@ class LiveRouterTests(unittest.TestCase):
 
     def test_every_studio_path_the_app_builds_is_routed(self):
         bundle = self._bundle()
-        library = self._library()
-        if bundle is None or library is None:
-            self.skipTest("no installed app bundle or local model library on this machine")
+        if bundle is None:
+            self.skipTest("no installed app bundle on this machine")
         runtime, worker, hub_source = bundle
         # An installed bundle can predate the very fix this probes for. Reported as a skip rather
         # than a failure: the point of this test is the tree under test, and the tree under test is
@@ -170,6 +164,8 @@ class LiveRouterTests(unittest.TestCase):
 
         with TemporaryDirectory() as tmp:
             data = Path(tmp)
+            library = data / "fake-library"          # empty, disposable: see the note above
+            (library / ".studiohub").mkdir(parents=True, mode=0o700)
             ready = data / "ready.json"
             process = subprocess.Popen(
                 [str(runtime), str(worker), "--data-dir", str(data),

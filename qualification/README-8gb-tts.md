@@ -1,6 +1,6 @@
 # The 8 GB text-to-speech run - double-click, walk away
 
-Three voice models on an 8 GB Mac: **Qwen3-TTS 0.6B 8-bit**, **VoxCPM2 4-bit** and **OmniVoice bf16**
+Five voice models on an 8 GB Mac: **Qwen3-TTS 0.6B 8-bit** and **4-bit**, **VoxCPM2 4-bit**, **OmniVoice bf16** and **Breeze TTS 2 4-bit**
 (in that order). Each reads the same short text (about 175 words) in the two owner voices, so the numbers
 can be laid beside the 32 GB Mac's. Labels: **[M]** measured, **[I]** inference.
 
@@ -44,7 +44,7 @@ whatever finished is already saved. It loads each model from cold, which is part
   different question. `--quick` and `--allow-non-target` still run, labelled "not 8 GB evidence".
 - Studio Hub is running, version **0.6.125 or later** (the bypass route arrived in 0.6.125).
 - The three packages are present and verified, by the Hub's own model view
-  (`qwen3-tts-12hz-0-6b-base-8bit`, `voxcpm2-4bit`, `omnivoice-bfloat16`).
+  (`qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-0-6b-base-4bit`, `voxcpm2-4bit`, `omnivoice-bfloat16`, `breeze-tts-2-mlx-4bit`).
 - The two voices are in the Hub: "Chris - Soft and Soothing" (`cd07b21a2ccf`) and "Christian - Slow &
   Calming" (`0616aec33b41`).
 - The Mac is not busy with fleet work (no active Hub jobs). If it is, the script says so, waits (up to 30 minutes) and
@@ -120,7 +120,7 @@ bash eight-gb-tts-run.sh --quick
 
 Runs S2 in Chris's voice for each model (three clips, a few minutes on a 32 GB Mac) into a folder named
 `TTS 8GB Quick Check ...`. It is the script's own self-test and works on any Mac (the summary says it is not 8 GB
-evidence). Other switches: `--models qwen3,voxcpm2,omnivoice` picks models; `--with-s4` adds the 3-minute text.
+evidence). Other switches: `--models qwen3,qwen3-4bit,voxcpm2,omnivoice,breeze` picks models; `--with-s4` adds the 3-minute text.
 
 Settings (all optional, set in Terminal before the command): `TTS8_TIMEOUT=480` seconds per short clip (the 3-minute text gets
 3x); `TTS8_RELAX_FREE_GB=0` the free-memory requirement during a model; `TTS8_S4=1` same as `--with-s4`; `TTS8_BASELINE_S=30` seconds of idle SSD-write sampling before the first clip (0 skips it). `TTS8_MEM_WAIT=300`

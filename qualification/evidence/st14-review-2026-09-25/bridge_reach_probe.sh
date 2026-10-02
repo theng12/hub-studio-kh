@@ -7,8 +7,11 @@ RES="$ROOT/.build/StudioHub-0662/Studio Hub.app/Contents/Resources"
 PY="$RES/runtimes/voice/bin/python3"
 OUT="$ROOT/.build/chat-review-2026-09-25"
 DATA="$(mktemp -d /tmp/chat-bridge.XXXXXX)"; chmod 700 "$DATA"
+# An EMPTY throwaway library: never the real ~/StudioHubModels (a Hub with a throwaway data dir
+# shelves/retires whatever library it is given into that data dir; see qualification/library_guard.py).
+LIB="$DATA/empty-library"; mkdir -p "$LIB/.studiohub"; chmod 700 "$LIB/.studiohub"
 READY="$DATA/hub-ready.json"
-"$PY" -I -B "$RES/hub_worker.py" --data-dir "$DATA" --models-dir "$HOME/StudioHubModels" \
+"$PY" -I -B "$RES/hub_worker.py" --data-dir "$DATA" --models-dir "$LIB" \
   --ready-file "$READY" --port 0 --host 127.0.0.1 --offline >"$OUT/bridge-hub.out" 2>&1 &
 HPID=$!
 for _ in $(seq 1 240); do [ -f "$READY" ] && break; kill -0 "$HPID" 2>/dev/null || break; sleep 1; done

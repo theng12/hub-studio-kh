@@ -262,7 +262,7 @@ fails closed on identity, readiness, health and malformed-response errors. Run i
 explicit `APP`, `LIB` and an isolated port:
 
 ```sh
-APP="$PWD/dist/Studio Hub.app" LIB="$HOME/StudioHubModels" PORT=0 \
+APP="$PWD/dist/Studio Hub.app" PORT=0 \
   sh qualification/verify-launch.sh
 ```
 

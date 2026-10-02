@@ -122,4 +122,4 @@ PYTHON
 
 echo
 echo "--- does the app in this kit start? ---"
-APP="$APP" LIB="$LIB" sh "$HERE/verify-launch.sh"
+APP="$APP" sh "$HERE/verify-launch.sh"

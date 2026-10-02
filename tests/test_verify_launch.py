@@ -35,6 +35,7 @@ parser.add_argument("--port", type=int, default=0)
 args = parser.parse_args()
 
 mode = os.environ.get("FIXTURE_MODE", "healthy")
+Path(os.environ["FIXTURE_ARGS_FILE"]).write_text(json.dumps({"data": args.data_dir, "models": args.models_dir}))
 Path(os.environ["FIXTURE_PID_FILE"]).write_text(str(os.getpid()))
 
 if mode == "malformed_readiness":
@@ -111,6 +112,7 @@ class VerifyLaunchTests(unittest.TestCase):
             "TMPDIR": str(self.root),
             "FIXTURE_MODE": mode,
             "FIXTURE_PID_FILE": str(self.pid_file),
+            "FIXTURE_ARGS_FILE": str(self.root / "service-args.json"),
         })
         if path is not None:
             env["PATH"] = path
@@ -165,6 +167,19 @@ class VerifyLaunchTests(unittest.TestCase):
         self.assertIn("identity: fixture fixture-commit development_build: True", result.stdout)
         self.assertIn("RESULT: PASS", result.stdout)
         self.assertNotIn("Traceback", result.stdout + result.stderr)
+
+    def test_never_hands_the_service_a_real_library(self):
+        """A throwaway data dir over a real library shelved and retired real weights (2026-10-02)."""
+        (self.library / "whisper-base" / "rev").mkdir(parents=True)
+        (self.library / "whisper-base" / "rev" / "weights.bin").write_text("weights")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        args = json.loads((self.root / "service-args.json").read_text())
+        models = Path(args["models"]).resolve()
+        self.assertNotEqual(models, self.library.resolve())
+        self.assertTrue(str(models).startswith(str(Path(args["data"]).resolve())), args)
+        self.assertEqual([p.name for p in models.iterdir()], [".studiohub"], "the library given must be empty")
+        self.assertEqual((self.library / "whisper-base" / "rev" / "weights.bin").read_text(), "weights")
 
     def test_uses_bundled_python_when_system_python_is_broken(self):
         shim_dir = self.root / "bin"

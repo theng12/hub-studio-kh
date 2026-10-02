@@ -21,11 +21,14 @@ import urllib.error
 import urllib.request
 import uuid
 import wave
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import library_guard  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "dist" / "Studio Hub.app"
 RESOURCES = APP / "Contents" / "Resources"
-LIBRARY = ROOT / "model-library"
+LIBRARY = ROOT / "scratch-library"   # a repo-local scratch library; library_guard refuses a real one
 EVIDENCE = ROOT / "qualification" / "evidence" / "fleet-packaged.json"
 
 
@@ -158,7 +161,7 @@ class Hub:
         self.process = subprocess.Popen(
             [str(RESOURCES / "runtimes" / "voice" / "bin" / "python3"), "-I", "-B",
              str(RESOURCES / "hub_worker.py"), "--data-dir", str(self.data),
-             "--models-dir", str(LIBRARY), "--ready-file", str(self.ready),
+             "--models-dir", str(library_guard.require_disposable(LIBRARY)), "--ready-file", str(self.ready),
              "--host", host,
              "--parent-pid", str(os.getpid()), "--offline"],
             cwd=str(self.data), stdout=self.log, stderr=subprocess.STDOUT)

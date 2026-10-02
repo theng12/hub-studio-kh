@@ -28,6 +28,10 @@ import tempfile
 import time
 
 import httpx
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import library_guard  # noqa: E402
+
 
 TEXT = "This is a standalone Voice Studio test. The bundled engine is speaking clearly."
 PARAMS = {"preset_speaker": "", "language": "en", "seed": 42}
@@ -45,7 +49,7 @@ def main() -> int:
     parser.add_argument("--save-wav", type=Path)
     args = parser.parse_args()
 
-    app, models, clip = args.app.resolve(), args.models.resolve(), args.clip.resolve()
+    app, models, clip = args.app.resolve(), library_guard.require_disposable(args.models), args.clip.resolve()
     service = app / "Contents/MacOS/StudioHubService"
     assert service.is_file(), service
     audio = clip.read_bytes()

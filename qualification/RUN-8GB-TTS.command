@@ -1,5 +1,5 @@
 #!/bin/sh
-# Double-click this to run the 8 GB text-to-speech test (Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit, OmniVoice bf16).
+# Double-click this to run the 8 GB text-to-speech test (Qwen3-TTS 0.6B 8-bit and 4-bit, VoxCPM2 4-bit, OmniVoice bf16, Breeze TTS 2 4-bit).
 #
 # Why this file exists: Finder has no application
 # bound to a `.sh`, so double-clicking `eight-gb-tts-run.sh` opens it in TextEdit and looks broken.
@@ -7,7 +7,7 @@
 # one copy of it to keep correct.
 #
 # Before it runs anything it says plainly which Studio Hub is installed here. The measurement itself
-# then checks the rest (memory size, the three models, the two voices, a quiet Hub) and refuses in
+# then checks the rest (memory size, the models, the two voices, a quiet Hub) and refuses in
 # plain words rather than guessing.
 set -u
 
@@ -27,8 +27,8 @@ fi
 
 echo "Studio Hub - 8 GB text-to-speech test"
 echo
-echo "This measures three voice models on this Mac: Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit and OmniVoice"
-echo "bf16, each reading the same short text in the two owner voices. It does NOT wait for memory: it tells"
+echo "This measures five voice models on this Mac: Qwen3-TTS 0.6B 8-bit and 4-bit, VoxCPM2 4-bit, OmniVoice"
+echo "bf16 and Breeze TTS 2 4-bit, each reading the same short text in the two owner voices. It does NOT wait for memory: it tells"
 echo "Studio Hub to bypass its free-memory guard for each model and just runs it. A clip that runs longer than"
 echo "8 minutes is stopped and recorded as 'timed out'; a model that crashes is recorded and the next one goes"
 echo "on. It writes a results folder beside this file, installs nothing and deletes nothing, and puts the Hub's"

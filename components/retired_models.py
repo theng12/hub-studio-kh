@@ -47,6 +47,9 @@ def retire_installed(library: str | os.PathLike[str], trash_root: str | os.PathL
     repo id is skipped. Called at Hub start-up, so a Mac sheds a model the day the app that retires it
     is installed instead of carrying 17 GB of weights nothing offers.
     """
+    from components import library_ownership
+    if library_ownership.moving_into_temp(library, trash_root):
+        return []                               # never carry real weights into a throwaway folder
     when = time.gmtime(time.time() if now is None else float(now))
     moved = []
     for package_id in RETIRED_MODELS:

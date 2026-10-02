@@ -17,6 +17,9 @@ import tempfile
 import time
 
 import httpx
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import library_guard  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_APP = Path("/Applications/Studio Hub.app")
@@ -29,7 +32,8 @@ EXPECTED = ("The river runs quietly past the old stone bridge, "
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, default=DEFAULT_APP)
-    parser.add_argument("--models", type=Path, default=Path.home() / "StudioHubModels")
+    parser.add_argument("--models", type=Path, required=True,
+                        help="a DISPOSABLE library (qualification/library_guard.py clone ...), never the real one")
     parser.add_argument("--clip", type=Path, default=DEFAULT_CLIP)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--ack", action="store_true",
@@ -37,7 +41,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
-    app, models, clip = args.app.resolve(), args.models.resolve(), args.clip.resolve()
+    app, models, clip = args.app.resolve(), library_guard.require_disposable(args.models), args.clip.resolve()
     service = app / "Contents/MacOS/StudioHubService"
     assert service.is_file(), service
     assert models.is_dir(), models

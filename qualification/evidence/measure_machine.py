@@ -41,6 +41,8 @@ import urllib.error
 import urllib.request
 import uuid
 import wave
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import library_guard  # noqa: E402
 
 
 def http(base: str, path: str, token: str, *, method: str = "GET", payload=None,
@@ -210,7 +212,7 @@ def main() -> int:
     process = subprocess.Popen(
         [str(resources / "runtimes" / "voice" / "bin" / "python3"), "-I", "-B",
          str(resources / "hub_worker.py"), "--data-dir", str(data),
-         "--models-dir", str(arguments.library.expanduser().resolve()),
+         "--models-dir", str(library_guard.require_disposable(arguments.library)),
          "--ready-file", str(ready), "--parent-pid", str(os.getpid()), "--offline"],
         cwd=str(data), stdout=log, stderr=subprocess.STDOUT)
 
