@@ -158,6 +158,51 @@ class InstalledRetiredModelsTests(unittest.TestCase):
             self.assertEqual((landed / "weights.bin").read_text(), LTX_PACKAGE, "moved whole, never deleted")
             self.assertEqual(retired_models.retire_installed(library, trash), [], "a second start moves nothing")
 
+    def test_the_retired_receipt_leaves_installed_json_with_the_folder(self) -> None:
+        """A retired package's line in `.studiohub/installed.json` goes with its folder, atomically.
+
+        The Hub already read a missing folder as "not installed", but `verify-kit.sh` walks the whole index
+        and counted every file of the moved package as missing, and the kit manifest listed it as installed.
+        """
+        import fcntl
+        sys.path.insert(0, str(WORKTREE))
+        from components import model_packages, retired_models
+        with tempfile.TemporaryDirectory() as tmp:
+            library, trash = Path(tmp) / "library", Path(tmp) / "trash"
+            state = library / ".studiohub"
+            state.mkdir(parents=True, mode=0o700)
+            os.chmod(state, 0o700)
+            receipt = lambda name: {"revision": "r1", "folder": f"{name}/r1", "files": {"w.bin": {"st_size": 1}}}
+            index = {name: receipt(name) for name in (LTX_PACKAGE, GEMMA_PACKAGE, "whisper-turbo", "old-other-gone")}
+            (state / "installed.json").write_text(json.dumps(index, sort_keys=True))
+            for name in (LTX_PACKAGE, GEMMA_PACKAGE, "whisper-turbo"):
+                (library / name / "r1").mkdir(parents=True)
+                (library / name / "r1" / "w.bin").write_text("x")
+            # The index is busy (an import holds the Hub's lock): the folder still moves, the receipt waits.
+            fd = os.open(state / "import.lock", os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                self.assertEqual(retired_models.retire_installed(library, trash), [LTX_PACKAGE])
+            finally:
+                os.close(fd)
+            self.assertIn(LTX_PACKAGE, json.loads((state / "installed.json").read_text()))
+            # The next start (nothing left to move) catches up: only the retired receipt is dropped.
+            self.assertEqual(retired_models.retire_installed(library, trash), [])
+            kept = json.loads((state / "installed.json").read_text())
+            self.assertEqual(sorted(kept), ["gemma-3-12b-it-4bit", "old-other-gone", "whisper-turbo"],
+                             "other receipts, even one with no folder, are not this list's to forget")
+            self.assertEqual((state / "installed.json").read_text(), json.dumps(kept, sort_keys=True),
+                             "the same format `_register` writes")
+            self.assertEqual(os.stat(state / "installed.json").st_mode & 0o777, 0o600)
+            self.assertEqual([p.name for p in state.iterdir() if p.name.startswith("index-")], [])
+            self.assertEqual(model_packages.forget_packages(library, [LTX_PACKAGE]), [], "idempotent")
+            # A receipt whose folder is still there is never dropped.
+            self.assertEqual(model_packages.forget_packages(library, ["whisper-turbo"]), [])
+            # An unreadable index is left exactly as it is.
+            (state / "installed.json").write_text("not json")
+            self.assertEqual(retired_models.retire_installed(library, trash), [])
+            self.assertEqual((state / "installed.json").read_text(), "not json")
+
     def test_a_symlinked_or_failing_move_is_skipped_not_followed(self) -> None:
         from components import retired_models
         with tempfile.TemporaryDirectory() as tmp:

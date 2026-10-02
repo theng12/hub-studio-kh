@@ -913,13 +913,8 @@ def verify_package(manifest, folder, *, library_root=None, allow_state=False):
     return verified
 
 
-def _register(manifest, folder, root):
-    verified = verify_package(manifest, folder, library_root=root)
-    index = _index(root)
-    index[manifest['package_id']] = {
-        'revision': manifest['revision'], 'manifest_sha256': manifest_digest(manifest),
-        'folder': folder.relative_to(root).as_posix(), 'files': verified,
-    }
+def _write_index(root, index):
+    """Replace ``.studiohub/installed.json`` atomically (0600, fsynced), anchored at the library."""
     with _directory(root, '.studiohub') as state_fd:
         name = 'index-' + uuid.uuid4().hex
         fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=state_fd)
@@ -935,6 +930,48 @@ def _register(manifest, folder, root):
                 os.unlink(name, dir_fd=state_fd)
             except FileNotFoundError:
                 pass
+
+
+def forget_packages(library, package_ids):
+    """Drop the receipts of packages whose folders are gone; return the package ids dropped.
+
+    Used when the Hub moves a retired or shelved package into the Trash Folder: the receipt is then a
+    line for bytes nobody will find (the verify-kit check and the kit manifest read the whole index and
+    count every one as missing files). Takes the same import lock and writes the same format as
+    `_register`. A receipt whose folder is still on disk is kept; a busy lock or an unreadable index
+    changes nothing and raises `PackageError`, so the caller tries again at the next start.
+    """
+    root = _library(library)
+    if not (root / '.studiohub/installed.json').is_file():
+        return []
+    with _lock(root):
+        index = _index(root)
+        gone = []
+        for package_id in package_ids:
+            record = index.get(package_id)
+            if record is None:
+                continue
+            folders = [package_id]
+            try:
+                folders.append(_relative(record.get('folder') or ''))
+            except PackageError:
+                pass
+            if not any(os.path.lexists(root / folder) for folder in folders):
+                del index[package_id]
+                gone.append(package_id)
+        if gone:
+            _write_index(root, index)
+    return gone
+
+
+def _register(manifest, folder, root):
+    verified = verify_package(manifest, folder, library_root=root)
+    index = _index(root)
+    index[manifest['package_id']] = {
+        'revision': manifest['revision'], 'manifest_sha256': manifest_digest(manifest),
+        'folder': folder.relative_to(root).as_posix(), 'files': verified,
+    }
+    _write_index(root, index)
     return folder
 
 
