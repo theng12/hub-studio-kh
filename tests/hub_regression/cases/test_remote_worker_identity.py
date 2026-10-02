@@ -92,3 +92,45 @@ def test_a_peer_job_is_polled_to_its_own_answer_not_failed_on_machine_id(fixture
     assert "machine_id" not in str(item.get("error")), item.get("error")
     assert "the worker's own failure" in str(item.get("error")), item.get("error")
     assert not worker.polls[1:], "every status the worker gave must have been read"
+
+
+def test_a_peer_job_given_up_on_is_cancelled_on_its_node(fixture_monitor, monkeypatch):
+    """When the controller gives up on a peer image job (the poll lost its connection and the
+    recovery window passed) it regenerates elsewhere. The node's job kept running unpolled,
+    burning that Mac and holding its peer lease; the controller now asks the node to cancel it."""
+    import asyncio
+    import httpx
+
+    monkeypatch.setattr(broker, "POLL_S", 0.0)
+    monkeypatch.setattr(broker, "RECOVERY_WINDOW_S", 0.0)
+    submitted = broker.submit_batch({"modality": "image", "model": "model-a", "routing": "pool",
+                                     "items": [{"prompt": "hello"}]})
+    batch = broker.batches[submitted["batch_id"]]
+    item = batch["items"][0]
+    studio = {"id": "image@node-a", "modality": "image", "machine": "node-a",
+              "host": "10.0.0.9", "port": 51201, "hub_port": 51201, "hub_token": "fleet-token",
+              "local": False, "runtime_identity": {"id": "fleet:node-a", "compatible": True}}
+    monkeypatch.setattr(fixture_monitor, "registry", [*fixture_monitor.registry, studio])
+    item.update(state="running", studio=studio["id"], tries=1)
+    broker._busy.add(studio["id"])
+
+    class LostNode(_PeerWorker):
+        deleted: list[str] = []
+
+        async def get(self, url, **kwargs):
+            raise httpx.ConnectError("node stopped answering")
+
+        async def delete(self, url, **kwargs):
+            self.deleted.append(url)
+            return httpx.Response(200, json={}, request=httpx.Request("DELETE", url))
+
+    worker = LostNode([{"state": "running"}])
+
+    async def run():
+        await broker._run_item(worker, batch, item, studio)
+        await asyncio.gather(*broker._abandoned_peer_cancels)
+
+    asyncio.run(run())
+
+    assert item.get("studio_job_id") is None, "the job was not given up on"
+    assert [url.endswith("/api/generate/jobs/job-1") for url in worker.deleted] == [True]

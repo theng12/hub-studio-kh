@@ -1942,6 +1942,32 @@ async def _signal_worker_cancel(client: httpx.AsyncClient, item: dict) -> bool:
     return False
 
 
+_abandoned_peer_cancels: set[asyncio.Task] = set()
+
+
+def _cancel_abandoned_peer_job(client: httpx.AsyncClient, item: dict) -> None:
+    """Best effort: tell a node to stop a job this controller has given up on.
+
+    Without it the abandoned job kept running unpolled, burning that Mac and holding its peer
+    lease, while the item regenerated elsewhere. Sent in the background (an unreachable node must
+    not delay the retry) on a copy, so the item's own cancel fields stay those of a user cancel.
+    """
+    probe = {"studio": item.get("studio"), "studio_job_id": item.get("studio_job_id")}
+
+    async def send() -> None:
+        try:
+            sent = await _signal_worker_cancel(client, probe)
+        except Exception as exc:  # best effort: never let this touch the item's retry
+            sent, probe["cancel_error"] = False, str(exc) or type(exc).__name__
+        logging.getLogger("studiohub.broker").info(
+            "abandoned peer job %s on %s: cancel %s", probe["studio_job_id"], probe["studio"],
+            "sent" if sent else f"not sent ({probe.get('cancel_error')})")
+
+    task = asyncio.create_task(send())
+    _abandoned_peer_cancels.add(task)
+    task.add_done_callback(_abandoned_peer_cancels.discard)
+
+
 async def cancel_batch(batch_id: str, client: httpx.AsyncClient | None = None) -> dict | None:
     """Cancel queued work and immediately signal every known running worker."""
     b = batches.get(batch_id)
@@ -4312,6 +4338,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             if (item.get("studio_job_id") and recovered is False
                     and not getattr(e, "worker_terminal", False)):
                 if remote_studio and b.get("modality") == "image":
+                    _cancel_abandoned_peer_job(client, item)
                     item.pop("studio_job_id", None)
                     item.pop("studio", None)
                 else:
@@ -4336,6 +4363,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         if (b.get("modality") == "voice" and item.get("studio_job_id")
                 and _is_transport_failure(e, message)):
             if remote_studio:
+                _cancel_abandoned_peer_job(client, item)
                 item.pop("studio_job_id", None)
                 item.pop("studio", None)
             else:
