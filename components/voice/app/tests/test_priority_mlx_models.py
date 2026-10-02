@@ -1193,8 +1193,8 @@ def test_no_wav_error_names_the_real_cause_not_just_a_temp_dir(monkeypatch, tmp_
     assert "25.8 GB unified memory" in big
 
 
-def test_fish_4bit_is_a_24gb_fish_row_with_its_licence_and_revision_evidence() -> None:
-    """Fish S2 Pro 4-bit rides the 8-bit row's engine, section policy and 24 GB tier.
+def test_fish_4bit_is_a_16gb_fish_row_with_its_licence_and_revision_evidence() -> None:
+    """Fish S2 Pro 4-bit rides the 8-bit row's engine and section policy, on the 16 GB tier (owner, 2026-10-02).
 
     Its publisher spells the repo `fishaudio-s2-pro`, so the local-revision evidence branch (keyed on
     the repo name) must still recognise it: without that a finished clone job has no voice evidence.
@@ -1203,7 +1203,7 @@ def test_fish_4bit_is_a_24gb_fish_row_with_its_licence_and_revision_evidence() -
 
     model = catalog.get_model("majentik/fishaudio-s2-pro-MLX-4bit")
     assert model is not None and model.family == "fish-audio-mlx"
-    assert model.min_unified_memory_gb == 24
+    assert model.min_unified_memory_gb == 16
     assert model.sample_rate_hz == 44100
     assert model.license_name == "Fish Audio Research License"
     assert "Built with Fish Audio" in model.license_source and "commercial" in model.license_source
