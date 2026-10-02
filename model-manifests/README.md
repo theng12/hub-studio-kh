@@ -1,7 +1,7 @@
 # Studio Hub model manifests
 
-This catalog contains **28** bounded model packages. The files describe
-**86,092,503,575 expected bytes** across the packages; Qwen Base
+This catalog contains **27** bounded model packages. The files describe
+**78,024,484,788 expected bytes** across the packages; Qwen Base
 packages reference the shared `whisper-turbo` package for their internal
 quality check and do not copy its weights again.
 

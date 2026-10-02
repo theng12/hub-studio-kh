@@ -5,7 +5,7 @@ The Hub has no Video worker any more (`packaging/stage_voice.py` ships none whil
 catalog, with only a Voice worker registered, and check what a person or the gateway would meet:
 
 * the catalog and package routes answer 200, LTX is in neither, and every other package still is -
-  including `gemma-3-12b-it-4bit`, which stays in the catalog (it is not retired);
+  and neither is `gemma-3-12b-it-4bit` (LTX's text encoder, retired 0.6.128 on the owner's word);
 * the Hub reports no video capability (no video model, no video operation);
 * a job for the retired model, and a job for a video model that is not there, are refused with a
   named code, never a 500 and never a queued job that waits for ever;
@@ -105,14 +105,15 @@ class HubWithoutVideoTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.temporary.cleanup()
 
-    def test_the_package_route_answers_and_has_no_ltx_but_keeps_gemma(self) -> None:
+    def test_the_package_route_answers_and_has_no_ltx_and_no_gemma(self) -> None:
         status, body = self.out["packages"]
         self.assertEqual(status, 200)
         ids = {row["package_id"] for row in body["models"]}
         models = {row["model_id"] for row in body["models"]}
         self.assertNotIn(LTX_PACKAGE, ids)
         self.assertNotIn(LTX_MODEL, models)
-        self.assertIn(GEMMA_PACKAGE, ids, "Gemma is not retired: the owner may reuse it as a chat model")
+        self.assertNotIn(GEMMA_PACKAGE, ids, "Gemma 3 12B is retired (owner 2026-10-02)")
+        self.assertNotIn(GEMMA_MODEL, models)
         self.assertIn("whisper-turbo", ids, "the rest of the catalog must be untouched")
         self.assertGreaterEqual(len(ids), 20)
 
@@ -132,10 +133,10 @@ class HubWithoutVideoTests(unittest.TestCase):
         status, body = self.out["job_unknown"]
         self.assertEqual(status, 409)
         self.assertEqual(body["detail"]["code"], "MODEL_NOT_PACKAGED")
-        # Gemma is in the catalog but no studio runs it: a clean refusal, not a 500 or a job that waits.
+        # Gemma is retired too: refused by name, not a 500 or a job that waits.
         status, body = self.out["job_gemma"]
         self.assertEqual(status, 409, body)
-        self.assertIn(body["detail"]["code"], {"MODEL_NOT_READY", "STUDIO_NOT_RUNNING", "MODEL_NOT_INSTALLED"})
+        self.assertEqual(body["detail"]["code"], "MODEL_RETIRED")
 
 
 class InstalledRetiredModelsTests(unittest.TestCase):
@@ -149,11 +150,13 @@ class InstalledRetiredModelsTests(unittest.TestCase):
                 (library / name / "weights.bin").write_text(name)
             (library / "Qwen").mkdir()                       # a repo id's first path part is never a package
             moved = retired_models.retire_installed(library, trash, now=1_790_000_000)
-            self.assertEqual(moved, [LTX_PACKAGE])
+            self.assertEqual(moved, [LTX_PACKAGE, GEMMA_PACKAGE])
             self.assertFalse((library / LTX_PACKAGE).exists())
-            self.assertTrue((library / GEMMA_PACKAGE / "weights.bin").is_file(), "Gemma is not retired")
+            self.assertFalse((library / GEMMA_PACKAGE).exists(), "Gemma is retired: every Mac sheds it")
             self.assertTrue((library / "whisper-turbo" / "weights.bin").is_file())
-            (landed,) = list(trash.glob("*/retired-models/*"))
+            landed_all = sorted(trash.glob("*/retired-models/*"))
+            self.assertEqual(len(landed_all), 2)
+            landed = next(p for p in landed_all if p.name.startswith(LTX_PACKAGE))
             self.assertRegex(landed.parent.parent.name, r"^\d{4}-\d{2}-\d{2}$", "the Trash Folder's dated layout")
             self.assertEqual((landed / "weights.bin").read_text(), LTX_PACKAGE, "moved whole, never deleted")
             self.assertEqual(retired_models.retire_installed(library, trash), [], "a second start moves nothing")
@@ -182,14 +185,14 @@ class InstalledRetiredModelsTests(unittest.TestCase):
             fd = os.open(state / "import.lock", os.O_CREAT | os.O_RDWR, 0o600)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX)
-                self.assertEqual(retired_models.retire_installed(library, trash), [LTX_PACKAGE])
+                self.assertEqual(retired_models.retire_installed(library, trash), [LTX_PACKAGE, GEMMA_PACKAGE])
             finally:
                 os.close(fd)
             self.assertIn(LTX_PACKAGE, json.loads((state / "installed.json").read_text()))
             # The next start (nothing left to move) catches up: only the retired receipt is dropped.
             self.assertEqual(retired_models.retire_installed(library, trash), [])
             kept = json.loads((state / "installed.json").read_text())
-            self.assertEqual(sorted(kept), ["gemma-3-12b-it-4bit", "old-other-gone", "whisper-turbo"],
+            self.assertEqual(sorted(kept), ["old-other-gone", "whisper-turbo"],
                              "other receipts, even one with no folder, are not this list's to forget")
             self.assertEqual((state / "installed.json").read_text(), json.dumps(kept, sort_keys=True),
                              "the same format `_register` writes")

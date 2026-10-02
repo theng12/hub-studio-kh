@@ -29,7 +29,6 @@ SHELVED_MODELS = [
     "chatterbox-4bit", "mlx-community/chatterbox-4bit",          # Chatterbox 4-bit (disqualified 2026-10-01)
     "chatterbox-8bit", "mlx-community/chatterbox-8bit",          # Chatterbox 8-bit (disqualified 2026-10-01)
     "s3tokenizerv2", "mlx-community/S3TokenizerV2",              # Chatterbox's companion; nothing else requires it
-    "gemma-3-12b-it-4bit", "mlx-community/gemma-3-12b-it-4bit",  # Gemma 3 12B 4-bit (owner 2026-10-02; kept for a possible chat model)
 ]
 
 

@@ -21,7 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / ".build" / "prepare-kit.sh"
-RETIRED = "ltx-2-3-22b-ram-12gb-mlx"      # retired 0.6.127; Gemma (gemma-3-12b-it-4bit) is NOT retired
+RETIRED = "ltx-2-3-22b-ram-12gb-mlx"      # retired 0.6.127 (Gemma, gemma-3-12b-it-4bit, followed in 0.6.128)
 KEPT = "whisper-base"
 
 

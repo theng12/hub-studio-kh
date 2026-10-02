@@ -22,8 +22,7 @@ from components import retired_models, shelved_models  # noqa: E402
 SEEDS = {"whisper-base": "mlx-community/whisper-base-mlx", "whisper-small": "mlx-community/whisper-small-mlx",
          "voxcpm2-bf16": "mlx-community/VoxCPM2-bf16", "fish-audio-s2-pro-bf16": "mlx-community/fish-audio-s2-pro-bf16",
          "chatterbox-4bit": "mlx-community/chatterbox-4bit", "chatterbox-8bit": "mlx-community/chatterbox-8bit",
-         "s3tokenizerv2": "mlx-community/S3TokenizerV2",
-         "gemma-3-12b-it-4bit": "mlx-community/gemma-3-12b-it-4bit"}
+         "s3tokenizerv2": "mlx-community/S3TokenizerV2"}
 
 
 def manifests():
@@ -56,11 +55,14 @@ class ListTests(unittest.TestCase):
                   for dep in (m.get("requires_packages") or [])}
         self.assertFalse(needed & set(SEEDS), "a kept model requires a shelved one, which would be moved away")
 
-    def test_gemma_is_shelved_not_retired_so_it_stays_in_the_catalog_and_on_the_ssd(self):
-        gemma = next(m for m in manifests() if m["package_id"] == "gemma-3-12b-it-4bit")
-        self.assertTrue(shelved_models.manifest_shelved(gemma))
-        self.assertTrue(shelved_models.is_shelved("mlx-community/Gemma-3-12B-IT-4bit"))
-        self.assertFalse(retired_models.manifest_retired(gemma))
+    def test_gemma_is_retired_not_shelved_so_no_mac_and_no_kit_carries_it(self):
+        # Owner 2026-10-02: Gemma 3 12B is retired everywhere (it was shelved in 0.6.127). Its manifest is parked
+        # beside LTX's, out of the catalog.
+        parked = json.loads((ROOT / "components/video/retired/gemma-3-12b-it-4bit.json").read_text())
+        self.assertTrue(retired_models.manifest_retired(parked))
+        self.assertTrue(retired_models.is_retired("mlx-community/Gemma-3-12B-IT-4bit"))
+        self.assertFalse(shelved_models.manifest_shelved(parked))
+        self.assertFalse((MANIFESTS / "gemma-3-12b-it-4bit.json").exists())
 
     def test_shelved_and_retired_are_different_lists(self):
         self.assertFalse(shelved_models.is_shelved(*retired_models.RETIRED_MODELS))
@@ -142,15 +144,19 @@ class CopyStepTests(unittest.TestCase):
             self.assertTrue((kit.library / "whisper-base").is_dir(), "the SSD must keep the shelved weights")
             self.assertIn("Shelved, not copied (1): whisper-base", output)
 
-    def test_gemma_is_not_copied_to_a_fleet_mac_but_stays_on_the_ssd(self):
+    def test_gemma_is_retired_so_even_a_keep_all_mac_is_not_given_it(self):
         with TemporaryDirectory() as tmp:
             kit = self._kit(Path(tmp))
             kit.ship("gemma-3-12b-it-4bit", floor=1)
+            (kit.kit / kit.APP / "Contents/Resources/components/retired_models.py").write_text(
+                (ROOT / "components" / "retired_models.py").read_text())
+            settings = kit.root / "Library/Application Support/StudioHub Standalone/hub/device_settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text('{"keep_all_models": true}')
             code, output, _prompt = kit.run()
             self.assertEqual(code, 0, output)
             self.assertFalse((kit.home / "gemma-3-12b-it-4bit").exists(), output)
-            self.assertTrue((kit.library / "gemma-3-12b-it-4bit").is_dir(), "the SSD must keep Gemma")
-            self.assertIn("Shelved, not copied (2): ", output)
+            self.assertTrue((kit.home / "plain-model").is_dir(), output)
 
     def test_a_keep_all_mac_copies_it(self):
         with TemporaryDirectory() as tmp:

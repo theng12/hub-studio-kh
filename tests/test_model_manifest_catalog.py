@@ -319,10 +319,6 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # Refreshed 2026-09-27 (0.6.83) with the true-16:9 measurement: a third run at
             # 1024x576, 49 frames, 351.6 s, 9.36 GB peak MLX Metal, recorded in the manifest's
             # `memory_evidence` and `reason`.
-            # A companion: 13 files / 8,068,018,787 bytes, the text encoder every LTX prompt
-            # loads. It has no runtime of its own and no picker row (the Hub marks it a
-            # dependency), which is why its floor mirrors the model it serves.
-            "gemma-3-12b-it-4bit": "88eb8541a329b20672847e24a9a4ebb2e320205c7a0963960512f2375623c13f",
             # ── Music: YuE2, the lane's second engine, and its decoder companion ──
             # Captured 2026-09-27 from `vanch007/mlx-Yue2-3B` (9 files / 9,920,168,755 bytes) and
             # `m-a-p/YuE2-Vae` (7 files / 530,542,479 bytes). Both carry a MEASURED tier from three

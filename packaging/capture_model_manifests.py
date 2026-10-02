@@ -178,7 +178,7 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # `video-ltx` so the Video worker resolves its installed folder and passes the local path,
     # and it is listed in the pack's `requires_packages` so the Hub marks it a dependency rather
     # than offering it in a picker as if it were a video model.
-    {"package_id": "gemma-3-12b-it-4bit", "model_id": "mlx-community/gemma-3-12b-it-4bit", "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558", "engine": "video-ltx"},
+    # (Gemma 3 12B 4-bit, LTX's text encoder, retired 0.6.128: its capture row is gone; its manifest lives dormant in components/video/retired/.)
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
@@ -242,7 +242,7 @@ DETAILS: dict[str, dict[str, Any]] = {
     # requires as a dependency) and no runtime of its own. The floor mirrors the model whose
     # pipeline loads it, because a machine that cannot hold the 22B model cannot use the encoder
     # either.
-    "gemma-3-12b-it-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (24, 32, "Companion of the LTX-2.3 22B pack: the pipeline loads this text encoder for every prompt, and its 5.0 GB of weights are inside that pack's measured 16.38 GB process footprint.")},
+    # (Gemma 3 12B 4-bit retired 0.6.128: its manifest lives dormant in components/video/retired/.)
     "yue2-3b-mlx": {
         "defaults": {"mode": "off", "duration_seconds": 36, "seed": -1, "precision": "8bit",
                      "parameters_source": "components/music/app/backend/catalog.py"},

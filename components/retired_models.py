@@ -15,9 +15,11 @@ RETIRED_MODELS = [
     "ace-step-1-5-turbo", "ACE-Step/Ace-Step1.5",   # ACE-Step 1.5, retired 0.6.116
     "lance-3b-video-bf16", "mlx-community/Lance-3B-Video-bf16",   # Lance 3B Video bf16, retired 0.6.120
     "lance-3b-processor-qwen2-5-vl", "Qwen/Qwen2.5-VL-3B-Instruct",   # its processor companion
-    # LTX-2.3 22B video, retired 0.6.127. Its Gemma text encoder (`gemma-3-12b-it-4bit`) is NOT retired:
-    # the owner may reuse it as a chat model, so it stays in the catalog.
+    # LTX-2.3 22B video, retired 0.6.127.
     "ltx-2-3-22b-ram-12gb-mlx", "baa-ai/LTX-2.3-22B-RAM-12GB-MLX",
+    # Gemma 3 12B 4-bit (LTX's text encoder), retired 0.6.128: owner 2026-10-02, "it's bad ... remove it all over".
+    # Not shelved: every Mac, keep-all-models Macs included, sheds it, and the kit never carries it.
+    "gemma-3-12b-it-4bit", "mlx-community/gemma-3-12b-it-4bit",
 ]
 
 

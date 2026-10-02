@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - Gemma 3 12B 4-bit is retired everywhere
+
+Owner, 2026-10-02: "it's bad ... remove it all over". `gemma-3-12b-it-4bit` / `mlx-community/gemma-3-12b-it-4bit` (LTX's text encoder; shelved
+in 0.6.127) moves from `components/shelved_models.py` to `components/retired_models.py`. Every Mac - **keep-all-models Macs included** - moves its
+copy into the self-cleaning Trash Folder at the next Hub start (`retired_models.retire_installed`, 15-day purge) and drops its `installed.json`
+receipt; the kit never lists, stages or copies it; a job naming it is refused `MODEL_RETIRED`. Its manifest is parked in
+`components/video/retired/` beside LTX's (dormant; the Video worker is not shipped), the capture rows are gone, and the package counts are
+recomputed: **27 packages, 78,024,484,788 bytes (~78.0 GB)** in the catalog README, kit README, SSD-KIT-README, NODE-SETUP-CHECKLIST,
+runtime-contract and `docs/model-benchmarks.md` (regenerated). Tests: `test_retired_models`, `test_video_retired`, `test_shelved_models`
+(Gemma retired not shelved; a keep-all kit is not given it), `test_model_manifest_catalog`. Left for the coordinator: the 8.07 GB copy on each SSD's
+`model-library/gemma-3-12b-it-4bit` (move to the trash, as for LTX).
+
 ## Unreleased - Image: memory-bounded generation for the 8 GB tier, resident models on larger Macs
 
 **Cause (owner's real 8 GB M1 run, Hub 0.6.126, guard bypassed):** FLUX.2 Klein 4B 4-bit peaked at 9.8 GB of MLX memory and
