@@ -71,7 +71,7 @@ Rule 2 above and Voice's cache cap are the same rule (the Voice worker's default
 12. **Clear the cache between sections** (`_release_device_memory` already does) and after any stage you slab.
 13. **Measure before you set a floor.** `min_free_memory_gb` is the *measured peak process footprint plus about 0.25 GB*, on the **8 GB runner** (`qualification/eight-gb-tts-run.sh`, S2 and S4, both owner voices; images: `qualification/eight_gb_image_run.py`). A number computed
     from file sizes, a multiple of the weights or "what the other model uses" is a formula, and **a floor must never be a formula**. Every non-empty `min_free_memory_gb` carries a `min_free_memory_note` saying what was measured, on which Mac, when.
-    (Image floors: Klein 4-bit 3.2 and Z-Image-Turbo 4-bit 4.4, measured on a 32 GB Mac emulating 8 GB, 2026-10-02; re-measure on the 8 GB runner.)
+    (Image floors are unchanged for now: measured on a 32 GB Mac emulating 8 GB, 2026-10-02, Klein ~2.9 GB and Z-Image ~4.1 GB footprint; floors to be set from the 8 GB runner.)
 14. **Do not trust RTF measured on a busy Mac.** Peaks are exact under load; timings are not (load average 17-54 during this work made RTF swing 2-5x).
 
 ## Image

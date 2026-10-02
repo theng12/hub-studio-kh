@@ -228,6 +228,12 @@ CAPACITY_RELEASE_ATTEMPTS = 3
 # another Mac (a pinned job fails with the same, clear, error). ~4 minutes with the back-off.
 CAPACITY_HANDBACK_AFTER = 3
 INSUFFICIENT_MEMORY = "INSUFFICIENT_MEMORY"
+# The same rule for the admission wait (the Hub's own free-memory floor, checked before a job is sent):
+# a job that has waited this long (~4 minutes, like three refusals with back-off) for a Mac whose free
+# memory is short - while none of our own work is running on that Mac - is handed back typed
+# INSUFFICIENT_MEMORY with the needs-X/has-Y sentence, so the Gateway can re-route it. A job waiting
+# behind our own running work on the Mac is ordinary queueing and keeps waiting.
+ADMISSION_WAIT_HANDBACK_S = 240.0
 # A Mac another queue has reserved is not free *yet*. It is not a reason to park the item: the
 # refusal takes that machine out of selection for this long - for every item aimed at it, through
 # `_machine_reserved_until` - and the dispatcher's own heartbeat retries after that. It keeps its
@@ -322,6 +328,36 @@ def _memory_gate(mem: dict, host: dict, reserved_gb: float = 0.0) -> tuple[str, 
         return ("wait", f"waiting for memory: needs ~{need_free:.1f}GB, "
                         f"~{max(0.0, effective_free):.1f}GB free")
     return ("run", None)
+
+
+def _machine_has_active_work(studio: dict) -> bool:
+    """Whether the Hub itself is running work on this studio's Mac (any studio on it)."""
+    from . import chat_jobs, transcription_jobs
+    machine = studio.get("machine", "local")
+    active = set(_busy) | set(chat_jobs.busy_studios) | set(transcription_jobs.busy_studios)
+    return any(row.get("id") in active for row in _monitor().registry
+               if row.get("machine", "local") == machine) or studio.get("id") in active
+
+
+def _admission_wait_expired(item: dict, studio: dict, mem: dict, note: str | None, now: float) -> bool:
+    """Whether this item has waited ADMISSION_WAIT_HANDBACK_S on an unmet free-memory floor.
+
+    The clock runs only while the shortage is real (the Mac's own free memory is below the floor, not
+    merely below it after our reservations), the wait is the memory wait itself (not a busy sibling),
+    and the Hub has no work of its own running on that Mac. Anything else resets it.
+    """
+    host = _host_for_studio(studio)
+    try:
+        short = (bool(host) and "waiting for memory" in str(note or "")
+                 and float(host["available_gb"]) < _required_free_memory(mem)
+                 and not _machine_has_active_work(studio))
+    except (KeyError, TypeError, ValueError):
+        short = False
+    if not short:
+        item.pop("admission_wait_started_at", None)
+        return False
+    started = item.setdefault("admission_wait_started_at", now)
+    return now - float(started) >= ADMISSION_WAIT_HANDBACK_S
 
 
 def _local_gate(mem: dict, host: dict) -> tuple[str, str | None]:
@@ -901,7 +937,8 @@ def _is_capacity_failure(message: str) -> bool:
     ))
 
 
-async def _insufficient_memory_text(b: dict, studio: dict, failures: int) -> str:
+async def _insufficient_memory_text(b: dict, studio: dict, failures: int | None = None,
+                                    waited_s: float | None = None) -> str:
     """The sentence an operator (and the Gateway's user) reads when a Mac hands a job back: which Mac,
     how much it needs and how much it has - from the Hub's own admission policy and host snapshot."""
     machine = label_for(studio.get("machine", "local"))
@@ -916,7 +953,9 @@ async def _insufficient_memory_text(b: dict, studio: dict, failures: int) -> str
         pass
     numbers = (f"needs about {need:.1f} GB free and has about {free:.1f} GB free"
                if need is not None and free is not None else "does not have enough free memory")
-    return (f"{machine} {numbers} for {b['model']} (it refused {failures} times). "
+    why = (f"it waited {max(1, round(waited_s / 60))} minutes" if waited_s is not None
+           else f"it refused {failures} times")
+    return (f"{machine} {numbers} for {b['model']} ({why}). "
             f"Another Mac with more free memory can run this job.")
 
 
@@ -3503,9 +3542,18 @@ async def _dispatch_loop():
                             client, studio, b["model"], entry)
                         if decision != "run":
                             # skip → another (maybe bigger/remote) studio may take
-                            # it; wait → defer. NEVER errors the whole batch.
+                            # it; wait → defer. NEVER errors the whole batch - except that an
+                            # admission wait is bounded like three refusals (~4 min): the item is
+                            # sent on to `_run_item`, which hands it back as INSUFFICIENT_MEMORY.
                             b["governor_note"] = f"{studio['id']}: {note}"
-                            continue
+                            if not (decision == "wait" and _admission_wait_expired(
+                                    queued[compatible_index], studio, mem, note, now)):
+                                continue
+                            queued[compatible_index]["_memory_handback"] = await _insufficient_memory_text(
+                                b, studio, waited_s=ADMISSION_WAIT_HANDBACK_S)
+                        else:
+                            queued[compatible_index].pop("admission_wait_started_at", None)
+                            queued[compatible_index].pop("_memory_handback", None)
                         reserve = _required_free_memory(mem) if is_local else 0.0
                     # Eligibility was calculated before the catalog/memory awaits.
                     # Recheck the physical lease so a transcription that claimed
@@ -3882,6 +3930,13 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         if _expire_genstudio_batch(b):
             item["state"] = "cancelled"
             item["error"] = "GenStudio execution lease expired"
+            return
+        handback = item.pop("_memory_handback", None)
+        if handback:
+            # It waited ADMISSION_WAIT_HANDBACK_S for free memory this Mac does not have: nothing was
+            # sent and no attempt is spent; the Gateway re-routes it (a pinned job fails with this sentence).
+            item.update(state="error", retry_at=None, error_code=INSUFFICIENT_MEMORY, error=handback)
+            item["tries"] = max(0, int(item.get("tries") or 0) - 1)
             return
         if voice_reference_asset_id:
             if body.get("voice_library_id"):
@@ -4393,6 +4448,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         if item["state"] in ("done", "error", "cancelled"):
             item.pop("capacity_failures", None)
             item.pop("capacity_wait_started_at", None)
+            item.pop("admission_wait_started_at", None)
+            item.pop("_memory_handback", None)
             item.setdefault("machine", str(studio.get("machine") or "local")[:500])
             item.setdefault("worker_id", str(studio.get("id") or "unknown")[:500])
             if item["state"] == "error":

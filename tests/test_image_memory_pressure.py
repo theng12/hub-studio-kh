@@ -275,8 +275,8 @@ class MemoryCatalogTests(unittest.TestCase):
 
         entries = self.catalog(16 * GiB)
         z_admission = memory_admission.describe(Z_IMAGE_TURBO.repo, entries[Z_IMAGE_TURBO.repo])
-        self.assertEqual(z_admission['effective_min_free_memory_gb'], 4.4)
-        self.assertEqual(z_admission['catalog_min_free_memory_gb'], 4.4)
+        self.assertEqual(z_admission['effective_min_free_memory_gb'], 3.0)
+        self.assertEqual(z_admission['catalog_min_free_memory_gb'], 3.0)
         self.assertEqual(z_admission['effective_min_total_memory_gb'], 8.0)
         self.assertEqual(z_admission['min_total_source'], 'manifest')
         # The invariant, not the number, because the number was wrong once in a way that cost a
@@ -288,15 +288,13 @@ class MemoryCatalogTests(unittest.TestCase):
         # tier: the one tier with no measurement, and the one that needed to run.
         SMALLEST_FLEET_TOTAL_GB = 8.0
         self.assertLess(z_admission['effective_min_free_memory_gb'], SMALLEST_FLEET_TOTAL_GB)
-        # Still a real guard rather than drifting to nothing: above FLUX's floor, since this
-        # model's footprint is the larger of the two.
-        self.assertGreater(z_admission['effective_min_free_memory_gb'], 3.2)
+        # Still a real guard rather than drifting to nothing: above FLUX's 2.0, since this
+        # model's weights are the larger of the two.
+        self.assertGreater(z_admission['effective_min_free_memory_gb'], 2.0)
 
         flux_admission = memory_admission.describe(MODEL_ID, entries[MODEL_ID])
-        # The catalog row says 3.2 (8 GB-tier footprint 2.93 GB + margin), but the Hub's measured fleet default
-        # for Klein (2.0) outranks it: 8 GB Macs routinely have 2.4-3.0 GB available and an unmet free floor waits.
         self.assertEqual(flux_admission['effective_min_free_memory_gb'], 2.0)
-        self.assertEqual(flux_admission['catalog_min_free_memory_gb'], 3.2)
+        self.assertEqual(flux_admission['catalog_min_free_memory_gb'], None)
         self.assertEqual(flux_admission['default_min_total_memory_gb'], 8.0)
 
     def test_the_memory_policy_names_the_model_a_running_job_actually_loaded(self):

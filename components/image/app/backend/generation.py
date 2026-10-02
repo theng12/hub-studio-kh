@@ -208,9 +208,8 @@ FLUX2_KLEIN = ImageModel(
               'guidance': 1.0, 'seed': -1},
     limits={'min_steps': 2, 'max_steps': 100, 'min_guidance': 0.0, 'max_guidance': 30.0,
             'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
-    # 3.2: the 8 GB-tier staged + streamed footprint (2.93 GB) plus margin. 32 GB Mac emulating 8 GB,
-    # 2026-10-02; re-measure on 8 GB runner.
-    min_free_memory_gb=3.2,
+    # No catalog free floor on purpose (the Hub's measured fleet default applies). Measured on a 32 GB Mac emulating
+    # 8 GB (2026-10-02), staged + streamed: footprint ~2.9 GB; floor to be set from the 8 GB runner.
     # The bounded configurations (tiers in `FLUX2_*_BELOW_BYTES` above) were added after the 8 GB runs showed the
     # unbounded one at 9.8 GB of MLX memory and ~4 GB of swap per image; 24 GB and up are unchanged.
     memory=MemoryPolicy(low_ram_below_bytes=FLUX2_LOW_RAM_BELOW_BYTES,
@@ -320,9 +319,10 @@ Z_IMAGE_TURBO = ImageModel(
     # What decides "this machine class is unqualified" is the published *tier*
     # (min_unified_memory_gb = 16): reported to the operator with a below-tier warning; the Hub's
     # requirement (measured, else manifest, else this tier) is what gates dispatch, since 2026-09-30.
-    # 4.4: the 8 GB-tier staged + streamed footprint (4.13 GB) plus margin. 32 GB Mac emulating 8 GB,
-    # 2026-10-02; re-measure on 8 GB runner.
-    min_free_memory_gb=4.4,
+    # Measured on a 32 GB Mac emulating 8 GB (2026-10-02), staged + streamed: footprint ~4.1 GB. The free floor
+    # stays 3.0 (unchanged): it is to be set from the 8 GB runner, since an unmet free floor waits and 8 GB Macs
+    # often have only 2.4-3.0 GB available.
+    min_free_memory_gb=3.0,
     qualification={
         'memory_profile': {
             'before': {'mlx_peak_gb': 6.26, 'footprint_peak_gb': 7.46},
