@@ -218,6 +218,9 @@ class Context:
     app_root: Path | None = None                    # the installed .app this Hub runs from
     machines: Iterable[str] = ()
     output_roots: Iterable[Path] = ()               # managed output folders, for partial files
+    # The Voice worker's output folders: audio in them that the Hub never registered is kept for
+    # `UNACKED_DAYS` and then moved to the Trash Folder like any other unacknowledged output.
+    unregistered_roots: Iterable[Path] = ()
     settings: dict = field(default_factory=dict)    # effective device settings
     running_staging: Callable[[], set] = lambda: set()
     # The transcription spool (uploaded media and subtitle files, `job_storage`): its own policy runs on
@@ -533,6 +536,23 @@ def _acked_outputs(ctx: Context, now: float, run: _Run, severe: bool, done: Call
             run.note("acked outputs", freed, files)
 
 
+def _unregistered_outputs(ctx: Context, now: float, run: _Run, severe: bool) -> None:
+    """Voice audio the Hub never registered (the worker's own retention loop is off in the packaged
+    app). Ordinary retention for an unacknowledged output is `UNACKED_DAYS`; a Mac that is filling
+    shortens it to the operator's retention window, never below an hour. Cleanup switched off by the
+    operator stops it, as for registered outputs. To the Trash Folder, never a delete."""
+    settings = ctx.settings or {}
+    roots = list(ctx.unregistered_roots)
+    if not roots or not settings.get("cleanup_enabled", True):
+        return
+    window = output_storage.UNACKED_DAYS * 86400.0
+    if severe:
+        window = min(window, max(3600.0, float(settings.get("retention_days", 3)) * 86400))
+    freed, files = output_storage.trash_unregistered(roots, min_age_seconds=window, now=now)
+    if files:
+        run.note("unregistered outputs", freed, files)
+
+
 def _spool(ctx: Context, run: _Run, severe: bool, done: Callable[[], bool]) -> None:
     """Finished transcription jobs' files, oldest first: amber halves the spool's own limit, red empties
     what is finished. A job still queued or running is never eligible (`job_storage` guarantees it)."""
@@ -580,6 +600,7 @@ def sweep(ctx: Context, *, now: float | None = None, startup: bool = False) -> d
         guarded(lambda: _app_copies(run))
         guarded(lambda: _updates(ctx, now, run, False))
         guarded(lambda: _orphan_apps(ctx, now, run))
+        guarded(lambda: _unregistered_outputs(ctx, now, run, False))
         guarded(lambda: _trash(ctx, now, run, usage.total, None))
         if startup:
             guarded(lambda: _orphans(ctx, now, run, False, None))
@@ -592,6 +613,7 @@ def sweep(ctx: Context, *, now: float | None = None, startup: bool = False) -> d
             ordered = [
                 lambda: _logs(ctx, run, severe),
                 lambda: _updates(ctx, now, run, True),
+                lambda: _unregistered_outputs(ctx, now, run, severe),
                 lambda: _trash(ctx, now, run, usage.total, done),
                 lambda: _orphans(ctx, now, run, severe, done),
                 lambda: _acked_outputs(ctx, now, run, severe, done),

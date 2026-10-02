@@ -800,6 +800,21 @@ def make_middleware(token: str):
                 response.set_cookie("kh_studio_token", fleet, httponly=True,
                                     samesite="strict")
                 return response
+            # **The previous Fleet token, for a node that missed the rotation.** Only while that node
+            # is still waiting to be moved over, and only for what a node itself may do (register,
+            # read its group, read the release): it is a leaked-token risk the controller accepts for
+            # a bounded window so an offline Mac is not stranded, not a way to keep dispatching.
+            if peers.accepts_previous_token(offered):
+                if not node_origin_allowed(request.method, request.url.path):
+                    return JSONResponse(
+                        {"detail": f"{request.method} {request.url.path} was refused by "
+                                   f"{_this_machine_name()}: the previous Fleet token is accepted "
+                                   f"for a limited time so a Mac that missed the rotation can be "
+                                   f"told the new one. Use the current Fleet token."},
+                        status_code=403,
+                    )
+                request.state.fleet_actor = {"kind": "fleet", "node_id": None}
+                return await call_next(request)
         # A node credential this controller revoked by removing that Mac: say so, with the date,
         # instead of a bare 401 the Mac cannot tell from a controller that lost its roster.
         if offered:

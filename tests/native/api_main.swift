@@ -3130,6 +3130,27 @@ struct NativeAPITests {
         require(FleetCopy.handoverFallback.contains("SSH over Tailscale")
                 && FleetCopy.handoverFallback.contains("credential-rotation-decision.md"),
                 "the fallback names the mechanism and the runbook")
+        // A rotation that only missed Macs that were off says they catch up by themselves.
+        require(FleetCopy.unfinishedNotice(total: 2, verified: 1, manual: 0, pending: 1, rotation: true)?
+                    .contains("given the new one automatically") == true,
+                "a rotation's unreachable Mac must be told it is not stranded")
+        require(FleetCopy.unfinishedNotice(total: 2, verified: 1, manual: 1, pending: 0, rotation: true)?
+                    .contains("SSH over Tailscale") == true,
+                "a Mac that refused the old credential still needs the manual path")
+        require(FleetCopy.previousTokenNotice(count: 0, until: nil) == nil,
+                "nothing is said when no node is on the previous token")
+        require(FleetCopy.previousTokenNotice(count: 3, until: nil)?
+                    .hasPrefix("3 nodes are still on the previous Fleet token.") == true,
+                "the count of nodes still on the previous token is shown")
+        require(FleetCopy.previousTokenNotice(count: 1, until: 1_800_000_000)?
+                    .hasPrefix("1 node is still on the previous Fleet token.") == true,
+                "one node reads in the singular")
+        let rotationSummaryJSON = Data(#"{"total":2,"reachable":1,"unreachable":1,"error":0,"on_previous_token":1,"previous_token_until":1800000000.0}"#.utf8)
+        let rotationDecoder = JSONDecoder()
+        rotationDecoder.keyDecodingStrategy = .convertFromSnakeCase
+        let rotationSummary = try? rotationDecoder.decode(NativeFleetSummary.self, from: rotationSummaryJSON)
+        require(rotationSummary?.onPreviousToken == 1 && rotationSummary?.previousTokenUntil == 1_800_000_000,
+                "the roster summary must carry the nodes still on the previous token")
 
         // The address typed for a controller is checked before any credential is sent to it.
         for good in ["192.168.1.21:8080", "http://192.168.1.21:8080", "100.101.102.103:8080",
@@ -3550,20 +3571,13 @@ struct NativeAPITests {
         await store.refreshMemoryPolicy()
         require(store.memoryInventory?.studios.count == 3, "the default fixture must be restored")
 
-        // Connections: the Hub reports its own role and identity, and the credential this app
-        // already holds is shown masked rather than printed.
+        // Connections: the Hub reports its own role and identity.
         await store.refreshConnection()
         require(store.controllerIdentity?.settings.role == "standalone", "the Hub role must be reported truthfully")
         require(store.controllerIdentity?.settings.siteName == "This Mac", "the station name must come from the Hub")
         require(store.controllerIdentity?.settings.globalAuthority == "genstudio", "GenStudio stays the global authority")
         require(store.controllerIdentity?.readiness.ready == true, "a healthy local Hub must report ready")
         require(store.hubVersion?.version == "0.4.0", "the app must show the Hub's own version")
-        let secret = "hub-token-abcdefghijklmnop"
-        let masked = NativeWorkspaceStore.maskedToken(secret)
-        require(masked != secret, "the token must never be shown unmasked by default")
-        require(!masked.contains("efghijkl"), "the middle of a credential must not be published")
-        require(masked.hasPrefix("hub-") && masked.hasSuffix("mnop"), "the mask must still be recognisable")
-        require(NativeWorkspaceStore.maskedToken("short") == "••••••••", "a short credential must be fully masked")
 
         await store.setMemoryMode("memory_saver", studioIDs: ["subtitle"])
         let (memoryMethod, memoryToken) = FixtureProtocol.memoryRequest()

@@ -12,11 +12,13 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from test_copy_models_for_this_mac import Harness
-
 ROOT = Path(__file__).resolve().parents[1]
 MANIFESTS = ROOT / "model-manifests"
+# `discover -s tests` puts this folder on the path; `unittest tests.test_shelved_models` does not, and the
+# sibling import below then failed with ModuleNotFoundError before a single test ran.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT))
+from test_copy_models_for_this_mac import Harness  # noqa: E402
 from components import retired_models, shelved_models  # noqa: E402
 
 SEEDS = {"whisper-base": "mlx-community/whisper-base-mlx", "whisper-small": "mlx-community/whisper-small-mlx",

@@ -5012,6 +5012,12 @@ struct StudioContent: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                if let notice = FleetCopy.previousTokenNotice(
+                    count: workspace.fleetNodes?.summary.onPreviousToken ?? 0,
+                    until: workspace.fleetNodes?.summary.previousTokenUntil) {
+                    Text(notice).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let report = workspace.fleetOperation {
                     fleetOperationReportView(report)
                 }
@@ -5045,7 +5051,8 @@ struct StudioContent: View {
                      + report.unfinished.map { machine in
                          "\(workspace.fleetMachineName(machine)) — \(report.outcomes[machine] ?? "no answer")"
                      }.joined(separator: "; ")
-                     + ". " + FleetCopy.handoverFallback)
+                     + ". " + (report.kind == .rotation && report.manual == 0
+                                ? FleetCopy.rotationWaitsNote : FleetCopy.handoverFallback))
                     .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
                     .fixedSize(horizontal: false, vertical: true)
             }

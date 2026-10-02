@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .registry import DATA_DIR
-from .peers import fleet_token, fresh_snapshot
+from .peers import confirm_node, fleet_token, fresh_snapshot, held_token, nodes_on_previous_token
 from .vocabulary import NODE_MODALITIES
 
 log = logging.getLogger("studiohub.fleet_nodes")
@@ -423,6 +423,7 @@ def leave(node_id: str) -> bool:
         return False
     del nodes[node_id]
     _write(nodes)
+    confirm_node(node_id)
     return True
 
 
@@ -506,6 +507,7 @@ def remove(node_id: str, *, by: str = "") -> dict[str, Any] | None:
         "joined_at": row.get("joined_at"),
     }
     _write(document["nodes"], document["removed"])
+    confirm_node(node_id)   # a removed Mac is not waited for: it is not in the group any more
     return dict(document["removed"][node_id])
 
 
@@ -704,7 +706,11 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
     if owned:
         client = _probe_client()
     try:
-        response = await client.get(f"{node['address']}{PROBE_PATH}", timeout=PROBE_TIMEOUT)
+        # A node still on the previous Fleet token is asked with that one (a client that carries
+        # the current token would read it as "unauthorized" for a rotation it simply was off for).
+        older = held_token(str(node.get("id") or ""))
+        response = await client.get(f"{node['address']}{PROBE_PATH}", timeout=PROBE_TIMEOUT,
+                                    **({"headers": {"X-Hub-Token": older}} if older else {}))
         if response.status_code in (401, 403):
             # The node answered, so it is up - it refused *this controller*. Reported as plain
             # "unreachable", the operator goes looking at the network and at the wrong Mac, when the
@@ -767,6 +773,13 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
             if row.get("state") == "reachable":
                 row["last_seen_at"] = seen_at
                 row["never_connected"] = False
+    # **Which Macs are still on the previous Fleet token** (a rotation they were off for). Named
+    # on the row and counted, so the app can say "N nodes still on the previous token" instead of
+    # the operator finding out when the old token stops working.
+    waiting = nodes_on_previous_token()
+    for row in rows:
+        row["on_previous_token"] = row["id"] in waiting
+    on_previous = [row["id"] for row in rows if row["on_previous_token"]]
     # The role this Hub is actually in, not a constant.
     #
     # This was hardcoded to "controller", so a standalone Mac answered "controller" here while
@@ -792,6 +805,9 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
             "unauthorized": sum(row["state"] == "unauthorized" for row in rows),
             "error": sum(row["state"] == "error" for row in rows),
             "removed": len(_removed()),
+            "on_previous_token": len(on_previous),
+            # When the previous token stops being accepted for the last Mac still on it.
+            "previous_token_until": max((waiting[node] for node in on_previous), default=None),
         },
     }
 
