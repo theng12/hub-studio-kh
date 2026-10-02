@@ -43,7 +43,8 @@ class RunnerTests(unittest.TestCase):
         found = re.findall(r'pkg="([^"]+)", repo="([^"]+)"', program())
         self.assertEqual([p for p, _ in found],
                          ["qwen3-tts-12hz-0-6b-base-8bit", "qwen3-tts-12hz-0-6b-base-4bit",
-                          "voxcpm2-4bit", "omnivoice-bfloat16", "breeze-tts-2-mlx-4bit"])
+                          "voxcpm2-4bit", "omnivoice-bfloat16", "breeze-tts-2-mlx-4bit",
+                          "fish-audio-s2-pro-4bit", "fish-audio-s2-pro-8bit", "fish-audio-s2-pro-bf16"])
         for package_id, repo in found:
             self.assertEqual(manifests[package_id]["model_id"], repo)
 
@@ -64,10 +65,70 @@ class RunnerTests(unittest.TestCase):
             self.skipTest("prepare-kit.sh is local to the release Mac")
         text = prepare.read_text().replace("\\\n", " ")
         managed = re.search(r'MANAGED="(.*?)"', text, re.S).group(1).split()
-        for name in ("RUN-8GB-TTS.command", "eight-gb-tts-run.sh", "README-8gb-tts.md", "tts-script-S2.txt", "tts-script-S4.txt", "ssd_wear.py"):
+        for name in ("RUN-8GB-TTS.command", "RUN-16GB-FISH.command", "import_kit_packages.py", "eight-gb-tts-run.sh", "README-8gb-tts.md",
+                     "tts-script-S2.txt", "tts-script-S4.txt", "ssd_wear.py"):
             self.assertTrue((QUAL / name).is_file(), name)
             self.assertIn(f'"$ROOT/qualification/{name}" "$KIT/Technical/{name}"', text, f"{name} never reaches a drive")
             self.assertIn(name, managed, f"{name} would be moved to _trash by the Technical prune")
+        self.assertIn('"TTS "[0-9]*"GB Run "*', text, "a 16 GB results folder would be moved to _trash by the Technical prune")
+
+
+    def test_the_16gb_fish_wrapper_runs_exactly_the_three_fish_models_after_importing_them_and_ships(self):
+        wrapper = QUAL / "RUN-16GB-FISH.command"
+        text = wrapper.read_text()
+        self.assertEqual(subprocess.run(["sh", "-n", str(wrapper)]).returncode, 0)
+        self.assertTrue(wrapper.stat().st_mode & 0o100, "a double-click wrapper must be executable")
+        self.assertIn("--models fish4,fish8,fishbf16 --target-gb 16", text)
+        self.assertLess(text.index('"$IMPORTER" --app'), text.index("--models fish4,fish8,fishbf16"), "import first, then measure")
+        manifests = {m["package_id"] for m in (json.loads(p.read_text()) for p in (ROOT / "model-manifests").glob("*.json"))}
+        keys = dict(re.findall(r'key="(fish\w+)".*?pkg="([^"]+)"', program(), re.S))
+        self.assertEqual(sorted(keys), ["fish4", "fish8", "fishbf16"])
+        self.assertEqual(sorted(keys.values()), sorted(re.search(r'PACKAGES="([^"]+)"', text)[1].split(",")), "the wrapper imports what the runner measures")
+        self.assertTrue(set(keys.values()) <= manifests)
+
+    def test_the_fish_models_are_opt_in_and_slower_and_the_default_list_stays_the_five(self):
+        ns = runner()
+        by_key = {m["key"]: m for m in ns["MODELS"]}
+        self.assertEqual([m["key"] for m in ns["MODELS"] if not m.get("opt_in")], ["qwen3", "qwen3-4bit", "voxcpm2", "omnivoice", "breeze"])
+        for key in ("fish4", "fish8", "fishbf16"):
+            self.assertTrue(by_key[key]["opt_in"])
+            self.assertEqual(ns["clip_limit"]("S2", by_key[key]), 3 * ns["clip_limit"]("S2", by_key["qwen3"]))
+            self.assertEqual(ns["clip_limit"]("S4", by_key[key]), 9 * ns["clip_limit"]("S2", by_key["qwen3"]))
+        self.assertEqual(ns["clip_limit"]("S2"), ns["TIMEOUT"])
+
+    def precheck_with(self, only, packages_listed=True):
+        ns = runner()
+        ns["ONLY"], ns["ON_TARGET"] = only, True
+        ready = Path(tempfile.mkdtemp()) / "hub-ready.json"
+        ready.write_text(json.dumps({"version": "0.6.131"}))
+        ns["READY"] = ready
+        packs = [{"package_id": m["pkg"], "files_state": "files_verified", "dispatch_state": "eligible"} for m in ns["MODELS"]] if packages_listed else []
+        answers = {"/api/hub/model-health": {"models": []}, "/api/hub/model-packages": {"models": packs},
+                   "/studio/voice/api/voices": {"voices": [{"id": i} for _, i, _ in ns["VOICES"]]}}
+        ns["hub_get"] = lambda path, timeout=30: answers[path]
+        return ns
+
+    def test_precheck_picks_the_five_by_default_and_the_fish_models_only_when_named(self):
+        self.assertEqual([m["key"] for m in self.precheck_with(None)["precheck"]()[1]], ["qwen3", "qwen3-4bit", "voxcpm2", "omnivoice", "breeze"])
+        self.assertEqual([m["key"] for m in self.precheck_with(["fish4", "fish8", "fishbf16"])["precheck"]()[1]], ["fish4", "fish8", "fishbf16"])
+
+    def test_a_missing_fish_package_points_at_the_wrapper_not_the_copy_step(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            self.precheck_with(["fishbf16"], packages_listed=False)["precheck"]()
+        self.assertIn("RUN-16GB-FISH.command", err.getvalue())
+
+    def test_the_target_size_decides_who_is_on_target_and_every_label_says_the_real_size(self):
+        def on_target(gib, *args):
+            ns = {"__name__": "tts8"}
+            with mock.patch.object(sys, "argv", ["x", str(QUAL), "/nonexistent.app", *args]), \
+                    mock.patch("subprocess.run", lambda cmd, **kw: types.SimpleNamespace(stdout=str(int(gib * 1073741824)) if "hw.memsize" in cmd else "")):
+                exec(compile(program(), "eight-gb-tts-run", "exec"), ns)
+            return ns["ON_TARGET"], ns["MAC"], ns["TARGET_GB"]
+        self.assertEqual(on_target(8), (True, "8 GB Mac", 8))
+        self.assertEqual(on_target(16), (False, "16 GB Mac", 8), "a 16 GB Mac is not 8 GB evidence")
+        self.assertEqual(on_target(16, "--target-gb", "16"), (True, "16 GB Mac", 16))
+        self.assertEqual(on_target(32, "--target-gb=16")[0], False)
 
 
 NOTE = "voice: waiting for memory: needs ~3.2GB, ~3.0GB free"   # the Hub's own admission reason (broker._memory_gate)
@@ -113,7 +174,7 @@ class MemoryStallTests(unittest.TestCase):
         self.assertIsNone(ns["memory_wait"]("voice: needs a ~16GB machine; this one has 8GB"))
         self.assertIsNone(ns["memory_wait"](None))
 
-    def fake_hub(self, stalled, admission=False, was=None, crash_while_relaxed=False, restore_file=None, hung=(), broken=()):
+    def fake_hub(self, stalled, admission=False, was=None, crash_while_relaxed=False, restore_file=None, hung=(), broken=(), total=8.0):
         """A Hub whose `stalled` models stay queued behind the memory guard until the operator override lowers it.
         `admission=False` is a Hub older than 0.6.125 (no override route); `was` is an override already in force."""
         wav = io.BytesIO()
@@ -129,7 +190,7 @@ class MemoryStallTests(unittest.TestCase):
                 if method == "GET":
                     o = log["override"]
                     return 200, {"overridden": bool(o), "effective_min_free_memory_gb": o["free"] if o else 3.2,
-                                 "effective_min_total_memory_gb": o["total"] if o else 8.0}
+                                 "effective_min_total_memory_gb": o["total"] if o else total}
                 log["puts"].append((body["model"], body["min_free_memory_gb"], body.get("min_total_memory_gb")))
                 if body["min_free_memory_gb"] is not None and restore_file:   # what a crash right now would leave behind
                     log["file_at_lowering"] = json.loads(Path(restore_file).read_text())
@@ -294,7 +355,7 @@ class SsdWearParsingTests(unittest.TestCase):
 class BypassTests(unittest.TestCase):
     """The guard is bypassed at once, nothing waits or aborts for swap, a hung or dead model is recorded and skipped, and the guard is put back."""
 
-    def run_main(self, hub_kwargs, swap=None, models=("qwen3", "voxcpm2"), timeout=None, with_s4=False):
+    def run_main(self, hub_kwargs, swap=None, models=("qwen3", "voxcpm2"), timeout=None, with_s4=False, patch=None):
         ns = runner()
         call, log = MemoryStallTests.fake_hub(self, {QWEN}, restore_file=ns["RESTORE"], **hub_kwargs)
         chosen = [m for m in ns["MODELS"] if m["key"] in models]
@@ -305,6 +366,7 @@ class BypassTests(unittest.TestCase):
                   precheck=lambda: ("0.6.125", chosen, {"S2": "hello", "S4": "hello"}))
         if timeout is not None:
             ns["TIMEOUT"] = timeout
+        ns.update(patch or {})
         status = "not run"
         with mock.patch.dict("os.environ", {"TTS8_OUT": out}), contextlib.redirect_stdout(io.StringIO()):
             try:
@@ -471,3 +533,142 @@ Pages occupied by compressor:                  87916.
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SixteenGbFishTests(BypassTests):
+    """Fish on a 16 GB Mac: labelled 16 GB, its 24/32 GB memory tier bypassed with the free-memory floor and both put back."""
+    ON_16 = {"RAM_GB": 16.0, "MEM_BYTES": 16 * 1073741824, "MAC_GB": 16, "MAC": "16 GB Mac", "TARGET_GB": 16, "ON_TARGET": True}
+
+    def test_a_16gb_run_says_16gb_everywhere_and_a_fish_clip_may_run_24_minutes(self):
+        ns, log, rows, summary, status = self.run_main({"admission": True, "total": 24.0}, models=("fish4", "fish8", "fishbf16"), patch=self.ON_16)
+        self.assertEqual(status, 0)
+        self.assertEqual([r["status"] for r in rows], ["completed"] * 6)
+        self.assertIn("FITS WITH THE GUARD BYPASSED", summary)
+        self.assertIn("Measured on this 16 GB Mac", summary)
+        self.assertNotRegex(summary, r"(?<![\d.])8 GB (Mac|evidence)|not 8 GB")
+        self.assertNotIn("not 16 GB", summary)
+        self.assertTrue(all("16 GB Mac" in r["source"] for r in rows))
+        self.assertEqual({r["model"] for r in rows}, {"Fish Audio S2 Pro"})
+        self.assertEqual([r["quant"] for r in rows][::2], ["4bit", "8bit", "bf16"])
+
+    def test_the_results_folder_names_the_mac_it_ran_on(self):
+        ns = runner()
+        call, log = MemoryStallTests.fake_hub(self, set(), admission=True)
+        out = tempfile.mkdtemp()
+        ns.update(self.ON_16, call=call, QUICK=False, ONLY=None, voice_pids=lambda rows: [1], pressure_level=lambda: 1, footprint=lambda pid: (1e9, 1e9),
+                  swap_gb=lambda: 0.0, precheck=lambda: ("0.6.131", [m for m in ns["MODELS"] if m["key"] == "fish4"], {"S2": "hi", "S4": "hi"}))
+        with mock.patch.dict("os.environ", {"TTS8_OUT": out}), contextlib.redirect_stdout(io.StringIO()):
+            ns["main"]()
+        self.assertTrue(next(Path(out).iterdir()).name.startswith("TTS 16GB Run "))
+
+    def test_a_not_16gb_mac_says_so_in_the_summary(self):
+        ns, log, rows, summary, status = self.run_main({"admission": True}, models=("fish4",), patch={**self.ON_16, "ON_TARGET": False, "RAM_GB": 32.0, "MAC": "32 GB Mac"})
+        self.assertIn("NOT 16 GB evidence", summary)
+        self.assertIn("Measured on this 32 GB Mac", summary)
+        self.assertIn("not 16 GB evidence", summary)
+
+    def test_a_hub_that_cannot_bypass_still_gets_a_16gb_verdict(self):
+        ns, log, rows, summary, status = self.run_main({"admission": False}, models=("fish4",), patch=self.ON_16)
+        self.assertIn("fits this 16 GB Mac", summary)
+
+    def test_a_model_above_this_macs_memory_has_its_total_tier_bypassed_and_both_numbers_are_put_back(self):
+        ns, log, rows, summary, status = self.run_main({"admission": True, "total": 24.0}, models=("fish8",), patch=self.ON_16)
+        self.assertEqual(status, 0)
+        self.assertEqual(log["puts"][0], ("mlx-community/fish-audio-s2-pro-8bit", 0.0, 0.0), "free floor and the 24 GB tier both lowered")
+        self.assertEqual(log["puts"][-1], ("mlx-community/fish-audio-s2-pro-8bit", None, None), "the Hub's own free floor and tier restored")
+        self.assertIsNone(log["override"], "the Hub's own requirement is back")
+
+    def test_a_tier_that_fits_this_mac_is_left_alone(self):
+        ns, log, rows, summary, status = self.run_main({"admission": True, "total": 16.0}, models=("fish4",), patch=self.ON_16)
+        self.assertEqual(log["puts"][0], ("majentik/fishaudio-s2-pro-MLX-4bit", 0.0, 16.0))
+
+
+class ImportKitPackagesTests(unittest.TestCase):
+    """The 16 GB wrapper's first step: exactly the named packages, from the kit, through the app's own import code."""
+    REV = "a" * 40
+
+    def setUp(self):
+        import hashlib
+        import importlib.util
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name).resolve()
+        self.app, self.kit, self.library = root / "Studio Hub.app", root / "kit", root / "library"
+        res = self.app / "Contents/Resources"
+        (res / "components").mkdir(parents=True)
+        (res / "components" / "model_packages.py").symlink_to(ROOT / "components" / "model_packages.py")
+        (res / "model-manifests").mkdir()
+        self.library.mkdir()
+        data = b"fish weights"
+        for package in ("fish-test-4bit", "fish-test-bf16"):
+            manifest = {"schema_version": 1, "package_id": package, "model_id": "owner/" + package, "revision": self.REV, "engine": "voice-mlx",
+                        "minimum_macos": "14.0", "requires_packages": [],
+                        "files": [{"path": "model/w.bin", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "urls": []}]}
+            (res / "model-manifests" / f"{package}.json").write_text(json.dumps(manifest))
+            folder = self.kit / "model-library" / package / self.REV / "model"
+            folder.mkdir(parents=True)
+            (folder / "w.bin").write_bytes(data)
+        spec = importlib.util.spec_from_file_location("import_kit_packages", QUAL / "import_kit_packages.py")
+        self.tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.tool)
+
+    def hub(self, path):
+        """A running Hub's read-only view: a package is 'files_verified' once its folder is in the library."""
+        rows = [{"package_id": p, "files_state": "files_verified" if (self.library / p / self.REV).is_dir() else "not_installed",
+                 "folder": str(self.library / p / self.REV) if (self.library / p / self.REV).is_dir() else None}
+                for p in ("fish-test-4bit", "fish-test-bf16")]
+        return {"models": rows}
+
+    def run_tool(self, *packages, hub=None):
+        out = io.StringIO()
+        with mock.patch.dict("os.environ", {"STUDIOHUB_MODELS_DIR": str(self.library)}), contextlib.redirect_stdout(out):
+            status = self.tool.main(["--app", str(self.app), "--kit", str(self.kit), "--packages", ",".join(packages)], hub=hub or self.hub)
+        return status, out.getvalue()
+
+    def test_it_imports_exactly_the_named_packages_and_says_what_it_copied_then_a_second_run_copies_nothing(self):
+        status, out = self.run_tool("fish-test-bf16")
+        self.assertEqual(status, 0, out)
+        self.assertTrue((self.library / "fish-test-bf16" / self.REV / "model" / "w.bin").is_file())
+        self.assertFalse((self.library / "fish-test-4bit").exists(), "only what was named")
+        self.assertIn("Copied from the kit to this Mac: fish-test-bf16", out)
+        self.assertIn("fish-test-bf16", json.loads((self.library / ".studiohub" / "installed.json").read_text()), "the Hub's own receipt")
+        status, out = self.run_tool("fish-test-bf16", "fish-test-4bit")
+        self.assertEqual(status, 0, out)
+        self.assertIn("already here, verified: fish-test-bf16", out)
+        self.assertIn("Copied from the kit to this Mac: fish-test-4bit", out)
+
+    def test_a_package_the_kit_does_not_carry_is_a_named_problem_not_a_crash(self):
+        import shutil
+        shutil.rmtree(self.kit / "model-library" / "fish-test-bf16")
+        status, out = self.run_tool("fish-test-bf16", "no-such-package")
+        self.assertEqual(status, 3)
+        self.assertIn("PROBLEM: fish-test-bf16: not on this SSD", out)
+        self.assertIn("PROBLEM: no-such-package: this Studio Hub does not know the package", out)
+
+    def test_a_corrupt_kit_file_is_refused_by_the_hubs_own_check_and_nothing_is_published(self):
+        (self.kit / "model-library" / "fish-test-bf16" / self.REV / "model" / "w.bin").write_bytes(b"damaged!!!!")
+        status, out = self.run_tool("fish-test-bf16")
+        self.assertEqual(status, 3)
+        self.assertIn("the import refused it", out)
+        self.assertFalse((self.library / "fish-test-bf16").exists())
+
+    def test_no_running_hub_means_nothing_is_copied(self):
+        status, out = self.run_tool("fish-test-bf16", hub=lambda path: None)
+        self.assertEqual(status, 3)
+        self.assertIn("Studio Hub is not running", out)
+        self.assertFalse((self.library / "fish-test-bf16").exists())
+
+    def test_it_stops_before_copying_when_the_disk_would_run_short(self):
+        with mock.patch.object(self.tool.shutil, "disk_usage", lambda p: types.SimpleNamespace(free=1000)):
+            status, out = self.run_tool("fish-test-bf16")
+        self.assertEqual(status, 3)
+        self.assertIn("not enough disk space", out)
+        self.assertFalse((self.library / "fish-test-bf16").exists())
+
+    def test_the_library_is_the_one_the_running_hub_reports(self):
+        elsewhere = self.library.parent / "hub-library"
+        (elsewhere / "fish-test-4bit" / self.REV).mkdir(parents=True)
+        rows = [{"package_id": "fish-test-4bit", "files_state": "files_verified", "folder": str(elsewhere / "fish-test-4bit" / self.REV)}]
+        self.assertEqual(self.tool.library_of(rows), elsewhere)
+        self.assertIsNone(self.tool.library_of([{"folder": None}, {}]))
+

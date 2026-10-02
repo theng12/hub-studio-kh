@@ -13,7 +13,7 @@ can be laid beside the 32 GB Mac's. Labels: **[M]** measured, **[I]** inference.
    the script (or send the whole folder back).
 
 Keep `RUN-8GB-TTS.command`, `eight-gb-tts-run.sh`, `ssd_wear.py`, `tts-script-S2.txt` and `tts-script-S4.txt` together
-(the kit's Technical folder has all five). If Finder refuses the double-click ("unidentified
+(the kit's Technical folder has all five; the Fish test also needs `RUN-16GB-FISH.command` and `import_kit_packages.py`). If Finder refuses the double-click ("unidentified
 developer"), right-click it > Open, once.
 
 ## What it does now (short version)
@@ -128,3 +128,30 @@ Settings (all optional, set in Terminal before the command): `TTS8_TIMEOUT=480` 
 only matters on a Hub older than 0.6.125 that cannot bypass: a job held for memory that long is recorded `did not start`.
 
 Note: the Hub keeps the audio of each job like any other job and cleans it by its own retention rule.
+
+## The 16 GB Fish test (`RUN-16GB-FISH.command`)
+
+The same measurement for **Fish Audio S2 Pro 4-bit, 8-bit and bf16** on a **16 GB Mac** (the new M4 Mac mini). Same two voices, same
+short text (S2), one clip at a time, in that order. Everything above applies (the Hub's free-memory guard is bypassed for each model and put
+back afterwards, nothing is stopped for swap, peak memory used and "Started with N GB free" are reported, SSD writes are recorded); what differs:
+
+1. **Double-click `RUN-16GB-FISH.command`** (same `Technical` folder, same prerequisites: Studio Hub 0.6.125+ open, other apps closed, on power).
+   It refuses on a Mac that is not 16 GB (before copying anything).
+2. **It first puts the three packages on that Mac.** Fish bf16 is shelved and 8-bit is 24 GB-tier, so the kit's copy step ("2 - Copy the models") does
+   not carry them to a 16 GB Mac. `import_kit_packages.py` (beside it) imports exactly `fish-audio-s2-pro-4bit`, `-8bit` and `-bf16` from the kit's
+   `model-library` into the library the running Hub uses, through the Hub's own import code (`model_packages.import_folder`: every file is checked against the
+   manifest while it is copied), skips any the Hub already reads as verified, stops first if the disk would drop below 5 GB free, and prints what it
+   copied (about 22 GB the first time; a second run copies nothing). It never starts a Hub and never touches another library.
+3. **Fish gets 3x the time limit**: 24 minutes per clip instead of 8 (Fish runs at about 2-4x real time on the 32 GB Mac, slower on 16 GB). A clip that is still
+   going then is cancelled and written down as "timed out", and the next model goes on. Expect 30 to 90 minutes.
+4. **The labels say "16 GB Mac".** The results folder is `TTS 16GB Run <date-time>`, the summary says "fits this 16 GB Mac" and "Measured on this 16 GB Mac".
+   On a Mac of another size the folder carries that size and the summary says it is not 16 GB evidence.
+5. **The 3-minute text is opt-in**, as for 8 GB: in Terminal, `bash RUN-16GB-FISH.command --with-s4` (limit 72 minutes per clip; very slow).
+6. **The Hub's own memory tier is bypassed too.** Fish 8-bit is declared 24 GB and bf16 32 GB, which a 16 GB Mac is below; the scheduler would not even try them. For
+   each model the runner lowers both the free-memory requirement (to 0) and, when it is above this Mac's memory, the total-memory tier, then puts both back.
+
+A Mac that is not marked "keep all models" moves a shelved model (Fish bf16) into the Hub's Trash Folder the next time Studio Hub **starts** (kept 15 days; nothing is
+deleted), so run the test straight after the copy with the Hub left open, as the wrapper does. Without the wrapper, in Terminal in the `Technical` folder:
+`bash eight-gb-tts-run.sh --models fish4,fish8,fishbf16 --target-gb 16` (the three packages must already be on the Mac). No 32 GB reference time is used for Fish
+(the 32 GB samples were taken under heavy load), so no Fish clip is flagged "slow".
+

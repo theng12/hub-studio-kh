@@ -1,11 +1,13 @@
 #!/bin/bash
 # Text-to-speech on an 8 GB Mac: Qwen3-TTS 0.6B 8-bit and 4-bit, VoxCPM2 4-bit, OmniVoice bf16, Breeze TTS 2 4-bit.
+# (And, on request, on a 16 GB Mac: Fish Audio S2 Pro 4-bit, 8-bit and bf16 - see --models fish4,fish8,fishbf16 below.)
 #
 #   bash eight-gb-tts-run.sh                 the test (two voices x the short text S2, every model below; guard bypassed)
 #   bash eight-gb-tts-run.sh --with-s4       also the 3-minute text S4 (slow: can take hours on 8 GB)
 #   bash eight-gb-tts-run.sh --quick         a short check (S2, Chris only) - the script's own self-test
-#   bash eight-gb-tts-run.sh --models qwen3,voxcpm2   only these (qwen3, qwen3-4bit, voxcpm2, omnivoice, breeze)
-#   bash eight-gb-tts-run.sh --allow-non-target       run the full test on a Mac that is not 8 GB
+#   bash eight-gb-tts-run.sh --models qwen3,voxcpm2   only these (qwen3, qwen3-4bit, voxcpm2, omnivoice, breeze; fish4, fish8, fishbf16)
+#   bash eight-gb-tts-run.sh --models fish4,fish8,fishbf16 --target-gb 16   the 16 GB Fish test (RUN-16GB-FISH.command does this)
+#   bash eight-gb-tts-run.sh --allow-non-target       run the full test on a Mac that is not the target size (8 GB, or --target-gb N)
 #
 # (Easier: double-click RUN-8GB-TTS.command, which runs this.)
 #
@@ -45,7 +47,11 @@
 # It installs nothing and deletes nothing. It asks the Hub for audio (and keeps the Mac awake while it runs);
 # the only setting it touches is that temporary per-model override. Safe to run again; each run gets its own folder.
 #
-# Nothing to edit. Knobs (all optional): TTS8_TIMEOUT=480 (seconds per short clip; S4 gets 3x), TTS8_RELAX_FREE_GB=0
+# The Fish models are not in the default list (they are 16 GB-tier or bigger; the 8 GB test stays the five above). They are slower, so each
+# Fish clip gets FISH_TIME_FACTOR (3x) the time limit. Every label says the size of the Mac it ran on ("16 GB Mac"), and a result is only
+# "evidence" for the target size (8 GB, or TTS8_TARGET_GB / --target-gb).
+#
+# Nothing to edit. Knobs (all optional): TTS8_TIMEOUT=480 (seconds per short clip; S4 gets 3x), TTS8_TARGET_GB=8 (the Mac size this run is evidence for), TTS8_RELAX_FREE_GB=0
 # (the free-memory requirement while a model is measured), TTS8_S4=1 (also run the 3-minute text), TTS8_MEM_WAIT=300
 # (only for a Hub that cannot bypass), TTS8_OUT=<folder> (where the results folder goes), TTS8_READY_FILE=<hub-ready.json>,
 # TTS8_BASELINE_S=30 (seconds of idle SSD-write sampling before the first clip; 0 skips it), STUDIOHUB_APP=<app>.
@@ -96,9 +102,16 @@ for i, a in enumerate(ARGS):
         ONLY = [x.strip() for x in ARGS[i + 1].split(",") if x.strip()]
     elif a.startswith("--models="):
         ONLY = [x.strip() for x in a.split("=", 1)[1].split(",") if x.strip()]
+TARGET_GB = int(os.environ.get("TTS8_TARGET_GB", "8"))   # the Mac size this run is evidence for (8 for the 8 GB test, 16 for the Fish test)
+for i, a in enumerate(ARGS):
+    if a == "--target-gb" and i + 1 < len(ARGS) and ARGS[i + 1].isdigit():
+        TARGET_GB = int(ARGS[i + 1])
+    elif a.startswith("--target-gb=") and a.split("=", 1)[1].isdigit():
+        TARGET_GB = int(a.split("=", 1)[1])
 WITH_S4 = "--with-s4" in ARGS or os.environ.get("TTS8_S4") == "1"   # the 3-minute text is opt-in: on 8 GB it can run for hours
 TIMEOUT = float(os.environ.get("TTS8_TIMEOUT", "480"))   # hard wall-clock limit for a short clip; the 3-minute text gets S4_FACTOR times this
 S4_FACTOR = 3.0
+FISH_TIME_FACTOR = 3.0   # Fish S2 Pro runs at 2-4x real time on the 32 GB Mac (130-290 s for the short text, 400-950 s for S4), slower still on 16 GB
 MEM_WAIT_S = float(os.environ.get("TTS8_MEM_WAIT", "300"))   # only on a Hub that cannot bypass: a job held for memory this long is given up on
 RELAX_GB = float(os.environ.get("TTS8_RELAX_FREE_GB", "0"))  # the free-memory requirement while a model is measured (0 = guard bypassed)
 MIN_VERSION = (0, 6, 125)   # the per-model override route (the bypass) arrived in 0.6.125
@@ -121,6 +134,15 @@ MODELS = [
     # 8 GB Mac by itself; it is in this list because the owner asked for it to be measured. No 32 GB reference time.
     dict(key="breeze", name="Breeze TTS 2 4-bit", csv_model="Breeze TTS 2", quant="4bit",
          pkg="breeze-tts-2-mlx-4bit", repo="mlx-community/Breeze-TTS-2-mlx-4bit"),
+    # Fish Audio S2 Pro: opt-in (only with --models), never in the 8 GB default list. The manifests' memory tiers are 16 / 24 / 32 GB and bf16 is
+    # shelved (the kit's copy step does not put it on a Mac), so RUN-16GB-FISH.command imports all three from the kit before this runs.
+    # No 32 GB reference time: the 32 GB samples were taken under heavy load, so no Fish clip is ever flagged "slow" against one.
+    dict(key="fish4", name="Fish Audio S2 Pro 4-bit", csv_model="Fish Audio S2 Pro", quant="4bit", opt_in=True, time_factor=FISH_TIME_FACTOR,
+         pkg="fish-audio-s2-pro-4bit", repo="majentik/fishaudio-s2-pro-MLX-4bit"),
+    dict(key="fish8", name="Fish Audio S2 Pro 8-bit", csv_model="Fish Audio S2 Pro", quant="8bit", opt_in=True, time_factor=FISH_TIME_FACTOR,
+         pkg="fish-audio-s2-pro-8bit", repo="mlx-community/fish-audio-s2-pro-8bit"),
+    dict(key="fishbf16", name="Fish Audio S2 Pro bf16", csv_model="Fish Audio S2 Pro", quant="bf16", opt_in=True, time_factor=FISH_TIME_FACTOR,
+         pkg="fish-audio-s2-pro-bf16", repo="mlx-community/fish-audio-s2-pro-bf16"),
 ]
 VOICES = [("chris", "cd07b21a2ccf", "Chris - Soft and Soothing"),
           ("christian", "0616aec33b41", "Christian - Slow & Calming")]
@@ -167,7 +189,11 @@ MEM_BYTES = int((run(["sysctl", "-n", "hw.memsize"]).strip() or 0))
 RAM_GB = round(MEM_BYTES / 1073741824, 1) if MEM_BYTES else None
 OSV = run(["sw_vers", "-productVersion"]).strip() or "unknown"
 CHIP = run(["sysctl", "-n", "machdep.cpu.brand_string"]).strip() or run(["sysctl", "-n", "hw.model"]).strip() or "unknown"
-ON_TARGET = bool(MEM_BYTES) and MEM_BYTES <= 9 * 1073741824
+GIB = MEM_BYTES / 1073741824
+# On target: an 8 GB test accepts up to 9 GiB (as always); any other target accepts within 1 GiB of it.
+ON_TARGET = bool(MEM_BYTES) and GIB <= TARGET_GB + 1 and (TARGET_GB <= 8 or GIB >= TARGET_GB - 1)
+MAC_GB = round(GIB) if MEM_BYTES else TARGET_GB
+MAC = f"{MAC_GB} GB Mac"   # what this Mac IS, in every label: a run on a 16 GB Mac never says "8 GB"
 
 def swap_gb():
     m = re.search(r"used = ([\d.]+)([MG])", run(["sysctl", "-n", "vm.swapusage"]))
@@ -324,7 +350,10 @@ class Guard:
                if d.get("overridden") else None)
         self.active[repo] = was
         self._save()   # written BEFORE the Hub changes, so a crash right after still knows what to put back
-        if self._put(repo, RELAX_GB, d["effective_min_total_memory_gb"]):
+        total = d["effective_min_total_memory_gb"]
+        if RAM_GB and total and total > RAM_GB:
+            total = 0.0   # a model whose memory TIER is above this Mac (Fish 8-bit 24 GB, bf16 32 GB on a 16 GB Mac): the Hub would not even try it
+        if self._put(repo, RELAX_GB, total):
             return True
         self.active.pop(repo, None); self._save()
         return False
@@ -389,11 +418,11 @@ def wait_idle(max_wait=1800):
 # ---------------------------------------------------------------- pre-checks
 def precheck():
     if not ON_TARGET and not QUICK and not ALLOW_NON_TARGET:
-        stop(4, f"this Mac has {RAM_GB} GB of memory, and this test is about 8 GB Macs.",
-             "On a bigger Mac the system has room to spare, so the memory numbers would describe this Mac, not an 8 GB one.",
-             "", "  - Run it on the 8 GB Mac - that is the whole point.",
+        stop(4, f"this Mac has {RAM_GB} GB of memory, and this test is about {TARGET_GB} GB Macs.",
+             f"On a different-sized Mac the memory numbers would describe this Mac, not a {TARGET_GB} GB one.",
+             "", f"  - Run it on the {TARGET_GB} GB Mac - that is the whole point.",
              "  - A short self-check on this Mac:   bash eight-gb-tts-run.sh --quick",
-             "  - Run the full test here anyway (the summary will say it is not 8 GB evidence):",
+             f"  - Run the full test here anyway (the summary will say it is not {TARGET_GB} GB evidence):",
              "        bash eight-gb-tts-run.sh --allow-non-target")
     try:
         d = json.loads(READY.read_text())
@@ -406,7 +435,7 @@ def precheck():
     if ver_tuple(hub_ver) < MIN_VERSION:
         stop(3, f"the Studio Hub running here is version {hub_ver}; this test needs 0.6.125 or later (it bypasses the memory guard through a route that arrived in 0.6.125).",
              "Update this Mac from the kit (double-click 'Update this Mac'), open Studio Hub, then run this again.")
-    models = [m for m in MODELS if ONLY is None or m["key"] in ONLY]
+    models = [m for m in MODELS if (m["key"] in ONLY if ONLY is not None else not m.get("opt_in"))]
     if not models:
         stop(3, "--models named no known model.", "Use any of: " + ", ".join(m["key"] for m in MODELS))
     packs = {p.get("package_id"): p for p in (hub_get("/api/hub/model-packages") or {}).get("models", [])}
@@ -423,8 +452,11 @@ def precheck():
         if not bad and h.get("state") not in (None, "ready"):
             say(f"  Note: the Hub reports {m['name']} as '{h.get('state')}' ({h.get('reason') or 'no reason given'}).")
     if bad:
-        stop(3, "a model this test needs is missing or not verified on this Mac.", *bad, "",
-             "The kit's copy step puts these in place: double-click '2 - Copy the models' (or 'Update this Mac') from the kit,",
+        hint = (["The Fish models are 16 GB-tier or bigger (bf16 is shelved), so the kit's copy step does not put them on a Mac. Double-click",
+                 "RUN-16GB-FISH.command from the kit's Technical folder: it imports exactly these three from the kit first."]
+                if any(m.get("opt_in") for m in models) else
+                ["The kit's copy step puts these in place: double-click '2 - Copy the models' (or 'Update this Mac') from the kit,"])
+        stop(3, "a model this test needs is missing or not verified on this Mac.", *bad, "", *hint,
              "then open Studio Hub > Models and let it finish checking them. This test never copies or repairs anything itself.")
     voices = {v.get("id"): v for v in (hub_get("/studio/voice/api/voices") or {}).get("voices", [])}
     missing = [f"{n} ({i})" for _, i, n in VOICES if i not in voices]
@@ -525,8 +557,9 @@ def wav_seconds(b):
 def err_text(e):
     return re.sub(r"\s+", " ", e if isinstance(e, str) else json.dumps(e) if e else "")[:300]
 
-def clip_limit(script_key):
-    return TIMEOUT * (S4_FACTOR if script_key == "S4" else 1.0)
+def clip_limit(script_key, model=None):
+    """Hard wall-clock limit for one clip: TIMEOUT, x3 for the 3-minute text, x the model's own factor (Fish is slower)."""
+    return TIMEOUT * (model or {}).get("time_factor", 1.0) * (S4_FACTOR if script_key == "S4" else 1.0)
 
 def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
     vkey, vid, _ = voice
@@ -535,7 +568,7 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
     rec = {"model": model["csv_model"], "quant": model["quant"], "voice": vkey, "script": script_key,
            "file": wav.name, "machine_ram_gb": RAM_GB, "macos_version": OSV, "app_version": ctx["hub_ver"], "chip": CHIP,
            "ref_32gb_seconds": ref if ref is not None else "", "cold_start": "yes" if cold else "no",
-           "source": f"Hub {ctx['hub_ver']}, worker process-tree footprint (sampled every 1 s), 8 GB test script",
+           "source": f"Hub {ctx['hub_ver']}, worker process-tree footprint (sampled every 1 s), TTS runner script on a {MAC}",
            "guard_relaxed": "yes" if relaxed else "no", "override_used_gb": RELAX_GB if relaxed else "",
            "hub_free_floor_gb": ctx.get("floors", {}).get(model["repo"], "")}
     if not wait_idle():
@@ -557,10 +590,10 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
     sampler = Sampler(); sampler.start()
     t0 = time.time(); bid = None; state = None; item = {}; batch = {}; poll_max = 0.0; down_since = None
     mem_since = None; mem_need = None; hub_note = ""; restarts = 0; was_running = False
-    limit = clip_limit(script_key)
+    limit = clip_limit(script_key, model)
     try:
-        env = {"modality": "voice", "model": model["repo"], "label": "tts-8gb-run", "voice_library_id": vid,
-               "clientRequestId": "tts-8gb-" + uuid.uuid4().hex[:12],
+        env = {"modality": "voice", "model": model["repo"], "label": f"tts-{MAC_GB}gb-run", "voice_library_id": vid,
+               "clientRequestId": f"tts-{MAC_GB}gb-" + uuid.uuid4().hex[:12],
                "items": [{"text": text, "seed": 1234, "params": {}}]}
         s, r = call("POST", "/api/hub/jobs", env)
         if s != 200:
@@ -685,7 +718,7 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
     lines = [title, f"This Mac: {CHIP}, {RAM_GB} GB memory, macOS {OSV}, Studio Hub {hub_ver}",
              f"Run started {started}." + ("" if finished_all else " THE RUN WAS STOPPED EARLY - clips not listed were never run.")]
     if not ON_TARGET:
-        lines.append(f"NOTE: this Mac has {RAM_GB} GB, not 8 GB. The numbers are real but are NOT 8 GB evidence.")
+        lines.append(f"NOTE: this Mac has {RAM_GB} GB, not {TARGET_GB} GB. The numbers are real but are NOT {TARGET_GB} GB evidence.")
     if QUICK:
         lines.append("NOTE: quick check (S2, Chris only, one clip per model). It proves the script works; it is not the full test.")
     lines.append("")
@@ -742,15 +775,15 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
         elif slow or stalled or level >= 4 or grow > 2:
             verdict = "completed but strained this Mac"
         else:
-            verdict = "fits" + (" 8 GB" if ON_TARGET else " this Mac (not 8 GB)")
+            verdict = "fits" + (f" this {MAC}" if ON_TARGET else f" this Mac (not {TARGET_GB} GB)")
         lines.append(f"{m['name']}: {', '.join(facts)} -> {verdict}")
         if done and measured:
             # Two different numbers, never one line: the PEAK is what the worker then used; the FREE memory at the start is what
             # the Hub needed to see before it began (its floor). Mixing them is how a floor was once set to peak + margin.
             started = [v for v in (fnum(r.get("free_gb_before")) for r in done) if v is not None]
             lines.append(f"    Peak memory used: {measured:.2f} GB (the worker's footprint at its highest while generating - memory USED, not the free memory "
-                         f"needed to start). Measured on this {RAM_GB} GB Mac, in this run only"
-                         + ("" if ON_TARGET else " - and it is not an 8 GB Mac, so not 8 GB evidence") + ".")
+                         f"needed to start). Measured on this {MAC}, in this run only"
+                         + ("" if ON_TARGET else f" - and it is not a {TARGET_GB} GB Mac, so not {TARGET_GB} GB evidence") + ".")
             if started:
                 lines.append(f"    Started with {min(started):.1f} GB free" + (f" (lowest of {len(started)} clips; highest {max(started):.1f} GB)" if len(started) > 1 else "")
                              + f", as the Hub counts it just before each clip. The Hub's free-memory floor for this model is {floor or 'not recorded'} GB: "
@@ -794,7 +827,7 @@ def main():
     jobs = [(m, v, s) for m in models for v in voices for s in scripts]
     ref_total = sum(REF32.get((m["key"], v[0], s[0]), 0) for m, v, s in jobs)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    name = ("TTS 8GB Quick Check " if QUICK else "TTS 8GB Run ") + stamp
+    name = (f"TTS {MAC_GB}GB Quick Check " if QUICK else f"TTS {MAC_GB}GB Run ") + stamp
     for base in [Path(os.environ["TTS8_OUT"])] if os.environ.get("TTS8_OUT") else [HERE, Path.home() / "Desktop"]:
         try:
             out = base / name; (out).mkdir(parents=True)
@@ -831,9 +864,11 @@ def main():
         say("")
     say(f"{len(jobs)} clip(s), one at a time" + ("" if WITH_S4 or QUICK else " (the 3-minute text is off; --with-s4 adds it)")
         + f". The 32 GB Mac needed about {max(ref_total / 60, 1):.0f} minute(s) of generation for the same work.")
-    worst = sum(clip_limit(s[0]) for s in scripts) / 60 * len(models)   # one clip per model can time out, then the model's others are skipped
+    worst = sum(clip_limit(s[0], m) for m in models for s in scripts) / 60   # one clip per model can time out, then the model's others are skipped
     say(f"The Hub's free-memory guard is bypassed for each model while it is measured (put back afterwards); nothing is aborted for swap.")
-    say(f"Every clip is stopped after {TIMEOUT / 60:g} min" + (f" ({TIMEOUT * S4_FACTOR / 60:g} min for the 3-minute text)" if WITH_S4 and not QUICK else "")
+    limits = sorted({clip_limit("S2", m) for m in models})
+    say("Every clip is stopped after " + " / ".join(f"{t / 60:g}" for t in limits) + " min" + (" (Fish gets longer: it is slower)" if len(limits) > 1 else "")
+        + (f" ({TIMEOUT * S4_FACTOR / 60:g} min x the model's factor for the 3-minute text)" if WITH_S4 and not QUICK else "")
         + f"; a model whose clip times out or crashes is skipped and the next model goes on. At worst about {worst:.0f} minutes.")
     if QUICK:
         say("expect a few minutes here, mostly loading each model.")
