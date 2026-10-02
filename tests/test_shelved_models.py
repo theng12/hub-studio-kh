@@ -67,6 +67,36 @@ class ListTests(unittest.TestCase):
         self.assertFalse(retired_models.is_retired(*shelved_models.SHELVED_MODELS))
 
 
+class ReceiptTests(unittest.TestCase):
+    def _library(self, root):
+        state = root / ".studiohub"
+        state.mkdir(parents=True, mode=0o700)
+        os.chmod(state, 0o700)
+        names = ("whisper-base", "whisper-turbo")
+        (state / "installed.json").write_text(json.dumps(
+            {n: {"revision": "r", "folder": f"{n}/r", "files": {}} for n in names}, sort_keys=True))
+        for name in names:
+            (root / name / "r").mkdir(parents=True)
+        return state / "installed.json"
+
+    def test_a_shelved_package_leaves_installed_json_with_its_folder(self):
+        catalog = {m["package_id"]: m for m in manifests()}
+        with TemporaryDirectory() as tmp:
+            library, trash = Path(tmp) / "lib", Path(tmp) / "trash"
+            index = self._library(library)
+            moved = shelved_models.shelve_installed(library, catalog.values(), trash, keep_all=True)
+            self.assertEqual((moved, sorted(json.loads(index.read_text()))), ([], ["whisper-base", "whisper-turbo"]),
+                             "a keep-all Mac moves nothing and keeps every receipt")
+            moved = shelved_models.shelve_installed(library, catalog.values(), trash, keep_all=False)
+            self.assertEqual(moved, ["whisper-base"])
+            self.assertEqual(sorted(json.loads(index.read_text())), ["whisper-turbo"])
+            self.assertEqual(os.stat(index).st_mode & 0o777, 0o600)
+            # A package that failed to move (its folder is still there) keeps its receipt.
+            (library / "whisper-small" / "r").mkdir(parents=True)
+            self.assertEqual(shelved_models.shelve_installed(library, [], trash, keep_all=False), [])
+            self.assertEqual(sorted(json.loads(index.read_text())), ["whisper-turbo"])
+
+
 class KeepAllSettingTests(unittest.TestCase):
     def test_a_literal_true_marks_keep_all_and_damage_fails_safe(self):
         with TemporaryDirectory() as tmp:

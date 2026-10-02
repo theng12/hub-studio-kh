@@ -60,4 +60,20 @@ def retire_installed(library: str | os.PathLike[str], trash_root: str | os.PathL
         except OSError:
             continue
         moved.append(package_id)
+    forget_receipts(library, [i for i in RETIRED_MODELS if "/" not in i and "\\" not in i])
     return moved
+
+
+def forget_receipts(library: str | os.PathLike[str], package_ids) -> list[str]:
+    """Drop the model library's install receipts for packages whose folders are gone (best effort).
+
+    The Trash Folder move leaves a line in ``.studiohub/installed.json`` for bytes nobody will find; the
+    kit tools (verify-kit, the kit manifest) read the whole index and report each as missing files.
+    Runs on every start, not only after a move, so a Mac that already moved a model sheds its receipt too.
+    A busy import lock or an unreadable index is skipped and tried again at the next start.
+    """
+    from components import model_packages
+    try:
+        return model_packages.forget_packages(library, package_ids)
+    except (OSError, model_packages.PackageError):
+        return []

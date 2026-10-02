@@ -91,9 +91,11 @@ def shelve_installed(library: str | os.PathLike[str], manifests, trash_root: str
     if keep_all:
         return []
     when = time.gmtime(time.time() if now is None else float(now))
-    moved = []
+    moved, shelved_ids = [], []
     for manifest in manifests:
         package_id = str(manifest.get("package_id") or "")
+        if package_id and manifest_shelved(manifest) and Path(package_id).name == package_id:
+            shelved_ids.append(package_id)
         folder = Path(library) / package_id
         if (not package_id or not manifest_shelved(manifest) or Path(package_id).name != package_id
                 or folder.is_symlink() or not folder.is_dir()):
@@ -105,4 +107,6 @@ def shelve_installed(library: str | os.PathLike[str], manifests, trash_root: str
         except OSError:
             continue
         moved.append(package_id)
+    from components import retired_models       # lazy: the kit's copy script imports this file by bare name
+    retired_models.forget_receipts(library, shelved_ids)
     return moved
