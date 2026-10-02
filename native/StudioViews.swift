@@ -635,7 +635,6 @@ struct StudioContent: View {
     @State private var loadedAudioJobID: String?
     @State private var historyTab = HistoryTab.all
     @State private var loadingImage = false
-    @State private var revealedToken = false
     @State private var connectionNote: String?
     @State private var controllerDraft = ""
     /// The name being typed. Kept apart from the Hub's answer so the field does not fight the poll.
@@ -4487,7 +4486,7 @@ struct StudioContent: View {
             }
             HubSection("Model downloads") {
                 ValueRow("Hugging Face token", value: workspace.tokenStatus.isSet ? workspace.tokenStatus.masked : "Not configured")
-                SecureField("New access token", text: $hfToken).textFieldStyle(.roundedBorder).frame(maxWidth: 360)
+                SecretInput(placeholder: "New access token", text: $hfToken).frame(maxWidth: 380)
                 Text("For models that require account access. The app shows only the saved token’s masked value.").font(HubType.secondary).foregroundStyle(.secondary)
                 HStack {
                     Button("Test Token") { Task { savingToken = true; defer { savingToken = false }; if let result = await workspace.testHFToken(hfToken) { tokenMessage = "Access verified" + (result.name.map { " for " + $0 } ?? "") } } }.disabled(!connected || hfToken.isEmpty || savingToken || studio.configuration.offline)
@@ -4826,23 +4825,14 @@ struct StudioContent: View {
             // `tests/test_peer_path_contract.py::FleetCredentialWiringTests`. Merging the secrets
             // would give every node (and the Gateway) authority to administer every Mac.
             Text("Give this out").font(HubType.rowTitle)
+            // Both tokens are masked until the eye is pressed; Copy works without showing them.
             ValueRow("Fleet token") {
-                Text(revealedToken ? (studio.fleetToken ?? "Unavailable")
-                                   : (studio.fleetToken.map(NativeWorkspaceStore.maskedToken) ?? "Unavailable"))
-                    .textSelection(.enabled).multilineTextAlignment(.trailing)
-                    .font(HubType.mono)
+                SecretValue(value: studio.fleetToken, copyTitle: "Copy Fleet Token") {
+                    connectionNote = "Fleet token copied"
+                }
             }
-            HStack {
-                Button("Copy Fleet Token") {
-                    if let token = studio.fleetToken {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(token, forType: .string)
-                        connectionNote = "Fleet token copied"
-                    }
-                }.disabled(studio.fleetToken == nil)
-                Text("Give this to GatewayKH so it can send work here and collect the results, and to every Mac that joins this controller. **This is the only token you hand out.**")
-                    .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Give this to GatewayKH so it can send work here and collect the results, and to every Mac that joins this controller. **This is the only token you hand out.**")
+                .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("What it lets the holder do: send work to this Mac, follow that job, download the result, acknowledge it, cancel it or discard an uncertain one, and read the model and fleet lists.")
                 .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("What it cannot do: change this Mac's settings, install or remove its models, delete its output, manage its shared voices, or make a Mac join or leave. A Mac that holds this token still cannot administer this Mac.")
@@ -4852,23 +4842,11 @@ struct StudioContent: View {
             // a joining Mac adopts and what this Mac then presents back to it. Handing a node the
             // Hub token instead would give every node's owner full authority over this Mac.
             ValueRow("Hub token") {
-                Text(revealedToken ? (studio.connectionToken ?? "Unavailable")
-                                   : (studio.connectionToken.map(NativeWorkspaceStore.maskedToken) ?? "Unavailable"))
-                    .textSelection(.enabled).multilineTextAlignment(.trailing)
-                    .font(HubType.mono)
+                SecretValue(value: studio.connectionToken, copyTitle: "Copy Hub Token") {
+                    connectionNote = "Hub token copied"
+                }
             }
-            HStack {
-                Button(revealedToken ? "Hide Token" : "Reveal Token") { revealedToken.toggle() }
-                    .disabled(studio.connectionToken == nil)
-                Button("Copy Hub Token") {
-                    if let token = studio.connectionToken {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(token, forType: .string)
-                        connectionNote = "Hub token copied"
-                    }
-                }.disabled(studio.connectionToken == nil)
-                if let connectionNote { Text(connectionNote).font(HubType.secondary).foregroundStyle(.secondary) }
-            }
+            if let connectionNote { Text(connectionNote).font(HubType.secondary).foregroundStyle(.secondary) }
             Text("Keep this one. It is this Mac's own key — for you, on this Mac — and it never leaves it. Use it to change settings, install or remove models, delete output, and manage shared voices.")
                 .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("Do not give it out. Anyone who holds it can do everything on this Mac. GatewayKH needs it only if it will manage shared voices here — to send work, give it the Fleet token above instead.")
@@ -5013,8 +4991,8 @@ struct StudioContent: View {
                         HStack {
                             TextField("New controller's address, e.g. 100.x.y.z:47873", text: $handoverAddress)
                                 .textFieldStyle(.roundedBorder).frame(maxWidth: 300)
-                            TextField("Its Fleet token", text: $handoverToken)
-                                .textFieldStyle(.roundedBorder).frame(maxWidth: 240)
+                            SecretInput(placeholder: "Its Fleet token", text: $handoverToken)
+                                .frame(maxWidth: 260)
                             Button(workspace.fleetOperationRunning ? "Handing over…" : "Hand over…") {
                                 confirmingHandover = true
                             }
@@ -5054,15 +5032,7 @@ struct StudioContent: View {
             if let token = report.token, report.kind == .rotation {
                 VStack(alignment: .leading, spacing: HubSpace.xs) {
                     Text("New Fleet token — give it to every member and to GatewayKH").font(HubType.caption)
-                    HStack {
-                        Text(token).font(HubType.mono)
-                            .textSelection(.enabled)
-                        Button("Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(token, forType: .string)
-                            connectionNote = "Fleet token copied"
-                        }
-                    }
+                    SecretValue(value: token) { connectionNote = "Fleet token copied" }
                 }
             }
             if !report.followed.isEmpty {
@@ -5903,10 +5873,10 @@ struct StudioContent: View {
             HStack {
                 TextField("100.x.y.z  ·  or a name like mac.tailnet.ts.net", text: $controllerDraft)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
-                // Visible, not a SecureField: the owner asked to see the token they pasted so a
-                // wrong copy is obvious, and it is a LAN credential they already hold in a file.
-                TextField("Controller's Fleet token", text: $controllerToken)
-                    .textFieldStyle(.roundedBorder).frame(maxWidth: 280)
+                // Masked like every secret, with the eye to check what was pasted so a wrong copy is
+                // obvious (the owner's reason this field used to be plain text).
+                SecretInput(placeholder: "Controller's Fleet token", text: $controllerToken)
+                    .frame(maxWidth: 300)
                 Button("Test") {
                     Task { await workspace.testControllerAddress(controllerDraft) }
                 }
@@ -5935,7 +5905,7 @@ struct StudioContent: View {
                 let cleaned = value.filter { !$0.isWhitespace }
                 if cleaned != value { controllerToken = cleaned }
             }
-            Text("Neither the address nor the token can contain a space, so pasted spaces and newlines are removed for you. The token is shown so you can check what you pasted.")
+            Text("Neither the address nor the token can contain a space, so pasted spaces and newlines are removed for you. Press the eye to check the token you pasted.")
                 .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             // Kept inline as well as in the banner at the top: this is the spot the operator is
             // looking at the moment they press Join, so the answer belongs here too - and it is

@@ -10,6 +10,15 @@ import sys
 
 api, views = (pathlib.Path(a) for a in sys.argv[1:3])
 notes = pathlib.Path(sys.argv[3]) if len(sys.argv) > 3 else None
+shell = pathlib.Path(sys.argv[4]) if len(sys.argv) > 4 else None
+
+# Connections shows this Mac's two tokens (masked) only while the services run, so a render can give it a
+# fixture Hub token; the Fleet token is read from a fixture file the harness writes.
+if shell is not None:
+    text = shell.read_text()
+    needle = "@Published private(set) var connectionToken: String?"
+    assert needle in text, "connectionToken moved; update render_fixture_patch.py"
+    shell.write_text(text.replace(needle, "@Published var connectionToken: String?", 1))
 
 text = api.read_text()
 for name in ("audioJobs", "imageJobs", "musicJobs"):
