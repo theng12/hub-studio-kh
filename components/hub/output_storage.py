@@ -561,6 +561,55 @@ def enforce(*, machine: str, max_bytes: int, retention_days: int,
         return final | {"deleted": deleted, "freed_bytes": freed}
 
 
+# What a Voice worker leaves in its output folder (`components/voice/app/backend/storage_policy.py`).
+VOICE_OUTPUT_SUFFIXES = frozenset({".wav", ".mp3", ".ogg", ".flac", ".m4a"})
+
+
+def trash_unregistered(roots: object, *, min_age_seconds: float,
+                       now: float | None = None) -> tuple[int, int]:
+    """Move generated audio the Hub never registered into the Trash Folder. Returns (bytes, files).
+
+    The packaged Voice worker's own retention loop is off (the Hub owns the policy), but the Hub only
+    cleans what `register_finalized_output` indexed, and that happens only when the Hub's own broker
+    finishes a job. A job a controller ran on this Mac as a peer, or anything else that wrote to the
+    worker's output folder without passing through the broker, was therefore kept for ever. Such a
+    file has no acknowledgement to wait for, so it follows the unacknowledged rule: it moves once it
+    is `min_age_seconds` old (the caller passes `UNACKED_DAYS`), which also leaves any job still
+    being finished alone. Only top-level audio files of the given roots; hidden files (partials),
+    links, other folders and everything the index already knows are never touched. A move that
+    fails leaves the file where it is, to be retried.
+    """
+    now = time.time() if now is None else float(now)
+    freed = files = 0
+    with _LOCK:
+        _schema()
+        with ledger._conn() as conn:
+            known_paths, known_inodes = set(), set()
+            for row in conn.execute("SELECT path, inode FROM output_files"):
+                known_paths.add(row["path"])
+                known_inodes.add(row["inode"])
+        for root in _roots([str(item) for item in (roots or [])]):
+            try:
+                entries = list(os.scandir(root))
+            except OSError:
+                continue
+            for entry in entries:
+                if entry.name.startswith(".") or Path(entry.name).suffix.lower() not in VOICE_OUTPUT_SUFFIXES:
+                    continue
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if (not stat.S_ISREG(info.st_mode) or now - info.st_mtime < min_age_seconds
+                        or entry.path in known_paths or info.st_ino in known_inodes):
+                    continue
+                group = {"batch_id": "unregistered", "job_id": Path(entry.name).stem}
+                if _to_trash(Path(entry.path), group, info.st_ino, now, root):
+                    freed += info.st_size
+                    files += 1
+    return freed, files
+
+
 def reclaim_acked(*, machine: str, min_age_seconds: float, done, now: float | None = None) -> tuple[int, int]:
     """Give disk space back by DELETING acknowledged outputs, oldest first, until `done()` says enough.
 

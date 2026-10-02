@@ -384,10 +384,15 @@ class BypassTests(unittest.TestCase):
 
     def test_heavy_swap_is_recorded_not_a_reason_to_abort(self):
         grow = {"n": 0}
-        def swap(log):   # swap rises 0.5 GB per reading once the guard is bypassed
+        def swap(log):   # swap rises 2 GB per reading once the guard is bypassed
+            # The runner reads swap once before the clip, once when its sampler starts and then
+            # every time the sampler gets a turn, so how many readings a fast fake clip sees depends
+            # on thread scheduling. At 0.5 GB a reading the recorded delta came out at exactly
+            # 1.5 on a loaded Mac and `> 1.5` failed; at 2 GB even the two guaranteed readings
+            # (before, sampler start) are a 2 GB rise, whatever the scheduler does.
             if log["override"]:
                 grow["n"] += 1
-                return 0.5 * grow["n"]
+                return 2.0 * grow["n"]
             return 0.0
         ns, log, rows, summary, status = self.run_main({"admission": True}, swap=swap)
         qwen = [r for r in rows if r["model"] == "Qwen3-TTS 0.6B"]

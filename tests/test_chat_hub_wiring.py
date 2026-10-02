@@ -555,7 +555,13 @@ class ChatCompletionJobTests(_PackagedHub, unittest.TestCase):
         # round trip carries the model load, and a rate computed from it would understate the
         # model on exactly the reply the owner is measuring.
         self.stub.hold = True
-        threading.Timer(0.4, self.stub.release.set).start()
+        # Held for 0.4 s *from the moment the worker has the request*, not from now: a timer started
+        # here also counted the app start-up and the Hub's own work before the request went out,
+        # so on a loaded machine the round trip measured 0.26-0.30 s and the >= 0.35 s assertion
+        # below failed for a reason that had nothing to do with what it checks.
+        threading.Thread(
+            target=lambda: (self.stub.seen.wait(30), time.sleep(0.4), self.stub.release.set()),
+            daemon=True).start()
         self.stub.payload = {
             "id": "chatcmpl-timed", "object": "chat.completion", "model": MODEL,
             "choices": [{"index": 0, "finish_reason": "stop",

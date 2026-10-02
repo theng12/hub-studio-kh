@@ -16,6 +16,9 @@ import sys
 import unittest
 
 
+SUBPROCESS_TIMEOUT_S = 600
+
+
 class HubRegressionTests(unittest.TestCase):
     def test_adapted_upstream_hub_cases_in_isolated_subprocess(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -37,15 +40,22 @@ class HubRegressionTests(unittest.TestCase):
         ):
             environment.pop(key, None)
 
-        completed = subprocess.run(
-            [str(runtime), "-m", "pytest", "-q", "tests/hub_regression/cases"],
-            cwd=root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=120,
-        )
+        # The timeout only exists to turn a hung child into a failure. 54 cases take well under a
+        # minute on an idle Mac, but 120 s was tight enough that a gate run alongside a build or a
+        # model download killed a healthy child; ten minutes is a hang, not load.
+        try:
+            completed = subprocess.run(
+                [str(runtime), "-m", "pytest", "-q", "tests/hub_regression/cases"],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=SUBPROCESS_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as expired:
+            self.fail(f"isolated Hub regression hung for {SUBPROCESS_TIMEOUT_S} s: "
+                      f"{(expired.stdout or b'')[-2000:]!r}")
         log_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
         self.assertEqual(
             completed.returncode, 0,

@@ -311,7 +311,8 @@ class FleetNodeStoreTests(unittest.TestCase):
         # this controller is a credential problem, not a silent Mac (0.6.16).
         self.assertEqual(inventory["summary"],
                          {"total": 2, "reachable": 1, "unreachable": 1, "unauthorized": 0,
-                          "error": 0, "removed": 0})
+                          "error": 0, "removed": 0, "on_previous_token": 0,
+                          "previous_token_until": None})
 
     def test_a_node_that_answers_nonsense_is_an_error_not_a_success(self) -> None:
         fleet_nodes.join({"node_id": "odd", "name": "Odd",

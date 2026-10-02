@@ -1529,6 +1529,12 @@ struct NativeFleetSummary: Decodable, Equatable {
     /// that folded it into "unreachable" sent the operator to look at the network.
     let unauthorized: Int?
     let removed: Int?
+    /// Nodes that were off when the Fleet token was rotated and still hold the previous one. The
+    /// controller keeps talking to them with it, and tells them the new one when they answer.
+    /// Absent from a Hub older than the grace window.
+    let onPreviousToken: Int?
+    /// When the previous token stops being accepted for the last of them (seconds since 1970).
+    let previousTokenUntil: Double?
 }
 
 /// One Mac's outcome in a Fleet-token rotation or a handover, keyed by machine id in the answer.
@@ -1601,7 +1607,8 @@ struct FleetOperationReport: Equatable {
         let action = kind == .handover ? "Handover" : "Fleet token rotation"
         let lead = "\(action): \(verified) of \(total) Mac\(total == 1 ? "" : "s") followed."
         guard let unfinishedLine = FleetCopy.unfinishedNotice(total: total, verified: verified,
-                                                             manual: manual, pending: pending)
+                                                             manual: manual, pending: pending,
+                                                             rotation: kind == .rotation)
         else { return lead }
         return "\(lead) \(unfinishedLine)"
     }
@@ -7839,14 +7846,6 @@ final class NativeWorkspaceStore: ObservableObject {
             throw ReleaseError("The controller holds a release whose descriptor does not match the agreed schema. Refusing it.")
         }
         return ReleaseAnswer(descriptor: descriptor, trustedPublisher: trusted)
-    }
-
-    /// Show a credential without publishing it. The app already holds this token to talk to
-    /// its own Hub; masking keeps it out of screenshots, support logs and the status line
-    /// until the operator asks for it.
-    static func maskedToken(_ token: String) -> String {
-        guard token.count > 12 else { return String(repeating: "•", count: max(token.count, 8)) }
-        return "\(token.prefix(4))\(String(repeating: "•", count: 8))\(token.suffix(4))"
     }
 
     /// A moment the Hub stamped, as a person reads it. The Hub's unit is seconds since 1970 and

@@ -19,10 +19,13 @@ loop, so the 5s dashboard poll never blocks on slow/offline peers.
 """
 
 import asyncio
+import json
 import os
 import secrets
+import tempfile
 import time
 from collections.abc import Callable
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
@@ -34,6 +37,14 @@ SHARED_STUDIO_TOKEN_FILE = (
     LAUNCHER_ROOT.parent / ".kh_studio_token"
     if DATA_DIR == LAUNCHER_ROOT else DATA_DIR / ".kh_studio_token"
 )
+#: Nodes that were off when the Fleet token was rotated, and the token each of them still holds.
+#: `{"nodes": {node_id: {"token": <the one it holds>, "until": <epoch>}}}`, 0600, next to the
+#: current token. Rotating used to switch the controller over regardless, which stranded those
+#: nodes until someone re-joined each by hand; now the controller keeps presenting a node the token
+#: it holds, pushes the new one when it answers, and forgets the old one once every node confirmed
+#: or the window ended.
+PREVIOUS_TOKENS_FILE = DATA_DIR / ".fleet_token_previous"
+PREVIOUS_TOKEN_GRACE_S = 30 * 24 * 3600
 DEFAULT_HUB_PORT = 47873
 PEER_TTL_S = 12.0
 # How old a snapshot may get before the sweep reads it again. It must be well under PEER_TTL_S,
@@ -99,6 +110,84 @@ def set_fleet_token(token: str):
         _cache.clear()
 
 
+# -- nodes still on the previous Fleet token --------------------------------
+def _held_tokens(now: float | None = None) -> dict[str, dict]:
+    """`{node_id: {"token", "until"}}` for nodes not yet confirmed on the current token."""
+    now = time.time() if now is None else now
+    try:
+        document = json.loads(PREVIOUS_TOKENS_FILE.read_text(encoding="utf-8"))
+        rows = document["nodes"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    if not isinstance(rows, dict):
+        return {}
+    current = current_fleet_token()
+    return {str(node): row for node, row in rows.items()
+            if isinstance(row, dict) and isinstance(row.get("token"), str) and row["token"]
+            and row["token"] != current and isinstance(row.get("until"), (int, float))
+            and row["until"] > now}
+
+
+def _write_held_tokens(rows: dict[str, dict]) -> None:
+    if not rows:
+        PREVIOUS_TOKENS_FILE.unlink(missing_ok=True)
+        return
+    PREVIOUS_TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(prefix=".fleet_token_previous-",
+                                        dir=PREVIOUS_TOKENS_FILE.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"nodes": rows}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(0o600)
+        temporary.replace(PREVIOUS_TOKENS_FILE)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def held_token(node_id: str) -> str | None:
+    """The older Fleet token this node still holds, while its grace window is open."""
+    row = _held_tokens().get(str(node_id))
+    return row["token"] if row else None
+
+
+def note_nodes_on_previous_token(held: dict[str, str], *, window_s: float = PREVIOUS_TOKEN_GRACE_S,
+                                 confirmed: tuple[str, ...] = ()) -> None:
+    """Record which nodes did not get a rotation (`held`: node -> the token it holds) and which did.
+
+    A node already waiting keeps its original deadline: a second rotation must not extend how long
+    an old token stays good.
+    """
+    rows = _held_tokens()
+    for node in confirmed:
+        rows.pop(str(node), None)
+    until = time.time() + window_s
+    for node, token in held.items():
+        rows[str(node)] = {"token": token, "until": rows.get(str(node), {}).get("until", until)}
+    _write_held_tokens(rows)
+
+
+def confirm_node(node_id: str) -> None:
+    """This node now holds the current token: it needs the previous one no more."""
+    rows = _held_tokens()
+    if rows.pop(str(node_id), None) is not None:
+        _write_held_tokens(rows)
+
+
+def nodes_on_previous_token() -> dict[str, float]:
+    """`{node_id: deadline}` for every node that has not confirmed the current token yet."""
+    return {node: float(row["until"]) for node, row in _held_tokens().items()}
+
+
+def accepts_previous_token(offered: str | None) -> bool:
+    """Whether `offered` is a token a not-yet-confirmed node still holds (constant-time)."""
+    if not offered:
+        return False
+    return any([secrets.compare_digest(offered, row["token"]) for row in _held_tokens().values()])
+
+
 def studio_headers(studio: dict | None = None) -> dict[str, str]:
     token = (studio or {}).get("studio_token") or fleet_token()
     return {"X-Studio-Token": token} if token else {}
@@ -109,6 +198,12 @@ def _peer_url(studio: dict) -> str:
 
 
 def _peer_token(studio: dict) -> str | None:
+    node = studio.get("fleet_node")
+    if node:
+        # A joined node is asked with whatever token *it* holds, read now rather than baked into
+        # the registry entry at load: the entry outlives a rotation, and a node that missed one
+        # still answers only to the older token until it is told the new one.
+        return held_token(node) or fleet_token()
     return studio.get("hub_token") or fleet_token()
 
 
@@ -234,9 +329,21 @@ async def _refresh_stale(machines, stale, client, now):
         token = _peer_token(s0)
         auth_generation = _auth_generation
         headers = {"X-Hub-Token": token} if token else {}
+        # A node that missed a rotation is asked with the older token it still holds.
+        on_older = bool(s0.get("fleet_node") and held_token(s0["fleet_node"]) == token)
         try:
             r = await client.get(f"{url}/api/hub/resources?local_only=true",
                                   headers=headers, timeout=PEER_TIMEOUT_S)
+            if r.status_code in (401, 403) and on_older:
+                # It may already hold the current token (the push reached it, the answer did not).
+                current = current_fleet_token()
+                retry = await client.get(f"{url}/api/hub/resources?local_only=true",
+                                         headers={"X-Hub-Token": current} if current else {},
+                                         timeout=PEER_TIMEOUT_S)
+                if retry.status_code == 200:
+                    confirm_node(s0["fleet_node"])
+                    r, token, on_older = retry, current, False
+                    headers = {"X-Hub-Token": current}
             if r.status_code in (401, 403):
                 # Hub is reachable but rejected the token → clearest possible signal
                 # that the fleet tokens don't match on that machine.
@@ -288,6 +395,9 @@ async def _refresh_stale(machines, stale, client, now):
             if store(machine, snapshot, entry, auth_generation,
                      clears_rejection=clears_rejection):
                 note_reachability(machine, snapshot)
+            if on_older:
+                # It is back and answering to the older token: hand it the current one.
+                await push_current_token(s0, client)
         except httpx.ConnectError:
             # TCP refused: nothing is listening on :47873 there — the Studio Hub
             # isn't actually running on that machine (even if its studios are).
@@ -654,6 +764,28 @@ async def start_remote_studio_update_repair(
                 "error": f"can't reach the remote Hub ({exc})"}
 
 
+async def push_current_token(studio: dict, client: httpx.AsyncClient) -> bool:
+    """Give a node that missed a rotation the current Fleet token, authenticated with its old one.
+
+    The write is the one a rotation makes. The node saves it before it answers, so an answer below
+    400 means it holds the new token and the older one is no longer needed for it.
+    """
+    node = studio.get("fleet_node")
+    held, current = held_token(node) if node else None, current_fleet_token()
+    if not held or not current:
+        return False
+    try:
+        response = await client.post(f"{_peer_url(studio)}/api/hub/fleet",
+                                     headers={"X-Hub-Token": held},
+                                     json={"token": current, "sync": False}, timeout=PEER_TIMEOUT_S)
+    except httpx.HTTPError:
+        return False
+    if response.status_code >= 400:
+        return False
+    confirm_node(node)
+    return True
+
+
 async def sync_owner_password(
     registry: list[dict], client: httpx.AsyncClient, verifier: dict,
 ) -> dict:
@@ -723,12 +855,18 @@ async def sync_fleet_token(
     handover passes a `local_commit` that does nothing (the retiring controller keeps its own
     credential; it is not joining anyone) and a `controller_url` naming the new head.
     """
-    old_token = fleet_token()
+    current_token = fleet_token()
     machines = _remote_machines(registry)
+    # What each node holds right now: the current token, or the older one it is still waiting to
+    # be moved off. Filled by `one` so the rotation can record who did not get the new one.
+    holding: dict[str, str | None] = {}
+    saved: set[str] = set()
 
     async def one(machine: str, studios: list[dict]) -> tuple[str, dict]:
         studio = studios[0]
         url = _peer_url(studio)
+        old_token = held_token(machine) or current_token
+        holding[machine] = old_token
         headers = {"X-Hub-Token": old_token} if old_token else {}
         body: dict[str, object] = {"token": new_token, "sync": False}
         if controller_url:
@@ -751,6 +889,7 @@ async def sync_fleet_token(
             if response.status_code >= 400:
                 return machine, {"ok": False, "status": "failed",
                                  "detail": f"peer returned HTTP {response.status_code}"}
+            saved.add(machine)
             verified = await client.get(
                 f"{url}/api/hub/resources?local_only=true",
                 headers={"X-Hub-Token": new_token}, timeout=PEER_TIMEOUT_S)
@@ -766,6 +905,14 @@ async def sync_fleet_token(
     rows = await asyncio.gather(*(one(machine, studios)
                                   for machine, studios in machines.items()))
     results = dict(rows)
+    if not controller_url:
+        # **A node that did not get the new token keeps the one it has until it does.** Without
+        # this the controller switched over anyway and a Mac that was off at that moment was
+        # stranded: it answered only to a token nobody presented any more. A node that refused
+        # the old token ("manual") holds something else entirely, so there is nothing to keep.
+        waiting = {machine: token for machine, token in holding.items()
+                   if token and machine not in saved and results[machine]["status"] != "manual"}
+        note_nodes_on_previous_token(waiting, confirmed=tuple(saved))
     local_commit(new_token)
     _cache.clear()
     verified = sum(row["ok"] for row in results.values())

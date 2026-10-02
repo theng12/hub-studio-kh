@@ -555,5 +555,80 @@ class UnackedTests(Fixture):
         self.assertEqual(view["protected_bytes"], 0)
 
 
+class UnregisteredVoiceOutputTests(Fixture):
+    """The packaged Voice worker's own retention loop is off and the Hub only cleans what it
+    registered, so audio a peer-served job left in the worker's output folder was kept for ever."""
+
+    def ctx(self, **overrides):
+        overrides.setdefault("unregistered_roots", [self.out])
+        return super().ctx(**overrides)
+
+    def moved(self, name: str) -> list[Path]:
+        return list((self.hub / "trash").rglob(f"*-{name}"))
+
+    def test_an_old_unregistered_voice_file_moves_to_the_trash_folder_not_a_delete(self):
+        self.set_free(500)
+        old = self.put(self.out / "peer-job.wav", 20, age=8 * DAY)
+        with mock.patch.object(os, "unlink", side_effect=AssertionError("hard delete")):
+            result = dg.sweep(self.ctx())
+        self.assertFalse(old.exists())
+        self.assertEqual(len(self.moved("peer-job.wav")), 1)
+        self.assertEqual(self.moved("peer-job.wav")[0].read_bytes(), b"x" * 20)
+        self.assertIn(("unregistered outputs", 1), [(a["step"], a["count"]) for a in result["actions"]])
+
+    def test_without_the_root_nothing_is_looked_at(self):
+        self.set_free(500)
+        old = self.put(self.out / "peer-job.wav", 20, age=30 * DAY)
+        dg.sweep(self.ctx(unregistered_roots=[]))
+        self.assertTrue(old.exists())
+
+    def test_a_file_the_hub_registered_is_left_to_the_registered_rules(self):
+        self.set_free(500)
+        kept = self.add_output("mine.wav", 20, age_days=8, acked=False)
+        os.utime(kept, (time.time() - 9 * DAY,) * 2)
+        dg.sweep(self.ctx())
+        self.assertTrue(kept.exists(), "the governor's own step took an indexed output")
+
+    def test_a_recent_hidden_non_audio_or_linked_file_is_never_moved(self):
+        self.set_free(500)
+        fresh = self.put(self.out / "fresh.wav", 10, age=2 * DAY)
+        history = self.put(self.out / ".history.json", 10, age=30 * DAY)
+        notes = self.put(self.out / "notes.txt", 10, age=30 * DAY)
+        target = self.put(self.root / "elsewhere.wav", 10, age=30 * DAY)
+        (self.out / "link.wav").symlink_to(target)
+        folder = self.put(self.out / "sub" / "inner.wav", 10, age=30 * DAY)
+        dg.sweep(self.ctx())
+        for path in (fresh, history, notes, target, folder):
+            self.assertTrue(path.exists(), path)
+        self.assertTrue((self.out / "link.wav").is_symlink())
+
+    def test_a_filling_disk_shortens_the_wait_to_the_retention_window(self):
+        self.set_free(500)
+        four_days = self.put(self.out / "four.wav", 10, age=4 * DAY)
+        dg.sweep(self.ctx())
+        self.assertTrue(four_days.exists(), "a green disk keeps it for the unacknowledged window")
+        self.set_free(55)                                           # red
+        dg.sweep(self.ctx())
+        self.assertFalse(four_days.exists(), "left live output (red then empties the Trash Folder oldest-first)")
+        young = self.put(self.out / "young.wav", 10, age=3600)
+        dg.sweep(self.ctx())
+        self.assertTrue(young.exists(), "never younger than the retention window")
+
+    def test_cleanup_switched_off_keeps_everything(self):
+        self.set_free(500)
+        old = self.put(self.out / "peer-job.wav", 20, age=30 * DAY)
+        dg.sweep(self.ctx(settings={"retention_days": 3, "cleanup_enabled": False}))
+        self.assertTrue(old.exists())
+
+    def test_a_move_that_fails_leaves_the_file_for_the_next_pass(self):
+        self.set_free(500)
+        old = self.put(self.out / "peer-job.wav", 20, age=8 * DAY)
+        with mock.patch.object(os, "rename", side_effect=OSError("fixture")):
+            dg.sweep(self.ctx())
+        self.assertTrue(old.exists())
+        dg.sweep(self.ctx())
+        self.assertFalse(old.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

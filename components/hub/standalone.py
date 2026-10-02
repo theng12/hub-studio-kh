@@ -467,6 +467,10 @@ def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
         library=library, manifests=manifests, app_root=release_delta.installed_app_root(),
         machines={worker.get("machine", "local") for worker in monitor.registry if worker.get("local") is True},
         output_roots=roots, settings=standalone_config.load_device_settings()["effective"],
+        unregistered_roots=[Path(root) for worker in monitor.registry
+                            if worker.get("local") is True and worker.get("modality") == "voice"
+                            for root in worker.get("managed_output_roots", [])
+                            if isinstance(root, str) and root],
         running_staging=model_downloads.running_staging,
         spool_limit=lambda: job_storage._read()["max_bytes"], spool_enforce=job_storage.enforce_budget)
 

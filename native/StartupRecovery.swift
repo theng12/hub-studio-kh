@@ -189,13 +189,35 @@ enum FleetCopy {
     static let handoverFallback = "Any Mac that did not follow has to be moved by hand: SSH over "
         + "Tailscale, following gateway-kh/repository/docs/credential-rotation-decision.md."
 
+    /// What happens to a Mac a Fleet-token rotation could not reach: nothing is lost. The controller
+    /// keeps accepting and presenting the previous token for it and gives it the new one when it
+    /// answers again.
+    static let rotationWaitsNote = "A Mac that could not be reached stays on the previous token "
+        + "(accepted for 30 days) and is given the new one automatically when it comes back."
+
     /// The lead sentence of a rotation or handover result, or nil when every Mac followed.
-    static func unfinishedNotice(total: Int, verified: Int, manual: Int, pending: Int) -> String? {
+    /// A rotation whose only unfinished Macs are unreachable ones says they will catch up by
+    /// themselves; a handover, or a Mac that refused the old credential, still needs a person.
+    static func unfinishedNotice(total: Int, verified: Int, manual: Int, pending: Int,
+                                 rotation: Bool = false) -> String? {
         guard manual > 0 || pending > 0 else { return nil }
         let followed = "\(verified) of \(total) Mac\(total == 1 ? "" : "s") followed"
         var needs: [String] = []
         if manual > 0 { needs.append("\(manual) refused the old credential") }
         if pending > 0 { needs.append("\(pending) could not be reached") }
-        return "\(followed.capitalized); \(needs.joined(separator: " and ")). " + handoverFallback
+        let advice = rotation && manual == 0 ? rotationWaitsNote : handoverFallback
+        return "\(followed.capitalized); \(needs.joined(separator: " and ")). " + advice
+    }
+
+    /// "N nodes still on the previous token", from the roster's count, or nil when none are.
+    static func previousTokenNotice(count: Int, until: Double?) -> String? {
+        guard count > 0 else { return nil }
+        let noun = count == 1 ? "node is" : "nodes are"
+        var line = "\(count) \(noun) still on the previous Fleet token."
+        if let until {
+            let date = Date(timeIntervalSince1970: until).formatted(date: .abbreviated, time: .omitted)
+            line += " The controller keeps accepting it until \(date) and gives them the new token when they come back."
+        }
+        return line
     }
 }

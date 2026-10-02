@@ -2623,6 +2623,31 @@ class RotateAndHandOverTest(unittest.TestCase):
             except urllib.error.HTTPError as exc:
                 self.assertEqual(exc.code, expected)
 
+    def test_a_node_that_was_off_for_a_rotation_is_named_and_not_stranded(self) -> None:
+        controller = self._hub("controller", role="controller")
+        fleet = (controller.data / ".fleet_token").read_text().strip()
+        controller.post_json(
+            "/api/hub/fleet/nodes",
+            {"node_id": "asleep-mac", "name": "Asleep", "address": "http://127.0.0.1:9",
+             "studios": [{"id": "voice", "modality": "voice"}]}, token=fleet)
+        status, body, _ = controller.post_json("/api/hub/fleet", {}, token=controller.token)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["verified"], 0)
+        new = body["token"]
+        # The controller switched over, but still holds what the sleeping Mac holds.
+        previous = json.loads((controller.data / ".fleet_token_previous").read_text())
+        self.assertEqual(previous["nodes"]["asleep-mac"]["token"], fleet)
+        # The app can say how many nodes are still on the previous token, and which.
+        _, listing, _ = controller.request("/api/hub/fleet/nodes", token=controller.token)
+        self.assertEqual(listing["summary"]["on_previous_token"], 1)
+        self.assertTrue(listing["nodes"][0]["on_previous_token"])
+        # The old token is a node-scope key for the window, nothing more; the new one is the real one.
+        for token, route, expected in ((fleet, "/api/hub/fleet/nodes", 200),
+                                       (fleet, "/api/hub/startup", 403),
+                                       (new, "/api/hub/startup", 200)):
+            status, _, _ = controller.request(route, token=token)
+            self.assertEqual(status, expected, (route, token == new))
+
     def test_handing_over_moves_every_node_and_retires_the_old_controller(self) -> None:
         old_controller = self._hub("old-controller", role="controller")
         new_controller = self._hub("new-controller", controller_id="promoted-node")
