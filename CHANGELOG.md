@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.130 — 2026-10-02 · Even Fish / VoxCPM2 / Chatterbox / Pocket pauses, Fish 4-bit on 16 GB, Breeze back to 16 GB only
+
+Release of `integrate/0.6.130` (merges fix/pauses-tiers-0130, commit 645d542; no conflicts). Owner decisions 2026-10-02:
+- **Pauses:** every family that joined sections with the flat 0.12 s pause (Fish, VoxCPM2, Chatterbox, Pocket) now uses the same text-led pauses
+  as OmniVoice and Qwen3-TTS 1.7B: 0.30 s after a sentence, 0.60 s at a paragraph break.
+- **Fish Audio S2 Pro 4-bit moves from the 24 GB tier to the 16 GB tier** (from the measured 7.4-8.1 GB S2 peak; catalog row, manifest
+  qualification, capture spec, digest pin and benchmarks page agree). The 8.4 GB free floor is unchanged.
+- **Breeze TTS 2 4-bit is carried to 16 GB Macs only again** (the 0.6.129 8 GB carry is reverted; its ~5 GB footprint is too tight on 8 GB).
+
 ## 0.6.129 — 2026-10-02 · Models can no longer be lost to a test, Fish S2 Pro 4-bit, Fish decodes in far less memory, Breeze on 8 GB Macs
 
 Release of `integrate/0.6.129` (merges fix/library-ownership, feat/breeze-8gb-carry, feat/fish-4bit, in that order; no conflicts).

@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.130 - 2026-10-02
+
+### Proper pauses for Fish and more voices, and a lighter Fish on 16 GB Macs
+
+**Pauses you can hear.** Fish, VoxCPM2, Chatterbox and Pocket now pause between sections the way OmniVoice and Qwen already did: a short
+breath (0.3 s) after a sentence and a longer one (0.6 s) at a paragraph break, instead of one flat, barely audible gap.
+
+**Fish Audio S2 Pro 4-bit now fits 16 GB Macs.** Its measured memory use is about 7.4 to 8.1 GB, so it is offered from 16 GB instead of 24 GB.
+
+**Breeze is for 16 GB Macs again.** The earlier trial that copied Breeze to 8 GB Macs is undone; it needs about 5 GB, which is too tight there.
+
 ## 0.6.129 - 2026-10-02
 
 ### Models can no longer be lost by a test, and a lighter Fish voice

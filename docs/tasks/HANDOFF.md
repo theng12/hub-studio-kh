@@ -5,6 +5,9 @@
 
 Last updated: **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
 
+> **0.6.130 - text-led 0.3/0.6 s pauses for Fish/VoxCPM2/Chatterbox/Pocket, Fish 4-bit on the 16 GB tier, Breeze back to 16 GB only (`integrate/0.6.130` = 0.6.129 + `fix/pauses-tiers-0130` 645d542).**
+> Supersedes the 0.6.129 Breeze 8 GB carry and the 24 GB Fish 4-bit tier. Gate numbers, DMG and checksum: `_orchestra/audit-20261001/release-0130/`. Not installed / not published until the coordinator does it.
+
 > **0.6.129 - library ownership + Fish S2 Pro 4-bit + Fish bounded decode + Breeze 8 GB carry (`integrate/0.6.129`; merges `fix/library-ownership`, `feat/breeze-8gb-carry`, `feat/fish-4bit`, no conflicts).**
 > A Hub only moves packages out of a model library it owns (`components/library_ownership.py`, `<library>/.studiohub/owner.json`; a temp data dir never owns one);
 > the launch tests and `verify-launch.sh` use a temporary library (`tests/test_no_real_library_launch.py` scans for regressions). Fish S2 Pro 4-bit
