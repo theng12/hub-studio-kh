@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.133 — 2026-10-03 · Fleet health follows what each Mac really runs; a renamed Mac shows its new name; rename a Mac from the Gateway
+
+Release of `release/0.6.133` (main at 9a7e786 = 0.6.132 + 8cff7b1 fleet health + 9a7e786 node rename; no merge needed).
+- **Fleet health: a node's studios follow the node** (8cff7b1). Studios were recorded on the controller's roster once, at join, and nodes do not
+  re-join, so every node that joined while Video shipped kept a `video` studio: the controller polled a worker that does not exist, showed "workers
+  offline" and held every idle Mac in `needs_attention` (activity `partial_read`). `fleet_nodes.sync_roster_from_snapshots` now makes each node's roster
+  studios follow what its authenticated peer snapshot says it runs, both ways; silence, errors and empty answers never change a row, and the monitor
+  reloads its registry when a row changed.
+- **An old error stops holding a Mac amber** (8cff7b1): `activity._state_at` treats an error as `needs_attention` only for `JUST_FINISHED_S` (15 min);
+  after that the Mac ages to ready / long idle like any finished job. A studio that should run and is down still needs attention.
+- **A renamed Mac's name reaches its controller** (9a7e786). `/api/hub/resources` carries `machine: {id, name}`, the peer snapshot keeps it, and the
+  roster sync adopts the name only from an authenticated snapshot naming that node id with a valid 1-120 character name (older Hubs and other Macs change
+  nothing). Before, the name moved only at join and through the node's own-credential status call, so a node whose credential the controller no longer
+  recognised kept its old name forever.
+- **Rename a Mac from the Gateway** (9a7e786): new Fleet-token route `POST /api/hub/fleet/nodes/{id}/name` (`local`/own id renames the controller).
+  `relay_name` renames the node on the node first (`POST /api/hub/machine-label` with the Fleet token) and only then the roster, and drops the
+  pre-rename snapshot. Rule: a Mac's name lives on the Mac, so a Mac that is off or refuses keeps its name and the caller is told why. Neither route is in
+  `NODE_ALLOWED`; a fleet-credential `machine-label` needs 1-120 printable characters (no clearing).
+- **Handover join uses the machine name** (9a7e786): `_register_with_controller` read `machine_name` from `load_settings` (never there), so a handed-over
+  Mac joined under its id; it now reads `public_settings`.
+- Connections > Local API on a non-controller says "Machine ID" (stays the same after a rename) instead of "Controller ID"; the Fleet-token line says it
+  may rename this Mac. Tests: `tests/test_fleet_health_idle.py`, `tests/test_node_rename.py`, `test_machine_name_and_restart` pins the fleet rename rule.
+
 ## 0.6.132 — 2026-10-02 · New Studio Hub icon (Wave Frame), fleet-password rotation no longer strands offline Macs, unregistered voice outputs cleaned
 
 Release of `integrate/0.6.132` (merges fix/small-batch-0132, commit d9e3534, and feat/fish-16gb-test, commit 4fc4694, on 0.6.131; no conflicts, plus the logo commit).

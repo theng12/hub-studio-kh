@@ -2,6 +2,26 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.133 - 2026-10-03
+
+### Fleet health shows real problems only, and renamed Macs show their new name
+
+**Idle Macs no longer show as needing attention.** Macs that joined while the Video studio still shipped kept a Video worker on their
+controller's list, so Fleet showed "workers offline" for a worker that no longer exists and kept every idle Mac amber. Each Mac's
+studios now follow what that Mac actually runs.
+
+**An old failed job stops holding a Mac in "Needs Attention".** After 15 minutes a failed job no longer keeps the Mac amber; it goes back
+to Ready like any other finished job. A studio that should be running and is not still shows as needing attention.
+
+**A renamed Mac shows its new name everywhere.** When you rename a Mac, its controller and the Gateway now pick up the new name from the
+Mac itself, within a minute or so.
+
+**Rename a Mac from the Gateway.** Studio Hub is now ready for the Gateway's new Rename option for a Mac in the fleet. The name is changed on that Mac first, so if the Mac is
+switched off it keeps its name and you are told why.
+
+**Connections shows "Machine ID".** On a Mac that is not a controller, Connections now shows its Machine ID, which stays the same when the
+Mac is renamed. A Mac handed over to a new controller now joins under its name instead of its ID.
+
 ## 0.6.132 - 2026-10-02
 
 ### A new Studio Hub icon, and changing the fleet password is safe for offline Macs

@@ -3,7 +3,14 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.132** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+Last updated: **0.6.133** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+
+> **0.6.133 - fleet health follows each node, renamed Macs keep their new name, rename from the Gateway (`release/0.6.133` = 0.6.132 + 8cff7b1 + 9a7e786 on main).**
+> `fleet_nodes.sync_roster_from_snapshots` (monitor poll) makes a node's roster studios and name follow its authenticated peer snapshot (`machine: {id, name}` now in
+> `/api/hub/resources`); silence/errors/older Hubs change nothing. `activity._state_at`: an error holds `needs_attention` only 15 min. Gateway rename: Fleet-token
+> `POST /api/hub/fleet/nodes/{id}/name` -> `relay_name` -> node `POST /api/hub/machine-label`, then the roster (a Mac's name lives on the Mac). Handover join now sends
+> `public_settings()` machine name. Write-ups: `_orchestra/audit-20261001/node-rename.md`, `fleet-health/`. Gate numbers, DMG and checksum:
+> `_orchestra/audit-20261001/release-0133/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.132 - Wave Frame icon, fleet-token rotation grace, unregistered voice outputs to the Trash Folder, 16 GB Fish test (`integrate/0.6.132` = 0.6.131 + `fix/small-batch-0132` d9e3534 + `feat/fish-16gb-test` 4fc4694 + the logo commit).**
 > New app icon (owner's pick, concept 2 "Wave Frame"): sources `assets/logo/app-icon.svg` + `menubar-icon.svg`; **`python3 packaging/make_app_icon.py`** renders `assets/app-icon.icns`
