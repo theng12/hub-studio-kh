@@ -2,6 +2,27 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.128 - 2026-10-02
+
+### Image and voice now fit on 8 GB Macs, and a few things are tidied
+
+**Images on 8 GB Macs.** FLUX.2 Klein and Z-Image-Turbo now use far less memory while they draw (Klein about 3 GB instead of about 9 GB),
+so an 8 GB Mac no longer swaps for minutes or wears its disk. Larger Macs keep the model ready between jobs and are quicker for the next one.
+
+**Voice-overs on 8 GB Macs.** VoxCPM2, Qwen3-TTS and OmniVoice now stay near 3 GB, and Breeze near 4.3 GB, with exactly the same sound. A long
+script no longer runs the Mac out of memory.
+
+**A lighter Qwen voice.** Qwen3-TTS 0.6B Base is now also offered in a smaller 4-bit version.
+
+**Gemma is gone.** The Gemma 3 12B text model is retired and every Mac moves its copy to the Trash Folder (emptied after 15 days).
+
+**Jobs do not wait for ever.** If a Mac cannot free the memory a job needs for about four minutes, the job is handed back so another Mac can
+take it, with a plain sentence saying how much memory was needed.
+
+**Chat fix.** Asking Chat for JSON together with a system message no longer fails.
+
+**Tidier sidebar.** In a short window the sidebar scrolls and its footer no longer overlaps the list.
+
 ## 0.6.127 - 2026-10-02
 
 ### A Mac protects its own disk, starts by itself, and the app looks tidier

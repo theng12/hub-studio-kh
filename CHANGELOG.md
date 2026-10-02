@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased - Gemma 3 12B 4-bit is retired everywhere
+## 0.6.128 — 2026-10-02 · Image and voice fit 8 GB Macs, Gemma retired, chat JSON fix, sidebar fix
+
+Release of `integrate/0.6.128` (audit 2026-10-01 fixes; merges fix/retire-index, fix/kit-index-retired, fix/chat-json-system, fix/image-memory-8gb,
+fix/tts-memory-ceiling, ui/design-pass-2). Highlights; the per-feature engineering notes follow.
+- **Image memory (8 GB tier):** FLUX.2 Klein 4-bit footprint 9.4 -> 2.9 GB and Z-Image-Turbo 4-bit 7.5 -> 4.1 GB (staged + streamed, bounded VAE decode, MLX cache cap); the model stays loaded between jobs on larger Macs; all image jobs run on one inference thread, the JPEG encode runs off it.
+- **Voice memory:** one codec decode per section no longer balloons (slabbed decode with context, reference encoded once, MLX cache capped): VoxCPM2 / Qwen3-TTS / OmniVoice peak ~3 GB, Breeze ~4.3 GB, with identical audio. New option: Qwen3-TTS 0.6B Base 4-bit (lighter, 8 GB tier).
+- **Gemma 3 12B retired** (owner): every Mac, keep-all Macs included, moves its copy to the Trash Folder; 27 packages, ~78.0 GB.
+- **Memory admission is bounded:** a job that waits ~4 minutes on the Hub's own free-memory floor, on a Mac with none of our work running, is handed back `INSUFFICIENT_MEMORY` (needs X, has Y) so the Gateway re-routes it. No free-memory floors were changed (Klein 2.0 fleet default, Z-Image 3.0); the measured footprints are in the catalog notes and the floors are to be set from the 8 GB runner.
+- **Chat:** a JSON-mode request that also carries a system message no longer fails on Qwen3.5 / Gemma templates.
+- **Kit:** retired models leave the kit index; Technical-folder runners updated (Qwen 4-bit in the TTS list, Klein's 8 GB tier pins).
+- **UI:** the sidebar list takes the remaining height and scrolls, the footer is its own row and drops the counts line in a short window (no overlap at the minimum window).
+
+### Gemma 3 12B 4-bit is retired everywhere
 
 Owner, 2026-10-02: "it's bad ... remove it all over". `gemma-3-12b-it-4bit` / `mlx-community/gemma-3-12b-it-4bit` (LTX's text encoder; shelved
 in 0.6.127) moves from `components/shelved_models.py` to `components/retired_models.py`. Every Mac - **keep-all-models Macs included** - moves its
@@ -12,7 +24,7 @@ runtime-contract and `docs/model-benchmarks.md` (regenerated). Tests: `test_reti
 (Gemma retired not shelved; a keep-all kit is not given it), `test_model_manifest_catalog`. Left for the coordinator: the 8.07 GB copy on each SSD's
 `model-library/gemma-3-12b-it-4bit` (move to the trash, as for LTX).
 
-## Unreleased - Image: memory-bounded generation for the 8 GB tier, resident models on larger Macs
+### Image: memory-bounded generation for the 8 GB tier, resident models on larger Macs
 
 **Cause (owner's real 8 GB M1 run, Hub 0.6.126, guard bypassed):** FLUX.2 Klein 4B 4-bit peaked at 9.8 GB of MLX memory and
 swapped ~4 GB (3.9 GB written to the SSD) per image; Z-Image-Turbo 4-bit in `--low-ram` swapped 9.6-33 GB per image. Measured per stage:
