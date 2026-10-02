@@ -762,7 +762,7 @@ class ChatGenerationRecordTests(unittest.TestCase):
         self.assertEqual(item["text"], "hi")
 
 
-def _dispatch_chat_pack(payload: dict) -> tuple[dict, dict]:
+def _dispatch_chat_pack(payload: dict, status: int = 200, tries: int = 1) -> tuple[dict, dict]:
     """Run one dispatched Chat pack against a stub worker answering ``payload``.
 
     Returns ``(batch, pack)`` so a test can read either the pack's own facts or the summary the
@@ -772,13 +772,13 @@ def _dispatch_chat_pack(payload: dict) -> tuple[dict, dict]:
 
     async def run() -> tuple[dict, dict]:
         client = httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, json=payload)))
+            lambda request: httpx.Response(status, json=payload)))
         monitor = type("Monitor", (), {"_client": client})()
         studio = {"id": "chat", "modality": "chat", "machine": "local",
                   "hub_token": "worker-token", "host": "127.0.0.1", "port": 1}
         pack = {"index": 0, "pack_id": "pack-1", "scene_ids": ["scene-1"],
                 "messages": [{"role": "user", "content": "hi"}], "params": {},
-                "state": "running", "tries": 1, "studio": "chat",
+                "state": "running", "tries": tries, "studio": "chat",
                 "duration_seconds": None, "error": None, "results": {}, "usage": None,
                 "model_revision": None, "raw_responses": [], "started_at": None,
                 "finished_at": None, "retry_at": None}
@@ -871,6 +871,34 @@ class ChatPackUsageEvidenceTests(unittest.TestCase):
         self.assertIsNone(pack["usage"])
         self.assertEqual(pack["state"], "error")
         self.assertIn("inconsistent token usage evidence", pack["error"])
+
+
+class ChatPackMachineBusyTests(unittest.TestCase):
+    """A node that answers MACHINE_BUSY is a wait, not a spent try (as Subtitle and the broker).
+
+    The 409 was "transient", so each busy node spent one of the pack's tries and the last one
+    ended the pack as an error - "local is reserved for other work on this Mac" - though
+    nothing ran.
+    """
+
+    def test_a_reserved_node_keeps_the_pack_queued_with_its_tries(self) -> None:
+        from components.hub.backend import broker, chat_jobs
+
+        busy = {"detail": "local is reserved for other work on this Mac", "code": "MACHINE_BUSY"}
+        before = time.time()
+        _, pack = _dispatch_chat_pack(busy, status=409, tries=chat_jobs.MAX_TRIES)
+        self.assertEqual(pack["state"], "queued", pack["error"])
+        self.assertEqual(pack["tries"], chat_jobs.MAX_TRIES - 1)
+        self.assertIn("reserved for other work", pack["error"])
+        self.assertLessEqual(pack["retry_at"], time.time() + broker.MACHINE_RESERVED_AVOID_S)
+        self.assertGreater(pack["retry_at"], before)
+
+    def test_any_other_409_still_counts_as_a_try(self) -> None:
+        from components.hub.backend import chat_jobs
+
+        _, pack = _dispatch_chat_pack({"detail": "model paused", "code": "MODEL_PAUSED"},
+                                      status=409, tries=chat_jobs.MAX_TRIES)
+        self.assertEqual(pack["state"], "error")
 
 
 class PeerLeaseDisconnectTests(_PackagedHub, unittest.TestCase):

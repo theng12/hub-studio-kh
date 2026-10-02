@@ -705,6 +705,11 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
                                  modality=studio["modality"])
             error = RuntimeError(f"HTTP {response.status_code}: {response.text[:500] or 'Chat completion failed'}")
             error.transient = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
+            error.status_code = response.status_code
+            try:
+                error.error_code = response.json().get("code")
+            except Exception:
+                error.error_code = None
             raise error
         payload = response.json()
         if _expire_genstudio_batch(batch):
@@ -762,6 +767,14 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
         else:
             pack.update(state="cancelled", error="cancelled", finished_at=time.time())
     except Exception as exc:
+        if broker._is_machine_reservation_refusal(exc) and not batch.get("cancelled"):
+            # A node already running other work answered at its door: nothing ran and the Mac is
+            # healthy. A wait, as Subtitle and the broker treat it - not a spent try, which after
+            # MAX_TRIES busy answers ended the pack "local is reserved for other work on this Mac".
+            pack.update(state="queued", studio=None, tries=max(0, pack["tries"] - 1),
+                        retry_at=time.time() + broker.MACHINE_RESERVED_AVOID_S,
+                        error=f"waiting for a free machine: {exc}")
+            return
         transient = isinstance(exc, (httpx.HTTPError, OSError, ValueError)) or getattr(exc, "transient", False)
         capacity = broker._is_capacity_failure(str(exc))
         if capacity:
