@@ -208,10 +208,12 @@ FLUX2_KLEIN = ImageModel(
               'guidance': 1.0, 'seed': -1},
     limits={'min_steps': 2, 'max_steps': 100, 'min_guidance': 0.0, 'max_guidance': 30.0,
             'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
-    # No catalog free floor on purpose (the Hub's measured fleet default applies). Measured on a 32 GB Mac emulating
-    # 8 GB (2026-10-02), staged + streamed: footprint ~2.9 GB; floor to be set from the 8 GB runner.
+    # Free memory needed before start; owner chose 2.8 GB on 2026-10-02 for headroom - measured 8 GB M1+M2 runs started cleanly from 3.76 GB free
+    # (3.76-4.14 GB free; peak 2.16-2.68 GB; ~0 swap). This is the free memory a job needs to begin, NOT its peak. The
+    # Hub's fleet default (`memory_admission._FLEET_DEFAULTS`) carries the same 2.8, because it outranks this row.
     # The bounded configurations (tiers in `FLUX2_*_BELOW_BYTES` above) were added after the 8 GB runs showed the
     # unbounded one at 9.8 GB of MLX memory and ~4 GB of swap per image; 24 GB and up are unchanged.
+    min_free_memory_gb=2.8,
     memory=MemoryPolicy(low_ram_below_bytes=FLUX2_LOW_RAM_BELOW_BYTES,
                         low_ram_cache_limit_gb=BOUNDED_CACHE_LIMIT_GB, bounded_vae_decode=True,
                         lean_below_bytes=FLUX2_LEAN_BELOW_BYTES, lean_cache_limit_gb=2.0,
@@ -319,10 +321,9 @@ Z_IMAGE_TURBO = ImageModel(
     # What decides "this machine class is unqualified" is the published *tier*
     # (min_unified_memory_gb = 16): reported to the operator with a below-tier warning; the Hub's
     # requirement (measured, else manifest, else this tier) is what gates dispatch, since 2026-09-30.
-    # Measured on a 32 GB Mac emulating 8 GB (2026-10-02), staged + streamed: footprint ~4.1 GB. The free floor
-    # stays 3.0 (unchanged): it is to be set from the 8 GB runner, since an unmet free floor waits and 8 GB Macs
-    # often have only 2.4-3.0 GB available.
-    min_free_memory_gb=3.0,
+    # Free memory needed before start; owner chose 2.8 GB on 2026-10-02 for headroom - measured 8 GB M1+M2 runs started
+    # cleanly from 3.53 GB free (3.53-4.24 GB free; peak 2.77-2.97 GB; ~0 swap) - NOT the peak.
+    min_free_memory_gb=2.8,
     qualification={
         'memory_profile': {
             'before': {'mlx_peak_gb': 6.26, 'footprint_peak_gb': 7.46},

@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.131 - 2026-10-02
+
+### Passwords and tokens are hidden, and jobs start on 8 GB Macs
+
+**Passwords and tokens are hidden behind an eye icon.** The Fleet token, the Hub token, the Hugging Face token and the token boxes for handing over
+or joining a controller now show dots until you press the eye. Copy still works while they are hidden, and what you type is hidden too.
+
+**Jobs start on 8 GB Macs showing about 3 GB free.** We measured real 8 GB Macs (an M1 and an M2). Voice and image jobs started cleanly from about
+3 GB of free memory and never swapped, so the Hub no longer holds them back until 4 GB or more is free. It now starts a job once 2.8 GB is free,
+which leaves a little room to spare. This applies to Qwen3-TTS 0.6B (8-bit and
+4-bit), VoxCPM2 4-bit, OmniVoice, FLUX.2 Klein 4-bit and Z-Image-Turbo 4-bit.
+
+**The 8 GB test reports are clearer.** They now say "Peak memory used" and "Started with N GB free" as two separate lines, so a peak is never mistaken
+for the free memory a job needs before it starts.
+
 ## 0.6.130 - 2026-10-02
 
 ### Proper pauses for Fish and more voices, and a lighter Fish on 16 GB Macs

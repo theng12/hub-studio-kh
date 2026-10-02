@@ -101,8 +101,9 @@ A folder named `TTS 8GB Run <date-time>` beside the script (on the drive; `~/Des
   swap +1.8 GB, memory pressure critical, slowest clip 2.7x the 32 GB time -> ...`. A model that finished every clip is
   "fits" only if pressure never reached critical, swap grew by 2 GB or less, no clip took over 3x its 32 GB time and the
   Mac kept answering; otherwise it says "completed but strained this Mac", "FITS WITH THE GUARD BYPASSED", "did not
-  complete" or "DOES NOT FIT" and why. For a model that completed it also gives a **recommended requirement = measured
-  peak + 0.25 GB**, labelled as measured on this Mac.
+  complete" or "DOES NOT FIT" and why. For a model that completed it also gives **Peak memory used** (what the worker used) and **Started with N GB free**
+  (what the Hub saw just before each clip), labelled as measured on this Mac. The two are never one number: a free-memory floor is
+  what a job needs before it starts, not its peak.
 - `results.csv` - one row per clip: the same columns as the 32 GB `summary.csv`, plus status, error, memory pressure, swap
   before/after/peak, machine RAM, macOS and app version, chip, the 32 GB reference time and the ratio, `guard_relaxed`,
   `override_used_gb`, `measured_peak_gb`, `swap_delta_gb`, `worker_restarts`, `verdict`, the four SSD columns above and a few more.

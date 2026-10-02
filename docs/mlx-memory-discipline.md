@@ -69,9 +69,9 @@ Rule 2 above and Voice's cache cap are the same rule (the Voice worker's default
 10. **Encode a reference once.** Every section of a long script re-encoded the same reference clip (+1.3-1.8 GB each time). Cache the encoded features keyed on the file (path, mtime, size) or on a hash of the samples. Keep at most a few entries.
 11. **Sync inside big transformers when weights are upcast.** A bf16/4-bit layer fed fp32 activations holds an fp32 copy of *every layer's* weights until the graph is evaluated (VoxCPM2's local encoder: +0.8 GB per call, 170 calls per section). `mx.eval` after each layer.
 12. **Clear the cache between sections** (`_release_device_memory` already does) and after any stage you slab.
-13. **Measure before you set a floor.** `min_free_memory_gb` is the *measured peak process footprint plus about 0.25 GB*, on the **8 GB runner** (`qualification/eight-gb-tts-run.sh`, S2 and S4, both owner voices; images: `qualification/eight_gb_image_run.py`). A number computed
+13. **Measure before you set a floor.** `min_free_memory_gb` is the *free memory a job needs before it starts* (NOT its peak), read from the **8 GB runner**'s "Started with N GB free" for jobs that started cleanly (`qualification/eight-gb-tts-run.sh`, S2 and S4, both owner voices; images: `qualification/eight_gb_image_run.py`). A number computed
     from file sizes, a multiple of the weights or "what the other model uses" is a formula, and **a floor must never be a formula**. Every non-empty `min_free_memory_gb` carries a `min_free_memory_note` saying what was measured, on which Mac, when.
-    (Image floors are unchanged for now: measured on a 32 GB Mac emulating 8 GB, 2026-10-02, Klein ~2.9 GB and Z-Image ~4.1 GB footprint; floors to be set from the 8 GB runner.)
+    (0.6.131: Qwen3-TTS 0.6B 8/4-bit, VoxCPM2 4-bit, OmniVoice, Klein and Z-Image are all 2.8 (the owner's choice, for headroom) over the real 8 GB M1+M2 runs of 2026-10-02: started cleanly from ~3.1-4.6 GB free, peaks 3.65-4.41 GB voice / 2.16-2.97 GB image, ~0 swap. The old peak + 0.25 GB rule made healthy 8 GB Macs wait.)
 14. **Do not trust RTF measured on a busy Mac.** Peaks are exact under load; timings are not (load average 17-54 during this work made RTF swing 2-5x).
 
 ## Image

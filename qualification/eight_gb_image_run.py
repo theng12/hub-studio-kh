@@ -39,7 +39,6 @@ RELAX_GB = float(os.environ.get("IMG8_RELAX_FREE_GB", "0"))   # the free-memory 
 PER_DAY = float(os.environ.get("IMG8_PER_DAY", "200"))        # the TB/year illustration: images a day (an assumption, not a measurement)
 BASELINE_S = float(os.environ.get("IMG8_BASELINE_S", "30"))   # idle seconds of SSD-write sampling before the first image (0 = skip)
 SETTLE_S = float(os.environ.get("IMG8_SETTLE_S", "600"))      # after a cancel, how long to wait for the worker to finish the image it was on
-MARGIN_GB = 0.25
 MIN_VERSION = (0, 6, 125)   # the per-model override route (the bypass) arrived in 0.6.125
 STALL_S = 20.0
 SEED0 = 42                  # image n uses seed SEED0 + n - 1; the old standalone 8 GB test used 42 too
@@ -557,7 +556,7 @@ def image(model, n, size, steps, out_dir, cold, ctx, relaxed=False):
     peak = max(fnum(rec.get("peak_memory_gb")) or 0, fnum(mlx_gb) or 0)
     rec["measured_peak_gb"] = round(peak, 2) if peak else ""
     if rec["status"] == "completed":
-        rec["verdict"] = "fits at default guard" if not relaxed else f"fits only with relaxed guard - real need about {peak + MARGIN_GB:.1f} GB"
+        rec["verdict"] = "fits at default guard" if not relaxed else f"fits only with relaxed guard - peak memory used {peak:.2f} GB"
     else:
         rec["verdict"] = "does not fit - " + ("too slow, timed out" if rec["status"] == "timed out" else "crashed or errored")
     if isinstance(batch, dict) and isinstance(item, dict) and item.get("run_started") and batch.get("created_at"):
@@ -634,17 +633,24 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
             verdict = f"did not finish every image (guard bypassed): image {failed['image']} {failed['status']}"
         elif relaxed_rows and (stalled or level >= 4 or grow > 2):
             verdict = (f"RAN, BUT ONLY WITH THE MEMORY GUARD BYPASSED (the Hub's own requirement is {floor or '?'} GB free) and it strained this Mac; "
-                       f"it needed about {measured + MARGIN_GB:.1f} GB")
+                       f"its peak memory used was {measured:.2f} GB")
         elif relaxed_rows:
-            verdict = f"FITS WITH THE GUARD BYPASSED: the Hub's own requirement is {floor or '?'} GB free; it needed about {measured + MARGIN_GB:.1f} GB"
+            verdict = f"FITS WITH THE GUARD BYPASSED: the Hub's own requirement is {floor or '?'} GB free; its peak memory used was {measured:.2f} GB"
         elif stalled or level >= 4 or grow > 2:
             verdict = "completed but strained this Mac"
         else:
             verdict = "fits" + (" 8 GB" if ON_TARGET else " this Mac (not 8 GB)")
         lines.append(f"    Verdict: {verdict}")
         if done and measured:
-            lines.append(f"    Recommended free-memory requirement: {measured + MARGIN_GB:.1f} GB (peak {measured:.2f} GB + {MARGIN_GB:g} GB margin; the Hub's "
-                         f"default is {floor or 'not recorded'} GB). One Mac, this run only" + ("" if ON_TARGET else " - and not an 8 GB Mac") + ".")
+            # Two different numbers, never one line: the PEAK is what the worker then used; the FREE memory at the start is what
+            # the Hub needed to see before it began (its floor). Mixing them is how a floor was once set to peak + margin.
+            started = [v for v in (fnum(r.get("free_gb_before")) for r in done) if v is not None]
+            lines.append(f"    Peak memory used: {measured:.2f} GB (memory USED while generating, not the free memory needed to start). "
+                         "One Mac, this run only" + ("" if ON_TARGET else " - and not an 8 GB Mac") + ".")
+            if started:
+                lines.append(f"    Started with {min(started):.1f} GB free" + (f" (lowest of {len(started)} images; highest {max(started):.1f} GB)" if len(started) > 1 else "")
+                             + f", as the Hub counts it just before each image. The Hub's free-memory floor is {floor or 'not recorded'} GB: "
+                               "what a job needs before it starts, a different number from the peak.")
         # Swap and SSD writes, image by image and running total: does it pile up over consecutive jobs?
         steps_line = []
         for r in mine:

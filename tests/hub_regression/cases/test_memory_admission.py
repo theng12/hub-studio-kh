@@ -37,17 +37,30 @@ def test_flux_4bit_uses_measured_8gb_fleet_default(reset):
     assert policy["default_min_total_memory_gb"] == 8
     assert policy["effective_min_total_memory_gb"] == 8.0
     assert policy["min_total_source"] == "measured"
-    assert policy["effective_min_free_memory_gb"] == 2
+    # 2.8 GB of FREE memory before a job starts (not its peak): the owner's choice 2026-10-02, for headroom over the
+    # real 8 GB M1+M2 runs, which started cleanly from 3.09 GB free. The fleet default outranks the catalog for this,
+    # so it must carry the 2.8 itself.
+    assert policy["effective_min_free_memory_gb"] == 2.8
+    assert policy["default_min_free_memory_gb"] == 2.8
     assert policy["source"] == "fleet_default"
     assert policy["overridden"] is False
     requirements = broker._admission_requirements(FLUX_REPO, _flux_entry())
-    assert requirements == {"min_total": 8.0, "min_free": 2}
+    assert requirements == {"min_total": 8.0, "min_free": 2.8}
     assert broker._memory_gate(
         requirements, {"total_gb": 8.59, "available_gb": 2.4}
+    )[0] == "wait"
+    assert broker._memory_gate(
+        requirements, {"total_gb": 8.0, "available_gb": 2.7}
+    )[0] == "wait"
+    assert broker._memory_gate(
+        requirements, {"total_gb": 8.0, "available_gb": 2.8}
     )[0] == "run"
     assert broker._memory_gate(
-        requirements, {"total_gb": 8.0, "available_gb": 3.0}
+        requirements, {"total_gb": 8.0, "available_gb": 3.1}
     )[0] == "run"
+    # The same 2.8 holds when the worker's own catalog row publishes it (the shipped image row does).
+    published = dict(_flux_entry(), min_free_memory_gb=2.8)
+    assert memory_admission.describe(FLUX_REPO, published)["effective_min_free_memory_gb"] == 2.8
     # The old case dispatched to a Mac "far below every published tier". Below the *measured*
     # 8 GB is now refused outright (a 4 GB Mac is not a candidate), never queued behind memory.
     assert broker._memory_gate(
@@ -139,7 +152,7 @@ def test_qwen_base_uses_owner_approved_8gb_floor_with_live_headroom_guard(reset)
 
 
 def test_the_owner_approved_floor_has_a_producer_home(reset):
-    """The 3.2 GB floor must come from the worker's own row, so a new model needs no Hub edit.
+    """The live-free floor must come from the worker's own row, so a new model needs no Hub edit.
 
     Deleting the Hub's model-keyed table is only safe while this holds: the shipped Voice row for
     the 8 GB production voice-cloning tier publishes the owner-approved live-free floor, and its
@@ -152,8 +165,8 @@ def test_the_owner_approved_floor_has_a_producer_home(reset):
                 if m.repo == "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"), None)
     assert row is not None, "the 8 GB production voice-cloning tier left the voice catalog"
     published = voice_catalog.serialize_model(row)
-    assert published["min_free_memory_gb"] == 4.2, (
-        "the Voice worker no longer publishes the owner-approved 4.2 GB live-free floor for "
+    assert published["min_free_memory_gb"] == 2.8, (
+        "the Voice worker no longer publishes the 2.8 GB live-free floor (owner's choice 2026-10-02) for "
         f"{row.repo}; the Hub now has no source for it and would fall back to 2.0 GB")
     assert published["min_unified_memory_gb"] == 8
     # And the Hub reads exactly that, with no table of its own.

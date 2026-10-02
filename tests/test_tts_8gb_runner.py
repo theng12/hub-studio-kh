@@ -323,7 +323,7 @@ class BypassTests(unittest.TestCase):
         self.assertEqual([r["guard_relaxed"] for r in qwen], ["yes"] * 2)
         self.assertEqual(qwen[0]["override_used_gb"], "0.0")
         self.assertEqual(qwen[0]["measured_peak_gb"], "2.35")
-        self.assertEqual(qwen[0]["verdict"], "fits only with relaxed guard - real need about 2.6 GB")
+        self.assertEqual(qwen[0]["verdict"], "fits only with relaxed guard - peak memory used 2.35 GB")
         self.assertEqual(qwen[0]["hub_free_floor_gb"], "3.2")
         self.assertEqual(qwen[0]["script"], "S2")
         self.assertEqual({r["script"] for r in rows}, {"S2"}, "the 3-minute text is opt-in")
@@ -335,7 +335,14 @@ class BypassTests(unittest.TestCase):
         self.assertEqual(log["file_at_lowering"] is not None, True, "what to put back must be saved before the Hub is changed")
         self.assertEqual([o for m, o in log["override_at_post"] if m == QWEN and o is not None][:1], [{"free": 0.0, "total": 8.0}])
         self.assertIn("FITS WITH THE GUARD BYPASSED", summary)
-        self.assertIn("Recommended free-memory requirement: 2.6 GB (worker peak 2.35 GB + 0.25 GB margin; the Hub's default is 3.2 GB)", summary)
+        # Peak (memory USED) and the free memory at the start are two lines, and the old "Recommended free-memory requirement:
+        # peak + margin" line is gone: that is how a floor was once set to a peak.
+        self.assertIn("Peak memory used: 2.35 GB", summary)
+        self.assertIn("Started with ", summary)
+        self.assertIn(" GB free", summary)
+        self.assertIn("The Hub's free-memory floor for this model is 3.2 GB", summary)
+        self.assertNotIn("Recommended free-memory requirement", summary)
+        self.assertNotIn("0.25 GB margin", summary)
         self.assertEqual(json.loads(ns["RESTORE"].read_text()), {})
 
     def test_every_clip_records_ssd_writes_swapouts_the_baseline_and_net_and_the_summary_says_it_in_words(self):

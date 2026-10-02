@@ -101,7 +101,6 @@ TIMEOUT = float(os.environ.get("TTS8_TIMEOUT", "480"))   # hard wall-clock limit
 S4_FACTOR = 3.0
 MEM_WAIT_S = float(os.environ.get("TTS8_MEM_WAIT", "300"))   # only on a Hub that cannot bypass: a job held for memory this long is given up on
 RELAX_GB = float(os.environ.get("TTS8_RELAX_FREE_GB", "0"))  # the free-memory requirement while a model is measured (0 = guard bypassed)
-MARGIN_GB = 0.25         # the recommended requirement is the measured peak plus this
 MIN_VERSION = (0, 6, 125)   # the per-model override route (the bypass) arrived in 0.6.125
 SLOW_FACTOR = 3.0
 STALL_S = 20.0           # a poll or a sampling pass that takes this long means the Mac was not responsive
@@ -671,7 +670,7 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
     rec.update(measured_peak_gb=round(peak, 2) if peak else "", swap_delta_gb=round(max(sampler.swap_peak - (swap0 or 0), 0), 3))
     if rec["status"] == "completed":
         rec["verdict"] = ("fits at default guard" if not relaxed
-                          else f"fits only with relaxed guard - real need about {peak + MARGIN_GB:.1f} GB")
+                          else f"fits only with relaxed guard - peak memory used {peak:.2f} GB")
     elif rec["status"] in ("timed out", "failed"):
         rec["verdict"] = "does not fit - " + ("too slow, timed out" if rec["status"] == "timed out" else "crashed or errored")
     if isinstance(batch, dict) and isinstance(item, dict) and item.get("run_started") and batch.get("created_at"):
@@ -734,10 +733,10 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
             verdict = f"did not complete on this Mac (guard bypassed): {failed['voice']} {failed['script']} {failed['status']}"
         elif relaxed_rows and len(done) == len(mine) and (slow or stalled or level >= 4 or grow > 2):
             verdict = (f"RAN, BUT ONLY WITH THE MEMORY GUARD BYPASSED (the Hub's own requirement is {floor or '?'} GB free) and it strained this Mac; "
-                       f"it needed about {measured + MARGIN_GB:.1f} GB")
+                       f"its peak memory used was {measured:.2f} GB")
         elif relaxed_rows and len(done) == len(mine):
             verdict = (f"FITS WITH THE GUARD BYPASSED: the Hub's own requirement is {floor or '?'} GB free; "
-                       f"it needed about {measured + MARGIN_GB:.1f} GB")
+                       f"its peak memory used was {measured:.2f} GB")
         elif len(done) < len(mine):
             verdict = "did not complete on this Mac"
         elif slow or stalled or level >= 4 or grow > 2:
@@ -746,9 +745,16 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
             verdict = "fits" + (" 8 GB" if ON_TARGET else " this Mac (not 8 GB)")
         lines.append(f"{m['name']}: {', '.join(facts)} -> {verdict}")
         if done and measured:
-            lines.append(f"    Recommended free-memory requirement: {measured + MARGIN_GB:.1f} GB (worker peak {measured:.2f} GB + {MARGIN_GB:g} GB margin; "
-                         f"the Hub's default is {floor or 'not recorded'} GB). Measured on this {RAM_GB} GB Mac, in this run only"
+            # Two different numbers, never one line: the PEAK is what the worker then used; the FREE memory at the start is what
+            # the Hub needed to see before it began (its floor). Mixing them is how a floor was once set to peak + margin.
+            started = [v for v in (fnum(r.get("free_gb_before")) for r in done) if v is not None]
+            lines.append(f"    Peak memory used: {measured:.2f} GB (the worker's footprint at its highest while generating - memory USED, not the free memory "
+                         f"needed to start). Measured on this {RAM_GB} GB Mac, in this run only"
                          + ("" if ON_TARGET else " - and it is not an 8 GB Mac, so not 8 GB evidence") + ".")
+            if started:
+                lines.append(f"    Started with {min(started):.1f} GB free" + (f" (lowest of {len(started)} clips; highest {max(started):.1f} GB)" if len(started) > 1 else "")
+                             + f", as the Hub counts it just before each clip. The Hub's free-memory floor for this model is {floor or 'not recorded'} GB: "
+                               "the free memory a job needs before it starts, which is a different number from the peak.")
         wear = ssd_wear.wear_lines(done, hours_per_day=DAY_HOURS)
         if wear:
             lines += ["    " + l for l in wear]
@@ -768,7 +774,7 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
               f"Memory guard: before each model the Hub's free-memory requirement was bypassed (set to {RELAX_GB:g} GB, TTS8_RELAX_FREE_GB) with no waiting, and put back after",
               "the model and on any exit. Nothing is cancelled for swap or memory pressure - they are recorded. Every clip has a hard time limit; one that",
               "runs over is 'timed out' (cancelled), one that dies is 'failed' with the error, and the model's remaining clips are skipped.",
-              "'Recommended requirement' is the measured peak plus a small margin; it is one Mac's measurement, not a decision - nothing here changes the Hub's own number.",
+              "'Peak memory used' is what the worker used while generating; 'Started with' is the free memory the Hub saw just before the clip. They are different numbers: a free-memory floor is what a job needs to START, not its peak. Both are one Mac's measurement, not a decision - nothing here changes the Hub's own number.",
               f"'DID NOT START' only appears on a Hub that cannot bypass the guard: the job waited more than {MEM_WAIT_S / 60:g} min for free memory (TTS8_MEM_WAIT)."]
     return "\n".join(lines) + "\n"
 

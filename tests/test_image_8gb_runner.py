@@ -260,6 +260,10 @@ class MeasuringLoopTests(unittest.TestCase):
                          "standalone run"):
             self.assertIn(expected, text)
         self.assertEqual("NOT 8 GB evidence" in text, not ns["ON_TARGET"])
+        # Peak memory USED and the free memory the job STARTED with are two lines, never one "recommended requirement".
+        self.assertNotIn("Recommended free-memory requirement", text)
+        self.assertIn("Peak memory used: 6.50 GB", text)
+        self.assertRegex(text, r"Started with \d+\.\d GB free")
 
     def test_the_summary_warns_when_the_worker_was_already_full_or_the_mac_was_busy(self):
         ns = runner()

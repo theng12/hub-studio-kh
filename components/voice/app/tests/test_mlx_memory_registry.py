@@ -32,7 +32,7 @@ def test_every_catalog_floor_names_the_measurement_it_came_from() -> None:
         note = row.min_free_memory_note.strip()
         assert note, (
             f"{row.repo}: min_free_memory_gb={row.min_free_memory_gb} has no min_free_memory_note. A floor is a "
-            "measured peak footprint plus margin, never a formula: say on which Mac, build and date."
+            "measured free memory needed before a job starts (not its peak), never a formula: say on which Mac, build and date."
         )
         assert "measure" in note.lower(), f"{row.repo}: the note must say what was measured"
         assert 1.0 <= row.min_free_memory_gb <= 64.0, f"{row.repo}: implausible floor {row.min_free_memory_gb}"

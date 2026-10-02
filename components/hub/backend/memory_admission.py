@@ -46,9 +46,11 @@ DEFAULT_MIN_FREE_MEMORY_GB = 2.0
 _FLEET_DEFAULTS = {
     "aitrader/flux2-klein-4b-mlx-4bit": {
         "min_total_memory_gb": 8.0,
-        # Unchanged in 0.6.128. Measured on a 32 GB Mac emulating 8 GB (2026-10-02), Klein's staged + streamed footprint
-        # is ~2.9 GB; the floor is to be set from the 8 GB runner (an unmet free floor waits, and 8 GB Macs often have 2.4-3.0 GB).
-        "min_free_memory_gb": 2.0,
+        # Free memory needed before start, from the real 8 GB M1+M2 runs 2026-10-02 (started cleanly from 3.76-4.14 GB
+        # free, peak 2.16-2.68 GB, ~0 swap): the free memory a job needs to begin, NOT its peak. This table outranks the
+        # worker's catalog row for the free floor (`describe`), so 2.8 (owner's choice 2026-10-02, for headroom) is set here as well as in the catalog. Z-Image-Turbo
+        # 4-bit has no entry on purpose: it would also override its manifest's total tier; its catalog row carries 3.0.
+        "min_free_memory_gb": 2.8,
         "reason": "Fleet-qualified on 8 GB Apple-silicon Macs",
     },
 }

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.131 — 2026-10-02 · Passwords and tokens hidden behind an eye icon; memory floors from the real 8 GB measurement
+
+Release of `integrate/0.6.131` (merges feat/secret-protection, commit 4fe6d08, built on 0.6.129; no conflicts).
+- **Secrets are masked (native app):** the Fleet token and Hub token on Connections, the new Fleet token after a rotation, the Hand-over and
+  Join-a-controller token fields and the Hugging Face token are shown as 12 fixed dots (no prefix, suffix or length) until the eye is pressed;
+  Copy works while masked; typed tokens use a secure field until revealed. `SecretValue` / `SecretInput` in `native/Design.swift`; the pixel check
+  (two different secrets draw identical pixels while masked) runs inside the native lifecycle gate; `tests/test_secret_masking.py` pins that every
+  token shown or typed uses them. No auth change.
+- **Free-memory floors = 2.8 GB** (the FREE memory a job needs before it starts, NOT its peak) for Qwen3-TTS 0.6B 8-bit and 4-bit, VoxCPM2 4-bit,
+  OmniVoice bf16, FLUX.2 Klein 4-bit and Z-Image-Turbo 4-bit. The owner chose 2.8 GB on 2026-10-02 for headroom (live idle 8 GB Macs show 3.27-5.22 GB
+  free). Source: the real 8 GB M1 + M2 runs on 0.6.128 (1406 / 1407, 2026-10-02): jobs started
+  cleanly from 3.09-4.65 GB free and peaked at 3.65-4.41 GB (voice) / 2.16-2.97 GB (image) with ~0 swap, so the old floors (4.1-4.6 GB for voice, taken
+  from peak + margin) made healthy 8 GB Macs wait for memory they did not need. Each floor's `min_free_memory_note` says what was measured.
+  Where it lives: the Voice catalog rows (`components/voice/app/backend/catalog.py`); the Image rows (`generation.py`); and for FLUX.2 Klein the
+  Hub's `memory_admission._FLEET_DEFAULTS`, which OUTRANKS the worker's catalog row for the free floor (2.0 -> 2.8), so it is set in both. Z-Image-Turbo
+  has no fleet default (it would also override its manifest's 8 GB total tier); its catalog row went 3.0 -> 2.8. Breeze and Fish floors unchanged.
+- **8 GB runners no longer confuse peak with floor:** the TTS and image runners' summary printed "Recommended free-memory requirement: peak + 0.25 GB",
+  which is how the floors above were set too high. It now prints "Peak memory used: X GB" and "Started with Y GB free" (lowest of the clips), and the CSV
+  verdict says "peak memory used X GB" instead of "real need about".
+
 ## 0.6.130 — 2026-10-02 · Even Fish / VoxCPM2 / Chatterbox / Pocket pauses, Fish 4-bit on 16 GB, Breeze back to 16 GB only
 
 Release of `integrate/0.6.130` (merges fix/pauses-tiers-0130, commit 645d542; no conflicts). Owner decisions 2026-10-02:

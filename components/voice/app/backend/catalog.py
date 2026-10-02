@@ -710,11 +710,10 @@ CATALOG: tuple[ModelEntry, ...] = (
         # run swapping. The output is correct either way (93% transcribe-back),
         # which is exactly why the old 8 GB floor looked fine on paper.
         min_unified_memory_gb=16,
-        min_free_memory_gb=4.6,
+        min_free_memory_gb=2.8,
         min_free_memory_note=(
-            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 4.1-4.3 GB (up to 4.9 GB "
-            "in earlier runs with the 18.9 s Christian reference) with the mlx_memory bounds "
-            "(S2/S4, 2026-10-02, 32 GB M2 Max) + 0.25 GB margin. MLX peak 3.3 GB, was 9.2 GB."
+            "Free memory needed before start; owner chose 2.8 GB on 2026-10-02 for headroom - measured 8 GB M1+M2 runs started cleanly from 3.25 GB free (started 3.25-4.47 GB free), peak 4.30-4.41 GB, ~0 swap. "
+            "This is the free memory a job needs to begin, NOT its peak: the peak is the memory it then uses."
         ),
         recommended_hardware="24 GB unified memory. Measured at 3.95x realtime on 16 GB; an 8 GB Mac swaps and drops to 47x realtime.",
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
@@ -812,11 +811,10 @@ CATALOG: tuple[ModelEntry, ...] = (
         # (`workload_policy._HUB_PRODUCTION_FREE_GB`, keyed by this exact repo id) because this
         # row published no floor; a model-keyed table in a consumer is the defect this release
         # removes, so the fact lives with the model that has it.
-        min_free_memory_gb=4.2,
+        min_free_memory_gb=2.8,
         min_free_memory_note=(
-            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 3.8-3.9 GB with the "
-            "mlx_memory bounds (S2/S4, both owner voices, 2026-10-02, 32 GB M2 Max) + 0.25 GB margin. "
-            "Before the bounds the worker peaked at 7.3-8.0 GB MLX active and 7.7 GB on the 8 GB mini."
+            "Free memory needed before start; owner chose 2.8 GB on 2026-10-02 for headroom - measured 8 GB M1+M2 runs started cleanly from 3.40 GB free (started 3.40-4.26 GB free), peak 3.97-4.15 GB, ~0 swap. "
+            "This is the free memory a job needs to begin, NOT its peak: the peak is the memory it then uses."
         ),
         recommended_hardware=(
             "Apple Silicon with 8 GB unified memory minimum; 16 GB preferred "
@@ -848,11 +846,10 @@ CATALOG: tuple[ModelEntry, ...] = (
         size_gb=1.7,
         gated=False,
         min_unified_memory_gb=8,
-        min_free_memory_gb=4.1,
+        min_free_memory_gb=2.8,
         min_free_memory_note=(
-            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 3.6-3.8 GB with the "
-            "mlx_memory bounds (S2 both owner voices, S4 chris, 2026-10-02, 32 GB M2 Max) + 0.25 GB "
-            "margin. MLX peak 2.8-3.2 GB, was 7.17 GB without them."
+            "Free memory needed before start; owner chose 2.8 GB on 2026-10-02 for headroom - measured 8 GB M1+M2 runs started cleanly from 4.29 GB free (started 4.29-4.49 GB free), peak 3.87-4.04 GB, ~0 swap. "
+            "This is the free memory a job needs to begin, NOT its peak: the peak is the memory it then uses."
         ),
         recommended_hardware=(
             "Apple Silicon with 8 GB unified memory minimum; 16 GB preferred. About 0.3 GB less "
@@ -970,11 +967,10 @@ CATALOG: tuple[ModelEntry, ...] = (
         size_gb=2.0,
         gated=False,
         min_unified_memory_gb=8,
-        min_free_memory_gb=4.4,
+        min_free_memory_gb=2.8,
         min_free_memory_note=(
-            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 3.4-4.1 GB with the "
-            "mlx_memory bounds (S2/S4, 2026-10-02, 32 GB M2 Max) + 0.25 GB margin. MLX peak 3.44 GB "
-            "in the first section (reference encode), 2.7 GB after; was 5.4 GB."
+            "Free memory needed before start; owner chose 2.8 GB on 2026-10-02 for headroom - measured 8 GB M1+M2 runs started cleanly from 3.09 GB free (started 3.09-4.65 GB free), peak 3.65-3.93 GB, ~0 swap. "
+            "This is the free memory a job needs to begin, NOT its peak: the peak is the memory it then uses."
         ),
         recommended_hardware="M1 Pro / M2 16 GB recommended.",
         capabilities=("tts", "voice-cloning", "multilingual", "expressive"),
