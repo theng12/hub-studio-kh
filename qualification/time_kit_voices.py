@@ -43,6 +43,9 @@ TIMED_NAME = "transcript.timed.json"
 MAX_REFERENCE_SECONDS = 15.0
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import library_guard  # noqa: E402
+
 def reference_clip(folder: Path) -> Path | None:
     return next((p for p in sorted(folder.iterdir()) if p.stem == "reference"), None)
 
@@ -126,7 +129,9 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         data, ready = Path(tmp), Path(tmp) / "ready.json"
-        process = start_hub(args.app, args.models, data, ready)
+        # Never hand the real library to a Hub that has a throwaway data directory (see library_guard).
+        models = library_guard.clone(args.models, data / "library", [args.model])
+        process = start_hub(args.app, models, data, ready)
         try:
             info = json.loads(ready.read_text())
             base, token = info["url"], info["token"]

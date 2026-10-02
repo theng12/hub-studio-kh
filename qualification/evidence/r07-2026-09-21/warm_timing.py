@@ -17,6 +17,9 @@ import tempfile
 import time
 
 import httpx
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import library_guard  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[3]
 APP = Path("/Applications/Studio Hub.app")
@@ -27,13 +30,14 @@ PROMPT = "Warm lo-fi hip hop beat, mellow piano, vinyl crackle"
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, default=APP)
-    parser.add_argument("--models", type=Path, default=Path.home() / "StudioHubModels")
+    parser.add_argument("--models", type=Path, required=True,
+                        help="a DISPOSABLE library (qualification/library_guard.py clone ...), never the real one")
     parser.add_argument("--duration", type=float, default=30.0)
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    app, models = args.app.resolve(), args.models.resolve()
+    app, models = args.app.resolve(), library_guard.require_disposable(args.models)
     params = {"duration_seconds": args.duration, "steps": 8, "guidance_scale": 1.0,
               "shift": 3.0, "seed": -1, "instrumental": True,
               "lyrics": "[Instrumental]", "vocal_language": "unknown"}

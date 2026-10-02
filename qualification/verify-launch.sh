@@ -8,13 +8,18 @@
 # the app said only "the engine exited (code 2)" and every automated test had driven the
 # worker directly, so nothing exercised the app's own command line.
 #
-# Read-only with respect to your real state: it uses a fresh temporary directory and does
-# not touch the library, your preferences, or your app data.
+# It never touches your real state. It starts the service with a fresh temporary data
+# directory AND a fresh, EMPTY temporary model library, both under $TMPDIR,
+# so no model, library or preference of yours is read, moved or shelved. (Until 2026-10-02 it was
+# given the real library next to a throwaway data directory; an app older than the library-
+# ownership check then shelved/retired real weights into that throwaway directory's Trash Folder,
+# which destroyed them. A library is therefore never passed to the service here.)
 #
 #   sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/verify-launch.sh"
 #
-# Override the paths if yours differ:
-#   APP="/Applications/Studio Hub 0.4.0.app" LIB="/Volumes/Models/model-library" sh verify-launch.sh
+# Override the app if yours differs:
+#   APP="/Applications/Studio Hub 0.4.0.app" sh verify-launch.sh
+# LIB= is accepted for old command lines and ignored.
 
 # Defaults that work with no environment at all, which is what happens when this is
 # double-clicked in Finder rather than run from a terminal.
@@ -27,22 +32,13 @@ if [ -z "${APP:-}" ]; then
   done
   APP="${APP:-$KIT/Studio Hub.app}"
 fi
-if [ -z "${LIB:-}" ]; then
-  # `$KIT/../model-library` is the kit's own library when this script is run from `Technical/`,
-  # which is where it sits in the kit and therefore how it is actually used: someone who has just
-  # copied the folder wants `sh Technical/check-everything.sh` to work with no arguments.
-  for candidate in "$KIT/model-library" "$KIT/../model-library" "$HOME/model-library" \
-                   "/Volumes/Models/model-library"; do
-    [ -d "$candidate" ] && { LIB="$candidate"; break; }
-  done
-fi
-LIB="${LIB:-}"
+# LIB (a real library) is deliberately not used: see the header.
 
 SVC="$APP/Contents/MacOS/StudioHubService"
 PY="$APP/Contents/Resources/runtimes/voice/bin/python3"
 
 echo "app:     $APP"
-echo "library: $LIB"
+echo "library: (an empty temporary one; your real model library is not used)"
 echo
 
 fail() { echo "RESULT: FAIL — $1"; exit 1; }
@@ -50,7 +46,6 @@ fail() { echo "RESULT: FAIL — $1"; exit 1; }
 [ -d "$APP" ] || fail "no app at $APP"
 [ -x "$SVC" ] || fail "the bundled service is missing or not executable (replace this app with a complete copy)"
 [ -x "$PY" ]  || fail "the bundled Python runtime is missing or not executable (replace this app with a complete copy)"
-[ -n "$LIB" ] && [ -d "$LIB" ] || fail "no model library found — set LIB= to wherever you put it (looked beside this script, in your home folder, and in /Volumes/Models)"
 MANIFEST="$APP/Contents/Resources/release-manifest.json"
 identity=$("$PY" - "$MANIFEST" <<'PY'
 import json
@@ -76,6 +71,10 @@ echo
 
 TMP=$(mktemp -d)
 chmod 700 "$TMP"
+# The service needs a model-library folder to start; give it an empty throwaway one.
+LIB="$TMP/empty-library"
+mkdir -p "$LIB/.studiohub"
+chmod 700 "$LIB/.studiohub"
 # The flags have to be the ones the app passes, or this proves a command line nobody uses -
 # which is exactly how a `--listen-host`/`--host` mismatch shipped. The port is one of them now:
 # the app pins it so a node's address keeps naming this Mac. When Studio Hub is already running on

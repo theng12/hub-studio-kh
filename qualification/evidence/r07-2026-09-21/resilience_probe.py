@@ -20,6 +20,9 @@ import tempfile
 import time
 
 import httpx
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import library_guard  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[3]
 APP = Path("/Applications/Studio Hub.app")
@@ -30,7 +33,7 @@ WHISPER = "mlx-community/whisper-large-v3-turbo"
 class Service:
     def __init__(self, data: Path, models: Path):
         self.data = data
-        self.models = models
+        self.models = library_guard.require_disposable(models)
         self.ready = data / "hub-ready.json"
         self.log_path = data / "service.log"
         self.process: subprocess.Popen | None = None
@@ -192,7 +195,8 @@ def history_subtitle(models: Path, output: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("probe", choices=("cancel-music", "history-subtitle"))
-    parser.add_argument("--models", type=Path, default=Path.home() / "StudioHubModels")
+    parser.add_argument("--models", type=Path, required=True,
+                        help="a DISPOSABLE library (qualification/library_guard.py clone ...), never the real one")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.probe == "cancel-music":

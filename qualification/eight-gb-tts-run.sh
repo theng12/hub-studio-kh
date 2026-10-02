@@ -1,10 +1,10 @@
 #!/bin/bash
-# Text-to-speech on an 8 GB Mac: Qwen3-TTS 0.6B 8-bit, VoxCPM2 4-bit, OmniVoice bf16.
+# Text-to-speech on an 8 GB Mac: Qwen3-TTS 0.6B 8-bit and 4-bit, VoxCPM2 4-bit, OmniVoice bf16, Breeze TTS 2 4-bit.
 #
-#   bash eight-gb-tts-run.sh                 the test (two voices x the short text S2, three models; guard bypassed)
+#   bash eight-gb-tts-run.sh                 the test (two voices x the short text S2, every model below; guard bypassed)
 #   bash eight-gb-tts-run.sh --with-s4       also the 3-minute text S4 (slow: can take hours on 8 GB)
 #   bash eight-gb-tts-run.sh --quick         a short check (S2, Chris only) - the script's own self-test
-#   bash eight-gb-tts-run.sh --models qwen3,voxcpm2   only these (qwen3, qwen3-4bit, voxcpm2, omnivoice)
+#   bash eight-gb-tts-run.sh --models qwen3,voxcpm2   only these (qwen3, qwen3-4bit, voxcpm2, omnivoice, breeze)
 #   bash eight-gb-tts-run.sh --allow-non-target       run the full test on a Mac that is not 8 GB
 #
 # (Easier: double-click RUN-8GB-TTS.command, which runs this.)
@@ -14,7 +14,7 @@
 # scheduler, section splitting and joins apply exactly as in production. It uses the same two texts
 # (tts-script-S2.txt, about 175 words; tts-script-S4.txt, about 3 minutes) and the same two owner
 # voices as the 32 GB Mac measurement, one job at a time, in this order:
-#   Qwen3-TTS 0.6B 8-bit -> VoxCPM2 4-bit -> OmniVoice bf16.
+#   Qwen3-TTS 0.6B 8-bit -> Qwen3-TTS 0.6B 4-bit -> VoxCPM2 4-bit -> OmniVoice bf16 -> Breeze TTS 2 4-bit.
 #
 # It measures per clip: finished or failed (and why), wall time, audio length, real-time factor,
 # the biggest memory the voice worker used (macOS `footprint`, sampled every second), memory
@@ -118,12 +118,16 @@ MODELS = [
          pkg="voxcpm2-4bit", repo="mlx-community/VoxCPM2-4bit"),
     dict(key="omnivoice", name="OmniVoice bf16", csv_model="OmniVoice", quant="bf16",
          pkg="omnivoice-bfloat16", repo="mlx-community/OmniVoice-bfloat16"),
+    # Breeze's manifest floor is 16 GB (0.27x realtime; ~3.3 GB resident), so the kit's copy step does not put it on an
+    # 8 GB Mac by itself; it is in this list because the owner asked for it to be measured. No 32 GB reference time.
+    dict(key="breeze", name="Breeze TTS 2 4-bit", csv_model="Breeze TTS 2", quant="4bit",
+         pkg="breeze-tts-2-mlx-4bit", repo="mlx-community/Breeze-TTS-2-mlx-4bit"),
 ]
 VOICES = [("chris", "cd07b21a2ccf", "Chris - Soft and Soothing"),
           ("christian", "0616aec33b41", "Christian - Slow & Calming")]
 SCRIPT_FILES = [("S2", "tts-script-S2.txt", "about 175 words"), ("S4", "tts-script-S4.txt", "about 3 minutes")]
 # Generation seconds on the 32 GB M2 Max (audit-20260930/tts-samples/summary.csv), same texts and voices.
-# qwen3-4bit has no 32 GB reference time yet, so its clips are never flagged "slow" against one.
+# qwen3-4bit and breeze have no 32 GB reference time yet, so their clips are never flagged "slow" against one.
 REF32 = {("qwen3", "chris", "S2"): 42.5, ("qwen3", "chris", "S4"): 105.1,
          ("qwen3", "christian", "S2"): 44.4, ("qwen3", "christian", "S4"): 126.0,
          ("voxcpm2", "chris", "S2"): 97.0, ("voxcpm2", "chris", "S4"): 270.5,

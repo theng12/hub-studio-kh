@@ -11,6 +11,9 @@ RES="$APP/Contents/Resources"
 PY="$RES/runtimes/voice/bin/python3"
 OUT="$ROOT/.build/chat-review-2026-09-25"
 DATA="$(mktemp -d /tmp/chat-review.XXXXXX)"
+# An EMPTY throwaway library: never the real ~/StudioHubModels (a Hub with a throwaway data dir
+# shelves/retires whatever library it is given into that data dir; see qualification/library_guard.py).
+LIB="$DATA/empty-library"; mkdir -p "$LIB/.studiohub"; chmod 700 "$LIB/.studiohub"
 READY="$DATA/hub-ready.json"
 mkdir -p "$OUT"; chmod 700 "$DATA"
 
@@ -25,7 +28,7 @@ PY
 
 echo
 echo "=== starting the packaged Hub (starts all packaged workers as children) ==="
-"$PY" -I -B "$RES/hub_worker.py" --data-dir "$DATA" --models-dir "$HOME/StudioHubModels" \
+"$PY" -I -B "$RES/hub_worker.py" --data-dir "$DATA" --models-dir "$LIB" \
   --ready-file "$READY" --port 0 --host 127.0.0.1 --offline >"$OUT/hub.out" 2>&1 &
 HPID=$!
 for _ in $(seq 1 240); do [ -f "$READY" ] && break; kill -0 "$HPID" 2>/dev/null || break; sleep 1; done
@@ -113,7 +116,8 @@ fi
 
 echo
 echo "=== the app's own gate: does the model library carry the install receipt? ==="
-python3 - "$HOME/StudioHubModels/.studiohub/installed.json" <<'PY'
+# Read-only look at a receipt index: set REAL_INDEX to inspect a real one (the Hub itself never gets it).
+python3 - "${REAL_INDEX:-$LIB/.studiohub/installed.json}" <<'PY'
 import json, sys, os, time
 path = sys.argv[1]
 d = json.load(open(path))

@@ -145,10 +145,10 @@ script checks the outcome instead of the intention.
 If it fails, it prints the service's own message — which is the thing the app never shows you.
 Send that message back and it will be obvious what is wrong.
 
-To point it at a different app or library:
+To point it at a different app (it always uses an empty temporary model library, never yours):
 
 ```sh
-APP="/Applications/Studio Hub.app" LIB="/Volumes/SomeDrive/model-library" sh verify-launch.sh
+APP="/Applications/Studio Hub.app" sh verify-launch.sh
 ```
 
 ## 7. Optional: prove the copy is intact

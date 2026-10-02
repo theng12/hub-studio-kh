@@ -18,6 +18,9 @@ import tempfile
 import time
 
 import httpx
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import library_guard  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_APP = Path("/Applications/Studio Hub.app")
@@ -33,7 +36,8 @@ def riff_wave(data: bytes) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, default=DEFAULT_APP)
-    parser.add_argument("--models", type=Path, default=Path.home() / "StudioHubModels")
+    parser.add_argument("--models", type=Path, required=True,
+                        help="a DISPOSABLE library (qualification/library_guard.py clone ...), never the real one")
     parser.add_argument("--clip", type=Path, default=DEFAULT_CLIP)
     parser.add_argument("--model", default="mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit")
     parser.add_argument("--text", default=TRANSCRIPT)
@@ -47,7 +51,7 @@ def main() -> int:
                         help="acknowledge delivery through the Hub after verifying the artifact")
     args = parser.parse_args()
 
-    app, models, clip = args.app.resolve(), args.models.resolve(), args.clip.resolve()
+    app, models, clip = args.app.resolve(), library_guard.require_disposable(args.models), args.clip.resolve()
     service = app / "Contents/MacOS/StudioHubService"
     assert service.is_file(), service
     audio = clip.read_bytes()

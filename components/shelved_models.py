@@ -89,6 +89,9 @@ def shelve_installed(library: str | os.PathLike[str], manifests, trash_root: str
     """
     if keep_all:
         return []
+    from components import library_ownership   # lazy: the kit's copy script imports this file by bare name
+    if library_ownership.moving_into_temp(library, trash_root):
+        return []                               # never carry real weights into a throwaway folder
     when = time.gmtime(time.time() if now is None else float(now))
     moved, shelved_ids = [], []
     for manifest in manifests:

@@ -17,6 +17,9 @@ import tempfile
 import time
 
 import httpx
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import library_guard  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_APP = Path("/Applications/Studio Hub.app")
@@ -32,14 +35,15 @@ PNG_MAGIC = bytes([137, 80, 78, 71, 13, 10, 26, 10])
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, default=DEFAULT_APP)
-    parser.add_argument("--models", type=Path, default=Path.home() / "StudioHubModels")
+    parser.add_argument("--models", type=Path, required=True,
+                        help="a DISPOSABLE library (qualification/library_guard.py clone ...), never the real one")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--save-png", type=Path)
     parser.add_argument("--ack", action="store_true",
                         help="acknowledge delivery through the Hub after verifying the artifact")
     args = parser.parse_args()
 
-    app, models = args.app.resolve(), args.models.resolve()
+    app, models = args.app.resolve(), library_guard.require_disposable(args.models)
     service = app / "Contents/MacOS/StudioHubService"
     assert service.is_file(), service
     receipt: dict = {"app": str(app), "models_dir": str(models), "model": MODEL,

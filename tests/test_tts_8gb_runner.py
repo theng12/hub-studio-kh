@@ -43,7 +43,7 @@ class RunnerTests(unittest.TestCase):
         found = re.findall(r'pkg="([^"]+)", repo="([^"]+)"', program())
         self.assertEqual([p for p, _ in found],
                          ["qwen3-tts-12hz-0-6b-base-8bit", "qwen3-tts-12hz-0-6b-base-4bit",
-                          "voxcpm2-4bit", "omnivoice-bfloat16"])
+                          "voxcpm2-4bit", "omnivoice-bfloat16", "breeze-tts-2-mlx-4bit"])
         for package_id, repo in found:
             self.assertEqual(manifests[package_id]["model_id"], repo)
 
