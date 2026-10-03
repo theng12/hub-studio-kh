@@ -1578,14 +1578,36 @@ def listed_batches() -> list[dict]:
         listed.values(), key=lambda value: -value["created_at"])]
 
 
+def drain_holds_group() -> bool:
+    """True when this Mac drains for an update and its own work is done: the group is held too.
+
+    A controller's app counts the work it dispatched to its nodes as its own (its batches), and its
+    relaunch would cut that work short. So once nothing runs on this Mac any more, nothing new starts
+    on the nodes either: what they run finishes, the count reaches zero and the controller installs.
+    Without this a long queue kept some node busy for ever and the controller - and, holding the
+    group's one update slot, every Mac behind it - never updated (owner's rule 2026-10-03: stop new
+    work, finish current work, install; never held back because there is work).
+    """
+    if not update_drain.draining():
+        return False
+    from . import chat_jobs, transcription_jobs
+    registry = _monitor().registry
+    local = {s.get("machine", "local") for s in registry if peers.is_local_studio(s)} | {"local"}
+    working = set(_busy) | set(chat_jobs.busy_studios) | set(transcription_jobs.busy_studios)
+    return not (any(peers.is_local_studio(s) for s in registry if s.get("id") in working)
+                or local & set(_external_machine_leases))
+
+
 def busy_machines() -> set[str]:
     """Physical machines holding a non-preemptive heavy-work lease."""
     by_id = {s["id"]: s for s in _monitor().registry}
     if update_drain.draining():
         # This Mac is finishing its work to install an update: its own machine is taken. A
-        # controller's joined nodes are other Macs and keep taking work - only this Mac's own
-        # work drains (it used to name every machine, so a draining controller left its idle
-        # nodes idle for the whole drain).
+        # controller's joined nodes are other Macs and keep taking work while this Mac's own work
+        # finishes (it used to name every machine, so a draining controller left its idle nodes
+        # idle for the whole drain) - then they stop too, see `drain_holds_group`.
+        if drain_holds_group():
+            return {s.get("machine", "local") for s in by_id.values()} | {"local"}
         return {s.get("machine", "local") for s in by_id.values()
                 if peers.is_local_studio(s)} | {"local"}
     occupied = set(_external_machine_leases) | {
