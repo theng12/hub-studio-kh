@@ -3,7 +3,17 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.139** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+Last updated: **0.6.140** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.140 - workstation mode for shop Macs (`release/0.6.140` = 0.6.139 + 5e5ad77 `feat/workstation-mode` incl. 9e44011, 2026-10-03).**
+> `components/hub/workstation.py`: `<hub data>/workstation.json` (default off), set via controller relay `POST /api/hub/fleet/nodes/{id}/workstation` ->
+> node `/api/hub/workstation`; `workstation` block on `/api/hub/resources` + fleet rows. On: workers at `PRIO_DARWIN_BG`, only `components/workstation_models.py`
+> (6 models, package + repo ids; checked against `model-manifests/` after 0.6.139, all ship, none retired/shelved), only-when-idle / step-aside / quiet hours,
+> no pop-ups. Critical memory pressure 20 s -> job handed back as `WORKSTATION_YIELDED` -> broker re-queues on another Mac of the group or returns it to the
+> Gateway, no try spent; `WORKSTATION_STANDING_BY` / `WORKSTATION_MODEL_NOT_ALLOWED` refusals are waits (30 s / 600 s). Kit Extras: `Set Up a Shop Mac.command`,
+> `Set Up the Shops Controller.command` (copied by `prepare-kit-extras.sh` beside Yam Display); `NODE-SETUP-CHECKLIST.md` "Shops". Merged with no textual
+> conflicts against 0.6.139's uniform narration (broker hunks are separate). Gate numbers, DMG and checksum: `_orchestra/audit-20261001/release-0140/`.
+> Not installed / not on the drives / not published until the coordinator does it. Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
 
 > **0.6.139 - one pause rule, 250-character sections and 1,500-character requests for every voice; the kit installs Yam Display (`release/0.6.139` = 0.6.138 + 3f59771 `feat/kit-yamdisplay` + 52eb9a7 `feat/uniform-narration` incl. 37b0971, 2026-10-03).**
 > `long_form_policy` uniform joins 0.6 s sentence / 1.0 s paragraph / 0.15 s soft for every family (request `sentence_pause_sec` / `paragraph_pause_sec` override);

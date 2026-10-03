@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.140 — 2026-10-03 · Workstation mode: a shop's cashier Mac lends the fleet its idle time and never its user's
+
+Release of `release/0.6.140` (= 0.6.139 + `feat/workstation-mode` 5e5ad77 (incl. 9e44011), merged `--no-ff`, no textual conflicts; the branch was cut
+from 3f59771, so it is checked against 0.6.139's uniform narration and kit Extras: no shared code path, broker edits in separate hunks).
+- **Workstation mode** (`components/hub/workstation.py`, owner 2026-10-03 "Shops"): per-Mac settings in `<hub data>/workstation.json` (default off), set
+  from the Gateway via the controller relay `POST /api/hub/fleet/nodes/{id}/workstation` -> the node's `/api/hub/workstation` (fleet token); published as
+  `workstation` {settings, state off|working|standing_by|yielded|quiet_hours, reason, jobs_today, yields_today} on `/api/hub/resources` and every fleet row.
+  When on: worker processes (and children) at `PRIO_DARWIN_BG`; only-when-idle (HID idle >= `idle_minutes`, default 3, or screen locked); step aside
+  (input -> the current job finishes, model unloaded, no new work for `resume_after_minutes`, default 2); quiet hours; no desktop alerts.
+- **Six-model allowlist** (`components/workstation_models.py`): FLUX.2 Klein 4B 4-bit, Z-Image-Turbo 4-bit, Qwen3-TTS 0.6B Base 4-bit, VoxCPM2 4-bit,
+  Whisper large-v3 turbo, Stable Audio 3 Medium, each by package id and repo id; any other model is refused at the peer door
+  (`WORKSTATION_MODEL_NOT_ALLOWED`). Checked against 0.6.140's `model-manifests/`: all six ship, none retired or shelved
+  (`tests/test_workstation_mode.py` pins it).
+- **Memory**: no fixed reserve; a job starts on the model's own free floor or the Mac's `start_free_gb` (`broker._with_machine_floor`). A started job
+  finishes; only macOS critical memory pressure for 20 s cancels it and hands it back as **`WORKSTATION_YIELDED`** (receipt kept, worker stopped if it
+  does not stop in 2 s).
+- **Controller** (`broker.py`, `peers.py`, `capabilities.py`, `fleet_nodes.py`): a standing-by Mac is busy, never failed; a `WORKSTATION_YIELDED` item
+  is re-queued on another free Mac of the group or handed straight back to the Gateway, no try spent; stand-by (30 s) / not-allowed (600 s) refusals are waits.
+- **Native**: the app reads `workstation.json` - no window / What's New / failure pop-ups, optional hidden menu-bar icon.
+- **Kit**: `packaging/kit-extras/Set Up a Shop Mac.command` (workstation mode on, `STUDIOHUB_WORKSTATION=1` copies only the six models, then
+  Update this Mac) and `Set Up the Shops Controller.command` (own generation paused via `machine_flags.json`); `prepare-kit-extras.sh` copies both into
+  Extras beside the Yam Display installer. `qualification/NODE-SETUP-CHECKLIST.md` "Shops". Tests: `tests/test_workstation_mode.py`, `tests/test_shop_kit.py`,
+  `tests/hub_regression/cases/test_workstation_yield.py`, `tests/test_yam_display_install.py`.
+
 ## 0.6.139 — 2026-10-03 · One pause rule for every voice, 250-character sections and 1,500-character requests; the kit installs Yam Display
 
 Release of `release/0.6.139` (= 0.6.138 + `feat/kit-yamdisplay` 3f59771 on main + `feat/uniform-narration` 52eb9a7 (incl. 37b0971 paragraph pause), merged

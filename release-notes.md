@@ -2,6 +2,25 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.140 - 2026-10-03
+
+### Shop Macs can help the fleet without getting in anyone's way
+
+**A shop's cashier Mac can now lend its spare time to the fleet.** Turn on Workstation Mode for it and Studio Hub
+works quietly in the background: its jobs get the lowest priority, so the till, Chrome and Telegram always come first,
+and it shows no pop-ups or alerts.
+
+**It only makes the six lighter models.** FLUX.2 Klein, Z-Image-Turbo, Qwen3-TTS 0.6B, VoxCPM2, Whisper turbo and
+Stable Audio 3. A job for any other model goes to another Mac.
+
+**It can wait for the Mac to be free.** You can set it to work only when nobody has touched the Mac for a few minutes,
+to step aside when someone starts using it, and to take no work at all during hours you choose. A job it has started always finishes;
+only if the Mac runs critically short of memory does it stop the job, and then another Mac takes it straight away.
+
+**Set it up from the drive.** The kit's Extras folder has "Set Up a Shop Mac" for each cashier Mac (it copies only the
+six models, about 15 GB) and "Set Up the Shops Controller" for the shop's always-on Mac mini. The settings for each Mac
+are then changed from the Gateway's Fleet page.
+
 ## 0.6.139 - 2026-10-03
 
 ### One pause rule for every voice
