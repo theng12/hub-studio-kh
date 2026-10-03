@@ -868,19 +868,12 @@ def _long_form_join_pause_s(family: str, repo: str) -> float:
     return float(policy["join_pause_seconds"])
 
 
-# The text-led join pauses live in `long_form_policy` (one source for the joiner, the lane contract
-# and the section check).
-_PRODUCTION_PAUSE_FAMILIES = long_form_policy.PRODUCTION_PAUSE_FAMILIES
-_uses_production_pauses = long_form_policy.uses_production_pauses
-
-
-def _request_join_pauses_s(family: str, repo: str, text: str, chunks: list[str],
-                           params: dict) -> Optional[list[float]]:
-    """Text-led pauses for this request (its own sentence/paragraph pause when asked), or None for
-    the family's flat join pause."""
-    rule = long_form_policy.requested_boundary_pauses(family, repo, params)
-    if rule is None:
-        return None
+# The join pauses live in `long_form_policy` (one rule for every family, owner 2026-10-03; one
+# source for the joiner, the lane contract and the section check).
+def _request_join_pauses_s(text: str, chunks: list[str], params: dict) -> list[float]:
+    """Text-led pauses for this request: its own sentence/paragraph pause when asked, else the
+    uniform rule."""
+    rule = long_form_policy.requested_boundary_pauses(params)
     return _production_join_pauses_s(text, chunks, float(params.get("speed") or 1.0), rule)
 
 
@@ -2552,10 +2545,7 @@ class GenerationManager:
             text,
             max_chars_override=budget,
         ) or [text]
-        repo = str(job.params.get("repo") or "")
-        requested = _request_join_pauses_s("qwen3-tts", repo, text, chunks, job.params)
-        pauses = (sum(requested) if requested is not None
-                  else max(0, len(chunks) - 1) * _long_form_join_pause_s("qwen3-tts", repo))
+        pauses = sum(_request_join_pauses_s(text, chunks, job.params))
         return round(
             sum(qwen_quality.automatic_duration_limit(chunk, speed) for chunk in chunks)
             + pauses,
@@ -3321,9 +3311,7 @@ class GenerationManager:
                 segment_paths, output_path, model.family,
                 pause_s=_long_form_join_pause_s(model.family, model.repo),
                 repo=model.repo,
-                pause_sequence_s=_request_join_pauses_s(
-                    model.family, model.repo, text, chunks, job.params,
-                ),
+                pause_sequence_s=_request_join_pauses_s(text, chunks, job.params),
                 cancel_event=job.cancel_event,
             )
         finally:
@@ -3826,7 +3814,7 @@ class GenerationManager:
             pause_s=_long_form_join_pause_s(family, model_repo),
             repo=model_repo,
             pause_sequence_s=_request_join_pauses_s(
-                family, model_repo, str(gen_kwargs.get("text") or ""), chunks, job.params,
+                str(gen_kwargs.get("text") or ""), chunks, job.params,
             ),
         )
 

@@ -163,31 +163,8 @@ def test_all_short_sections_have_no_reference_and_are_left_alone(tmp_path):
     assert abs((_voiced_db(audio, *runs[1]) - _voiced_db(audio, *runs[0])) - 9.5) <= 0.5
 
 
-@pytest.mark.parametrize("family,repo", [
-    ("fish-audio-mlx", "majentik/fishaudio-s2-pro-MLX-4bit"),
-    ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-8bit"),
-    ("voxcpm-mlx", "mlx-community/VoxCPM2-4bit"),
-    ("chatterbox-mlx", "mlx-community/chatterbox-8bit"),
-    ("pocket-tts", "kyutai/pocket-tts"),
-    ("omnivoice", "k2-fsa/OmniVoice"),
-    ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"),
-])
-def test_text_led_pauses_cover_every_family_that_had_the_flat_default(family, repo):
-    # Owner decision 2026-10-02: 0.30 s after a sentence, 0.60 s at a paragraph, for every family
-    # that used the flat 0.12 s join (Fish was heard as having "no proper pause").
-    assert generation._uses_production_pauses(family, repo)
-
-
-@pytest.mark.parametrize("family,repo", [
-    ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"),
-    ("breeze-tts", "breeze/breeze-tts-2-mlx-4bit"),
-    ("khmer-tts-mms", "facebook/mms-tts-khm"),
-])
-def test_families_with_their_own_pause_keep_it(family, repo):
-    assert not generation._uses_production_pauses(family, repo)
-
-
 def test_sentence_and_paragraph_pauses_follow_the_text():
     text = "The river was quiet. The mill stood still.\n\nMara listened."
     chunks = ["The river was quiet.", "The mill stood still.", "Mara listened."]
-    assert generation._production_join_pauses_s(text, chunks, 1.0) == pytest.approx([0.30, 0.60])
+    # Owner decision 2026-10-03: one rule for every family, 0.6 s after a sentence, 1.0 s at a paragraph.
+    assert generation._production_join_pauses_s(text, chunks, 1.0) == pytest.approx([0.60, 1.00])

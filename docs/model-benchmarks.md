@@ -98,6 +98,16 @@ than a curated one:
 - mlx-community/VoxCPM2-4bit — No probe receipt exists for the fleet run: the figure survives only as prose (components/voice/CHANGELOG.md 1.31.0, the catalogue comment beside the model's 16 GB memory floor, research notes). It was published as this model's runtime until 2026-09-25 on the strength of that prose. The model keeps a runtime from the stored r07 probe instead, and the prose stays where it is as the evidence for the memory floor it was measured for.
 - mlx-community/pocket-tts-4bit — No probe receipt exists: the numbers live in a manifest's `qualification.memory_evidence` string, in the owner-review notes and in the comment this record replaced. The measurement happened, but a number with no stored run behind it must not be republished as a scheduler's runtime. Re-admit it by storing the run's own receipt.
 
+### Narration sectioning and request size (owner decision 2026-10-03)
+
+One rule for every voice model, so a chapter sounds the same whichever model or Mac narrates it.
+
+| Layer | Value | Evidence |
+| --- | --- | --- |
+| Section (one synthesis pass, joined inside a request) | **250 characters** for every model (`long_form_policy.UNIFORM_SECTION_MAX_CHARACTERS`) | Dreamlands scripts: median sentence 115 characters, 99th percentile 210, longest 262; 0.05% of sentences are longer than 250, 1.87% longer than 200. Every family's measured budget is larger (Breeze and Chatterbox 500, VoxCPM2 400, Qwen preset 360, Fish 300, OmniVoice and Qwen clone 288, the conservative default and the audited Qwen 1.7B Auto 280). |
+| Join pause | **0.6 s after a sentence, 1.0 s at a paragraph break**; 0.15 s where one over-long sentence had to be cut | Owner listening, Dreamlands Ch12. A request may set `sentence_pause_sec` / `paragraph_pause_sec`. |
+| Request (`maximum_input_characters`) | **1,500 characters** for every model (`lane_contract.UNIFORM_REQUEST_CHARACTERS`) | Breeze TTS 2 4-bit on the slowest allowed Mac (M1 16 GB): 900 s / RTF 5.13 x 8.58 characters per audio second = 1,505. A model whose own slowest-Mac timing fits less publishes the smaller size. |
+
 ## What is NOT measured
 
 23 of 28 packages have no run behind them — their floor is

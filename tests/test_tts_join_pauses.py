@@ -1,11 +1,13 @@
-"""Caller-chosen join pauses: `paragraph_pause_sec` / `sentence_pause_sec` (owner 2026-10-03).
+"""One join-pause rule for every voice model, and the caller's own `paragraph_pause_sec` /
+`sentence_pause_sec` (owner 2026-10-03).
 
-Sleep narration wants 1.0 s at a paragraph break and 0.3 s after a sentence. Pinned here:
+Every model joins its sections at 0.6 s after a sentence and 1.0 s at a paragraph break (a cut
+inside an over-long sentence keeps a 0.15 s soft join). Pinned here:
 
 * the request model accepts 0-3 s and refuses anything else; an absent field is not recorded, so an
   older caller's retried request still compares equal;
-* every voice model publishes both fields (bounds, the model's own default, request-only);
-* the joiner follows the request for any family (Breeze too), and keeps today's pauses without it;
+* every voice model publishes both fields (bounds, the uniform default, request-only);
+* the joiner follows the request for any family, and the uniform rule without it;
 * the section check never reads the requested pause as an unnatural silence;
 * the broker sends the fields only to a worker whose lane contract publishes them.
 """
@@ -27,8 +29,6 @@ from components.voice.app.backend import (  # noqa: E402
 
 TEXT = "The river was quiet. The mill stood still.\n\nMara listened."
 CHUNKS = ["The river was quiet.", "The mill stood still.", "Mara listened."]
-BREEZE = ("breeze-tts", "breeze/breeze-tts-2-mlx-4bit")
-FISH = ("fish-audio-mlx", "majentik/fishaudio-s2-pro-MLX-4bit")
 
 
 class RequestTests(unittest.TestCase):
@@ -61,57 +61,60 @@ class ContractTests(unittest.TestCase):
     def test_every_voice_model_publishes_both_pauses(self):
         for model in catalog.CATALOG:
             parameters = {p["name"]: p for p in lane_contract.parameters_for(model)}
-            defaults = long_form_policy.default_boundary_pauses(model.family, model.repo)
-            for boundary in ("paragraph", "sentence"):
+            for boundary, default in (("paragraph", 1.0), ("sentence", 0.6)):
                 parameter = parameters[f"{boundary}_pause_sec"]
                 self.assertEqual((parameter["minimum"], parameter["maximum"]), (0.0, 3.0))
                 self.assertTrue(parameter["request_only"])
-                self.assertAlmostEqual(parameter["default"], defaults[boundary])
+                self.assertAlmostEqual(parameter["default"], default)
             self.assertNotIn("paragraph_pause_sec",
                              [p["name"] for p in model_defaults.editable(parameters.values())])
 
-    def test_defaults_are_the_pauses_in_force_today(self):
-        self.assertEqual(long_form_policy.default_boundary_pauses(*FISH),
-                         {"sentence": 0.3, "paragraph": 0.6, "soft": 0.18})
-        self.assertEqual(long_form_policy.default_boundary_pauses(*BREEZE),
-                         {"sentence": 0.6, "paragraph": 0.6, "soft": 0.6})
+    def test_one_rule_for_every_model(self):
+        self.assertEqual(long_form_policy.default_boundary_pauses(),
+                         {"sentence": 0.6, "paragraph": 1.0, "soft": 0.15})
+        for model in catalog.CATALOG:
+            self.assertEqual(long_form_policy.policy_for(model.family, model.repo)
+                             ["join_pause_seconds"], 0.6, model.repo)
 
 
 class JoinTests(unittest.TestCase):
-    def test_no_request_keeps_todays_joins(self):
-        self.assertIsNone(generation._request_join_pauses_s(*BREEZE, TEXT, CHUNKS, {}))
-        self.assertEqual(generation._request_join_pauses_s(*FISH, TEXT, CHUNKS, {}), [0.3, 0.6])
+    def test_no_request_joins_at_the_uniform_rule(self):
+        self.assertEqual(generation._request_join_pauses_s(TEXT, CHUNKS, {}), [0.6, 1.0])
 
-    def test_sleep_pauses_follow_the_text_for_breeze_and_fish(self):
-        sleep = {"paragraph_pause_sec": 1.0, "sentence_pause_sec": 0.3}
-        for family in (BREEZE, FISH):
-            self.assertEqual(generation._request_join_pauses_s(*family, TEXT, CHUNKS, sleep),
-                             [0.3, 1.0])
+    def test_a_cut_inside_a_sentence_keeps_a_short_soft_join(self):
+        text = "The river ran on and on past the mill and the bridge. Then it stopped."
+        chunks = ["The river ran on and on", "past the mill and the bridge.", "Then it stopped."]
+        self.assertEqual(generation._request_join_pauses_s(text, chunks, {}), [0.15, 0.6])
 
-    def test_a_boundary_left_out_keeps_the_models_own(self):
-        only_paragraph = {"paragraph_pause_sec": 1.0}
-        self.assertEqual(generation._request_join_pauses_s(*BREEZE, TEXT, CHUNKS, only_paragraph),
-                         [0.6, 1.0])
-        self.assertEqual(generation._request_join_pauses_s(*FISH, TEXT, CHUNKS, only_paragraph),
-                         [0.3, 1.0])
+    def test_a_requested_pause_replaces_the_rule(self):
+        asked = {"paragraph_pause_sec": 1.5, "sentence_pause_sec": 0.3}
+        self.assertEqual(generation._request_join_pauses_s(TEXT, CHUNKS, asked), [0.3, 1.5])
+
+    def test_a_boundary_left_out_keeps_the_uniform_one(self):
+        self.assertEqual(generation._request_join_pauses_s(TEXT, CHUNKS, {"paragraph_pause_sec": 2.0}),
+                         [0.6, 2.0])
 
     def test_pauses_are_set_before_the_tempo_pass(self):
         asked = {"paragraph_pause_sec": 1.0, "sentence_pause_sec": 0.3, "speed": 0.8}
-        result = generation._request_join_pauses_s(*FISH, TEXT, CHUNKS, asked)
+        result = generation._request_join_pauses_s(TEXT, CHUNKS, asked)
         self.assertEqual([round(p, 3) for p in result], [0.24, 0.8])
 
 
 class SectionCheckTests(unittest.TestCase):
-    def test_a_requested_pause_widens_the_silence_allowance(self):
+    def test_the_silence_allowance_follows_the_uniform_and_requested_pause(self):
         sentence = "One sentence. Another one."
-        self.assertEqual(tts_quality.max_pause_s(sentence), 3.8)
-        self.assertEqual(tts_quality.max_pause_s(sentence, requested_pause_s=1.0), 4.5)
-        self.assertEqual(tts_quality.max_pause_s(sentence, requested_pause_s=0.1), 3.8)
+        margin = tts_quality.PAUSE_MARGIN_S
+        self.assertEqual(tts_quality.max_pause_s(sentence), round(0.6 + margin, 2))
+        self.assertEqual(tts_quality.max_pause_s("One.\n\nTwo."), round(1.0 + margin, 2))
+        self.assertEqual(tts_quality.max_pause_s(sentence, requested_pause_s=1.0),
+                         round(1.0 + margin, 2))
+        self.assertEqual(tts_quality.max_pause_s(sentence, requested_pause_s=0.1),
+                         round(0.6 + margin, 2))
 
     def test_a_section_holding_the_requested_pause_plus_breath_is_accepted(self):
         text = "Mara listened to the river for a long while. " * 3
         metrics = {"duration_s": 14.0, "voiced_s": 10.0, "voiced_ratio": 0.7, "dc_offset": 0.0,
-                   "longest_pause_s": 4.2}
+                   "longest_pause_s": 4.4}
         with self.assertRaises(tts_quality.SectionQualityError):
             tts_quality.check_section(text, "breeze-tts", metrics)
         evidence = tts_quality.check_section(text, "breeze-tts", metrics, requested_pause_s=1.0)

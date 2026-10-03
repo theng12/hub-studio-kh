@@ -43,7 +43,11 @@ mode the catalog+dispatch chain resolves, when the record declares one.  The
 long-form budgets are taken from ``long_form_policy.policy_for()`` called with
 *no* audit override, so the expectation is the family default rather than the
 audited value being checked (calling it with the override would be one more
-self-consistency check).
+self-consistency check).  It is called with ``uniform=False``: a record states
+the section size and joins the model was MEASURED at, and since the owner's one
+narration rule (2026-10-03) the runtime renders every model inside that
+envelope instead (250-character sections, 0.6 s / 1.0 s joins) - a record is
+not wrong for describing its measurement.
 
 Non-coverage
 ------------
@@ -1183,6 +1187,7 @@ def validate_record(
             model_id,
             audited_section_max_characters=measured.get("maximum"),
             audited_default_section_max_characters=measured.get("default"),
+            uniform=False,
         )
         if policy is not None and measured:
             anchor_audit_id = _policy_anchor_audit_id(record)
