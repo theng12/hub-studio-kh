@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.137 — 2026-10-03 · Every voice section is checked before it is joined and re-made if it came out wrong; Breeze takes chapters in pieces it can finish in time
+
+Release of `release/0.6.137` (= 0.6.136 + `fix/whisper-gaps-tts-deadline` c6ea53b + `fix/tts-quality-gate` f115fb5, both merged `--no-ff`, no conflicts;
+f115fb5 is built on c6ea53b).
+- **TTS size per request from the slowest Mac** (c6ea53b, `catalog.py`, `lane_contract.py`). Each TTS model whose slowest allowed Mac class was timed
+  (`catalog.SlowestMacSpeed`) publishes `lane_contract.maximum_input_characters` = floor(900 s / RTF x chars-per-audio-second, to 100) with
+  `maximum_input_characters_source`. Breeze TTS 2 4-bit: M1 16 GB, RTF 5.13, 8.58 chars/s -> **1,500** characters (one request <= 15 min on an M1 16 GB,
+  2x under the 1,800 s voice deadline). The Gateway scales its deadline by this field and Story splits narration by it. Other TTS models publish nothing.
+  The Whisper subtitle gaps were investigated first: Whisper drops nothing; the audio itself was silent, DC drift or babble from failed Breeze sections
+  (`_orchestra/audit-20261001/whisper-gaps-tts-deadline.md`). Test: `test_lane_contract.py`.
+- **Per-section TTS quality gate** (f115fb5, new `tts_quality.py`, `generation.py`, `broker.py`). Every mlx-audio family (Breeze, VoxCPM2, OmniVoice, Fish,
+  Chatterbox, Qwen, Pocket) now runs through the parent section loop, single-section requests included (that one section is moved into place, not joined or
+  levelled). Each section gets audio checks (DC/drift removed with a 50 ms moving average, voiced = 20 ms frame > -40 dBFS; `TTS_SECTION_SILENT` below
+  chars / (fastest rate x 2.5), `TTS_SECTION_TOO_LONG` above chars / (slowest rate x 0.55) + 2.5 s; Breeze 8.6-11.7 chars/s, others 6-20; CJK counts 3x)
+  and a Whisper large-v3 turbo transcribe-back (`TTS_SECTION_TEXT_MISMATCH` when > max(2 words, 10%) are not heard) loaded only when turbo + 2 GB is free;
+  a skipped check says why (`unavailable`, `memory`, `script`, `qwen_clone_gate`). A rejected section is re-rendered with a new seed (+7919 per attempt)
+  up to 3 times, then the job fails with `TTS_SECTION_*` and "Section N of M ...". Breeze `max_tokens` is now bounded by the section's text (it ran to
+  `generate_audio`'s 1,200 = 96 s). Evidence: job field `section_quality {revision, sections: [...]}`, persisted, and copied onto the batch item by
+  `broker._record_worker_section_quality` (numbers, booleans and known codes only; cleared on a re-attempt). Measured offline on 131 Dreamlands sections:
+  19/19 bad rejected (7 by audio checks alone), 0/112 good rejected; 10/10 new-seed re-renders accepted; Whisper ~4% of Breeze generation time, +1.6 GB
+  while a job runs (`_orchestra/audit-20261001/tts-quality-gate.md`). Tests: `test_tts_quality.py`, `tests/test_section_quality_passthrough.py`.
+
 ## 0.6.136 — 2026-10-03 · A busy group no longer blocks its controller's update; the app relaunches only after a real crash; free work is re-run when its Mac or worker dies
 
 Release of `release/0.6.136` (= 0.6.135 + `fix/drain-never-starves` e505ad9 + `fix/crash-only-and-reroute` b65a9ad, both merged `--no-ff`, no conflicts;

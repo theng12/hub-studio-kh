@@ -3,7 +3,15 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.136** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+Last updated: **0.6.137** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+
+> **0.6.137 - per-section TTS quality gate with re-render, Breeze `max_tokens` bounded by text, `maximum_input_characters` from the slowest Mac (`release/0.6.137` = 0.6.136 + c6ea53b `fix/whisper-gaps-tts-deadline` + f115fb5 `fix/tts-quality-gate`, 2026-10-03).**
+> `catalog.SlowestMacSpeed` on a TTS row -> `lane_contract.maximum_input_characters` (+ `_source`) = floor(900 s / RTF x chars/audio-s, to 100); Breeze 1,500 (M1 16 GB,
+> RTF 5.13, 8.58 chars/s); Gateway deadline scaling and Story splitting read it. `tts_quality.py`: per-section DC/silence/duration checks + Whisper-turbo transcribe-back
+> (only when turbo + 2 GB free; skip reason recorded); every mlx-audio family goes through the parent section loop; a rejected section retries with seed +7919 up to 3x,
+> then `TTS_SECTION_*` "Section N of M"; Breeze `max_tokens` bounded by the duration ceiling. `section_quality` on the job, copied to the batch item by
+> `broker._record_worker_section_quality`. Write-ups: `_orchestra/audit-20261001/whisper-gaps-tts-deadline.md`, `tts-quality-gate.md`. Gate numbers, DMG and checksum:
+> `_orchestra/audit-20261001/release-0137/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.136 - drain never starves, relaunch only after a real crash + `last_stop`, free work re-run when its Mac or worker dies (`release/0.6.136` = 0.6.135 + e505ad9 `fix/drain-never-starves` + b65a9ad `fix/crash-only-and-reroute`, 2026-10-03).**
 > `broker.drain_holds_group()`: once a draining controller's own Mac runs nothing, `busy_machines` names every machine in the group and

@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.137 - 2026-10-03
+
+### Voices are checked piece by piece, and long chapters are split into pieces that finish in time
+
+**Every piece of a voice-over is checked before it goes into the finished file.** A long text is voiced in pieces. Each piece is now
+checked: is it silent, or just a hum, or much too long for its words, and (when the Mac has the memory for it) does it actually say
+the words it was given? A piece that fails is made again, up to three more times. If it still fails, the job stops and tells you which
+piece was the problem, instead of handing back audio with silence, humming or missing sentences in it.
+
+**Breeze no longer runs on for a minute and a half on a short sentence.** Each Breeze piece now gets only as much time as its words
+need, which is where the long stretches of humming and babble came from.
+
+**Breeze chapters are split into pieces a slower Mac can finish.** Studio Hub now tells the Gateway the most text one Breeze request
+should carry (1,500 characters), worked out from the slowest Mac allowed to run it, so a long chapter is sent in parts instead of
+running out of time.
+
 ## 0.6.136 - 2026-10-03
 
 ### Updates no longer wait for ever, Studio Hub only reopens after a crash, and lost work is redone
