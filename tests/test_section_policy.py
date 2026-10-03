@@ -18,7 +18,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from components.voice.app.backend import catalog, long_form_policy  # noqa: E402
+from components.voice.app.backend import catalog, long_form_policy, model_audits  # noqa: E402
 
 GENERATION = (ROOT / "components/voice/app/backend/generation.py").read_text()
 FAMILIES = sorted({entry.family for entry in catalog.CATALOG})
@@ -59,9 +59,11 @@ class SectionBudgetTests(unittest.TestCase):
 
     def test_an_unknown_family_gets_the_conservative_default(self) -> None:
         """A newly adopted family must inherit sectioning rather than skip it."""
-        policy = long_form_policy.policy_for("brand-new-family", "org/repo")
+        policy = long_form_policy.policy_for("brand-new-family", "org/repo", uniform=False)
         self.assertEqual(policy["section_max_characters"],
                          long_form_policy.CONSERVATIVE_DEFAULT_SECTION_MAX_CHARACTERS)
+        self.assertEqual(long_form_policy.policy_for("brand-new-family", "org/repo")
+                         ["section_max_characters"], 250)
         self.assertEqual(policy["source"], "conservative_default")
         self.assertEqual(policy["origin"], "conservative_default")
 
@@ -74,14 +76,14 @@ class SectionBudgetTests(unittest.TestCase):
         name it marks.
         """
         for entry in catalog.FAMILIES.values():
-            policy = long_form_policy.policy_for(entry.id, f"{entry.id}/repo")
+            policy = long_form_policy.policy_for(entry.id, f"{entry.id}/repo", uniform=False)
             self.assertEqual(policy["section_max_characters"], entry.section_max_characters, entry.id)
             self.assertEqual(policy["join_pause_milliseconds"],
                              round(entry.join_pause_seconds * 1000), entry.id)
             self.assertEqual(policy["origin"], entry.section_origin, entry.id)
             for refinement in entry.section_refinements:
                 refined = long_form_policy.policy_for(
-                    entry.id, f"mlx-community/{entry.id}-{refinement.marker}-probe"
+                    entry.id, f"mlx-community/{entry.id}-{refinement.marker}-probe", uniform=False
                 )
                 if refinement.section_max_characters is not None:
                     self.assertEqual(refined["section_max_characters"],
@@ -89,9 +91,20 @@ class SectionBudgetTests(unittest.TestCase):
                 if refinement.join_pause_seconds is not None:
                     self.assertEqual(refined["join_pause_milliseconds"],
                                      round(refinement.join_pause_seconds * 1000), entry.id)
-        # The families with their own measurements keep them.
-        self.assertEqual(long_form_policy.policy_for("omnivoice", "x")["section_max_characters"], 288)
-        self.assertEqual(long_form_policy.policy_for("chatterbox-mlx", "x")["section_max_characters"], 500)
+        # The families with their own measurements keep them as the measured policy...
+        measured = lambda family: long_form_policy.policy_for(family, "x", uniform=False)  # noqa: E731
+        self.assertEqual(measured("omnivoice")["section_max_characters"], 288)
+        self.assertEqual(measured("chatterbox-mlx")["section_max_characters"], 500)
+
+    def test_every_voice_model_renders_one_section_size_and_one_join(self) -> None:
+        """Owner 2026-10-03: 250-character sections and the 0.6 s sentence join for every model,
+        audited ones included (the Qwen 1.7B audit's Auto 280 is capped, not followed)."""
+        for entry in catalog.CATALOG:
+            policy = catalog._audited_long_form_policy(entry.family, entry.repo)
+            self.assertEqual(policy["section_max_characters"], 250, entry.repo)
+            self.assertEqual(policy["join_pause_milliseconds"], 600, entry.repo)
+            self.assertEqual(catalog.section_size_control_for(entry.repo)["runtime_default"], 250,
+                             entry.repo)
 
     def test_an_engine_cliff_is_the_section_budget_and_is_published_as_a_cap(self) -> None:
         with patch.dict(catalog.FAMILIES, {"engine-cliff-probe": _engine_cliff_family()}):
@@ -220,7 +233,7 @@ class SectionSizeControlTests(unittest.TestCase):
         repo = "mlx-community/VoxCPM2-4bit"
         resolved = catalog.resolve_section_budget("voxcpm-mlx", repo, None)
         self.assertEqual(resolved["section_max_characters"],
-                         catalog.FAMILIES["voxcpm-mlx"].section_max_characters)
+                         long_form_policy.UNIFORM_SECTION_MAX_CHARACTERS)
 
     def test_a_measured_family_publishes_a_budget_below_its_engine_ceiling(self) -> None:
         """OmniVoice's 288 is a measurement, not the shared default, and is not raised.
@@ -230,7 +243,7 @@ class SectionSizeControlTests(unittest.TestCase):
         97.0% and 600 to 83.0%. 288 is kept because it paces better at that equal
         coverage. The evidence lives beside the constant in `long_form_policy`.
         """
-        policy = long_form_policy.policy_for("omnivoice", "x")
+        policy = long_form_policy.policy_for("omnivoice", "x", uniform=False)
         self.assertEqual(policy["section_max_characters"], 288)
         self.assertEqual(policy["origin"], "family_policy")
         self.assertNotEqual(policy["section_max_characters"],
@@ -244,15 +257,18 @@ class SectionSizeControlTests(unittest.TestCase):
         control = catalog.section_size_control_for(repo)
         self.assertEqual(control["source"], "model_audit")
         self.assertEqual((control["minimum"], control["maximum"]), (40, 3000))
-        # The kept tier's record derives from the measured production audit, so the
-        # published runtime default is the audited Auto 280 - not the family's 288 and
-        # not the 400 maximum, which stays the largest override a caller may ask for.
-        self.assertEqual(control["runtime_default"], 280)
+        # The kept tier's record derives from the measured production audit, so its measured
+        # default is the audited Auto 280 - not the family's 288 and not the 400 maximum. The
+        # owner's uniform 250 (2026-10-03) caps it at runtime; a caller may still ask up to 3000.
+        self.assertEqual(control["runtime_default"], 250)
         self.assertEqual(
-            long_form_policy.policy_for("qwen3-tts", repo)["section_max_characters"], 288
+            long_form_policy.policy_for("qwen3-tts", repo, uniform=False)["section_max_characters"],
+            288,
         )
+        pinned = model_audits.qwen_17b_production_v2_limits(repo)
+        self.assertEqual(pinned["default_private_section_max_characters"], 280)
         self.assertEqual(
-            catalog._audited_long_form_policy("qwen3-tts", repo)["section_max_characters"], 280
+            catalog._audited_long_form_policy("qwen3-tts", repo)["section_max_characters"], 250
         )
 
 

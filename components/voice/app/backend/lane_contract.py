@@ -79,6 +79,24 @@ OUTPUT_FORMAT_PARAMETER = {
     "note": ("omit for the WAV; m4a delivers AAC-LC 128 kbps mono (about 4-6x smaller) and falls "
              "back to the WAV if encoding fails"),
 }
+
+
+def pause_parameters(model: catalog.ModelEntry) -> list[dict[str, Any]]:
+    """`paragraph_pause_sec` / `sentence_pause_sec`: the caller's own join pause at a paragraph break
+    and after a sentence (owner 2026-10-03). Bounds are the API's; each ``default`` is the pause every
+    model joins at when the field is omitted (the uniform rule). `request_only`: a per-job choice,
+    never an operator default."""
+    defaults = long_form_policy.default_boundary_pauses()
+    return [{
+        "name": f"{boundary}_pause_sec", "type": "number", "required": False,
+        "minimum": long_form_policy.REQUESTED_PAUSE_MINIMUM_SECONDS,
+        "maximum": long_form_policy.REQUESTED_PAUSE_MAXIMUM_SECONDS,
+        "default": round(defaults[boundary], 3), "request_only": True,
+        "note": (f"seconds of silence inserted at a {label} where the request's text is split into "
+                 "sections; omit for the default"),
+    } for boundary, label in (("paragraph", "paragraph break"), ("sentence", "sentence end"))]
+
+
 # Quoted verbatim from the spec / `broker`: done, error, cancelled are terminal;
 # `uncertain` is NOT terminal - an item whose outcome the Hub cannot establish is
 # held for an operator decision - and this lane can release one.
@@ -429,6 +447,7 @@ def parameters_for(model: catalog.ModelEntry,
             continue
         parameters.append({"name": name, **shape})
     parameters.append(dict(OUTPUT_FORMAT_PARAMETER))
+    parameters.extend(pause_parameters(model))
     return _with_resolved_defaults(parameters, defaults)
 
 
@@ -452,9 +471,7 @@ def for_model(model: catalog.ModelEntry,
     runtime = runtime_seconds_for(model.repo)
     if runtime is not None:
         contract["runtime_seconds"] = runtime
-    request_size = maximum_input_characters(model)
-    if request_size is not None:
-        contract.update(request_size)
+    contract.update(maximum_input_characters(model))
     return contract
 
 
@@ -462,29 +479,41 @@ def for_model(model: catalog.ModelEntry,
 # each Hub-recommended chunk this same budget (`TTS_CHUNK_BUDGET_S`), and the Hub's own voice
 # deadline (1,800 s) is twice it.
 REQUEST_BUDGET_SECONDS = 900.0
+# One request size for every voice model (owner decision 2026-10-03). It is Breeze's measured
+# slowest-Mac size (900 s / RTF 5.13 on an M1 16 GB x 8.58 characters per audio second = 1,505,
+# rounded down), applied to every model; a model whose own slowest-Mac timing allows less keeps
+# the smaller size.
+UNIFORM_REQUEST_CHARACTERS = 1500
 
 
-def maximum_input_characters(model: catalog.ModelEntry) -> Optional[dict[str, Any]]:
-    """The per-request text size a caller should split long narration into, or None.
+def maximum_input_characters(model: catalog.ModelEntry) -> dict[str, Any]:
+    """The per-request text size a caller should split long narration into.
 
     A sizing recommendation, not a refusal bound (`text.max_characters` stays the enforced one):
     a longer request is still accepted, it just may run past a deadline sized for this one. The
-    Gateway reads `maximum_input_characters` and Story splits narration by it. Published only where
-    the slowest allowed Mac class was timed (`catalog.SlowestMacSpeed`).
+    Gateway reads `maximum_input_characters` and Story splits narration by it. Every model publishes
+    `UNIFORM_REQUEST_CHARACTERS`; where the slowest allowed Mac class was timed
+    (`catalog.SlowestMacSpeed`) and fits less inside `REQUEST_BUDGET_SECONDS`, that is the cap.
     """
+    source: dict[str, Any] = {"evidence": "owner_uniform", "decided": "2026-10-03"}
+    characters = UNIFORM_REQUEST_CHARACTERS
     speed = model.slowest_mac_speed
-    if speed is None:
-        return None
-    audio_seconds = REQUEST_BUDGET_SECONDS / speed.realtime_factor
-    characters = int(audio_seconds * speed.characters_per_audio_second) // 100 * 100
-    return {
-        "maximum_input_characters": characters,
-        "maximum_input_characters_source": {
+    if speed is not None:
+        audio_seconds = REQUEST_BUDGET_SECONDS / speed.realtime_factor
+        measured = int(audio_seconds * speed.characters_per_audio_second) // 100 * 100
+        source = {
             "request_budget_seconds": REQUEST_BUDGET_SECONDS,
             "mac_class": speed.mac_class,
             "realtime_factor": speed.realtime_factor,
             "characters_per_audio_second": speed.characters_per_audio_second,
-            "evidence": "measured",
+            "measured_characters": measured,
             "source": speed.source,
-        },
+            **source,
+        }
+        if measured < characters:
+            characters = measured
+            source["evidence"] = "measured"
+    return {
+        "maximum_input_characters": characters,
+        "maximum_input_characters_source": source,
     }

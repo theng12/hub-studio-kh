@@ -447,17 +447,20 @@ evidence fields there with a regression test.
 ### Section size
 
 The Generate tab exposes an optional **Long-form delivery → Section size**
-control for every catalogued sectioning model. Auto keeps the model's audited
-or measured default — for example 288 characters for Qwen3-TTS 0.6B Base, 400
-for the 1.7B Base 4-bit tier, 500 for Chatterbox, 288 for OmniVoice, 300 for
-Fish Audio S2 Pro, and 280 for the two Khmer VITS voices. Custom accepts whole
+control for every catalogued sectioning model. Auto is **250 characters for
+every voice model** (owner decision 2026-10-03), inside each model's audited or
+measured budget — 288 for Qwen3-TTS 0.6B Base, the audited Auto 280 (maximum
+400) for the 1.7B Base 4-bit tier, 500 for Chatterbox and Breeze, 400 for
+VoxCPM2, 288 for OmniVoice, 300 for Fish Audio S2 Pro, and 280 for the two Khmer
+VITS voices. Custom accepts whole
 numbers from 40 through 3000 and remembers the choice with that model's
 existing Generate settings. No catalogued family has an engine input cliff any
 more, so the range is the derived control's, not an engine's hard cap.
 
-Voice Studio continues to choose and apply the 300/600/180 ms sentence,
-paragraph, and soft-split pauses automatically; those pacing safeguards are
-not user-adjustable. A rejected local Qwen cloning output retries with a
+Every model joins its sections at the same pauses: 0.6 s after a sentence,
+1.0 s at a paragraph break, and 0.15 s where an over-long sentence had to be cut
+(owner decision 2026-10-03). An API caller may set its own `sentence_pause_sec`
+/ `paragraph_pause_sec` (0-3 s) per request. A rejected local Qwen cloning output retries with a
 230-character section. API callers omit `section_max_characters` for Auto, or
 send an integer `section_max_characters` for Custom. Invalid, out-of-range, or
 unsupported values are rejected before generation is queued. This is a Voice

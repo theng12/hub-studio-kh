@@ -121,12 +121,15 @@ keys ship; a reader that wants to know how to *ask for work* reads `lane_contrac
   and a lane that published one number would set the wrong deadline for whichever mode the host
   selects.
 
-- **`maximum_input_characters`** (voice only, optional) is the text size one request should carry
-  so it finishes in about 900 s (`lane_contract.REQUEST_BUDGET_SECONDS`) on the slowest Mac class
-  allowed to run the model, computed from that class's measured realtime factor and characters per
-  audio second (`catalog.SlowestMacSpeed`, echoed in `maximum_input_characters_source`). It is a
+- **`maximum_input_characters`** (voice) is the text size one request should carry: **1,500
+  characters for every voice model** (owner decision 2026-10-03,
+  `lane_contract.UNIFORM_REQUEST_CHARACTERS`). 1,500 is Breeze TTS 2 4-bit's slowest-Mac size —
+  900 s (`lane_contract.REQUEST_BUDGET_SECONDS`) / RTF 5.13 on an M1 16 GB x 8.58 characters per
+  audio second = 1,505, rounded down. Where a model's slowest allowed Mac class was timed
+  (`catalog.SlowestMacSpeed`) and fits less inside 900 s, that smaller size is published instead
+  (`maximum_input_characters_source.evidence` = `measured`; otherwise `owner_uniform`). It is a
   sizing recommendation for callers that split long narration (the Gateway passes it to Story),
-  not a refusal bound; absent where the slowest class was never timed. Breeze TTS 2 4-bit: 1,500.
+  not a refusal bound.
 
 - **`structured_output`** is optional and currently published by the `chat` lane alone. It
   states **how** a structured answer is guaranteed, which "json_object is supported" does not:

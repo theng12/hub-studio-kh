@@ -360,6 +360,29 @@ def build() -> str:
                 add(f"- {row}")
         add("")
 
+    # Owner decision 2026-10-03; the record is the code that applies it (`long_form_policy`
+    # UNIFORM_* and `lane_contract.UNIFORM_REQUEST_CHARACTERS`), and the evidence is named per row.
+    add("### Narration sectioning and request size (owner decision 2026-10-03)")
+    add("")
+    add("One rule for every voice model, so a chapter sounds the same whichever model or Mac narrates it.")
+    add("")
+    add("| Layer | Value | Evidence |")
+    add("| --- | --- | --- |")
+    add("| Section (one synthesis pass, joined inside a request) | **250 characters** for every model "
+        "(`long_form_policy.UNIFORM_SECTION_MAX_CHARACTERS`) | Dreamlands scripts: median sentence 115 "
+        "characters, 99th percentile 210, longest 262; 0.05% of sentences are longer than 250, 1.87% "
+        "longer than 200. Every family's measured budget is larger (Breeze and Chatterbox 500, VoxCPM2 "
+        "400, Qwen preset 360, Fish 300, OmniVoice and Qwen clone 288, the conservative default and the "
+        "audited Qwen 1.7B Auto 280). |")
+    add("| Join pause | **0.6 s after a sentence, 1.0 s at a paragraph break**; 0.15 s where one "
+        "over-long sentence had to be cut | Owner listening, Dreamlands Ch12. A request may set "
+        "`sentence_pause_sec` / `paragraph_pause_sec`. |")
+    add("| Request (`maximum_input_characters`) | **1,500 characters** for every model "
+        "(`lane_contract.UNIFORM_REQUEST_CHARACTERS`) | Breeze TTS 2 4-bit on the slowest allowed Mac "
+        "(M1 16 GB): 900 s / RTF 5.13 x 8.58 characters per audio second = 1,505. A model whose own "
+        "slowest-Mac timing fits less publishes the smaller size. |")
+    add("")
+
     add("## What is NOT measured")
     add("")
     with_a_run = {row["package_id"] for row in measured if row["evidence"] == "M"}

@@ -116,8 +116,10 @@ class TheFamilyIsRegisteredTest(unittest.TestCase):
         policy = long_form_policy.policy_for("breeze-tts", "mlx-community/Breeze-TTS-2-mlx-4bit")
         self.assertEqual(0.60, policy["join_pause_seconds"],
                          "the pause the owner chose by ear is not what the joiner reads")
-        self.assertEqual(long_form_policy.BREEZE_TTS_SECTION_MAX_CHARACTERS,
+        # Owner 2026-10-03: one 250-character section size for every voice model (Breeze was 500).
+        self.assertEqual(long_form_policy.UNIFORM_SECTION_MAX_CHARACTERS,
                          policy["section_max_characters"])
+        self.assertEqual(250, policy["section_max_characters"])
         self.assertEqual(-16.0, policy["section_loudness_target_lufs"])
 
     def test_the_joiner_finds_the_family_through_the_registry(self) -> None:

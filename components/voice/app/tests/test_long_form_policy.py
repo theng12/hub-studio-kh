@@ -9,24 +9,25 @@ from backend import catalog, generation, long_form_policy, model_audits
 
 @pytest.mark.parametrize(
     ("family", "repo", "section_chars", "join_ms", "source"),
+    # Owner decision 2026-10-03: every voice model renders 250-character sections joined at 0.6 s
+    # after a sentence (1.0 s at a paragraph), whatever its family measured (Breeze 500, VoxCPM2
+    # 400, Fish 300, OmniVoice / Qwen clone 288, the Qwen 1.7B audited Auto 280, Chatterbox 500,
+    # the conservative 280). The source still names where the measured number came from.
     [
-        ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", 288, 180, "model_audit"),
-        # The shipped 1.7B Base tier: its derived record reaches the measured
-            # production audit, so the Auto 280 section size governs and 400 is the ceiling.
-            ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", 280, 300, "model_audit"),
-        ("chatterbox-mlx", "mlx-community/chatterbox-4bit", 500, 120, "model_audit"),
-        ("chatterbox-mlx", "mlx-community/chatterbox-8bit", 500, 120, "runtime_default"),
-        ("voxcpm-mlx", "mlx-community/VoxCPM2-4bit", 400, 120, "runtime_default"),
-        ("voxcpm-mlx", "mlx-community/VoxCPM2-8bit", 400, 120, "runtime_default"),
-        ("voxcpm-mlx", "mlx-community/VoxCPM2-bf16", 400, 120, "runtime_default"),
-        ("omnivoice", "mlx-community/OmniVoice-bfloat16", 288, 300, "model_audit"),
-        ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-8bit", 300, 120, "runtime_default"),
-        ("fish-audio-mlx", "majentik/fishaudio-s2-pro-MLX-4bit", 300, 120, "runtime_default"),
-        ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-bf16", 300, 120, "runtime_default"),
-        # The Khmer VITS families have no measurement of their own, so they get the
-        # conservative default. They are still catalogued, so they still publish one.
-        ("khmer-tts-mms", "khmerttsopensource/khmer-tts", 280, 120, "conservative_default"),
-        ("khmer-tts-onnx", "sengtha/khmer-tts-female-v2", 280, 120, "conservative_default"),
+        ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", 250, 600, "model_audit"),
+        ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", 250, 600, "model_audit"),
+        ("chatterbox-mlx", "mlx-community/chatterbox-4bit", 250, 600, "model_audit"),
+        ("chatterbox-mlx", "mlx-community/chatterbox-8bit", 250, 600, "runtime_default"),
+        ("voxcpm-mlx", "mlx-community/VoxCPM2-4bit", 250, 600, "runtime_default"),
+        ("voxcpm-mlx", "mlx-community/VoxCPM2-8bit", 250, 600, "runtime_default"),
+        ("voxcpm-mlx", "mlx-community/VoxCPM2-bf16", 250, 600, "runtime_default"),
+        ("omnivoice", "mlx-community/OmniVoice-bfloat16", 250, 600, "model_audit"),
+        ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-8bit", 250, 600, "runtime_default"),
+        ("fish-audio-mlx", "majentik/fishaudio-s2-pro-MLX-4bit", 250, 600, "runtime_default"),
+        ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-bf16", 250, 600, "runtime_default"),
+        ("khmer-tts-mms", "khmerttsopensource/khmer-tts", 250, 600, "conservative_default"),
+        ("khmer-tts-onnx", "sengtha/khmer-tts-female-v2", 250, 600, "conservative_default"),
+        ("breeze-tts", "mlx-community/Breeze-TTS-2-mlx-4bit", 250, 600, "runtime_default"),
     ],
 )
 def test_catalog_and_runtime_share_exact_long_form_policy(
@@ -68,30 +69,32 @@ def test_catalog_and_runtime_share_exact_long_form_policy(
     assert " ".join(chunks) == " ".join(text.split())
 
 
-def test_exact_model_audit_override_is_published_and_executed(monkeypatch) -> None:
+@pytest.mark.parametrize(("audited", "runs_at"), [(200, 200), (444, 250)])
+def test_exact_model_audit_override_is_published_and_executed(monkeypatch, audited, runs_at) -> None:
+    """A finer audited section is followed; a larger one is capped at the uniform 250."""
     repo = "mlx-community/chatterbox-8bit"
     monkeypatch.setattr(
         model_audits,
         "input_limits",
-        lambda _repo: {"private_section_max_characters": 444},
+        lambda _repo: {"private_section_max_characters": audited},
     )
     entry = catalog.get_model(repo)
     assert entry is not None
     published = catalog.serialize_model(entry)["long_form_delivery"]
 
-    assert published["section_max_characters"] == 444
+    assert published["section_max_characters"] == runs_at
     assert published["source"] == "model_audit"
     chunks = generation._internal_mlx_text_chunks(
         "chatterbox-mlx", repo, "Audited sentence delivery. " * 100
     )
-    assert all(len(chunk) <= 444 for chunk in chunks)
+    assert all(len(chunk) <= runs_at for chunk in chunks)
 
 
 def test_every_family_publishes_a_long_form_policy() -> None:
     """A family must never silently lose its policy and fall back to one request.
 
-    A family with no measurement of its own gets the 280-character conservative
-    default. The engine-cliff families (Bark, Orpheus) were cut with the menu, so
+    A family with no measurement of its own gets the conservative default (capped,
+    like every family, at the uniform 250). The engine-cliff families (Bark, Orpheus) were cut with the menu, so
     no catalogued family publishes a hard cap any more.
     """
     for family in sorted(catalog.FAMILIES):

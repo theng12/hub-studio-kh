@@ -7,7 +7,7 @@ from the generation runtime.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Optional
 
 
@@ -16,6 +16,23 @@ QWEN_CLONE_JOIN_PAUSE_SECONDS = 0.18
 OMNIVOICE_JOIN_PAUSE_SECONDS = 0.30
 OMNIVOICE_PARAGRAPH_JOIN_PAUSE_SECONDS = 0.60
 OMNIVOICE_SOFT_JOIN_PAUSE_SECONDS = 0.18
+# ── one narration rule for every voice model (owner decision 2026-10-03) ─────
+# Every section join follows the text, for every family, by default: 0.6 s after a sentence, 1.0 s
+# at a paragraph break. A cut inside a sentence happens only when one sentence is longer than the
+# section budget (about 0.05% of Dreamlands sentences at 250 characters) and keeps a short soft join.
+# A request may still ask its own `sentence_pause_sec` / `paragraph_pause_sec`. This replaces the
+# family-specific joins (Breeze's flat 0.6 s, the 0.3/0.6/0.18 s production joins, Qwen's 0.18 s and
+# the 0.12 s default); those numbers stay above as the values the model audits were measured at.
+UNIFORM_SENTENCE_JOIN_PAUSE_SECONDS = 0.60
+UNIFORM_PARAGRAPH_JOIN_PAUSE_SECONDS = 1.00
+UNIFORM_SOFT_JOIN_PAUSE_SECONDS = 0.15
+# And one section size for every voice model. Evidence, Dreamlands scripts: median sentence 115
+# characters, 99th percentile 210, longest 262; 0.05% of sentences are longer than 250 and 1.87%
+# longer than 200. So a 250-character section almost always ends at a sentence, and no family runs a
+# section past what it was measured at (the family budgets below are the measured ceilings: Breeze
+# 500, VoxCPM2 400, Fish 300, OmniVoice and Qwen clone 288, Qwen preset 360, Chatterbox 500, the
+# conservative default 280, the audited Qwen 1.7B Auto 280). `policy_for` caps every one at this.
+UNIFORM_SECTION_MAX_CHARACTERS = 250
 # ── matching section loudness before the join ────────────────────────────────
 # A long script is rendered as independent sections and the engine has no idea what level the
 # section before it came out at. Measured on Breeze TTS 2 4-bit: across the 14 sections of one
@@ -234,29 +251,52 @@ class LongFormPolicy:
 
 
 def production_boundary_pause_seconds(boundary: str) -> float:
-    """Return the shared production narration pause before final tempo pass."""
+    """The join pause at one boundary (sentence / paragraph / soft), before the final tempo pass.
+    One rule for every family (owner decision 2026-10-03)."""
     pauses = {
-        "sentence": OMNIVOICE_JOIN_PAUSE_SECONDS,
-        "paragraph": OMNIVOICE_PARAGRAPH_JOIN_PAUSE_SECONDS,
-        "soft": OMNIVOICE_SOFT_JOIN_PAUSE_SECONDS,
+        "sentence": UNIFORM_SENTENCE_JOIN_PAUSE_SECONDS,
+        "paragraph": UNIFORM_PARAGRAPH_JOIN_PAUSE_SECONDS,
+        "soft": UNIFORM_SOFT_JOIN_PAUSE_SECONDS,
     }
     return pauses[boundary]
 
 
+# A caller may ask for its own sentence / paragraph pause (`sentence_pause_sec`,
+# `paragraph_pause_sec`, owner decision 2026-10-03: Sleep wants 1.0 s at a paragraph). Bounds the API
+# enforces and the lane contract publishes.
+REQUESTED_PAUSE_MINIMUM_SECONDS = 0.0
+REQUESTED_PAUSE_MAXIMUM_SECONDS = 3.0
+
+
+def default_boundary_pauses() -> dict[str, float]:
+    """The sentence / paragraph / mid-sentence pause every model joins at when the caller asks none."""
+    return {boundary: production_boundary_pause_seconds(boundary)
+            for boundary in ("sentence", "paragraph", "soft")}
+
+
+def requested_boundary_pauses(params: dict) -> dict[str, float]:
+    """The join pauses for one request: its own sentence / paragraph pause where it asked one, the
+    uniform rule for the rest."""
+    pauses = default_boundary_pauses()
+    for boundary in ("sentence", "paragraph"):
+        value = params.get(f"{boundary}_pause_sec")
+        if value is not None:
+            pauses[boundary] = float(value)
+    return pauses
+
+
 def qwen_17b_assembly_invariants(repo: str) -> Optional[dict[str, object]]:
-    """The Qwen 1.7B assembly behavior consumed by runtime and audit checks."""
+    """The Qwen 1.7B assembly its production audit measured (the audit checks compare the record
+    to it; the runtime reads only whether it applies). Its joins are the measured 300/600/180 ms;
+    the runtime now joins at the uniform rule (`production_boundary_pause_seconds`)."""
     if "1.7b-base" not in repo.rsplit("/", 1)[-1].lower():
         return None
     return {
-        "private_join_pause_milliseconds": round(
-            production_boundary_pause_seconds("sentence") * 1000
-        ),
+        "private_join_pause_milliseconds": round(OMNIVOICE_JOIN_PAUSE_SECONDS * 1000),
         "private_paragraph_join_pause_milliseconds": round(
-            production_boundary_pause_seconds("paragraph") * 1000
+            OMNIVOICE_PARAGRAPH_JOIN_PAUSE_SECONDS * 1000
         ),
-        "private_soft_join_pause_milliseconds": round(
-            production_boundary_pause_seconds("soft") * 1000
-        ),
+        "private_soft_join_pause_milliseconds": round(OMNIVOICE_SOFT_JOIN_PAUSE_SECONDS * 1000),
         "private_edge_destructive_trim": False,
         "private_speech_crossfade": False,
     }
@@ -317,7 +357,7 @@ def _conservative_default() -> "LongFormPolicy":
         origin="conservative_default",
         note=(
             "This family has no section-size measurement of its own yet, so Voice Studio renders "
-            "conservative 280-character sections instead of sending a whole script to an engine "
+            "conservative sections instead of sending a whole script to an engine "
             "whose input limit is unknown. 280 is the smallest budget any measured family uses, "
             "so no family is sectioned more coarsely than one we have evidence for."
         ),
@@ -330,11 +370,16 @@ def policy_for(
     *,
     audited_section_max_characters: object = None,
     audited_default_section_max_characters: object = None,
+    uniform: bool = True,
 ) -> Optional[dict]:
     """Return the effective runtime policy, including a valid audit override.
 
     Never None for a known family: a missing policy used to mean "one request for the whole
     script", which is the failure this function exists to prevent.
+
+    ``uniform`` applies the owner's one narration rule (2026-10-03): sections of at most
+    `UNIFORM_SECTION_MAX_CHARACTERS` and the uniform sentence join. ``uniform=False`` is the family's
+    measured / audited policy, which is what the model audits describe (`audit_contract_runtime`).
     """
     policy = _runtime_default(family, repo)
     # The published `source` is what a person reads on the Models page, so it names the evidence
@@ -366,7 +411,7 @@ def policy_for(
             section_true_peak_ceiling_dbtp=policy.section_true_peak_ceiling_dbtp,
             section_loudness_range_lu=policy.section_loudness_range_lu,
         )
-        return _published_policy(policy, family, source="model_audit")
+        return _published_policy(policy, family, source="model_audit", uniform=uniform)
 
     try:
         audited_limit = int(audited_section_max_characters)
@@ -390,12 +435,25 @@ def policy_for(
             section_loudness_range_lu=policy.section_loudness_range_lu,
         )
         source = "model_audit"
-    return _published_policy(policy, family, source=source)
+    return _published_policy(policy, family, source=source, uniform=uniform)
 
 
-def _published_policy(policy: LongFormPolicy, family: str, *, source: str) -> dict:
+def _published_policy(policy: LongFormPolicy, family: str, *, source: str,
+                      uniform: bool = True) -> dict:
     """One policy, as the catalogue publishes it: the section budget, the engine's limit if it has
     one, and how this family's speed control is delivered."""
+    if uniform:
+        measured = policy.section_max_characters
+        policy = replace(
+            policy,
+            section_max_characters=min(measured, UNIFORM_SECTION_MAX_CHARACTERS),
+            join_pause_seconds=UNIFORM_SENTENCE_JOIN_PAUSE_SECONDS,
+            note=(f"Every voice model renders sections of up to {UNIFORM_SECTION_MAX_CHARACTERS} "
+                  f"characters joined at {UNIFORM_SENTENCE_JOIN_PAUSE_SECONDS:g} s after a sentence "
+                  f"and {UNIFORM_PARAGRAPH_JOIN_PAUSE_SECONDS:g} s at a paragraph break "
+                  f"(owner decision 2026-10-03; this model was measured at {measured}). "
+                  + policy.note),
+        )
     payload = policy.serialize(source=source)
     payload["speed"] = asdict(speed_policy_for(family))
     return payload

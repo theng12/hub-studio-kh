@@ -240,9 +240,15 @@ def test_the_expectation_is_the_family_default_not_the_audited_value(
         "omnivoice",
         "mlx-community/OmniVoice-bfloat16",
         audited_section_max_characters=360,
+        uniform=False,
     )
     assert audited["section_max_characters"] == 360
     assert audited["source"] == "model_audit"
+    # The runtime caps every model at the owner's uniform section size; the record is checked
+    # against the measured policy above, never against the cap.
+    assert policy.policy_for(
+        "omnivoice", "mlx-community/OmniVoice-bfloat16", audited_section_max_characters=360,
+    )["section_max_characters"] == policy.UNIFORM_SECTION_MAX_CHARACTERS == 250
 
     result = _validate(_mutate(omnivoice_record, "section_budget"), sources)
     check = next(c for c in result["checks"] if c["id"] == "section_budget")

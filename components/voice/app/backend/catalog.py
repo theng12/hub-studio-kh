@@ -262,7 +262,7 @@ FAMILIES: dict[str, Family] = {
         text_guidance=TextGuidance(
             soft_max_chars=None,
             chunking="auto-split",
-            note="Long scripts auto-split into sentence-safe ~400-character sections. Every section reuses the original reference, then Voice Studio verifies and joins the audio.",
+            note="Long scripts auto-split into sentence-safe sections of up to 250 characters. Every section reuses the original reference, then Voice Studio verifies and joins the audio at 0.6 s after a sentence and 1.0 s at a paragraph break.",
         ),
     ),
     "qwen3-tts": Family(
@@ -274,7 +274,7 @@ FAMILIES: dict[str, Family] = {
         join_pause_seconds=long_form_policy.QWEN_CLONE_JOIN_PAUSE_SECONDS,
         section_note=(
             "Clone continuity setting. Every section reuses the same reference voice "
-            "and transcript evidence, with a fixed 180 ms join."
+            "and transcript evidence."
         ),
         # `max_output_duration_s` is honoured by this family alone: the dispatcher turns it into
         # Qwen's own audio-token ceiling (`generation._qwen_max_tokens_for_duration`, for the Base
@@ -296,7 +296,7 @@ FAMILIES: dict[str, Family] = {
                 marker="1.7b-base",
                 join_pause_seconds=long_form_policy.OMNIVOICE_JOIN_PAUSE_SECONDS,
                 note=(
-                    "The 1.7B production candidate runtime uses 300 ms sentence, "
+                    "The 1.7B production candidate was audited with 300 ms sentence, "
                     "600 ms paragraph and 180 ms soft joins."
                 ),
             ),
@@ -373,7 +373,7 @@ FAMILIES: dict[str, Family] = {
         text_guidance=TextGuidance(
             soft_max_chars=None,
             chunking="auto-split",
-            note="Long scripts auto-split at sentence boundaries (about 500 chars standard / 400 Turbo), then Voice Studio verifies and joins every section.",
+            note="Long scripts auto-split at sentence boundaries into sections of up to 250 characters, then Voice Studio verifies and joins every section.",
         ),
     ),
     "omnivoice": Family(
@@ -386,8 +386,7 @@ FAMILIES: dict[str, Family] = {
         section_max_characters=long_form_policy.OMNIVOICE_SECTION_MAX_CHARACTERS,
         join_pause_seconds=long_form_policy.OMNIVOICE_JOIN_PAUSE_SECONDS,
         section_note=(
-            "Conservative cloning setting using the same reference for every section, "
-            "with 300 ms sentence joins, 600 ms paragraph joins, and 180 ms soft joins. "
+            "Conservative cloning setting using the same reference for every section. "
             "Fleet measurement puts OmniVoice's memory ceiling near 1286 characters even "
             "on 8 GB; this budget is retained until the long-section quality gate has run."
         ),
@@ -448,7 +447,7 @@ FAMILIES: dict[str, Family] = {
         text_guidance=TextGuidance(
             soft_max_chars=None,
             chunking="auto-split",
-            note="Long scripts are split privately at sentence-safe ~300-character sections, rendered with the same clone/style controls, joined, and tempo-adjusted once.",
+            note="Long scripts are split privately at sentence-safe sections of up to 250 characters, rendered with the same clone/style controls, joined, and tempo-adjusted once.",
         ),
     ),
     "khmer-tts-mms": Family(
@@ -462,7 +461,7 @@ FAMILIES: dict[str, Family] = {
         section_origin="conservative_default",
         section_note=(
             "This family has no section-size measurement of its own yet, so Voice Studio "
-            "renders conservative 280-character sections instead of sending a whole script "
+            "renders conservative sections instead of sending a whole script "
             "to an engine whose input limit is unknown."
         ),
         summary=(
@@ -492,7 +491,7 @@ FAMILIES: dict[str, Family] = {
         section_origin="conservative_default",
         section_note=(
             "This family has no section-size measurement of its own yet, so Voice Studio "
-            "renders conservative 280-character sections instead of sending a whole script "
+            "renders conservative sections instead of sending a whole script "
             "to an engine whose input limit is unknown."
         ),
         summary=(
@@ -524,7 +523,7 @@ FAMILIES: dict[str, Family] = {
         section_origin="conservative_default",
         section_note=(
             "This family has no section-size measurement of its own yet, so Voice Studio "
-            "renders conservative 280-character sections instead of sending a whole script "
+            "renders conservative sections instead of sending a whole script "
             "to an engine whose input limit is unknown."
         ),
         summary=(
@@ -566,8 +565,7 @@ FAMILIES: dict[str, Family] = {
         section_note=(
             "Breeze segments itself, one section per paragraph, and was measured doing it: 14 "
             "sections of 325 to 575 characters from a 1,227-word script, every one a verbatim "
-            "continuation in order. Sections are joined at 600 ms, the pause the owner chose by ear "
-            "from three cuts of the same render, and levelled to one loudness before the join."
+            "continuation in order. Sections are levelled to one loudness before the join."
         ),
         lane_parameters=("voice_design_prompt", "normalize_text"),
         summary=(
@@ -579,13 +577,14 @@ FAMILIES: dict[str, Family] = {
         how_to_use=(
             "Describe the voice you want and it designs one, or pick a reference voice from your "
             "Voices library to clone it, or write how the line should be read. Long scripts are "
-            "split privately into paragraph-sized sections, rendered with the same voice, levelled "
-            "to one loudness and joined into a single file at a 600 ms pause."
+            "split privately into sentence-safe sections of up to 250 characters, rendered with the "
+            "same voice, levelled to one loudness and joined into a single file at 0.6 s after a "
+            "sentence and 1.0 s at a paragraph break."
         ),
         text_guidance=TextGuidance(
             soft_max_chars=None,
             chunking="auto-split",
-            note="Long scripts are split privately into paragraph-sized sections (about 500 characters), rendered with the same voice or design, matched to one loudness, and joined into one final file at a 600 ms pause.",
+            note="Long scripts are split privately into sentence-safe sections of up to 250 characters, rendered with the same voice or design, matched to one loudness, and joined into one final file at 0.6 s after a sentence and 1.0 s at a paragraph break.",
         ),
     ),
 }
