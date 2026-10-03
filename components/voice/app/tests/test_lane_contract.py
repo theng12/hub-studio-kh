@@ -424,3 +424,25 @@ def test_every_roster_consumer_joins_on_the_published_key_shape() -> None:
                        ('native/StudioAPI.swift', native)):
         assert 'isQwen = family' not in text and 'isQwen=' not in text, (
             f'{path} decides something from a family name again; that is the hardcoded-consumer rule')
+
+
+def test_a_timed_model_publishes_a_request_size_that_fits_the_budget_on_its_slowest_mac() -> None:
+    """`maximum_input_characters` is what Story splits narration by (through the Gateway). It must
+    make one request finish inside the budget on the slowest Mac allowed, and exist only where that
+    Mac class was timed. Breeze on an M1 16 GB (RTF 5.13) killed 7,649-character chapters at 1,800 s."""
+    seen = 0
+    for model in catalog.CATALOG:
+        contract = lane_contract.for_model(model)
+        size = contract.get("maximum_input_characters")
+        if model.slowest_mac_speed is None:
+            assert size is None, model.repo
+            continue
+        seen += 1
+        speed = model.slowest_mac_speed
+        assert type(size) is int and 0 < size <= contract["parameters"][0]["max_characters"], model.repo
+        worst_run = size / speed.characters_per_audio_second * speed.realtime_factor
+        assert worst_run <= lane_contract.REQUEST_BUDGET_SECONDS, (model.repo, worst_run)
+        assert contract["maximum_input_characters_source"]["evidence"] == "measured"
+    assert seen, "no model publishes a request size; Story would send whole chapters"
+    breeze = catalog.get_model("mlx-community/Breeze-TTS-2-mlx-4bit")
+    assert lane_contract.for_model(breeze)["maximum_input_characters"] == 1500

@@ -628,6 +628,22 @@ AUDIO8_LANGUAGE_CODES = (
 
 
 @dataclass(frozen=True)
+class SlowestMacSpeed:
+    """How fast this model narrates on the slowest Mac class it is allowed on — measured.
+
+    ``realtime_factor`` is generation seconds per second of audio (the worst run on that class);
+    ``characters_per_audio_second`` is the input rate (the lowest seen, i.e. the most audio per
+    character). Together they size one request (``lane_contract.maximum_input_characters``).
+    ``source`` names the runs. Absent on a model whose slowest class was never timed, and then
+    nothing is published.
+    """
+    mac_class: str
+    realtime_factor: float
+    characters_per_audio_second: float
+    source: str
+
+
+@dataclass(frozen=True)
 class SectionSizeControl:
     minimum: int
     maximum: int
@@ -682,6 +698,7 @@ class ModelEntry:
     # bullets so users can set realistic expectations BEFORE submitting.
     use_cases: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     section_size_control: SectionSizeControl | None = None
+    slowest_mac_speed: SlowestMacSpeed | None = None
     # One recorded fact about the model's license, stated once and never as
     # advice. Empty means "not established in this file", which is the honest
     # value: an invented license name is worse than an absent one.
@@ -1286,6 +1303,16 @@ CATALOG: tuple[ModelEntry, ...] = (
             "reference) to 5.33 GB (S2 christian, 18.9 s reference; S1 4.45-4.6 GB) with the mlx_memory "
             "bounds (2026-10-02, 32 GB M2 Max) + 0.25 GB margin. MLX peak 4.2-4.4 GB, was 9.9 GB; the "
             "3.1 GB of weights keep it above the 4.5 GB 8 GB target."
+        ),
+        # [M] Dreamlands fleet run 2026-10-03 (Gateway job records, generation_seconds /
+        # audio_duration_s, 48 Breeze chapters): M1 16 GB 4.89-5.13 (jobs da960426, 73b4eace),
+        # M2 16 GB 3.4-4.7, M4 16 GB 2.5-3.4; input 8.58-11.70 characters per audio second.
+        slowest_mac_speed=SlowestMacSpeed(
+            mac_class="M1 16 GB",
+            realtime_factor=5.13,
+            characters_per_audio_second=8.58,
+            source="Dreamlands fleet run 2026-10-03, Gateway jobs da960426 and 73b4eace (M1 16 GB) "
+                   "and 48 Breeze chapters for the character rate",
         ),
         recommended_hardware=(
             "16 GB or more. Measured ~3.3 GB resident in every mode; the kernel peak footprint "
