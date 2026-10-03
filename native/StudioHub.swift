@@ -955,6 +955,22 @@ enum RelaunchHelper {
     }
 }
 
+/// Workstation mode (`components/hub/workstation.py`, owner 2026-10-03 "Shops"): a shop's cashier Mac
+/// shows no pop-ups - no window opened by itself, no What's New - and may hide this menu-bar icon.
+/// Read from the Hub's own `workstation.json` beside its other state, so it needs no request.
+struct WorkstationQuiet: Equatable {
+    var quiet = false
+    var hideIcon = false
+
+    static func read(dataDirectory: URL) -> WorkstationQuiet {
+        let file = dataDirectory.appendingPathComponent("hub/workstation.json")
+        guard let data = try? Data(contentsOf: file),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              object["enabled"] as? Bool == true else { return WorkstationQuiet() }
+        return WorkstationQuiet(quiet: true, hideIcon: object["hide_menu_bar_icon"] as? Bool == true)
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var controller: StudioController!
@@ -983,6 +999,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     private var statusObserver: AnyCancellable?
     private var failureObserver: AnyCancellable?
+    private var workstation = WorkstationQuiet()
+    private var workstationTimer: Timer?
+    /// Re-read every few seconds: the Gateway changes the setting through the Hub while the app runs.
+    private func refreshWorkstation() {
+        guard let controller else { return }
+        workstation = WorkstationQuiet.read(dataDirectory: controller.configuration.dataDirectory)
+        statusItem?.isVisible = !workstation.hideIcon
+    }
 
     /// The menu-bar mark: the Wave Frame glyph as a template image (one colour plus alpha, so macOS
     /// tints it for light and dark bars and for the pressed state). `menubar-icon.png` is 18 px and
@@ -1098,16 +1122,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.statusItem.button?.toolTip = "Studio Hub — " + status
             stateItem.title = status
         }
-        failureObserver = controller.$failure.dropFirst().compactMap { $0 }.sink { [weak self] _ in self?.openWindow() }
+        refreshWorkstation()
+        workstationTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshWorkstation() }
+        }
+        failureObserver = controller.$failure.dropFirst().compactMap { $0 }.sink { [weak self] _ in
+            guard self?.workstation.quiet != true else { return }   // a shop's Mac: logged, not shown
+            self?.openWindow()
+        }
         controller.onStopped = { [weak self] in self?.engineStopped() }
         // Decided before the window opens, and only once per launch. The launchd agent starts the
         // executable directly, so it carries the login marker in its environment; a login item
         // launch carries the AppleEvent instead.
-        announceReleaseNotes = ReleaseNotesSeen.shouldAnnounce()
+        announceReleaseNotes = !workstation.quiet && ReleaseNotesSeen.shouldAnnounce()
         let agentLaunch = ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1"
         let loginLaunch = agentLaunch || NSAppleEventManager.shared().currentAppleEvent?
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
-        if !loginLaunch || !controller.hasLibrary { openWindow() }
+        // A workstation opens its window only by hand (Dock, menu): an update's reopen must not put
+        // Studio Hub in front of a cashier.
+        if (!loginLaunch && !workstation.quiet) || !controller.hasLibrary { openWindow() }
         // A login launch starts the Studios only when the owner asked for it; the default is
         // off, so a Mac that signs in overnight stays idle until someone sends it work. Every
         // other launch starts them, because opening the app is the intent to use it.

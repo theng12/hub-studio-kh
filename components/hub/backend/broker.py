@@ -244,6 +244,14 @@ MACHINE_RESERVED_AVOID_S = 5.0
 # on a 5-minute timer, so the Mac is left out of selection for that long - and the refusal is not a
 # generation attempt, so it never uses up one of the item's MAX_TRIES.
 DISK_FULL_AVOID_S = 300.0
+# Workstation mode (`components/hub/workstation.py`): a shop Mac whose user is at the keyboard, or
+# whose free memory is under its floor, stands by - a busy Mac, not a broken one - and one that stopped
+# a job for its user hands the job back. A model it does not run is refused for longer.
+WORKSTATION_YIELDED = "WORKSTATION_YIELDED"
+WORKSTATION_STANDING_BY_AVOID_S = 30.0
+WORKSTATION_NOT_ALLOWED_AVOID_S = 600.0
+_WORKSTATION_REFUSALS = {"WORKSTATION_STANDING_BY": WORKSTATION_STANDING_BY_AVOID_S,
+                         "WORKSTATION_MODEL_NOT_ALLOWED": WORKSTATION_NOT_ALLOWED_AVOID_S}
 HANDOFF_RETRY_S = 15.0
 FAILED_WORKER_AVOID_S = 90.0
 MACHINE_FAILURE_THRESHOLD = 2
@@ -385,6 +393,13 @@ def _host_for_studio(studio: dict) -> dict | None:
     return host if isinstance(host, dict) else None
 
 
+def _with_machine_floor(mem: dict | None, studio: dict) -> dict | None:
+    """A workstation's own "free memory needed to start a job", when its owner set one, in place
+    of the model's free-before-start floor (`components/hub/workstation.py`, `start_free_gb`)."""
+    override = None if mem is None else peers.workstation_start_free_gb(studio.get("machine", "local"))
+    return mem if override is None else {**mem, "min_free": override}
+
+
 async def release_idle_siblings(client: httpx.AsyncClient, target: dict) -> dict:
     """Ask idle sibling Studios on the target Mac to release resident state.
 
@@ -445,7 +460,7 @@ async def release_idle_siblings(client: httpx.AsyncClient, target: dict) -> dict
 async def prepare_machine_memory(client: httpx.AsyncClient, studio: dict,
                                  model: str, entry: dict) -> tuple[str, str | None]:
     """Run admission, coordinated idle handoff, then one fresh admission check."""
-    mem = _admission_requirements(model, entry)
+    mem = _with_machine_floor(_admission_requirements(model, entry), studio)
     if mem is None:
         return "run", None
     is_local = peers.is_local_studio(studio)
@@ -484,7 +499,7 @@ def memory_admission_dispatchable(studio: dict, model: str, entry: dict) -> bool
     MemoryGuard remains authoritative, with the memory-failure turn fallback
     preventing the opposite lane from being stranded.
     """
-    mem = _admission_requirements(model, entry)
+    mem = _with_machine_floor(_admission_requirements(model, entry), studio)
     if mem is None:
         return True
     host = _host_for_studio(studio)
@@ -988,7 +1003,13 @@ def _is_machine_reservation_refusal(exc: BaseException) -> bool:
     must stay terminal.
     """
     return (getattr(exc, "status_code", None) == 409
-            and str(getattr(exc, "error_code", "") or "") == "MACHINE_BUSY")
+            and str(getattr(exc, "error_code", "") or "") in {"MACHINE_BUSY", *_WORKSTATION_REFUSALS})
+
+
+def _another_machine_free(b: dict, machine: str) -> bool:
+    """Whether a Mac other than ``machine`` could take this batch's item right now."""
+    return any(studio.get("machine", "local") != machine
+               for studio in _eligible_studios(b["modality"], b["routing"], b.get("model")))
 
 
 def _is_disk_full_refusal(exc: BaseException) -> bool:
@@ -4585,7 +4606,20 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         retryable = getattr(e, "retryable", True) or abandoned
         item["last_progress_at"] = time.time()
         now = time.time()
-        if retryable and _is_capacity_failure(message) and not b["cancelled"]:
+        if code == WORKSTATION_YIELDED and not b["cancelled"]:
+            # A workstation stopped this job for its own user (input, or free memory under its
+            # floor). Nothing was kept and nothing is pending, and it is not that Mac's failure or
+            # an attempt: another Mac of this group takes it now if one is free, otherwise it goes
+            # back to the Gateway at once, typed, to be moved to another group.
+            machine = studio.get("machine", "local")
+            item["tries"] = max(0, int(item.get("tries") or 0) - 1)
+            item["retry_at"] = None
+            item.setdefault("avoid_machines", {})[machine] = now + WORKSTATION_STANDING_BY_AVOID_S
+            if _another_machine_free(b, machine):
+                item.update(state="queued", error=f"moved to another Mac: {message}")
+            else:
+                item.update(state="error", error=message, error_code=WORKSTATION_YIELDED)
+        elif retryable and _is_capacity_failure(message) and not b["cancelled"]:
             # Memory pressure is a capacity wait, not a consumed generation
             # attempt. Avoid this Mac briefly so another healthy worker can
             # steal the item; if none can, keep it queued until memory clears.
@@ -4646,8 +4680,10 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             # avoid window, recorded per machine so this one refusal covers every item aimed at it.
             item["retry_at"] = None
             machine = studio.get("machine", "local")
-            item.setdefault("avoid_machines", {})[machine] = now + MACHINE_RESERVED_AVOID_S
-            _machine_reserved_until[machine] = now + MACHINE_RESERVED_AVOID_S
+            avoid = _WORKSTATION_REFUSALS.get(code, MACHINE_RESERVED_AVOID_S)
+            item.setdefault("avoid_machines", {})[machine] = now + avoid
+            if code != "WORKSTATION_MODEL_NOT_ALLOWED":   # a lane it does not run says nothing of the others
+                _machine_reserved_until[machine] = now + avoid
         elif _is_disk_full_refusal(e) and not b["cancelled"]:
             # The Mac refused at the door because its disk is full: not a failure of the work and not
             # an attempt. Keep the item queued, restore the try it was charged, and leave that Mac out of

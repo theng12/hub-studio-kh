@@ -877,7 +877,8 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
         )
         quarantined = bool((protections.get(machine) or {}).get("quarantined"))
         is_busy = studio_id in busy
-        machine_busy = machine in busy_machines
+        # A workstation whose user is at it (or in its quiet hours) is a busy Mac, not a missing one.
+        machine_busy = machine in busy_machines or peers.standing_by(machine)
         machine_release = _machine_release_evidence(managed_release, machine)
         component_release = (
             (machine_release.get("components") or {}).get(studio.get("modality"))

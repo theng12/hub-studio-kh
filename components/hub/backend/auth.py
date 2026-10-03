@@ -577,6 +577,12 @@ FLEET_ALLOWED = (
     # the roster and rejoins dispatch when resumed. Not in `NODE_ALLOWED`: a leaf Mac's credential
     # cannot pause another Mac.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/pause$"),
+    # **Workstation mode from the Gateway (owner, 2026-10-03, "Shops").** The controller relays the
+    # Gateway's change (`.../fleet/nodes/{id}/workstation`) to the Mac's own `/api/hub/workstation`,
+    # which accepts only the workstation settings, validated. Not in `NODE_ALLOWED`.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/workstation$"),
+    ("GET", r"^/api/hub/workstation$"),
+    ("POST", r"^/api/hub/workstation$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
     # statement — here is your new credential, and here is your new head — so they are one route.
     # A controller pushes it to a node with the Fleet token; the *operator* calls it with the Hub

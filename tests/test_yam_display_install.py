@@ -327,7 +327,10 @@ class PrepareKitExtrasTests(unittest.TestCase):
         result = self.prepare()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         extras = self.kit / "Extras"
-        self.assertEqual(sorted(p.name for p in extras.iterdir()), [COMMAND, "YamDisplay2.4.8.4.dmg"])
+        # Beside it, the Shops set-up commands (workstation mode, 2026-10-03; `tests/test_shop_kit.py`).
+        self.assertEqual(sorted(p.name for p in extras.iterdir()),
+                         [COMMAND, "Set Up a Shop Mac.command", "Set Up the Shops Controller.command",
+                          "YamDisplay2.4.8.4.dmg"])
         sha = hashlib.sha256((extras / "YamDisplay2.4.8.4.dmg").read_bytes()).hexdigest()
         self.assertIn(f"Extras/YamDisplay2.4.8.4.dmg sha256 {sha}", result.stdout)
         self.assertTrue(os.access(extras / COMMAND, os.X_OK))
@@ -346,7 +349,7 @@ class PrepareKitExtrasTests(unittest.TestCase):
     def test_it_is_idempotent(self):
         self.assertEqual(self.prepare().returncode, 0)
         self.assertEqual(self.prepare().returncode, 0)
-        self.assertEqual(len(list((self.kit / "Extras").iterdir())), 2)
+        self.assertEqual(len(list((self.kit / "Extras").iterdir())), 4)
 
     def test_missing_assets_say_so_and_fail(self):
         for f in self.assets.iterdir():

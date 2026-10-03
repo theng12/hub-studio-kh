@@ -28,7 +28,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from components import shelved_models
-from . import disk_governor, output_storage, standalone_config
+from . import disk_governor, output_storage, standalone_config, workstation
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
 from .backend import app_release, chat_jobs, peers, release_sync, shared_voices, startup_control, transcription_jobs, update_drain, vocabulary
 from .backend.monitor import StudioMonitor
@@ -978,6 +978,10 @@ def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
         return {"code": "MACHINE_DISABLED", "detail": f"{machine} is disabled on this Mac"}
     if not registry.studio_enabled(machine, studio_id):
         return {"code": "STUDIO_DISABLED", "detail": f"{studio_id} is disabled on this Mac"}
+    # A shop Mac in workstation mode: someone at the keyboard, quiet hours, or a model it does not
+    # run. Busy, not broken - the controller tries another Mac (`broker._WORKSTATION_REFUSALS`).
+    if (refusal := workstation.admission_refusal(model)) is not None:
+        return refusal
     if model:
         paused = broker.model_block_state(studio_id, model)
         if paused is not None:
@@ -1175,6 +1179,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             pass
         storage_sweep = None
         peer_lease_sweep = None
+        workstation_watch = None
         release_mirror = None
         if start_background:
             # The output size / age limits (device settings), enforced for every studio - not only in
@@ -1184,6 +1189,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             storage_sweep = _asyncio.create_task(
                 job_storage.budget_loop(standalone_config.cleanup_interval_seconds()))
             peer_lease_sweep = _asyncio.create_task(_peer_lease_loop(monitor))
+
+            def held_peer_jobs() -> list[tuple[str, str]]:
+                with _PEER_LEASE_LOCK:
+                    return list(_PEER_JOBS)
+            workstation_watch = _asyncio.create_task(workstation.watch(monitor, held_peer_jobs))
             # A node fetches the release its controller holds; a no-op on any Mac that is not one.
             release_mirror = _asyncio.create_task(release_sync.loop())
             try:
@@ -1227,6 +1237,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     try:
                         await storage_sweep
                     except Exception:
+                        pass
+                if workstation_watch is not None:
+                    workstation_watch.cancel()
+                    try:
+                        await workstation_watch
+                    except BaseException:
                         pass
                 if peer_lease_sweep is not None:
                     peer_lease_sweep.cancel()
@@ -1369,7 +1385,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "disk": host.get("disk"), "startup": _startup_snapshot(),
                 "current_job": local_job, "machine": fleet_view.this_machine(),
                 # Why this Mac's Hub last stopped (quit, crash, Force Quit...), as the app recorded it.
-                "last_stop": fleet_view.this_last_stop()}
+                "last_stop": fleet_view.this_last_stop(),
+                # Workstation mode: whether this Mac takes new work right now, and why not.
+                "workstation": workstation.status()}
 
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:
@@ -1607,6 +1625,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                                           for item in on_this_machine)},
                     "startup": _startup_snapshot(),
                     "last_stop": fleet.this_last_stop(),
+                    "workstation": workstation.status(),
                 }
             else:
                 snapshot = peers.cached(machine) or {}
@@ -1624,6 +1643,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     host = member.get("host") or {}
                     startup = member.get("startup")
                     last_stop = member.get("last_stop")
+                    workstation_row = member.get("workstation")
                 else:
                     startup = snapshot.get("startup") if isinstance(snapshot.get("startup"), dict) else None
                     reachable = bool(snapshot.get("reachable") and snapshot.get("auth"))
@@ -1633,6 +1653,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     version = snapshot.get("version")
                     host = snapshot.get("host") or {}
                     last_stop = fleet.last_stop_of(snapshot.get("last_stop"))
+                    workstation_row = fleet._workstation_of(snapshot.get("workstation"))
                 row = {
                     "machine": machine,
                     "label": str((member or {}).get("label")
@@ -1644,6 +1665,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     "detail": detail,
                     "startup": startup,
                     "last_stop": last_stop if isinstance(last_stop, dict) else None,
+                    "workstation": workstation_row if isinstance(workstation_row, dict) else None,
                 }
             stats = measured.get(machine) or {}
             rows.append({
@@ -1689,6 +1711,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "detail": member.get("detail"),
                 "startup": member.get("startup"),
                 "last_stop": member.get("last_stop"),
+                "workstation": member.get("workstation"),
                 "memory_gb": host.get("total_gb"), "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"), "disk": host.get("disk"),
@@ -2491,6 +2514,40 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         transcription_jobs._wakeup.set()
         return JSONResponse({"ok": True, "node": wanted, "paused": paused})
 
+    @app.get("/api/hub/workstation")
+    def workstation_read() -> dict[str, Any]:
+        """This Mac's workstation mode: its settings, what it is doing now and today's counts."""
+        return {"ok": True, "workstation": workstation.status()}
+
+    @app.post("/api/hub/workstation")
+    def workstation_write(body: dict[str, Any]) -> JSONResponse:
+        """Change this Mac's workstation settings (any subset). Its controller relays the Gateway's
+        change here with the Fleet token; the setting is this Mac's own, so it is kept here."""
+        try:
+            answer = workstation.save(body)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "code": "BAD_SETTING", "detail": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "workstation": answer})
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/workstation")
+    async def fleet_node_workstation(node_id: str, body: dict[str, Any]) -> JSONResponse:
+        """Change one Mac's workstation settings from the Gateway: a joined node (relayed to it, the
+        way a rename is) or this controller itself (its id or ``local``)."""
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            try:
+                answer = workstation.save(body)
+            except ValueError as exc:
+                return JSONResponse({"ok": False, "code": "BAD_SETTING", "detail": str(exc)},
+                                    status_code=400)
+            return JSONResponse({"ok": True, "node": wanted, "workstation": answer})
+        try:
+            answer = await fleet.relay_workstation(wanted, body)
+        except fleet.StartupRelayError as error:
+            return JSONResponse(error.body, status_code=error.status)
+        return JSONResponse(answer)
+
     @app.get("/api/hub/shared-voices")
     def shared_voice_list() -> dict[str, Any]:
         """What this controller holds and how far each voice has reached its nodes.
@@ -3058,6 +3115,26 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         url = worker["base_url"] + tail
         if request.url.query:
             url += "?" + request.url.query
+
+        def yielded_answer(status_code: int, content_type: str, content: bytes) -> Response | None:
+            """A job this Mac handed back (workstation mode) reads as handed back, at once."""
+            match = _PEER_JOB_PATH.match(tail)
+            if request.method != "GET" or match is None or tail.rstrip("/") != match.group(0):
+                return None
+            payload = None
+            if "json" in content_type:
+                try:
+                    payload = json.loads(content)
+                except (ValueError, TypeError):
+                    payload = None
+            answer = workstation.rewrite_status(worker_id, match.group(1), status_code, payload)
+            if answer is None:
+                return None
+            with _PEER_LEASE_LOCK:
+                held_by = _PEER_JOBS.get((worker_id, match.group(1)))
+            if held_by is not None:
+                _release_peer_lease(held_by)
+            return JSONResponse(answer[1], status_code=answer[0])
         headers = {"X-Hub-Token": worker["hub_token"]}
         if content_type:
             headers["Content-Type"] = content_type
@@ -3070,6 +3147,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except (httpx.HTTPError, OSError) as exc:
             if owner is not None:
                 _release_peer_lease(owner)
+            if (handed_back := yielded_answer(502, "", b"")) is not None:
+                return handed_back   # its worker was stopped to free the memory
             settled(request_body=body, started_at=started_at,
                     runtime_s=time.time() - started_at, worker_id=worker_id, machine=machine,
                     failure="worker_unreachable", failure_detail=str(exc) or type(exc).__name__)
@@ -3089,6 +3168,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise
         if owner is not None:
             _settle_peer_lease(owner, worker_id, upstream)
+            if upstream.status_code < 400:
+                workstation.note_job_accepted()
+        if (handed_back := yielded_answer(upstream.status_code,
+                                          upstream.headers.get("content-type") or "",
+                                          upstream.content)) is not None:
+            return handed_back
         _observe_peer_response(worker_id, tail, upstream)
         settled(request_body=body, started_at=started_at, runtime_s=time.time() - started_at,
                 worker_id=worker_id, machine=machine, status_code=upstream.status_code,

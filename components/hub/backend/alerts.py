@@ -60,6 +60,9 @@ async def _post_webhook(url: str, event: dict):
 
 def _desktop_push(message: str):
     try:
+        from components.hub import workstation
+        if workstation.load()["enabled"]:
+            return   # a shop's Mac shows no pop-ups (workstation mode is quiet)
         from .control import find_pterm
         pterm = find_pterm()
         if pterm:

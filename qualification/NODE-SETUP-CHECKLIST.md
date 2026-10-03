@@ -40,6 +40,27 @@ Do NOT enrol all the machines yet. Do this first:
 machine with an empty roster. That is the single biggest unknown, and it is the thing you are about
 to do — so do it once, carefully, before doing it forty-nine times.
 
+## Shops: cashier Macs in workstation mode (owner, 2026-10-03)
+
+A shop's cashier iMac (8 GB; Chrome POS, Telegram, PDF viewer, Printer Studio KH) lends the fleet its
+idle time and never its user's. Both commands are in the kit's **Extras** folder.
+
+| # | Where | Step | What "good" looks like |
+|---|---|---|---|
+| 1 | the always-on Mac mini | Double-click **Extras/Set Up the Shops Controller** | "This Mac's own generation: PAUSED"; then the usual update (app, Yam Display, ~15 GB of models, services started). |
+| 2 | the Mac mini | Studio Hub > **Connections**: role **Controller**, Tailscale address on, restart services, **Copy Fleet Token** | The Gateway's Fleet page shows the group with this Mac **Paused** (grey, not an alarm). |
+| 3 | each cashier Mac | Double-click **Extras/Set Up a Shop Mac** | "Workstation mode: ON"; only the six workstation models are copied (FLUX.2 Klein 4B 4-bit, Z-Image-Turbo 4-bit, Qwen3-TTS 0.6B 4-bit, VoxCPM2 4-bit, Whisper large-v3 turbo, Stable Audio 3 Medium; ~15 GB). |
+| 4 | each cashier Mac | Studio Hub > **Connections**: Tailscale address on, restart services, **Join** with the controller's address and Fleet token | The Mac appears under the Shops group as **Working**. |
+| 5 | the Gateway | Fleet > the Mac's **…** menu > **Workstation Mode** | Only when idle (default off, 3 min), Step aside when someone uses it (default off, resume after 2 min), free memory needed to start a job (default: each model's own, ~2.8 GB), quiet hours, hide the menu-bar icon. |
+
+What workstation mode does: every worker runs at macOS background priority (lowest CPU band, throttled
+disk, low-priority GPU); only the six models above are accepted (others are refused by name and go to
+another Mac); no pop-ups or desktop alerts from Studio Hub. **A job it starts always finishes** - step
+aside lets the current job finish, then unloads the model and takes no new work until the Mac has been
+left alone for the resume time. The only interruption is macOS reporting **critical** memory pressure
+for 20 seconds (rare); the job then moves to another Mac at once. Staff should know the Mac may be busy
+in the background; heat and fan noise are expected.
+
 ## On every node, in macOS System Settings (owner decision, 2026-10-02)
 
 - [ ] Turn **off** macOS automatic update *downloads* (System Settings > General > Software Update >
