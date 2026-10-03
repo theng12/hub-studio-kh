@@ -868,22 +868,27 @@ def _long_form_join_pause_s(family: str, repo: str) -> float:
     return float(policy["join_pause_seconds"])
 
 
-# Families whose section joins follow the text: 0.30 s after a sentence, 0.60 s at a paragraph break.
-# OmniVoice and Qwen3-TTS 1.7B were first; the families that sat on the flat 0.12 s default joined
-# them on the owner's decision (2026-10-02) after Fish joins were heard as having "no proper pause".
-_PRODUCTION_PAUSE_FAMILIES = frozenset(
-    {"omnivoice", "voxcpm-mlx", "fish-audio-mlx", "chatterbox-mlx", "pocket-tts"}
-)
+# The text-led join pauses live in `long_form_policy` (one source for the joiner, the lane contract
+# and the section check).
+_PRODUCTION_PAUSE_FAMILIES = long_form_policy.PRODUCTION_PAUSE_FAMILIES
+_uses_production_pauses = long_form_policy.uses_production_pauses
 
 
-def _uses_production_pauses(family: str, repo: str) -> bool:
-    return family in _PRODUCTION_PAUSE_FAMILIES or (
-        family == "qwen3-tts" and "1.7b-base" in repo.lower()
-    )
+def _request_join_pauses_s(family: str, repo: str, text: str, chunks: list[str],
+                           params: dict) -> Optional[list[float]]:
+    """Text-led pauses for this request (its own sentence/paragraph pause when asked), or None for
+    the family's flat join pause."""
+    rule = long_form_policy.requested_boundary_pauses(family, repo, params)
+    if rule is None:
+        return None
+    return _production_join_pauses_s(text, chunks, float(params.get("speed") or 1.0), rule)
 
 
-def _production_join_pauses_s(text: str, chunks: list[str], speed: float) -> list[float]:
+def _production_join_pauses_s(text: str, chunks: list[str], speed: float,
+                              rule: Optional[dict[str, float]] = None) -> list[float]:
     """Keep production narration boundaries stable after final tempo adjustment."""
+    rule = rule or {boundary: long_form_policy.production_boundary_pause_seconds(boundary)
+                    for boundary in ("sentence", "paragraph", "soft")}
     pauses: list[float] = []
     cursor = 0
     speed = max(long_form_policy.SPEED_MINIMUM,
@@ -897,11 +902,11 @@ def _production_join_pauses_s(text: str, chunks: list[str], speed: float) -> lis
         while visible_end and visible_end[-1] in _QWEN_TRAILING_CLOSERS:
             visible_end = visible_end[:-1].rstrip()
         if separator.count("\n") >= 2:
-            pause = long_form_policy.production_boundary_pause_seconds("paragraph")
+            pause = rule["paragraph"]
         elif visible_end and visible_end[-1] in _QWEN_SENTENCE_ENDINGS:
-            pause = long_form_policy.production_boundary_pause_seconds("sentence")
+            pause = rule["sentence"]
         else:
-            pause = long_form_policy.production_boundary_pause_seconds("soft")
+            pause = rule["soft"]
         pauses.append(pause * speed)
         cursor = max(end, next_start if next_start >= 0 else end)
     return pauses
@@ -2547,9 +2552,10 @@ class GenerationManager:
             text,
             max_chars_override=budget,
         ) or [text]
-        pauses = max(0, len(chunks) - 1) * _long_form_join_pause_s(
-            "qwen3-tts", str(job.params.get("repo") or "")
-        )
+        repo = str(job.params.get("repo") or "")
+        requested = _request_join_pauses_s("qwen3-tts", repo, text, chunks, job.params)
+        pauses = (sum(requested) if requested is not None
+                  else max(0, len(chunks) - 1) * _long_form_join_pause_s("qwen3-tts", repo))
         return round(
             sum(qwen_quality.automatic_duration_limit(chunk, speed) for chunk in chunks)
             + pauses,
@@ -3315,12 +3321,8 @@ class GenerationManager:
                 segment_paths, output_path, model.family,
                 pause_s=_long_form_join_pause_s(model.family, model.repo),
                 repo=model.repo,
-                pause_sequence_s=(
-                    _production_join_pauses_s(
-                        text, chunks, float(job.params.get("speed") or 1.0),
-                    )
-                    if _uses_production_pauses(model.family, model.repo)
-                    else None
+                pause_sequence_s=_request_join_pauses_s(
+                    model.family, model.repo, text, chunks, job.params,
                 ),
                 cancel_event=job.cancel_event,
             )
@@ -3375,6 +3377,8 @@ class GenerationManager:
             record.update(tts_quality.check_section(
                 text, model.family, tts_quality.audio_metrics(segment_path),
                 speed=speed, heard=heard,
+                requested_pause_s=max(float(job.params.get(name) or 0.0)
+                                      for name in ("paragraph_pause_sec", "sentence_pause_sec")),
             ))
             return True
         except tts_quality.SectionQualityError as exc:
@@ -3821,14 +3825,8 @@ class GenerationManager:
             family,
             pause_s=_long_form_join_pause_s(family, model_repo),
             repo=model_repo,
-            pause_sequence_s=(
-                _production_join_pauses_s(
-                    str(gen_kwargs.get("text") or ""),
-                    chunks,
-                    float(job.params.get("speed") or 1.0),
-                )
-                if _uses_production_pauses(family, model_repo)
-                else None
+            pause_sequence_s=_request_join_pauses_s(
+                family, model_repo, str(gen_kwargs.get("text") or ""), chunks, job.params,
             ),
         )
 

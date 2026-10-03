@@ -1066,13 +1066,26 @@ async def _lane_accepts_output_format(studio: dict, model: str, value: object) -
     worker whose own catalog says it honours that value; anything else (no catalog, no parameter,
     a value outside its enum) is treated as "not supported" and the job runs as it always has.
     """
+    parameter = await _lane_parameter(studio, model, "output_format")
+    if parameter is None:
+        return False
+    options = parameter.get("enum")
+    return not isinstance(options, list) or value in options
+
+
+async def _lane_parameter(studio: dict, model: str, name: str) -> dict | None:
+    """The parameter ``name`` as this worker's own lane contract publishes it, or None."""
     entry = await _catalog_entry(studio, model)
     contract = (entry or {}).get("lane_contract")
     for parameter in (contract.get("parameters") if isinstance(contract, dict) else None) or ():
-        if isinstance(parameter, dict) and parameter.get("name") == "output_format":
-            options = parameter.get("enum")
-            return not isinstance(options, list) or value in options
-    return False
+        if isinstance(parameter, dict) and parameter.get("name") == name:
+            return parameter
+    return None
+
+
+# Optional per-job voice fields an older worker silently drops (so they are sent only to a worker
+# that publishes them, and are not part of a recovered job's identity). Join pauses added 2026-10-03.
+_OPTIONAL_LANE_FIELDS = ("output_format", "paragraph_pause_sec", "sentence_pause_sec")
 
 
 def _normalized_immutable_revision(value: object) -> str | None:
@@ -3012,7 +3025,7 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
             params == accepted_params if modality == "music"
             else isinstance(params, dict)
             and all(params.get(key) == value for key, value in body.items()
-                    if key != "output_format")
+                    if key not in _OPTIONAL_LANE_FIELDS)
         )
         if (any(job.get(key) != value for key, value in accepted.items()
                 if value is not None) or not params_match):
@@ -4104,6 +4117,9 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
     if "output_format" in body and not await _lane_accepts_output_format(
             studio, b["model"], body["output_format"]):
         body.pop("output_format")
+    for name in ("paragraph_pause_sec", "sentence_pause_sec"):
+        if name in body and await _lane_parameter(studio, b["model"], name) is None:
+            body.pop(name)
     # Reference-image jobs use multipart. Image Studio accepts ``image`` on
     # img2img/edit; Video Studio accepts ``file`` on video2video with
     # mode=img2video. One exact source image is used per stable scene id.

@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field
 
 from components import model_defaults
 
-from . import (cache, catalog, fleet_auth, job_details, lane_contract, memory_policy,
+from . import (cache, catalog, fleet_auth, job_details, lane_contract, long_form_policy, memory_policy,
                model_storage, paths, reference_audio, settings as app_settings,
                storage_policy)
 from .generation import (
@@ -414,8 +414,9 @@ def _job_parameters(body: "Txt2SpeechBody", model: catalog.ModelEntry) -> dict:
         params[name] = value
     # Absent means the WAV, exactly as before: the key is not recorded at all, so an older
     # caller's retried `client_request_id` still compares equal to its stored request.
-    if params.get("output_format") is None:
-        params.pop("output_format", None)
+    for name in ("output_format", "paragraph_pause_sec", "sentence_pause_sec"):
+        if params.get(name) is None:
+            params.pop(name, None)
     return params
 
 
@@ -432,6 +433,15 @@ class Txt2SpeechBody(BaseModel):
     # from the finished lossless WAV after the model lock is released; an encode that cannot run
     # delivers the WAV and records why.
     output_format: Optional[Literal["wav", "m4a"]] = None
+    # Optional join pauses, seconds, at a paragraph break / after a sentence (owner 2026-10-03: Sleep
+    # wants 1.0 s at a paragraph). Absent = the model's own pauses, as always (and not recorded, like
+    # `output_format`).
+    paragraph_pause_sec: Optional[float] = Field(
+        default=None, ge=long_form_policy.REQUESTED_PAUSE_MINIMUM_SECONDS,
+        le=long_form_policy.REQUESTED_PAUSE_MAXIMUM_SECONDS)
+    sentence_pause_sec: Optional[float] = Field(
+        default=None, ge=long_form_policy.REQUESTED_PAUSE_MINIMUM_SECONDS,
+        le=long_form_policy.REQUESTED_PAUSE_MAXIMUM_SECONDS)
     # ── Kokoro fields ──
     voice: Optional[str] = None         # preset voice name (Kokoro)
     # ── language (also implicit for some engines) ──

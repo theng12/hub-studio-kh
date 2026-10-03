@@ -79,6 +79,24 @@ OUTPUT_FORMAT_PARAMETER = {
     "note": ("omit for the WAV; m4a delivers AAC-LC 128 kbps mono (about 4-6x smaller) and falls "
              "back to the WAV if encoding fails"),
 }
+
+
+def pause_parameters(model: catalog.ModelEntry) -> list[dict[str, Any]]:
+    """`paragraph_pause_sec` / `sentence_pause_sec`: the caller's own join pause at a paragraph break
+    and after a sentence (owner 2026-10-03). Bounds are the API's; each ``default`` is the pause this
+    model joins at when the field is omitted. `request_only`: a per-job choice, never an operator
+    default."""
+    defaults = long_form_policy.default_boundary_pauses(model.family, model.repo)
+    return [{
+        "name": f"{boundary}_pause_sec", "type": "number", "required": False,
+        "minimum": long_form_policy.REQUESTED_PAUSE_MINIMUM_SECONDS,
+        "maximum": long_form_policy.REQUESTED_PAUSE_MAXIMUM_SECONDS,
+        "default": round(defaults[boundary], 3), "request_only": True,
+        "note": (f"seconds of silence inserted at a {label} where the request's text is split into "
+                 "sections; omit for this model's own pause"),
+    } for boundary, label in (("paragraph", "paragraph break"), ("sentence", "sentence end"))]
+
+
 # Quoted verbatim from the spec / `broker`: done, error, cancelled are terminal;
 # `uncertain` is NOT terminal - an item whose outcome the Hub cannot establish is
 # held for an operator decision - and this lane can release one.
@@ -429,6 +447,7 @@ def parameters_for(model: catalog.ModelEntry,
             continue
         parameters.append({"name": name, **shape})
     parameters.append(dict(OUTPUT_FORMAT_PARAMETER))
+    parameters.extend(pause_parameters(model))
     return _with_resolved_defaults(parameters, defaults)
 
 

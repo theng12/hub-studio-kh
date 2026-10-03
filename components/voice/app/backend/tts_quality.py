@@ -49,7 +49,8 @@ MAX_MISSING_WORDS = 2
 # while its 7 missing words of 76 were still inside the 10% share.
 MAX_MISSING_RUN = 3
 # A silence inside a section may be the longest pause its text calls for (a paragraph, 0.6 s, else a
-# sentence, 0.3 s) plus this. Breeze's own sleep-narration pauses run to 3.2-3.4 s at -40 dBFS
+# sentence, 0.3 s; never less than the longest pause the caller asked for, e.g. Sleep's 1.0 s
+# paragraph pause) plus this. Breeze's own sleep-narration pauses run to 3.2-3.4 s at -40 dBFS
 # (131 Dreamlands sections, 10 fresh renders, EP0003 Ch09); the failures it must catch were 4.3-35 s
 # of silence (EP0003 Ch09 part 5 had 35 s at -66 dB and passed every other check).
 # ponytail: one margin for every family, measured on Breeze; give a family its own (as with
@@ -129,10 +130,15 @@ def max_duration_s(text: str, family: str, speed: float = 1.0) -> float:
     return round(_spoken_characters(text) / (low * SLOW_FACTOR) + EDGE_ALLOWANCE_S, 2)
 
 
-def max_pause_s(text: str, speed: float = 1.0) -> float:
-    """Longest silence a section of ``text`` may hold between two words."""
+def max_pause_s(text: str, speed: float = 1.0, requested_pause_s: float = 0.0) -> float:
+    """Longest silence a section of ``text`` may hold between two words.
+
+    ``requested_pause_s`` is the longest pause the request asked for (its paragraph pause), so a
+    caller's own longer pause never reads as an unnatural one.
+    """
     boundary = "paragraph" if re.search(r"\n\s*\n", text) else "sentence"
-    pause = long_form_policy.production_boundary_pause_seconds(boundary) + PAUSE_MARGIN_S
+    pause = max(long_form_policy.production_boundary_pause_seconds(boundary),
+                float(requested_pause_s or 0.0)) + PAUSE_MARGIN_S
     return round(pause / max(0.25, float(speed or 1.0)), 2)
 
 
@@ -182,7 +188,7 @@ def _close(word: str, other: str) -> bool:
 
 
 def check_section(text: str, family: str, metrics: dict, *, speed: float = 1.0,
-                  heard: str | None = None) -> dict:
+                  heard: str | None = None, requested_pause_s: float = 0.0) -> dict:
     """Evidence for one section; raises ``SectionQualityError`` when the audio is not the text."""
     chars = _spoken_characters(text)
     _, high = _band(family, max(0.25, float(speed or 1.0)))
@@ -191,7 +197,7 @@ def check_section(text: str, family: str, metrics: dict, *, speed: float = 1.0,
         "characters": chars,
         "max_duration_s": max_duration_s(text, family, speed),
         "min_voiced_s": round(chars / (high * FAST_FACTOR), 2),
-        "max_pause_s": max_pause_s(text, speed),
+        "max_pause_s": max_pause_s(text, speed, requested_pause_s),
     }
     missing_allowed = None
     if heard is not None:

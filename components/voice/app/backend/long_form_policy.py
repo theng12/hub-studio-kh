@@ -243,6 +243,52 @@ def production_boundary_pause_seconds(boundary: str) -> float:
     return pauses[boundary]
 
 
+# Families whose section joins follow the text: 0.30 s after a sentence, 0.60 s at a paragraph break.
+# OmniVoice and Qwen3-TTS 1.7B were first; the families that sat on the flat 0.12 s default joined
+# them on the owner's decision (2026-10-02) after Fish joins were heard as having "no proper pause".
+PRODUCTION_PAUSE_FAMILIES = frozenset(
+    {"omnivoice", "voxcpm-mlx", "fish-audio-mlx", "chatterbox-mlx", "pocket-tts"}
+)
+# A caller may ask for its own sentence / paragraph pause (`sentence_pause_sec`,
+# `paragraph_pause_sec`, owner decision 2026-10-03: Sleep wants 1.0 s at a paragraph). Bounds the API
+# enforces and the lane contract publishes.
+REQUESTED_PAUSE_MINIMUM_SECONDS = 0.0
+REQUESTED_PAUSE_MAXIMUM_SECONDS = 3.0
+
+
+def uses_production_pauses(family: str, repo: str) -> bool:
+    return family in PRODUCTION_PAUSE_FAMILIES or (
+        family == "qwen3-tts" and "1.7b-base" in repo.lower()
+    )
+
+
+def default_boundary_pauses(family: str, repo: str) -> dict[str, float]:
+    """The sentence / paragraph / mid-sentence pause this model joins at when the caller asks none.
+
+    Text-led families use the production pauses; every other family joins every section at its own
+    flat pause (Breeze 0.6 s), so that flat pause is its default for each boundary.
+    """
+    if uses_production_pauses(family, repo):
+        return {boundary: production_boundary_pause_seconds(boundary)
+                for boundary in ("sentence", "paragraph", "soft")}
+    flat = float((policy_for(family, repo) or {}).get("join_pause_seconds", DEFAULT_JOIN_PAUSE_SECONDS))
+    return {"sentence": flat, "paragraph": flat, "soft": flat}
+
+
+def requested_boundary_pauses(family: str, repo: str, params: dict) -> Optional[dict[str, float]]:
+    """The text-led pauses for one request, or None when this request joins at the family's flat pause.
+
+    A requested pause turns text-led joining on for any family; a boundary the caller left out keeps
+    the family's own default for it.
+    """
+    pauses = default_boundary_pauses(family, repo)
+    requested = {boundary: params.get(f"{boundary}_pause_sec") for boundary in ("sentence", "paragraph")}
+    if not uses_production_pauses(family, repo) and all(v is None for v in requested.values()):
+        return None
+    pauses.update({boundary: float(value) for boundary, value in requested.items() if value is not None})
+    return pauses
+
+
 def qwen_17b_assembly_invariants(repo: str) -> Optional[dict[str, object]]:
     """The Qwen 1.7B assembly behavior consumed by runtime and audit checks."""
     if "1.7b-base" not in repo.rsplit("/", 1)[-1].lower():
