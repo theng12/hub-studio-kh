@@ -1,6 +1,6 @@
 #!/bin/bash
 # Put the kit's Extras folder in order: the Yam Display installer and the standalone command that
-# installs it. Called by the per-release prepare-kit script, or by hand:
+# installs it, and the Shops set-up commands (`Set Up a Shop Mac`, `Set Up the Shops Controller`). Called by the per-release prepare-kit script, or by hand:
 #
 #   bash packaging/kit-extras/prepare-kit-extras.sh "<kit folder>" "<trash folder>"
 #
@@ -47,4 +47,9 @@ copy_checked "$DMG" "$DMGNAME"
 copy_checked "$HERE/$COMMAND" "$COMMAND"
 chmod 644 "$KIT/Extras/$DMGNAME"
 chmod 755 "$KIT/Extras/$COMMAND"
+# The Shops location's two set-up commands (workstation mode, owner 2026-10-03).
+for shop in "Set Up a Shop Mac.command" "Set Up the Shops Controller.command"; do
+  copy_checked "$HERE/$shop" "$shop"
+  chmod 755 "$KIT/Extras/$shop"
+done
 exit $status

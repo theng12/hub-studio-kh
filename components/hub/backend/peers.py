@@ -381,6 +381,9 @@ async def _refresh_stale(machines, stale, client, now):
                 "last_stop": data.get("last_stop") if isinstance(data.get("last_stop"), dict) else None,
                 # Who that Mac says it is and what it is called now (`{id, name}`). Absent from an older Hub.
                 "machine": data.get("machine") if isinstance(data.get("machine"), dict) else None,
+                # Its workstation mode, settings and state (`components/hub/workstation.py`). Absent from
+                # an older Hub, which is then never standing by.
+                "workstation": data.get("workstation") if isinstance(data.get("workstation"), dict) else None,
                 "reachable": True, "auth": True, "status": "connected",
             }
             clears_rejection = False
@@ -451,6 +454,28 @@ def cached(machine: str) -> dict | None:
     return entry[1] if entry and not entry[1].get(_DISPATCH_REJECTED) else None
 
 
+#: Workstation states in which a Mac takes no new work: someone is using it, it just handed a job
+#: back, or it is in its quiet hours. A busy Mac for routing - not offline, not failed.
+STANDING_BY_STATES = frozenset({"standing_by", "yielded", "quiet_hours"})
+
+
+def _workstation(machine: str) -> dict:
+    snapshot = cached(machine) or {}
+    value = snapshot.get("workstation")
+    return value if isinstance(value, dict) else {}
+
+
+def standing_by(machine: str) -> bool:
+    """Whether that Mac's workstation mode says it takes no new work right now."""
+    return _workstation(machine).get("state") in STANDING_BY_STATES
+
+
+def workstation_start_free_gb(machine: str) -> float | None:
+    """That Mac's own "free memory needed to start a job", when its owner set one."""
+    value = _workstation(machine).get("start_free_gb")
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def fresh_snapshot(machine: str) -> dict | None:
     """The cached peer snapshot for ``machine``, but only while it is still current.
 
@@ -496,6 +521,7 @@ def dispatch_ready(studio: dict, generation=None) -> bool:
         and snapshot.get("reachable") is True
         and snapshot.get("auth") is True
         and snapshot.get("status") == "connected"
+        and (snapshot.get("workstation") or {}).get("state") not in STANDING_BY_STATES
     )
 
 

@@ -775,6 +775,18 @@ def _current_job_of(value: object) -> dict[str, Any] | None:
     return {key: value.get(key) for key in _CURRENT_JOB_KEYS}
 
 
+_WORKSTATION_KEYS = ("enabled", "idle_only", "idle_minutes", "step_aside", "resume_after_minutes",
+                     "start_free_gb", "quiet_hours", "hide_menu_bar_icon", "state", "reason",
+                     "yields_today", "jobs_today")
+
+
+def _workstation_of(value: object) -> dict[str, Any] | None:
+    """A node's workstation report, cut to the contract keys (it is another machine's word)."""
+    if not isinstance(value, dict) or not isinstance(value.get("state"), str):
+        return None
+    return {key: value.get(key) for key in _WORKSTATION_KEYS}
+
+
 def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     """A probe result derived from a peer poll's snapshot.
 
@@ -787,7 +799,8 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
     carried = {"host": host, "version": snapshot.get("version"),
                "startup": _startup_of(snapshot.get("startup"), row),
                "current_job": _current_job_of(snapshot.get("current_job")),
-               "last_stop": last_stop_of(snapshot.get("last_stop")) or _last_known_stop(row)}
+               "last_stop": last_stop_of(snapshot.get("last_stop")) or _last_known_stop(row),
+               "workstation": _workstation_of(snapshot.get("workstation"))}
     if snapshot.get("auth") is False:
         return {**row, **carried, "state": "unauthorized",
                 "detail": _CREDENTIAL_DETAIL.format(
@@ -870,7 +883,8 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
                 "version": body.get("version"), "source": body.get("source"),
                 "startup": _startup_of(body.get("startup"), row),
                 "current_job": _current_job_of(body.get("current_job")),
-                "last_stop": last_stop_of(body.get("last_stop")) or _last_known_stop(row)}
+                "last_stop": last_stop_of(body.get("last_stop")) or _last_known_stop(row),
+                "workstation": _workstation_of(body.get("workstation"))}
     except (httpx.HTTPError, OSError) as exc:
         # A message that stops at the colon ("could not reach the node: ") reads as though the
         # reason were withheld, and it happens whenever the exception carries an empty message -
@@ -1081,6 +1095,9 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
         "current_job": row.get("current_job") if isinstance(row.get("current_job"), dict) else None,
         # Why that Mac's Hub last stopped, as it recorded it (stale when it is not answering now).
         "last_stop": row.get("last_stop") if isinstance(row.get("last_stop"), dict) else None,
+        # Its workstation mode as it reported it (`components/hub/workstation.py`); None from an
+        # older Hub or a Mac that is not answering.
+        "workstation": row.get("workstation") if isinstance(row.get("workstation"), dict) else None,
     }
 
 
@@ -1200,6 +1217,54 @@ async def relay_name(node_id: str, name: object, *,
     from . import peers
     peers.invalidate(wanted)
     return {"ok": True, "node": wanted, "name": clean}
+
+
+async def relay_workstation(node_id: str, changes: object, *,
+                            client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Change one joined Mac's workstation settings **on that Mac**. Raises `StartupRelayError`.
+
+    The settings are the node's own (it enforces them), so - like a rename - they are written there,
+    with this controller's Fleet token, and nowhere else; the roster learns them from the next poll.
+    """
+    if not isinstance(changes, dict):
+        raise StartupRelayError(400, {"ok": False, "code": "BAD_SETTING",
+                                      "detail": "workstation settings must be an object"})
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        raise StartupRelayError(404, {"ok": False, "code": "UNKNOWN_NODE",
+                                      "detail": f"this controller has no joined Mac {node_id!r}"})
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        response = await client.post(f"{node.get('address') or ''}/api/hub/workstation",
+                                     json=changes, timeout=PROBE_TIMEOUT)
+    except httpx.HTTPError as exc:
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
+                                      "reason": _unreachable_reason(exc),
+                                      "detail": "that Mac did not answer, so its settings did not "
+                                                "change - try again when it is back"}) from exc
+    finally:
+        if owned:
+            await client.aclose()
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if response.status_code == 400 and isinstance(body, dict) and body.get("code") == "BAD_SETTING":
+        raise StartupRelayError(400, body)
+    if response.status_code in (401, 403, 404, 405):
+        raise StartupRelayError(502, {
+            "ok": False, "code": "NODE_REFUSED",
+            "detail": "that Mac refused: its Studio Hub is older than workstation mode, or it holds a "
+                      "different Fleet token. Update it first."})
+    if not response.is_success or not isinstance(body, dict):
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_ERROR",
+                                      "detail": f"that Mac answered HTTP {response.status_code}"})
+    from . import peers
+    peers.invalidate(wanted)
+    return {"ok": True, "node": wanted, "workstation": _workstation_of(body.get("workstation"))}
 
 
 async def pool(client: httpx.AsyncClient | None = None) -> dict[str, Any]:

@@ -526,6 +526,15 @@ def main() -> int:
         manifest_shelved = lambda manifest, stem=None: False  # noqa: E731
         keep_all_models = lambda settings_file: False  # noqa: E731
     keep_all = keep_all_models(Path.home() / HUB_SETTINGS_RELATIVE)
+    # **A Shop Mac (workstation mode, owner 2026-10-03)** carries only the 8 GB-class models it runs
+    # (`components/workstation_models.py`, ~15 GB). `Extras/Set Up a Shop Mac.command` sets this.
+    shop_mac = os.environ.get("STUDIOHUB_WORKSTATION", "").strip() == "1"
+    if shop_mac:
+        try:
+            from workstation_models import manifest_allowed  # type: ignore
+        except ImportError:
+            print("  This kit's Studio Hub predates workstation mode, so it cannot set up a Shop Mac.")
+            return 2
     manifests = {m["package_id"]: m for m in
                  (json.loads(p.read_text()) for p in sorted(manifests_dir.glob("*.json")))
                  if not manifest_retired(m)}
@@ -542,8 +551,11 @@ def main() -> int:
     print(f"  This Mac has {memory} GB of memory.")
     print()
 
-    chosen, skipped, shelved = [], [], []
+    chosen, skipped, shelved, not_for_shop = [], [], [], []
     for package_id, manifest in sorted(manifests.items()):
+        if shop_mac and not manifest_allowed(manifest):
+            not_for_shop.append(package_id)
+            continue
         if not keep_all and manifest_shelved(manifest):
             shelved.append(package_id)
             continue
@@ -619,6 +631,10 @@ def main() -> int:
         print(f"  Shelved, not copied ({len(shelved)}): {', '.join(shelved)}")
         print("  They stay on the SSD. To keep them on this Mac, set keep_all_models in the Hub's "
               "settings (see the release notes), then run this again.")
+        print()
+    if not_for_shop:
+        print(f"  Shop Mac: only the workstation models are copied; {len(not_for_shop)} other model(s) "
+              "stay on the SSD.")
         print()
     if skipped:
         skip_gb = sum(size_gb(m) for _p, _n, m in skipped)
