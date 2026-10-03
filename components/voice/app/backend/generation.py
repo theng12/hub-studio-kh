@@ -113,6 +113,7 @@ from . import (
     reference_audio,
     resource_telemetry,
     text_normalization,
+    tts_quality,
     paths,
 )
 from .native_executor import ExclusiveNativeExecutor
@@ -1818,6 +1819,7 @@ class GenerationJob:
     quality_validation: Optional[dict] = None  # redacted model-owned acceptance evidence
     quality_retry_count: int = 0
     quality_retry_history: list[dict] = field(default_factory=list)
+    section_quality: Optional[dict] = None  # per-section acceptance evidence (tts_quality)
     error_code: Optional[str] = None
     client_request_params: Optional[dict] = None  # immutable idempotency comparison
     origin: str = "unknown"
@@ -1868,6 +1870,7 @@ class GenerationJob:
             "quality_validation": self.quality_validation,
             "quality_retry_count": self.quality_retry_count,
             "quality_retry_history": self.quality_retry_history,
+            "section_quality": self.section_quality,
             "error_code": self.error_code,
             # Provenance of the reference contract the job's clone path used.
             # `reference_profile_audited: false` means the execution copy was
@@ -2888,6 +2891,8 @@ class GenerationManager:
                         job.state = "cancelled"
                     else:
                         job.state = "error"
+                        if isinstance(e, tts_quality.SectionQualityError):
+                            job.error_code = e.code
                         if isinstance(e, qwen_quality.QwenQualityError):
                             job.error_code = e.code
                             job.quality_validation = {
@@ -3194,7 +3199,9 @@ class GenerationManager:
                 model.family, model.repo, normalized,
                 max_chars_override=job.params.get("_resolved_section_max_characters"),
             )
-            if len(chunks) > 1:
+            # A gated family takes this path even for one section, so a short request is checked
+            # (and retried) exactly like a chapter.
+            if len(chunks) > 1 or (chunks and model.family in MLX_AUDIO_FAMILIES):
                 self._dispatch_mlx_long_form(job, output_path, model, normalized, chunks)
                 return
         value = self._run_native_payload(
@@ -3262,6 +3269,9 @@ class GenerationManager:
         segment_paths: list[Path] = []
         job.chunk_total = len(chunks)
         job.chunk_index = 0
+        gated = model.family in MLX_AUDIO_FAMILIES
+        if gated:
+            job.section_quality = {"revision": tts_quality.REVISION, "sections": []}
         try:
             for index, chunk in enumerate(chunks, start=1):
                 if job.cancel_event.is_set():
@@ -3270,27 +3280,37 @@ class GenerationManager:
                 job.progress = max(job.progress, min(0.93, 0.08 + (index - 1) / len(chunks) * 0.85))
                 self._persist()
                 segment_path = segment_root / f"section_{index:03d}.wav"
-                section_params = {
-                    **job.params,
-                    "text": chunk,
-                    "_native_single_section": True,
-                    "_qwen_attempt_seed": job.resolved_seed,
-                    # The reused child keeps MLX RNG state between commands,
-                    # matching the former parent loop which seeded once per job.
-                    "_native_continue_rng": index > 1,
-                }
-                self._run_native_payload(
-                    job,
-                    {"action": "generate", "job_id": job.job_id,
-                     "params": section_params, "output_path": str(segment_path)},
-                )
-                if job.cancel_event.is_set():
-                    return
-                if not segment_path.exists():
-                    raise RuntimeError(f"{model.family} produced no audio for section {index}")
+                for attempt in range(tts_quality.SECTION_RETRIES + 1):
+                    section_params = {
+                        **job.params,
+                        "text": chunk,
+                        "_native_single_section": True,
+                        # A retry gets its own seed; the first attempt keeps the job's.
+                        "_qwen_attempt_seed": (job.resolved_seed + attempt * 7919) % (2**32),
+                        # The reused child keeps MLX RNG state between commands,
+                        # matching the former parent loop which seeded once per job.
+                        "_native_continue_rng": index > 1 and attempt == 0,
+                    }
+                    self._run_native_payload(
+                        job,
+                        {"action": "generate", "job_id": job.job_id,
+                         "params": section_params, "output_path": str(segment_path)},
+                    )
+                    if job.cancel_event.is_set():
+                        return
+                    if not segment_path.exists():
+                        raise RuntimeError(f"{model.family} produced no audio for section {index}")
+                    if not gated or self._section_accepted_locked(
+                        job, model, chunk, segment_path, index, len(chunks), attempt,
+                    ):
+                        break
                 segment_paths.append(segment_path)
                 job.progress = max(job.progress, min(0.95, 0.08 + index / len(chunks) * 0.85))
                 self._persist()
+            if len(segment_paths) == 1:
+                # One section is the whole request: nothing to join or level, exactly as before.
+                os.replace(segment_paths[0], output_path)
+                return
             _join_long_form_wavs(
                 segment_paths, output_path, model.family,
                 pause_s=_long_form_join_pause_s(model.family, model.repo),
@@ -3306,6 +3326,84 @@ class GenerationManager:
             )
         finally:
             shutil.rmtree(segment_root, ignore_errors=True)
+            if gated and any(record.get("transcribe_back") == "whisper"
+                             for record in job.section_quality["sections"]):
+                self._release_section_validator()
+
+    # Whisper turbo is loaded beside the TTS model only when this much is free on top of it.
+    _SECTION_VALIDATOR_HEADROOM_GB = 2.0
+
+    def _section_transcript_locked(self, job: GenerationJob, model, text: str,
+                                   segment_path: Path) -> tuple[Optional[str], str]:
+        """Whisper's reading of one section, or None and why the transcribe-back was skipped.
+
+        Skipped, never failed: a Mac without Whisper turbo, or without the memory to hold it beside
+        the TTS model (an 8 GB Mac), still gets the audio checks. A Qwen Base clone is checked by
+        its own whole-output Whisper gate after the join, so it is not transcribed twice.
+        """
+        from . import transcription
+
+        if qwen_quality.is_qwen_base_clone(model.repo, job.params):
+            return None, "qwen_clone_gate"
+        if not tts_quality.transcribe_back_applies(text):
+            return None, "script"
+        repo = transcription.recommended_model()
+        stt = transcription.manager
+        if stt.loaded_model_key() is None or stt.loaded_model_key()[0] != repo:
+            snapshot = _memory_snapshot()
+            needed = transcription.model_for_repo(repo).size_gb + self._SECTION_VALIDATOR_HEADROOM_GB
+            if snapshot is None or snapshot["available_gb"] < needed:
+                return None, "memory"
+        try:
+            result = stt.transcribe_locked(str(segment_path), model_repo=repo,
+                                           language=job.params.get("language"))
+        except Exception as exc:  # not installed, or it failed: the audio checks still apply
+            print(f"[gen] section transcribe-back skipped: {type(exc).__name__}: {exc}",
+                  file=sys.stderr, flush=True)
+            return None, "unavailable"
+        return str(result.get("text") or ""), "whisper"
+
+    def _section_accepted_locked(self, job: GenerationJob, model, text: str, segment_path: Path,
+                                 index: int, total: int, attempt: int) -> bool:
+        """Check one rendered section; False asks for a re-render, the last failure fails the job."""
+        started = time.perf_counter()
+        speed = (float(job.params.get("speed") or 1.0)
+                 if _speed_delivery(model.family) == "native" else 1.0)
+        heard, transcribe_back = self._section_transcript_locked(job, model, text, segment_path)
+        record = {"section": index, "attempt": attempt + 1, "transcribe_back": transcribe_back}
+        try:
+            record.update(tts_quality.check_section(
+                text, model.family, tts_quality.audio_metrics(segment_path),
+                speed=speed, heard=heard,
+            ))
+            return True
+        except tts_quality.SectionQualityError as exc:
+            record.update(exc.evidence)
+            if attempt >= tts_quality.SECTION_RETRIES:
+                raise tts_quality.SectionQualityError(
+                    exc.code,
+                    f"Section {index} of {total} {exc.detail} on all "
+                    f"{attempt + 1} attempts, so the audio was not delivered. "
+                    "Try again, or reword that part of the text.",
+                    record,
+                ) from None
+            print(f"[gen] section {index}/{total} rejected ({exc.code}); "
+                  f"re-rendering with a new seed ({attempt + 1}/{tts_quality.SECTION_RETRIES})",
+                  file=sys.stderr, flush=True)
+            return False
+        finally:
+            record["check_seconds"] = round(time.perf_counter() - started, 3)
+            job.section_quality["sections"].append(record)
+            self._persist()
+
+    @staticmethod
+    def _release_section_validator() -> None:
+        from . import transcription
+
+        try:
+            transcription.manager.release_memory_locked("tts-section-validation-complete")
+        except Exception:
+            pass
 
     @staticmethod
     def _apply_parent_output_speed(job: GenerationJob, output_path: Path) -> None:
@@ -3503,6 +3601,8 @@ class GenerationManager:
                 )
         elif family == "qwen3-tts" and output_duration_limit is not None:
             gen_kwargs["max_tokens"] = _qwen_max_tokens_for_duration(output_duration_limit, speed)
+        elif tts_quality.max_tokens_for_section(text, family) is not None:
+            gen_kwargs["max_tokens"] = tts_quality.max_tokens_for_section(text, family)
         # Speed is passed upstream ONLY to an engine that applies the multiplier itself. For every
         # other family the argument is omitted entirely and one pitch-preserving tempo pass is
         # applied to the finished artifact - because the alternatives are all silent: Chatterbox
@@ -3675,6 +3775,8 @@ class GenerationManager:
                         }
                         if family == "qwen3-tts"
                         and qwen_quality.is_qwen_base_clone(model_repo, job.params)
+                        else {"max_tokens": tts_quality.max_tokens_for_section(chunk, family)}
+                        if tts_quality.max_tokens_for_section(chunk, family) is not None
                         else {}
                     ),
                 },
@@ -4412,6 +4514,7 @@ class GenerationManager:
             "quality_validation": job.quality_validation,
             "quality_retry_count": job.quality_retry_count,
             "quality_retry_history": job.quality_retry_history,
+            "section_quality": job.section_quality,
             "error_code": job.error_code,
             "origin": _origin(job.origin),
             "origin_device": _origin_device(job.origin_device),
@@ -4467,6 +4570,7 @@ class GenerationManager:
                 quality_validation=raw.get("quality_validation"),
                 quality_retry_count=int(raw.get("quality_retry_count") or 0),
                 quality_retry_history=raw.get("quality_retry_history") or [],
+                section_quality=raw.get("section_quality"),
                 error_code=raw.get("error_code"),
                 origin=_origin(raw.get("origin")),
                 origin_device=_origin_device(raw.get("origin_device")),
