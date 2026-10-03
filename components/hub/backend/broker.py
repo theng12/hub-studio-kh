@@ -4050,12 +4050,12 @@ def _record_worker_resource_usage(item: dict, job: dict) -> None:
 _SECTION_QUALITY_NUMBERS = frozenset({
     "section", "attempt", "duration_s", "dc_offset", "voiced_s", "voiced_ratio", "characters",
     "max_duration_s", "min_voiced_s", "words_expected", "words_heard", "word_overlap",
-    "check_seconds",
+    "check_seconds", "longest_pause_s", "max_pause_s", "longest_missing_run",
 })
 _SECTION_QUALITY_WORDS = {
     "transcribe_back": frozenset({"whisper", "unavailable", "memory", "script", "qwen_clone_gate"}),
     "rejection_code": frozenset({"TTS_SECTION_SILENT", "TTS_SECTION_TOO_LONG",
-                                 "TTS_SECTION_TEXT_MISMATCH"}),
+                                 "TTS_SECTION_INTERNAL_SILENCE", "TTS_SECTION_TEXT_MISMATCH"}),
 }
 
 
