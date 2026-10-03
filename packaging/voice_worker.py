@@ -322,7 +322,7 @@ def start_log_rotation(stop: threading.Event, path: Path | None = None,
 
 
 def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token=None, factory=False,
-               shutdown_callback=None, host='127.0.0.1'):
+               shutdown_callback=None, shutdown_started=None, host='127.0.0.1'):
     """Shared owned-process lifecycle for the private Voice worker and local Hub.
 
     ``host`` defaults to loopback: the Hub is reachable from this Mac only unless the operator
@@ -379,6 +379,10 @@ def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token
                             f'http://{client_host}:{port}', version, token=token)
 
             async def shutdown(self, sockets=None):
+                # Before the graceful wait: an owner must stop reacting to children that exit
+                # because the same signal reached them.
+                if shutdown_started is not None:
+                    shutdown_started()
                 try:
                     await super().shutdown(sockets=sockets)
                 finally:

@@ -992,6 +992,14 @@ enum LaunchAgent {
         run(["bootout", "gui/\(getuid())/\(label)"])
     }
 
+    /// Put the running app under the agent's supervision: load the agent if it is not loaded and
+    /// start its job if it is not running. Its copy then stands by (`AgentStandby`) instead of
+    /// starting a second app. Both calls are harmless when already done.
+    static func superviseRunningApp(at plistURL: URL, label: String = LaunchAgent.label) {
+        run(["bootstrap", "gui/\(getuid())", plistURL.path])
+        run(["kickstart", "gui/\(getuid())/\(label)"])
+    }
+
     private static func run(_ arguments: [String]) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
@@ -1092,5 +1100,45 @@ enum ExistingInstance {
         guard decision == .presentAndExit else { return }
         present()
         exitQuietly()
+    }
+}
+
+/// What makes the launch agent supervise a copy of Studio Hub that launchd did not start.
+///
+/// `KeepAlive` only relaunches the process launchd itself spawned. An app opened from Finder, or
+/// reopened by an update, was supervised by nothing, and the agent written after login was not
+/// even loaded until the next login - so on 2026-10-03 a Force Quit left the owner's controller
+/// without a Hub for 24 minutes. Now such a launch loads/starts the agent, and the agent's copy
+/// finds the data folder taken and stands by: it blocks on the same lock, before any AppKit
+/// setup, until the running copy ends. A deliberate Quit leaves a marker and the standby exits 0
+/// (`KeepAlive` leaves the app stopped); anything else - a crash, a Force Quit, a kill - exits 1,
+/// and launchd starts a fresh copy from the bundle on disk (never the standby's own, possibly
+/// replaced, image).
+enum AgentStandby {
+    static let cleanQuitMarkerName = "clean-quit"
+
+    static func exitStatus(cleanQuit: Bool) -> Int32 { cleanQuit ? 0 : 1 }
+
+    /// nil when the data folder is free (this process is the app); otherwise blocks until the
+    /// copy holding it ends and answers the status this process should exit with.
+    static func waitForRunningCopy(directory: URL) -> Int32? {
+        let descriptor = open(directory.appendingPathComponent("app.lock").path,
+                              O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        if flock(descriptor, LOCK_EX | LOCK_NB) == 0 { return nil }
+        while flock(descriptor, LOCK_EX) != 0 && errno == EINTR {}
+        let marker = directory.appendingPathComponent(cleanQuitMarkerName)
+        return exitStatus(cleanQuit: FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    /// Written by a deliberate Quit while the lock is still held; cleared by the next app start.
+    static func markCleanQuit(directory: URL) {
+        FileManager.default.createFile(atPath: directory.appendingPathComponent(cleanQuitMarkerName).path,
+                                       contents: nil, attributes: [.posixPermissions: 0o600])
+    }
+
+    static func clearCleanQuit(directory: URL) {
+        unlink(directory.appendingPathComponent(cleanQuitMarkerName).path)
     }
 }
