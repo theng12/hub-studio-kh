@@ -499,6 +499,17 @@ def test_catalog_reports_runtime_cache_load_and_memory_truth(monkeypatch) -> Non
     fish = models["mlx-community/fish-audio-s2-pro-8bit"]
     assert fish["memory_eligible"] is False
 
+    # Capacity, not this moment: the same 8 GB Mac with little free right now (another model
+    # resident) still publishes an 8 GB model as eligible; admission decides on free memory.
+    monkeypatch.setattr(
+        generation,
+        "_memory_snapshot",
+        lambda: {"total_gb": 8.0, "available_gb": 1.0, "used_gb": 7.0, "percent": 87.5},
+    )
+    models = {item["repo"]: item for item in main.get_catalog()["models"]}
+    assert models["mlx-community/OmniVoice-bfloat16"]["memory_eligible"] is True
+    assert models["khmerttsopensource/khmer-tts"]["memory_eligible"] is True
+
 
 def test_local_generation_serializes_and_persists_worker_resource_evidence(
     tmp_path: Path, monkeypatch

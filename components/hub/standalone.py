@@ -2693,6 +2693,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 raise HTTPException(503, str(exc)) from exc
             if refusal:
                 raise HTTPException(409, refusal)
+            routing, _routing_error = routing_rule.parse(envelope.get("routing"))
+            if broker.every_capable_mac_paused(envelope.get("modality"), envelope.get("model"), routing):
+                # Every Mac here that could run it is paused: refuse rather than queue it for ever, so
+                # the Gateway places it in another group. A replay of an accepted batch is not refused.
+                return JSONResponse({"error": broker.NO_AVAILABLE_MACHINE_TEXT,
+                                     "code": broker.NO_AVAILABLE_MACHINE,
+                                     "detail": broker.NO_AVAILABLE_MACHINE_TEXT}, status_code=503)
         result = broker.submit_batch(envelope)
         if result.get("code") == cloud_guard.REFUSAL_CODE:
             raise HTTPException(403, {"code": result["code"], "detail": result["error"]})

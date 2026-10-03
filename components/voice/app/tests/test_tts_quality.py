@@ -203,6 +203,7 @@ def test_a_failed_section_is_rendered_again_with_a_new_seed(tmp_path, monkeypatc
     seeds = [call["params"]["_qwen_attempt_seed"] for call in renders.calls]
     assert seeds[0] == 5 and seeds[1] != 5
     assert renders.calls[1]["params"]["_native_continue_rng"] is False
+    assert renders.calls[1]["params"]["_memory_admitted"] is True, "a re-render is the same admitted job"
     records = job.section_quality["sections"]
     assert [(r["section"], r["attempt"], r["accepted"]) for r in records] == [
         (1, 1, False), (1, 2, True)]

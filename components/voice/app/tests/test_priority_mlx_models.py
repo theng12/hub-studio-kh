@@ -219,6 +219,57 @@ def test_memory_preflight_honours_the_operator_floor_the_hub_forwards(monkeypatc
         manager._memory_preflight(model, SimpleNamespace(params={"memory_floor_gb": 2.5}))
 
 
+def test_memory_preflight_frees_a_different_idle_model_before_refusing(monkeypatch) -> None:
+    """An idle worker holding model A, asked for model B, is not short of memory: the load evicts A
+    anyway. The guard used to refuse B on the reading taken with A still resident (an idle 8 GB Mac
+    that last ran Qwen refusing OmniVoice); it now frees A first and decides on a fresh reading."""
+    manager = object.__new__(generation.GenerationManager)
+    manager._mlx_audio_model = object()
+    manager._mlx_audio_model_repo = "held/qwen"
+    readings = iter([2.2, 4.3])
+    monkeypatch.setattr(
+        generation, "_memory_snapshot",
+        lambda: {"total_gb": 8.0, "available_gb": next(readings), "used_gb": 4.0, "percent": 50.0},
+    )
+    evicted = []
+    monkeypatch.setattr(manager, "_evict_loaded_models",
+                        lambda reason="": (evicted.append(reason),
+                                           setattr(manager, "_mlx_audio_model", None)))
+    omnivoice = SimpleNamespace(repo="wanted/omnivoice", family="omnivoice", size_gb=2.0)  # 3.25 GB
+    manager._memory_preflight(omnivoice, SimpleNamespace(params={}))
+    assert evicted and manager._mlx_audio_model is None
+
+    # Still short after freeing it: refused, with the fresh numbers it decided on.
+    manager._mlx_audio_model = object()
+    readings = iter([2.2, 2.9])
+    with pytest.raises(generation.MemoryGuardError, match="3.2 GB free is needed, but only 2.9 GB"):
+        manager._memory_preflight(omnivoice, SimpleNamespace(params={}))
+
+    # The model it holds is the one asked for: nothing to free, the loaded floor applies.
+    manager._mlx_audio_model, manager._mlx_audio_model_repo = object(), "wanted/omnivoice"
+    evicted.clear()
+    readings = iter([2.0])
+    with pytest.raises(generation.MemoryGuardError):
+        manager._memory_preflight(omnivoice, SimpleNamespace(params={}))
+    assert not evicted
+
+
+def test_a_later_section_of_an_admitted_job_is_not_measured_against_itself(monkeypatch) -> None:
+    """2026-10-04: OmniVoice parts on idle 8 GB Macs failed "2.8 GB free is needed, but only 2.0-2.5
+    GB is available" - the guard re-ran for every section, with the job's own model resident."""
+    manager = object.__new__(generation.GenerationManager)
+    manager._mlx_audio_model = object()
+    manager._mlx_audio_model_repo = "wanted/omnivoice"
+    monkeypatch.setattr(
+        generation, "_memory_snapshot",
+        lambda: {"total_gb": 8.0, "available_gb": 2.2, "used_gb": 6.0, "percent": 75.0},
+    )
+    omnivoice = SimpleNamespace(repo="wanted/omnivoice", family="omnivoice", size_gb=2.0)
+    with pytest.raises(generation.MemoryGuardError, match="2.8 GB free is needed"):
+        manager._memory_preflight(omnivoice, SimpleNamespace(params={}))
+    manager._memory_preflight(omnivoice, SimpleNamespace(params={"_memory_admitted": True}))
+
+
 def test_worker_memory_snapshot_uses_the_shared_available_figure(monkeypatch) -> None:
     from components import host_memory
     monkeypatch.setattr(host_memory, "available_bytes", lambda vm: 3_650_000_000)

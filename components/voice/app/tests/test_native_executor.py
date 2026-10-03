@@ -449,6 +449,8 @@ def test_parent_sequences_long_form_native_sections_and_joins_only_after_complet
     assert all(call["params"]["_native_single_section"] for call in calls)
     assert calls[0]["params"]["_native_continue_rng"] is False
     assert calls[1]["params"]["_native_continue_rng"] is True
+    # Admitted once: the memory guard checks the first section only (2026-10-04).
+    assert [call["params"]["_memory_admitted"] for call in calls] == [False, True]
     assert job.chunk_index == job.chunk_total == 2
     assert job.resource_usage["worker"]["peak_rss_gb"] == 2.0
     assert job.resource_usage["command_count"] == 2

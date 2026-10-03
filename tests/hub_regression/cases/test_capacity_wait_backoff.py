@@ -44,7 +44,7 @@ def _setup(fixture_monitor, monkeypatch):
 def test_repeated_memory_refusals_back_off_then_hand_the_job_back(fixture_monitor, monkeypatch):
     batch, item, studio, client, releases, clock = _setup(fixture_monitor, monkeypatch)
     monkeypatch.setattr(broker, "_insufficient_memory_text",
-                        lambda b, s, n: _text("Mac mini 1101 needs about 3.2 GB free and has about 3.0 GB free"))
+                        lambda b, s, decision, n: "Mac mini 1101 needs about 3.2 GB free and has about 3.0 GB free")
     delays = []
     for attempt in range(broker.CAPACITY_HANDBACK_AFTER - 1):
         item.update(state="running", studio="image", tries=1)
@@ -75,18 +75,31 @@ def test_repeated_memory_refusals_back_off_then_hand_the_job_back(fixture_monito
 
 def test_the_handback_sentence_names_the_mac_and_the_numbers(fixture_monitor, monkeypatch):
     batch, item, studio, client, releases, clock = _setup(fixture_monitor, monkeypatch)
-
-    async def entry(_studio, _model):
-        return {"repo": "model-a"}
-
-    monkeypatch.setattr(broker, "_catalog_entry", entry)
-    monkeypatch.setattr(broker, "_admission_requirements", lambda model, e: {"min_total": 8, "min_free": 3.2})
-    monkeypatch.setattr(broker, "_host_for_studio", lambda s: {"total_gb": 8.0, "available_gb": 3.0})
-    text = asyncio.run(broker._insufficient_memory_text(batch, studio, 3))
+    gate = "waiting for memory: needs ~3.2GB, ~3.0GB free"
+    text = broker._insufficient_memory_text(batch, studio, gate, 3)
     assert "3.2 GB free" in text and "3.0 GB free" in text and "model-a" in text and "3 times" in text
-    monkeypatch.setattr(broker, "_host_for_studio", lambda s: None)
-    assert "does not have enough free memory" in asyncio.run(broker._insufficient_memory_text(batch, studio, 3))
+    assert "does not have enough free memory" in broker._insufficient_memory_text(
+        batch, studio, "MemoryGuardError: not enough memory", 3)
 
 
-async def _text(value):
-    return value
+def test_the_handback_reports_the_numbers_the_worker_refused_on(fixture_monitor, monkeypatch):
+    """2026-10-04: 116 of 272 hand-backs read "needs about 3.1 GB free and has about 4.5 GB free".
+    The worker had refused on its own fresh reading; the sentence printed the Hub's snapshot of
+    the Mac, taken at another moment. The sentence now carries the refusal's own numbers."""
+    batch, item, studio, _client, releases, clock = _setup(fixture_monitor, monkeypatch)
+    monkeypatch.setattr(broker, "_host_for_studio", lambda s: {"total_gb": 8.0, "available_gb": 4.5})
+
+    class Worker:
+        async def post(self, url, **kwargs):
+            return httpx.Response(503, json={"detail": (
+                "MemoryGuardError: Memory guard paused this job: 3.2 GB free is needed, but only "
+                "2.1 GB is available. Close memory-heavy apps or choose a smaller model; the job "
+                "was not sent to the engine.")})
+
+    for _attempt in range(broker.CAPACITY_HANDBACK_AFTER):
+        item.update(state="running", studio="image", tries=1)
+        asyncio.run(broker._run_item(Worker(), batch, item, studio))
+        clock[0] += 1000.0
+    assert item["error_code"] == "INSUFFICIENT_MEMORY"
+    assert "needs about 3.2 GB free and has about 2.1 GB free" in item["error"], item["error"]
+    assert "4.5" not in item["error"]

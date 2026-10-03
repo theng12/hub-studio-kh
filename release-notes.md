@@ -2,7 +2,32 @@
 
 Written to be read by the person using the app. Newest first.
 
-## 0.6.140 - 2026-10-03
+## 0.6.141 - 2026-10-04
+
+### Paused Macs no longer hold on to work
+
+**A group whose Macs are all paused now says no straight away.** If every Mac in a group that could make a job is
+paused, the group turns the job down at once and the Gateway sends it to another group. Before, the group accepted the
+job and it sat waiting for hours while other Macs had nothing to do.
+
+**Pausing hands waiting work back.** When you pause the last Mac in a group that could make a waiting job, the job goes
+back to the Gateway within a few seconds and is made somewhere else. Nothing is charged for it. Jobs that are already
+being made finish as normal. A Mac that is switched off but not paused still counts: it may come back.
+
+### Voices run on 8 GB Macs again
+
+**OmniVoice and VoxCPM2 stopped failing on 8 GB Macs half-way through a voice-over.** The memory check ran again before
+every section of a voice-over, while the voice was already loaded for that same job, so it found too little free memory
+and stopped the job. It now checks once, before the job starts.
+
+**A Mac makes room for the voice you asked for.** If a Mac still has a different voice loaded from its last job, it
+unloads that one first instead of saying it is short of memory.
+
+**"Not enough memory" messages now tell the truth.** When a Mac does hand a job back for memory, the message shows the
+free memory it actually saw when it decided, not a reading from another moment (some said "needs 3.1 GB and has 4.5 GB").
+
+**A Mac's model list no longer says "not enough memory" just because it is busy for a moment.** It now says whether the
+Mac can run the model at all; free memory is checked when a job is about to start.
 
 ### Shop Macs can help the fleet without getting in anyone's way
 

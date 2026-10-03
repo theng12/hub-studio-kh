@@ -1,6 +1,37 @@
 # Changelog
 
+## 0.6.141 — 2026-10-04 · A paused group hands its work back; TTS on 8 GB Macs admitted once per job, on one reading
+
+Release of `release/0.6.141` (= 0.6.140, which was never published, + the fixes below). Found by the TTS comparison test of 2026-10-04
+(`_orchestra/audit-20261001/tts-comparison/`). Gateway contract: `_orchestra/audit-20261001/INTERFACES-0141.md`.
+- **Never strand work in a paused group** (`broker.every_capable_mac_paused`, `_hand_back_queued`, `standalone.submit_jobs`). Pauses were read only
+  when choosing a Mac (`_eligible_studios`, `_pool_members`), never at accept, so group 1500 with all five Macs paused accepted 21-25 TTS jobs that sat
+  queued ~7,000 s. Now: when at least one Mac that could run the model is known and every such Mac is paused (machine or Studio) or drained,
+  `POST /api/hub/jobs` answers **503** `{"error", "code": "NO_AVAILABLE_MACHINE", "detail"}` (replays of an accepted `clientRequestId` excepted), and the
+  dispatcher hands every queued item of such a batch back as `error` / `error_code: NO_AVAILABLE_MACHINE`, no try spent, webhooks after the durable write;
+  running items finish. Offline/busy/cooling Macs still count as capable. `_pool_members` now shares `_model_rows` / `_paused` / `_can_run` with it.
+  Broker lanes only (voice, image, music, video, render); chat and transcription keep their own queues.
+- **Voice memory guard admits a job once** (`generation._memory_preflight`, `_dispatch_mlx_long_form` `_memory_admitted`). The guard ran before every
+  section with the job's own model (and the section validator) resident, so OmniVoice / VoxCPM2 parts on idle 8 GB Macs failed "2.8 GB free is needed,
+  but only 2.0-2.5 GB is available" (the loaded floor 2.75 GB) while the host reading showed 3.0-4.6 GB; 0 successes on 8 GB since 00:25. Later
+  sections and quality re-renders of an admitted job are no longer re-measured.
+- **A different idle model is freed before refusing** (`_memory_preflight`): a worker holding model A, asked for B, evicts A (the load does anyway)
+  and re-reads, instead of refusing B on memory A held. The Hub's admission hand-off (`release_idle_siblings`) now also asks the idle target Studio
+  itself to release, for the same reason.
+- **The hand-back sentence quotes the decision's numbers** (`broker._insufficient_memory_text`): it parses the refusal's own sentence (Hub gate
+  "needs ~X GB, ~Y GB free" or Voice MemoryGuard "X GB free is needed, but only Y GB is available") instead of re-reading policy and a cached host
+  snapshot afterwards (116 of 272 refusals said e.g. "needs about 3.1 GB free and has about 4.5 GB free"). The admission-wait expiry now uses the floor
+  the gate used (`_with_machine_floor`, a workstation's start floor included).
+- **Voice `memory_eligible` is capacity only** (`model_runtime_status`): total memory >= the model's tier, like every other Studio and as
+  `capabilities` / `model_health` / the Gateway read it. It used to also need free memory at that instant, so a busy or briefly-full 8 GB Mac published
+  OmniVoice as not memory-eligible.
+- Tests: `tests/hub_regression/cases/test_paused_group_hands_back.py` (new), `test_capacity_wait_backoff.py` (worker numbers win over a 4.5 GB snapshot),
+  `tests/test_memory_policy_contract.py` (target released too), voice `test_priority_mlx_models.py`, `test_native_executor.py`, `test_tts_quality.py`,
+  `test_generation_artifact_contract.py`.
+
 ## 0.6.140 — 2026-10-03 · Workstation mode: a shop's cashier Mac lends the fleet its idle time and never its user's
+
+Never published on its own; it ships in 0.6.141.
 
 Release of `release/0.6.140` (= 0.6.139 + `feat/workstation-mode` 5e5ad77 (incl. 9e44011), merged `--no-ff`, no textual conflicts; the branch was cut
 from 3f59771, so it is checked against 0.6.139's uniform narration and kit Extras: no shared code path, broker edits in separate hunks).

@@ -252,6 +252,12 @@ WORKSTATION_STANDING_BY_AVOID_S = 30.0
 WORKSTATION_NOT_ALLOWED_AVOID_S = 600.0
 _WORKSTATION_REFUSALS = {"WORKSTATION_STANDING_BY": WORKSTATION_STANDING_BY_AVOID_S,
                          "WORKSTATION_MODEL_NOT_ALLOWED": WORKSTATION_NOT_ALLOWED_AVOID_S}
+# Every Mac of this group that could run the model is paused or drained (`every_capable_mac_paused`):
+# a new batch is refused with this code (HTTP 503) and queued items are handed back with it, nothing
+# charged, so the Gateway places the work in another group instead of it waiting here for ever.
+NO_AVAILABLE_MACHINE = "NO_AVAILABLE_MACHINE"
+NO_AVAILABLE_MACHINE_TEXT = ("No Mac in this group can take this right now — every Mac that "
+                             "could run it is paused")
 HANDOFF_RETRY_S = 15.0
 FAILED_WORKER_AVOID_S = 90.0
 MACHINE_FAILURE_THRESHOLD = 2
@@ -401,7 +407,11 @@ def _with_machine_floor(mem: dict | None, studio: dict) -> dict | None:
 
 
 async def release_idle_siblings(client: httpx.AsyncClient, target: dict) -> dict:
-    """Ask idle sibling Studios on the target Mac to release resident state.
+    """Ask the idle Studios on the target Mac to release resident state.
+
+    The target itself is asked too: a model it holds idle is one the incoming job's own load
+    evicts anyway; left resident, it held an idle 8 GB Mac below a different model's free-memory
+    floor until the job was handed back as INSUFFICIENT_MEMORY.
 
     Worker endpoints own the final safety check: queued or active direct work
     returns 409 and is never preempted. A short machine cooldown prevents three
@@ -424,7 +434,6 @@ async def release_idle_siblings(client: httpx.AsyncClient, target: dict) -> dict
     siblings = [
         studio for studio in _monitor().registry
         if studio.get("machine", "local") == machine
-        and studio.get("id") != target.get("id")
         and studio.get("modality") in SUPPORTED_MODALITIES
     ]
 
@@ -618,34 +627,62 @@ def _pool_members(modality: str, model: str, routing: str = "pool") -> dict[str,
     fresh-only one, so a catalog that is briefly stale does not shrink the pool to nothing.
     """
     mon = _monitor()
-    if modality == "transcription":
-        cache = getattr(mon, "_transcribe_cache", {})
-        rows = [(studio, row) for studio in mon.registry if studio.get("modality") == modality
-                for row in ((cache.get(studio["id"]) or (0, {}))[1] or {}).get("models", [])
-                if isinstance(row, dict) and row.get("repo") == model]
-    else:
-        rows = [(m["studio"], m["entry"])
-                for m in mon.cached_catalog_entries(model, modality=modality)]
     members: dict[str, tuple] = {}
-    for studio, entry in rows:
+    for studio, entry in _model_rows(modality, model):
         machine = studio.get("machine", "local")
-        if (machine in members
-                or not routing_rule.allows(studio, routing)
-                or (routing == routing_rule.REMOTE and peers.is_local_studio(studio))
-                or studio["id"] in _maintenance
-                or not machine_enabled(machine) or not studio_enabled(machine, studio["id"])
+        if (machine in members or _paused(studio)
                 or _machine_blocked(machine)
                 or mon.status.get(studio["id"], {}).get("status") != "up"
                 or not peers.dispatch_ready(studio)
-                or not entry.get("cached", is_cached(entry))
-                or _model_block_note(studio, model, entry)):
-            continue
-        known = _known_memory_gb(studio)
-        needed = memory_admission.requirement_gb(model, entry)[0] or 0.0
-        if known is not None and known < needed:
+                or not _can_run(studio, entry, model, routing)):
             continue
         members[machine] = (studio, entry)
     return members
+
+
+def _model_rows(modality: str, model: str) -> list[tuple[dict, dict]]:
+    """(studio, catalog row) for every Studio whose last-good catalog lists this model."""
+    mon = _monitor()
+    if modality == "transcription":
+        cache = getattr(mon, "_transcribe_cache", {})
+        return [(studio, row) for studio in mon.registry if studio.get("modality") == modality
+                for row in ((cache.get(studio["id"]) or (0, {}))[1] or {}).get("models", [])
+                if isinstance(row, dict) and row.get("repo") == model]
+    return [(m["studio"], m["entry"]) for m in mon.cached_catalog_entries(model, modality=modality)]
+
+
+def _paused(studio: dict) -> bool:
+    """The operator's "no new work here": the Mac or the Studio paused, or the Studio drained."""
+    machine = studio.get("machine", "local")
+    return (studio["id"] in _maintenance or not machine_enabled(machine)
+            or not studio_enabled(machine, studio["id"]))
+
+
+def _can_run(studio: dict, entry: dict, model: str, routing: str) -> bool:
+    """Whether this Studio could run the model at all once free - routing, files, RAM tier -
+    whatever its pause, health or current load."""
+    if (not routing_rule.allows(studio, routing)
+            or (routing == routing_rule.REMOTE and peers.is_local_studio(studio))
+            or not entry.get("cached", is_cached(entry))
+            or _model_block_note(studio, model, entry)):
+        return False
+    known = _known_memory_gb(studio)
+    return known is None or known >= (memory_admission.requirement_gb(model, entry)[0] or 0.0)
+
+
+def every_capable_mac_paused(modality: str, model: str | None,
+                             routing: str = routing_rule.POOL) -> bool:
+    """True when Macs that could run this model are known and every one of them is paused or
+    drained, so work for it would wait here for ever (owner, 2026-10-04: never strand work).
+
+    Offline, busy or cooling-down Macs still count as able to take it: they come back. Only a
+    pause or a drain is "not allowed".
+    """
+    # ponytail: a Mac whose catalog this Hub has never seen (offline since it started) is unknown
+    # and counts for nothing either way; with no known capable Mac at all, nothing is refused here.
+    capable = [studio for studio, entry in _model_rows(modality, model or "")
+               if _can_run(studio, entry, model or "", routing)]
+    return bool(capable) and all(_paused(studio) for studio in capable)
 
 
 def pool_machines(modality: str, model: str, routing: str = "pool") -> set[str]:
@@ -952,22 +989,29 @@ def _is_capacity_failure(message: str) -> bool:
     ))
 
 
-async def _insufficient_memory_text(b: dict, studio: dict, failures: int | None = None,
-                                    waited_s: float | None = None) -> str:
+# The two sentences that refuse a job for memory, each carrying the numbers it decided on: the Hub's
+# own gate (`_memory_gate`) and the worker's MemoryGuard (Voice `_memory_preflight`).
+_MEMORY_DECISION_NUMBERS = (
+    re.compile(r"needs ~([\d.]+)\s*GB, ~([\d.]+)\s*GB free"),
+    re.compile(r"([\d.]+) GB free is needed, but only ([\d.]+) GB is available"),
+)
+
+
+def _insufficient_memory_text(b: dict, studio: dict, decision: str, failures: int | None = None,
+                              waited_s: float | None = None) -> str:
     """The sentence an operator (and the Gateway's user) reads when a Mac hands a job back: which Mac,
-    how much it needs and how much it has - from the Hub's own admission policy and host snapshot."""
+    how much it needs and how much it has.
+
+    The numbers are the ones the refusal itself was decided on (``decision`` is that refusal's own
+    sentence). They used to be looked up again afterwards - the Hub's policy and its cached
+    snapshot of the Mac - so 116 of 272 hand-backs on 2026-10-04 read "needs about 3.1 GB free and
+    has about 4.5 GB free": the worker refused on its own fresh reading, and the sentence printed a
+    snapshot from another moment (a failed Voice job also unloads its model, which frees memory)."""
     machine = label_for(studio.get("machine", "local"))
-    need = free = None
-    try:
-        entry = await _catalog_entry(studio, b["model"])
-        mem = _admission_requirements(b["model"], entry) if entry else None
-        need = _required_free_memory(mem) if mem else None
-        host = _host_for_studio(studio)
-        free = float(host["available_gb"]) if host else None
-    except (KeyError, TypeError, ValueError):
-        pass
-    numbers = (f"needs about {need:.1f} GB free and has about {free:.1f} GB free"
-               if need is not None and free is not None else "does not have enough free memory")
+    match = next(filter(None, (pattern.search(str(decision or ""))
+                               for pattern in _MEMORY_DECISION_NUMBERS)), None)
+    numbers = (f"needs about {float(match[1]):.1f} GB free and has about {float(match[2]):.1f} GB free"
+               if match else "does not have enough free memory")
     why = (f"it waited {max(1, round(waited_s / 60))} minutes" if waited_s is not None
            else f"it refused {failures} times")
     return (f"{machine} {numbers} for {b['model']} ({why}). "
@@ -3625,6 +3669,24 @@ def evict_finished_batches(*, keep_recent: int = 20, older_than_s: float = 900.0
     return removed
 
 
+async def _hand_back_queued(client: httpx.AsyncClient, b: dict) -> None:
+    """Give every queued item of this batch back, typed NO_AVAILABLE_MACHINE: nothing ran and no
+    try is spent. Running items are left to finish. Same publication order as `_run_item`'s
+    terminal path: the durable write first, then the per-item webhooks."""
+    now = time.time()
+    handed = [item for item in b["items"] if item.get("state") == "queued"]
+    for item in handed:
+        for key in ("capacity_failures", "capacity_wait_started_at",
+                    "admission_wait_started_at", "_memory_handback"):
+            item.pop(key, None)
+        item.update(state="error", retry_at=None, error_code=NO_AVAILABLE_MACHINE,
+                    error=NO_AVAILABLE_MACHINE_TEXT, finished_at=now, last_progress_at=now)
+    reserved = [item for item in handed if _reserve_item_webhook(b, item)]
+    await _maybe_finish(client, b)
+    for item in reserved:
+        await _post_item_webhook(client, b, item, reserved=True)
+
+
 async def _dispatch_loop():
     """The scheduler: match queued items to free studios, forever."""
     client = httpx.AsyncClient(timeout=httpx.Timeout(connect=5, read=60, write=30, pool=5))
@@ -3660,6 +3722,10 @@ async def _dispatch_loop():
                     ledger.save_batch(b)
                     continue
                 if b["cancelled"]:
+                    continue
+                if every_capable_mac_paused(b["modality"], b.get("model"),
+                                            b.get("routing", routing_rule.POOL)):
+                    await _hand_back_queued(client, b)
                     continue
                 now = time.time()
                 queued = [i for i in b["items"] if i["state"] == "queued"
@@ -3749,11 +3815,14 @@ async def _dispatch_loop():
                             # admission wait is bounded like three refusals (~4 min): the item is
                             # sent on to `_run_item`, which hands it back as INSUFFICIENT_MEMORY.
                             b["governor_note"] = f"{studio['id']}: {note}"
+                            # The expiry reads the floor the gate itself used (a workstation's own
+                            # start floor included), and the sentence the gate's own numbers.
                             if not (decision == "wait" and _admission_wait_expired(
-                                    queued[compatible_index], studio, mem, note, now)):
+                                    queued[compatible_index], studio,
+                                    _with_machine_floor(mem, studio), note, now)):
                                 continue
-                            queued[compatible_index]["_memory_handback"] = await _insufficient_memory_text(
-                                b, studio, waited_s=ADMISSION_WAIT_HANDBACK_S)
+                            queued[compatible_index]["_memory_handback"] = _insufficient_memory_text(
+                                b, studio, note, waited_s=ADMISSION_WAIT_HANDBACK_S)
                         else:
                             queued[compatible_index].pop("admission_wait_started_at", None)
                             queued[compatible_index].pop("_memory_handback", None)
@@ -4635,7 +4704,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 # Hand it back, typed: not retryable on this Mac, and not this Mac's failure either
                 # (no machine penalty) - the Gateway re-routes it to another eligible Mac.
                 item.update(state="error", retry_at=None, error_code=INSUFFICIENT_MEMORY,
-                            error=await _insufficient_memory_text(b, studio, failures))
+                            error=_insufficient_memory_text(b, studio, message, failures))
                 item["tries"] = max(0, int(item.get("tries") or 0) - 1)
                 return
             handoff = (await release_idle_siblings(client, studio)

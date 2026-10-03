@@ -2119,11 +2119,15 @@ class GenerationManager:
         # A null catalog floor means the model is deliberately not yet memory
         # qualified. Keep the runtime free-memory guard below, but do not
         # manufacture a total-memory eligibility claim from missing evidence.
+        #
+        # This is the Mac's capacity (its memory tier), as every other Studio publishes it and as
+        # the Hub's capabilities / model health and the Gateway read it: "can this Mac run the
+        # model at all". It used to also require free memory *right now*, so an idle 8 GB Mac whose
+        # free memory dipped (another model resident, a section's validator loaded) published
+        # OmniVoice as not memory-eligible - a moment read as a property. Free memory now is
+        # decided at admission, by the Hub's gate and `_memory_preflight`, on one fresh reading.
         if snapshot is not None and model_entry.min_unified_memory_gb is not None:
-            memory_eligible = (
-                float(snapshot["total_gb"]) >= float(model_entry.min_unified_memory_gb)
-                and float(snapshot["available_gb"]) >= required
-            )
+            memory_eligible = float(snapshot["total_gb"]) >= float(model_entry.min_unified_memory_gb)
         return {
             "loaded": loaded,
             "runtime_ready": self.runtime_ready_for_family(model_entry.family),
@@ -2401,6 +2405,8 @@ class GenerationManager:
 
     def _memory_preflight(self, model_entry, job=None) -> None:
         """Refuse a job that cannot safely fit in currently available memory."""
+        if ((getattr(job, "params", None) or {}).get("_memory_admitted")):
+            return  # a later section of a job already admitted (`_dispatch_mlx_long_form`)
         snapshot = _memory_snapshot()
         if snapshot is None:
             print("[gen] memory guard unavailable; continuing without live RAM probe", flush=True)
@@ -2440,6 +2446,14 @@ class GenerationManager:
         if floor is not None:
             required = float(floor)
         available = float(snapshot["available_gb"])
+        if available < required and not cached and self.has_loaded_model():
+            # A different model this worker holds is evicted by the load anyway
+            # (`_generate_mlx_audio`), so its memory is not in use by anything this job
+            # competes with: free it first and measure again. Refusing instead let an idle
+            # 8 GB Mac that last ran Qwen refuse OmniVoice for memory its own idle model held.
+            self._evict_loaded_models(reason=f"make room for {model_entry.repo}")
+            snapshot = _memory_snapshot() or snapshot
+            available = float(snapshot["available_gb"])
         if available < required:
             raise MemoryGuardError(
                 f"Memory guard paused this job: {required:.1f} GB free is needed, "
@@ -3286,6 +3300,12 @@ class GenerationManager:
                         # The reused child keeps MLX RNG state between commands,
                         # matching the former parent loop which seeded once per job.
                         "_native_continue_rng": index > 1 and attempt == 0,
+                        # The memory guard admits a job once, at its first section. A later
+                        # section runs with the job's own model (and the section validator)
+                        # resident, so re-checking free memory there measured the job against
+                        # itself and refused it half-made: "2.8 GB free is needed, but only
+                        # 2.0-2.5 GB is available" on idle 8 GB Macs (OmniVoice, VoxCPM2, 2026-10-04).
+                        "_memory_admitted": index > 1 or attempt > 0,
                     }
                     self._run_native_payload(
                         job,

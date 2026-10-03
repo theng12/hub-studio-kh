@@ -327,12 +327,15 @@ class HandoffTests(PackagedMachine):
         result, stubs = self.handoff(
             (('image', 'image', 51101), ('voice', 'voice', 51102)), 'voice')
 
-        self.assertEqual(result['attempted'], 1)
-        self.assertEqual(result['released'], 1)
+        self.assertEqual(result['attempted'], 2)
+        self.assertEqual(result['released'], 2)
         self.assertEqual(result['busy'], [])
         self.assertEqual(result['failed'], [])
         # The sibling was actually asked, not merely counted.
         self.assertGreaterEqual(stubs['image'].releases, 1)
+        # So was the idle target: a different model it holds is one the job's load evicts anyway
+        # - left resident, it held an idle 8 GB Mac below another model's free-memory floor.
+        self.assertGreaterEqual(stubs['voice'].releases, 1)
 
     def test_a_sibling_that_is_generating_is_never_preempted(self) -> None:
         """Releasing a model out from under running work would kill the job, not the model."""
@@ -340,7 +343,7 @@ class HandoffTests(PackagedMachine):
         result, stubs = self.handoff(
             (('subtitle', 'transcription', 51103), ('voice', 'voice', 51102)), 'voice')
 
-        self.assertEqual(result['released'], 0)
+        self.assertEqual(result['released'], 1, 'only the idle target')
         self.assertEqual(result['busy'], ['subtitle'])
         self.assertEqual(stubs['subtitle'].releases, 0,
                          'a busy Studio must not even be asked to release')

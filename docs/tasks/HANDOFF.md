@@ -3,7 +3,17 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.140** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.141** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.141 - a paused group hands its work back; TTS admitted once per job on one reading (`release/0.6.141` = 0.6.140 + the TTS-comparison fixes, 2026-10-04).**
+> 0.6.140 was never published; 0.6.141 carries workstation mode too. `broker.every_capable_mac_paused(modality, model, routing)`: known capable Macs
+> (`_model_rows` + `_can_run`) all `_paused` (machine/Studio paused or drained) -> `POST /api/hub/jobs` 503 `{"error","code":"NO_AVAILABLE_MACHINE","detail"}`
+> (not for a replay) and `_dispatch_loop` -> `_hand_back_queued` (queued items `error` / `NO_AVAILABLE_MACHINE`, no try, durable write then webhooks).
+> Offline/busy Macs still count. Broker lanes only (chat/transcription: open). Voice `_memory_preflight`: skipped for `_memory_admitted` sections
+> (index > 1 or a re-render; the guard re-measured the job against its own resident model: "2.8 GB needed, 2.0-2.5 available" on idle 8 GB Macs), and frees a
+> different idle model before refusing; `release_idle_siblings` also releases the idle target. `_insufficient_memory_text(b, studio, decision, ...)` parses the
+> refusal's own numbers. Voice `memory_eligible` = total >= tier only. Contract: `_orchestra/audit-20261001/INTERFACES-0141.md`. Gate numbers, DMG and
+> checksum: `_orchestra/audit-20261001/release-0141/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.140 - workstation mode for shop Macs (`release/0.6.140` = 0.6.139 + 5e5ad77 `feat/workstation-mode` incl. 9e44011, 2026-10-03).**
 > `components/hub/workstation.py`: `<hub data>/workstation.json` (default off), set via controller relay `POST /api/hub/fleet/nodes/{id}/workstation` ->
