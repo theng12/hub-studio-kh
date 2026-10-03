@@ -572,6 +572,11 @@ FLEET_ALLOWED = (
     # Neither is in `NODE_ALLOWED`: a node's own credential cannot rename another Mac.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/name$"),
     ("POST", r"^/api/hub/machine-label$"),
+    # **Pausing a Mac from the Gateway (owner request 2026-10-03).** `{"paused": bool}` flips the
+    # scheduler's own per-machine switch: no new work to that Mac, running jobs finish, it stays in
+    # the roster and rejoins dispatch when resumed. Not in `NODE_ALLOWED`: a leaf Mac's credential
+    # cannot pause another Mac.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/pause$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
     # statement — here is your new credential, and here is your new head — so they are one route.
     # A controller pushes it to a node with the Fleet token; the *operator* calls it with the Hub
