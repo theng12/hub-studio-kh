@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.135 - 2026-10-03
+
+### Studio Hub keeps itself running, and you can pause a Mac
+
+**One studio stopping no longer stops everything.** If one studio (for example Chat) stops unexpectedly, Studio Hub now starts that studio
+again by itself after a short wait. The other studios, and the jobs they are running, carry on as normal.
+
+**Studio Hub comes back after a crash or a Force Quit.** If Studio Hub crashes, or is closed with Force Quit (for example when the Mac runs
+low on memory), it now opens again by itself. Choosing Quit from its menu still closes it and it stays closed.
+
+**Saved voices from this Mac stay on this Mac.** A voice that only exists in this Mac's own library is now only used here, instead of
+being sent to another Mac that does not have it.
+
+**Pause a Mac from the Gateway.** A Mac can now be paused: it finishes the work it is doing, takes no new jobs, and stays in the fleet.
+Resume it and it starts taking work again.
+
 ## 0.6.134 - 2026-10-03
 
 ### Thumbnails, music and video finish on your other Macs

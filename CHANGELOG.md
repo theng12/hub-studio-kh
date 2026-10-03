@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.135 — 2026-10-03 · One worker exiting no longer stops the Hub; a crash or Force Quit brings the app back; pause a Mac from the Gateway
+
+Release of `release/0.6.135` (= 0.6.134 + `fix/worker-exit-resilience` 214ad11 + `feat/pause-node` 1194f1b, both merged `--no-ff`, no conflicts).
+- **A worker that exits is restarted on its own** (214ad11, `packaging/hub_worker.py`). A private worker that exits after start-up is restarted on its own
+  port with backoff (1, 2, 5, 10, 30, 60 s; reset after 5 min up); only its lane is down meanwhile and the Hub, the other studios and their in-flight jobs keep
+  running. A worker failing before the Hub is ready is still fatal. `run_server` gains a `shutdown_started` hook so no child is restarted once shutdown begins.
+- **The app is supervised by its launch agent** (214ad11, `native/ShellCore.swift`, `native/StudioHub.swift`). An app opened by hand or reopened by an update
+  was supervised by nothing (the agent is only loaded at login); such a launch now loads/kickstarts the agent. The agent's copy waits on the data-folder lock
+  before any AppKit setup and, when the app ends, exits 0 after a deliberate Quit (clean-quit marker) or 1 otherwise, so launchd relaunches after a crash or
+  Force Quit and a clean Quit stays stopped. Default data folder only.
+- **An unmanaged voice stays on this Mac** (214ad11, `broker.py`): a `voice_library_id` the Hub does not manage is this Mac's own library entry and is now
+  routed only to the studio that holds it (was: any studio, so it could go to a node without that voice).
+- **Pause or resume a Mac** (1194f1b): Fleet-token `POST /api/hub/fleet/nodes/{id}/pause {"paused": bool}` flips `registry.machine_enabled` (already read by
+  every modality's dispatch) for a joined node or the controller itself, persisted in `machine_flags.json`; running jobs finish, the Mac stays joined, and the
+  roster row publishes `paused`. Fleet-token only (not in `NODE_ALLOWED`). Tests: `test_hub_process.py`, `tests/native/api_main.swift`,
+  `hub_regression/cases/test_unmanaged_voice_routing.py`, `test_node_pause.py`.
+
 ## 0.6.134 — 2026-10-03 · Image, music and video jobs finish on other Macs; a busy Mac is a wait; abandoned peer work is cancelled
 
 Release of `release/0.6.134` (= `fix/image-machine-id-reserved`: 0.6.133 + 2e29bea + ec170ac + 59b6ec6).
