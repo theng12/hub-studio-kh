@@ -1103,6 +1103,195 @@ enum ExistingInstance {
     }
 }
 
+/// Why the previous run of Studio Hub ended, as this Mac can tell (owner decision 2026-10-03).
+///
+/// Only a crash brings the app back. A Force Quit is deliberate - often the answer to macOS's
+/// "out of application memory" dialog - and a memory kill is macOS making room; relaunching either
+/// reloads the models and recreates the pressure. The app cannot see its own exit status, so it
+/// leaves evidence while it runs: a `running` file it touches every few seconds (its start time
+/// inside), a `crashed` file written from a handler for the crash signals, a `terminated` file for
+/// SIGTERM, a `memory-critical` file stamped when macOS reports critical memory pressure, and the
+/// `clean-quit` file a deliberate Quit writes. SIGKILL (Force Quit, macOS) cannot be caught, so it
+/// is what is left: no clean marker and no crash evidence. A crash report in
+/// `~/Library/Logs/DiagnosticReports` backs up the signal handler (a stack overflow cannot run it).
+/// The verdict is written to `last-stop.json`, which the Hub publishes as `last_stop`.
+enum StopReason: String, Equatable {
+    case quit, crashed, updated
+    case forceQuit = "force_quit"
+    case lowMemory = "low_memory"
+    case macRestarted = "mac_restarted"
+
+    /// Plain English without a time; the Gateway adds the time in its own time zone.
+    func label(relaunched: Bool) -> String {
+        switch self {
+        case .quit: return "Quit"
+        case .crashed: return relaunched ? "Crashed (restarted)" : "Crashed"
+        case .updated: return "Restarted for an update"
+        case .forceQuit: return "Force-quit"
+        case .lowMemory: return "Stopped for low memory"
+        case .macRestarted: return "Mac restarted, shut down or lost power"
+        }
+    }
+}
+
+enum StopRecord {
+    static let fileName = "last-stop.json"
+    static let runningMarkerName = "running"
+    static let crashedMarkerName = "crashed"
+    static let terminatedMarkerName = "terminated"
+    static let memoryMarkerName = "memory-critical"
+    /// Written by a Quit for an update's relaunch, and when macOS announces a restart, shutdown or
+    /// logout (`NSWorkspace.willPowerOffNotification`), so neither reads as the owner quitting.
+    static let updatingMarkerName = "updating"
+    static let powerOffMarkerName = "power-off"
+    static let crashSignals: [Int32] = [SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGTRAP, SIGSYS]
+    /// How often the running app touches its `running` file, which dates a kill nothing records.
+    static let heartbeatSeconds: TimeInterval = 15
+    /// Critical memory pressure this close before the end makes an uncaught kill a low-memory stop.
+    static let lowMemoryWindow: TimeInterval = 600
+    static let defaultCrashReports = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent("Library/Logs/DiagnosticReports")
+
+    /// The decision, pure. `stoppedAt` is when the run ended as far as the evidence dates it.
+    static func classify(cleanQuit: Bool, crashed: Bool, terminated: Bool,
+                         stoppedAt: Date, bootTime: Date, memoryCriticalAt: Date?,
+                         updating: Bool = false, poweringOff: Bool = false) -> StopReason {
+        if crashed { return .crashed }
+        if updating { return .updated }
+        if cleanQuit { return poweringOff ? .macRestarted : .quit }
+        if poweringOff { return .macRestarted }
+        if terminated { return .forceQuit }
+        if bootTime > stoppedAt { return .macRestarted }
+        if let pressure = memoryCriticalAt, stoppedAt.timeIntervalSince(pressure) < lowMemoryWindow {
+            return .lowMemory
+        }
+        return .forceQuit
+    }
+
+    /// Only a crash brings the app back.
+    static func relaunches(_ reason: StopReason) -> Bool { reason == .crashed }
+
+    static func bootTime() -> Date {
+        var time = timeval()
+        var size = MemoryLayout<timeval>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_BOOTTIME]
+        guard sysctl(&mib, 2, &time, &size, nil, 0) == 0 else { return .distantPast }
+        return Date(timeIntervalSince1970: TimeInterval(time.tv_sec))
+    }
+
+    private static func modified(_ url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
+    /// The newest crash report of this app written at or after `since`.
+    static func crashReport(since: Date, in directory: URL = defaultCrashReports,
+                            process: String = "StudioHub") -> Date? {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return names.filter { $0.hasPrefix(process + "-") && $0.hasSuffix(".ips") }
+            .compactMap { modified(directory.appendingPathComponent($0)) }
+            .filter { $0 >= since }.max()
+    }
+
+    /// Read the evidence the previous run left, write `last-stop.json`, clear the evidence, and
+    /// answer the record - or nil when there is nothing to settle (it was settled already).
+    /// Call only while holding, or just after taking, the data-folder lock. `waitForCrashReport`
+    /// covers the seconds ReportCrash takes when the crash handler could not run.
+    @discardableResult
+    static func settle(directory: URL, now: Date = Date(), relaunching: Bool,
+                       crashReports: URL = defaultCrashReports, waitForCrashReport: TimeInterval = 0,
+                       boot: Date = StopRecord.bootTime(), standbySince: Date? = nil) -> [String: Any]? {
+        func marker(_ name: String) -> URL { directory.appendingPathComponent(name) }
+        let running = marker(runningMarkerName)
+        let cleanQuitAt = modified(marker(AgentStandby.cleanQuitMarkerName))
+        let crashedAt = modified(marker(crashedMarkerName))
+        let terminatedAt = modified(marker(terminatedMarkerName))
+        let lastAlive = modified(running)
+        guard lastAlive != nil || cleanQuitAt != nil || crashedAt != nil || terminatedAt != nil
+                || standbySince != nil else { return nil }
+        // A standby saw the end happen, so `now` dates it; otherwise the last heartbeat does.
+        let alive = standbySince != nil ? now : (lastAlive ?? now)
+        let started = (try? String(contentsOf: running, encoding: .utf8))
+            .flatMap { TimeInterval($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .map { Date(timeIntervalSince1970: $0) } ?? standbySince ?? alive.addingTimeInterval(-86_400)
+        var reportAt = crashReport(since: started, in: crashReports)
+        // Only for an end that just happened: a login launch after a power cut must not wait.
+        if crashedAt == nil, cleanQuitAt == nil, terminatedAt == nil, reportAt == nil, waitForCrashReport > 0,
+           now.timeIntervalSince(alive) < AgentStandby.relaunchWindow {
+            let until = Date().addingTimeInterval(waitForCrashReport)
+            while reportAt == nil, Date() < until {
+                Thread.sleep(forTimeInterval: 1)
+                reportAt = crashReport(since: started, in: crashReports)
+            }
+        }
+        let stoppedAt = cleanQuitAt ?? crashedAt ?? terminatedAt ?? reportAt.map { min($0, alive) } ?? alive
+        let reason = classify(cleanQuit: cleanQuitAt != nil, crashed: crashedAt != nil || reportAt != nil,
+                              terminated: terminatedAt != nil, stoppedAt: stoppedAt, bootTime: boot,
+                              memoryCriticalAt: modified(marker(memoryMarkerName)),
+                              updating: modified(marker(updatingMarkerName)) != nil,
+                              poweringOff: modified(marker(powerOffMarkerName)) != nil)
+        let relaunched = relaunching && relaunches(reason)
+        let record: [String: Any] = ["reason": reason.rawValue, "at": stoppedAt.timeIntervalSince1970,
+                                     "label": reason.label(relaunched: relaunched), "relaunched": relaunched]
+        if let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) {
+            try? data.write(to: marker(fileName), options: .atomic)
+        }
+        for name in [runningMarkerName, crashedMarkerName, terminatedMarkerName, memoryMarkerName,
+                     updatingMarkerName, powerOffMarkerName, AgentStandby.cleanQuitMarkerName] {
+            unlink(marker(name).path)
+        }
+        return record
+    }
+
+    /// Start of a run: the evidence a later `settle` reads. The start time is the file's content,
+    /// the heartbeat its modification time.
+    static func markRunning(directory: URL, now: Date = Date()) {
+        try? Data(String(now.timeIntervalSince1970).utf8)
+            .write(to: directory.appendingPathComponent(runningMarkerName), options: .atomic)
+    }
+
+    static func heartbeat(directory: URL) {
+        utimes(directory.appendingPathComponent(runningMarkerName).path, nil)
+    }
+
+    static func noteCriticalMemory(directory: URL) { touch(directory.appendingPathComponent(memoryMarkerName)) }
+    static func noteUpdating(directory: URL) { touch(directory.appendingPathComponent(updatingMarkerName)) }
+    static func notePowerOff(directory: URL) { touch(directory.appendingPathComponent(powerOffMarkerName)) }
+    private static func touch(_ url: URL) {
+        let path = url.path
+        if utimes(path, nil) != 0 {
+            FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600])
+        }
+    }
+
+    /// Mark a crash signal or SIGTERM in the data folder, then die of it as before. The handler
+    /// only calls open/write/close/signal/raise, which are async-signal-safe.
+    static func installSignalMarkers(directory: URL) {
+        stopMarkerCrashedPath = strdup(directory.appendingPathComponent(crashedMarkerName).path)
+        stopMarkerTerminatedPath = strdup(directory.appendingPathComponent(terminatedMarkerName).path)
+        for number in crashSignals {
+            signal(number) { received in
+                writeStopMarker(stopMarkerCrashedPath, received)
+                signal(received, SIG_DFL); raise(received)
+            }
+        }
+        signal(SIGTERM) { received in
+            writeStopMarker(stopMarkerTerminatedPath, received)
+            signal(received, SIG_DFL); raise(received)
+        }
+    }
+}
+
+private var stopMarkerCrashedPath: UnsafeMutablePointer<CChar>?
+private var stopMarkerTerminatedPath: UnsafeMutablePointer<CChar>?
+private func writeStopMarker(_ path: UnsafeMutablePointer<CChar>?, _ number: Int32) {
+    guard let path else { return }
+    let descriptor = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0o600)
+    guard descriptor >= 0 else { return }
+    var byte = UInt8(truncatingIfNeeded: number)
+    _ = write(descriptor, &byte, 1)
+    close(descriptor)
+}
+
 /// What makes the launch agent supervise a copy of Studio Hub that launchd did not start.
 ///
 /// `KeepAlive` only relaunches the process launchd itself spawned. An app opened from Finder, or
@@ -1110,26 +1299,48 @@ enum ExistingInstance {
 /// even loaded until the next login - so on 2026-10-03 a Force Quit left the owner's controller
 /// without a Hub for 24 minutes. Now such a launch loads/starts the agent, and the agent's copy
 /// finds the data folder taken and stands by: it blocks on the same lock, before any AppKit
-/// setup, until the running copy ends. A deliberate Quit leaves a marker and the standby exits 0
-/// (`KeepAlive` leaves the app stopped); anything else - a crash, a Force Quit, a kill - exits 1,
-/// and launchd starts a fresh copy from the bundle on disk (never the standby's own, possibly
-/// replaced, image).
+/// setup, until the running copy ends. It then settles why the app ended (`StopRecord`) and exits
+/// 1 - so launchd starts a fresh copy from the bundle on disk (never the standby's own, possibly
+/// replaced, image) - only after a crash. A Quit, a Force Quit, a memory kill or anything it
+/// cannot prove was a crash exits 0, and `KeepAlive` leaves the app stopped.
 enum AgentStandby {
     static let cleanQuitMarkerName = "clean-quit"
+    /// How long a launchd-started copy treats the previous run's end as the reason it was started.
+    static let relaunchWindow: TimeInterval = 120
+    static let crashReportWait: TimeInterval = 15
 
-    static func exitStatus(cleanQuit: Bool) -> Int32 { cleanQuit ? 0 : 1 }
+    static func exitStatus(for reason: StopReason) -> Int32 { StopRecord.relaunches(reason) ? 1 : 0 }
 
     /// nil when the data folder is free (this process is the app); otherwise blocks until the
     /// copy holding it ends and answers the status this process should exit with.
-    static func waitForRunningCopy(directory: URL) -> Int32? {
+    static func waitForRunningCopy(directory: URL, crashReports: URL = StopRecord.defaultCrashReports,
+                                   crashReportWait: TimeInterval = AgentStandby.crashReportWait) -> Int32? {
         let descriptor = open(directory.appendingPathComponent("app.lock").path,
                               O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
         guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
         if flock(descriptor, LOCK_EX | LOCK_NB) == 0 { return nil }
+        let waitingSince = Date()
         while flock(descriptor, LOCK_EX) != 0 && errno == EINTR {}
-        let marker = directory.appendingPathComponent(cleanQuitMarkerName)
-        return exitStatus(cleanQuit: FileManager.default.fileExists(atPath: marker.path))
+        let record = StopRecord.settle(directory: directory, relaunching: true, crashReports: crashReports,
+                                       waitForCrashReport: crashReportWait, standbySince: waitingSince)
+        return exitStatus(for: (record?["reason"] as? String).flatMap(StopReason.init) ?? .forceQuit)
+    }
+
+    /// For a copy launchd started while nothing held the data folder: a login launch, or
+    /// `KeepAlive` relaunching an app it supervised directly. True when the previous run ended
+    /// moments ago in a way that must not bring the app back (anything but a crash), so this copy
+    /// exits 0 at once - before any AppKit setup - and `KeepAlive` leaves the app stopped. Only a
+    /// kill counts: a Quit already exited 0 (launchd did not relaunch it), so a Quit just before a
+    /// quick logout and login must not stop the login launch.
+    static func shouldStayStopped(directory: URL, now: Date = Date(),
+                                  crashReports: URL = StopRecord.defaultCrashReports,
+                                  crashReportWait: TimeInterval = AgentStandby.crashReportWait) -> Bool {
+        guard let record = StopRecord.settle(directory: directory, now: now, relaunching: true,
+                                             crashReports: crashReports, waitForCrashReport: crashReportWait),
+              let reason = (record["reason"] as? String).flatMap(StopReason.init),
+              let at = record["at"] as? TimeInterval else { return false }
+        return (reason == .forceQuit || reason == .lowMemory) && now.timeIntervalSince1970 - at < relaunchWindow
     }
 
     /// Written by a deliberate Quit while the lock is still held; cleared by the next app start.
@@ -1138,7 +1349,4 @@ enum AgentStandby {
                                        contents: nil, attributes: [.posixPermissions: 0o600])
     }
 
-    static func clearCleanQuit(directory: URL) {
-        unlink(directory.appendingPathComponent(cleanQuitMarkerName).path)
-    }
 }

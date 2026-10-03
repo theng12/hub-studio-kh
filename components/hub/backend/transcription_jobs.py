@@ -1068,7 +1068,13 @@ async def _run_item(monitor, batch: dict, item: dict, studio: dict, owner: str,
         else:
             item.update(state="cancelled", error="cancelled")
     except Exception as exc:
-        if _packaged() and post_started:
+        # A worker or Mac that went away mid-transcription (a dropped or timed-out connection, a
+        # peer's gateway timeout) is re-run elsewhere at once instead of being fenced for
+        # UNCERTAIN_RECOVERY_SECONDS: the work is free and a duplicate SRT is never read (owner
+        # decision 2026-10-03). Anything else after the POST keeps the fence.
+        went_away = (isinstance(exc, httpx.TransportError)
+                     or getattr(exc, "status_code", None) in AMBIGUOUS_RESPONSE_STATUS)
+        if _packaged() and post_started and not went_away:
             _mark_uncertain(item, f"Subtitle worker response is uncertain: {str(exc) or type(exc).__name__}")
             return
         transient = isinstance(exc, (httpx.HTTPError, OSError)) or getattr(exc, "transient", False)

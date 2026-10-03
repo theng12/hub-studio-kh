@@ -175,9 +175,9 @@ def test_a_reserved_node_is_a_wait_not_a_spent_attempt(fixture_monitor, tmp_path
         time.time() + broker.MACHINE_RESERVED_AVOID_S)
 
 
-def test_packaged_uncertainty_is_preserved_for_subtitle(
-        fixture_monitor, tmp_path):
-    """A lost response still fences the physical machine for reconciliation."""
+def test_a_lost_subtitle_worker_is_retried_elsewhere(fixture_monitor, tmp_path):
+    """Owner decision 2026-10-03: a worker or Mac lost mid-transcription is re-run on another Mac
+    at once. It used to be fenced `uncertain` for UNCERTAIN_RECOVERY_SECONDS (15 minutes)."""
     studio = _up_monitor(fixture_monitor)
 
     class LostClient:
@@ -187,14 +187,31 @@ def test_packaged_uncertainty_is_preserved_for_subtitle(
     fixture_monitor._client = LostClient()
     batch = _subtitle_batch(tmp_path)
     item = batch["items"][0]
+    item["tries"] = 1
+    asyncio.run(asyncio.wait_for(transcription_jobs._run_item(
+        fixture_monitor, batch, item, studio, "transcription:subtitle:0"), timeout=30))
+    assert item["state"] == "queued", item
+    assert not item.get("manual_action_required")
+    machine = studio.get("machine", "local")
+    assert item["avoid_machines"][machine] > time.time(), "the next try goes to another Mac"
+
+
+def test_an_unreadable_subtitle_answer_is_still_fenced(fixture_monitor, tmp_path):
+    """A worker that answered, but not with a usable transcript, is not a lost worker."""
+    studio = _up_monitor(fixture_monitor)
+
+    class OddClient:
+        async def post(self, url, **kwargs):
+            return httpx.Response(200, content=b"not json",
+                                  request=httpx.Request("POST", url))
+
+    fixture_monitor._client = OddClient()
+    batch = _subtitle_batch(tmp_path)
+    item = batch["items"][0]
     asyncio.run(asyncio.wait_for(transcription_jobs._run_item(
         fixture_monitor, batch, item, studio, "transcription:subtitle:0"), timeout=30))
     assert item["state"] == "uncertain"
-    assert item["tries"] == 0  # dispatch alone increments attempts
     assert item["manual_action_required"] is True
-    assert item.get("retry_at") is None
-    # The fenced attempt must not be handed to the queue again.
-    assert item["state"] != "queued"
 
 
 def test_cancellation_after_acceptance_does_not_reissue_the_job(

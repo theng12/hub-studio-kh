@@ -302,6 +302,8 @@ def main():
         'STUDIOHUB_PACKAGED': '1', 'STUDIOHUB_REQUIRE_AUTH': '1', 'STUDIOHUB_DATA_DIR': str(hub_data),
         'STUDIOHUB_MODELS_DIR': str(models), 'STUDIOHUB_RELEASE_MANIFEST': str(release_file),
         'STUDIOHUB_WORKERS_FILE': str(workers_file),
+        # Why the app last stopped, written by the app itself (`StopRecord`); published as `last_stop`.
+        'STUDIOHUB_LAST_STOP_FILE': str(data / 'last-stop.json'),
         'STUDIOHUB_MODEL_MANIFESTS': str(RESOURCES / 'model-manifests'),
         'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
         'PATH': str(runtime / 'bin') + ':/usr/bin:/bin:/usr/sbin:/sbin',

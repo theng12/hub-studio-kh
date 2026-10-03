@@ -1367,7 +1367,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         from .backend import fleet_nodes as fleet_view
         return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version(),
                 "disk": host.get("disk"), "startup": _startup_snapshot(),
-                "current_job": local_job, "machine": fleet_view.this_machine()}
+                "current_job": local_job, "machine": fleet_view.this_machine(),
+                # Why this Mac's Hub last stopped (quit, crash, Force Quit...), as the app recorded it.
+                "last_stop": fleet_view.this_last_stop()}
 
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:
@@ -1604,6 +1606,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                                 "up": sum((monitor.status.get(item["id"]) or {}).get("status") == "up"
                                           for item in on_this_machine)},
                     "startup": _startup_snapshot(),
+                    "last_stop": fleet.this_last_stop(),
                 }
             else:
                 snapshot = peers.cached(machine) or {}
@@ -1620,6 +1623,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     version = member.get("version")
                     host = member.get("host") or {}
                     startup = member.get("startup")
+                    last_stop = member.get("last_stop")
                 else:
                     startup = snapshot.get("startup") if isinstance(snapshot.get("startup"), dict) else None
                     reachable = bool(snapshot.get("reachable") and snapshot.get("auth"))
@@ -1628,6 +1632,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     detail = None if snapshot else "this Mac has not reported in yet"
                     version = snapshot.get("version")
                     host = snapshot.get("host") or {}
+                    last_stop = fleet.last_stop_of(snapshot.get("last_stop"))
                 row = {
                     "machine": machine,
                     "label": str((member or {}).get("label")
@@ -1638,6 +1643,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     "health": health,
                     "detail": detail,
                     "startup": startup,
+                    "last_stop": last_stop if isinstance(last_stop, dict) else None,
                 }
             stats = measured.get(machine) or {}
             rows.append({
@@ -1682,6 +1688,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "health": "up" if reachable else str(member.get("state") or "unknown"),
                 "detail": member.get("detail"),
                 "startup": member.get("startup"),
+                "last_stop": member.get("last_stop"),
                 "memory_gb": host.get("total_gb"), "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"), "disk": host.get("disk"),

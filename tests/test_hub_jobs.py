@@ -551,7 +551,7 @@ class HubJobProofTests(unittest.TestCase):
                         assert self_response_status == 200
                         raise httpx.ReadError("worker completed but its response was lost")
 
-                monitor = SimpleNamespace(_client=LostClient())
+                monitor = SimpleNamespace(_client=LostClient(), _transcribe_cache={})
                 batch = batch_for("lost-subtitle-response")
                 transcription_jobs.batches[batch["id"]] = batch
                 await transcription_jobs._run_item(
@@ -562,16 +562,16 @@ class HubJobProofTests(unittest.TestCase):
             self.worker.transcription_posts = self.worker.transcription_completed = 0
         self.worker.transcription_started.clear()
         lost = asyncio.run(lost_response())
+        # Owner decision 2026-10-03: a worker lost mid-transcription is re-run (on another Mac first)
+        # instead of fencing this one; transcription is free and a second SRT is never read.
         self.assertEqual((lost["items"][0]["state"], lost["items"][0]["tries"]),
-                         ("uncertain", 1))
+                         ("queued", 1))
+        self.assertFalse(lost["items"][0].get("manual_action_required"))
+        self.assertIn("local", lost["items"][0]["avoid_machines"])
+        self.assertNotIn("local", broker.busy_machines())
+        # Re-running is the dispatcher's job: this attempt itself posted exactly once.
         self.assertEqual((self.worker.transcription_posts, self.worker.transcription_completed), (1, 1))
         transcription_jobs.batches.clear()
-
-        transcription_jobs.restore_batches()
-        self.assertEqual(transcription_jobs.retry_batch(lost["id"])[1], 0)
-        self.assertEqual(transcription_jobs.batches[lost["id"]]["items"][0]["studio_task_id"],
-                         "stt-lost-subtitle-response-0")
-        self.assertEqual(self.worker.transcription_posts, 1)
 
         async def cancel_after_acceptance():
             async with httpx.AsyncClient() as real:
@@ -711,12 +711,14 @@ class HubJobProofTests(unittest.TestCase):
                 self.assertFalse(item.get("manual_action_required"))
                 self.assertNotIn("local", broker.busy_machines())
             for status in (408, 504):
+                # A worker that timed out behind its gateway is a lost worker: re-run, not fenced
+                # (owner decision 2026-10-03).
                 with self.worker.lock:
                     self.worker.transcription_refusal = status
                 item = asyncio.run(request(status))
-                self.assertEqual(item["state"], "uncertain")
-                self.assertTrue(item["manual_action_required"])
-                self.assertIn("local", broker.busy_machines())
+                self.assertEqual(item["state"], "queued")
+                self.assertFalse(item.get("manual_action_required"))
+                self.assertNotIn("local", broker.busy_machines())
                 transcription_jobs.batches.clear()
         finally:
             with self.worker.lock:
