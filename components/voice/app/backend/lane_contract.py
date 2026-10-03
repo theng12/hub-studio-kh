@@ -452,4 +452,39 @@ def for_model(model: catalog.ModelEntry,
     runtime = runtime_seconds_for(model.repo)
     if runtime is not None:
         contract["runtime_seconds"] = runtime
+    request_size = maximum_input_characters(model)
+    if request_size is not None:
+        contract.update(request_size)
     return contract
+
+
+# How long one request should take on the slowest Mac allowed to run the model. The Gateway gives
+# each Hub-recommended chunk this same budget (`TTS_CHUNK_BUDGET_S`), and the Hub's own voice
+# deadline (1,800 s) is twice it.
+REQUEST_BUDGET_SECONDS = 900.0
+
+
+def maximum_input_characters(model: catalog.ModelEntry) -> Optional[dict[str, Any]]:
+    """The per-request text size a caller should split long narration into, or None.
+
+    A sizing recommendation, not a refusal bound (`text.max_characters` stays the enforced one):
+    a longer request is still accepted, it just may run past a deadline sized for this one. The
+    Gateway reads `maximum_input_characters` and Story splits narration by it. Published only where
+    the slowest allowed Mac class was timed (`catalog.SlowestMacSpeed`).
+    """
+    speed = model.slowest_mac_speed
+    if speed is None:
+        return None
+    audio_seconds = REQUEST_BUDGET_SECONDS / speed.realtime_factor
+    characters = int(audio_seconds * speed.characters_per_audio_second) // 100 * 100
+    return {
+        "maximum_input_characters": characters,
+        "maximum_input_characters_source": {
+            "request_budget_seconds": REQUEST_BUDGET_SECONDS,
+            "mac_class": speed.mac_class,
+            "realtime_factor": speed.realtime_factor,
+            "characters_per_audio_second": speed.characters_per_audio_second,
+            "evidence": "measured",
+            "source": speed.source,
+        },
+    }
