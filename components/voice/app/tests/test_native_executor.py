@@ -437,6 +437,7 @@ def test_parent_sequences_long_form_native_sections_and_joins_only_after_complet
     manager._native_executor = FakeExecutor()
     manager._native_loaded_model_keys = []
     manager._persist = lambda **_kwargs: None
+    manager._section_accepted_locked = lambda *_args: True  # sequencing only; see test_tts_quality
     job = generation.GenerationJob(
         "long-form", "txt2speech", {"repo": "local/voice", "text": "first second", "seed": 3},
     )
@@ -474,6 +475,7 @@ def test_parent_long_form_resolves_random_seed_once_before_child_sections(tmp_pa
     manager._native_executor = FakeExecutor()
     manager._native_loaded_model_keys = []
     manager._persist = lambda **_kwargs: None
+    manager._section_accepted_locked = lambda *_args: True  # sequencing only; see test_tts_quality
     job = generation.GenerationJob(
         "random-long-form", "txt2speech", {"repo": "local/voice", "text": "first second", "seed": -1},
     )

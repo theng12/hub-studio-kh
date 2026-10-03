@@ -2533,6 +2533,7 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     if item.get("state") == "done" and item.get("asset_id"):
         return  # terminal polling/recovery is idempotent
     _record_worker_resource_usage(item, job)
+    _record_worker_section_quality(item, job)
     item["artifact_path"] = job.get("output_path")
     # The absolute form is built here because the asset record below fetches from it, and because
     # the Hub is the only thing that should ever hold a worker's address.
@@ -2894,6 +2895,7 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
                 return False
             _persist_worker_execution_started_at(b, item, job)
             _record_worker_resource_usage(item, job)
+            _record_worker_section_quality(item, job)
             state = job.get("state")
             if state in ("queued", "running", "cancel_requested"):
                 _record_worker_progress(item, job.get("progress"),
@@ -3922,7 +3924,7 @@ _OUTCOME_STATES = frozenset({"done", "error", "cancelled"})
 _ATTEMPT_EVIDENCE_FIELDS = (
     "machine", "worker_id", "model_revision", "runtime_revision",
     "resource_usage", "error_code", "runtime_s", "duration_s", "finished_at",
-    "worker_accepted_params",
+    "worker_accepted_params", "section_quality",
 )
 
 
@@ -3977,6 +3979,7 @@ def _record_worker_failure(item: dict, studio: dict, job: dict, t_start: float) 
     _record_worker_execution_started_at(item, job)
     _record_worker_identity(item, studio, job)
     _record_worker_resource_usage(item, job)
+    _record_worker_section_quality(item, job)
     code = job.get("error_code")
     if code is not None:
         item["error_code"] = _sanitize_public_error_code(code)
@@ -4042,6 +4045,40 @@ def _record_worker_resource_usage(item: dict, job: dict) -> None:
                     sanitized[key] = value
         clean[section] = sanitized
     item["resource_usage"] = clean
+
+
+_SECTION_QUALITY_NUMBERS = frozenset({
+    "section", "attempt", "duration_s", "dc_offset", "voiced_s", "voiced_ratio", "characters",
+    "max_duration_s", "min_voiced_s", "words_expected", "words_heard", "word_overlap",
+    "check_seconds",
+})
+_SECTION_QUALITY_WORDS = {
+    "transcribe_back": frozenset({"whisper", "unavailable", "memory", "script", "qwen_clone_gate"}),
+    "rejection_code": frozenset({"TTS_SECTION_SILENT", "TTS_SECTION_TOO_LONG",
+                                 "TTS_SECTION_TEXT_MISMATCH"}),
+}
+
+
+def _record_worker_section_quality(item: dict, job: dict) -> None:
+    """Keep a voice job's per-section quality evidence (``tts_quality``), numbers and known words only."""
+    raw = job.get("section_quality")
+    if not isinstance(raw, dict) or not isinstance(raw.get("sections"), list):
+        return
+    sections = []
+    for record in raw["sections"][:500]:
+        if not isinstance(record, dict):
+            continue
+        clean = {}
+        for key, value in record.items():
+            if key == "accepted" and isinstance(value, bool):
+                clean[key] = value
+            elif key in _SECTION_QUALITY_WORDS and value in _SECTION_QUALITY_WORDS[key]:
+                clean[key] = value
+            elif (key in _SECTION_QUALITY_NUMBERS and isinstance(value, (int, float))
+                  and not isinstance(value, bool) and math.isfinite(value)):
+                clean[key] = value
+        sections.append(clean)
+    item["section_quality"] = {"revision": str(raw.get("revision") or "")[:80], "sections": sections}
 
 
 async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict):
@@ -4263,6 +4300,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             _persist_worker_execution_started_at(b, item, job)
         _record_worker_identity(item, studio, job)
         _record_worker_resource_usage(item, job)
+        _record_worker_section_quality(item, job)
         item["studio_job_id"] = job["id"]
         if b["modality"] == "music" and isinstance(job.get("params"), dict):
             # Music normalizes aliases, defaults and prompt whitespace inside
@@ -4407,6 +4445,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             _persist_worker_execution_started_at(b, item, j)
             _record_worker_identity(item, studio, j)
             _record_worker_resource_usage(item, j)
+            _record_worker_section_quality(item, j)
             state = j.get("state")
             if state in ("queued", "running", "cancel_requested"):
                 _record_worker_progress(item, j.get("progress"), j.get("progress_stage"))
