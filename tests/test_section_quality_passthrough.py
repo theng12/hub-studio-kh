@@ -35,6 +35,16 @@ class SectionQualityPassthroughTests(unittest.TestCase):
         self.assertEqual(second, {"section": 3, "attempt": 2, "accepted": True})
         self.assertEqual(item["section_quality"]["revision"], "voicestudio.tts-section-quality.v1")
 
+    def test_every_code_and_number_the_voice_gate_writes_passes(self) -> None:
+        from components.voice.app.backend import tts_quality
+        item: dict = {}
+        record = {"section": 1, "attempt": 1, "accepted": False, "longest_pause_s": 34.98,
+                  "max_pause_s": 3.8, "longest_missing_run": 7,
+                  "rejection_code": "TTS_SECTION_INTERNAL_SILENCE"}
+        broker._record_worker_section_quality(item, {"section_quality": {
+            "revision": tts_quality.REVISION, "sections": [record]}})
+        self.assertEqual(item["section_quality"]["sections"], [record])
+
     def test_a_job_without_section_evidence_leaves_the_item_alone(self) -> None:
         item: dict = {}
         broker._record_worker_section_quality(item, {"section_quality": None})

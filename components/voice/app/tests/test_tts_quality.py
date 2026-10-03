@@ -73,6 +73,47 @@ def test_speech_that_is_not_the_text_is_rejected_when_whisper_is_available(tmp_p
         "TTS_SECTION_TEXT_MISMATCH")
 
 
+def test_a_long_silence_between_words_is_rejected_without_any_model(tmp_path):
+    # EP0003 Ch09 part 5: 35 s at -66 dB inside a 67 s section; long text and the speech around it
+    # kept the voiced time and the duration inside their bounds. Here in miniature, over a DC offset.
+    hush = (0.002 + np.random.default_rng(2).normal(0, 3e-4, RATE * 6)).astype(np.float32)
+    evidence = _verdict(_write(tmp_path / "gap.wav",
+                               np.concatenate([_speech(4.0), hush, _speech(4.0)])), heard=TEXT)
+    assert evidence["rejection_code"] == "TTS_SECTION_INTERNAL_SILENCE", evidence
+    assert evidence["longest_pause_s"] > evidence["max_pause_s"] == 3.8
+    # Breeze's own sentence pause (up to ~3.4 s measured) and the engine's edge silence are speech.
+    natural = np.concatenate([np.zeros(RATE), _speech(4.0), np.zeros(RATE * 3), _speech(4.0),
+                              np.zeros(RATE * 2)]).astype(np.float32)
+    assert _verdict(_write(tmp_path / "pause.wav", natural), heard=TEXT)["accepted"] is True
+
+
+def test_the_pause_allowed_follows_the_text_and_the_speed():
+    assert tts_quality.max_pause_s("One sentence. Another one.") == 3.8
+    assert tts_quality.max_pause_s("A paragraph ends.\n\nThe next begins.") == 4.1
+    assert tts_quality.max_pause_s("One sentence. Another one.", speed=0.5) == 7.6
+
+
+def test_a_dropped_clause_is_a_mismatch_even_inside_the_missing_share():
+    # EP0003 Ch09 part 5: Whisper heard 69 of 76 words and 7 may be missing, so it passed; the
+    # missing words were one clause, "Silas drew the soft crest of the ridge", lost to the silence.
+    text = ("The cartographer took out his field book and opened it to a clean spread of pages. "
+            "He records the gentle contour of the ridge in quiet charcoal strokes. The charcoal "
+            "moved across the paper in long, sweeping curves that matched the natural rise and "
+            "fall of the land. Silas drew the soft crest of the ridge, the precise placement of the "
+            "apiary shelter, and the winding course of the footpath that climbed from the orchard "
+            "below.")
+    heard = text.replace("drew the soft crest of the ridge, ", "")
+    metrics = {"duration_s": 40.0, "dc_offset": 0.0, "voiced_s": 22.5, "voiced_ratio": 0.56}
+    with pytest.raises(tts_quality.SectionQualityError) as failed:
+        tts_quality.check_section(text, "breeze-tts", metrics, heard=heard)
+    assert failed.value.code == "TTS_SECTION_TEXT_MISMATCH"
+    assert failed.value.evidence["words_heard"] == 69 and failed.value.evidence["word_overlap"] > 0.9
+    assert failed.value.evidence["longest_missing_run"] == 7
+    # The same number of words lost one here and one there is Whisper, not a dropped clause.
+    scattered = text.replace("The cartographer", "cartographer").replace("in quiet", "quiet")
+    assert tts_quality.longest_missing_run(text, scattered) <= 1
+
+
 def test_a_misspelt_name_and_a_word_or_two_lost_are_not_a_mismatch():
     text = "Elara felt a wave of gratitude for her reliable companion, the dark oak frame."
     matched, total = tts_quality.heard_words(text, "Alara felt a wave of gratitude for her "
