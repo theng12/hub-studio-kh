@@ -2,6 +2,25 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.139 - 2026-10-03
+
+### One pause rule for every voice
+
+**Every voice now pauses the same way.** Whatever voice you pick, there is a 0.6 second pause after a sentence and a 1 second pause at
+a new paragraph where the pieces of a voice-over are joined. A very long sentence that has to be cut in the middle gets only a short,
+soft join, so you do not hear a gap mid-sentence. You can still choose your own pauses for a job; then those are used instead.
+
+**Every voice is made in pieces of up to 250 characters.** Shorter pieces come out cleaner and are quicker to make again if one fails.
+The check that catches a long silence inside a piece allows for the new pauses.
+
+**Every voice takes up to 1,500 characters per request.** Studio Hub tells Story Studio this for every voice, so a chapter is sent in
+requests of that size and each one finishes in good time.
+
+### Yam Display comes with the kit
+
+**The setup drive now installs Yam Display.** "Install the app" and "Update this Mac" install it too, if it is missing or older. It is never
+downgraded, and if it cannot be installed, Studio Hub still installs normally.
+
 ## 0.6.138 - 2026-10-03
 
 ### Voices with a long silence in the middle, or a missing sentence, are made again

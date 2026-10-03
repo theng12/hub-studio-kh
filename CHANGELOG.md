@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.139 — 2026-10-03 · One pause rule for every voice, 250-character sections and 1,500-character requests; the kit installs Yam Display
+
+Release of `release/0.6.139` (= 0.6.138 + `feat/kit-yamdisplay` 3f59771 on main + `feat/uniform-narration` 52eb9a7 (incl. 37b0971 paragraph pause), merged
+`--no-ff`, no conflicts).
+- **One join rule for every voice family** (37b0971, 52eb9a7, `long_form_policy`): `UNIFORM_SENTENCE/PARAGRAPH/SOFT_JOIN_PAUSE_SECONDS` = 0.60 / 1.00 / 0.15 s.
+  `production_boundary_pause_seconds` returns the uniform rule; `PRODUCTION_PAUSE_FAMILIES` / `uses_production_pauses` are gone (Breeze's flat 0.6 s included).
+  A request's `sentence_pause_sec` / `paragraph_pause_sec` (0-3 s) replace the rule (`requested_boundary_pauses`). The lane contract publishes defaults
+  paragraph 1.0 / sentence 0.6 for every model.
+- **250-character sections for every TTS model** (`UNIFORM_SECTION_MAX_CHARACTERS`, `policy_for(..., uniform=True)`), join 600 ms published; a finer audit is
+  still followed (min), a caller may still choose 40-3000. Audit records are not edited: `audit_contract_runtime` checks a record against the family's
+  measured policy (`uniform=False`) and `qwen_17b_assembly_invariants` keeps the audited 300/600/180 ms.
+- **`lane_contract.maximum_input_characters` = 1,500 for every TTS model** (`UNIFORM_REQUEST_CHARACTERS`, `evidence: owner_uniform`); a model whose slowest
+  Mac was timed and fits less in 900 s publishes the smaller number (`evidence: measured`). Breeze stays 1,500.
+- **Quality gate**: the in-section silence allowance follows the uniform (or requested) pause + 3.5 s: sentence 4.1 s, paragraph 4.5 s (was 3.8 / 4.1).
+- Catalog wording, voice README, `docs/lane-execution-contract.md`, `docs/model-benchmarks.md` (via `qualification/model_record.py`) updated.
+  Write-up: `_orchestra/audit-20261001/uniform-narration.md`. Tests: `tests/test_tts_join_pauses.py` (new), `test_section_policy.py`, `test_breeze_family.py`,
+  voice `test_lane_contract.py`, `test_long_form_policy.py` and others.
+- **The kit installs Yam Display** (3f59771): `packaging/kit-extras/Install Yam Display.command` (installs when missing or older, never downgrades, never blocks the
+  Studio Hub install), run by `1 - Install the app.command` and `Update this Mac.command`; `prepare-kit-extras.sh` copies the DMG and command into a kit's
+  Extras with sha256 checks. Tests: `tests/test_yam_display_install.py`.
+
 ## 0.6.138 — 2026-10-03 · Every voice section is also checked for a long silence inside it or a dropped clause, and re-made if it has one
 
 Release of `release/0.6.138` (= 0.6.137 + `fix/gate-internal-silence` f5d7946, merged `--no-ff`, no conflicts).

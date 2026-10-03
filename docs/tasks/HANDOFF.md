@@ -3,7 +3,14 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.138** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+Last updated: **0.6.139** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+
+> **0.6.139 - one pause rule, 250-character sections and 1,500-character requests for every voice; the kit installs Yam Display (`release/0.6.139` = 0.6.138 + 3f59771 `feat/kit-yamdisplay` + 52eb9a7 `feat/uniform-narration` incl. 37b0971, 2026-10-03).**
+> `long_form_policy` uniform joins 0.6 s sentence / 1.0 s paragraph / 0.15 s soft for every family (request `sentence_pause_sec` / `paragraph_pause_sec` override);
+> `policy_for(uniform=True)` caps sections at 250 for every model (audit records unchanged, checked against the measured policy); `lane_contract.maximum_input_characters`
+> 1,500 for every TTS model (smaller if a timed slowest Mac needs it); gate silence allowance = pause + 3.5 s (4.1 / 4.5 s). Kit: `packaging/kit-extras/` Yam Display
+> installer command, run by the install/update launchers. Write-up: `_orchestra/audit-20261001/uniform-narration.md`. Gate numbers, DMG and checksum:
+> `_orchestra/audit-20261001/release-0139/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.138 - section gate catches internal silence and dropped clauses (`release/0.6.138` = 0.6.137 + f5d7946 `fix/gate-internal-silence`, 2026-10-03).**
 > `tts_quality.audio_metrics` -> `longest_pause_s` (longest unvoiced run between first and last voiced frame); `TTS_SECTION_INTERNAL_SILENCE` when it exceeds the
