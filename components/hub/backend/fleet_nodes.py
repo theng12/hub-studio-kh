@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .registry import DATA_DIR
+from .registry import DATA_DIR, machine_enabled
 from .peers import confirm_node, fleet_token, fresh_snapshot, held_token, nodes_on_previous_token
 from .vocabulary import NODE_MODALITIES
 
@@ -873,6 +873,8 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     waiting = nodes_on_previous_token()
     for row in rows:
         row["on_previous_token"] = row["id"] in waiting
+        # The owner's hand-pause (`POST .../pause`): no new work to this Mac, it stays joined.
+        row["paused"] = not machine_enabled(row["id"])
     on_previous = [row["id"] for row in rows if row["on_previous_token"]]
     # The role this Hub is actually in, not a constant.
     #

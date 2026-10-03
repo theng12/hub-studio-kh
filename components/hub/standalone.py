@@ -2455,6 +2455,35 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         monitor.reload_registry()
         return JSONResponse(answer)
 
+    @app.post("/api/hub/fleet/nodes/{node_id}/pause")
+    async def fleet_node_pause(node_id: str, body: dict[str, Any]) -> JSONResponse:
+        """Pause or resume one Mac in this group by hand: a joined node, or this controller itself.
+
+        The Gateway's Fleet page reaches it with the Fleet token it holds. It is the scheduler's own
+        per-machine switch (`registry.set_machine_enabled`, the one every modality's dispatch already
+        reads): a paused Mac gets no new work, jobs already running there finish, it stays monitored
+        and in the roster, and it takes work again the moment it is resumed. Kept in `machine_flags.json`,
+        so it survives a restart. A node's own credential cannot call this (not in `NODE_ALLOWED`).
+        """
+        from .backend import broker, registry, transcription_jobs
+        from .backend import fleet_nodes as fleet
+        paused = body.get("paused")
+        if not isinstance(paused, bool):
+            return JSONResponse({"ok": False, "code": "VALUE_REQUIRED",
+                                 "detail": "paused must be true or false"}, status_code=400)
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            machine = "local"
+        elif wanted in fleet._read():
+            machine = wanted
+        else:
+            return JSONResponse({"ok": False, "code": "NODE_UNKNOWN",
+                                 "detail": f"this controller has no Mac {wanted!r}"}, status_code=404)
+        registry.set_machine_enabled(machine, not paused)
+        broker.wake_dispatcher()
+        transcription_jobs._wakeup.set()
+        return JSONResponse({"ok": True, "node": wanted, "paused": paused})
+
     @app.get("/api/hub/shared-voices")
     def shared_voice_list() -> dict[str, Any]:
         """What this controller holds and how far each voice has reached its nodes.
