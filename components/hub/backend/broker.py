@@ -1943,29 +1943,137 @@ async def _signal_worker_cancel(client: httpx.AsyncClient, item: dict) -> bool:
 
 
 _abandoned_peer_cancels: set[asyncio.Task] = set()
+# How long an abandoned attempt is watched for: its Mac coming back to be told to stop, or with a
+# finished result that beats the re-run. ponytail: one flat window; per-lane if a lane runs longer.
+ABANDONED_WATCH_S = INFRA_RETRY_WINDOW_S
 
 
-def _cancel_abandoned_peer_job(client: httpx.AsyncClient, item: dict) -> None:
-    """Best effort: tell a node to stop a job this controller has given up on.
+def _superseded(item: dict) -> bool:
+    """True once an abandoned attempt's own finished result was adopted for this item: a re-run
+    still in flight stands down (cancels its job and records nothing)."""
+    return bool(item.get("superseded_by_original"))
+
+
+def _abandon_attempt(client: httpx.AsyncClient, b: dict, item: dict, studio: dict,
+                     body: dict, t_start: float) -> None:
+    """Give up on an attempt whose Mac or worker went away, so the item runs again.
+
+    Owner decision 2026-10-03: the fleet is the owner's own Macs and the work is free, so a node
+    that goes silent, or a worker that dies or restarts mid-job, never leaves an item `uncertain`
+    - every modality is re-run, on any capable Mac (the same one after a worker restart, whichever
+    is free first). The original is watched in the background (`_watch_abandoned_attempt`): it is
+    told to stop when its Mac answers again, and if it had already finished, its result is used
+    and the re-run is cancelled instead. A voice re-run takes a fresh client request id, or a
+    restarted worker would answer the new POST with the old, dead job.
+    """
+    job_id = item.pop("studio_job_id", None)
+    item.pop("studio", None)
+    if job_id:
+        _watch_abandoned_attempt(client, b, item, studio, str(job_id), body, t_start)
+    if b.get("modality") == "voice":
+        item["reruns"] = int(item.get("reruns") or 0) + 1
+        item["client_request_id"] = f"studiohub:{b['id']}:{item['index']}:rerun-{item['reruns']}"
+
+
+def _watch_abandoned_attempt(client: httpx.AsyncClient, b: dict, item: dict, studio: dict,
+                             job_id: str, body: dict, t_start: float) -> None:
+    """Best effort, in the background: settle a job this Hub has given up on.
 
     Without it the abandoned job kept running unpolled, burning that Mac and holding its peer
-    lease, while the item regenerated elsewhere. Sent in the background (an unreachable node must
-    not delay the retry) on a copy, so the item's own cancel fields stay those of a user cancel.
+    lease, while the item regenerated elsewhere. Each round asks the original for its job: a
+    finished one is adopted if the item has no result yet (the re-run is cancelled), a live one is
+    cancelled, and a Mac that does not answer is sent the cancel anyway and asked again later, for
+    `ABANDONED_WATCH_S`. Works on a copy, so the item's own cancel fields stay a user cancel's.
     """
-    probe = {"studio": item.get("studio"), "studio_job_id": item.get("studio_job_id")}
+    probe = {"studio": studio.get("id"), "studio_job_id": job_id}
+    log = logging.getLogger("studiohub.broker")
 
-    async def send() -> None:
-        try:
-            sent = await _signal_worker_cancel(client, probe)
-        except Exception as exc:  # best effort: never let this touch the item's retry
-            sent, probe["cancel_error"] = False, str(exc) or type(exc).__name__
-        logging.getLogger("studiohub.broker").info(
-            "abandoned peer job %s on %s: cancel %s", probe["studio_job_id"], probe["studio"],
-            "sent" if sent else f"not sent ({probe.get('cancel_error')})")
+    async def watch() -> None:
+        deadline = time.monotonic() + ABANDONED_WATCH_S
+        delay = 2.0
+        while True:
+            job = None
+            try:
+                url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
+                response = await client.get(url, headers=headers, timeout=10.0)
+                if response.status_code >= 400:
+                    return  # the worker no longer has it, or refuses us: nothing to stop
+                payload = response.json()
+                job = payload.get("job") if isinstance(payload, dict) else None
+            except Exception:
+                job = None
+            if isinstance(job, dict) and job.get("id") == job_id:
+                state = job.get("state")
+                if state == "done" and not job.get("error"):
+                    if item.get("state") in ("queued", "running") and not b.get("cancelled"):
+                        await _adopt_abandoned_attempt(client, b, item, studio, job, body, t_start)
+                    return
+                if state in ("queued", "running"):
+                    sent = await _signal_worker_cancel(client, probe)
+                    log.info("abandoned job %s on %s: cancel %s", job_id, probe["studio"],
+                             "sent" if sent else f"not sent ({probe.get('cancel_error')})")
+                    if sent:
+                        return
+                else:
+                    return  # failed, cancelled or unknown to it: nothing to stop or adopt
+            elif job is None:
+                try:
+                    sent = await _signal_worker_cancel(client, probe)
+                except Exception as exc:
+                    sent, probe["cancel_error"] = False, str(exc) or type(exc).__name__
+                log.info("abandoned job %s on %s: cancel %s", job_id, probe["studio"],
+                         "sent" if sent else f"not sent ({probe.get('cancel_error')})")
+                if sent:
+                    return
+            else:
+                return
+            if time.monotonic() + delay > deadline:
+                return
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60.0)
 
-    task = asyncio.create_task(send())
+    task = asyncio.create_task(watch())
     _abandoned_peer_cancels.add(task)
     task.add_done_callback(_abandoned_peer_cancels.discard)
+
+
+async def _adopt_abandoned_attempt(client: httpx.AsyncClient, b: dict, item: dict, studio: dict,
+                                   job: dict, body: dict, t_start: float) -> None:
+    """The original finished before its re-run: keep its result, cancel the re-run."""
+    rerun = {"studio": item.get("studio"), "studio_job_id": item.get("studio_job_id")}
+    was_running = item.get("state") == "running"
+    keep = {key: item.get(key) for key in ("studio", "studio_job_id", "client_request_id",
+                                           "model_revision", "runtime_revision", "machine", "worker_id")}
+    item["superseded_by_original"] = True
+    for key in ("model_revision", "runtime_revision", "machine", "worker_id"):
+        item.pop(key, None)  # the re-run's evidence; the original's own is recorded below
+    item.update(studio=studio.get("id"), studio_job_id=job["id"], retry_at=None, error=None)
+    if b.get("modality") == "voice":
+        item["client_request_id"] = body.get("client_request_id")
+    try:
+        if b.get("modality") == "voice":
+            _validate_voice_worker_job(item, job, expected_request_id=body.get("client_request_id"))
+        elif b.get("modality") in DURABLE_ASYNC_MODALITIES:
+            _validate_durable_worker_job(b["modality"], item, job,
+                                         remote=not peers.is_local_studio(studio))
+        await _record_worker_success(client, b, item, studio, job, body, t_start)
+    except Exception:
+        logging.getLogger("studiohub.broker").exception(
+            "could not adopt the abandoned job %s; its re-run continues", job.get("id"))
+    if item.get("state") != "done":
+        item.pop("superseded_by_original", None)
+        item.update(keep)
+        return
+    _mark_machine_success(studio)
+    if rerun["studio"] and rerun["studio_job_id"]:
+        await _signal_worker_cancel(client, rerun)
+    if not was_running:
+        # Nothing is in flight to publish it (a running re-run does that as it stands down).
+        reserved = _reserve_item_webhook(b, item)
+        await _maybe_finish(client, b)
+        if reserved:
+            await _post_item_webhook(client, b, item, reserved=True)
+        _wakeup.set()
 
 
 async def cancel_batch(batch_id: str, client: httpx.AsyncClient | None = None) -> dict | None:
@@ -2745,6 +2853,9 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
                 return False  # 404/4xx means the worker no longer has the job
             if b.get("modality") == "voice":
                 job = _voice_job_from_response(jr)
+                if (isinstance(job, dict) and job.get("state") == "uncertain"
+                        and job.get("error_code") == "EXECUTION_IDENTITY_LOST"):
+                    return False  # Voice Studio restarted under it and never resumes one
                 _validate_voice_worker_job(
                     item, job,
                     expected_request_id=str(body.get("client_request_id") or ""),
@@ -3014,7 +3125,8 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
             return pending(
                 "The original Voice worker response was malformed."
             )
-        expected_request_id = f"studiohub:{batch['id']}:{item['index']}"
+        expected_request_id = (item.get("client_request_id")
+                               or f"studiohub:{batch['id']}:{item['index']}")
         try:
             _validate_voice_worker_job(
                 item, job, expected_request_id=expected_request_id,
@@ -3921,7 +4033,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
     body["repo"] = b["model"]
     body[prompt_field] = item["prompt"]
     if b["modality"] == "voice":
-        body["client_request_id"] = f"studiohub:{b['id']}:{item['index']}"
+        body["client_request_id"] = (item.get("client_request_id")
+                                     or f"studiohub:{b['id']}:{item['index']}")
         floor = memory_admission.override_free_gb(b["model"])
         if floor is not None:   # the worker's own preflight must honour the same override
             body["memory_floor_gb"] = floor
@@ -4115,6 +4228,10 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 raise ValueError(
                     f"{b['modality'].title()} worker acceptance did not contain a valid job receipt"
                 )
+        if _superseded(item):
+            # The original attempt's result was adopted while this re-run was being submitted.
+            await _signal_worker_cancel(client, {"studio": studio["id"], "studio_job_id": job["id"]})
+            return
         if b["modality"] in RECEIPT_DURABLE_MODALITIES:
             # The acceptance receipt below is the durability boundary. Record
             # a supplied start time in the same write so a failure cannot occur
@@ -4195,6 +4312,9 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         # poll the studio's async job until terminal
         while True:
             await asyncio.sleep(POLL_S)
+            if _superseded(item):
+                await _signal_worker_cancel(client, {"studio": studio["id"], "studio_job_id": job["id"]})
+                return
             if _voice_recovery_owns(item):
                 if (b.get("modality") in DURABLE_ASYNC_MODALITIES
                         and b.get("cancelled") and item.get("studio_job_id")):
@@ -4239,6 +4359,12 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 return
             if b["modality"] == "voice":
                 j = _voice_job_from_response(jr)
+                if (isinstance(j, dict) and j.get("state") == "uncertain"
+                        and j.get("error_code") == "EXECUTION_IDENTITY_LOST"):
+                    # Voice Studio restarted under this job and never resumes one: re-run it.
+                    raise _worker_terminal_error(
+                        str(j.get("error") or "Voice Studio restarted before completion"),
+                        "WORKER_RESTART_UNCERTAIN")
                 _validate_voice_worker_job(
                     item, j,
                     expected_request_id=str(body.get("client_request_id") or ""),
@@ -4289,7 +4415,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             _mark_machine_success(studio)
             return
     except Exception as e:
-        if _voice_recovery_owns(item):
+        if _voice_recovery_owns(item) or _superseded(item):
             return
         if b.get("modality") == "voice" and isinstance(e, _VoiceReceiptError):
             _mark_voice_receipt_invalid(item)
@@ -4323,41 +4449,51 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         if isinstance(recovered, dict):
             e = _classify_worker_failure(b, item, studio, recovered, t_start)
         message = str(e) or type(e).__name__
-        # A Studio on another Mac cannot be reconciled the way a local one can: the result, if
-        # there is one, is on a machine that has stopped answering, and nothing here can reach
-        # it. The owner's rule for the fleet is therefore to regenerate rather than to wait, so
-        # a remote attempt that cannot be reconciled falls through to the bounded infrastructure
-        # retry below, which already avoids the machine and limits the attempts. Local work
-        # keeps reconciliation, because there the earlier result may genuinely still be there.
+        # A worker that stopped answering, lost the job or restarted under it cannot be waited
+        # on: the owner's rule (2026-10-03, every lane, this Mac or another) is to re-run rather
+        # than fence. The abandoned attempt falls through to the bounded retry below, which
+        # avoids a silent machine and limits the attempts, while `_watch_abandoned_attempt`
+        # cancels the original - or adopts it if it finished first. What stays `uncertain` is a
+        # worker that answered with something that is not this job, or a lost local receipt.
         remote_studio = not peers.is_local_studio(studio)
-        if b.get("modality") in DURABLE_ASYNC_MODALITIES:
-            code = str(getattr(e, "error_code", None) or item.get("error_code") or "")
-            if code in {"JOB_PERSISTENCE_UNCERTAIN", "WORKER_RESTART_UNCERTAIN"}:
+        code = str(getattr(e, "error_code", None) or item.get("error_code") or "")
+        abandoned = False  # set when the attempt is given up on below, which makes it re-runnable
+        if code == "WORKER_RESTART_UNCERTAIN" and not b["cancelled"]:
+            # The worker restarted under the job and never resumes it: run it again - on this Mac
+            # once its worker is back, or elsewhere, whichever is free first (owner, 2026-10-03).
+            # It still spends a try, so a job that crashes its worker every time ends.
+            _abandon_attempt(client, b, item, studio, body, t_start)
+            abandoned = True
+        elif b.get("modality") in DURABLE_ASYNC_MODALITIES:
+            if code == "JOB_PERSISTENCE_UNCERTAIN":
                 _mark_async_uncertain(
                     item, studio, b["modality"],
                     f"The accepted {b['modality'].title()} job has an uncertain final result; "
                     "reconcile its original worker receipt before any retry.", code,
                 )
                 return
+            went_away = _is_transport_failure(e, message) or getattr(e, "status_code", None) == 404
             if (item.get("studio_job_id") and recovered is False
                     and not getattr(e, "worker_terminal", False)):
-                if remote_studio and b.get("modality") == "image":
-                    _cancel_abandoned_peer_job(client, item)
-                    item.pop("studio_job_id", None)
-                    item.pop("studio", None)
+                if went_away or (remote_studio and b.get("modality") == "image"):
+                    # Its worker - on another Mac or this one - stopped answering for the whole
+                    # recovery window, or no longer has the job: re-run it (owner, 2026-10-03).
+                    # Music and Video used to stay `uncertain` here, and any local job too.
+                    _abandon_attempt(client, b, item, studio, body, t_start)
+                    abandoned = True
                 else:
+                    # The worker answered, but with a receipt that is not this job's: fenced.
                     _mark_async_uncertain(
                         item, studio, b["modality"],
                         f"The accepted {b['modality'].title()} job could not be reconciled; "
                         "it was not retried automatically.",
                     )
                     return
-            if (durable_post_attempted and not durable_post_rejected
-                    and not item.get("studio_job_id")
-                    and (not remote_studio or b.get("modality") == "music")):
-                # Image preserves its established remote regeneration policy.
-                # Music remains fenced even remotely because a single render is
-                # long-running and cannot be made idempotent without a receipt.
+            if (durable_post_attempted and not durable_post_rejected and not abandoned
+                    and not item.get("studio_job_id") and not remote_studio):
+                # A local worker that may have accepted the POST but whose receipt was lost:
+                # there is no job id to cancel or adopt, and this Mac is still here, so its worker
+                # is reconciled rather than doubled. A remote one is re-run like any lost node.
                 _mark_async_uncertain(
                     item, studio, b["modality"],
                     f"{b['modality'].title()} submission may have been accepted but its worker "
@@ -4366,18 +4502,10 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 return
         if (b.get("modality") == "voice" and item.get("studio_job_id")
                 and _is_transport_failure(e, message)):
-            if remote_studio:
-                _cancel_abandoned_peer_job(client, item)
-                item.pop("studio_job_id", None)
-                item.pop("studio", None)
-            else:
-                _mark_voice_uncertain(
-                    item,
-                    "The accepted Voice Studio job could not be reconciled; "
-                    "it was not retried automatically.",
-                )
-                return
-        retryable = getattr(e, "retryable", True)
+            _abandon_attempt(client, b, item, studio, body, t_start)
+            abandoned = True
+        # A 404 from a worker that lost the job is not retryable by itself; an abandoned attempt is.
+        retryable = getattr(e, "retryable", True) or abandoned
         item["last_progress_at"] = time.time()
         now = time.time()
         if retryable and _is_capacity_failure(message) and not b["cancelled"]:

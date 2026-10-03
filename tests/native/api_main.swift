@@ -6177,32 +6177,145 @@ struct NativeAPITests {
 
         // The agent's standby copy (2026-10-03: a Force Quit left a Mac without its Hub because the
         // running app was supervised by nothing). A free data folder means "be the app"; a held one
-        // blocks until its holder ends, then exits 1 so launchd relaunches a fresh copy - or 0 when a
-        // deliberate Quit left its marker, so KeepAlive leaves the app stopped.
+        // blocks until its holder ends, then exits 1 so launchd relaunches a fresh copy ONLY after a
+        // crash (owner decision 2026-10-03): a Quit, a Force Quit or a memory kill exits 0, so
+        // KeepAlive leaves the app stopped - relaunching after a Force Quit reloads the models and
+        // recreates the memory pressure the owner just relieved.
         final class StandbyResult: @unchecked Sendable { var status: Int32?? = .none }
         let standbyDirectory = temporary.appendingPathComponent("agent-standby")
-        try FileManager.default.createDirectory(at: standbyDirectory, withIntermediateDirectories: true)
-        require(AgentStandby.waitForRunningCopy(directory: standbyDirectory) == nil,
+        let noReports = temporary.appendingPathComponent("no-crash-reports")
+        let reports = temporary.appendingPathComponent("crash-reports")
+        for folder in [standbyDirectory, noReports, reports] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        require(AgentStandby.waitForRunningCopy(directory: standbyDirectory, crashReports: noReports,
+                                                crashReportWait: 0) == nil,
                 "with nobody holding the data folder the agent's copy must start as the app")
-        for cleanQuit in [false, true] {
+        func lastStop() -> [String: Any]? {
+            (try? Data(contentsOf: standbyDirectory.appendingPathComponent(StopRecord.fileName)))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        }
+        // (how the running app ended, crash report folder, standby exit status, recorded reason)
+        let endings: [(String, URL, Int32, String)] = [
+            ("quit", noReports, 0, "quit"),
+            ("crash signal", noReports, 1, "crashed"),
+            ("crash report only", reports, 1, "crashed"),
+            ("SIGTERM", noReports, 0, "force_quit"),
+            ("SIGKILL", noReports, 0, "force_quit"),
+            ("SIGKILL under critical memory pressure", noReports, 0, "low_memory"),
+            ("update relaunch", noReports, 0, "updated"),
+        ]
+        for (ending, crashReports, expected, reason) in endings {
             var holder: InstanceLock? = try InstanceLock(directory: standbyDirectory)
-            if cleanQuit { AgentStandby.markCleanQuit(directory: standbyDirectory) }
+            StopRecord.markRunning(directory: standbyDirectory, now: Date().addingTimeInterval(-60))
             let result = StandbyResult()
             let finished = DispatchSemaphore(value: 0)
             Thread {
-                result.status = .some(AgentStandby.waitForRunningCopy(directory: standbyDirectory))
+                result.status = .some(AgentStandby.waitForRunningCopy(
+                    directory: standbyDirectory, crashReports: crashReports, crashReportWait: 0))
                 finished.signal()
             }.start()
             require(finished.wait(timeout: .now() + 0.3) == .timedOut,
                     "the standby must wait while the running app holds the data folder")
+            // What the app leaves behind as it ends.
+            switch ending {
+            case "quit": AgentStandby.markCleanQuit(directory: standbyDirectory)
+            case "crash signal":
+                FileManager.default.createFile(atPath: standbyDirectory.appendingPathComponent(StopRecord.crashedMarkerName).path, contents: Data([11]))
+            case "crash report only":
+                FileManager.default.createFile(atPath: reports.appendingPathComponent("StudioHub-2026-10-03-093600.ips").path, contents: Data())
+            case "SIGTERM":
+                FileManager.default.createFile(atPath: standbyDirectory.appendingPathComponent(StopRecord.terminatedMarkerName).path, contents: Data([15]))
+            case "SIGKILL under critical memory pressure": StopRecord.noteCriticalMemory(directory: standbyDirectory)
+            case "update relaunch":
+                StopRecord.noteUpdating(directory: standbyDirectory); AgentStandby.markCleanQuit(directory: standbyDirectory)
+            default: break  // SIGKILL leaves nothing
+            }
             withExtendedLifetime(holder) {}
             holder = nil
             require(finished.wait(timeout: .now() + 5) == .success,
                     "the standby must wake when the running app ends")
-            require(result.status == .some(cleanQuit ? 0 : 1),
-                    "after \(cleanQuit ? "a Quit" : "a crash") the standby must exit \(cleanQuit ? 0 : 1), got \(String(describing: result.status))")
-            AgentStandby.clearCleanQuit(directory: standbyDirectory)
+            require(result.status == .some(expected),
+                    "after \(ending) the standby must exit \(expected), got \(String(describing: result.status))")
+            let record = lastStop()
+            require(record?["reason"] as? String == reason,
+                    "after \(ending) last-stop.json must say \(reason), got \(String(describing: record))")
+            require(!(record?["label"] as? String ?? "").isEmpty && record?["at"] is Double,
+                    "the record carries a plain label and a time: \(String(describing: record))")
+            require(!FileManager.default.fileExists(atPath: standbyDirectory.appendingPathComponent(StopRecord.runningMarkerName).path),
+                    "settling consumes the evidence")
+            require(StopRecord.settle(directory: standbyDirectory, relaunching: false, crashReports: noReports) == nil,
+                    "a settled stop is not settled twice")
+            require(lastStop()?["reason"] as? String == reason, "a second settle keeps the record")
+            try? FileManager.default.removeItem(at: reports.appendingPathComponent("StudioHub-2026-10-03-093600.ips"))
         }
+        require(lastStop() != nil && (StopRecord.settle(directory: standbyDirectory, relaunching: true) == nil),
+                "nothing to settle without evidence")
+
+        // The decision itself: only a crash relaunches.
+        let stopped = Date(timeIntervalSince1970: 1_800_000_000)
+        let booted = stopped.addingTimeInterval(-86_400)
+        func verdict(cleanQuit: Bool = false, crashed: Bool = false, terminated: Bool = false,
+                     boot: Date = booted, pressure: Date? = nil, updating: Bool = false,
+                     poweringOff: Bool = false) -> StopReason {
+            StopRecord.classify(cleanQuit: cleanQuit, crashed: crashed, terminated: terminated,
+                                stoppedAt: stopped, bootTime: boot, memoryCriticalAt: pressure,
+                                updating: updating, poweringOff: poweringOff)
+        }
+        require(verdict(cleanQuit: true) == .quit, "a Quit is a Quit")
+        require(verdict(cleanQuit: true, poweringOff: true) == .macRestarted, "a Quit by a restart/shutdown/logout")
+        require(verdict(cleanQuit: true, updating: true) == .updated, "a Quit for an update")
+        require(verdict(crashed: true) == .crashed && verdict(cleanQuit: true, crashed: true) == .crashed,
+                "crash evidence wins")
+        require(verdict(terminated: true) == .forceQuit, "SIGTERM is a Force Quit")
+        require(verdict() == .forceQuit, "an uncaught kill with no memory pressure is a Force Quit")
+        require(verdict(pressure: stopped.addingTimeInterval(-120)) == .lowMemory,
+                "an uncaught kill right after critical memory pressure is a low-memory stop")
+        require(verdict(pressure: stopped.addingTimeInterval(-3_600)) == .forceQuit,
+                "memory pressure an hour earlier says nothing about this kill")
+        require(verdict(boot: stopped.addingTimeInterval(300)) == .macRestarted,
+                "no marker and a boot after the last heartbeat is a restart or a power cut")
+        for reason in [StopReason.quit, .updated, .forceQuit, .lowMemory, .macRestarted] {
+            require(!StopRecord.relaunches(reason) && AgentStandby.exitStatus(for: reason) == 0,
+                    "\(reason) must leave the app stopped")
+        }
+        require(StopRecord.relaunches(.crashed) && AgentStandby.exitStatus(for: .crashed) == 1,
+                "a crash must relaunch")
+        // The launch agent itself keeps relaunching on any unsuccessful exit, so the plist needs no
+        // migration on Macs that already have it.
+        require((LaunchAgent.propertyList(executablePath: "/x")["KeepAlive"] as? [String: Any])?["SuccessfulExit"] as? Bool == false,
+                "KeepAlive is unchanged; the decision lives in the app")
+
+        // A copy launchd starts with the folder free - `KeepAlive` relaunching an app it ran
+        // directly - exits 0 straight away after a kill, and starts after a crash. A login launch
+        // long after a kill, or after a Quit, starts too.
+        let relaunchDirectory = temporary.appendingPathComponent("agent-relaunch")
+        try FileManager.default.createDirectory(at: relaunchDirectory, withIntermediateDirectories: true)
+        let now = Date()
+        StopRecord.markRunning(directory: relaunchDirectory, now: now.addingTimeInterval(-600))
+        require(AgentStandby.shouldStayStopped(directory: relaunchDirectory, now: now,
+                                               crashReports: noReports, crashReportWait: 0),
+                "a launchd relaunch moments after a Force Quit must stay stopped")
+        StopRecord.markRunning(directory: relaunchDirectory, now: now.addingTimeInterval(-600))
+        FileManager.default.createFile(atPath: relaunchDirectory.appendingPathComponent(StopRecord.crashedMarkerName).path, contents: Data([6]))
+        require(!AgentStandby.shouldStayStopped(directory: relaunchDirectory, now: now,
+                                                crashReports: noReports, crashReportWait: 0),
+                "a launchd relaunch after a crash must start")
+        StopRecord.markRunning(directory: relaunchDirectory, now: now.addingTimeInterval(-600))
+        AgentStandby.markCleanQuit(directory: relaunchDirectory)
+        require(!AgentStandby.shouldStayStopped(directory: relaunchDirectory, now: now,
+                                                crashReports: noReports, crashReportWait: 0),
+                "a login launch just after a Quit must start")
+        StopRecord.markRunning(directory: relaunchDirectory, now: now.addingTimeInterval(-7_200))
+        utimes(relaunchDirectory.appendingPathComponent(StopRecord.runningMarkerName).path,
+               [timeval(tv_sec: Int(now.timeIntervalSince1970) - 3_600, tv_usec: 0),
+                timeval(tv_sec: Int(now.timeIntervalSince1970) - 3_600, tv_usec: 0)])
+        require(!AgentStandby.shouldStayStopped(directory: relaunchDirectory, now: now,
+                                                crashReports: noReports, crashReportWait: 0),
+                "a login launch an hour after a kill must start")
+        require(!AgentStandby.shouldStayStopped(directory: relaunchDirectory, now: now,
+                                                crashReports: noReports, crashReportWait: 0),
+                "a first launch with no evidence must start")
 
         // The one-time move off the old SMAppService login item. Pure and injected, so no branch
         // here touches the real system; the app target supplies the real call in one place.

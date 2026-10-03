@@ -189,7 +189,8 @@ def verify_node_credential(node_id: str, offered: str | None) -> bool:
     return hmac.compare_digest(stored, hash_credential(offered))
 
 
-def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = None) -> float | None:
+def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = None,
+              last_stops: dict[str, dict[str, Any]] | None = None) -> float | None:
     """Stamp `last_seen_at` for the nodes that just answered. Returns the stamp, or `None`.
 
     Batched deliberately: `inventory()` probes every node on every fleet read, and a write
@@ -222,6 +223,9 @@ def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = 
                 "start_services_on_launch": known.get("start_services_on_launch"),
                 "observed_at": now,
             }
+        stop = last_stop_of((last_stops or {}).get(node_id))
+        if stop is not None:
+            row["last_stop"] = stop
         changed = True
     if changed:
         _write(nodes)
@@ -724,6 +728,40 @@ def _last_known_startup(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
 _CURRENT_JOB_KEYS = ("job_id", "modality", "model", "label", "started_at")
+LAST_STOP_REASONS = frozenset({"quit", "crashed", "updated", "force_quit", "low_memory", "mac_restarted"})
+
+
+def last_stop_of(value: object) -> dict[str, Any] | None:
+    """Why a Mac's Studio Hub last stopped, as that Mac recorded it - or ``None``.
+
+    Written by the app (`StopRecord` in native/ShellCore.swift) to ``last-stop.json``. It is another
+    machine's word, so only the four contract keys travel, with a known reason and a real time.
+    """
+    if not isinstance(value, dict) or value.get("reason") not in LAST_STOP_REASONS:
+        return None
+    at = value.get("at")
+    if isinstance(at, bool) or not isinstance(at, (int, float)) or at <= 0:
+        return None
+    return {"reason": value["reason"], "at": float(at),
+            "label": str(value.get("label") or "")[:80] or None,
+            "relaunched": value.get("relaunched") is True}
+
+
+def this_last_stop() -> dict[str, Any] | None:
+    """This Mac's own ``last_stop``: the file the app writes, named by `hub_worker.py`."""
+    path = os.environ.get("STUDIOHUB_LAST_STOP_FILE")
+    if not path:
+        return None
+    try:
+        return last_stop_of(json.loads(Path(path).read_text()))
+    except (OSError, ValueError):
+        return None
+
+
+def _last_known_stop(row: dict[str, Any]) -> dict[str, Any] | None:
+    """What an unreachable node last said about its last stop, marked stale; ``None`` if never."""
+    known = last_stop_of(row.get("last_stop"))
+    return {**known, "stale": True} if known else None
 
 
 def _current_job_of(value: object) -> dict[str, Any] | None:
@@ -748,7 +786,8 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
     host = snapshot.get("host") if isinstance(snapshot.get("host"), dict) else {}
     carried = {"host": host, "version": snapshot.get("version"),
                "startup": _startup_of(snapshot.get("startup"), row),
-               "current_job": _current_job_of(snapshot.get("current_job"))}
+               "current_job": _current_job_of(snapshot.get("current_job")),
+               "last_stop": last_stop_of(snapshot.get("last_stop")) or _last_known_stop(row)}
     if snapshot.get("auth") is False:
         return {**row, **carried, "state": "unauthorized",
                 "detail": _CREDENTIAL_DETAIL.format(
@@ -782,6 +821,7 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
                                           "joined_at", "last_seen_at", "updated_at")}
     row["credential_issued_at"] = node.get("credential_issued_at")
     row["last_startup"] = node.get("last_startup")
+    row["last_stop"] = node.get("last_stop")
     # Whether this controller holds a credential for the machine, never the credential. A
     # roster row with no hash is a row from before per-node credentials existed, and it reads
     # as "the next join of this id has to prove itself" rather than as "trusted".
@@ -829,7 +869,8 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         return {**row, "state": "reachable", "detail": None, "host": host,
                 "version": body.get("version"), "source": body.get("source"),
                 "startup": _startup_of(body.get("startup"), row),
-                "current_job": _current_job_of(body.get("current_job"))}
+                "current_job": _current_job_of(body.get("current_job")),
+                "last_stop": last_stop_of(body.get("last_stop")) or _last_known_stop(row)}
     except (httpx.HTTPError, OSError) as exc:
         # A message that stops at the colon ("could not reach the node: ") reads as though the
         # reason were withheld, and it happens whenever the exception carries an empty message -
@@ -840,7 +881,7 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         if reason:
             detail = f"{detail}: {reason}"
         return {**row, "state": "unreachable", "reason": _unreachable_reason(exc), "detail": detail,
-                "startup": _last_known_startup(row)}
+                "startup": _last_known_startup(row), "last_stop": _last_known_stop(row)}
     finally:
         if owned:
             await client.aclose()
@@ -861,7 +902,10 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
         [row["id"] for row in rows if row.get("state") == "reachable"],
         {row["id"]: row["startup"] for row in rows
          if row.get("state") == "reachable" and isinstance(row.get("startup"), dict)
-         and not row["startup"].get("stale")})
+         and not row["startup"].get("stale")},
+        {row["id"]: row["last_stop"] for row in rows
+         if row.get("state") == "reachable" and isinstance(row.get("last_stop"), dict)
+         and not row["last_stop"].get("stale")})
     if seen_at is not None:
         for row in rows:
             if row.get("state") == "reachable":
@@ -1035,6 +1079,8 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
         # What that Mac said it is working on in the snapshot this row came from; None when idle
         # or when it runs a Hub that does not report one.
         "current_job": row.get("current_job") if isinstance(row.get("current_job"), dict) else None,
+        # Why that Mac's Hub last stopped, as it recorded it (stale when it is not answering now).
+        "last_stop": row.get("last_stop") if isinstance(row.get("last_stop"), dict) else None,
     }
 
 

@@ -849,7 +849,7 @@ final class StudioController: ObservableObject {
     }
 
     /// Turn the one login mechanism on or off: the launchd agent that starts the app at login and
-    /// relaunches it after a crash. A normal Quit exits 0, so `KeepAlive` leaves the app stopped.
+    /// relaunches it after a crash (and only a crash - see `StopRecord`). A normal Quit exits 0.
     func setLogin(_ enabled: Bool) {
         if let message = changeLogin(enabled) { failure = message }
     }
@@ -1018,8 +1018,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ExistingInstance.handle(ExistingInstance.decide(lockHeldByAnother: controller.existingInstanceDetected),
                                     present: ExistingInstanceHandler.presentRunningApp,
                                     exitQuietly: ExistingInstanceHandler.noteAndExit)
-            // This copy owns the data folder now; a Quit marker left by the previous one is spent.
-            AgentStandby.clearCleanQuit(directory: config.dataDirectory)
+            // This copy owns the data folder now: settle why the previous one ended (unless the
+            // agent's copy already did), then leave the evidence the next settle reads.
+            StopRecord.settle(directory: config.dataDirectory, relaunching: false)
+            StopRecord.markRunning(directory: config.dataDirectory)
+            StopRecord.installSignalMarkers(directory: config.dataDirectory)
+            startStopEvidence(directory: config.dataDirectory)
             // One-time, before anything else can offer the login choice: remove the login item an
             // older build left behind so the launch agent is the only mechanism that can run.
             controller.migrateLegacyLoginItemIfNeeded()
@@ -1119,8 +1123,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DispatchQueue.global(qos: .utility).async { LaunchAgent.superviseRunningApp(at: agentPlist) }
         }
     }
+    /// The heartbeat that dates a kill nothing can record, and the stamp of critical memory pressure
+    /// that tells a low-memory stop from a plain Force Quit. See `StopRecord`.
+    private var heartbeat: DispatchSourceTimer?
+    private var memoryPressure: DispatchSourceMemoryPressure?
+    private func startStopEvidence(directory: URL) {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + StopRecord.heartbeatSeconds, repeating: StopRecord.heartbeatSeconds)
+        timer.setEventHandler { StopRecord.heartbeat(directory: directory) }
+        timer.resume()
+        heartbeat = timer
+        let pressure = DispatchSource.makeMemoryPressureSource(eventMask: .critical, queue: .global(qos: .utility))
+        pressure.setEventHandler { StopRecord.noteCriticalMemory(directory: directory) }
+        pressure.resume()
+        memoryPressure = pressure
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willPowerOffNotification, object: nil, queue: nil) { _ in
+            StopRecord.notePowerOff(directory: directory)
+        }
+    }
     /// A deliberate Quit (menu, update relaunch, logout) tells the agent's standby copy to leave
-    /// the app stopped. A crash or Force Quit never gets here, so the standby relaunches it.
+    /// the app stopped. A crash never gets here, so the standby relaunches it; a Force Quit or a
+    /// memory kill never gets here either, and `StopRecord` tells those from a crash.
     func applicationWillTerminate(_ notification: Notification) {
         guard let controller, !controller.existingInstanceDetected else { return }
         AgentStandby.markCleanQuit(directory: controller.configuration.dataDirectory)
@@ -1141,6 +1165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         relaunching = true
+        StopRecord.noteUpdating(directory: controller.configuration.dataDirectory)
         controller.forceStopWithoutAsking = true
         if controller.running { controller.stop() } else { terminateApp() }
     }
@@ -1205,6 +1230,13 @@ struct StudioHubApplication {
            let configuration = try? ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL),
            let status = AgentStandby.waitForRunningCopy(directory: configuration.dataDirectory) {
             exit(status)
+        }
+        // launchd started this copy with the data folder free: at login, or `KeepAlive` relaunching
+        // an app it ran itself. Only a crash may bring the app back (owner decision 2026-10-03).
+        if ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1",
+           let configuration = try? ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL),
+           AgentStandby.shouldStayStopped(directory: configuration.dataDirectory) {
+            exit(0)
         }
         let app = NSApplication.shared
         let delegate = AppDelegate()

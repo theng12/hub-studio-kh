@@ -102,12 +102,28 @@ def test_lost_and_malformed_image_acceptance_are_fenced(fixture_monitor, no_deli
         assert "another-machine" not in broker.busy_machines()
 
 
-def test_accepted_job_lost_poll_and_persistence_uncertainty_keep_worker_id(
+def test_a_worker_that_lost_the_accepted_job_is_rerun(fixture_monitor, no_delivery):
+    """Owner decision 2026-10-03: free work is re-run when its worker no longer has it (it was
+    `uncertain` and fenced until an operator acted)."""
+    batch, item, studio = image_attempt(fixture_monitor)
+    client = WorkerClient(response(200, {"job": accepted_response(studio)}),
+                          response(404, {"detail": "not found"}))
+
+    async def run():
+        await broker._run_item(client, batch, item, studio)
+        await asyncio.gather(*broker._abandoned_peer_cancels)
+    asyncio.run(run())
+    assert client.posts == 1
+    assert item["state"] == "queued" and item["retry_at"] is not None
+    assert item.get("studio_job_id") is None
+    assert studio["machine"] not in broker.busy_machines()
+
+
+def test_accepted_job_persistence_uncertainty_keeps_worker_id(
         fixture_monitor, no_delivery):
-    for poll in (response(404, {"detail": "not found"}),
-                 response(200, {"job": {"id": "worker-1", "state": "error",
+    for poll in (response(200, {"job": {"id": "worker-1", "state": "error",
                      "error": "Final PNG exists without a receipt",
-                     "error_code": "JOB_PERSISTENCE_UNCERTAIN"}})):
+                     "error_code": "JOB_PERSISTENCE_UNCERTAIN"}}),):
         batch, item, studio = image_attempt(fixture_monitor)
         client = WorkerClient(response(200, {"job": accepted_response(studio)}), poll)
         asyncio.run(broker._run_item(client, batch, item, studio))
