@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.136 — 2026-10-03 · A busy group no longer blocks its controller's update; the app relaunches only after a real crash; free work is re-run when its Mac or worker dies
+
+Release of `release/0.6.136` (= 0.6.135 + `fix/drain-never-starves` e505ad9 + `fix/crash-only-and-reroute` b65a9ad, both merged `--no-ff`, no conflicts;
+both touch `broker.py`/`standalone.py` in separate hunks - drain gating in `busy_machines`/`_submission_readiness`, re-runs in `_run_item`'s failure path -
+and a re-run is dispatched through the same `busy_machines` gate, so a held drain defers re-runs like any new work).
+- **Drain never starves** (e505ad9, `broker.py`, `standalone.py`). A draining controller's nodes keep working while its own job(s) finish; once nothing runs
+  on the controller itself (`broker.drain_holds_group`), `busy_machines` names every machine in the group and new submissions get the re-routable
+  `MACHINE_BUSY`. What the nodes run finishes, the count reaches zero, the controller installs. Before, a long queue kept some node running one of the
+  controller's batches for ever, so the controller - holding the group's one update slot - and every Mac behind it never updated. Test: `test_update_drain.py`.
+- **Relaunch only after a real crash** (b65a9ad, `native/ShellCore.swift`, `native/StudioHub.swift`). `StopRecord` settles why the last run ended from a
+  `running` heartbeat, crash-signal (`crashed`), SIGTERM (`terminated`), `memory-critical`, `clean-quit`, `updating` and `power-off` markers, backed by
+  `StudioHub-*.ips` reports. The agent's standby exits 1 (launchd relaunches) only for a crash; a Quit, Force Quit or memory kill exits 0
+  (`AgentStandby.shouldStayStopped`), so the existing plist (KeepAlive SuccessfulExit=false) needs no migration.
+- **Why a Mac went offline** (b65a9ad, `fleet_nodes.py`, `standalone.py`): the verdict is written to `<data>/last-stop.json` and published as
+  `last_stop {reason, at, label, relaunched}` on `/api/hub/resources`, the fleet overview rows and `/api/hub/fleet/nodes` rows; a controller relays each
+  node's, and repeats an unreachable node's last word marked stale. Test: `test_last_stop.py`.
+- **Free work is re-run when its Mac or worker dies** (b65a9ad, `broker.py`, `transcription_jobs.py`). An attempt whose worker stopped answering for the
+  recovery window, lost the job (404) or restarted under it (`WORKER_RESTART_UNCERTAIN`; Voice `EXECUTION_IDENTITY_LOST`) is re-run in every lane (image,
+  music, video, voice; this Mac or a node) instead of being left `uncertain`. The abandoned original is watched for `ABANDONED_WATCH_S`: cancelled when its Mac
+  answers, or adopted if it finished first (the re-run is then cancelled). A voice re-run takes a fresh client request id. Transcription lost to a dropped or
+  timed-out worker is re-run elsewhere at once. Malformed receipts and a lost local POST receipt stay fenced.
+  Tests: `hub_regression/cases/test_free_work_reroute.py`, native StopRecord/AgentStandby checks in `tests/native/api_main.swift`.
+
 ## 0.6.135 — 2026-10-03 · One worker exiting no longer stops the Hub; a crash or Force Quit brings the app back; pause a Mac from the Gateway
 
 Release of `release/0.6.135` (= 0.6.134 + `fix/worker-exit-resilience` 214ad11 + `feat/pause-node` 1194f1b, both merged `--no-ff`, no conflicts).

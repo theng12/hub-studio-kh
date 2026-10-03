@@ -3,7 +3,17 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.135** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+Last updated: **0.6.136** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+
+> **0.6.136 - drain never starves, relaunch only after a real crash + `last_stop`, free work re-run when its Mac or worker dies (`release/0.6.136` = 0.6.135 + e505ad9 `fix/drain-never-starves` + b65a9ad `fix/crash-only-and-reroute`, 2026-10-03).**
+> `broker.drain_holds_group()`: once a draining controller's own Mac runs nothing, `busy_machines` names every machine in the group and
+> `_submission_readiness` returns `MACHINE_BUSY`, so the nodes finish and the controller installs (re-runs dispatch through the same gate). Native
+> `StopRecord` (`ShellCore.swift`) classifies the last stop from heartbeat/signal/memory/clean-quit/updating/power-off markers + `.ips` reports; standby exits 1
+> only for a crash (`AgentStandby.shouldStayStopped`), no plist change. `<data>/last-stop.json` -> `last_stop {reason, at, label, relaunched}` on
+> `/api/hub/resources`, fleet overview and `/api/hub/fleet/nodes` rows (stale relay for unreachable nodes). `_run_item`: a worker that went silent, lost the job
+> or restarted (`WORKER_RESTART_UNCERTAIN`, Voice `EXECUTION_IDENTITY_LOST`) -> `_abandon_attempt` re-runs it in every lane; `_watch_abandoned_attempt`
+> cancels the original or adopts its finished result (first result wins); voice re-runs get `...:rerun-N` request ids. Gate numbers, DMG and checksum:
+> `_orchestra/audit-20261001/release-0136/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.135 - worker exits restart only that worker, the launch agent supervises the app, unmanaged voices stay local, pause a node (`release/0.6.135` = 0.6.134 + 214ad11 `fix/worker-exit-resilience` + 1194f1b `feat/pause-node`, 2026-10-03).**
 > `packaging/hub_worker.py` restarts a private worker that exits after start-up on its own port (backoff 1/2/5/10/30/60 s, reset after 5 min up; fatal only before

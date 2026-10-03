@@ -2,6 +2,24 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.136 - 2026-10-03
+
+### Updates no longer wait for ever, Studio Hub only reopens after a crash, and lost work is redone
+
+**A busy group of Macs no longer holds back its update.** When an update is ready, the main Mac of a group finishes its own work and then
+pauses the whole group: the other Macs finish what they are doing, take nothing new for a moment, and the update installs. Before, a long
+queue could keep the group busy so the update never got its turn.
+
+**Studio Hub reopens by itself only after a crash.** If Studio Hub crashes, it opens again on its own. If you choose Quit, use Force Quit,
+or macOS closes it because the Mac ran out of memory, it now stays closed.
+
+**See why a Mac went offline.** Each Mac now remembers why Studio Hub last stopped (you quit it, it crashed, Force Quit, low memory, an
+update, or the Mac was shut down), and the Gateway can show that next to a Mac that is offline.
+
+**Work is redone when a Mac or studio stops in the middle of it.** If a Mac goes quiet, or one of its studios stops while making something,
+that job is now started again on another Mac (or on the same one once it is back) for every kind of job: images, music, video and voices.
+If the first try turns out to have finished after all, its result is kept and the second try is stopped.
+
 ## 0.6.135 - 2026-10-03
 
 ### Studio Hub keeps itself running, and you can pause a Mac
