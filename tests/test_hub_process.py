@@ -304,19 +304,34 @@ class HubProcessTests(unittest.TestCase):
                            "Voice parent watchdog did not stop the orphaned child")
             self.assertFalse(fixture["child_ready"].exists())
 
-    def test_owned_voice_crash_stops_hub_and_removes_worker_descriptor(self):
-        with self._running_hub() as (fixture, process, known_children):
-            _, _, _, child_pid = self._await_started(fixture, process, known_children)
-            os.kill(child_pid, signal.SIGKILL)
-            self._wait_for(lambda: not self._alive(child_pid), 5,
-                           "Voice child did not exit after the test crash")
-            self._wait_for(lambda: process.poll() is not None, 8,
-                           "Hub stayed alive after its owned Voice worker crashed")
-            self.assertFalse(fixture["ready"].exists())
-            self.assertFalse(fixture["child_ready"].exists())
-            self.assertFalse(fixture["workers"].exists())
+    def _await_restart(self, fixture, process, ready_file: Path, old_pid: int) -> dict:
+        def restarted():
+            try:
+                value = self._read_json(ready_file)
+            except (OSError, ValueError):
+                return None
+            return value if value["pid"] != old_pid and self._alive(value["pid"]) else None
+        value = self._wait_for(restarted, 10, "Hub did not restart its crashed worker")
+        self.assertIsNone(process.poll(), "Hub stopped after one worker crashed")
+        return value
 
-    def test_hub_owns_image_and_voice_and_stops_both_after_image_crash(self):
+    def test_owned_voice_crash_restarts_voice_and_keeps_the_hub(self):
+        """One worker exiting must not stop the Hub; it used to stop it and every other studio."""
+        with self._running_hub() as (fixture, process, known_children):
+            hub_ready, child_ready, _, child_pid = self._await_started(fixture, process, known_children)
+            os.kill(child_pid, signal.SIGKILL)
+            again = self._await_restart(fixture, process, fixture["child_ready"], child_pid)
+            known_children.append(again["pid"])
+            # Same endpoint, so the Hub's worker descriptor stays valid; only the pid changes.
+            self.assertEqual(again["url"], child_ready["url"])
+            self._wait_for(lambda: self._read_json(fixture["workers"])[0]["pid"] == again["pid"], 5,
+                           "Worker descriptor still names the dead pid")
+            status, health = self._get_json(again["url"] + "/api/health", TOKEN)
+            self.assertEqual((status, health), (200, {"ok": True, "component": "voice"}))
+            status, _ = self._get_json(hub_ready["url"] + "/api/health")
+            self.assertEqual(status, 200)
+
+    def test_image_crash_restarts_image_and_leaves_voice_running(self):
         with self._running_hub(image=True) as (fixture, process, known_children):
             _, _, workers, voice_pid = self._await_started(fixture, process, known_children)
             self.assertEqual({worker["id"] for worker in workers}, {"voice", "image"})
@@ -327,10 +342,16 @@ class HubProcessTests(unittest.TestCase):
             self.assertNotEqual(image["port"], workers[0]["port"])
             self.assertEqual(image["managed_output_roots"], [str((fixture["data"] / "image/outputs").resolve())])
             os.kill(image["pid"], signal.SIGKILL)
-            self._wait_for(lambda: process.poll() is not None, 10, "Hub survived owned Image crash")
-            self.assertFalse(self._alive(voice_pid), "Voice survived Hub cleanup after Image crash")
+            again = self._await_restart(fixture, process, fixture["data"] / "hub/image-ready.json",
+                                        image["pid"])
+            known_children.append(again["pid"])
+            self.assertTrue(self._alive(voice_pid), "Voice was stopped because Image crashed")
+            self.assertEqual(int(again["url"].rsplit(":", 1)[1]), image["port"])
+            process.terminate()
+            process.communicate(timeout=15)
+            self.assertFalse(self._alive(again["pid"]), "Restarted Image survived Hub shutdown")
+            self.assertFalse(self._alive(voice_pid), "Voice survived Hub shutdown")
             self.assertFalse(fixture["workers"].exists())
-            self.assertFalse((fixture["data"] / "hub/image-ready.json").exists())
 
     def test_voice_startup_failure_never_publishes_hub_readiness(self):
         with self._running_hub(failing_voice=True) as (fixture, process, known_children):

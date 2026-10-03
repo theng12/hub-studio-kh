@@ -3333,11 +3333,13 @@ def _eligible_studios(modality: str, routing: str,
 
 
 def _shared_voice_allows_studio(batch: dict, item: dict, studio: dict) -> bool:
-    """Keep Hub-owned clones on workers where their stable id is synchronized.
+    """Keep a cloned voice on the workers that actually hold it.
 
-    Unknown ids retain the legacy behavior because they may be direct-only
-    Voice Studio library entries. Hub-owned ids with no successful targets
-    wait in queue until the background synchronizer heals one worker.
+    A Hub-owned id goes only where it is synchronized; with no successful target it waits in
+    queue until the background synchronizer heals one worker. An id the Hub does not manage is
+    an entry in this Mac's own Voice Studio library (the app lists voices from it), which no
+    other Mac holds: it used to be allowed on *any* studio, so a pool dispatch could send it to
+    a node that would fail it for a missing reference. It now stays on this Mac's own studio.
     """
     if batch.get("modality") != "voice":
         return True
@@ -3347,7 +3349,9 @@ def _shared_voice_allows_studio(batch: dict, item: dict, studio: dict) -> bool:
     if not voice_id:
         return True
     synced = shared_voices.synced_studio_ids(voice_id)
-    return synced is None or studio.get("id") in synced
+    if synced is None:
+        return peers.is_local_studio(studio)
+    return studio.get("id") in synced
 
 
 def _version_tuple(value: object) -> tuple[int, int, int] | None:

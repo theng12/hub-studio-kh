@@ -222,16 +222,31 @@ def worker_specs(release: dict, data: Path, runtime: Path, resources: Path) -> l
 
 def worker_command(spec: dict, resources: Path, data: Path, models: Path,
                    token_file: Path, ready_file: Path, parent_pid: int,
-                   *, offline: bool) -> list[str]:
+                   *, offline: bool, port: int = 0) -> list[str]:
     command = [
         str(spec['python']), '-I', '-B', str(resources / f"{spec['id']}_worker.py"),
         '--data-dir', str(data), '--models-dir', str(models),
         '--ready-file', str(ready_file), '--parent-pid', str(parent_pid),
         '--hub-token-file', str(token_file), *spec.get('extra_args', []),
     ]
+    if port:
+        command += ['--port', str(port)]
     if offline:
         command.append('--offline')
     return command
+
+
+# A private worker that exits after startup is restarted on its own port, so the Hub's worker
+# descriptor stays valid and only that studio's lane is down (the monitor sees it unreachable)
+# while every other studio and its in-flight jobs keep running. Consecutive failures back off
+# along this list (the last value repeats); a worker that stayed up for RESTART_STABLE_SECONDS
+# starts the list over.
+RESTART_BACKOFF_SECONDS = (1, 2, 5, 10, 30, 60)
+RESTART_STABLE_SECONDS = 300
+
+
+def restart_delay(failures: int) -> int:
+    return RESTART_BACKOFF_SECONDS[min(failures, len(RESTART_BACKOFF_SECONDS) - 1)]
 
 
 def main():
@@ -319,37 +334,75 @@ def main():
         parser.error(str(exc))
     children = []
     child_watch_stop = threading.Event()
+    # Held while a worker is spawned or the descriptor rewritten, so `cleanup` never misses a
+    # worker the monitor is starting at the moment the Hub shuts down.
+    children_lock = threading.Lock()
+
+    def spawn(child, port=0):
+        child['ready'].unlink(missing_ok=True)
+        command = worker_command(
+            child['spec'], RESOURCES, data, models, token_file, child['ready'],
+            os.getpid(), offline=args.offline, port=port)
+        child['process'] = subprocess.Popen(command, cwd=data,
+            env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'})
+        child['started'] = time.monotonic()
+
+    def descriptor(child):
+        return {
+            'id': child['id'], 'modality': child['modality'],
+            'title': f"{child['id'].title()} Studio",
+            'host': '127.0.0.1', 'port': child['port'], 'machine': 'local', 'local': True,
+            'hub_token': token, 'studio_token': token, 'pid': child['process'].pid,
+            'runtime_identity': {'id': child['runtime_id'], 'compatible': True},
+            'managed_output_roots': [str(child['outputs'])],
+        }
+
+    def restart(child):
+        """Bring one exited worker back on its own port; the Hub and other studios stay up."""
+        label = child['id'].title()
+        if time.monotonic() - child['started'] >= RESTART_STABLE_SECONDS:
+            child['failures'] = 0
+        delay = restart_delay(child['failures'])
+        child['failures'] += 1
+        print(f"Private {label} worker exited (status {child['process'].returncode}); restarting "
+              f"it in {delay} s. The other studios keep running.", file=sys.stderr, flush=True)
+        if child_watch_stop.wait(delay):
+            return
+        with children_lock:
+            if child_watch_stop.is_set():
+                return
+            spawn(child, child['port'])
+        try:
+            await_child(child['process'], child['ready'], label=label)
+        except (RuntimeError, ValueError) as exc:
+            print(f"{exc}; the Hub will try again.", file=sys.stderr, flush=True)
+            stop_child(child['process'])
+            return
+        with children_lock:
+            if not child_watch_stop.is_set():
+                write_workers(workers_file, [descriptor(item) for item in children])
+        print(f"Private {label} worker restarted.", file=sys.stderr, flush=True)
 
     def watch_children():
         while not child_watch_stop.wait(0.2):
             for child in children:
-                if child['process'].poll() is not None:
-                    print(f"Private {child['id'].title()} worker exited unexpectedly; stopping its Hub owner.",
-                          file=sys.stderr, flush=True)
-                    os.kill(os.getpid(), signal.SIGTERM)
-                    return
+                if child['process'].poll() is not None and not child_watch_stop.is_set():
+                    restart(child)
 
     def load_app():
-        # The shared server starts its parent watchdog before these startup waits.
-        workers = []
+        # The shared server starts its parent watchdog before these startup waits. A worker that
+        # fails here, before the Hub is ready, is still fatal: nothing has been published yet.
         for child in children:
-            _, port = await_child(child['process'], child['ready'], label=child['id'].title())
-            workers.append({
-                'id': child['id'], 'modality': child['modality'],
-                'title': f"{child['id'].title()} Studio",
-                'host': '127.0.0.1', 'port': port, 'machine': 'local', 'local': True,
-                'hub_token': token, 'studio_token': token, 'pid': child['process'].pid,
-                'runtime_identity': {'id': child['runtime_id'], 'compatible': True},
-                'managed_output_roots': [str(child['outputs'])],
-            })
-        write_workers(workers_file, workers)
+            _, child['port'] = await_child(child['process'], child['ready'], label=child['id'].title())
+        write_workers(workers_file, [descriptor(child) for child in children])
         threading.Thread(target=watch_children, daemon=True,
                          name='studiohub-child-monitor').start()
         from components.hub.standalone import app
         return app
 
     def cleanup():
-        child_watch_stop.set()
+        with children_lock:
+            child_watch_stop.set()
         ready.unlink(missing_ok=True)
         for child in reversed(children):
             stop_child(child['process'])
@@ -358,19 +411,13 @@ def main():
 
     try:
         for spec in specs:
-            worker_id = spec['id']
-            child_ready = hub_data / f'{worker_id}-ready.json'
-            child_ready.unlink(missing_ok=True)
-            command = worker_command(
-                spec, RESOURCES, data, models, token_file, child_ready,
-                os.getpid(), offline=args.offline)
-            child = subprocess.Popen(command, cwd=data,
-                env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'})
-            children.append({
-                'id': worker_id, 'modality': spec['modality'], 'process': child,
-                'ready': child_ready, 'runtime_id': spec['runtime_id'],
-                'outputs': spec['outputs'],
-            })
+            child = {
+                'id': spec['id'], 'modality': spec['modality'], 'spec': spec,
+                'ready': hub_data / f"{spec['id']}-ready.json", 'runtime_id': spec['runtime_id'],
+                'outputs': spec['outputs'], 'failures': 0,
+            }
+            spawn(child)
+            children.append(child)
         # The Hub publishes what it was told to listen on, so "is this Mac reachable, and on
         # what" is a fact an operator or a gateway can read rather than infer from a failed
         # connection. The shell decides the list (`--listen-auto` recomputes it from this Mac's
@@ -379,7 +426,8 @@ def main():
         os.environ['STUDIOHUB_BOUND_HOST'] = _bind_host(args.host)
         os.environ['STUDIOHUB_BOUND_PORT'] = str(args.port)
         run_server(load_app, args.port, ready, release['version'], args.parent_pid, pgid,
-                   token=token, factory=True, shutdown_callback=cleanup, host=_bind_host(args.host))
+                   token=token, factory=True, shutdown_callback=cleanup,
+                   shutdown_started=child_watch_stop.set, host=_bind_host(args.host))
     finally:
         cleanup()
 

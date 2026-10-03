@@ -6175,6 +6175,35 @@ struct NativeAPITests {
         }
         withExtendedLifetime(heldLock) {}
 
+        // The agent's standby copy (2026-10-03: a Force Quit left a Mac without its Hub because the
+        // running app was supervised by nothing). A free data folder means "be the app"; a held one
+        // blocks until its holder ends, then exits 1 so launchd relaunches a fresh copy - or 0 when a
+        // deliberate Quit left its marker, so KeepAlive leaves the app stopped.
+        final class StandbyResult: @unchecked Sendable { var status: Int32?? = .none }
+        let standbyDirectory = temporary.appendingPathComponent("agent-standby")
+        try FileManager.default.createDirectory(at: standbyDirectory, withIntermediateDirectories: true)
+        require(AgentStandby.waitForRunningCopy(directory: standbyDirectory) == nil,
+                "with nobody holding the data folder the agent's copy must start as the app")
+        for cleanQuit in [false, true] {
+            var holder: InstanceLock? = try InstanceLock(directory: standbyDirectory)
+            if cleanQuit { AgentStandby.markCleanQuit(directory: standbyDirectory) }
+            let result = StandbyResult()
+            let finished = DispatchSemaphore(value: 0)
+            Thread {
+                result.status = .some(AgentStandby.waitForRunningCopy(directory: standbyDirectory))
+                finished.signal()
+            }.start()
+            require(finished.wait(timeout: .now() + 0.3) == .timedOut,
+                    "the standby must wait while the running app holds the data folder")
+            withExtendedLifetime(holder) {}
+            holder = nil
+            require(finished.wait(timeout: .now() + 5) == .success,
+                    "the standby must wake when the running app ends")
+            require(result.status == .some(cleanQuit ? 0 : 1),
+                    "after \(cleanQuit ? "a Quit" : "a crash") the standby must exit \(cleanQuit ? 0 : 1), got \(String(describing: result.status))")
+            AgentStandby.clearCleanQuit(directory: standbyDirectory)
+        }
+
         // The one-time move off the old SMAppService login item. Pure and injected, so no branch
         // here touches the real system; the app target supplies the real call in one place.
         var unregisterCalls = 0

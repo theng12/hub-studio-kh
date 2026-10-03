@@ -1012,11 +1012,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do {
             config = try ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL)
             controller = StudioController(configuration: config)
-            // A redundant launch (for example launchd starting a previously loaded agent while the
-            // app is open) presents the running app and exits 0, before any window or alert.
+            // A redundant launch (a second open from Finder while the app is open) presents the
+            // running app and exits 0, before any window or alert. The agent's own copy never gets
+            // here while the app runs: it stands by in `main` (see `AgentStandby`).
             ExistingInstance.handle(ExistingInstance.decide(lockHeldByAnother: controller.existingInstanceDetected),
                                     present: ExistingInstanceHandler.presentRunningApp,
                                     exitQuietly: ExistingInstanceHandler.noteAndExit)
+            // This copy owns the data folder now; a Quit marker left by the previous one is spent.
+            AgentStandby.clearCleanQuit(directory: config.dataDirectory)
             // One-time, before anything else can offer the login choice: remove the login item an
             // older build left behind so the launch agent is the only mechanism that can run.
             controller.migrateLegacyLoginItemIfNeeded()
@@ -1107,6 +1110,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if controller.hasLibrary && controller.canConfigure && (!loginLaunch || controller.configuration.startServicesAtLogin) {
             controller.start()
         }
+        // Opened by hand or by an update's reopen: nothing would bring this copy back after a
+        // crash or a Force Quit, so hand it to the agent's supervision. Only for the default data
+        // folder - the agent never runs with `--data-dir`, so supervising a kit's or a test's
+        // copy would start a second app on the real one.
+        let agentPlist = LaunchAgent.defaultPlistURL()
+        if !agentLaunch && !CommandLine.arguments.contains("--data-dir") && LaunchAgent.isInstalled(at: agentPlist) {
+            DispatchQueue.global(qos: .utility).async { LaunchAgent.superviseRunningApp(at: agentPlist) }
+        }
+    }
+    /// A deliberate Quit (menu, update relaunch, logout) tells the agent's standby copy to leave
+    /// the app stopped. A crash or Force Quit never gets here, so the standby relaunches it.
+    func applicationWillTerminate(_ notification: Notification) {
+        guard let controller, !controller.existingInstanceDetected else { return }
+        AgentStandby.markCleanQuit(directory: controller.configuration.dataDirectory)
     }
     /// Reopen the app once this process has exited. The data-folder lock is held until then, so a
     /// second copy started now would hand off to this one and quit; the helper waits for the exit.
@@ -1182,6 +1199,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 @main
 struct StudioHubApplication {
     @MainActor static func main() {
+        // The agent's copy while another Studio Hub runs: wait for it, before any AppKit setup
+        // (no Dock icon, no entry in Force Quit), then let launchd decide. See `AgentStandby`.
+        if ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1",
+           let configuration = try? ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL),
+           let status = AgentStandby.waitForRunningCopy(directory: configuration.dataDirectory) {
+            exit(status)
+        }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
