@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.138 - 2026-10-03
+
+### Voices with a long silence in the middle, or a missing sentence, are made again
+
+**A piece of a voice-over with a long silence inside it is now caught.** In 0.6.137 a piece could pass its check with half a minute of
+silence in the middle, because the rest of it sounded fine. Studio Hub now measures the longest quiet stretch between the first and last
+words. If it is far longer than a natural pause (about 4 seconds at normal speed), the piece is made again, the same way as other
+failed pieces. This check needs no extra memory, so 8 GB Macs do it too.
+
+**A dropped phrase is now caught.** When the Mac listens back to a piece, it used to allow a few missing words anywhere. If more than three
+words in a row are missing, a whole phrase was dropped, and the piece is now made again.
+
 ## 0.6.137 - 2026-10-03
 
 ### Voices are checked piece by piece, and long chapters are split into pieces that finish in time

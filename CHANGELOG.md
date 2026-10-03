@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.138 — 2026-10-03 · Every voice section is also checked for a long silence inside it or a dropped clause, and re-made if it has one
+
+Release of `release/0.6.138` (= 0.6.137 + `fix/gate-internal-silence` f5d7946, merged `--no-ff`, no conflicts).
+- **Section gate: unnatural silence inside a section** (f5d7946, `tts_quality.py` evidence revision v2, `broker.py`). EP0003 Chapter 9 part 5 passed the
+  0.6.137 gate with 35 s of silence (-66 dB) inside a 67 s section, and Whisper heard 69 of 76 words (7 allowed) - the 7 were one clause lost in the silence.
+  `audio_metrics` now records `longest_pause_s` (longest unvoiced run between the first and last voiced 20 ms frame, after DC/drift removal, so edge silence
+  does not count). `TTS_SECTION_INTERNAL_SILENCE` when it exceeds the longest pause the text calls for (`long_form_policy` paragraph 0.6 s if the text has a
+  blank line, else sentence 0.3 s) + 3.5 s, divided by native speed (3.8 s / 4.1 s at speed 1); re-rendered with a new seed like the other codes. No model
+  is needed, so 8 GB Macs get this check too. The 3.5 s margin: Breeze 4-bit's own narration pauses reach 3.2-3.4 s; good clips stop at 3.44 s, the next
+  is 4.32 s.
+- **Transcribe-back: a dropped clause fails** even when the 10% share holds: `TTS_SECTION_TEXT_MISMATCH` also when more than 3 consecutive expected words
+  are not heard (`longest_missing_run`). Broker whitelist carries the new code and `longest_pause_s`, `max_pause_s`, `longest_missing_run`.
+- Offline on saved audio: 19/19 bad eval sections caught (18 by audio alone, was 7); 8 eval sections labelled good are now rejected, each with a 4.3-18.9 s
+  mid-section silence; 4 of 18 accepted Chapter 9 sections (35, 12.3, 7.6, 6.7 s) rejected, 14 kept (`_orchestra/audit-20261001/tts-gate-internal-silence.md`).
+  Tests: `test_tts_quality.py` (+3), `tests/test_section_quality_passthrough.py` (+1).
+
 ## 0.6.137 — 2026-10-03 · Every voice section is checked before it is joined and re-made if it came out wrong; Breeze takes chapters in pieces it can finish in time
 
 Release of `release/0.6.137` (= 0.6.136 + `fix/whisper-gaps-tts-deadline` c6ea53b + `fix/tts-quality-gate` f115fb5, both merged `--no-ff`, no conflicts;

@@ -3,7 +3,14 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.137** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+Last updated: **0.6.138** (newest block first; the rest of this line and the blocks under it are older). Previously **0.6.126** (merged into `implementation/voice-runtime` + `main`; DMG built; **NOT installed anywhere, not on the drives, nothing published**) over **0.6.125** (macOS free memory; installed on this Mac; 2026-10-01).
+
+> **0.6.138 - section gate catches internal silence and dropped clauses (`release/0.6.138` = 0.6.137 + f5d7946 `fix/gate-internal-silence`, 2026-10-03).**
+> `tts_quality.audio_metrics` -> `longest_pause_s` (longest unvoiced run between first and last voiced frame); `TTS_SECTION_INTERNAL_SILENCE` when it exceeds the
+> text's longest pause (paragraph 0.6 s / sentence 0.3 s) + 3.5 s, / native speed; no model, so 8 GB Macs run it. Transcribe-back also fails on > 3 consecutive
+> unheard words (`longest_missing_run`). Evidence revision v2; `broker._SECTION_QUALITY_*` whitelist carries the new code and numbers. Write-up:
+> `_orchestra/audit-20261001/tts-gate-internal-silence.md`. Gate numbers, DMG and checksum: `_orchestra/audit-20261001/release-0138/`. Not installed / not on the
+> drives / not published until the coordinator does it.
 
 > **0.6.137 - per-section TTS quality gate with re-render, Breeze `max_tokens` bounded by text, `maximum_input_characters` from the slowest Mac (`release/0.6.137` = 0.6.136 + c6ea53b `fix/whisper-gaps-tts-deadline` + f115fb5 `fix/tts-quality-gate`, 2026-10-03).**
 > `catalog.SlowestMacSpeed` on a TTS row -> `lane_contract.maximum_input_characters` (+ `_source`) = floor(900 s / RTF x chars/audio-s, to 100); Breeze 1,500 (M1 16 GB,
