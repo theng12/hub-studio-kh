@@ -23,6 +23,8 @@ failure here means the machine differs, not that the step is wrong.
 | 10 | **Subtitle**, choose the WAV just made, **Transcribe** | A transcript appears; **Open Transcript** from Jobs loads it too |
 | 11 | **Image**, generate one image | An image appears |
 
+Yam Display installs automatically with **1 - Install the app** (or run `Extras/Install Yam Display.command`). It is the virtual display a headless Mac mini needs.
+
 If any step fails, stop and send me: the step number, a photo of the screen, and the output of
 `sh "/Volumes/KH-STUDIO-ATLAS/Video Generation Kit/Studio Hub KH/Technical/verify-launch.sh"`.
 

@@ -76,6 +76,24 @@ fleet_mode_open() {
   return 1
 }
 
+# **Yam Display (owner, 2026-10-03).** Every fleet Mac needs it - it is the virtual display that lets a
+# headless Mac mini render and be screen-shared. Its installer rides in the kit's Extras folder and
+# `Extras/Install Yam Display.command` does the work: install when missing or older, never downgrade,
+# one line and move on when the installer is not in the kit. A Yam Display problem never stops or
+# fails the Studio Hub install: this returns 1 so the caller can say so plainly, and nothing more.
+# The `STUDIOHUB_*` names are for tests; nobody sets them in real use.
+install_yam_display() {
+  yd_cmd=""
+  for yd_dir in "${STUDIOHUB_EXTRAS_DIR:-$HERE/Extras}" "$KIT/Extras"; do
+    [ -f "$yd_dir/Install Yam Display.command" ] && { yd_cmd="$yd_dir/Install Yam Display.command"; break; }
+  done
+  if [ -z "$yd_cmd" ]; then
+    echo "  Yam Display: not in this kit (no Extras folder beside this file) - skipped."
+    return 0
+  fi
+  STUDIOHUB_UNATTENDED=1 STUDIOHUB_YAMDISPLAY_TARGET="$1" /bin/sh "$yd_cmd"
+}
+
 clear
 echo "============================================================"
 echo "  Studio Hub - updating this Mac"
@@ -101,7 +119,8 @@ fi
 # The app already on this Mac, looked for exactly where the model copy looks — the two must agree
 # about which bundle is "the app", or this would compare one build and install another.
 INSTALLED=""
-for app in "/Applications/$NAME" "$HOME/Applications/$NAME"; do
+# (`STUDIOHUB_INSTALL_TARGET` is the test stand-in for Applications; nobody sets it in real use.)
+for app in "${STUDIOHUB_INSTALL_TARGET:-/Applications}/$NAME" "${STUDIOHUB_INSTALL_TARGET:-$HOME/Applications}/$NAME"; do
   [ -d "$app" ] && { INSTALLED="$app"; break; }
 done
 
@@ -148,7 +167,7 @@ if [ "$SKIP_APP" = "0" ]; then
   # default, this Mac's /Applications) and the closing "Press Return". The administrator password
   # prompt is macOS's own and still appears when /Applications needs it — that one cannot and
   # should not be skipped.
-  STUDIOHUB_UNATTENDED=1 /bin/sh "$HERE/1 - Install the app.command" || {
+  STUDIOHUB_UNATTENDED=1 STUDIOHUB_YAMDISPLAY_BY_CALLER=1 /bin/sh "$HERE/1 - Install the app.command" || {
     echo
     echo "  Installing the app did not finish, so the models were left alone."
     echo "  Run this file again."
@@ -158,6 +177,16 @@ if [ "$SKIP_APP" = "0" ]; then
     exit 1
   }
 fi
+
+# Yam Display, whether or not the app was replaced: a Mac whose app is current may still lack it. Its
+# failure is reported at the end and never stops the models or the fleet-mode start.
+echo
+echo "============================================================"
+echo "  Yam Display"
+echo "============================================================"
+echo
+YD_STATUS=0
+install_yam_display "${STUDIOHUB_INSTALL_TARGET:-}" || YD_STATUS=1
 
 # The model copy takes its Python from the installed app, so it runs *after* the swap above, never
 # beside it. `STUDIOHUB_ASSUME_YES` answers its "press Return to start" the same way the step above
@@ -185,6 +214,11 @@ FLEET_STATUS=0
 fleet_mode_open "$FLEET_TARGET" || FLEET_STATUS=1
 
 echo
+if [ "$YD_STATUS" != "0" ]; then
+  echo "  Yam Display was NOT installed (see above). Run 'Extras/Install Yam Display.command' to try again;"
+  echo "  everything else is unaffected."
+  echo
+fi
 if [ "$STATUS" = "0" ] && [ "$FLEET_STATUS" = "0" ]; then
   echo "  This Mac is up to date."
 elif [ "$STATUS" = "0" ]; then

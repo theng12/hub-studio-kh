@@ -67,6 +67,24 @@ fleet_mode_open() {
   return 1
 }
 
+# **Yam Display (owner, 2026-10-03).** Every fleet Mac needs it - it is the virtual display that lets a
+# headless Mac mini render and be screen-shared. Its installer rides in the kit's Extras folder and
+# `Extras/Install Yam Display.command` does the work: install when missing or older, never downgrade,
+# one line and move on when the installer is not in the kit. A Yam Display problem never stops or
+# fails the Studio Hub install: this returns 1 so the caller can say so plainly, and nothing more.
+# The `STUDIOHUB_*` names are for tests; nobody sets them in real use.
+install_yam_display() {
+  yd_cmd=""
+  for yd_dir in "${STUDIOHUB_EXTRAS_DIR:-$HERE/Extras}" "$KIT/Extras"; do
+    [ -f "$yd_dir/Install Yam Display.command" ] && { yd_cmd="$yd_dir/Install Yam Display.command"; break; }
+  done
+  if [ -z "$yd_cmd" ]; then
+    echo "  Yam Display: not in this kit (no Extras folder beside this file) - skipped."
+    return 0
+  fi
+  STUDIOHUB_UNATTENDED=1 STUDIOHUB_YAMDISPLAY_TARGET="$1" /bin/sh "$yd_cmd"
+}
+
 clear
 echo "============================================================"
 echo "  Studio Hub - installing the app"
@@ -199,6 +217,15 @@ echo
 echo "  Installed Studio Hub $VERSION"
 echo "  Installed to:  $TARGET/$NAME"
 echo
+# Yam Display next, into the same Applications folder. `Update this Mac.command` does this step itself
+# (it also has to run when the app is already current), so it says so and this one stands aside.
+if [ "${STUDIOHUB_YAMDISPLAY_BY_CALLER:-}" != "1" ]; then
+  install_yam_display "${STUDIOHUB_YAMDISPLAY_TARGET:-$TARGET}" || {
+    echo
+    echo "  Studio Hub is installed. Yam Display was not - see above."
+  }
+  echo
+fi
 # When `Update this Mac.command` is driving, it opens the app itself once the models are copied: opening
 # it now would start the services while the models are still arriving.
 if [ "${STUDIOHUB_UNATTENDED:-}" != "1" ]; then

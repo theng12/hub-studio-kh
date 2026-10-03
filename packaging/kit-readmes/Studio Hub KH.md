@@ -37,6 +37,7 @@ what you should see.
    it. This sets **Settings → Startup → Start services on startup**; without it the app opens
    after a restart but serves nothing. If Studio Hub is busy with a job it is left running and
    the file tells you to run it again when it is idle.
+   Yam Display installs automatically with **1 - Install the app** (or run `Extras/Install Yam Display.command`).
 3. The first time macOS opens the app you may need to **right-click → Open** (the app is not
    signed); if so the install file says so, and asks you to run it again.
    **`Update this Mac.command`** does the same at the end of every update, whether or not the

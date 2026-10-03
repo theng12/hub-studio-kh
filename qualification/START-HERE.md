@@ -31,6 +31,8 @@ alone. A second run takes about a second.
 It asks for your password, because putting an app in **Applications** needs it. That
 is the only time you will be asked.
 
+Yam Display installs automatically with **1 - Install the app** (or run `Extras/Install Yam Display.command`).
+
 ### 3. Open Studio Hub from Applications
 
 Right-click it and choose **Open**, then **Open** again the first time.
