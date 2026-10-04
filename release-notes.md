@@ -15,6 +15,9 @@ asks for its own pauses still gets them.
 **A shop Mac in use (Lite Mode standing by) no longer counts as free, so work isn't held for it.** As soon as its user
 steps away it counts again.
 
+**A model installed from the Gateway shows as installed as soon as the download finishes**, instead of reading "not
+installed" for up to a minute.
+
 ## 0.6.143 - 2026-10-04
 
 ### Steadier voices
