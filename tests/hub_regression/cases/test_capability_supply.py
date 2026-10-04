@@ -161,3 +161,27 @@ def test_no_machine_fitting_the_model_is_zero_not_an_invented_value(fixture_moni
     assert by_operation["available_worker_slots"] == 0
     assert by_operation["available_physical_machine_slots"] == 0
     assert snapshot["capacity"]["available_physical_machine_slots"] == 0
+
+
+def test_a_standing_by_lite_mode_mac_is_not_capacity_until_it_is_free(fixture_monitor, monkeypatch):
+    """D5 (owner, 2026-10-04): a Lite Mode Mac standing by, stepped aside or in quiet hours takes no
+    new work, so it is not in the group's eligible total either - counting it let the Gateway queue
+    work here for a Mac that was not coming. It re-enters the moment it is free again."""
+    from components.hub.backend import peers
+
+    monitor = fixture_monitor
+    _serve(monitor, "image", [_row("AITRADER/FLUX2-klein-4B-mlx-4bit")])
+    for state in sorted(peers.STANDING_BY_STATES):
+        monkeypatch.setattr(peers, "_workstation", lambda machine, state=state: {"state": state})
+        snapshot = _build(monitor)
+        supply = next(row for row in snapshot["model_supply"] if row["operation"] == "image.text_to_image")
+        assert supply["eligible_physical_slots_total"] == 0, state
+        assert snapshot["capacity"]["by_operation"]["image.text_to_image"][
+            "eligible_physical_machine_slots_total"] == 0, state
+
+    monkeypatch.setattr(peers, "_workstation", lambda machine: {"state": "working"})
+    snapshot = _build(monitor)
+    supply = next(row for row in snapshot["model_supply"] if row["operation"] == "image.text_to_image")
+    assert supply["eligible_physical_slots_total"] == 1
+    assert snapshot["capacity"]["by_operation"]["image.text_to_image"][
+        "eligible_physical_machine_slots_total"] == 1
