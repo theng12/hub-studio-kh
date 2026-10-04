@@ -118,3 +118,74 @@ def test_a_new_batch_is_refused_503_when_every_capable_mac_is_paused(group, monk
         registry.set_machine_enabled("n2", True)
         accepted = client.post("/api/hub/jobs", json=envelope, headers=headers)
         assert accepted.status_code == 200, accepted.text
+
+
+# ── transcription: its own queue, the same rule through the same helper ──────────────────────────
+WHISPER = "mlx-community/whisper-large-v3-turbo"
+
+
+def _up_whisper(monitor):
+    """The packaged `subtitle` worker, up, with Whisper cached, as the broker's monitor."""
+    broker.configure_monitor(monitor)
+    studio = next(row for row in monitor.registry if row["id"] == "subtitle")
+    monitor.status[studio["id"]] = {"status": "up", "last_seen": time.time(), "last_checked": time.time()}
+    monitor._transcribe_cache[studio["id"]] = (time.time(), {
+        "available": True, "models": [{"repo": WHISPER, "cached": True}]})
+    return studio
+
+
+def _transcription_batch(states):
+    from components.hub.backend import transcription_jobs
+    batch = {"id": "stt-paused", "idempotency_key": "k", "created_at": time.time(),
+             "updated_at": time.time(), "finished_at": None, "cancelled": False,
+             "modality": "transcription", "model": WHISPER, "routing": "pool",
+             "items": [{"index": i, "item_id": f"c{i}", "filename": f"c{i}.wav", "state": state,
+                        "tries": 0, "studio": None, "error": None, "avoid_machines": {}}
+                       for i, state in enumerate(states)]}
+    transcription_jobs.batches[batch["id"]] = batch
+    return batch
+
+
+def test_transcription_queued_items_are_handed_back_when_every_capable_mac_is_paused(fixture_monitor):
+    from components.hub.backend import transcription_jobs
+    machine = _up_whisper(fixture_monitor)["machine"]
+    batch = _transcription_batch(["running", "queued"])
+    assert not broker.every_capable_mac_paused("transcription", WHISPER), "an unpaused Mac keeps its work"
+    registry.set_machine_enabled(machine, False)
+    try:
+        assert broker.every_capable_mac_paused("transcription", WHISPER)
+        asyncio.run(transcription_jobs.dispatch_once(fixture_monitor))
+    finally:
+        registry.set_machine_enabled(machine, True)
+    assert batch["items"][0]["state"] == "running", "running work finishes"
+    handed = transcription_jobs.summary(batch)["items"][1]
+    assert (handed["state"], handed["error_code"], handed["error"], handed["tries"]) == (
+        "error", broker.NO_AVAILABLE_MACHINE, broker.NO_AVAILABLE_MACHINE_TEXT, 0)
+    transcription_jobs.retry_failed_item(batch["id"], 1)
+    assert batch["items"][1]["error_code"] is None, "a retried item does not carry the old code"
+
+
+def test_a_new_transcription_batch_is_refused_503_when_every_capable_mac_is_paused(fixture_monitor, monkeypatch):
+    from fastapi.testclient import TestClient
+    from components.hub import standalone
+    from components.hub.backend import transcription_jobs
+
+    monkeypatch.setattr(standalone, "_submission_readiness", lambda envelope, monitor: None)
+    app = standalone.create_app(start_background=False)
+    headers = {"Authorization": "Bearer st02-regression-token"}
+    form = {"model": WHISPER, "item_ids": "job-1"}
+    files = {"files": ("a.wav", b"RIFF....WAVEfmt ", "audio/wav")}
+    with TestClient(app) as client:
+        machine = _up_whisper(fixture_monitor)["machine"]  # after create_app, which installs its own
+        registry.set_machine_enabled(machine, False)
+        try:
+            response = client.post("/api/hub/transcription/jobs", data=form, files=files, headers=headers)
+        finally:
+            registry.set_machine_enabled(machine, True)
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"] == {"error": broker.NO_AVAILABLE_MACHINE_TEXT,
+                                             "code": "NO_AVAILABLE_MACHINE",
+                                             "detail": broker.NO_AVAILABLE_MACHINE_TEXT}
+        assert not transcription_jobs.batches, "nothing was queued"
+        accepted = client.post("/api/hub/transcription/jobs", data=form, files=files, headers=headers)
+        assert accepted.status_code == 200, accepted.text

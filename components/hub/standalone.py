@@ -2881,12 +2881,24 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             if target not in known:
                 raise HTTPException(400, f"no machine named {target!r} is in this fleet; known: "
                                          + ", ".join(sorted(known)))
+
+        def admission(envelope: dict) -> Any:
+            # Runs after the replay/duplicate checks, so an accepted batch is never refused here.
+            refusal = _submission_readiness(envelope, monitor)
+            if not refusal and broker.every_capable_mac_paused(
+                    "transcription", envelope.get("model"), parsed):
+                # Same refusal as `/api/hub/jobs`: nothing accepted, so the Gateway places it elsewhere.
+                raise HTTPException(503, {"error": broker.NO_AVAILABLE_MACHINE_TEXT,
+                                          "code": broker.NO_AVAILABLE_MACHINE,
+                                          "detail": broker.NO_AVAILABLE_MACHINE_TEXT})
+            return refusal
+
         try:
             batch, duplicate = await transcription_jobs.create_batch(
                 files, item_ids, model, language, word_timestamps, label, project,
                 episode, genstudio_execution,
                 routing=parsed,
-                admission_guard=lambda envelope: _submission_readiness(envelope, monitor),
+                admission_guard=admission,
             )
         finally:
             for upload in files:
