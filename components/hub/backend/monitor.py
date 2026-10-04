@@ -1021,8 +1021,14 @@ class StudioMonitor:
                 # A retired model is never published, whatever a worker still reports.
                 and not retired_models.is_retired(model.get("repo"), model.get("model_id"))
             ]
+            from . import memory_admission
+            health_memory = ((getattr(self, "status", {}).get(sid) or {}).get("health") or {})
+            health_memory = health_memory.get("memory") if isinstance(health_memory, dict) else None
+            total_gb = health_memory.get("total_gb") if isinstance(health_memory, dict) else None
             for m in entries:
-                annotated = dict(m)
+                # The tier and verdict published are the floor dispatch enforces, not the worker's
+                # own literal (VoxCPM2 4-bit read 16 GB here while the Hub ran it on 8 GB).
+                annotated = memory_admission.publish_floor(dict(m), total_gb)
                 # Do not federate obsolete hosted-lane metadata. Render's raw
                 # dispatch hint remains in its direct worker catalog, where the
                 # broker reads it, but the Hub's public aggregate is local-only.

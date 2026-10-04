@@ -172,3 +172,60 @@ def test_the_owner_approved_floor_has_a_producer_home(reset):
     # And the Hub reads exactly that, with no table of its own.
     assert not hasattr(workload_policy, "_HUB_PRODUCTION_FREE_GB")
     assert not hasattr(workload_policy, "_HUB_PRODUCTION_TOTAL_GB")
+
+
+def _shipped_worker_rows():
+    """Every model row a shipped Voice, Image or Music worker publishes, as it publishes its tier."""
+    from components.image.app.backend import generation as image_generation
+    from components.music.app.backend import catalog as music_catalog
+    from components.voice.app.backend import catalog as voice_catalog
+
+    rows = [voice_catalog.serialize_model(m) for m in voice_catalog.CATALOG]
+    rows += [music_catalog.serialize_model(m) for m in music_catalog.CATALOG]
+    rows += [{"repo": m.repo, "min_unified_memory_gb": m.qualified_minimum_memory_gb}
+             for m in vars(image_generation).values() if type(m).__name__ == "ImageModel"]
+    return rows
+
+
+def test_published_tier_and_eligibility_are_the_admission_floor_for_every_shipped_model(reset):
+    """0.6.143: Voice published 16 GB for VoxCPM2 4-bit while dispatch enforced its manifest's
+    8 GB, so all 33 8 GB Macs read `memory_eligible: false` and capacity counted only 16 GB Macs.
+    Image published 16 GB for FLUX.2 Klein (measured 8) and Z-Image-Turbo (manifest 8). The Hub
+    now publishes the floor it enforces, whatever literal a worker carries."""
+    rows = _shipped_worker_rows()
+    assert {"mlx-community/VoxCPM2-4bit", FLUX_REPO,
+            "filipstrand/Z-Image-Turbo-mflux-4bit"} <= {row["repo"] for row in rows}
+    for row in rows:
+        floor = memory_admission.requirement_gb(row["repo"], row, use_override=False)[0]
+        for total in (8.59, 17.18, 25.77, 34.36):
+            # The worker's own verdict, from its own tier (Voice's rule).
+            tier = row.get("min_unified_memory_gb")
+            worker = dict(row, memory_eligible=tier is None or total >= tier)
+            published = memory_admission.publish_floor(worker, total)
+            if floor is None:
+                assert published == worker
+                continue
+            assert published["min_unified_memory_gb"] == floor, row["repo"]
+            assert published["memory_eligible"] is (total >= floor), (row["repo"], total)
+            # Idempotent: a published row read back gives the same floor.
+            assert memory_admission.requirement_gb(row["repo"], published, use_override=False)[0] == floor
+
+
+def test_voxcpm2_4bit_is_published_eligible_on_an_8gb_mac(reset, fixture_monitor):
+    repo = "mlx-community/VoxCPM2-4bit"
+    fixture_monitor.status["voice"]["health"] = {"memory": {"total_gb": 8.59}}
+    voice = next(s for s in fixture_monitor.registry if s["id"] == "voice")
+    image = next(s for s in fixture_monitor.registry if s["id"] == "image")
+    catalogs = [None] * len(fixture_monitor.registry)
+    catalogs[fixture_monitor.registry.index(voice)] = {"models": [
+        {"repo": repo, "min_unified_memory_gb": 16, "memory_eligible": False}]}
+    # Image's `memory_eligible` is "Apple Silicon, macOS 14": no floor overrules a false one.
+    catalogs[fixture_monitor.registry.index(image)] = {"models": [
+        {"repo": FLUX_REPO, "min_unified_memory_gb": 16, "memory_eligible": False}]}
+    fixture_monitor.status["image"]["health"] = {"memory": {"total_gb": 17.18}}
+    rows = {row["repo"]: row for row in
+            fixture_monitor._assemble_aggregate_catalog(catalogs, [])["models"]}
+    assert rows[repo]["min_unified_memory_gb"] == 8.0
+    assert rows[repo]["memory_eligible"] is True
+    assert rows[FLUX_REPO]["min_unified_memory_gb"] == 8.0
+    assert rows[FLUX_REPO]["memory_eligible"] is False
