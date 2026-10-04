@@ -3481,10 +3481,14 @@ class GenerationManager:
         except tts_quality.SectionQualityError as exc:
             record.update(exc.evidence)
             if attempt >= tts_quality.SECTION_RETRIES:
+                # The measured values ride in the message: it is the one field a failed job carries
+                # all the way to the Gateway and Story, so a threshold can be set from real numbers.
+                attempts = [r for r in job.section_quality["sections"] if r.get("section") == index]
                 raise tts_quality.SectionQualityError(
                     exc.code,
                     f"Section {index} of {total} {exc.detail} on all "
-                    f"{attempt + 1} attempts, so the audio was not delivered. "
+                    f"{attempt + 1} attempts, so the audio was not delivered "
+                    f"({tts_quality.rejection_numbers([*attempts, record])}). "
                     "Try again, or reword that part of the text.",
                     record,
                 ) from None

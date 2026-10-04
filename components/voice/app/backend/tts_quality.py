@@ -59,19 +59,36 @@ PAUSE_MARGIN_S = 3.5
 WIDE_CHARACTER_WEIGHT = 3      # one CJK/kana/hangul character takes about as long as three Latin
 _WIDE = re.compile(r"[\u1100-\u11ff\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\uf900-\ufaff]")
 SPELLING_VARIANT_RATIO = 0.8   # "Elara" heard as "Alara" still counts as heard
-# Khmer is compared syllable by syllable (`qwen_quality._KHMER_SYLLABLE`): it writes no spaces between
-# words, so the word rule above counted 0 expected / 0 heard and always passed. Whisper turbo's Khmer
-# is far weaker than its English, so a Khmer section fails only when Whisper heard under half its
-# syllables, or missed a clause's worth (about six words) in a row.
-# ponytail: guessed, not measured - tighten from the overlap of known-good Khmer sections
-# (CALIBRATION-PLAN.md, Khmer step) before trusting it to catch a single dropped word.
-KHMER_MIN_SYLLABLE_OVERLAP = 0.5
-KHMER_MAX_MISSING_RUN = 24
+# Khmer is scored syllable by syllable (`qwen_quality._KHMER_SYLLABLE`) but never rejected on it: the
+# score is recorded (`text_check` "advisory") and only the audio checks enforce. Whisper large-v3 turbo
+# cannot read Khmer - measured through the fleet (`_orchestra/audit-20261001/tts-khmer/GATE.md`):
+# 48 known-good sections (VoxCPM2 4/8-bit, OmniVoice) scored syllable overlap median 0.00, max 0.11, and
+# the native Khmer MMS voice 0.007-0.095, while the same audio against the wrong text, cut in half or
+# missing a clause scored up to 0.42, and pure silence 0.05: Whisper writes repetition loops
+# ("ចញញញញ...", 41 of 48 good sections) or mixed-script fragments, whatever the audio says,
+# so no threshold separates a good section from a broken one. Revisit with a Khmer-capable recogniser.
 _KHMER = re.compile(r"[\u1780-\u17ff]")
 # Families whose engine emits 12.5 acoustic tokens per second (the Qwen3-TTS 12 Hz codec), so a
 # section's duration ceiling is also its token budget. Unbounded, mlx-audio's `generate_audio`
 # default of 1,200 tokens let one failed Breeze clause run on for 96 s.
 TOKENS_PER_SECOND = {"breeze-tts": 12.5}
+
+
+# The measured value and its limit behind each rejection, as a failed job's message states them
+# (short: the Hub keeps 500 characters of a worker's error).
+_REJECTION_NUMBERS = {
+    "TTS_SECTION_SILENT": "voiced {voiced_s} s < {min_voiced_s} s",
+    "TTS_SECTION_TOO_LONG": "{duration_s} s > {max_duration_s} s",
+    "TTS_SECTION_INTERNAL_SILENCE": "pause {longest_pause_s} s > {max_pause_s} s",
+    "TTS_SECTION_TEXT_MISMATCH": "heard {words_heard}/{words_expected}, overlap {word_overlap}, "
+                                 "missing run {longest_missing_run}",
+}
+
+
+def rejection_numbers(records: list[dict]) -> str:
+    """'attempt 1: heard 12/40, overlap 0.3, missing run 18; attempt 2: ...' for rejected records."""
+    return "; ".join(f"attempt {r['attempt']}: " + _REJECTION_NUMBERS[r["rejection_code"]].format(**r)
+                     for r in records if r.get("rejection_code") in _REJECTION_NUMBERS)
 
 
 @dataclass
@@ -220,18 +237,17 @@ def check_section(text: str, family: str, metrics: dict, *, speed: float = 1.0,
         evidence["words_heard"] = matched
         evidence["word_overlap"] = round(matched / total, 3) if total else 1.0
         evidence["longest_missing_run"] = longest_missing_run(text, heard)
-        missing_allowed = max(MAX_MISSING_WORDS, math.floor(total * MAX_MISSING_SHARE))
+        if _KHMER.search(text):
+            evidence["text_check"] = "advisory"
+        else:
+            missing_allowed = max(MAX_MISSING_WORDS, math.floor(total * MAX_MISSING_SHARE))
     if metrics["voiced_s"] < evidence["min_voiced_s"]:
         code, why = "TTS_SECTION_SILENT", "came out (nearly) silent or as a DC drift"
     elif metrics["duration_s"] > evidence["max_duration_s"]:
         code, why = "TTS_SECTION_TOO_LONG", "ran far longer than its text (babble or humming)"
     elif metrics.get("longest_pause_s", 0.0) > evidence["max_pause_s"]:
         code, why = "TTS_SECTION_INTERNAL_SILENCE", "stopped mid-text for an unnatural pause"
-    elif missing_allowed is not None and _KHMER.search(text) and (
-            evidence["word_overlap"] < KHMER_MIN_SYLLABLE_OVERLAP
-            or evidence["longest_missing_run"] > KHMER_MAX_MISSING_RUN):
-        code, why = "TTS_SECTION_TEXT_MISMATCH", "does not say its text (Whisper heard other words)"
-    elif missing_allowed is not None and not _KHMER.search(text) and (
+    elif missing_allowed is not None and (
             total - matched > missing_allowed
             or evidence["longest_missing_run"] > MAX_MISSING_RUN):
         code, why = "TTS_SECTION_TEXT_MISMATCH", "does not say its text (Whisper heard other words)"

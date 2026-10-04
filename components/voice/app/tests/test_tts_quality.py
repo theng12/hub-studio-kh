@@ -225,6 +225,9 @@ def test_a_section_that_never_passes_fails_the_job_naming_the_section(tmp_path, 
 
     assert raised.value.code == "TTS_SECTION_SILENT"
     assert str(raised.value).startswith("Section 2 of 2 came out (nearly) silent")
+    # The measured values of every attempt ride in the message, the field a failed job carries.
+    assert "(attempt 1: voiced 0.0 s < " in str(raised.value)
+    assert "; attempt 4: voiced 0.0 s < " in str(raised.value)
     assert len(renders.calls) == 1 + tts_quality.SECTION_RETRIES + 1
     assert not (tmp_path / "out.wav").exists()
 
@@ -247,6 +250,28 @@ def test_whisper_hearing_other_words_rejects_the_section(tmp_path, monkeypatch):
     records = job.section_quality["sections"]
     assert [r.get("rejection_code") for r in records] == ["TTS_SECTION_TEXT_MISMATCH", None]
     assert {r["transcribe_back"] for r in records} == {"whisper"}
+
+
+def test_a_text_mismatch_failure_states_each_attempts_overlap_and_missing_run(tmp_path, monkeypatch):
+    from backend import transcription
+
+    monkeypatch.setattr(generation, "_memory_snapshot", lambda: {"available_gb": 64.0})
+    monkeypatch.setattr(transcription.manager, "transcribe_locked",
+                        lambda *_args, **_kwargs: {"text": "Thank you for watching."})
+    monkeypatch.setattr(transcription.manager, "release_memory_locked", lambda *_args: {})
+    renders = _Renders(*[_speech(2.0)] * (tts_quality.SECTION_RETRIES + 1))
+    manager = _manager_with(renders, monkeypatch)
+    job = generation.GenerationJob("asr-fails", "txt2speech",
+                                   {"repo": "local/voice", "text": "first section text", "seed": 5})
+
+    with pytest.raises(tts_quality.SectionQualityError) as raised:
+        manager._dispatch_txt2speech(job, tmp_path / "out.wav")
+
+    message = f"SectionQualityError: {raised.value}"
+    assert ("so the audio was not delivered (attempt 1: heard 0/3, overlap 0.0, missing run 3; "
+            "attempt 2: heard 0/3, overlap 0.0, missing run 3; attempt 3: ") in message
+    assert message.endswith("missing run 3). Try again, or reword that part of the text.")
+    assert len(message) <= 500, "the Hub keeps 500 characters of a worker's error"
 
 
 def test_whisper_is_not_loaded_beside_the_model_when_memory_is_short(tmp_path, monkeypatch):
