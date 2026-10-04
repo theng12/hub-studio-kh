@@ -446,6 +446,10 @@ def parameters_for(model: catalog.ModelEntry,
         if any(parameter["name"] == name for parameter in parameters):
             continue
         parameters.append({"name": name, **shape})
+    # The family's sampling levers, with the bound the worker clamps to and this model's default.
+    for name, lever in catalog.sampling_levers(model.family, model.repo).items():
+        parameters.append({"name": name, "required": False,
+                           **{key: value for key, value in lever.items() if key != "kwarg"}})
     parameters.append(dict(OUTPUT_FORMAT_PARAMETER))
     parameters.extend(pause_parameters(model))
     return _with_resolved_defaults(parameters, defaults)

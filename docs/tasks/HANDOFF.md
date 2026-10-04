@@ -3,7 +3,14 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.141** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.142** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.142 - every TTS model's sampling levers reachable, defaults unchanged (`release/0.6.142` = 0.6.141 + the levers, 2026-10-04).**
+> `catalog.SAMPLING_LEVERS` is the one table (family -> request field -> engine kwarg, bound, default; `SAMPLING_DEFAULTS_BY_REPO` per checkpoint);
+> `catalog.sampling_kwargs` is applied once in `_generate_mlx_audio` after the mode resolver (and in `_generate_khmer_vits` as VitsModel attributes);
+> `lane_contract.parameters_for` publishes them. Defaults = 0.6.141's effective values (mlx-audio `generate_audio` passes temperature 0.7 to all). To adopt
+> calibrated defaults, edit only that table and the pin in `components/voice/app/tests/test_sampling_levers.py`. Khmer MMS seeds like MLX now.
+> Audit + calibration plan: `_orchestra/audit-20261001/tts-sampling/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.141 - a paused group hands its work back; TTS admitted once per job on one reading (`release/0.6.141` = 0.6.140 + the TTS-comparison fixes, 2026-10-04).**
 > 0.6.140 was never published; 0.6.141 carries workstation mode too. `broker.every_capable_mac_paused(modality, model, routing)`: known capable Macs

@@ -374,8 +374,10 @@ def test_voxcpm_clone_without_transcript_stays_reference_only(tmp_path: Path) ->
 def test_mlx_worker_applies_seed_and_voxcpm_controls() -> None:
     source = inspect.getsource(generation.GenerationManager._generate_mlx_audio)
     assert "mx.random.seed" in source
-    assert 'gen_kwargs["warmup_patches"]' in source
-    assert 'gen_kwargs["max_tokens"]' in source
+    assert "catalog.sampling_kwargs(family, model_entry.repo, params)" in source
+    kwargs = catalog.sampling_kwargs("voxcpm-mlx", "mlx-community/VoxCPM2-4bit",
+                                     {"voxcpm_warmup_patches": 9, "voxcpm_max_tokens": 1})
+    assert (kwargs["warmup_patches"], kwargs["max_tokens"]) == (4, 256)
 
 
 def test_voxcpm_api_preserves_advanced_controls() -> None:
@@ -1177,9 +1179,10 @@ def test_omnivoice_mlx_supports_clone_plus_traits_and_clamps(tmp_path: Path) -> 
     assert kwargs["ref_audio"] == str(reference)
     assert kwargs["ref_text"] == "Override transcript"
     assert kwargs["instruct"] == "female, warm, khmer accent"
-    assert kwargs["num_steps"] == 64
-    assert kwargs["guidance_scale"] == 8.0
     assert kwargs["duration_s"] == 120.0
+    levers = catalog.sampling_kwargs("omnivoice", "mlx-community/OmniVoice-bfloat16", {
+        "omnivoice_num_steps": 100, "omnivoice_guidance_scale": 99})
+    assert (levers["num_steps"], levers["guidance_scale"]) == (64, 8.0)
 
 
 def test_fish_audio_mlx_supports_optional_clone_style_and_clamps(tmp_path: Path) -> None:
@@ -1206,10 +1209,9 @@ def test_fish_audio_mlx_supports_optional_clone_style_and_clamps(tmp_path: Path)
     assert kwargs["ref_audio"] == str(reference)
     assert kwargs["ref_text"] == ""
     assert kwargs["instruct"] == "warm, intimate audiobook narration"
-    assert kwargs["temperature"] == 2.0
-    assert kwargs["top_p"] == 0.05
-    assert kwargs["top_k"] == 100
-    assert kwargs["max_tokens"] == 4096
+    levers = catalog.sampling_kwargs("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-8bit", {
+        "fish_temperature": 9, "fish_top_p": 0, "fish_top_k": 999, "fish_max_tokens": 9999})
+    assert levers == {"temperature": 2.0, "top_p": 0.05, "top_k": 100, "max_tokens": 4096}
 
 
 def test_no_wav_error_names_the_real_cause_not_just_a_temp_dir(monkeypatch, tmp_path) -> None:

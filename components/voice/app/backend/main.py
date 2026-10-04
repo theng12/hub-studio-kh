@@ -414,7 +414,11 @@ def _job_parameters(body: "Txt2SpeechBody", model: catalog.ModelEntry) -> dict:
         params[name] = value
     # Absent means the WAV, exactly as before: the key is not recorded at all, so an older
     # caller's retried `client_request_id` still compares equal to its stored request.
-    for name in ("output_format", "paragraph_pause_sec", "sentence_pause_sec"):
+    # An omitted sampling lever (`catalog.SAMPLING_LEVERS`, 0.6.142) is not recorded either, so a
+    # request recorded before the levers existed still compares equal; the worker applies the
+    # model's default from the table.
+    levers = [name for levers in catalog.SAMPLING_LEVERS.values() for name in levers]
+    for name in ("output_format", "paragraph_pause_sec", "sentence_pause_sec", *levers):
         if params.get(name) is None:
             params.pop(name, None)
     return params
@@ -490,6 +494,27 @@ class Txt2SpeechBody(BaseModel):
     fish_top_p: float = 0.7
     fish_top_k: int = 30
     fish_max_tokens: int = 1024
+    # ── Sampling levers (0.6.142). Bounds, engine argument and the default in force are the one
+    # table `catalog.SAMPLING_LEVERS`; the literals on the VoxCPM2 / OmniVoice / Fish fields above
+    # are request defaults the lane's published default replaces (`_job_parameters`). ──
+    qwen_temperature: Optional[float] = None
+    qwen_top_p: Optional[float] = None
+    qwen_top_k: Optional[int] = None
+    qwen_repetition_penalty: Optional[float] = None
+    breeze_temperature: Optional[float] = None
+    breeze_top_p: Optional[float] = None
+    breeze_top_k: Optional[int] = None
+    breeze_repetition_penalty: Optional[float] = None
+    breeze_cfg_scale: Optional[float] = None
+    pocket_temperature: Optional[float] = None
+    pocket_lsd_decode_steps: Optional[int] = None
+    pocket_eos_threshold: Optional[float] = None
+    omnivoice_class_temperature: Optional[float] = None
+    omnivoice_position_temperature: Optional[float] = None
+    omnivoice_layer_penalty_factor: Optional[float] = None
+    omnivoice_t_shift: Optional[float] = None
+    vits_noise_scale: Optional[float] = None
+    vits_noise_scale_duration: Optional[float] = None
     # ── Bark-specific knobs ──
     bark_voice_preset: Optional[str] = None  # e.g. "v2/en_speaker_6"; None = random
     bark_temperature: float = 0.7

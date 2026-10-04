@@ -590,6 +590,129 @@ FAMILIES: dict[str, Family] = {
 }
 
 
+# ───────────── sampling levers: the ONE table of each TTS model's stability knobs ─────────────
+#
+# Owner, 2026-10-04: "find a balanced default for each of the models". Per family: the request
+# field -> the engine argument it sets (`kwarg`), the bound the worker clamps to, and the default.
+# The lane contract publishes these rows and the worker applies them, so neither keeps a copy.
+#
+# **Every default is the value that engine received before these were exposed** (mlx-audio
+# 94c7716, audited in `_orchestra/audit-20261001/tts-sampling/LEVERS.md`): mlx-audio's own
+# `generate_audio` wrapper passes `temperature=0.7` to every model, so 0.7 - not the 0.9 in the
+# Qwen3/Breeze signatures - is what those engines sampled at; every other value is the engine's
+# own signature default. So this table changed no output. To adopt a calibrated default, change it
+# here (a whole family) or in `SAMPLING_DEFAULTS_BY_REPO` (one checkpoint), and nowhere else.
+#
+# `seed` is deliberately not a lever: the worker seeds MLX/torch once per request and later
+# sections continue that stream; an engine-level `seed` (Breeze takes one) would reseed every
+# section to the same state.
+def _lever(kwarg: str, kind: str, minimum: float, maximum: float, default: float,
+           note: str) -> dict:
+    return {"kwarg": kwarg, "type": kind, "minimum": minimum, "maximum": maximum,
+            "default": default, "note": note}
+
+
+_TEMPERATURE_NOTE = "sampling temperature; lower is steadier, higher is more varied"
+_TOP_P_NOTE = "nucleus sampling: keep the smallest token set whose probability reaches this; 1.0 = off"
+_TOP_K_NOTE = "sample only from the k most likely tokens; 0 = off"
+
+SAMPLING_LEVERS: dict[str, dict[str, dict]] = {
+    "qwen3-tts": {
+        "qwen_temperature": _lever("temperature", "number", 0.05, 2.0, 0.7, _TEMPERATURE_NOTE),
+        "qwen_top_p": _lever("top_p", "number", 0.05, 1.0, 1.0, _TOP_P_NOTE),
+        "qwen_top_k": _lever("top_k", "integer", 0, 100, 50, _TOP_K_NOTE),
+        # Qwen3 Base clones in ICL mode, where the engine raises anything below 1.5 to 1.5
+        # (`max(repetition_penalty, 1.5)`), so 1.5 is both the floor and what it always used.
+        "qwen_repetition_penalty": _lever(
+            "repetition_penalty", "number", 1.5, 2.0, 1.5,
+            "penalty on repeating audio tokens; the engine floors it at 1.5 when cloning"),
+    },
+    "breeze-tts": {
+        "breeze_temperature": _lever("temperature", "number", 0.05, 2.0, 0.7, _TEMPERATURE_NOTE),
+        "breeze_top_p": _lever("top_p", "number", 0.05, 1.0, 1.0, _TOP_P_NOTE),
+        "breeze_top_k": _lever("top_k", "integer", 0, 100, 50, _TOP_K_NOTE),
+        "breeze_repetition_penalty": _lever(
+            "repetition_penalty", "number", 1.0, 2.0, 1.0,
+            "penalty on repeating audio tokens; 1.0 = off"),
+        "breeze_cfg_scale": _lever(
+            "cfg_scale", "number", 1.0, 4.0, 1.0,
+            "classifier-free guidance toward the design/direction prompt; 1.0 = off, and it "
+            "applies only when a prompt is given"),
+    },
+    "pocket-tts": {
+        "pocket_temperature": _lever("temperature", "number", 0.05, 2.0, 0.7, _TEMPERATURE_NOTE),
+        "pocket_lsd_decode_steps": _lever(
+            "lsd_decode_steps", "integer", 1, 8, 1, "decoder refinement steps per frame"),
+        "pocket_eos_threshold": _lever(
+            "eos_threshold", "number", -8.0, 0.0, -4.0,
+            "end-of-speech logit threshold; lower stops later"),
+    },
+    "omnivoice": {
+        "omnivoice_num_steps": _lever("num_steps", "integer", 4, 64, 32, "unmasking steps"),
+        "omnivoice_guidance_scale": _lever(
+            "guidance_scale", "number", 0.0, 8.0, 2.0, "classifier-free guidance strength"),
+        "omnivoice_class_temperature": _lever(
+            "class_temperature", "number", 0.0, 2.0, 0.0,
+            "token sampling temperature; 0 = always the most likely token"),
+        "omnivoice_position_temperature": _lever(
+            "position_temperature", "number", 0.0, 10.0, 5.0,
+            "randomness of which positions are unmasked first"),
+        "omnivoice_layer_penalty_factor": _lever(
+            "layer_penalty_factor", "number", 0.0, 10.0, 5.0,
+            "how strongly lower codebook layers are unmasked first"),
+        "omnivoice_t_shift": _lever(
+            "t_shift", "number", 0.01, 1.0, 0.1, "time-schedule shift of the unmasking steps"),
+    },
+    "voxcpm-mlx": {
+        "cfg_value": _lever("cfg_value", "number", 0.5, 6.0, 2.0,
+                            "classifier-free guidance strength"),
+        "inference_timesteps": _lever("inference_timesteps", "integer", 4, 50, 7,
+                                      "diffusion steps per patch"),
+        "voxcpm_warmup_patches": _lever("warmup_patches", "integer", 0, 4, 0,
+                                        "patches generated before streaming output starts"),
+        "voxcpm_max_tokens": _lever("max_tokens", "integer", 256, 4096, 2000,
+                                    "ceiling on generated patches per section"),
+    },
+    "fish-audio-mlx": {
+        "fish_temperature": _lever("temperature", "number", 0.05, 2.0, 0.7, _TEMPERATURE_NOTE),
+        "fish_top_p": _lever("top_p", "number", 0.05, 1.0, 0.7, _TOP_P_NOTE),
+        "fish_top_k": _lever("top_k", "integer", 0, 100, 30, _TOP_K_NOTE),
+        "fish_max_tokens": _lever("max_tokens", "integer", 128, 4096, 1024,
+                                  "ceiling on generated tokens per section"),
+    },
+    # Set on the transformers VitsModel (its `noise_scale` attributes), not passed to a call.
+    "khmer-tts-mms": {
+        "vits_noise_scale": _lever("noise_scale", "number", 0.0, 1.5, 0.667,
+                                   "variation in the voice's acoustic detail"),
+        "vits_noise_scale_duration": _lever("noise_scale_duration", "number", 0.0, 1.5, 0.8,
+                                            "variation in the timing of each sound"),
+    },
+}
+
+# One checkpoint's own default where it should differ from its family's, e.g.
+# {"mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit": {"qwen_temperature": 0.6}}. Empty: none differs yet.
+SAMPLING_DEFAULTS_BY_REPO: dict[str, dict[str, float]] = {}
+
+
+def sampling_levers(family: str, repo: str) -> dict[str, dict]:
+    """The sampling levers one model takes, each with its default for that model."""
+    overrides = SAMPLING_DEFAULTS_BY_REPO.get(repo, {})
+    return {name: {**lever, "default": overrides.get(name, lever["default"])}
+            for name, lever in SAMPLING_LEVERS.get(family, {}).items()}
+
+
+def sampling_kwargs(family: str, repo: str, params: Mapping[str, object]) -> dict[str, object]:
+    """Engine arguments from a request: each lever's value, or its default, clamped to its bound."""
+    kwargs: dict[str, object] = {}
+    for name, lever in sampling_levers(family, repo).items():
+        value = params.get(name)
+        value = lever["default"] if value is None else value
+        cast = int if lever["type"] == "integer" else float
+        kwargs[lever["kwarg"]] = max(cast(lever["minimum"]),
+                                     min(cast(value), cast(lever["maximum"])))
+    return kwargs
+
+
 @dataclass(frozen=True)
 class LanguageSupport:
     """Truthful language capability metadata for catalog and Studio Hub clients.

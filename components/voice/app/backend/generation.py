@@ -542,8 +542,8 @@ _SECTIONED_FAMILIES = frozenset(catalog.FAMILIES)
 #
 # Fields:
 # - default_sample_rate: Hz emitted by the engine (used for log lines).
-# - uses_cfg: whether to pass `cfg_value` + `inference_timesteps` knobs to
-#   mlx-audio.generate_audio. Only VoxCPM2 uses these today.
+# - uses_cfg: whether the log line names the CFG/steps knobs. The knobs themselves, for every
+#   family, come from `catalog.SAMPLING_LEVERS`.
 # - mode: which kwarg-resolver to dispatch to:
 #     "qwen3"             — repo-name picks one of custom/design/clone
 #     "voxcpm_flex"       — any combo of ref_audio + ref_text + instruct
@@ -3632,12 +3632,9 @@ class GenerationManager:
         mode = family_config["mode"]
         mode_label = self._resolve_mlx_kwargs(mode, family, model_entry, params, gen_kwargs)
 
-        # Optional cfg knobs — currently only VoxCPM2 uses them.
-        if family_config.get("uses_cfg"):
-            gen_kwargs["cfg_value"] = max(0.5, min(float(params.get("cfg_value", 2.0)), 6.0))
-            gen_kwargs["inference_timesteps"] = max(4, min(int(params.get("inference_timesteps", 7)), 50))
-            gen_kwargs["warmup_patches"] = max(0, min(int(params.get("voxcpm_warmup_patches", 0)), 4))
-            gen_kwargs["max_tokens"] = max(256, min(int(params.get("voxcpm_max_tokens", 2000)), 4096))
+        # The family's sampling levers (temperature, top-p, CFG, steps ...), each the request's
+        # value or the model's default from the one table, `catalog.SAMPLING_LEVERS`.
+        gen_kwargs.update(catalog.sampling_kwargs(family, model_entry.repo, params))
 
         # MLX models sample through mlx.core.random. Apply the recorded seed
         # immediately before inference so history reuse is genuinely repeatable.
@@ -4118,12 +4115,6 @@ class GenerationManager:
             )
             gen_kwargs["ref_audio_max_duration_s"] = 10.0
 
-        gen_kwargs["num_steps"] = max(
-            4, min(int(params.get("omnivoice_num_steps", 32)), 64)
-        )
-        gen_kwargs["guidance_scale"] = max(
-            0.0, min(float(params.get("omnivoice_guidance_scale", 2.0)), 8.0)
-        )
         duration = params.get("omnivoice_duration_s")
         if duration is not None:
             gen_kwargs["duration_s"] = max(0.5, min(float(duration), 120.0))
@@ -4151,18 +4142,6 @@ class GenerationManager:
                 voice_id, params, gen_kwargs, voices_module, fallback_transcript=""
             )
 
-        gen_kwargs["max_tokens"] = max(
-            128, min(int(params.get("fish_max_tokens", 1024)), 4096)
-        )
-        gen_kwargs["temperature"] = max(
-            0.05, min(float(params.get("fish_temperature", 0.7)), 2.0)
-        )
-        gen_kwargs["top_p"] = max(
-            0.05, min(float(params.get("fish_top_p", 0.7)), 1.0)
-        )
-        gen_kwargs["top_k"] = max(
-            0, min(int(params.get("fish_top_k", 30)), 100)
-        )
         reference_label = voice_id or "private-reference"
         if has_reference and instruct:
             return f"clone + style (voice={reference_label})"
@@ -4307,12 +4286,23 @@ class GenerationManager:
                 "use a reference voice."
             )
 
-        seed = params.get("seed")
-        if seed is not None and int(seed) >= 0:
+        # The same seed rule as the MLX worker: the parent's per-attempt seed when it sectioned the
+        # request, seeded once, later sections continuing the stream. Reading `seed` here reseeded
+        # every section of a fixed-seed request to one state, and an unseeded request recorded a
+        # `resolved_seed` the audio was never rendered with.
+        seed = params.get("_qwen_attempt_seed", params.get("seed"))
+        if seed is None or int(seed) < 0:
+            import random
+            seed = random.randint(0, 2**32 - 1)
+        if not params.get("_native_continue_rng"):
             torch.manual_seed(int(seed))
-            job.resolved_seed = int(seed)
+        job.resolved_seed = int(seed)
 
         model, tokenizer = self._khmer_vits_get_model(model_entry.repo)
+        # VitsModel reads its noise scales from attributes, so each call sets them all.
+        for name, value in catalog.sampling_kwargs(model_entry.family, model_entry.repo,
+                                                   params).items():
+            setattr(model, name, value)
         inputs = tokenizer(text, return_tensors="pt")
         with torch.no_grad():
             waveform = model(**inputs).waveform.squeeze().cpu().numpy()

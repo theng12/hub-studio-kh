@@ -2,6 +2,25 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.142 - 2026-10-04
+
+### Every voice model's fine-tuning settings can now be set
+
+**Nothing sounds different yet.** This release only makes the settings reachable, so the best value for each voice can be
+found by listening. Every setting starts at exactly the value it had before.
+
+**Each voice model now takes its own steadiness settings with a request.** For example temperature (how varied each
+take is), top-p and top-k (how adventurous the next sound may be), repetition penalty, and for the step-by-step models
+the number of steps and the guidance strength. This covers Qwen3-TTS, Breeze TTS 2, VoxCPM2, OmniVoice, Fish S2 Pro,
+Pocket TTS and the Khmer voice. Each setting has a safe range, and a value outside it is brought back inside.
+
+**Each model's starting values live in one list.** When the listening tests pick a better value for a model, changing
+that one list changes it everywhere. You can also set a model's own starting value on this Mac in the Models tab.
+
+**A fixed seed now gives the same Khmer voice-over every time.** A long Khmer voice-over with a fixed seed restarted
+the same randomness for every part, and one without a seed recorded a seed it never used. Both now work like the other
+voices: one seed for the whole voice-over.
+
 ## 0.6.141 - 2026-10-04
 
 ### Paused Macs no longer hold on to work

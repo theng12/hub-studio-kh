@@ -366,9 +366,13 @@ class TestAppliedToARequest:
         lane publishes the per-model default (Chatterbox's exaggeration dial is its own number) and
         a request that omits the parameter must get that, not the blanket one.
         """
-        model = _model_publishing("cfg_value")
-        parameter = _parameter(model, "cfg_value")
         blanket = main.Txt2SpeechBody.model_fields["cfg_value"].default
+        # VoxCPM2 publishes `cfg_value` too, at the blanket's own 2.0, so the fixture is the model
+        # whose published default disagrees with it - found, never named.
+        model = next(m for m in catalog.CATALOG
+                     if any(p["name"] == "cfg_value" and p.get("default") != blanket
+                            for p in lane_contract.parameters_for(m)))
+        parameter = _parameter(model, "cfg_value")
         assert parameter["default"] != blanket, "the fixture must be a real disagreement"
 
         response = client.post("/api/generate/txt2speech", json={

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.142 — 2026-10-04 · Every TTS model's sampling levers are request fields with published bounds; defaults unchanged
+
+Release of `release/0.6.142` (= 0.6.141 + the change below). Owner, 2026-10-04: "find a balanced default for each of the models" after the TTS
+comparison found the Hub passed Breeze TTS 2 no sampling settings. Audit: `_orchestra/audit-20261001/tts-sampling/LEVERS.md`; calibration plan beside it.
+- **One table of sampling levers** (`catalog.SAMPLING_LEVERS`, per family: request field -> engine argument, bound, default; per-checkpoint overrides in
+  `catalog.SAMPLING_DEFAULTS_BY_REPO`; `catalog.sampling_kwargs` clamps). New request fields: `qwen_temperature|top_p|top_k|repetition_penalty`,
+  `breeze_temperature|top_p|top_k|repetition_penalty|cfg_scale`, `pocket_temperature|lsd_decode_steps|eos_threshold`,
+  `omnivoice_class_temperature|position_temperature|layer_penalty_factor|t_shift`, `vits_noise_scale|noise_scale_duration` (Khmer MMS). The existing
+  VoxCPM2 (`cfg_value`, `inference_timesteps`, `voxcpm_*`), OmniVoice (`omnivoice_num_steps|guidance_scale`) and Fish (`fish_*`) levers moved into the
+  table with their bounds unchanged. Chatterbox is unchanged (its levers were already request fields).
+- **Defaults equal what each engine received in 0.6.141** (pinned by `test_sampling_levers.EFFECTIVE_IN_0_6_141`): mlx-audio's `generate_audio`
+  passes `temperature=0.7` to every model, so Breeze/Qwen/Pocket sampled at 0.7 (not the 0.9 in their signatures); Qwen's ICL clone floors
+  repetition penalty at 1.5; Breeze `cfg_scale` 1.0 = off.
+- **Published**: `lane_contract.parameters_for` lists each model's levers with `type`/`minimum`/`maximum`/`default`, so the Models tab can store a
+  per-Mac default and a scheduler can read the bounds. An omitted lever is not recorded on the job (`main._job_parameters`), so a request recorded by
+  0.6.141 still compares equal on a `client_request_id` replay. Older workers ignore the new fields.
+- **Seed**: never passed to an engine (Breeze's own `seed` would reseed every section). Khmer MMS now follows the MLX rule (`_qwen_attempt_seed`, seeded
+  once, `_native_continue_rng` sections continue): a fixed seed reseeded every section to one state, and an unseeded job recorded a `resolved_seed` the
+  audio never used.
+- Gateway: no change needed — `/v1/audio/jobs` forwards `params` and flattens `controls` into the Hub item's params by name (checked in the sandbox).
+- Tests: `components/voice/app/tests/test_sampling_levers.py` (new, 118: defaults pinned per family, every lever clamped at both bounds and published,
+  engine argument names checked against the installed mlx-audio / transformers, Breeze end-to-end through `_generate_mlx_audio`, seed once / no engine
+  seed, Khmer seed + noise scales); `test_priority_mlx_models.py`, `test_model_defaults.py` follow the move to the table.
+
 ## 0.6.141 — 2026-10-04 · A paused group hands its work back; TTS on 8 GB Macs admitted once per job, on one reading
 
 Release of `release/0.6.141` (= 0.6.140, which was never published, + the fixes below). Found by the TTS comparison test of 2026-10-04
