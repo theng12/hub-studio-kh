@@ -6,8 +6,8 @@ Written to be read by the person using the app. Newest first.
 
 ### Lite Mode can be set up on the Mac itself
 
-**Settings now has a Lite Mode section** (next to Startup). A shop's cashier Mac can turn Lite Mode on or off and change
-its hours and limits right there, without the Gateway. It shows what the Mac is doing now (working, standing by,
+**Lite Mode (the new name for workstation mode) can now be set in Studio Hub > Settings > Lite Mode on each Mac, as well
+as from the Gateway.** A shop's cashier Mac can turn it on or off and change its hours and limits right there. It shows what the Mac is doing now (working, standing by,
 stepped aside or quiet hours) and today's counts. Changes apply straight away, with no restart.
 
 **Opening the app by hand always shows its window.** Opening Studio Hub from Applications or Spotlight now opens the
