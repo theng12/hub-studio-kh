@@ -4213,6 +4213,7 @@ _SECTION_QUALITY_NUMBERS = frozenset({
 })
 _SECTION_QUALITY_WORDS = {
     "transcribe_back": frozenset({"whisper", "unavailable", "memory", "script", "qwen_clone_gate"}),
+    "text_check": frozenset({"advisory"}),
     "rejection_code": frozenset({"TTS_SECTION_SILENT", "TTS_SECTION_TOO_LONG",
                                  "TTS_SECTION_INTERNAL_SILENCE", "TTS_SECTION_TEXT_MISMATCH"}),
 }

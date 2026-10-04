@@ -3,7 +3,8 @@
 The Khmer test of 2026-10-04 (`_orchestra/audit-20261001/tts-khmer/REPORT.md`, findings 1, 2, 4):
 ។ was not a sentence end (every join after a Khmer sentence got the 0.15 s mid-sentence pause),
 space-less Khmer was hard-cut inside a syllable, and the transcribe-back gate counted 0 words in a
-Khmer section and always passed.
+Khmer section and always passed. 0.6.142 then rejected every Khmer section Whisper heard: Whisper turbo
+cannot read Khmer (GATE.md beside REPORT.md), so the Khmer score is recorded and never rejects.
 """
 from __future__ import annotations
 
@@ -89,20 +90,40 @@ def _metrics(text):
     return {"duration_s": chars / 10.0, "voiced_s": chars / 12.0, "longest_pause_s": 0.4}
 
 
-def test_a_khmer_section_whisper_heard_passes_and_one_it_did_not_hear_fails():
-    evidence = tts_quality.check_section(SPACED, "voxcpm-mlx", _metrics(SPACED), heard=UNSPACED)
-    assert evidence["accepted"] and evidence["words_expected"] > 100
-    assert evidence["word_overlap"] == 1.0
+# What Whisper large-v3 turbo (language "km", through the fleet, 2026-10-04) wrote for the native Khmer
+# MMS voice reading SPACED, three takes (`_orchestra/audit-20261001/tts-khmer/GATE.md`): it cannot read
+# Khmer, so a correct Khmer section scores near zero, exactly like a broken one.
+MMS_HEARD = [
+    "ច aika يام Stageco",
+    "ប" + "ណ" * 150,
+    "ប្ំ នំ ន្ក ឯ្ ន្ក ្ទ្ ម។ ន្ ដកំ បំ ឍំ នំ ក្ ន្ក់ំ តំ គ្ក់់ តំ ឱំ ច្ក់ ន្ក់ ជំ ឬ្ក៩ នំ ដំ បាៗ បា�ឯរសុដWORរននើ។ ឃ្រ្ឋែារចៗម",
+]
 
-    first_half = SPACED[: len(SPACED) // 3]
+
+@pytest.mark.parametrize("heard", [*MMS_HEARD, UNSPACED, SPACED[: len(SPACED) // 3],
+                                   "now pel preah atit reap asdangkut"])
+def test_a_khmer_section_is_scored_but_never_rejected_for_what_whisper_heard(heard):
+    evidence = tts_quality.check_section(SPACED, "voxcpm-mlx", _metrics(SPACED), heard=heard)
+    assert evidence["accepted"] and evidence["text_check"] == "advisory"
+    assert evidence["words_expected"] == 147 and "word_overlap" in evidence
+    assert "longest_missing_run" in evidence
+
+
+def test_the_measured_khmer_hearing_scores_what_the_fleet_measured():
+    overlaps = [tts_quality.check_section(SPACED, "voxcpm-mlx", _metrics(SPACED), heard=heard)
+                ["word_overlap"] for heard in MMS_HEARD]
+    assert max(overlaps) < 0.1, overlaps   # a native Khmer voice, correctly read, scores ~0
+
+
+def test_the_audio_checks_still_reject_a_khmer_section():
+    silent = {**_metrics(SPACED), "voiced_s": 0.0}
     with pytest.raises(tts_quality.SectionQualityError) as failed:
-        tts_quality.check_section(SPACED, "voxcpm-mlx", _metrics(SPACED), heard=first_half)
-    assert failed.value.code == "TTS_SECTION_TEXT_MISMATCH"
-
-    # Heard in Latin letters (Whisper decoding Khmer as English) is not Khmer at all.
-    with pytest.raises(tts_quality.SectionQualityError):
-        tts_quality.check_section(SPACED, "voxcpm-mlx", _metrics(SPACED),
-                                  heard="now pel preah atit reap asdangkut")
+        tts_quality.check_section(SPACED, "voxcpm-mlx", silent, heard=MMS_HEARD[0])
+    assert failed.value.code == "TTS_SECTION_SILENT"
+    paused = {**_metrics(SPACED), "longest_pause_s": 30.0}
+    with pytest.raises(tts_quality.SectionQualityError) as failed:
+        tts_quality.check_section(SPACED, "voxcpm-mlx", paused)
+    assert failed.value.code == "TTS_SECTION_INTERNAL_SILENCE"
 
 
 def test_whisper_reads_a_khmer_section_as_khmer():
