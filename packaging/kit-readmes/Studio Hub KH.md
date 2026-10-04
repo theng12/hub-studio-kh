@@ -143,7 +143,7 @@ the 8 GB Macs: it is qualified there (measured on an 8 GB M1 Mac mini, low-RAM m
 |---|---|
 | `START-HERE.md` | the plain walk-through for a new Mac |
 | `NODE-SETUP-CHECKLIST.md` | tick list for setting up a node |
-| `Extras/Set Up a Shop Mac.command`, `Extras/Set Up the Shops Controller.command` | optional shortcuts: a work Mac in Lite Mode (the usual install with only the Lite Mode models, Lite Mode on - the same as setting the Mac up like any other and ticking **Lite Mode** in Studio Hub > Settings, on any role), and the Shops group's controller (its own generation paused) - see `NODE-SETUP-CHECKLIST.md`, "Shops" |
+| `Extras/Set Up a Shop Mac.command` | optional shortcut: a work Mac in Lite Mode (the usual install with only the Lite Mode models, Lite Mode on - the same as setting the Mac up like any other and ticking **Lite Mode** in Studio Hub > Settings, on any role, controller included) - see `NODE-SETUP-CHECKLIST.md`, "Shops" |
 | `Token and Stuff.md` | a place you have written down this Mac's addresses and tokens |
 | `Technical/verify-kit.sh` | proves this copy installs, starts and answers health |
 | `Technical/RUN-16GB-FISH.command` | the 16 GB Fish test: double-click on the 16 GB Mac. It first puts Fish S2 Pro 4-bit, 8-bit and bf16 on that Mac from this kit's `model-library` (bf16 and 8-bit are not part of the normal copy step), then measures all three; read `README-8gb-tts.md` beside it |

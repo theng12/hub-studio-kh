@@ -3865,6 +3865,7 @@ async def _dispatch_loop():
                     item["state"] = "running"
                     item["retry_at"] = None
                     item["studio"] = studio["id"]
+                    peers.note_dispatch(studio)
                     # Never let a later dispatch reconcile a previous attempt's
                     # worker id if the new POST loses its response.
                     item["studio_job_id"] = None

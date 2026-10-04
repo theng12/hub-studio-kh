@@ -212,6 +212,15 @@ def is_local_studio(studio: dict) -> bool:
             or (os.environ.get("STUDIOHUB_PACKAGED") == "1" and studio.get("local") is True))
 
 
+def note_dispatch(studio: dict) -> None:
+    """One of this Mac's own queues started a job on this Mac: Lite Mode's "Today: N jobs" counts it,
+    as it counts a controller's job at the peer door (`standalone`). A job sent to a node is that
+    node's to count."""
+    if is_local_studio(studio):
+        from components.hub import workstation
+        workstation.note_job_accepted()
+
+
 def studio_request(studio: dict, path_or_url: str) -> tuple[str, dict[str, str]]:
     """Return the safest URL + credentials for a Studio API request.
 

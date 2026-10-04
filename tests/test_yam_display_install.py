@@ -329,8 +329,7 @@ class PrepareKitExtrasTests(unittest.TestCase):
         extras = self.kit / "Extras"
         # Beside it, the Shops set-up commands (workstation mode, 2026-10-03; `tests/test_shop_kit.py`).
         self.assertEqual(sorted(p.name for p in extras.iterdir()),
-                         [COMMAND, "Set Up a Shop Mac.command", "Set Up the Shops Controller.command",
-                          "YamDisplay2.4.8.4.dmg"])
+                         [COMMAND, "Set Up a Shop Mac.command", "YamDisplay2.4.8.4.dmg"])
         sha = hashlib.sha256((extras / "YamDisplay2.4.8.4.dmg").read_bytes()).hexdigest()
         self.assertIn(f"Extras/YamDisplay2.4.8.4.dmg sha256 {sha}", result.stdout)
         self.assertTrue(os.access(extras / COMMAND, os.X_OK))
@@ -346,10 +345,20 @@ class PrepareKitExtrasTests(unittest.TestCase):
         self.assertTrue((self.trash / "Extras-retired" / "YamDisplay2.4.0.dmg").exists())
         self.assertTrue((self.kit / "Extras" / "Something Else.pdf").exists())
 
+    def test_a_drives_retired_shops_controller_command_goes_to_trash(self):
+        """Owner 2026-10-04: the Shops controller is set up like any Mac; the old command leaves the kit."""
+        (self.kit / "Extras").mkdir()
+        (self.kit / "Extras" / "Set Up the Shops Controller.command").write_text("#!/bin/sh\n")
+        result = self.prepare()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.kit / "Extras" / "Set Up the Shops Controller.command").exists())
+        retired = list((self.trash / "Extras-retired").glob("Set Up the Shops Controller.command-*"))
+        self.assertEqual(len(retired), 1)
+
     def test_it_is_idempotent(self):
         self.assertEqual(self.prepare().returncode, 0)
         self.assertEqual(self.prepare().returncode, 0)
-        self.assertEqual(len(list((self.kit / "Extras").iterdir())), 4)
+        self.assertEqual(len(list((self.kit / "Extras").iterdir())), 3)
 
     def test_missing_assets_say_so_and_fail(self):
         for f in self.assets.iterdir():

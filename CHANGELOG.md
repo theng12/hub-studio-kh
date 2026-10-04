@@ -2,7 +2,7 @@
 
 ## 0.6.142 — 2026-10-04 · Every TTS model's sampling levers are request fields (defaults unchanged); Khmer narration splits, pauses and is checked correctly
 
-Release of `release/0.6.142` (= 0.6.141 + the sampling levers and Khmer fixes below + `feat/workstation-app-settings` 2e0edf2 + `fix/paused-group-chat-transcription` a2b6284, merged --no-ff). Owner, 2026-10-04: "find a balanced default for each of the models" after the TTS
+Release of `release/0.6.142` (= 0.6.141 + the sampling levers and Khmer fixes below + `feat/lite-mode-every-role` 10e60cb (on `feat/workstation-app-settings` 2e0edf2) + `fix/paused-group-chat-transcription` a2b6284, merged --no-ff). Owner, 2026-10-04: "find a balanced default for each of the models" after the TTS
 comparison found the Hub passed Breeze TTS 2 no sampling settings. Audit: `_orchestra/audit-20261001/tts-sampling/LEVERS.md`; calibration plan beside it.
 - **One table of sampling levers** (`catalog.SAMPLING_LEVERS`, per family: request field -> engine argument, bound, default; per-checkpoint overrides in
   `catalog.SAMPLING_DEFAULTS_BY_REPO`; `catalog.sampling_kwargs` clamps). New request fields: `qwen_temperature|top_p|top_k|repetition_penalty`,
@@ -34,6 +34,15 @@ comparison found the Hub passed Breeze TTS 2 no sampling settings. Audit: `_orch
   re-reads per decision); a hand launch opens the window (only an update's reopen stays quiet). User-facing name "Lite Mode" (kit commands, README,
   checklist, copy-models, refusal sentences); code, API paths, JSON keys, `workstation.json` and error codes keep "workstation". Native tests in
   `tests/native/api_main.swift`, `render_main.swift`.
+- **Lite Mode governs every job on every role** (`feat/lite-mode-every-role`, 10e60cb): the scheduler treats `"local"` like any Lite Mode Mac
+  (`peers.dispatch_ready` / `standing_by` / `workstation_start_free_gb` read this Mac's `workstation.status()`, `peers.lite_mode_allows`); a controller
+  standing by routes its group's work to its nodes, otherwise work waits (`governor_note` "Waiting: Lite Mode - ..."); the pressure-yield loop also
+  watches `broker.local_running_jobs()`; a handed-back own job is re-queued here (standalone/node) or handed to the Gateway (controller).
+- **"Today: N jobs" counts every job this Mac starts in Lite Mode** (`peers.note_dispatch` at the own-queue dispatch points in `broker`,
+  `transcription_jobs`, `chat_jobs`; the peer door already counted). Test: `test_lite_mode_every_role.test_todays_count_includes_this_macs_own_queue`.
+- **`Set Up the Shops Controller.command` retired** (owner 2026-10-04: the Shops controller is a regular controller that also generates; set it up
+  like any Mac, then tick Lite Mode). Moved to `_trash`; `prepare-kit-extras.sh` ships only `Set Up a Shop Mac.command` and moves a drive's old copy
+  to `<volume>/_trash/Extras-retired/`; kit README, NODE-SETUP-CHECKLIST, AGENTS.md, `test_shop_kit`, `test_yam_display_install` follow.
 - **Transcription honours a fully paused group** (`fix/paused-group-chat-transcription`, a2b6284): `transcription_jobs` create route answers 503
   `NO_AVAILABLE_MACHINE` (after replay/duplicate checks) via `broker.every_capable_mac_paused`, the dispatcher hands queued items back as
   `error`/`NO_AVAILABLE_MACHINE` without a try, items publish `error_code`, a manual retry clears it. Chat needs nothing (no producer route; the peer

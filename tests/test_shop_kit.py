@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EXTRAS = ROOT / "packaging" / "kit-extras"
 SHOP = "Set Up a Shop Mac.command"
-CONTROLLER = "Set Up the Shops Controller.command"
+RETIRED = "Set Up the Shops Controller.command"   # owner 2026-10-04: set the controller up like any Mac
 FAKE_UPDATE = '#!/bin/sh\necho "workstation=${STUDIOHUB_WORKSTATION:-}" >> "$FAKE_UPDATE_LOG"\nexit 0\n'
 
 
@@ -53,26 +53,12 @@ class ShopKit(unittest.TestCase):
         self.run_command(SHOP)
         self.assertTrue(json.loads((self.data / "workstation.json").read_text())["step_aside"])
 
-    def test_the_controller_pauses_its_own_generation_and_keeps_other_flags(self) -> None:
-        result = self.run_command(CONTROLLER)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(json.loads((self.data / "machine_flags.json").read_text()), {"local": {"enabled": False}})
-        self.assertIn("PAUSED", result.stdout)
-        (self.data / "machine_flags.json").write_text(json.dumps(
-            {"local": {"enabled": True, "studios": {"image": {"enabled": False}}}, "node-a": {"enabled": True}}))
-        self.run_command(CONTROLLER)
-        flags = json.loads((self.data / "machine_flags.json").read_text())
-        self.assertEqual(flags, {"local": {"enabled": False, "studios": {"image": {"enabled": False}}},
-                                 "node-a": {"enabled": True}})
-        (self.data / "machine_flags.json").write_text(json.dumps({"node-a": {"enabled": True}}))
-        self.run_command(CONTROLLER)
-        self.assertFalse(json.loads((self.data / "machine_flags.json").read_text())["local"]["enabled"])
-
-    def test_the_extras_prepare_script_ships_both_commands(self) -> None:
+    def test_the_extras_prepare_script_ships_the_shop_shortcut_and_retires_the_controller_one(self) -> None:
         text = (EXTRAS / "prepare-kit-extras.sh").read_text()
-        for name in (SHOP, CONTROLLER):
-            self.assertIn(name, text)
-            self.assertTrue(os.access(EXTRAS / name, os.X_OK), name)
+        self.assertIn(f'copy_checked "$HERE/{SHOP}"', text)
+        self.assertTrue(os.access(EXTRAS / SHOP, os.X_OK))
+        self.assertFalse((EXTRAS / RETIRED).exists())
+        self.assertNotIn(f'copy_checked "$HERE/{RETIRED}"', text)
 
 
 class CopyFilter(unittest.TestCase):

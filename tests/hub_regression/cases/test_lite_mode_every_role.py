@@ -209,3 +209,49 @@ def test_the_lite_mode_loop_sees_this_queues_own_running_jobs(fixture_monitor):
         {"state": "done", "studio": "image", "studio_job_id": "j0"}]}
     broker.batches[batch["id"]] = batch
     assert broker.local_running_jobs() == [("image", "j1")]
+
+
+# ── "Today: N jobs" counts every job this Mac ran in Lite Mode, its own queue's too ─
+
+@pytest.mark.parametrize("role", ROLES)
+def test_todays_count_includes_this_macs_own_queue(group, lite, monkeypatch, role):
+    """It counted only a controller's jobs at the peer door, so a standalone (or a controller's own
+    Mac) in Lite Mode said "Today: 0 jobs" after a day of work."""
+    group(["local"], role)
+    workstation.save({"enabled": True})
+    started: list[str] = []
+
+    async def ran(client, batch, item, studio):
+        started.append(studio["machine"])
+    monkeypatch.setattr(broker, "_run_item", ran)
+    monkeypatch.setattr(broker, "admission_refusal", lambda batch: None)
+
+    async def entry(studio, model):
+        return {"repo": model, "cached": True}
+    monkeypatch.setattr(broker, "_catalog_entry", entry)
+    monkeypatch.setattr(broker, "_admission_requirements", lambda model, entry: None)
+    monkeypatch.setattr(broker, "is_cached", lambda entry: True)
+    monkeypatch.setattr(broker, "_model_block_note", lambda *a, **k: None)
+    broker.submit_batch({"modality": "voice", "model": LITE, "items": [{"text": "one"}]})
+
+    async def a_few_passes():
+        task = asyncio.create_task(broker._dispatch_loop())
+        for _ in range(10):
+            await asyncio.sleep(0.02)
+        task.cancel()
+    asyncio.run(a_few_passes())
+    batch = next(iter(broker.batches.values()))
+    assert started == ["local"], (batch.get("governor_note"), batch["items"][0]["state"])
+    assert workstation.status()["jobs_today"] == 1
+
+
+def test_a_job_sent_to_another_mac_or_run_with_lite_mode_off_is_not_counted(lite):
+    workstation.save({"enabled": True})
+    peers.note_dispatch(_studio("n1"))
+    assert workstation.status()["jobs_today"] == 0, "the node counts its own"
+    peers.note_dispatch(_studio("local"))
+    assert workstation.status()["jobs_today"] == 1
+    workstation.save({"enabled": False})
+    peers.note_dispatch(_studio("local"))
+    workstation.save({"enabled": True})
+    assert workstation.status()["jobs_today"] == 1

@@ -242,7 +242,7 @@ def _roll_day() -> None:
 
 
 def note_job_accepted() -> None:
-    """A job was accepted here (counted only while the mode is on)."""
+    """A job started on this Mac - from a controller or from its own queue - while the mode is on."""
     if load()["enabled"]:
         with _lock:
             _roll_day()

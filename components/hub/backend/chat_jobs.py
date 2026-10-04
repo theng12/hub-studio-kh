@@ -644,6 +644,7 @@ async def dispatch_once(monitor) -> int:
                 if not broker.acquire_external_machine(machine, owner):
                     continue
                 broker.note_external_dispatch(machine, "chat")
+                peers.note_dispatch(studio)
                 pack.update(
                     state="running", studio=studio["id"], error=None,
                     retry_at=None, started_at=time.time(),

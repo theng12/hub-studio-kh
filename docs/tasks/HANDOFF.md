@@ -5,7 +5,7 @@
 
 Last updated: **0.6.142** (newest block first; the rest of this line and the blocks under it are older).
 
-> **0.6.142 - every TTS model's sampling levers reachable (defaults unchanged), Khmer narration fixes, Lite Mode in Settings, paused-group rule for transcription (`release/0.6.142` = 0.6.141 + a599402 + 37c7bc7 + merges of 2e0edf2 `feat/workstation-app-settings` and a2b6284 `fix/paused-group-chat-transcription`, 2026-10-04).**
+> **0.6.142 - every TTS model's sampling levers reachable (defaults unchanged), Khmer narration fixes, Lite Mode in Settings, paused-group rule for transcription (`release/0.6.142` = 0.6.141 + a599402 + 37c7bc7 + merges of 10e60cb `feat/lite-mode-every-role` (on 2e0edf2 `feat/workstation-app-settings`) and a2b6284 `fix/paused-group-chat-transcription`, 2026-10-04).**
 > `catalog.SAMPLING_LEVERS` is the one table (family -> request field -> engine kwarg, bound, default; `SAMPLING_DEFAULTS_BY_REPO` per checkpoint);
 > `catalog.sampling_kwargs` is applied once in `_generate_mlx_audio` after the mode resolver (and in `_generate_khmer_vits` as VitsModel attributes);
 > `lane_contract.parameters_for` publishes them. Defaults = 0.6.141's effective values (mlx-audio `generate_audio` passes temperature 0.7 to all). To adopt

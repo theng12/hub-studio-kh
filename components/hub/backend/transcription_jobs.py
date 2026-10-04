@@ -895,6 +895,7 @@ async def dispatch_once(monitor) -> int:
                 if not broker.acquire_external_machine(machine, owner):
                     continue
                 broker.note_external_dispatch(machine, "transcription")
+                peers.note_dispatch(studio)
                 item.update(
                     state="running", studio=studio["id"], machine=machine, error=None,
                     studio_task_id=f"stt-{batch['id']}-{item['index']}",

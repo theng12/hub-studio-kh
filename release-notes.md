@@ -11,6 +11,16 @@ idle time.** Lite Mode is the new name for workstation mode, and it can still be
 section shows what the Mac is doing now (working, standing by, stepped aside or quiet hours) and today's counts.
 Changes apply straight away, with no restart.
 
+**Lite Mode now covers everything the Mac runs.** That includes its own work, not only work sent by its controller. A
+controller in Lite Mode that is being used sends its group's work to the other Macs; a Mac on its own simply waits.
+
+**"Today: N jobs" now counts every job the Mac ran in Lite Mode**, its own work included (it used to count only work sent
+by a controller).
+
+**The Shops controller is set up like any other Mac.** It is a normal controller that also makes things; tick Lite Mode on
+it if it is also a work Mac. The "Set Up the Shops Controller" command has left the kit (an old copy on a drive is moved
+to that drive's trash). "Set Up a Shop Mac" stays as an optional shortcut.
+
 **Opening the app by hand always shows its window.** Opening Studio Hub from Applications or Spotlight now opens the
 window, so a Mac whose menu-bar icon is hidden can still get to Settings. Only the reopen after an update stays quiet.
 
