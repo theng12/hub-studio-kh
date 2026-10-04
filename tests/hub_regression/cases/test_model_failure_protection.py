@@ -45,6 +45,25 @@ def test_failure_classifier_distinguishes_model_files_from_capacity_and_bad_inpu
     assert broker._worker_terminal_error("missing", "MODEL_FILES_UNAVAILABLE").model_unavailable
 
 
+def test_no_audio_for_a_tiny_section_does_not_pause_the_model(protection):
+    """2026-10-04: a "***" section made Qwen 0.6B write no audio; three such jobs paused the model.
+
+    The worker now reports that as a ValueError (the text, not the model); the same failure from a
+    real-length section is still a model failure and still pauses it after the threshold.
+    """
+    studio = {"id": "voice@studio-mac-1305"}
+    batch = {"model": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"}
+    content = ("RuntimeError: ValueError: qwen3-tts produced no audio. 3-character section. "
+               "the section '***' is too short or has nothing to speak")
+    for _ in range(broker.MODEL_FAILURE_THRESHOLD):
+        broker._classify_worker_failure(batch, {}, studio, {"state": "error", "error": content}, 0.0)
+    assert not broker._model_block_note(studio, batch["model"], {})
+    engine = "RuntimeError: RuntimeError: qwen3-tts produced no audio. 240-character section"
+    for _ in range(broker.MODEL_FAILURE_THRESHOLD):
+        broker._classify_worker_failure(batch, {}, studio, {"state": "error", "error": engine}, 0.0)
+    assert broker._model_block_note(studio, batch["model"], {})
+
+
 def test_recheck_requires_explicit_fresh_readiness_not_legacy_cached(protection, monkeypatch, fixture_monitor):
     import asyncio
 

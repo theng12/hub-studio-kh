@@ -289,17 +289,20 @@ def _normalized_speech_text(family: str, text: str, params: dict) -> str:
     return spoken
 
 
-def _no_wav_produced_error(output_dir, family: str, gen_kwargs: dict) -> RuntimeError:
+def _no_wav_produced_error(output_dir, family: str, gen_kwargs: dict,
+                           need_gb: Optional[float] = None) -> Exception:
     """Explain why mlx-audio returned without writing audio.
 
     The bare "didn't produce a wav file" is technically true and practically
-    useless: on a small machine it is nearly always the request being too large
-    to fit, and the temp-dir path tells the owner nothing they can act on. Name
-    what was attempted, what the host had, and what actually fits.
+    useless. Name what was attempted, what the host had, and the cause: a section
+    with too little to speak is the text (a ValueError, so the Hub does not pause
+    a healthy model for it), and memory is blamed only when free memory was below
+    what generation needs (``need_gb``; the smallest loaded-model need when unknown).
     """
     mem = _memory_snapshot() or {}
     total = float(mem.get("total_gb") or 0)
     avail = float(mem.get("available_gb") or 0)
+    text = str(gen_kwargs.get("text") or "")
 
     detail = [f"{family or 'mlx-audio'} produced no audio"]
     frames = None
@@ -310,11 +313,18 @@ def _no_wav_produced_error(output_dir, family: str, gen_kwargs: dict) -> Runtime
             f"requested {float(duration):.0f}s of audio "
             f"({frames} latent frames committed in one pass)"
         )
-    elif gen_kwargs.get("text"):
-        detail.append(f"{len(str(gen_kwargs['text']))}-character section")
+    elif text:
+        detail.append(f"{len(text)}-character section")
 
     if total:
         detail.append(f"host has {total:.1f} GB unified memory, {avail:.1f} GB free")
+
+    if text and (not _speakable(text) or _tiny_section(text)):
+        detail.append(
+            f"the section {text[:40]!r} is too short or has nothing to speak; "
+            "this is the text, not the model or this Mac's memory"
+        )
+        return ValueError(". ".join(detail))
 
     safe = next((f for below, f in _OMNIVOICE_MEASURED_SAFE_FRAMES
                  if total and total < below), None)
@@ -324,10 +334,15 @@ def _no_wav_produced_error(output_dir, family: str, gen_kwargs: dict) -> Runtime
             f"(~{safe // _OMNIVOICE_FRAMES_PER_SECOND}s per pass); "
             "shorten the section or run it on a larger machine"
         )
-    else:
+    elif total and avail < (need_gb or 1.5 + MEMORY_HEADROOM_GB):
         detail.append(
             "this is usually the request being too large for the available "
             "memory — shorten the section, or free memory and retry"
+        )
+    elif total:
+        detail.append(
+            "that is enough free memory, so this was not a memory limit; "
+            "retry, and if it repeats on every Mac check the model"
         )
     return RuntimeError(". ".join(detail) + f". Temp dir: {output_dir}")
 
@@ -741,6 +756,20 @@ _QWEN_SENTENCE_ENDINGS = frozenset(".!?。！？។៕")
 # even with no space following (Khmer often writes none). "." is not one of them: "3.5", "e.g.".
 _SCRIPT_FULL_STOPS = "។៕"
 _QWEN_TRAILING_CLOSERS = frozenset("\"'”’»）】〕〉")
+# A section shorter than this (tts_quality spoken characters, so one CJK character counts three) is
+# merged into its neighbour, and one with nothing to speak is left out. A chapter ending in a "***"
+# scene break was cut into its own 3-character section; Qwen 0.6B wrote no audio for it on every
+# Mac, the request failed everywhere, and the Hub paused a healthy model (2026-10-04).
+_SECTION_MIN_SPOKEN_CHARACTERS = 12
+
+
+def _speakable(text: str) -> bool:
+    """A letter or a digit in any script; punctuation, symbols and scene breaks have nothing to say."""
+    return any(ch.isalnum() for ch in text)
+
+
+def _tiny_section(text: str) -> bool:
+    return tts_quality._spoken_characters(text) < _SECTION_MIN_SPOKEN_CHARACTERS
 
 
 def _qwen_clone_text_chunks(text: str, max_chars: int = _QWEN_CLONE_CHUNK_CHARS) -> list[str]:
@@ -761,15 +790,19 @@ def _sentence_safe_text_chunks(text: str, max_chars: int) -> list[str]:
     This is shared by local engines whose public request can be long while
     their stable synthesis context is much shorter. Paragraph and sentence
     boundaries win; an unusually long sentence falls back to punctuation,
-    whitespace, and only then an unavoidable character boundary.
+    whitespace, and only then an unavoidable character boundary. A paragraph with
+    nothing to speak ("***") is left out, and a section under the minimum joins its
+    neighbour (which may then run up to that minimum past ``max_chars``).
     """
     if max_chars < 40:
         raise ValueError("Sentence-safe chunk size must be at least 40 characters")
     paragraphs = [
         " ".join(part.split())
         for part in text.strip().split("\n\n")
-        if part.strip()
+        if _speakable(part)
     ]
+    if text.strip() and not paragraphs:
+        raise ValueError("The text has nothing to speak: it is only punctuation or symbols")
     chunks: list[str] = []
     for paragraph in paragraphs:
         sentences: list[str] = []
@@ -802,7 +835,17 @@ def _sentence_safe_text_chunks(text: str, max_chars: int) -> list[str]:
                 current = f"{current} {unit}".strip()
         if current:
             chunks.append(current)
-    return chunks
+    # ponytail: a tiny section joins its neighbour even past max_chars (by under the minimum);
+    # moving the neighbour's last sentence over instead is the upgrade if a hard limit ever needs it.
+    merged: list[str] = []
+    for chunk in chunks:
+        if not _speakable(chunk):
+            continue
+        if merged and (_tiny_section(chunk) or _tiny_section(merged[-1])):
+            merged[-1] = f"{merged[-1]} {chunk}"
+        else:
+            merged.append(chunk)
+    return merged
 
 
 def _split_long_text_unit(text: str, max_chars: int) -> list[str]:
@@ -907,6 +950,14 @@ def _request_join_pauses_s(text: str, chunks: list[str], params: dict) -> list[f
     return _production_join_pauses_s(text, chunks, float(params.get("speed") or 1.0), rule)
 
 
+def _find_section(text: str, chunk: str, start: int) -> tuple[int, int]:
+    """Where a section sits in its text, ignoring whitespace: sections are rebuilt with single spaces
+    and a tiny paragraph is merged into its neighbour, so a literal ``find`` missed them and the
+    boundary after got the wrong pause."""
+    match = re.compile(r"\s*".join(map(re.escape, chunk.split()))).search(text, start)
+    return (match.start(), match.end()) if match else (-1, -1)
+
+
 def _production_join_pauses_s(text: str, chunks: list[str], speed: float,
                               rule: Optional[dict[str, float]] = None) -> list[float]:
     """Keep production narration boundaries stable after final tempo adjustment."""
@@ -917,9 +968,9 @@ def _production_join_pauses_s(text: str, chunks: list[str], speed: float,
     speed = max(long_form_policy.SPEED_MINIMUM,
                 min(float(speed), long_form_policy.SPEED_MAXIMUM))
     for index, chunk in enumerate(chunks[:-1]):
-        start = text.find(chunk, cursor)
-        end = start + len(chunk) if start >= 0 else cursor
-        next_start = text.find(chunks[index + 1], end)
+        start, end = _find_section(text, chunk, cursor)
+        end = end if start >= 0 else cursor
+        next_start, _ = _find_section(text, chunks[index + 1], end)
         separator = text[end:next_start] if next_start >= 0 else ""
         visible_end = chunk.rstrip()
         while visible_end and visible_end[-1] in _QWEN_TRAILING_CLOSERS:
@@ -3733,7 +3784,9 @@ class GenerationManager:
                     # mlx-audio sometimes uses a different naming scheme — find any wav.
                     candidates = sorted(temp_dir.glob("*.wav"))
                     if not candidates:
-                        raise _no_wav_produced_error(temp_dir, family, gen_kwargs)
+                        raise _no_wav_produced_error(
+                            temp_dir, family, gen_kwargs,
+                            _required_free_memory_gb(model_entry, loaded=True))
                     produced = candidates[0]
 
                 trimmed_seconds = _trim_model_terminal_silence(
