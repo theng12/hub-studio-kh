@@ -425,7 +425,7 @@ def presented_owner_token(request: Request, hub_token: str) -> bool:
 #
 # In short: send work, watch it, collect it, cancel it - and read what is needed to decide
 # where work should go. Never change this Mac's settings, never delete its output, never
-# manage its models or its membership of the fleet.
+# manage its models (beyond starting a checked download, see below) or its membership of the fleet.
 #
 # `chat` was missing from this regex until 2026-09-25, and the gap was a lie rather than a
 # precaution: `GET /api/hub/catalog` is fleet-allowed and aggregates every worker's catalog,
@@ -581,6 +581,14 @@ FLEET_ALLOWED = (
     # Gateway's change (`.../fleet/nodes/{id}/workstation`) to the Mac's own `/api/hub/workstation`,
     # which accepts only the workstation settings, validated. Not in `NODE_ALLOWED`.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/workstation$"),
+    # **Installing a model from the Gateway (owner decision 2026-10-04: the owner's Gateway may make a
+    # Mac install a model).** Only the download and its status, each through the fleet path, which
+    # refuses a shelved model, an unknown package, a full disk and a model this Mac has too little
+    # memory to run. Importing, cancelling, verifying and the plain `/api/hub/model-packages/...`
+    # routes stay Hub-token only, so the fleet still cannot remove or replace a model.
+    # Not in `NODE_ALLOWED`.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/model-packages/[^/]+/download$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/model-downloads/[^/]+$"),
     ("GET", r"^/api/hub/workstation$"),
     ("POST", r"^/api/hub/workstation$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same

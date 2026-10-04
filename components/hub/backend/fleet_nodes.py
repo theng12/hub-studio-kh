@@ -1267,6 +1267,52 @@ async def relay_workstation(node_id: str, changes: object, *,
     return {"ok": True, "node": wanted, "workstation": _workstation_of(body.get("workstation"))}
 
 
+async def relay_model(node_id: str, method: str, path: str, *,
+                      client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Pass a model install (or its status read) to one joined node's own fleet route, ``local``.
+
+    ``path`` is the part after ``/api/hub/fleet/nodes/local``. The node checks and audits the
+    request itself; its refusal (unknown package, shelved, disk, memory) comes back with its own
+    status and sentence. Raises `StartupRelayError`.
+    """
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        raise StartupRelayError(404, {"ok": False, "code": "UNKNOWN_NODE",
+                                      "detail": f"this controller has no joined Mac {node_id!r}"})
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        response = await client.request(method, f"{node.get('address') or ''}/api/hub/fleet/nodes/local{path}",
+                                        timeout=STARTUP_RELAY_TIMEOUT)
+    except httpx.HTTPError as exc:
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
+                                      "reason": _unreachable_reason(exc),
+                                      "detail": "that Mac did not answer, so nothing was installed - "
+                                                "try again when it is back"}) from exc
+    finally:
+        if owned:
+            await client.aclose()
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    if response.status_code in (401, 403, 405):
+        raise StartupRelayError(502, {
+            "ok": False, "code": "NODE_REFUSED",
+            "detail": "that Mac refused: its Studio Hub is older than installing models from the "
+                      "Gateway (needs Studio Hub 0.6.143), or it holds a different Fleet token. "
+                      "Update it first."})
+    if not response.is_success:
+        body = {"ok": False, **body}
+        body.setdefault("detail", f"that Mac answered HTTP {response.status_code}")
+        raise StartupRelayError(response.status_code, body)
+    return {**body, "node": wanted}
+
+
 async def pool(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """Every machine in the group this Mac belongs to, from whichever end of it this Mac is.
 
