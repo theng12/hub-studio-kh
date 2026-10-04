@@ -299,10 +299,9 @@ def build() -> str:
         if not rows:
             continue
         add(f"| **{MODALITY_TITLES[modality]}** | | |" + " |" * len(FLEET))
-        for manifest in sorted(rows, key=lambda m: (m["qualification"].get("minimum_unified_memory_gb") or 0,
-                                                    m["package_id"])):
+        for manifest in sorted(rows, key=lambda m: (hub_floor(m) or 0, m["package_id"])):
             q = manifest.get("qualification") or {}
-            floor = q.get("minimum_unified_memory_gb")
+            floor = hub_floor(manifest)
             label = labels.get(manifest["package_id"], manifest["package_id"])
             if manifest["package_id"] in companions:
                 # Its own row would answer "can this machine run it?" about a file nobody picks.
@@ -434,6 +433,18 @@ def build() -> str:
         f"{len(voice_rows)} voice runtime rows.")
     add("")
     return "\n".join(out)
+
+
+def hub_floor(manifest: dict) -> float | None:
+    """The RAM floor the Hub enforces (`memory_admission.requirement_gb`), not the manifest's alone:
+    a fleet measurement outranks it, and FLUX.2 Klein 4-bit read "no" on 8 GB here while the Hub
+    ran it there."""
+    import os
+    import tempfile
+    os.environ.setdefault("STUDIOHUB_DATA_DIR", tempfile.mkdtemp(prefix="model-record-"))
+    from components.hub.backend import memory_admission
+    floor = memory_admission.requirement_gb(manifest["model_id"], {}, use_override=False)[0]
+    return int(floor) if floor is not None and float(floor).is_integer() else floor
 
 
 def main() -> int:

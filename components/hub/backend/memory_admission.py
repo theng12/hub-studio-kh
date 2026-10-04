@@ -144,6 +144,41 @@ def requirement_gb(model: str, catalog_entry: dict, *,
     return None, "none"
 
 
+def publish_floor(row: dict, total_gb: float | None) -> dict:
+    """Make a worker's published tier and ``memory_eligible`` the floor dispatch enforces.
+
+    A worker's own tier is a literal in its catalog, and it went stale: Voice published 16 GB for
+    VoxCPM2 4-bit after the manifest (8 GB) had replaced it, so every 8 GB Mac read
+    ``memory_eligible: false`` to the Gateway and the published capacity counted only 16 GB Macs
+    while the Hub admitted - and finished - its jobs on 8 GB. The Hub's aggregate catalog now
+    publishes `requirement_gb` instead, so there is one number. It is the default floor (no
+    operator override): an override is site-local and is never written back into a catalog row,
+    which `requirement_gb` itself reads.
+
+    ``total_gb`` is the Mac's RAM as its worker reported it. A worker's ``memory_eligible: false``
+    is flipped only when its own stricter tier explains it; Image, Music, Chat and Subtitle use
+    the same field for "not Apple Silicon / macOS 14", which no floor can overrule.
+    """
+    model = str(row.get("repo") or row.get("model_id") or "")
+    try:
+        worker_tier = workload_policy.required_total_memory_gb(model, row)
+        floor = requirement_gb(model, row, use_override=False)[0]
+    except ValueError:
+        return row  # an unreadable published floor stays visible as published
+    if floor is None:
+        return row
+    for key in ("min_unified_memory_gb", "min_total_memory_gb", "qualified_minimum_memory_gb"):
+        if key == "min_unified_memory_gb" or key in row:
+            row[key] = floor
+    total = _number(total_gb) if not isinstance(total_gb, bool) else None
+    if total is not None and type(row.get("memory_eligible")) is bool:
+        if total < floor:
+            row["memory_eligible"] = False
+        elif row["memory_eligible"] is False and worker_tier is not None and total < worker_tier:
+            row["memory_eligible"] = True
+    return row
+
+
 def _number(value) -> float | None:
     try:
         result = float(value)

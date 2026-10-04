@@ -54,8 +54,8 @@ may still run there, and one at or below may still not (see the peak-memory note
 | Whisper Small | MLX (speech-to-text) | 8 GB | yes | yes | yes | yes |
 | Whisper Large v3 Turbo *(supporting files)* | MLX (speech-to-text) | 8 GB | yes | yes | yes | yes |
 | **Image** | | | | | | |
+| FLUX.2 Klein 4B MLX 4-bit | mflux (MLX) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | Z-Image-Turbo 6B MLX 4-bit | mflux (MLX) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
-| FLUX.2 Klein 4B MLX 4-bit | mflux (MLX) | 16 GB | no | yes | yes | yes |
 | **Music** | | | | | | |
 | Stable Audio 3 Medium (1.4B) | MLX (audio) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | YuE2 3B Music (8-bit AR + bf16 NAR) | mlx-Yue2 (MLX) | 16 GB (recommended 24 GB) | no | yes | yes | yes |

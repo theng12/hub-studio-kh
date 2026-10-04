@@ -635,6 +635,22 @@ def _retired_refusal(model: object) -> dict[str, Any] | None:
     return None
 
 
+def _a_joined_mac_can_run(envelope: dict[str, Any], modality: str | None) -> bool:
+    """Whether a joined Mac in this group has the model installed, runtime-ready and within its RAM floor.
+
+    The readiness row is this Mac's own disk, so group 1500 refused Fish S2 Pro 4-bit with
+    MODEL_NOT_READY while its node 1504 had it ready. The broker sends work only to a Studio whose
+    catalog has the model cached, so accepting it here lands it on that node.
+    """
+    model = str(envelope.get("model") or "")
+    routing, _error = routing_rule.parse(envelope.get("routing"))
+    return any(
+        not peers.is_local_studio(studio)
+        and broker._can_run(studio, entry, model, routing)
+        and entry.get("runtime_ready") is not False and entry.get("available") is not False
+        for studio, entry in broker._model_rows(str(modality or ""), model))
+
+
 def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> dict[str, Any] | None:
     """Return an explicit refusal when this packaged model cannot run here.
 
@@ -671,7 +687,7 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
     expected_modality = _modality_for_engine(str(manifest.get("engine") or ""))
     if expected_modality != envelope.get("modality"):
         return {"code": "MODEL_MODALITY_MISMATCH", "detail": "model is not available for this job modality"}
-    if state["dispatch_state"] != "eligible":
+    if state["dispatch_state"] != "eligible" and not _a_joined_mac_can_run(envelope, expected_modality):
         return {"code": "MODEL_NOT_READY", "detail": "model files, runtime, OS, or chip are not ready",
                 "readiness": state}
     # A Studio that is not running cannot be given work. Without this the job was accepted - the
