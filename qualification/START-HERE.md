@@ -26,6 +26,10 @@ It can be run again any time. It is built for it: models and voices you do not h
 are added, ones that changed are updated, and ones that are already correct are left
 alone. A second run takes about a second.
 
+**A Lite Mode Mac:** set it up like any Mac; use **2 - Copy the Lite Mode models** instead of
+**2 - Copy the models** if you want only the Lite models (about 15 GB); then open Studio Hub >
+Settings > Lite Mode and tick it.
+
 ### 2. Double-click **1 - Install the app**
 
 It asks for your password, because putting an app in **Applications** needs it. That

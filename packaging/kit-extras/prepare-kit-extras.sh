@@ -1,6 +1,6 @@
 #!/bin/bash
 # Put the kit's Extras folder in order: the Yam Display installer and the standalone command that
-# installs it, and the optional Lite Mode shortcut `Set Up a Shop Mac`. Called by the per-release prepare-kit script, or by hand:
+# installs it. Called by the per-release prepare-kit script, or by hand:
 #
 #   bash packaging/kit-extras/prepare-kit-extras.sh "<kit folder>" "<trash folder>"
 #
@@ -8,8 +8,8 @@
 # The installer comes from KIT_ASSETS (default ~/Developer/_orchestra/kit-assets) and the command
 # from this folder; both are copied and their sha256 is checked against the source. An older
 # YamDisplay*.dmg already in Extras is moved to the trash folder, never deleted. Anything else in
-# Extras is the owner's and is left alone: only the two names below are managed here (the kit's
-# Technical prune never looks in Extras).
+# Extras is the owner's and is left alone: only the two names below, and the retired commands named
+# at the end, are managed here (the kit's Technical prune never looks in Extras).
 # Exit status: 0 prepared, 1 not (and it says why).
 set -u
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -47,15 +47,17 @@ copy_checked "$DMG" "$DMGNAME"
 copy_checked "$HERE/$COMMAND" "$COMMAND"
 chmod 644 "$KIT/Extras/$DMGNAME"
 chmod 755 "$KIT/Extras/$COMMAND"
-# The optional Lite Mode shortcut (owner 2026-10-03).
-copy_checked "$HERE/Set Up a Shop Mac.command" "Set Up a Shop Mac.command"
-chmod 755 "$KIT/Extras/Set Up a Shop Mac.command"
-# Retired 2026-10-04 (owner): the Shops controller is a regular controller that also generates - set it
-# up like any Mac, then tick Lite Mode. A drive prepared earlier still has the command; it goes to the
-# volume's trash, never deleted.
-RETIRED="$KIT/Extras/Set Up the Shops Controller.command"
-if [ -e "$RETIRED" ]; then
-  mv "$RETIRED" "$TRASH/Extras-retired/Set Up the Shops Controller.command-$(date +%Y%m%d%H%M%S)" \
-    && echo "   _trash: Extras/Set Up the Shops Controller.command (retired)"
-fi
+# Retired commands (owner): a drive prepared earlier still has them; they go to the volume's trash,
+# never deleted.
+#  - 2026-10-04 `Set Up the Shops Controller`: the Shops controller is a regular controller that also
+#    generates - set it up like any Mac, then tick Lite Mode.
+#  - 2026-10-04 `Set Up a Shop Mac`: a Lite Mode Mac is set up like any Mac, then Lite Mode is ticked in
+#    Studio Hub > Settings; the kit's root has '2 - Copy the Lite Mode models.command' for its models.
+for name in "Set Up the Shops Controller.command" "Set Up a Shop Mac.command"; do
+  RETIRED="$KIT/Extras/$name"
+  if [ -e "$RETIRED" ]; then
+    mv "$RETIRED" "$TRASH/Extras-retired/$name-$(date +%Y%m%d%H%M%S)" \
+      && echo "   _trash: Extras/$name (retired)"
+  fi
+done
 exit $status

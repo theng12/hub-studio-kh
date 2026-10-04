@@ -48,14 +48,18 @@ as usual (or leave it standalone, or make it a controller) - **then tick Lite Mo
 Settings. That is the only extra step, and Lite Mode works the same on every role (owner, 2026-10-04):
 every generation job the Mac runs itself is governed, whether a controller sent it, it is the Mac's own
 queue, or it is a controller's own share of its group's work (a controller standing by keeps routing
-and sends its group's work to its nodes; a standalone Mac's work just waits). The two commands in the
-kit's **Extras** folder has one optional shortcut for a work Mac, **Set Up a Shop Mac**.
+and sends its group's work to its nodes; a standalone Mac's work just waits).
+
+**Lite Mode Mac: set it up like any Mac; use "2 - Copy the Lite Mode models" instead of "2 - Copy the
+models" if you want only the Lite models; then tick Lite Mode in Settings.** The Lite Mode copy is the
+same step with one switch (about 15 GB; safe to run again; voices copied the same way). It does not
+change the Mac's role and does not tick Lite Mode.
 
 | # | Where | Step | What "good" looks like |
 |---|---|---|---|
 | 1 | the always-on Mac mini | The usual install (app, Yam Display, models, services started), like any Mac; tick **Lite Mode** in Studio Hub > Settings if it is also a work Mac | The usual "good" for an update. It is a regular controller: it also generates. |
 | 2 | the Mac mini | Studio Hub > **Connections**: role **Controller**, Tailscale address on, restart services, **Copy Fleet Token** | The Gateway's Fleet page shows the group with this Mac **Working**. |
-| 3 | each cashier Mac | The usual install, then tick **Lite Mode** in Studio Hub > Settings - or, as a shortcut, double-click **Extras/Set Up a Shop Mac** | "Lite Mode: ON"; with the shortcut only the six Lite Mode models are copied (FLUX.2 Klein 4B 4-bit, Z-Image-Turbo 4-bit, Qwen3-TTS 0.6B 4-bit, VoxCPM2 4-bit, Whisper large-v3 turbo, Stable Audio 3 Medium; ~15 GB). |
+| 3 | each cashier Mac | The usual install (**1 - Install the app**), then **2 - Copy the Lite Mode models** (or **2 - Copy the models**), then tick **Lite Mode** in Studio Hub > Settings | "Lite Mode: ON"; the Lite Mode copy brings only the six Lite Mode models (FLUX.2 Klein 4B 4-bit, Z-Image-Turbo 4-bit, Qwen3-TTS 0.6B 4-bit, VoxCPM2 4-bit, Whisper large-v3 turbo, Stable Audio 3 Medium; ~15 GB). |
 | 4 | each cashier Mac | Studio Hub > **Connections**: Tailscale address on, restart services, **Join** with the controller's address and Fleet token | The Mac appears under the Shops group as **Working**. |
 | 5 | the cashier Mac, or the Gateway | Studio Hub > **Settings > Lite Mode** on the Mac itself, or Fleet > the Mac's **…** menu on the Gateway | Only when idle (default off, 3 min), Step aside when someone uses it (default off, resume after 2 min), free memory needed to start a job (default: each model's own, ~2.8 GB), quiet hours, hide the menu-bar icon. |
 

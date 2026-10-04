@@ -510,7 +510,8 @@ class LauncherTests(unittest.TestCase):
     to working from either place, and to naming the files the owner actually sees.
     """
 
-    LAUNCHERS = ("copy-models.command", "install_app.command", "Update this Mac.command")
+    LAUNCHERS = ("copy-models.command", "copy-lite-models.command", "install_app.command",
+                 "Update this Mac.command")
 
     def test_each_launcher_is_a_valid_shell_script(self):
         for name in self.LAUNCHERS:
@@ -582,6 +583,7 @@ class KitManifestTests(unittest.TestCase):
         text = (ROOT / "packaging" / "release_kit.py").read_text()
         self.assertIn("1 - Install the app.command", text)
         self.assertIn("2 - Copy the models.command", text)
+        self.assertIn("2 - Copy the Lite Mode models.command", text)
         self.assertNotIn('"Copy the app and the model library folder to the target Mac."', text)
 
     def test_the_kit_records_the_commit_that_built_it(self):

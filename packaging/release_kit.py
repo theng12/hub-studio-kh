@@ -153,7 +153,8 @@ def build(app: Path, library: Path) -> dict:
         "operator_steps": [
             "Double-click '1 - Install the app.command' in the kit folder.",
             "Double-click '2 - Copy the models.command' - it copies the models this Mac "
-            "can run into ~/StudioHubModels.",
+            "can run into ~/StudioHubModels. (A Lite Mode Mac that should carry only the Lite Mode models: "
+            "'2 - Copy the Lite Mode models.command' instead, then tick Lite Mode in Studio Hub > Settings.)",
             "Open Studio Hub from Applications; it offers that library as 'Use the Models Already "
             "on This Mac'.",
             "Allow the local-network and incoming-connection prompts.",
