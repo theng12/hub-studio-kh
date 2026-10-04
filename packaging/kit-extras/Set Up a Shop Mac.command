@@ -2,18 +2,19 @@
 # SET UP A SHOP MAC
 #
 # Double-click this file on a shop's cashier Mac (owner, 2026-10-03, "Shops"). It makes the Mac a
-# Studio Hub node in **workstation mode**: it lends its idle time to the fleet and never its user's.
+# Studio Hub node in **Lite Mode**: it lends its idle time to the fleet and never its user's.
 #
-#   1. Workstation mode is switched on, with its defaults: every job at background priority, only the
+#   1. Lite Mode is switched on, with its defaults: every job at background priority, only the
 #      8 GB-class models, quiet (no pop-ups). "Only when idle", "Step aside when someone uses it",
-#      quiet hours and the rest are set later from the Gateway's Fleet page.
+#      quiet hours and the rest are set later in Studio Hub's Settings on this Mac, or from the
+#      Gateway's Fleet page.
 #   2. 'Update this Mac.command' then installs Studio Hub and Yam Display and copies ONLY the
-#      workstation models (about 15 GB: FLUX.2 Klein 4B 4-bit, Z-Image-Turbo 4-bit, Qwen3-TTS 0.6B
+#      Lite Mode models (about 15 GB: FLUX.2 Klein 4B 4-bit, Z-Image-Turbo 4-bit, Qwen3-TTS 0.6B
 #      4-bit, VoxCPM2 4-bit, Whisper large-v3 turbo, Stable Audio 3 Medium), and starts the services.
 #   3. You join it to the Shops controller once, in the app (the last screen says how).
 #
-# Safe to run again: that is how a Shop Mac is updated. A Mac whose workstation settings were already
-# changed from the Gateway keeps them.
+# Safe to run again: that is how a Shop Mac is updated. A Mac whose Lite Mode settings were already
+# changed keeps them.
 #
 # The `STUDIOHUB_*` names are for tests; nobody sets them in real use.
 set -u
@@ -41,10 +42,10 @@ fi
 mkdir -p "$(dirname -- "$HUB_DATA")" && mkdir -m 700 -p "$HUB_DATA" || {
   echo "  Could not create $HUB_DATA"; read _ || true; exit 1; }
 if [ -f "$HUB_DATA/workstation.json" ]; then
-  echo "  Workstation mode is already set up on this Mac - its settings are kept."
+  echo "  Lite Mode is already set up on this Mac - its settings are kept."
 else
   printf '{\n  "enabled": true\n}\n' > "$HUB_DATA/workstation.json" && chmod 600 "$HUB_DATA/workstation.json"
-  echo "  Workstation mode: ON (background priority, 8 GB-class models only, no pop-ups)."
+  echo "  Lite Mode: ON (background priority, 8 GB-class models only, no pop-ups)."
 fi
 echo
 
@@ -59,7 +60,7 @@ echo
 echo "  1. Open Studio Hub > Connections, turn on this Mac's Tailscale address, restart the services."
 echo "  2. Join: the Shops controller's address and its Fleet token."
 echo "  After that everything else - Only when idle, Step aside, quiet hours, hiding the menu-bar"
-echo "  icon - is set from the Gateway's Fleet page (the Mac's ... menu > Workstation Mode)."
+echo "  icon - is set in Studio Hub > Settings > Lite Mode on this Mac, or from the Gateway's Fleet page."
 echo
 echo "  Press Return to close."
 read _ || true

@@ -6,7 +6,7 @@
 # paused**: it hands work to the shop Macs and makes nothing itself. This is the owner's ordinary Pause
 # (the Gateway's Fleet page shows "Paused" and can Resume it any time) - set here before the app starts.
 #
-# Then 'Update this Mac.command' installs Studio Hub and Yam Display, copies only the workstation
+# Then 'Update this Mac.command' installs Studio Hub and Yam Display, copies only the Lite Mode
 # models (~15 GB, in case its generation is ever resumed) and starts the services.
 #
 # Safe to run again. The `STUDIOHUB_*` names are for tests; nobody sets them in real use.

@@ -88,7 +88,7 @@ class CopyFilter(unittest.TestCase):
             with mock.patch.dict(os.environ, {"STUDIOHUB_WORKSTATION": "1"}):
                 code, output, _prompt = kit.run()
             self.assertEqual(code, 0, output)
-            self.assertIn("Shop Mac: only the workstation models are copied; 1 other", output)
+            self.assertIn("Shop Mac: only the Lite Mode models are copied; 1 other", output)
             self.assertTrue((kit.home / "voxcpm2-4bit").is_dir(), output)
             self.assertFalse((kit.home / "voxcpm2-8bit").exists(), "not a workstation model")
             code, output, _prompt = kit.run()

@@ -1,4 +1,5 @@
-"""Workstation mode: a shop's cashier Mac lends the fleet its idle time, never its user's time.
+"""Lite Mode (the name people see; "workstation" inside the code, its API, file and error codes): a
+shop's cashier Mac lends the fleet its idle time, never its user's time.
 
 Owner, 2026-10-03 ("Shops"): 7-8 cashier iMacs (M1/M3, 8 GB) run Chrome's cloud POS, Telegram, a PDF
 viewer and the label printer all day and are idle most of it. A Mac with ``enabled`` on:
@@ -25,9 +26,10 @@ Only work a controller sends through the peer surface is governed: a Shop Mac is
 synchronous request (Subtitle's ``/api/transcribe``) is not cancelled mid-way; it is short and ends
 by itself.
 
-The settings live in ``workstation.json`` in the Hub's data folder. The Gateway changes them through
-the controller (``POST /api/hub/fleet/nodes/{id}/workstation``) and the kit's Shop Mac setup writes
-the file before the app first starts. ``status()`` is what every fleet row publishes as
+The settings live in ``workstation.json`` in the Hub's data folder. The Mac's own Studio Hub app changes
+them in Settings > Lite Mode (``POST /api/hub/workstation``), the Gateway through the controller
+(``POST /api/hub/fleet/nodes/{id}/workstation``), and the kit's Shop Mac setup writes the file before
+the app first starts. Every decision re-reads the file, so a change applies without a restart. ``status()`` is what every fleet row publishes as
 ``workstation``.
 """
 from __future__ import annotations
@@ -94,11 +96,11 @@ def _minutes(key: str, value: object) -> int:
 def validate(changes: object, base: dict[str, Any] | None = None) -> dict[str, Any]:
     """``base`` with ``changes`` applied, or ``ValueError`` naming the first bad setting."""
     if not isinstance(changes, dict):
-        raise ValueError("workstation settings must be an object")
+        raise ValueError("Lite Mode settings must be an object")
     merged = dict(base or DEFAULTS)
     for key, value in changes.items():
         if key not in DEFAULTS:
-            raise ValueError(f"{key!r} is not a workstation setting")
+            raise ValueError(f"{key!r} is not a Lite Mode setting")
         if isinstance(DEFAULTS[key], bool):
             if not isinstance(value, bool):
                 raise ValueError(f"{key} must be true or false")
@@ -126,12 +128,12 @@ def load() -> dict[str, Any]:
     except FileNotFoundError:
         return dict(DEFAULTS)
     except (OSError, ValueError):
-        log.warning("workstation.json is unreadable; keeping workstation mode on with its defaults")
+        log.warning("workstation.json is unreadable; keeping Lite Mode on with its defaults")
         return {**DEFAULTS, "enabled": True}
     try:
         return validate({key: value for key, value in raw.items() if key in DEFAULTS})
     except (ValueError, AttributeError) as exc:
-        log.warning("workstation.json is invalid (%s); keeping workstation mode on with its defaults", exc)
+        log.warning("workstation.json is invalid (%s); keeping Lite Mode on with its defaults", exc)
         return {**DEFAULTS, "enabled": True}
 
 
@@ -270,7 +272,7 @@ def admission_refusal(model: str) -> dict[str, Any] | None:
         return None
     if model and not workstation_models.is_workstation_model(model):
         return {"code": NOT_ALLOWED_CODE,
-                "detail": f"{model} is not one of the models this shop Mac runs in workstation mode"}
+                "detail": f"{model} is not one of the models this shop Mac runs in Lite Mode"}
     if state != "working":
         return {"code": STANDING_BY_CODE, "detail": f"this Mac is standing by: {why}"}
     return None

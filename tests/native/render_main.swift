@@ -98,6 +98,23 @@ struct PageRenderHarness {
             try? Data("render-fixture-fleet-token-0123456789".utf8).write(to: fleetFile)
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fleetFile.path)
             studio.readFleetToken()
+            // Settings > Lite Mode. `STUDIOHUB_RENDER_LITE=off|working|standing_by|yielded|quiet_hours`
+            // picks what the Hub says this Mac is doing (default off, the state a Mac turns it on from).
+            let lite = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_LITE"] ?? "off"
+            let reasons = ["standing_by": "someone is using this Mac", "quiet_hours": "inside its quiet hours",
+                           "yielded": "macOS reported critical memory pressure for 20 seconds"]
+            let report: [String: Any] = [
+                "enabled": lite != "off", "idle_only": lite == "standing_by", "idle_minutes": 3,
+                "step_aside": lite == "standing_by", "resume_after_minutes": 2,
+                "start_free_gb": lite == "quiet_hours" ? 3.5 : NSNull(),
+                "quiet_hours": lite == "quiet_hours" ? ["22:00-07:00", "12:00-13:00"] : [],
+                "hide_menu_bar_icon": lite == "quiet_hours", "state": lite,
+                "reason": reasons[lite].map { $0 as Any } ?? NSNull(),
+                "jobs_today": lite == "off" ? 0 : 3, "yields_today": lite == "yielded" ? 1 : 0]
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            studio.workspace.workstation = try? decoder.decode(
+                NativeWorkstation.self, from: JSONSerialization.data(withJSONObject: report))
         }
 
         // `STUDIOHUB_RENDER_ROLES=controller,node,node-offline,standalone` renders every page once per

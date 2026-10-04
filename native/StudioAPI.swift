@@ -1406,6 +1406,101 @@ struct ConnectionNotice: Identifiable, Equatable {
     let text: String
 }
 
+/// Lite Mode (`components/hub/workstation.py`; internally "workstation"): a shop's own Mac lends the
+/// fleet its idle time. The settings are this Mac's Hub's own (`GET/POST /api/hub/workstation`), the same
+/// ones the Gateway's Fleet page changes through the controller - one copy, kept by the Hub.
+struct NativeWorkstationSettings: Codable, Equatable {
+    var enabled = false
+    var idleOnly = false
+    var idleMinutes = 3
+    var stepAside = false
+    var resumeAfterMinutes = 2
+    /// Free memory needed to start a job; nil is each model's own floor.
+    var startFreeGb: Double?
+    var quietHours: [String] = []
+    var hideMenuBarIcon = false
+
+    /// Every setting, with an explicit null for "each model's own" - a missing key would keep the old figure.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(idleOnly, forKey: .idleOnly)
+        try container.encode(idleMinutes, forKey: .idleMinutes)
+        try container.encode(stepAside, forKey: .stepAside)
+        try container.encode(resumeAfterMinutes, forKey: .resumeAfterMinutes)
+        if let startFreeGb { try container.encode(startFreeGb, forKey: .startFreeGb) }
+        else { try container.encodeNil(forKey: .startFreeGb) }
+        try container.encode(quietHours, forKey: .quietHours)
+        try container.encode(hideMenuBarIcon, forKey: .hideMenuBarIcon)
+    }
+
+    /// What this Mac does with its user's own use, said from these settings - the same rule as the
+    /// Gateway's sheet (`FleetWorkstation.policySentence`), so neither claims "only when idle" for a Mac
+    /// set to work through it.
+    var policySentence: String {
+        guard enabled else { return "Lite Mode is off, so this Mac takes fleet work whenever it is free." }
+        let unit = idleMinutes == 1 ? "minute" : "minutes"
+        switch (idleOnly, stepAside) {
+        case (true, true):
+            return "This Mac takes fleet work only after \(idleMinutes) \(unit) without input, and if someone starts using it "
+                + "it finishes its current job, then pauses new work."
+        case (true, false):
+            return "This Mac takes fleet work only after \(idleMinutes) \(unit) without input."
+        case (false, true):
+            return "This Mac takes fleet work at background priority; while someone is using it, it finishes its current "
+                + "job, then pauses new work."
+        case (false, false):
+            return "This Mac takes fleet work at background priority, even while someone is using it."
+        }
+    }
+}
+
+/// This Mac's Lite Mode as the Hub reports it: the settings, what it is doing now and today's counts.
+struct NativeWorkstation: Decodable, Equatable {
+    let settings: NativeWorkstationSettings
+    /// off, working, standing_by, yielded, quiet_hours.
+    let state: String?
+    /// The Hub's few words for why ("someone is using this Mac").
+    let reason: String?
+    let jobsToday: Int?
+    let yieldsToday: Int?
+
+    private enum Keys: String, CodingKey { case state, reason, jobsToday, yieldsToday }
+
+    init(from decoder: Decoder) throws {
+        settings = try NativeWorkstationSettings(from: decoder)
+        let container = try decoder.container(keyedBy: Keys.self)
+        state = try container.decodeIfPresent(String.self, forKey: .state)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        jobsToday = try container.decodeIfPresent(Int.self, forKey: .jobsToday)
+        yieldsToday = try container.decodeIfPresent(Int.self, forKey: .yieldsToday)
+    }
+
+    /// "Working", "Standing by (someone is using this Mac)", ... - the Gateway's chip words.
+    var now: String {
+        let word: String
+        switch state {
+        case "working": word = "Working"
+        case "standing_by": word = "Standing by"
+        case "yielded": word = "Stepped aside"
+        case "quiet_hours": word = "Quiet hours"
+        default: return settings.enabled ? "On" : "Off"
+        }
+        // "Quiet hours (inside its quiet hours)" says nothing twice; the other two say why.
+        guard let reason, !reason.isEmpty, state == "standing_by" || state == "yielded" else { return word }
+        return "\(word) (\(reason))"
+    }
+
+    /// "Today: 3 jobs · 1 step-aside", once Lite Mode is on.
+    var today: String? {
+        guard settings.enabled else { return nil }
+        let jobs = jobsToday ?? 0, yields = yieldsToday ?? 0
+        return "Today: \(jobs) job\(jobs == 1 ? "" : "s") · \(yields) step-aside\(yields == 1 ? "" : "s")"
+    }
+}
+
+struct NativeWorkstationAnswer: Decodable { let workstation: NativeWorkstation }
+
 /// The Hub's per-device storage policy and the bytes it currently accounts for.
 ///
 /// `protectedBytes` is the part cleanup must never touch: unfinished work, output whose
@@ -3041,6 +3136,10 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var modelDefaultsRevision = 0
     @Published private(set) var memoryNote: String?
     @Published private(set) var updatingMemory = false
+    /// This Mac's Lite Mode, read when Settings shows and every few seconds while it does.
+    @Published private(set) var workstation: NativeWorkstation?
+    @Published private(set) var workstationNote: String?
+    @Published private(set) var savingWorkstation = false
     /// Truthful Hub identity for the Connections screen.
     @Published private(set) var controllerIdentity: NativeControllerIdentity?
     @Published private(set) var hubVersion: NativeVersion?
@@ -3410,6 +3509,9 @@ final class NativeWorkspaceStore: ObservableObject {
         memoryInventory = nil
         memoryNote = nil
         updatingMemory = false
+        workstation = nil
+        workstationNote = nil
+        savingWorkstation = false
         // The loading-size status belongs to the Image worker that answered it; the next
         // connection reads its own rather than showing this one's `effective`.
         imageLoadingMode = nil
@@ -5755,6 +5857,40 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             memoryInventory = nil
             memoryNote = Self.actionable(error, action: "Read model memory settings")
+        }
+    }
+
+    /// Read this Mac's Lite Mode (`GET /api/hub/workstation`).
+    func refreshWorkstation() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let answer: NativeWorkstationAnswer = try await get(["api", "hub", "workstation"])
+            guard connectionID == requestConnection else { return }
+            workstation = answer.workstation
+        } catch {
+            guard connectionID == requestConnection else { return }
+            workstation = nil
+            workstationNote = Self.actionable(error, action: "Read Lite Mode settings")
+        }
+    }
+
+    /// Save every Lite Mode setting (`POST /api/hub/workstation`). The Hub validates them and reads the
+    /// file on every decision, so the change applies at once - no restart. True when it was saved.
+    func saveWorkstation(_ settings: NativeWorkstationSettings) async -> Bool {
+        guard let requestConnection = connectionID else { return false }
+        savingWorkstation = true
+        workstationNote = nil
+        defer { if connectionID == requestConnection { savingWorkstation = false } }
+        do {
+            let answer: NativeWorkstationAnswer = try await sendJSON(
+                ["api", "hub", "workstation"], method: "POST", body: settings)
+            guard connectionID == requestConnection else { return false }
+            workstation = answer.workstation
+            workstationNote = "Saved. It applies now - no restart needed."
+            return true
+        } catch {
+            if connectionID == requestConnection { workstationNote = Self.actionable(error, action: "Save Lite Mode settings") }
+            return false
         }
     }
 

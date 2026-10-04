@@ -955,9 +955,10 @@ enum RelaunchHelper {
     }
 }
 
-/// Workstation mode (`components/hub/workstation.py`, owner 2026-10-03 "Shops"): a shop's cashier Mac
-/// shows no pop-ups - no window opened by itself, no What's New - and may hide this menu-bar icon.
-/// Read from the Hub's own `workstation.json` beside its other state, so it needs no request.
+/// Lite Mode (internally "workstation", `components/hub/workstation.py`, owner 2026-10-03 "Shops"): a
+/// shop's cashier Mac shows no pop-ups - no window opened by itself, no What's New - and may hide this
+/// menu-bar icon. Read from the Hub's own `workstation.json` beside its other state, so it needs no
+/// request. Changed in Settings > Lite Mode on the Mac itself or from the Gateway's Fleet page.
 struct WorkstationQuiet: Equatable {
     var quiet = false
     var hideIcon = false
@@ -1033,6 +1034,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config: ShellConfiguration
+        /// This copy is an update's reopen (the previous one quit to install it), not someone opening the app.
+        var updateReopen = false
         do {
             config = try ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL)
             controller = StudioController(configuration: config)
@@ -1044,7 +1047,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                     exitQuietly: ExistingInstanceHandler.noteAndExit)
             // This copy owns the data folder now: settle why the previous one ended (unless the
             // agent's copy already did), then leave the evidence the next settle reads.
-            StopRecord.settle(directory: config.dataDirectory, relaunching: false)
+            let settled = StopRecord.settle(directory: config.dataDirectory, relaunching: false)
+            updateReopen = settled?["reason"] as? String == StopReason.updated.rawValue
             StopRecord.markRunning(directory: config.dataDirectory)
             StopRecord.installSignalMarkers(directory: config.dataDirectory)
             startStopEvidence(directory: config.dataDirectory)
@@ -1138,9 +1142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let agentLaunch = ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1"
         let loginLaunch = agentLaunch || NSAppleEventManager.shared().currentAppleEvent?
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
-        // A workstation opens its window only by hand (Dock, menu): an update's reopen must not put
-        // Studio Hub in front of a cashier.
-        if (!loginLaunch && !workstation.quiet) || !controller.hasLibrary { openWindow() }
+        // A Lite Mode Mac opens its window only by hand: an update's reopen must not put Studio Hub in
+        // front of a cashier. Opening the app from Applications or Spotlight still shows it - with the
+        // menu-bar icon hidden, that is the way back to Settings.
+        if (!loginLaunch && !(workstation.quiet && updateReopen)) || !controller.hasLibrary { openWindow() }
         // A login launch starts the Studios only when the owner asked for it; the default is
         // off, so a Mac that signs in overnight stays idle until someone sends it work. Every
         // other launch starts them, because opening the app is the intent to use it.
