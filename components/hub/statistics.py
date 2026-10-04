@@ -26,6 +26,11 @@ def register_routes(app, monitor) -> None:
         ),
         modality: str | None = Query(None, description="filter to one operation type"),
         machine: str | None = Query(None, description="filter to one machine"),
+        activity_since: float | None = Query(
+            None, ge=0,
+            description="count fleet activity (done/failed/median) only from this epoch second; "
+                        "the Gateway's 'Reset counters' baseline. The job history is untouched.",
+        ),
     ):
         """Generation analytics and the matching live fleet activity view."""
         since = time.time() - hours * 3600 if hours else None
@@ -39,8 +44,10 @@ def register_routes(app, monitor) -> None:
         # One producer-side source for "which queues contribute live activity" - the same call
         # the monitor's poll cycle makes, so the route and the durable ledger cannot disagree
         # about which queues exist. This used to be a second copy, and both omitted Chat.
+        # The per-machine counters' window: the later of `hours` and the caller's baseline.
+        counted_since = max((v for v in (since, activity_since) if v is not None), default=None)
         result["fleet_activity"] = activity.fleet_snapshot(
-            monitor.registry, monitor.status, activity.live_batches(), since_s=since,
+            monitor.registry, monitor.status, activity.live_batches(), since_s=counted_since,
         )
         result["filters"] = {
             "source": source,

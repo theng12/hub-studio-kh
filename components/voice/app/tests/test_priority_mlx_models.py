@@ -200,6 +200,56 @@ def test_memory_preflight_refuses_when_live_headroom_is_too_low(monkeypatch) -> 
         manager._memory_preflight(SimpleNamespace(repo="repo", family="voxcpm-mlx", size_gb=2.3))
 
 
+def test_a_memory_guard_refusal_ends_the_job_typed_insufficient_memory(monkeypatch, tmp_path) -> None:
+    """2026-10-04: every refusal ended as an uncoded `error`, so the fleet's per-Mac "failed" count
+    could not tell a job that never reached the engine (and ran on another Mac) from a real failure:
+    8 GB Macs read 26 done / 192 failed. The refusal now carries the Hub's own typed code."""
+    import threading
+
+    manager = object.__new__(generation.GenerationManager)
+    manager._lock = threading.Lock()
+    manager._mlx_audio_model = None
+    manager._mlx_audio_model_repo = None
+    manager._f5_tts_model = None
+    manager._f5_tts_model_repo = None
+    manager._last_model_activity_at = None
+    manager._consecutive_memory_failures = 0
+    manager._restart_scheduled = False
+    manager._loaded_model = None
+
+    class _Sampler:
+        def __init__(self, publish):
+            pass
+
+        def start(self):
+            return self
+
+        def finish(self, **kwargs):
+            return {"outcome": kwargs}
+
+    def refuse(job, path):
+        raise generation.MemoryGuardError("Memory guard paused this job: 3.2 GB free is needed")
+
+    monkeypatch.setattr(generation, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(generation, "TTS_AVAILABLE", True)
+    monkeypatch.setattr(generation.resource_telemetry, "JobResourceSampler", _Sampler)
+    monkeypatch.setattr(manager, "_dispatch_txt2speech", refuse)
+    monkeypatch.setattr(manager, "_record_local_revision_evidence", lambda _job: None)
+    monkeypatch.setattr(manager, "_record_final_audio_evidence", lambda _job, _path: None)
+    monkeypatch.setattr(manager, "_evict_loaded_models", lambda _reason="": {})
+    monkeypatch.setattr(manager, "_persist", lambda: None)
+    job = generation.GenerationJob(
+        job_id="refused", mode="txt2speech",
+        params={"repo": "mlx-community/OmniVoice-bfloat16", "text": "A short line."},
+    )
+    manager._run_txt2speech(job)
+
+    assert job.state == "error"
+    assert job.error_code == "INSUFFICIENT_MEMORY"
+    projection = generation.GenerationManager._activity_projection(job, observed_at=job.finished_at)
+    assert projection["error_code"] == "INSUFFICIENT_MEMORY"
+
+
 def test_memory_preflight_honours_the_operator_floor_the_hub_forwards(monkeypatch) -> None:
     """The Hub forwards its per-model free-memory override as ``memory_floor_gb`` (only while one is
     set). The worker's own estimate (size + headroom) must give way to it, in both directions, or the

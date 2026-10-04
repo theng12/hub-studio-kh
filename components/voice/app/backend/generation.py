@@ -2984,6 +2984,11 @@ class GenerationManager:
                         job.state = "error"
                         if isinstance(e, tts_quality.SectionQualityError):
                             job.error_code = e.code
+                        if isinstance(e, MemoryGuardError):
+                            # A refusal, not a failed generation: the job never reached the engine
+                            # and the Hub hands it to another Mac. Typed, so the fleet's per-Mac
+                            # "failed" count can leave it out (`activity.REFUSAL_CODES`).
+                            job.error_code = "INSUFFICIENT_MEMORY"
                         if isinstance(e, qwen_quality.QwenQualityError):
                             job.error_code = e.code
                             job.quality_validation = {

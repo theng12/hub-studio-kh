@@ -18,6 +18,12 @@ SCHEMA = "kh-studio.activity.v1"
 VALID_STATES = frozenset({"queued", "running", "cancel_requested", "uncertain", "done", "error", "cancelled"})
 ACTIVE_STATES = frozenset({"queued", "running", "cancel_requested", "uncertain"})
 TERMINAL_STATES = frozenset({"done", "error", "cancelled"})
+# An `error` that is a refusal, not a failure: the worker turned the job down before it reached the
+# engine and the Hub handed it to another Mac. It stays in the ledger and the timeline, but it is not
+# this Mac's failure, so it is neither counted in `failed` nor a reason to need attention. Before
+# this, every MemoryGuard refusal (three per hand-back) read as a failure: 8 GB Macs showed
+# "26 done · 192 failed" while the jobs themselves had succeeded elsewhere.
+REFUSAL_CODES = frozenset({"INSUFFICIENT_MEMORY"})
 RETENTION_S = 30 * 86400
 JUST_FINISHED_S = 15 * 60
 LONG_IDLE_S = 2 * 3600
@@ -455,6 +461,7 @@ def _state_at(machine: str, statuses: dict, studios: list[dict], live: list[dict
     # `failed` and the timeline; the state says only what needs someone now.
     recent_error = latest if (
         latest and latest["state"] == "error" and latest_time is not None
+        and latest.get("error_code") not in REFUSAL_CODES
         and now - latest_time < JUST_FINISHED_S
     ) else None
     if health_problem or recent_error:
@@ -686,6 +693,7 @@ def fleet_snapshot(registry: list[dict], statuses: dict, batches: dict,
         completed = sum(1 for row in events if row["state"] == "done"
                         and (row.get("finished_at") or row["observed_at"]) >= since_s)
         failed = sum(1 for row in events if row["state"] == "error"
+                     and row.get("error_code") not in REFUSAL_CODES
                      and (row.get("finished_at") or row["observed_at"]) >= since_s)
         median_runtime_s, relative = _performance(
             machine, active_events, current, latest, max(since_s, active_since or since_s),
