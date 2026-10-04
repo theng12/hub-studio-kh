@@ -689,9 +689,33 @@ SAMPLING_LEVERS: dict[str, dict[str, dict]] = {
     },
 }
 
-# One checkpoint's own default where it should differ from its family's, e.g.
-# {"mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit": {"qwen_temperature": 0.6}}. Empty: none differs yet.
-SAMPLING_DEFAULTS_BY_REPO: dict[str, dict[str, float]] = {}
+# One checkpoint's own default where it differs from its family's. These are the calibrated
+# defaults (owner, 2026-10-04: "use all ★ recommendations"): each model's recommended setting from the
+# fleet calibration, `_orchestra/audit-20261001/tts-sampling/REPORT.md` + `recommended.json` (5 seeds,
+# two voices; the "spread score" is take-to-take variation). Breeze B halved its spread and cut Chris's
+# section failures from 22 % to 7 %. VoxCPM2 8-bit kept A (no entry); a model not listed here (the
+# other Fish/VoxCPM2/Qwen checkpoints) keeps its family's default.
+SAMPLING_DEFAULTS_BY_REPO: dict[str, dict[str, float]] = {
+    "mlx-community/Breeze-TTS-2-mlx-4bit": {          # B
+        "breeze_temperature": 0.6, "breeze_top_p": 0.9, "breeze_top_k": 40,
+        "breeze_repetition_penalty": 1.05},
+    "majentik/fishaudio-s2-pro-MLX-4bit": {           # B
+        "fish_temperature": 0.6, "fish_top_p": 0.7, "fish_top_k": 30},
+    "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit": {  # D
+        "qwen_temperature": 0.6, "qwen_top_p": 0.9, "qwen_top_k": 40,
+        "qwen_repetition_penalty": 1.6},
+    "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit": {  # B
+        "qwen_temperature": 0.6, "qwen_top_p": 0.9, "qwen_top_k": 40,
+        "qwen_repetition_penalty": 1.5},
+    "mlx-community/VoxCPM2-4bit": {                   # B (the model card's steps)
+        "cfg_value": 2.0, "inference_timesteps": 10},
+    "mlx-community/OmniVoice-bfloat16": {             # C (greedy unmasking order)
+        "omnivoice_position_temperature": 0.0, "omnivoice_guidance_scale": 2.0},
+    "mlx-community/pocket-tts-4bit": {                # C (Kyutai's default)
+        "pocket_temperature": 0.3},
+    "khmerttsopensource/khmer-tts": {                 # B
+        "vits_noise_scale": 0.5, "vits_noise_scale_duration": 0.6},
+}
 
 
 def sampling_levers(family: str, repo: str) -> dict[str, dict]:

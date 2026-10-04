@@ -126,6 +126,14 @@ def test_the_audio_checks_still_reject_a_khmer_section():
     assert failed.value.code == "TTS_SECTION_INTERNAL_SILENCE"
 
 
+def test_whisper_is_not_loaded_for_a_khmer_section():
+    # Its score could only ever be advisory, so the time and memory to load Whisper are not spent;
+    # the silence / length / pause checks above still run.
+    assert tts_quality.transcribe_back_applies(SPACED) is False
+    assert tts_quality.transcribe_back_applies(UNSPACED) is False
+    assert tts_quality.transcribe_back_applies("An English sentence.") is True
+
+
 def test_whisper_reads_a_khmer_section_as_khmer():
     assert tts_quality.script_language(SPACED) == "km"
     assert tts_quality.script_language("An English sentence.") is None

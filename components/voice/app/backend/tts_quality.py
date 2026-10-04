@@ -146,8 +146,9 @@ def _spoken_characters(text: str) -> int:
 
 
 def transcribe_back_applies(text: str) -> bool:
-    """Whisper writes Chinese in either script, so a CJK section is checked by its audio only."""
-    return not _WIDE.search(text)
+    """Whisper writes Chinese in either script, and cannot read Khmer at all (GATE.md, above), so a
+    CJK or Khmer section is checked by its audio only and Whisper is not loaded for it."""
+    return not (_WIDE.search(text) or _KHMER.search(text))
 
 
 def script_language(text: str) -> str | None:

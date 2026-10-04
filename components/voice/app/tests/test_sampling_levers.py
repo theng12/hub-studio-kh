@@ -1,10 +1,12 @@
-"""Every TTS model's sampling levers are reachable, bounded, published, and default to what ran before.
+"""Every TTS model's sampling levers are reachable, bounded, published, and default to the calibrated values.
 
 Owner, 2026-10-04: "find a balanced default for each of the models". Breeze TTS 2 sampled at
 mlx-audio's loosest settings because the Hub passed it none; the levers are now one table
-(`catalog.SAMPLING_LEVERS`). This file pins the table's defaults to the values each engine actually
-received in 0.6.141, so exposing them changed no output; a calibrated default is a deliberate edit
-of the pin below.
+(`catalog.SAMPLING_LEVERS`). 0.6.142 pinned the family defaults to what each engine received in
+0.6.141 (kept below as the family baseline). 0.6.143 sets the calibrated per-model defaults
+(`catalog.SAMPLING_DEFAULTS_BY_REPO`, owner: "use all ★ recommendations") from the fleet calibration,
+`_orchestra/audit-20261001/tts-sampling/REPORT.md` + `recommended.json`; they are pinned in
+`CALIBRATED_0_6_143`. Changing a default is a deliberate edit of these pins.
 """
 from __future__ import annotations
 
@@ -36,6 +38,28 @@ EFFECTIVE_IN_0_6_141 = {
     "khmer-tts-mms": {"noise_scale": 0.667, "noise_scale_duration": 0.8},
 }
 
+# The calibrated defaults (REPORT.md "Recommended default per model"), as the engine receives them:
+# the recommended setting over the family baseline. VoxCPM2 8-bit kept A, so it is not listed.
+CALIBRATED_0_6_143 = {
+    "mlx-community/Breeze-TTS-2-mlx-4bit": {          # B: Chris's section failures 22 % -> 7 %
+        "temperature": 0.6, "top_p": 0.9, "top_k": 40, "repetition_penalty": 1.05, "cfg_scale": 1.0},
+    "majentik/fishaudio-s2-pro-MLX-4bit": {           # B
+        "temperature": 0.6, "top_p": 0.7, "top_k": 30, "max_tokens": 1024},
+    "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit": {  # D
+        "temperature": 0.6, "top_p": 0.9, "top_k": 40, "repetition_penalty": 1.6},
+    "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit": {  # B
+        "temperature": 0.6, "top_p": 0.9, "top_k": 40, "repetition_penalty": 1.5},
+    "mlx-community/VoxCPM2-4bit": {                   # B
+        "cfg_value": 2.0, "inference_timesteps": 10, "warmup_patches": 0, "max_tokens": 2000},
+    "mlx-community/OmniVoice-bfloat16": {             # C
+        "num_steps": 32, "guidance_scale": 2.0, "class_temperature": 0.0,
+        "position_temperature": 0.0, "layer_penalty_factor": 5.0, "t_shift": 0.1},
+    "mlx-community/pocket-tts-4bit": {                # C
+        "temperature": 0.3, "lsd_decode_steps": 1, "eos_threshold": -4.0},
+    "khmerttsopensource/khmer-tts": {                 # B
+        "noise_scale": 0.5, "noise_scale_duration": 0.6},
+}
+
 ALL_LEVERS = [
     (model, name, lever)
     for model in catalog.CATALOG
@@ -43,10 +67,18 @@ ALL_LEVERS = [
 ]
 
 
-def test_every_model_defaults_to_what_its_engine_received_before():
+def test_every_model_defaults_to_its_calibrated_setting_or_its_family_baseline():
     for model in catalog.CATALOG:
-        expected = EFFECTIVE_IN_0_6_141.get(model.family, {})
+        expected = CALIBRATED_0_6_143.get(model.repo, EFFECTIVE_IN_0_6_141.get(model.family, {}))
         assert catalog.sampling_kwargs(model.family, model.repo, {}) == expected, model.repo
+    assert set(CALIBRATED_0_6_143) == set(catalog.SAMPLING_DEFAULTS_BY_REPO)
+
+
+def test_every_calibrated_default_is_a_lever_of_its_model_and_within_its_bound():
+    for repo, defaults in catalog.SAMPLING_DEFAULTS_BY_REPO.items():
+        levers = catalog.SAMPLING_LEVERS[catalog.get_model(repo).family]
+        for name, value in defaults.items():
+            assert levers[name]["minimum"] <= value <= levers[name]["maximum"], (repo, name)
 
 
 def test_every_family_that_samples_has_its_levers():
@@ -86,7 +118,7 @@ def test_a_per_model_default_overrides_its_family(monkeypatch):
     assert catalog.sampling_kwargs("qwen3-tts", repo, {})["temperature"] == 0.55
     published = {p["name"]: p for p in lane_contract.parameters_for(catalog.get_model(repo))}
     assert published["qwen_temperature"]["default"] == 0.55
-    sibling = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+    sibling = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"     # not calibrated: the family's
     assert catalog.sampling_kwargs("qwen3-tts", sibling, {})["temperature"] == 0.7
 
 
@@ -141,7 +173,7 @@ def _render_breeze(tmp_path, monkeypatch, params):
     return sent, seeds, job
 
 
-def test_breeze_levers_reach_generate_audio_and_omitted_ones_keep_the_old_values(
+def test_breeze_levers_reach_generate_audio_and_omitted_ones_take_the_calibrated_defaults(
         tmp_path, monkeypatch):
     pytest.importorskip("mlx.core")
     sent, _, _ = _render_breeze(tmp_path, monkeypatch, {
@@ -149,11 +181,11 @@ def test_breeze_levers_reach_generate_audio_and_omitted_ones_keep_the_old_values
     assert sent[0]["temperature"] == 0.5
     assert sent[0]["top_p"] == 0.9
     assert sent[0]["cfg_scale"] == 4.0                      # clamped to the published bound
-    assert sent[0]["top_k"] == 50 and sent[0]["repetition_penalty"] == 1.0
+    assert sent[0]["top_k"] == 40 and sent[0]["repetition_penalty"] == 1.05
 
     sent, _, _ = _render_breeze(tmp_path, monkeypatch, {})
-    assert {k: sent[0][k] for k in EFFECTIVE_IN_0_6_141["breeze-tts"]} == (
-        EFFECTIVE_IN_0_6_141["breeze-tts"])
+    breeze = CALIBRATED_0_6_143["mlx-community/Breeze-TTS-2-mlx-4bit"]
+    assert {k: sent[0][k] for k in breeze} == breeze
 
 
 def test_a_fixed_seed_seeds_the_request_once_and_never_reaches_the_engine(tmp_path, monkeypatch):
@@ -207,13 +239,13 @@ def test_khmer_sections_continue_one_seed_and_take_their_noise_scales(tmp_path, 
         "vits_noise_scale": 0.3})
     manager._generate_khmer_vits(job, entry, tmp_path / "a.wav")
     assert seeded == [7] and job.resolved_seed == 7
-    assert (vits.noise_scale, vits.noise_scale_duration) == (0.3, 0.8)
+    assert (vits.noise_scale, vits.noise_scale_duration) == (0.3, 0.6)
 
     manager, job, vits, seeded = _khmer_render(monkeypatch, {
         "seed": 7, "_qwen_attempt_seed": 7, "_native_continue_rng": True})
     manager._generate_khmer_vits(job, entry, tmp_path / "b.wav")
     assert seeded == []                     # section 2 continues the stream, it is not reseeded to 7
-    assert (vits.noise_scale, vits.noise_scale_duration) == (0.667, 0.8)
+    assert (vits.noise_scale, vits.noise_scale_duration) == (0.5, 0.6)   # calibrated B
 
     manager, job, _, seeded = _khmer_render(monkeypatch, {})
     manager._generate_khmer_vits(job, entry, tmp_path / "c.wav")
