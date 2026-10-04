@@ -46,7 +46,7 @@ audited value being checked (calling it with the override would be one more
 self-consistency check).  It is called with ``uniform=False``: a record states
 the section size and joins the model was MEASURED at, and since the owner's one
 narration rule (2026-10-03) the runtime renders every model inside that
-envelope instead (250-character sections, 0.6 s / 1.0 s joins) - a record is
+envelope instead (250-character sections, 1.0 s / 1.5 s joins) - a record is
 not wrong for describing its measurement.
 
 Non-coverage

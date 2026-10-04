@@ -3,7 +3,14 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.143** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.144** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.144 - narration joins 1.0 s after a sentence / 1.5 s at a paragraph; a standing-by Lite Mode Mac is not group capacity (`release/0.6.144` = 0.6.143 a0f8263 + `--no-ff` merge of 9d13187 `feat/lite-capacity`, 2026-10-04).**
+> Pauses: owner decision 2026-10-04, `long_form_policy.UNIFORM_SENTENCE/PARAGRAPH_JOIN_PAUSE_SECONDS` = 1.00 / 1.50 (soft 0.15 unchanged) - the one source for the
+> joiner, published `join_pause_milliseconds` (1000), the lane contract's `sentence_pause_sec` / `paragraph_pause_sec` defaults (bounds 0-3 s unchanged) and
+> `tts_quality.max_pause_s` (+3.5 s margin). Requests sending their own pauses keep them. Lite capacity: `capabilities._model_capability` excludes a worker with
+> `standing_by` (`peers.standing_by`) from `capacity_eligible`. Per-release script `_orchestra/audit-20261001/release-0144/prepare-kit-0144.sh`. Gate numbers,
+> DMG and checksum: `_orchestra/audit-20261001/release-0144/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.143 - calibrated TTS sampling defaults, gzip fleet JSON, no tiny sections, any-Mac group readiness, fleet model install, Khmer transcribe-back skipped (`release/0.6.143` = 0.6.142 aeb89a5 + `--no-ff` merges of fba7d3c `perf/controller-read`, a36ca55 `feat/kit-lite-models-copy`, 9231ee5 `fix/tiny-section`, 3543f56 `fix/0143-small`, 37eb4cd `fix/machine-counters`, fe486fa `feat/node-model-install`, 65e49f7 `fix/khmer-gate`, 2026-10-04).**
 > Calibrated defaults live only in `catalog.SAMPLING_DEFAULTS_BY_REPO` (from `_orchestra/audit-20261001/tts-sampling/REPORT.md` + `recommended.json`), pinned by

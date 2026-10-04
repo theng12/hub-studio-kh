@@ -373,8 +373,9 @@ def build() -> str:
         "longer than 200. Every family's measured budget is larger (Breeze and Chatterbox 500, VoxCPM2 "
         "400, Qwen preset 360, Fish 300, OmniVoice and Qwen clone 288, the conservative default and the "
         "audited Qwen 1.7B Auto 280). |")
-    add("| Join pause | **0.6 s after a sentence, 1.0 s at a paragraph break**; 0.15 s where one "
-        "over-long sentence had to be cut | Owner listening, Dreamlands Ch12. A request may set "
+    add("| Join pause | **1.0 s after a sentence, 1.5 s at a paragraph break**; 0.15 s where one "
+        "over-long sentence had to be cut | Owner listening, Dreamlands Ch12 (0.6 / 1.0 s); owner "
+        "decision 2026-10-04 (1.0 / 1.5 s). A request may set "
         "`sentence_pause_sec` / `paragraph_pause_sec`. |")
     add("| Request (`maximum_input_characters`) | **1,500 characters** for every model "
         "(`lane_contract.UNIFORM_REQUEST_CHARACTERS`) | Breeze TTS 2 4-bit on the slowest allowed Mac "

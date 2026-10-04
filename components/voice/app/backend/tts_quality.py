@@ -48,9 +48,8 @@ MAX_MISSING_WORDS = 2
 # EP0003 Ch09 part 5 lost the clause "Silas drew the soft crest of the ridge" to a 35 s silence
 # while its 7 missing words of 76 were still inside the 10% share.
 MAX_MISSING_RUN = 3
-# A silence inside a section may be the longest pause its text calls for (a paragraph, 0.6 s, else a
-# sentence, 0.3 s; never less than the longest pause the caller asked for, e.g. Sleep's 1.0 s
-# paragraph pause) plus this. Breeze's own sleep-narration pauses run to 3.2-3.4 s at -40 dBFS
+# A silence inside a section may be the longest pause its text calls for (a paragraph, 1.5 s, else a
+# sentence, 1.0 s; never less than the longest pause the caller asked for) plus this. Breeze's own sleep-narration pauses run to 3.2-3.4 s at -40 dBFS
 # (131 Dreamlands sections, 10 fresh renders, EP0003 Ch09); the failures it must catch were 4.3-35 s
 # of silence (EP0003 Ch09 part 5 had 35 s at -66 dB and passed every other check).
 # ponytail: one margin for every family, measured on Breeze; give a family its own (as with

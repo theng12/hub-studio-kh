@@ -653,16 +653,16 @@ def test_omnivoice_long_form_join_uses_boundary_aware_speed_compensated_gaps(
     audio, sample_rate = sf.read(output, dtype="float32")
 
     assert sample_rate == 1000
-    # Target output gaps (owner's uniform rule, 2026-10-03) are 600 ms for a sentence, 1000 ms
+    # Target output gaps (owner's uniform rule, 2026-10-04) are 1000 ms for a sentence, 1500 ms
     # for a paragraph, and 150 ms for a soft punctuation split. Pre-scaling by 1.25 keeps those
     # durations stable after the finished WAV receives its 1.25x tempo pass.
-    assert len(audio) == 200 + 750 + 200 + 1250 + 200 + 188 + 200
-    assert np.allclose(audio[200:950], 0.0, atol=1e-6)
-    assert np.allclose(audio[1150:2400], 0.0, atol=1e-6)
-    assert np.allclose(audio[2600:2788], 0.0, atol=1e-6)
+    assert len(audio) == 200 + 1250 + 200 + 1875 + 200 + 188 + 200
+    assert np.allclose(audio[200:1450], 0.0, atol=1e-6)
+    assert np.allclose(audio[1650:3525], 0.0, atol=1e-6)
+    assert np.allclose(audio[3725:3913], 0.0, atol=1e-6)
     # Each independently rendered section receives its own micro-fade. There
     # is no audio overlap or speech crossfade at any join.
-    for start, end in ((0, 200), (950, 1150), (2400, 2600), (2788, 2988)):
+    for start, end in ((0, 200), (1450, 1650), (3525, 3725), (3913, 4113)):
         assert abs(audio[start]) < 1e-3
         assert abs(audio[end - 1]) < 1e-3
         assert np.max(np.abs(audio[start + 20:end - 20])) > 0.09
@@ -735,26 +735,26 @@ def test_qwen_clone_long_form_join_uses_production_boundary_pacing(
     audio, sample_rate = sf.read(output, dtype="float32")
 
     assert sample_rate == 1000
-    assert len(audio) == 200 + 750 + 200 + 1250 + 200 + 188 + 200
-    assert np.allclose(audio[200:950], 0.0, atol=1e-6)
-    assert np.allclose(audio[1150:2400], 0.0, atol=1e-6)
-    assert np.allclose(audio[2600:2788], 0.0, atol=1e-6)
+    assert len(audio) == 200 + 1250 + 200 + 1875 + 200 + 188 + 200
+    assert np.allclose(audio[200:1450], 0.0, atol=1e-6)
+    assert np.allclose(audio[1650:3525], 0.0, atol=1e-6)
+    assert np.allclose(audio[3725:3913], 0.0, atol=1e-6)
     assert np.allclose(audio[:200], 0.1, atol=1e-3)
-    assert np.allclose(audio[950:1150], 0.2, atol=1e-3)
-    assert np.allclose(audio[2400:2600], 0.3, atol=1e-3)
-    assert np.allclose(audio[2788:2988], 0.4, atol=1e-3)
+    assert np.allclose(audio[1450:1650], 0.2, atol=1e-3)
+    assert np.allclose(audio[3525:3725], 0.3, atol=1e-3)
+    assert np.allclose(audio[3913:4113], 0.4, atol=1e-3)
 
 
 def test_every_model_publishes_the_uniform_sentence_join() -> None:
-    # Owner decision 2026-10-03: one join rule for every model; the published flat pause is the
-    # sentence pause (Qwen clone was 0.18 s, CustomVoice 0.12 s, Qwen 1.7B and OmniVoice 0.30 s).
+    # Owner decision 2026-10-03 (1.0 s since 2026-10-04): one join rule for every model; the published
+    # flat pause is the sentence pause (Qwen clone was 0.18 s, CustomVoice 0.12 s, Qwen 1.7B and OmniVoice 0.30 s).
     for family, repo in (
         ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"),
         ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"),
         ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"),
         ("omnivoice", "mlx-community/OmniVoice-bfloat16"),
     ):
-        assert generation._long_form_join_pause_s(family, repo) == pytest.approx(0.60)
+        assert generation._long_form_join_pause_s(family, repo) == pytest.approx(1.00)
 
 
 def test_qwen_speed_is_pitch_preserving_and_changes_duration(tmp_path: Path) -> None:

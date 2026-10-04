@@ -467,7 +467,7 @@ def test_qwen_duration_validation_uses_resolved_section_budget(budget: int) -> N
     )
     expected = round(
         sum(qwen_quality.automatic_duration_limit(chunk, 1.0) for chunk in chunks)
-        + (len(chunks) - 1) * 0.6,  # the uniform sentence join (owner 2026-10-03)
+        + (len(chunks) - 1) * 1.0,  # the uniform sentence join (owner 2026-10-04)
         3,
     )
 

@@ -80,7 +80,7 @@ def test_a_long_silence_between_words_is_rejected_without_any_model(tmp_path):
     evidence = _verdict(_write(tmp_path / "gap.wav",
                                np.concatenate([_speech(4.0), hush, _speech(4.0)])), heard=TEXT)
     assert evidence["rejection_code"] == "TTS_SECTION_INTERNAL_SILENCE", evidence
-    assert evidence["longest_pause_s"] > evidence["max_pause_s"] == 4.1
+    assert evidence["longest_pause_s"] > evidence["max_pause_s"] == 4.5
     # Breeze's own sentence pause (up to ~3.4 s measured) and the engine's edge silence are speech.
     natural = np.concatenate([np.zeros(RATE), _speech(4.0), np.zeros(RATE * 3), _speech(4.0),
                               np.zeros(RATE * 2)]).astype(np.float32)
@@ -88,10 +88,10 @@ def test_a_long_silence_between_words_is_rejected_without_any_model(tmp_path):
 
 
 def test_the_pause_allowed_follows_the_text_and_the_speed():
-    # The uniform join rule (owner 2026-10-03): 0.6 s after a sentence, 1.0 s at a paragraph.
-    assert tts_quality.max_pause_s("One sentence. Another one.") == 4.1
-    assert tts_quality.max_pause_s("A paragraph ends.\n\nThe next begins.") == 4.5
-    assert tts_quality.max_pause_s("One sentence. Another one.", speed=0.5) == 8.2
+    # The uniform join rule (owner 2026-10-04): 1.0 s after a sentence, 1.5 s at a paragraph.
+    assert tts_quality.max_pause_s("One sentence. Another one.") == 4.5
+    assert tts_quality.max_pause_s("A paragraph ends.\n\nThe next begins.") == 5.0
+    assert tts_quality.max_pause_s("One sentence. Another one.", speed=0.5) == 9.0
 
 
 def test_a_dropped_clause_is_a_mismatch_even_inside_the_missing_share():

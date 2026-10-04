@@ -262,7 +262,7 @@ FAMILIES: dict[str, Family] = {
         text_guidance=TextGuidance(
             soft_max_chars=None,
             chunking="auto-split",
-            note="Long scripts auto-split into sentence-safe sections of up to 250 characters. Every section reuses the original reference, then Voice Studio verifies and joins the audio at 0.6 s after a sentence and 1.0 s at a paragraph break.",
+            note="Long scripts auto-split into sentence-safe sections of up to 250 characters. Every section reuses the original reference, then Voice Studio verifies and joins the audio at 1 s after a sentence and 1.5 s at a paragraph break.",
         ),
     ),
     "qwen3-tts": Family(
@@ -584,7 +584,7 @@ FAMILIES: dict[str, Family] = {
         text_guidance=TextGuidance(
             soft_max_chars=None,
             chunking="auto-split",
-            note="Long scripts are split privately into sentence-safe sections of up to 250 characters, rendered with the same voice or design, matched to one loudness, and joined into one final file at 0.6 s after a sentence and 1.0 s at a paragraph break.",
+            note="Long scripts are split privately into sentence-safe sections of up to 250 characters, rendered with the same voice or design, matched to one loudness, and joined into one final file at 1 s after a sentence and 1.5 s at a paragraph break.",
         ),
     ),
 }

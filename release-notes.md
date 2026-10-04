@@ -2,6 +2,19 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.144 - 2026-10-04
+
+### Narration
+
+**Narration pauses are longer and more natural: 1 second after each sentence and 1.5 seconds between paragraphs, where
+the text is joined.** This is for every voice model. A short pause inside a very long sentence stays short. A request that
+asks for its own pauses still gets them.
+
+### The fleet
+
+**A shop Mac in use (Lite Mode standing by) no longer counts as free, so work isn't held for it.** As soon as its user
+steps away it counts again.
+
 ## 0.6.143 - 2026-10-04
 
 ### Steadier voices

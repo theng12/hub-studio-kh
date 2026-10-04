@@ -17,14 +17,14 @@ OMNIVOICE_JOIN_PAUSE_SECONDS = 0.30
 OMNIVOICE_PARAGRAPH_JOIN_PAUSE_SECONDS = 0.60
 OMNIVOICE_SOFT_JOIN_PAUSE_SECONDS = 0.18
 # ── one narration rule for every voice model (owner decision 2026-10-03) ─────
-# Every section join follows the text, for every family, by default: 0.6 s after a sentence, 1.0 s
-# at a paragraph break. A cut inside a sentence happens only when one sentence is longer than the
+# Every section join follows the text, for every family, by default: 1.0 s after a sentence, 1.5 s
+# at a paragraph break (owner decision 2026-10-04; was 0.6 / 1.0). A cut inside a sentence happens only when one sentence is longer than the
 # section budget (about 0.05% of Dreamlands sentences at 250 characters) and keeps a short soft join.
 # A request may still ask its own `sentence_pause_sec` / `paragraph_pause_sec`. This replaces the
 # family-specific joins (Breeze's flat 0.6 s, the 0.3/0.6/0.18 s production joins, Qwen's 0.18 s and
 # the 0.12 s default); those numbers stay above as the values the model audits were measured at.
-UNIFORM_SENTENCE_JOIN_PAUSE_SECONDS = 0.60
-UNIFORM_PARAGRAPH_JOIN_PAUSE_SECONDS = 1.00
+UNIFORM_SENTENCE_JOIN_PAUSE_SECONDS = 1.00
+UNIFORM_PARAGRAPH_JOIN_PAUSE_SECONDS = 1.50
 UNIFORM_SOFT_JOIN_PAUSE_SECONDS = 0.15
 # And one section size for every voice model. Evidence, Dreamlands scripts: median sentence 115
 # characters, 99th percentile 210, longest 262; 0.05% of sentences are longer than 250 and 1.87%

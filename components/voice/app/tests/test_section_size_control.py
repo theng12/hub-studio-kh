@@ -259,7 +259,7 @@ def test_internal_queueing_keeps_qwen_06b_private_fallback_for_validation(
 
     job = manager.start_txt2speech({"repo": QWEN_06B_BASE, "text": text})
 
-    # The audited 288 is capped at the owner's uniform 250 (2026-10-03), joined at 0.6 s.
+    # The audited 288 is capped at the owner's uniform 250 (2026-10-03), joined at 1.0 s (2026-10-04).
     assert job.params["_resolved_section_max_characters"] == 250
     assert "section_max_characters" not in job.params
     chunks = generation._internal_mlx_text_chunks(
@@ -267,7 +267,7 @@ def test_internal_queueing_keeps_qwen_06b_private_fallback_for_validation(
     )
     expected = round(
         sum(qwen_quality.automatic_duration_limit(chunk, 1.0) for chunk in chunks)
-        + (len(chunks) - 1) * 0.6,
+        + (len(chunks) - 1) * 1.0,
         3,
     )
     assert generation.GenerationManager._qwen_job_duration_limit(job) == expected
@@ -467,8 +467,9 @@ def test_readme_documents_the_section_size_control_contract() -> None:
 
     assert "### Section size" in readme
     assert "whole numbers from 40 through 3000" in readme
-    # One pause rule for every model (owner 2026-10-03; it was 300/600/180 ms on some families).
-    assert "0.6 s after a sentence, 1.0 s at a paragraph break" in readme
+    # One pause rule for every model (owner 2026-10-03; it was 300/600/180 ms on some families;
+    # 1.0 / 1.5 s since 2026-10-04).
+    assert "1.0 s after a sentence, 1.5 s at a paragraph break" in readme
     assert "retries with a 230-character section" in readme
     assert "omit `section_max_characters` for Auto" in readme
     assert "send an integer `section_max_characters` for Custom" in readme

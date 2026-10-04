@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.144 — 2026-10-04 · Longer narration pauses; a standing-by Lite Mode Mac is not free capacity
+
+Release of `release/0.6.144` (= 0.6.143 a0f8263 + `--no-ff` merge of `feat/lite-capacity` 9d13187, then the owner's pause decision). No textual conflicts.
+- **Narration pauses are longer and more natural: 1 second after each sentence and 1.5 seconds between paragraphs, where the text is joined**
+  (owner decision 2026-10-04). `long_form_policy.UNIFORM_SENTENCE_JOIN_PAUSE_SECONDS` / `UNIFORM_PARAGRAPH_JOIN_PAUSE_SECONDS` = 1.00 / 1.50 s (were
+  0.60 / 1.00); the mid-sentence soft join stays 0.15 s. They are the one source for the joiner (`_production_join_pauses_s`), the published
+  `join_pause_milliseconds` (now 1000), the lane contract's `sentence_pause_sec` / `paragraph_pause_sec` defaults and the section silence check
+  (`tts_quality.max_pause_s`: 4.5 s after a sentence, 5.0 s at a paragraph). Request bounds stay 0-3 s; a request that sends its own pause keeps it.
+  Tests pinning 0.6 / 1.0 now pin 1.0 / 1.5; README, `docs/model-benchmarks.md` (+ `qualification/model_record.py`) and the catalog notes follow.
+- **A shop Mac in use (Lite Mode standing by) no longer counts as free, so work isn't held for it** (`capabilities._model_capability`: a worker with
+  `standing_by` - standing by, stepped aside or quiet hours - is not `capacity_eligible`; `build_snapshot` carries `standing_by`). It re-enters the
+  eligible totals as soon as it is free. Test: `hub_regression/cases/test_capability_supply.py`.
+
 ## 0.6.143 — 2026-10-04 · Calibrated voice defaults; faster fleet reads; no tiny sections; a group takes a job any of its Macs can run; install a model from the Gateway
 
 Release of `release/0.6.143` (= 0.6.142 aeb89a5 + `--no-ff` merges of `perf/controller-read` fba7d3c, `feat/kit-lite-models-copy` a36ca55,

@@ -9,25 +9,25 @@ from backend import catalog, generation, long_form_policy, model_audits
 
 @pytest.mark.parametrize(
     ("family", "repo", "section_chars", "join_ms", "source"),
-    # Owner decision 2026-10-03: every voice model renders 250-character sections joined at 0.6 s
-    # after a sentence (1.0 s at a paragraph), whatever its family measured (Breeze 500, VoxCPM2
+    # Owner decision 2026-10-03: every voice model renders 250-character sections joined at 1.0 s
+    # after a sentence (1.5 s at a paragraph; 2026-10-04, was 0.6 / 1.0), whatever its family measured (Breeze 500, VoxCPM2
     # 400, Fish 300, OmniVoice / Qwen clone 288, the Qwen 1.7B audited Auto 280, Chatterbox 500,
     # the conservative 280). The source still names where the measured number came from.
     [
-        ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", 250, 600, "model_audit"),
-        ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", 250, 600, "model_audit"),
-        ("chatterbox-mlx", "mlx-community/chatterbox-4bit", 250, 600, "model_audit"),
-        ("chatterbox-mlx", "mlx-community/chatterbox-8bit", 250, 600, "runtime_default"),
-        ("voxcpm-mlx", "mlx-community/VoxCPM2-4bit", 250, 600, "runtime_default"),
-        ("voxcpm-mlx", "mlx-community/VoxCPM2-8bit", 250, 600, "runtime_default"),
-        ("voxcpm-mlx", "mlx-community/VoxCPM2-bf16", 250, 600, "runtime_default"),
-        ("omnivoice", "mlx-community/OmniVoice-bfloat16", 250, 600, "model_audit"),
-        ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-8bit", 250, 600, "runtime_default"),
-        ("fish-audio-mlx", "majentik/fishaudio-s2-pro-MLX-4bit", 250, 600, "runtime_default"),
-        ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-bf16", 250, 600, "runtime_default"),
-        ("khmer-tts-mms", "khmerttsopensource/khmer-tts", 250, 600, "conservative_default"),
-        ("khmer-tts-onnx", "sengtha/khmer-tts-female-v2", 250, 600, "conservative_default"),
-        ("breeze-tts", "mlx-community/Breeze-TTS-2-mlx-4bit", 250, 600, "runtime_default"),
+        ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit", 250, 1000, "model_audit"),
+        ("qwen3-tts", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit", 250, 1000, "model_audit"),
+        ("chatterbox-mlx", "mlx-community/chatterbox-4bit", 250, 1000, "model_audit"),
+        ("chatterbox-mlx", "mlx-community/chatterbox-8bit", 250, 1000, "runtime_default"),
+        ("voxcpm-mlx", "mlx-community/VoxCPM2-4bit", 250, 1000, "runtime_default"),
+        ("voxcpm-mlx", "mlx-community/VoxCPM2-8bit", 250, 1000, "runtime_default"),
+        ("voxcpm-mlx", "mlx-community/VoxCPM2-bf16", 250, 1000, "runtime_default"),
+        ("omnivoice", "mlx-community/OmniVoice-bfloat16", 250, 1000, "model_audit"),
+        ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-8bit", 250, 1000, "runtime_default"),
+        ("fish-audio-mlx", "majentik/fishaudio-s2-pro-MLX-4bit", 250, 1000, "runtime_default"),
+        ("fish-audio-mlx", "mlx-community/fish-audio-s2-pro-bf16", 250, 1000, "runtime_default"),
+        ("khmer-tts-mms", "khmerttsopensource/khmer-tts", 250, 1000, "conservative_default"),
+        ("khmer-tts-onnx", "sengtha/khmer-tts-female-v2", 250, 1000, "conservative_default"),
+        ("breeze-tts", "mlx-community/Breeze-TTS-2-mlx-4bit", 250, 1000, "runtime_default"),
     ],
 )
 def test_catalog_and_runtime_share_exact_long_form_policy(

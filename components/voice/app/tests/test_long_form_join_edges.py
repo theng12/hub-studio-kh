@@ -166,5 +166,5 @@ def test_all_short_sections_have_no_reference_and_are_left_alone(tmp_path):
 def test_sentence_and_paragraph_pauses_follow_the_text():
     text = "The river was quiet. The mill stood still.\n\nMara listened."
     chunks = ["The river was quiet.", "The mill stood still.", "Mara listened."]
-    # Owner decision 2026-10-03: one rule for every family, 0.6 s after a sentence, 1.0 s at a paragraph.
-    assert generation._production_join_pauses_s(text, chunks, 1.0) == pytest.approx([0.60, 1.00])
+    # Owner decision 2026-10-03: one rule for every family (2026-10-04: 1.0 s after a sentence, 1.5 s at a paragraph).
+    assert generation._production_join_pauses_s(text, chunks, 1.0) == pytest.approx([1.00, 1.50])

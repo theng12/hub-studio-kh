@@ -457,9 +457,9 @@ numbers from 40 through 3000 and remembers the choice with that model's
 existing Generate settings. No catalogued family has an engine input cliff any
 more, so the range is the derived control's, not an engine's hard cap.
 
-Every model joins its sections at the same pauses: 0.6 s after a sentence,
-1.0 s at a paragraph break, and 0.15 s where an over-long sentence had to be cut
-(owner decision 2026-10-03). An API caller may set its own `sentence_pause_sec`
+Every model joins its sections at the same pauses: 1.0 s after a sentence,
+1.5 s at a paragraph break, and 0.15 s where an over-long sentence had to be cut
+(owner decisions 2026-10-03 and 2026-10-04; it was 0.6 s / 1.0 s). An API caller may set its own `sentence_pause_sec`
 / `paragraph_pause_sec` (0-3 s) per request. A rejected local Qwen cloning output retries with a
 230-character section. API callers omit `section_max_characters` for Auto, or
 send an integer `section_max_characters` for Custom. Invalid, out-of-range, or

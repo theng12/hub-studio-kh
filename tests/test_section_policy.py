@@ -97,12 +97,12 @@ class SectionBudgetTests(unittest.TestCase):
         self.assertEqual(measured("chatterbox-mlx")["section_max_characters"], 500)
 
     def test_every_voice_model_renders_one_section_size_and_one_join(self) -> None:
-        """Owner 2026-10-03: 250-character sections and the 0.6 s sentence join for every model,
+        """Owner 2026-10-03: 250-character sections and the uniform sentence join (1.0 s since 2026-10-04) for every model,
         audited ones included (the Qwen 1.7B audit's Auto 280 is capped, not followed)."""
         for entry in catalog.CATALOG:
             policy = catalog._audited_long_form_policy(entry.family, entry.repo)
             self.assertEqual(policy["section_max_characters"], 250, entry.repo)
-            self.assertEqual(policy["join_pause_milliseconds"], 600, entry.repo)
+            self.assertEqual(policy["join_pause_milliseconds"], 1000, entry.repo)
             self.assertEqual(catalog.section_size_control_for(entry.repo)["runtime_default"], 250,
                              entry.repo)
 
