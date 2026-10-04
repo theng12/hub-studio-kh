@@ -45,45 +45,6 @@ def test_failure_classifier_distinguishes_model_files_from_capacity_and_bad_inpu
     assert broker._worker_terminal_error("missing", "MODEL_FILES_UNAVAILABLE").model_unavailable
 
 
-def test_a_pause_whose_failure_was_the_text_is_lifted_on_start(protection):
-    """0.6.143: Qwen 0.6B was paused on studio-mac-1305 and -1408 by a "***" section that wrote no
-    audio (reported then as a RuntimeError). On start the Hub re-reads each pause with today's
-    classifier: that one is lifted, a real engine failure and missing weights stay paused."""
-    import json
-
-    tiny = ("RuntimeError: qwen3-tts produced no audio. 3-character section. host has 17.2 GB "
-            "unified memory, 7.5 GB free. this is usually the request being too large for the "
-            "available memory")
-    engine = "RuntimeError: qwen3-tts produced no audio. 240-character section"
-    rows = [
-        {"studio": "voice@studio-mac-1305", "model": "qwen", "reason": tiny, "blocked": True,
-         "error_code": "WORKER_TERMINAL_ERROR", "failures": 3},
-        {"studio": "voice@studio-mac-1408", "model": "qwen", "reason": engine, "blocked": True,
-         "error_code": "WORKER_TERMINAL_ERROR", "failures": 3},
-        {"studio": "image@node-a", "model": "flux", "reason": "missing", "blocked": True,
-         "error_code": "MODEL_FILES_UNAVAILABLE", "failures": 1},
-    ]
-    broker.MODEL_PROTECTION_FILE.write_text(json.dumps(rows))
-    broker._load_model_protection()
-
-    assert not broker._model_block_note({"id": "voice@studio-mac-1305"}, "qwen", {})
-    assert broker._model_block_note({"id": "voice@studio-mac-1408"}, "qwen", {})
-    assert broker._model_block_note({"id": "image@node-a"}, "flux", {})
-    # The lift is saved, so it is done once, not on every start.
-    saved = json.loads(broker.MODEL_PROTECTION_FILE.read_text())
-    assert {row["studio"] for row in saved} == {"voice@studio-mac-1408", "image@node-a"}
-
-
-def test_an_older_worker_reporting_no_audio_for_a_tiny_section_does_not_pause(protection):
-    """A node still on the pre-fix Voice worker reports the tiny section as a RuntimeError."""
-    studio = {"id": "voice@studio-mac-1305"}
-    batch = {"model": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"}
-    old = "RuntimeError: qwen3-tts produced no audio. 3-character section. host has 8.6 GB"
-    for _ in range(broker.MODEL_FAILURE_THRESHOLD):
-        broker._classify_worker_failure(batch, {}, studio, {"state": "error", "error": old}, 0.0)
-    assert not broker._model_block_note(studio, batch["model"], {})
-
-
 def test_recheck_requires_explicit_fresh_readiness_not_legacy_cached(protection, monkeypatch, fixture_monitor):
     import asyncio
 
@@ -188,3 +149,42 @@ def test_engine_failure_window_does_not_extend_with_each_failure(protection, mon
         broker._mark_model_failure(studio, "model-a", None, "ENGINE_ERROR", "RuntimeError: failed")
     assert not broker._model_block_note(studio, "model-a", {})
     assert broker._model_protection[(studio["id"], "model-a")]["failures"] == 1
+
+
+def test_a_pause_whose_failure_was_the_text_is_lifted_on_start(protection):
+    """0.6.143: Qwen 0.6B was paused on studio-mac-1305 and -1408 by a "***" section that wrote no
+    audio (reported then as a RuntimeError). On start the Hub re-reads each pause with today's
+    classifier: that one is lifted, a real engine failure and missing weights stay paused."""
+    import json
+
+    tiny = ("RuntimeError: qwen3-tts produced no audio. 3-character section. host has 17.2 GB "
+            "unified memory, 7.5 GB free. this is usually the request being too large for the "
+            "available memory")
+    engine = "RuntimeError: qwen3-tts produced no audio. 240-character section"
+    rows = [
+        {"studio": "voice@studio-mac-1305", "model": "qwen", "reason": tiny, "blocked": True,
+         "error_code": "WORKER_TERMINAL_ERROR", "failures": 3},
+        {"studio": "voice@studio-mac-1408", "model": "qwen", "reason": engine, "blocked": True,
+         "error_code": "WORKER_TERMINAL_ERROR", "failures": 3},
+        {"studio": "image@node-a", "model": "flux", "reason": "missing", "blocked": True,
+         "error_code": "MODEL_FILES_UNAVAILABLE", "failures": 1},
+    ]
+    broker.MODEL_PROTECTION_FILE.write_text(json.dumps(rows))
+    broker._load_model_protection()
+
+    assert not broker._model_block_note({"id": "voice@studio-mac-1305"}, "qwen", {})
+    assert broker._model_block_note({"id": "voice@studio-mac-1408"}, "qwen", {})
+    assert broker._model_block_note({"id": "image@node-a"}, "flux", {})
+    # The lift is saved, so it is done once, not on every start.
+    saved = json.loads(broker.MODEL_PROTECTION_FILE.read_text())
+    assert {row["studio"] for row in saved} == {"voice@studio-mac-1408", "image@node-a"}
+
+
+def test_an_older_worker_reporting_no_audio_for_a_tiny_section_does_not_pause(protection):
+    """A node still on the pre-fix Voice worker reports the tiny section as a RuntimeError."""
+    studio = {"id": "voice@studio-mac-1305"}
+    batch = {"model": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"}
+    old = "RuntimeError: qwen3-tts produced no audio. 3-character section. host has 8.6 GB"
+    for _ in range(broker.MODEL_FAILURE_THRESHOLD):
+        broker._classify_worker_failure(batch, {}, studio, {"state": "error", "error": old}, 0.0)
+    assert not broker._model_block_note(studio, batch["model"], {})
