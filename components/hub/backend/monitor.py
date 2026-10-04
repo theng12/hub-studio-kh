@@ -548,6 +548,20 @@ class StudioMonitor:
             self._save_catalog_state()
             return {"started": True, "studios": results}
 
+    async def refresh_machine_catalogs(self, machine: str) -> None:
+        """Re-read every studio on one machine now rather than on the next cycle.
+
+        A model download that has just finished changes what that machine's workers report, but
+        the cycle above re-reads them only every CATALOG_REFRESH_INTERVAL_S: until then the model
+        reads as absent and the scheduler does not send it work.
+        """
+        machine = machine.lower()
+        await asyncio.gather(*(
+            self._refresh_studio_catalog(studio, force=True)
+            for studio in list(self.registry)
+            if str(studio.get("machine") or "local").lower() == machine
+        ))
+
     async def _refresh_studio_catalog(self, studio: dict, *, force: bool) -> dict:
         sid = studio["id"]
         now = time.time()

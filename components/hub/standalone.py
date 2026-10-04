@@ -2431,12 +2431,28 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except (OSError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
 
+    _downloads_shown: set[str] = set()
+
+    async def _show_finished_download(run: dict[str, Any] | None, machine: str) -> None:
+        """Before a finished download is answered `done`, re-read the catalogs of the Mac it ran on.
+
+        The worker sees the new package at once, but this Hub re-reads worker catalogs only once a
+        minute, so the poller that hears `done` and reloads (the Gateway's Fleet page, the Model
+        library) read the model as absent and the scheduler would not send it work until the next
+        cycle. Once per run: a later status read of the same run is answered from the cache.
+        """
+        if not isinstance(run, dict) or run.get("state") != "done" or run.get("id") in _downloads_shown:
+            return
+        _downloads_shown.add(str(run.get("id")))
+        await monitor.refresh_machine_catalogs(machine)
+
     @app.get("/api/hub/model-downloads/{run_id}")
-    def model_download_status(run_id: str) -> dict[str, Any]:
+    async def model_download_status(run_id: str) -> dict[str, Any]:
         from . import model_downloads
         run = model_downloads.status(run_id)
         if run is None:
             raise HTTPException(404, "unknown model download")
+        await _show_finished_download(run, "local")
         return run
 
     @app.delete("/api/hub/model-downloads/{run_id}")
@@ -2499,13 +2515,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         wanted = node_id.strip().lower()
         if wanted not in ("local", fleet.this_machine()["id"].lower()):
             try:
-                return JSONResponse(await fleet.relay_model(wanted, "GET", f"/model-downloads/{run_id}"))
+                answer = await fleet.relay_model(wanted, "GET", f"/model-downloads/{run_id}")
             except fleet.StartupRelayError as error:
                 return JSONResponse(error.body, status_code=error.status)
+            # The node re-read its own catalogs before it said `done`; this controller's view of
+            # that node is its own cache, and is what the Gateway's Fleet read is built from.
+            await _show_finished_download(answer.get("run"), wanted)
+            return JSONResponse(answer)
         run = model_downloads.status(run_id)
         if run is None:
             return JSONResponse({"ok": False, "code": "UNKNOWN_DOWNLOAD",
                                  "detail": "this Mac has no model download with that id"}, status_code=404)
+        await _show_finished_download(run, "local")
         return JSONResponse({"ok": True, "node": wanted, "run": run})
 
     @app.post("/api/hub/model-packages/{package_id}/verify")

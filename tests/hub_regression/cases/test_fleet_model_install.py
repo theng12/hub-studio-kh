@@ -44,10 +44,10 @@ def hub(packaged_app, tmp_path, monkeypatch):  # noqa: F811
         if run_id == "run-1" else None))
     memory = mock.patch("psutil.virtual_memory", lambda: SimpleNamespace(total=16 * GIB))
     memory.start()
-    app, _owner = packaged_app
+    app, owner = packaged_app
     with TestClient(app) as client:
         client.headers["Authorization"] = "Bearer " + peers.fleet_token()
-        yield SimpleNamespace(client=client, started=started)
+        yield SimpleNamespace(client=client, started=started, owner=owner)
     memory.stop()
 
 
@@ -165,3 +165,96 @@ def test_the_fleet_still_cannot_import_cancel_or_use_the_plain_model_routes():
                          ("DELETE", "/api/hub/model-downloads/run-1"),
                          ("DELETE", "/api/hub/fleet/nodes/x/model-downloads/run-1")):
         assert not fleet_path_allowed(method, path), (method, path)
+
+
+# "Done but absent" (live, 2026-10-04, 1500 controller, Fish Audio S2 Pro 4-bit): the download finished
+# and its receipt was in the library the voice worker reads, but the Hub re-reads worker catalogs only
+# once a minute. The Gateway's Fleet page reloads the moment it hears `done`, so it read the model as
+# absent (and the scheduler would not send it work) until the next cycle.
+
+FISH_REPO = "majentik/fishaudio-s2-pro-MLX-4bit"
+
+
+class _Worker:
+    """The voice worker's /api/catalog: it reports what is on disk now."""
+
+    def __init__(self, state):
+        self.state, self.calls = state, 0
+
+    async def get(self, url, headers=None, timeout=None):
+        import httpx
+        self.calls += 1
+        body = {"families": {}, "models": [{"repo": FISH_REPO, "kind": "local",
+                                            "cache": {"state": self.state, "package_id": FISH}}]}
+        return httpx.Response(200, json=body, request=httpx.Request("GET", url))
+
+
+def _fish_cache_state(hub):
+    states = {row["cache"]["state"] for row in hub.client.get("/api/hub/models").json()["models"]
+              if row.get("repo") == FISH_REPO}
+    assert len(states) == 1, states
+    return states.pop()
+
+
+@pytest.mark.parametrize("route, who", [("/api/hub/fleet/nodes/local/model-downloads/run-2", "fleet"),
+                                        ("/api/hub/model-downloads/run-2", "owner")])   # Gateway / Model library
+def test_a_finished_download_shows_installed_on_the_next_read(hub, monkeypatch, route, who):
+    import time
+    from components.hub import model_downloads
+    monitor = hub.client.app.state.monitor
+    worker = _Worker("absent")
+    monkeypatch.setattr(monitor, "_client", worker)
+    monitor.status["voice"] = {"status": "up"}
+    assert _fish_cache_state(hub) == "absent", "before the download the worker has no Fish"
+
+    worker.state = "cached"                       # the download published the package
+    monkeypatch.setattr(model_downloads, "status", lambda run_id: {
+        "id": run_id, "package_id": FISH, "state": "done", "exit_code": 0,
+        "finished_at": time.time(), "total_bytes": 100})
+    headers = {"Authorization": "Bearer " + hub.owner} if who == "owner" else {}
+    answer = hub.client.get(route, headers=headers)
+    assert answer.status_code == 200, answer.text
+    assert _fish_cache_state(hub) == "cached", "the read straight after `done` must not be a minute old"
+
+    calls = worker.calls
+    hub.client.get(route, headers=headers)
+    assert worker.calls == calls, "a finished run re-reads the catalogs once, not on every poll"
+
+
+def test_a_relayed_finished_download_refreshes_the_controllers_view_of_that_node(hub, monkeypatch):
+    from components.hub.backend import fleet_nodes
+    monitor = hub.client.app.state.monitor
+    refreshed = []
+    monkeypatch.setattr(monitor, "refresh_machine_catalogs", lambda machine: _record(refreshed, machine))
+    running = _Node(200, {"ok": True, "node": "local", "run": {"id": "n-run", "state": "running", "bytes_done": 7}})
+    monkeypatch.setattr(fleet_nodes, "_probe_client", lambda: running)
+    assert hub.client.get(f"/api/hub/fleet/nodes/{NODE}/model-downloads/n-run").json()["run"]["bytes_done"] == 7
+    assert refreshed == [], "nothing to re-read while the download is still running"
+
+    done = _Node(200, {"ok": True, "node": "local", "run": {"id": "n-run", "state": "done", "exit_code": 0}})
+    monkeypatch.setattr(fleet_nodes, "_probe_client", lambda: done)
+    assert hub.client.get(f"/api/hub/fleet/nodes/{NODE}/model-downloads/n-run").json()["run"]["state"] == "done"
+    assert refreshed == [NODE]
+
+
+async def _record(calls, machine):
+    calls.append(machine)
+
+
+def test_refresh_machine_catalogs_reads_only_that_machines_studios(monkeypatch):
+    import asyncio
+    from components.hub.backend.monitor import StudioMonitor
+    monitor = StudioMonitor.__new__(StudioMonitor)
+    monitor.registry = [{"id": "voice", "machine": "local"}, {"id": "image"},
+                        {"id": f"{NODE}:voice", "machine": NODE.upper()}]
+    seen = []
+
+    async def refresh(studio, *, force):
+        seen.append((studio["id"], force))
+
+    monitor._refresh_studio_catalog = refresh
+    asyncio.run(monitor.refresh_machine_catalogs(NODE))
+    assert seen == [(f"{NODE}:voice", True)]
+    seen.clear()
+    asyncio.run(monitor.refresh_machine_catalogs("local"))
+    assert seen == [("voice", True), ("image", True)]
