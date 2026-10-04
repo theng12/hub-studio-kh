@@ -421,6 +421,23 @@ def _shelved_refusal(manifest: dict[str, Any]) -> None:
         raise HTTPException(409, _shelved_reason(manifest))
 
 
+def _memory_refusal(manifest: dict[str, Any]) -> None:
+    """A model this Mac has too little memory to run is not downloaded onto it by the fleet.
+
+    The floor is the scheduler's own (`memory_admission.requirement_gb`: operator override, measured,
+    manifest tier), so what is refused here is exactly what dispatch would never send to this Mac.
+    """
+    import psutil
+    from .backend import memory_admission
+    floor = (memory_admission.requirement_gb(manifest["model_id"], {})[0]
+             or (manifest.get("qualification") or {}).get("minimum_unified_memory_gb"))
+    memory_gb = round(psutil.virtual_memory().total / (1024 ** 3))
+    if floor and memory_gb < float(floor):
+        raise HTTPException(409, (
+            f"Not on this Mac: {manifest['package_id']} needs a Mac with at least {float(floor):g} GB of "
+            f"memory and this one has {memory_gb} GB, so it could never run here. Nothing was downloaded."))
+
+
 def _library_may_be_moved_from(what: str) -> bool:
     """True only when this Hub's data directory owns the model library (components/library_ownership.py).
 
@@ -2429,6 +2446,67 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if run is None:
             raise HTTPException(404, "unknown model download")
         return run
+
+    _MODEL_REFUSAL_CODES = {404: "UNKNOWN_PACKAGE", 507: "NOT_ENOUGH_DISK"}
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}/download")
+    async def fleet_node_model_download(node_id: str, package_id: str, request: Request) -> JSONResponse:
+        """Install a model on one Mac in this group from the Gateway: a joined node (relayed to the
+        node's own copy of this route, ``local``) or this controller itself (its id or ``local``).
+
+        The same download as the Model library's, with the same refusals (unknown package, shelved
+        model, full disk) plus one the local button does not need: a model this Mac has too little
+        memory to run. Audited here and, for a node, again on the node.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            startup_control.audit("model_download_relay", {"node": wanted, "package": package_id,
+                                                           "actor": actor})
+            try:
+                return JSONResponse(await fleet.relay_model(wanted, "POST",
+                                                            f"/model-packages/{package_id}/download"))
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+        try:
+            manifest = _model_catalog().get(package_id)
+            if manifest is None or manifest.get(_MANIFEST_ERROR):
+                raise HTTPException(404, "unknown model package")
+            _shelved_refusal(manifest)
+            _memory_refusal(manifest)
+            run = download_model_package(package_id, {})
+        except (OSError, ValueError) as exc:
+            run, refusal = None, HTTPException(409, str(exc))
+        except HTTPException as exc:
+            run, refusal = None, exc
+        startup_control.audit("model_download", {
+            "node": wanted, "package": package_id, "actor": actor,
+            **({"run": run.get("id")} if run else {"refused": refusal.detail})})
+        if run is None:
+            return JSONResponse({"ok": False, "code": _MODEL_REFUSAL_CODES.get(refusal.status_code, "REFUSED"),
+                                 "detail": refusal.detail}, status_code=refusal.status_code)
+        return JSONResponse({"ok": True, "node": wanted, "run": run})
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/model-downloads/{run_id}")
+    async def fleet_node_model_download_status(node_id: str, run_id: str) -> JSONResponse:
+        """How a download started through the route above is going, on the Mac that runs it."""
+        from . import model_downloads
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            try:
+                return JSONResponse(await fleet.relay_model(wanted, "GET", f"/model-downloads/{run_id}"))
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+        run = model_downloads.status(run_id)
+        if run is None:
+            return JSONResponse({"ok": False, "code": "UNKNOWN_DOWNLOAD",
+                                 "detail": "this Mac has no model download with that id"}, status_code=404)
+        return JSONResponse({"ok": True, "node": wanted, "run": run})
 
     @app.post("/api/hub/model-packages/{package_id}/verify")
     def verify_model_package(package_id: str) -> dict[str, Any]:
