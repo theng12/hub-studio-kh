@@ -402,7 +402,10 @@ def _model_capability(model: dict, studio: dict, worker: dict,
     capacity_eligible = _capacity_eligible(
         model,
         online=worker["online"],
-        ready=worker["ready"],
+        # **A Lite Mode Mac that is standing by is not capacity (D5).** It takes no new work
+        # until its user steps away, so counting it let the Gateway queue work here for a Mac
+        # that was not coming; it re-enters the eligible total the moment it is free again.
+        ready=worker["ready"] and not worker.get("standing_by"),
         drained=worker["drained"],
         maintenance=worker["maintenance"],
         machine_quarantined=worker["machine_quarantined"],
@@ -878,7 +881,8 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
         quarantined = bool((protections.get(machine) or {}).get("quarantined"))
         is_busy = studio_id in busy
         # A workstation whose user is at it (or in its quiet hours) is a busy Mac, not a missing one.
-        machine_busy = machine in busy_machines or peers.standing_by(machine)
+        standing_by = peers.standing_by(machine)
+        machine_busy = machine in busy_machines or standing_by
         machine_release = _machine_release_evidence(managed_release, machine)
         component_release = (
             (machine_release.get("components") or {}).get(studio.get("modality"))
@@ -901,6 +905,8 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
             "ready": ready,
             "busy": is_busy,
             "physical_machine_busy": machine_busy,
+            # Lite Mode standing by / stepped aside / quiet hours: busy, and not capacity either.
+            "standing_by": standing_by,
             "drained": drained,
             "maintenance": maintenance,
             "machine_quarantined": quarantined,
