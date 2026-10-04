@@ -25,6 +25,7 @@ import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from starlette.concurrency import run_in_threadpool
 
 from components import shelved_models
@@ -1269,6 +1270,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     app = FastAPI(title="Studio Hub", version=_app_version(), lifespan=lifespan)
     app.middleware("http")(auth.make_middleware(token))
+    # **JSON goes over the WAN compressed.** A Gateway's read of one controller is ~3.6 MB of
+    # JSON (`/api/hub/models` ~2 MB, `capabilities` ~1 MB, `jobs` ~0.4 MB) over a Tailscale link
+    # measured at 0.5-1.2 MB/s, so it took 4-20 s while `/health` answered in milliseconds. That
+    # JSON compresses 9-26x. Binary bodies (`application/octet-stream`: release images and blobs,
+    # which nodes read with `iter_raw` and resume with Range) stay identity, as do media types
+    # Starlette already excludes.
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5,
+                       exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES,
+                                              "application/octet-stream"))
     app.state.monitor = monitor
 
     @app.get("/api/health")

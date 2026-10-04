@@ -226,3 +226,24 @@ def test_the_new_routes_are_on_the_fleet_allowlist():
     assert auth.fleet_path_allowed(
         "POST", "/api/hub/transcription/jobs/b/items/0/retry")
     assert auth.fleet_path_allowed("GET", "/api/hub/model-health")
+
+
+def test_fleet_json_reads_are_gzipped_for_a_client_that_accepts_it(hub):
+    """A Gateway's read of one controller is megabytes of JSON over a ~1 MB/s Tailscale link;
+    compressed it is ~10x smaller. A client that does not ask still gets identity bytes."""
+    client, monitor = hub
+    monitor._catalog_cache["image"] = (time.time(), {"models": [
+        {"repo": f"fixture/model-{n}", "cache": {"state": "cached"}, "available": True}
+        for n in range(200)
+    ]})
+    zipped = client.get("/api/hub/models",
+                        headers={**_fleet_headers(), "Accept-Encoding": "gzip"})
+    assert zipped.status_code == 200, zipped.text
+    assert zipped.headers["content-encoding"] == "gzip"
+    assert zipped.num_bytes_downloaded * 5 < len(zipped.content)
+    assert len(zipped.json()["models"]) == 200
+
+    plain = client.get("/api/hub/models",
+                       headers={**_fleet_headers(), "Accept-Encoding": "identity"})
+    assert "content-encoding" not in plain.headers
+    assert [row["repo"] for row in plain.json()["models"]] == [row["repo"] for row in zipped.json()["models"]]

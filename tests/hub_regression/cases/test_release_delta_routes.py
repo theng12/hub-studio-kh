@@ -258,6 +258,8 @@ def test_blobs_and_manifest_are_served_with_range_and_only_when_listed(hub, tmp_
     full = hub.get(f"/api/hub/release/blob/{big}", headers=_node_headers())
     assert full.status_code == 200 and full.content == blobs[big]
     assert full.headers["accept-ranges"] == "bytes"
+    # Never gzipped: a node reads blobs with `iter_raw` and resumes them with Range.
+    assert "content-encoding" not in full.headers
     part = hub.get(f"/api/hub/release/blob/{big}", headers={**_node_headers(), "Range": "bytes=10-19"})
     assert part.status_code == 206 and part.content == blobs[big][10:20]
     assert hub.get(f"/api/hub/release/blob/{'1' * 64}", headers=_fleet_headers()).status_code == 404
