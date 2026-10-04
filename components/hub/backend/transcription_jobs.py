@@ -540,7 +540,7 @@ def summary(batch: dict, include_items: bool = True,
             "artifact_url": (f"/api/hub/transcription/jobs/{batch['id']}/items/"
                              f"{item['index']}/artifact" if item["state"] == "done"
                              and not batch.get("storage_cleaned_at") else None),
-            "error": item.get("error"), "tries": item["tries"],
+            "error": item.get("error"), "error_code": item.get("error_code"), "tries": item["tries"],
             "manual_action_required": bool(item.get("manual_action_required")),
             **({"metadata": item.get("metadata")} if include_metadata else {}),
         } for item in batch["items"]]
@@ -762,6 +762,19 @@ def _expire_genstudio_batch(batch: dict) -> bool:
     return True
 
 
+def _hand_back_queued(batch: dict) -> None:
+    """Every Mac here that could run it is paused: give queued items back typed
+    NO_AVAILABLE_MACHINE (the broker lanes' contract) instead of holding them for ever.
+    Nothing ran, so no try is spent; running items finish."""
+    now = time.time()
+    handed = [item for item in batch["items"] if item["state"] == "queued"]
+    for item in handed:
+        item.update(state="error", error_code=broker.NO_AVAILABLE_MACHINE,
+                    error=broker.NO_AVAILABLE_MACHINE_TEXT, finished_at=now)
+    if handed:
+        _save(batch)
+
+
 def renew_execution_lease(renewal: dict) -> bool:
     batch_id = renewal.get("local_batch_id")
     batch = batches.get(batch_id) if batch_id else None
@@ -809,6 +822,9 @@ async def dispatch_once(monitor) -> int:
         for batch in active:
             if _expire_genstudio_batch(batch):
                 _save(batch)
+                continue
+            if broker.every_capable_mac_paused("transcription", batch["model"], _routing(batch)):
+                _hand_back_queued(batch)
                 continue
             refusal = broker.admission_refusal(batch)
             if refusal:
@@ -1245,8 +1261,8 @@ def retry_batch(batch_id: str) -> tuple[dict | None, int]:
     for item in batch["items"]:
         if not item.get("manual_action_required") and (
                 item["state"] == "error" or item.get("interrupted")):
-            item.update(state="queued", error=None, studio=None, studio_task_id=None,
-                        interrupted=False, tries=0)
+            item.update(state="queued", error=None, error_code=None, studio=None,
+                        studio_task_id=None, interrupted=False, tries=0)
             retried += 1
     if retried:
         batch["cancelled"] = False
@@ -1285,7 +1301,7 @@ def retry_failed_item(batch_id: str, item_index: int) -> dict:
             f"item is not in a failed state (state is {state or 'unknown'})"
         )
     item.update(
-        state="queued", tries=0, error=None, studio=None, studio_task_id=None,
+        state="queued", tries=0, error=None, error_code=None, studio=None, studio_task_id=None,
         interrupted=False, manual_action_required=False, started_at=None,
         finished_at=None, duration_seconds=None, artifact_path=None,
     )
