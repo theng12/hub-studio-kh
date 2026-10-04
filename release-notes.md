@@ -17,6 +17,19 @@ Pocket TTS and the Khmer voice. Each setting has a safe range, and a value outsi
 **Each model's starting values live in one list.** When the listening tests pick a better value for a model, changing
 that one list changes it everywhere. You can also set a model's own starting value on this Mac in the Models tab.
 
+### Khmer narration: correct sentence pauses, no mid-syllable cuts, quality check now understands Khmer
+
+**Khmer sentences get a proper pause.** A Khmer sentence ends with ។ (or ៕), and the app did not know that, so where a
+long Khmer voice-over was joined after a sentence it left the short pause meant for the middle of a sentence. It now
+leaves the full sentence pause, and splits a long voice-over at the end of a Khmer sentence first.
+
+**Khmer written without spaces is never cut in the middle of a syllable.** When there is nowhere better to split, the
+app now splits between syllables, never in the middle of one.
+
+**The quality check can now check Khmer.** It used to find no words in Khmer text, so it passed every Khmer part without
+really checking it. It now compares Khmer syllable by syllable and listens in Khmer, so it can catch a part that leaves
+out a large piece of its text. For now it only fails a part that missed a lot, until it has been tried on more Khmer.
+
 **A fixed seed now gives the same Khmer voice-over every time.** A long Khmer voice-over with a fixed seed restarted
 the same randomness for every part, and one without a seed recorded a seed it never used. Both now work like the other
 voices: one seed for the whole voice-over.

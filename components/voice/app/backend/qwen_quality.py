@@ -141,15 +141,22 @@ def save_reference_evidence(cache_key: str, evidence: dict) -> None:
 
 def _normalized_text(value: str) -> str:
     value = unicodedata.normalize("NFKC", value or "").casefold()
-    value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
+    # Khmer vowel signs and the coeng are marks, not `\w`; they stay, or every syllable falls apart.
+    value = re.sub(r"[^\w\s\u17b4-\u17d3\u17dd]", " ", value, flags=re.UNICODE)
     return " ".join(value.split())
+
+
+# One Khmer orthographic syllable: a consonant or independent vowel with its subscripts (coeng +
+# consonant) and signs. Khmer writes no spaces between words, so it is compared syllable by
+# syllable, as CJK is compared character by character.
+_KHMER_SYLLABLE = re.compile(r"[\u1780-\u17b3](?:\u17d2[\u1780-\u17b3]|[\u17b4-\u17d1\u17d3\u17dd])*")
 
 
 def _tokens(value: str) -> list[str]:
     normalized = _normalized_text(value)
     words = re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", normalized)
     cjk = re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", normalized)
-    return words + cjk
+    return words + cjk + _KHMER_SYLLABLE.findall(normalized)
 
 
 # ── numeral canonicalization ────────────────────────────────────────────────

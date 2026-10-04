@@ -59,6 +59,15 @@ PAUSE_MARGIN_S = 3.5
 WIDE_CHARACTER_WEIGHT = 3      # one CJK/kana/hangul character takes about as long as three Latin
 _WIDE = re.compile(r"[\u1100-\u11ff\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\uf900-\ufaff]")
 SPELLING_VARIANT_RATIO = 0.8   # "Elara" heard as "Alara" still counts as heard
+# Khmer is compared syllable by syllable (`qwen_quality._KHMER_SYLLABLE`): it writes no spaces between
+# words, so the word rule above counted 0 expected / 0 heard and always passed. Whisper turbo's Khmer
+# is far weaker than its English, so a Khmer section fails only when Whisper heard under half its
+# syllables, or missed a clause's worth (about six words) in a row.
+# ponytail: guessed, not measured - tighten from the overlap of known-good Khmer sections
+# (CALIBRATION-PLAN.md, Khmer step) before trusting it to catch a single dropped word.
+KHMER_MIN_SYLLABLE_OVERLAP = 0.5
+KHMER_MAX_MISSING_RUN = 24
+_KHMER = re.compile(r"[\u1780-\u17ff]")
 # Families whose engine emits 12.5 acoustic tokens per second (the Qwen3-TTS 12 Hz codec), so a
 # section's duration ceiling is also its token budget. Unbounded, mlx-audio's `generate_audio`
 # default of 1,200 tokens let one failed Breeze clause run on for 96 s.
@@ -122,6 +131,11 @@ def _spoken_characters(text: str) -> int:
 def transcribe_back_applies(text: str) -> bool:
     """Whisper writes Chinese in either script, so a CJK section is checked by its audio only."""
     return not _WIDE.search(text)
+
+
+def script_language(text: str) -> str | None:
+    """The Whisper language a section's own script settles, whatever the request's `language` says."""
+    return "km" if _KHMER.search(text) else None
 
 
 def max_duration_s(text: str, family: str, speed: float = 1.0) -> float:
@@ -213,8 +227,13 @@ def check_section(text: str, family: str, metrics: dict, *, speed: float = 1.0,
         code, why = "TTS_SECTION_TOO_LONG", "ran far longer than its text (babble or humming)"
     elif metrics.get("longest_pause_s", 0.0) > evidence["max_pause_s"]:
         code, why = "TTS_SECTION_INTERNAL_SILENCE", "stopped mid-text for an unnatural pause"
-    elif missing_allowed is not None and (total - matched > missing_allowed
-                                          or evidence["longest_missing_run"] > MAX_MISSING_RUN):
+    elif missing_allowed is not None and _KHMER.search(text) and (
+            evidence["word_overlap"] < KHMER_MIN_SYLLABLE_OVERLAP
+            or evidence["longest_missing_run"] > KHMER_MAX_MISSING_RUN):
+        code, why = "TTS_SECTION_TEXT_MISMATCH", "does not say its text (Whisper heard other words)"
+    elif missing_allowed is not None and not _KHMER.search(text) and (
+            total - matched > missing_allowed
+            or evidence["longest_missing_run"] > MAX_MISSING_RUN):
         code, why = "TTS_SECTION_TEXT_MISMATCH", "does not say its text (Whisper heard other words)"
     else:
         return {**evidence, "accepted": True}

@@ -10,6 +10,8 @@ Last updated: **0.6.142** (newest block first; the rest of this line and the blo
 > `catalog.sampling_kwargs` is applied once in `_generate_mlx_audio` after the mode resolver (and in `_generate_khmer_vits` as VitsModel attributes);
 > `lane_contract.parameters_for` publishes them. Defaults = 0.6.141's effective values (mlx-audio `generate_audio` passes temperature 0.7 to all). To adopt
 > calibrated defaults, edit only that table and the pin in `components/voice/app/tests/test_sampling_levers.py`. Khmer MMS seeds like MLX now.
+> Khmer: ។/៕ in `_QWEN_SENTENCE_ENDINGS`; `_split_long_text_unit` prefers ។/៕, then space/U+200B/`,;:`, then `_cluster_boundary`; gate tokens include Khmer
+> syllables (`qwen_quality._KHMER_SYLLABLE`), Khmer thresholds `tts_quality.KHMER_*` are a loose unmeasured guess; Whisper reads Khmer sections as `km`.
 > Audit + calibration plan: `_orchestra/audit-20261001/tts-sampling/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.141 - a paused group hands its work back; TTS admitted once per job on one reading (`release/0.6.141` = 0.6.140 + the TTS-comparison fixes, 2026-10-04).**

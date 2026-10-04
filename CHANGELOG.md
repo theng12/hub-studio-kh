@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.142 — 2026-10-04 · Every TTS model's sampling levers are request fields with published bounds; defaults unchanged
+## 0.6.142 — 2026-10-04 · Every TTS model's sampling levers are request fields (defaults unchanged); Khmer narration splits, pauses and is checked correctly
 
 Release of `release/0.6.142` (= 0.6.141 + the change below). Owner, 2026-10-04: "find a balanced default for each of the models" after the TTS
 comparison found the Hub passed Breeze TTS 2 no sampling settings. Audit: `_orchestra/audit-20261001/tts-sampling/LEVERS.md`; calibration plan beside it.
@@ -19,6 +19,16 @@ comparison found the Hub passed Breeze TTS 2 no sampling settings. Audit: `_orch
 - **Seed**: never passed to an engine (Breeze's own `seed` would reseed every section). Khmer MMS now follows the MLX rule (`_qwen_attempt_seed`, seeded
   once, `_native_continue_rng` sections continue): a fixed seed reseeded every section to one state, and an unseeded job recorded a `resolved_seed` the
   audio never used.
+- **Khmer text handling** (`_orchestra/audit-20261001/tts-khmer/REPORT.md` findings 1, 2, 4). `generation._QWEN_SENTENCE_ENDINGS` (the one set the
+  section splitter and `_production_join_pauses_s` read) gains ។ U+17D4 / ៕ U+17D5, so joins after a Khmer sentence get the 0.6 s sentence pause, not
+  0.15 s. `_split_long_text_unit` prefers a cut after ។/៕ (even with no space after it), then space / zero-width space (U+200B) / `,;:`, and the
+  last-resort cut goes through `_cluster_boundary` (never before a combining mark, after a virama-class sign such as the Khmer coeng, or beside
+  ZWJ/ZWNJ). Quality gate: `qwen_quality._tokens` adds Khmer orthographic syllables (`_KHMER_SYLLABLE`; `_normalized_text` keeps Khmer signs), so
+  `tts_quality.heard_words` counts real units (it reported 0/0/1.0); a Khmer section fails `TTS_SECTION_TEXT_MISMATCH` when syllable overlap
+  < `KHMER_MIN_SYLLABLE_OVERLAP` 0.5 or a missing run > `KHMER_MAX_MISSING_RUN` 24 syllables (deliberately loose, unmeasured: `ponytail:` note);
+  the English rule is untouched. Whisper transcribe-back reads a Khmer section as `km` (`tts_quality.script_language`) whatever the request's
+  `language` says (Story sends the voice's own, e.g. `en`). Tests: `components/voice/app/tests/test_khmer_text_handling.py` (spaced and unspaced
+  Khmer fixtures; 8 of its 9 fail on 0.6.141 code).
 - Gateway: no change needed — `/v1/audio/jobs` forwards `params` and flattens `controls` into the Hub item's params by name (checked in the sandbox).
 - Tests: `components/voice/app/tests/test_sampling_levers.py` (new, 118: defaults pinned per family, every lever clamped at both bounds and published,
   engine argument names checked against the installed mlx-audio / transformers, Breeze end-to-end through `_generate_mlx_audio`, seed once / no engine

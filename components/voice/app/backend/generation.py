@@ -95,6 +95,7 @@ import tempfile
 import threading
 import time
 import traceback
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -732,7 +733,13 @@ _QWEN_CLONE_CHUNK_CHARS = (
     long_form_policy.QWEN_CLONE_SECTION_MAX_CHARACTERS
 )
 _LONG_FORM_JOIN_PAUSE_S = long_form_policy.DEFAULT_JOIN_PAUSE_SECONDS
-_QWEN_SENTENCE_ENDINGS = frozenset(".!?。！？")
+# The one set of sentence ends: the section splitter and the join-pause classifier both read it.
+# Khmer ends a sentence with ។ (khan) or ៕ (bariyosan); without them a Khmer paragraph was one long
+# "sentence" and every join after a Khmer sentence got the 0.15 s mid-sentence pause.
+_QWEN_SENTENCE_ENDINGS = frozenset(".!?。！？។៕")
+# Script full stops that never sit inside a word or number, so a long unit may be cut right after one
+# even with no space following (Khmer often writes none). "." is not one of them: "3.5", "e.g.".
+_SCRIPT_FULL_STOPS = "។៕"
 _QWEN_TRAILING_CLOSERS = frozenset("\"'”’»）】〕〉")
 
 
@@ -804,14 +811,20 @@ def _split_long_text_unit(text: str, max_chars: int) -> list[str]:
     remaining = text.strip()
     floor = max(1, int(max_chars * 0.55))
     while len(remaining) > max_chars:
-        whitespace = remaining.rfind(" ", floor, max_chars + 1)
+        full_stop = max(
+            (remaining.rfind(mark, floor, max_chars) + 1 for mark in _SCRIPT_FULL_STOPS),
+            default=0,
+        )
+        # A zero-width space is where Khmer (and Thai, Lao, Myanmar) marks a word break.
+        whitespace = max(remaining.rfind(" ", floor, max_chars + 1),
+                         remaining.rfind("\u200b", floor, max_chars) + 1)
         punctuation = max(
             (remaining.rfind(mark, floor, max_chars + 1) + 1 for mark in ",;:、，；："),
             default=0,
         )
-        cut = max(whitespace, punctuation)
+        cut = full_stop or max(whitespace, punctuation)
         if cut <= 0:
-            cut = max_chars
+            cut = _cluster_boundary(remaining, max_chars)
         piece = remaining[:cut].strip()
         if not piece:
             cut = max_chars
@@ -821,6 +834,23 @@ def _split_long_text_unit(text: str, max_chars: int) -> list[str]:
     if remaining:
         pieces.append(remaining)
     return pieces
+
+
+def _cluster_boundary(text: str, cut: int) -> int:
+    """``cut`` moved back to the start of its grapheme cluster, so a forced cut never splits a syllable.
+
+    A cut may not land before a combining mark (a Khmer vowel sign, a Devanagari matra) nor right after
+    a virama-class sign (the Khmer coeng ្, which joins the next consonant below the one before it),
+    nor beside a zero-width joiner. Without this, space-less Khmer was cut mid-syllable and the next
+    section began with a dependent vowel.
+    """
+    while 1 < cut < len(text) and (
+        unicodedata.category(text[cut]).startswith("M")
+        or unicodedata.combining(text[cut - 1]) == 9
+        or text[cut] in "\u200c\u200d" or text[cut - 1] in "\u200c\u200d"
+    ):
+        cut -= 1
+    return cut
 
 
 def _internal_mlx_text_chunks(
@@ -3365,8 +3395,11 @@ class GenerationManager:
             if snapshot is None or snapshot["available_gb"] < needed:
                 return None, "memory"
         try:
-            result = stt.transcribe_locked(str(segment_path), model_repo=repo,
-                                           language=job.params.get("language"))
+            result = stt.transcribe_locked(
+                str(segment_path), model_repo=repo,
+                # Khmer script can only be read as Khmer: a request's `language` is often the
+                # voice's own ("en" for an English reference cloned into a Khmer story).
+                language=tts_quality.script_language(text) or job.params.get("language"))
         except Exception as exc:  # not installed, or it failed: the audio checks still apply
             print(f"[gen] section transcribe-back skipped: {type(exc).__name__}: {exc}",
                   file=sys.stderr, flush=True)
