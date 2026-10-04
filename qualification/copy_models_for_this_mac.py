@@ -526,14 +526,15 @@ def main() -> int:
         manifest_shelved = lambda manifest, stem=None: False  # noqa: E731
         keep_all_models = lambda settings_file: False  # noqa: E731
     keep_all = keep_all_models(Path.home() / HUB_SETTINGS_RELATIVE)
-    # **A Shop Mac (workstation mode, owner 2026-10-03)** carries only the 8 GB-class models it runs
-    # (`components/workstation_models.py`, ~15 GB). `Extras/Set Up a Shop Mac.command` sets this.
+    # **Lite Mode models only (owner 2026-10-03/04)**: the 8 GB-class models a Lite Mode Mac runs
+    # (`components/workstation_models.py`, ~15 GB). The kit's `2 - Copy the Lite Mode models.command`
+    # sets STUDIOHUB_WORKSTATION=1; it is the only difference from `2 - Copy the models`.
     shop_mac = os.environ.get("STUDIOHUB_WORKSTATION", "").strip() == "1"
     if shop_mac:
         try:
             from workstation_models import manifest_allowed  # type: ignore
         except ImportError:
-            print("  This kit's Studio Hub predates Lite Mode, so it cannot set up a Shop Mac.")
+            print("  This kit's Studio Hub predates Lite Mode, so it cannot copy only the Lite Mode models.")
             return 2
     manifests = {m["package_id"]: m for m in
                  (json.loads(p.read_text()) for p in sorted(manifests_dir.glob("*.json")))
@@ -633,8 +634,7 @@ def main() -> int:
               "settings (see the release notes), then run this again.")
         print()
     if not_for_shop:
-        print(f"  Shop Mac: only the Lite Mode models are copied; {len(not_for_shop)} other model(s) "
-              "stay on the SSD.")
+        print(f"  Lite Mode models only: {len(not_for_shop)} other model(s) stay on the SSD.")
         print()
     if skipped:
         skip_gb = sum(size_gb(m) for _p, _n, m in skipped)

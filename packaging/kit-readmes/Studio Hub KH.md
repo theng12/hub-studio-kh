@@ -30,6 +30,9 @@ what you should see.
 1. **`2 - Copy the models.command`** — reads how much memory this Mac has and copies only
    the models it can run, plus your saved voices. Give it several minutes the first time.
    It is safe to run again: it adds what is missing and leaves the rest alone.
+   **A Lite Mode Mac:** set it up like any Mac; use **`2 - Copy the Lite Mode models.command`**
+   instead of this one if you want only the Lite models (about 15 GB); then tick **Lite Mode**
+   in Studio Hub > Settings.
 2. **`1 - Install the app.command`** — puts the app in **Applications**. It will ask for
    your password once. It closes and replaces any older copy for you, then **opens the app
    in fleet mode** (`--fleet-mode`): the Mac starts Studio Hub's services now, at every login
@@ -143,7 +146,7 @@ the 8 GB Macs: it is qualified there (measured on an 8 GB M1 Mac mini, low-RAM m
 |---|---|
 | `START-HERE.md` | the plain walk-through for a new Mac |
 | `NODE-SETUP-CHECKLIST.md` | tick list for setting up a node |
-| `Extras/Set Up a Shop Mac.command` | optional shortcut: a work Mac in Lite Mode (the usual install with only the Lite Mode models, Lite Mode on - the same as setting the Mac up like any other and ticking **Lite Mode** in Studio Hub > Settings, on any role, controller included) - see `NODE-SETUP-CHECKLIST.md`, "Shops" |
+| `2 - Copy the Lite Mode models.command` | the Lite Mode Mac's model copy: the same as `2 - Copy the models`, but only the models Lite Mode uses (about 15 GB). It does not change the Mac's role or tick Lite Mode - see `NODE-SETUP-CHECKLIST.md`, "Shops" |
 | `Token and Stuff.md` | a place you have written down this Mac's addresses and tokens |
 | `Technical/verify-kit.sh` | proves this copy installs, starts and answers health |
 | `Technical/RUN-16GB-FISH.command` | the 16 GB Fish test: double-click on the 16 GB Mac. It first puts Fish S2 Pro 4-bit, 8-bit and bf16 on that Mac from this kit's `model-library` (bf16 and 8-bit are not part of the normal copy step), then measures all three; read `README-8gb-tts.md` beside it |
