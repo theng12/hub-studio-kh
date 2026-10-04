@@ -129,6 +129,28 @@ only matters on a Hub older than 0.6.125 that cannot bypass: a job held for memo
 
 Note: the Hub keeps the audio of each job like any other job and cleans it by its own retention rule.
 
+## The 8 GB Breeze test (`RUN-8GB-BREEZE.command`)
+
+Breeze TTS 2 4-bit alone, on an **8 GB Mac**, with the calibrated Breeze sampling (0.6.143 "Breeze B": temperature 0.6, top_p 0.9,
+top_k 40, repetition penalty 1.05) sent in every request, so a Hub 0.6.142 (which takes these fields, with older defaults) samples the same way.
+
+1. **Double-click `RUN-8GB-BREEZE.command`** (same `Technical` folder; Studio Hub 0.6.142+ open, other apps closed, on power). It refuses on a
+   Mac that is not 8 GB, before copying anything.
+2. **It first puts Breeze on that Mac.** Breeze is 16 GB-tier, so "2 - Copy the models" leaves it behind on 8 GB. `import_kit_packages.py`
+   imports exactly `breeze-tts-2-mlx-4bit` (about 3 GB) from the kit's `model-library` through the Hub's own import code (as for Fish).
+   A second run copies nothing. Breeze stays on the Mac afterwards; the Hub still keeps it for 16 GB Macs, so it gets no fleet work there.
+3. **Then it runs `eight-gb-tts-run.sh --models breeze`**: S2 (175 words) in both owner voices, the Hub's free-memory guard *and* its
+   16 GB total-memory tier bypassed for Breeze and put back afterwards. A Breeze clip gets 2.5x the time limit (20 minutes): on the 16 GB fleet
+   Breeze runs at RTF 3.6 median (M1 16 GB: about 5), so the short text alone takes about 6 minutes there.
+
+Besides the usual columns, `results.csv` records `params_sent` / `worker_accepted_params` and the Hub's own telemetry for each job
+(`hub_max_used_gb`, `hub_min_available_gb`, `hub_peak_pressure`, `hub_swap_delta_gb`, `hub_worker_peak_rss_gb`) and the section checks
+(`sections`: how many, how many accepted, rejection codes); `summary.txt` has one line per completed clip with them.
+
+A clip the Hub never dispatches (queued for the whole limit) is recorded **did not start / NOT MEASURED**, not "timed out": on 2026-10-02
+both 8 GB Breeze clips sat queued for 480 s behind the 16 GB total-memory floor (that runner only bypassed the free-memory guard; the
+worker stayed idle at 0.8-1.1 GB), so that run measured nothing about Breeze on 8 GB.
+
 ## The 16 GB Fish test (`RUN-16GB-FISH.command`)
 
 The same measurement for **Fish Audio S2 Pro 4-bit, 8-bit and bf16** on a **16 GB Mac** (the new M4 Mac mini). Same two voices, same

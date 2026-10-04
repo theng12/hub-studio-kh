@@ -9,7 +9,9 @@
 #   bash eight-gb-tts-run.sh --models fish4,fish8,fishbf16 --target-gb 16   the 16 GB Fish test (RUN-16GB-FISH.command does this)
 #   bash eight-gb-tts-run.sh --allow-non-target       run the full test on a Mac that is not the target size (8 GB, or --target-gb N)
 #
-# (Easier: double-click RUN-8GB-TTS.command, which runs this.)
+# (Easier: double-click RUN-8GB-TTS.command, which runs this; RUN-8GB-BREEZE.command imports Breeze and runs --models breeze.)
+# Breeze clips send the calibrated sampling (BREEZE_CALIBRATED) and get BREEZE_TIME_FACTOR x the time limit. A clip the Hub never
+# dispatched (queued for the whole limit) is "did not start", not "timed out": nothing about the Mac was measured.
 #
 # It sends each clip to the Studio Hub that is already running on THIS Mac, through the same route
 # the Gateway and the Voice studio use (POST /api/hub/jobs, modality "voice"), so the Hub's own
@@ -111,6 +113,9 @@ for i, a in enumerate(ARGS):
 WITH_S4 = "--with-s4" in ARGS or os.environ.get("TTS8_S4") == "1"   # the 3-minute text is opt-in: on 8 GB it can run for hours
 TIMEOUT = float(os.environ.get("TTS8_TIMEOUT", "480"))   # hard wall-clock limit for a short clip; the 3-minute text gets S4_FACTOR times this
 S4_FACTOR = 3.0
+BREEZE_TIME_FACTOR = 2.5   # Breeze runs at RTF 3.6 median on the 16 GB fleet (M1 16 GB: 4.9-5.1), so the short text alone is ~6 min there: 480 s was too tight
+# Breeze's calibrated sampling (0.6.143, "Breeze B"), sent explicitly so a Hub 0.6.142 (which takes these fields, with the old defaults) samples the same way
+BREEZE_CALIBRATED = {"breeze_temperature": 0.6, "breeze_top_p": 0.9, "breeze_top_k": 40, "breeze_repetition_penalty": 1.05}
 FISH_TIME_FACTOR = 3.0   # Fish S2 Pro runs at 2-4x real time on the 32 GB Mac (130-290 s for the short text, 400-950 s for S4), slower still on 16 GB
 MEM_WAIT_S = float(os.environ.get("TTS8_MEM_WAIT", "300"))   # only on a Hub that cannot bypass: a job held for memory this long is given up on
 RELAX_GB = float(os.environ.get("TTS8_RELAX_FREE_GB", "0"))  # the free-memory requirement while a model is measured (0 = guard bypassed)
@@ -132,7 +137,8 @@ MODELS = [
          pkg="omnivoice-bfloat16", repo="mlx-community/OmniVoice-bfloat16"),
     # Breeze's manifest floor is 16 GB (0.27x realtime; ~3.3 GB resident), so the kit's copy step does not put it on an
     # 8 GB Mac by itself; it is in this list because the owner asked for it to be measured. No 32 GB reference time.
-    dict(key="breeze", name="Breeze TTS 2 4-bit", csv_model="Breeze TTS 2", quant="4bit",
+    # RUN-8GB-BREEZE.command imports it from the kit first (import_kit_packages.py) and runs only this model.
+    dict(key="breeze", name="Breeze TTS 2 4-bit", csv_model="Breeze TTS 2", quant="4bit", time_factor=BREEZE_TIME_FACTOR, params=BREEZE_CALIBRATED,
          pkg="breeze-tts-2-mlx-4bit", repo="mlx-community/Breeze-TTS-2-mlx-4bit"),
     # Fish Audio S2 Pro: opt-in (only with --models), never in the 8 GB default list. The manifests' memory tiers are 16 / 24 / 32 GB and bf16 is
     # shelved (the kit's copy step does not put it on a Mac), so RUN-16GB-FISH.command imports all three from the kit before this runs.
@@ -163,6 +169,9 @@ COLUMNS = ["model", "quant", "voice", "script", "audio_seconds", "generation_sec
            "queue_seconds", "footprint_before_gb", "worker_lifetime_peak_gb", "mlx_peak_active_gb", "mem_free_pct_min",
            "free_gb_before", "memory_released", "memory_holders", "needed_free_gb", "had_free_gb", "hub_reason",
            "guard_relaxed", "override_used_gb", "measured_peak_gb", "swap_delta_gb", "hub_free_floor_gb", "verdict", "worker_restarts",
+           # what was asked and what the worker took, and the Hub's own telemetry for the job (resource_usage, section_quality)
+           "params_sent", "worker_accepted_params", "hub_max_used_gb", "hub_min_available_gb", "hub_peak_pressure",
+           "hub_swap_delta_gb", "hub_worker_peak_rss_gb", "sections",
            ] + ssd_wear.COLUMNS
 
 LOG = None
@@ -455,6 +464,9 @@ def precheck():
         hint = (["The Fish models are 16 GB-tier or bigger (bf16 is shelved), so the kit's copy step does not put them on a Mac. Double-click",
                  "RUN-16GB-FISH.command from the kit's Technical folder: it imports exactly these three from the kit first."]
                 if any(m.get("opt_in") for m in models) else
+                ["Breeze is a 16 GB-tier model, so the kit's copy step does not put it on an 8 GB Mac. Double-click",
+                 "RUN-8GB-BREEZE.command from the kit's Technical folder: it imports exactly Breeze from the kit first."]
+                if [m["key"] for m in models] == ["breeze"] else
                 ["The kit's copy step puts these in place: double-click '2 - Copy the models' (or 'Update this Mac') from the kit,"])
         stop(3, "a model this test needs is missing or not verified on this Mac.", *bad, "", *hint,
              "then open Studio Hub > Models and let it finish checking them. This test never copies or repairs anything itself.")
@@ -594,7 +606,8 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
     try:
         env = {"modality": "voice", "model": model["repo"], "label": f"tts-{MAC_GB}gb-run", "voice_library_id": vid,
                "clientRequestId": f"tts-{MAC_GB}gb-" + uuid.uuid4().hex[:12],
-               "items": [{"text": text, "seed": 1234, "params": {}}]}
+               "items": [{"text": text, "seed": 1234, "params": dict(model.get("params") or {})}]}
+        rec["params_sent"] = json.dumps(model.get("params") or {}, sort_keys=True)
         s, r = call("POST", "/api/hub/jobs", env)
         if s != 200:
             raise RuntimeError(f"the Hub refused the job ({s}): {err_text(r)}")
@@ -661,7 +674,14 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
             wav.write_bytes(data)
             audio_s = wav_seconds(data)
         rec["status"] = "completed" if state == "done" else "timed out" if state == "timeout" else "failed"
-        if state == "timeout":
+        if state == "timeout" and not was_running:
+            # Never left the queue: the Hub did not dispatch it, so nothing about this Mac's memory or speed was measured
+            # (the 2026-10-02 Breeze clips read "timed out" this way: a 16 GB total-memory floor, idle worker peak 0.8-1.1 GB).
+            note = (batch.get("governor_note") or "") if isinstance(batch, dict) else ""
+            rec.update(status="did not start", hub_reason=note,
+                       error=f"did not start - the Hub kept the job queued for {int(limit)} s and never dispatched it, job cancelled"
+                             + (f" (Hub: {note})" if note else ""))
+        elif state == "timeout":
             rec["error"] = (f"timed out: not finished within {int(limit)} s, job cancelled"
                             + (f" (the Hub restarted the job {restarts} time(s): the voice worker kept dying)" if restarts else ""))
         elif state != "done":
@@ -704,8 +724,19 @@ def clip(model, voice, script_key, text, out_dir, cold, ctx, relaxed=False):
     if rec["status"] == "completed":
         rec["verdict"] = ("fits at default guard" if not relaxed
                           else f"fits only with relaxed guard - peak memory used {peak:.2f} GB")
+    elif rec["status"] == "did not start":
+        rec["verdict"] = "not measured - the Hub never dispatched the job"
     elif rec["status"] in ("timed out", "failed"):
         rec["verdict"] = "does not fit - " + ("too slow, timed out" if rec["status"] == "timed out" else "crashed or errored")
+    host, sq = ru.get("host") or {}, (item.get("section_quality") or {}) if isinstance(item, dict) else {}
+    sections = [x for x in (sq.get("sections") or []) if isinstance(x, dict)]
+    rec.update(hub_max_used_gb=host.get("maximum_used_gb", ""), hub_min_available_gb=host.get("minimum_available_gb", ""),
+               hub_peak_pressure=host.get("peak_pressure_level", ""), hub_swap_delta_gb=host.get("swap_used_delta_gb", ""),
+               hub_worker_peak_rss_gb=(ru.get("worker") or {}).get("peak_rss_gb", ""),
+               worker_accepted_params=json.dumps(item.get("worker_accepted_params"), sort_keys=True)
+               if isinstance(item, dict) and item.get("worker_accepted_params") else "",
+               sections="" if not sections else f"{len(sections)} sections, {sum(1 for x in sections if x.get('accepted') is not False)} accepted"
+               + "".join(f"; {x['rejection_code']}" for x in sections if x.get("rejection_code")))
     if isinstance(batch, dict) and isinstance(item, dict) and item.get("run_started") and batch.get("created_at"):
         rec["queue_seconds"] = round(item["run_started"] - batch["created_at"], 1)
     return rec
@@ -757,6 +788,9 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
         if failed and not done:
             verdict = (f"DOES NOT FIT: {failed['voice']} {failed['script']} {failed['status']} with the memory guard bypassed - {failed['error']}"
                        + (f"; the model's other {skipped} clip(s) were skipped" if skipped else ""))
+        elif refused and refused.get("needed_free_gb") in ("", None):   # never dispatched, and not for a free-memory reason the Hub named
+            verdict = (f"NOT MEASURED: {refused['error']}; the model's other {skipped} clip(s) were skipped. "
+                       "Nothing about this Mac's memory or speed was measured - see run.log for what the Hub said.")
         elif refused:
             verdict = (f"DID NOT START on this Mac: the Hub held the job back for lack of free memory - needs {refused['needed_free_gb']:g} GB free, "
                        f"had {refused['had_free_gb']:g} GB; waited {float(refused['generation_seconds']) / 60:.0f} min, then the job was cancelled "
@@ -788,6 +822,11 @@ def summarise(rows, models, title, hub_ver, started, finished_all):
                 lines.append(f"    Started with {min(started):.1f} GB free" + (f" (lowest of {len(started)} clips; highest {max(started):.1f} GB)" if len(started) > 1 else "")
                              + f", as the Hub counts it just before each clip. The Hub's free-memory floor for this model is {floor or 'not recorded'} GB: "
                                "the free memory a job needs before it starts, which is a different number from the peak.")
+        for r in done:   # the Hub's own telemetry for the job, beside the runner's sampler, and the section gate
+            if r.get("hub_max_used_gb") not in ("", None) or r.get("sections"):
+                lines.append(f"    {r['voice']} {r['script']}: RTF {r.get('rtf')}; Hub telemetry: max used {r.get('hub_max_used_gb')} GB, "
+                             f"min free {r.get('hub_min_available_gb')} GB, peak pressure {r.get('hub_peak_pressure')}, swap +{r.get('hub_swap_delta_gb')} GB; "
+                             f"sections: {r.get('sections') or 'not reported'}")
         wear = ssd_wear.wear_lines(done, hours_per_day=DAY_HOURS)
         if wear:
             lines += ["    " + l for l in wear]
