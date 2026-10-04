@@ -15,8 +15,12 @@ asks for its own pauses still gets them.
 **A shop Mac in use (Lite Mode standing by) no longer counts as free, so work isn't held for it.** As soon as its user
 steps away it counts again.
 
-**A model installed from the Gateway shows as installed as soon as the download finishes**, instead of reading "not
-installed" for up to a minute.
+**A model installed from the Gateway or the Model library shows as installed straight away**, instead of reading "not
+installed" for up to a minute after the download finished.
+
+### The kit
+
+**RUN-8GB-BREEZE test in the kit's Technical folder.** It checks Breeze TTS 2 on an 8 GB Mac.
 
 ## 0.6.143 - 2026-10-04
 
