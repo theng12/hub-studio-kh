@@ -978,8 +978,9 @@ def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
         return {"code": "MACHINE_DISABLED", "detail": f"{machine} is disabled on this Mac"}
     if not registry.studio_enabled(machine, studio_id):
         return {"code": "STUDIO_DISABLED", "detail": f"{studio_id} is disabled on this Mac"}
-    # A shop Mac in workstation mode: someone at the keyboard, quiet hours, or a model it does not
-    # run. Busy, not broken - the controller tries another Mac (`broker._WORKSTATION_REFUSALS`).
+    # A Mac in Lite Mode: someone at the keyboard, quiet hours, or a model it does not run. Busy, not
+    # broken - the controller tries another Mac (`broker._WORKSTATION_REFUSALS`). This Mac's own
+    # queues apply the same rule through the scheduler (`peers.dispatch_ready`, `lite_mode_allows`).
     if (refusal := workstation.admission_refusal(model)) is not None:
         return refusal
     if model:
@@ -1190,10 +1191,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 job_storage.budget_loop(standalone_config.cleanup_interval_seconds()))
             peer_lease_sweep = _asyncio.create_task(_peer_lease_loop(monitor))
 
-            def held_peer_jobs() -> list[tuple[str, str]]:
+            def held_jobs() -> list[tuple[str, str]]:
+                """Every job this Mac is running: a controller's (peer surface) and its own queue's."""
                 with _PEER_LEASE_LOCK:
-                    return list(_PEER_JOBS)
-            workstation_watch = _asyncio.create_task(workstation.watch(monitor, held_peer_jobs))
+                    peer = list(_PEER_JOBS)
+                return peer + broker.local_running_jobs()
+            workstation_watch = _asyncio.create_task(workstation.watch(monitor, held_jobs))
             # A node fetches the release its controller holds; a no-op on any Mac that is not one.
             release_mirror = _asyncio.create_task(release_sync.loop())
             try:

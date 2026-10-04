@@ -460,6 +460,11 @@ STANDING_BY_STATES = frozenset({"standing_by", "yielded", "quiet_hours"})
 
 
 def _workstation(machine: str) -> dict:
+    """That Mac's Lite Mode as it reported it - or, for this Mac (``"local"``), read live from its own
+    settings, so a controller or standalone treats its own Mac like any other Lite Mode Mac."""
+    if machine == "local":
+        from components.hub import workstation
+        return workstation.status()
     snapshot = cached(machine) or {}
     value = snapshot.get("workstation")
     return value if isinstance(value, dict) else {}
@@ -470,9 +475,28 @@ def standing_by(machine: str) -> bool:
     return _workstation(machine).get("state") in STANDING_BY_STATES
 
 
+def lite_mode_allows(studio: dict, model: str | None) -> bool:
+    """False only for this Mac's own studio when its Lite Mode is on and ``model`` is not a Lite
+    model. Another Mac answers that at its own door (``WORKSTATION_MODEL_NOT_ALLOWED``)."""
+    if not model or not is_local_studio(studio):
+        return True
+    from components import workstation_models
+    from components.hub import workstation
+    return not workstation.load()["enabled"] or workstation_models.is_workstation_model(model)
+
+
+def lite_mode_wait(model: str | None) -> str | None:
+    """Why this Mac's own studios take no new work right now in Lite Mode, or None - the plain
+    "waiting" sentence a queue shows when nothing else can take its work."""
+    from components.hub import workstation
+    refusal = workstation.admission_refusal(model or "")
+    return None if refusal is None else f"Waiting: Lite Mode - {refusal['detail']}"
+
+
 def workstation_start_free_gb(machine: str) -> float | None:
-    """That Mac's own "free memory needed to start a job", when its owner set one."""
-    value = _workstation(machine).get("start_free_gb")
+    """That Mac's own "free memory needed to start a job", when its owner set one and Lite Mode is on."""
+    mode = _workstation(machine)
+    value = mode.get("start_free_gb") if mode.get("enabled") else None
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
@@ -503,7 +527,7 @@ def fresh_snapshot(machine: str) -> dict | None:
 def dispatch_ready(studio: dict, generation=None) -> bool:
     """Whether a Studio has authority to receive newly dispatched work."""
     if is_local_studio(studio):
-        return True
+        return not standing_by("local")   # this Mac's own Lite Mode, whatever its role
     entry = _cache.get(studio.get("machine"))
     if not entry:
         return False
