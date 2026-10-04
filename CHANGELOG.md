@@ -2,7 +2,7 @@
 
 ## 0.6.142 — 2026-10-04 · Every TTS model's sampling levers are request fields (defaults unchanged); Khmer narration splits, pauses and is checked correctly
 
-Release of `release/0.6.142` (= 0.6.141 + the change below). Owner, 2026-10-04: "find a balanced default for each of the models" after the TTS
+Release of `release/0.6.142` (= 0.6.141 + the sampling levers and Khmer fixes below + `feat/workstation-app-settings` 2e0edf2 + `fix/paused-group-chat-transcription` a2b6284, merged --no-ff). Owner, 2026-10-04: "find a balanced default for each of the models" after the TTS
 comparison found the Hub passed Breeze TTS 2 no sampling settings. Audit: `_orchestra/audit-20261001/tts-sampling/LEVERS.md`; calibration plan beside it.
 - **One table of sampling levers** (`catalog.SAMPLING_LEVERS`, per family: request field -> engine argument, bound, default; per-checkpoint overrides in
   `catalog.SAMPLING_DEFAULTS_BY_REPO`; `catalog.sampling_kwargs` clamps). New request fields: `qwen_temperature|top_p|top_k|repetition_penalty`,
@@ -29,6 +29,15 @@ comparison found the Hub passed Breeze TTS 2 no sampling settings. Audit: `_orch
   the English rule is untouched. Whisper transcribe-back reads a Khmer section as `km` (`tts_quality.script_language`) whatever the request's
   `language` says (Story sends the voice's own, e.g. `en`). Tests: `components/voice/app/tests/test_khmer_text_handling.py` (spaced and unspaced
   Khmer fixtures; 8 of its 9 fail on 0.6.141 code).
+- **Lite Mode in the app's Settings** (`feat/workstation-app-settings`, 2e0edf2): Settings > Lite Mode reads/saves this Mac's workstation settings
+  through its own Hub (`GET/POST /api/hub/workstation`; same labels and policy sentence as the Gateway's Fleet sheet; no restart, `workstation.py`
+  re-reads per decision); a hand launch opens the window (only an update's reopen stays quiet). User-facing name "Lite Mode" (kit commands, README,
+  checklist, copy-models, refusal sentences); code, API paths, JSON keys, `workstation.json` and error codes keep "workstation". Native tests in
+  `tests/native/api_main.swift`, `render_main.swift`.
+- **Transcription honours a fully paused group** (`fix/paused-group-chat-transcription`, a2b6284): `transcription_jobs` create route answers 503
+  `NO_AVAILABLE_MACHINE` (after replay/duplicate checks) via `broker.every_capable_mac_paused`, the dispatcher hands queued items back as
+  `error`/`NO_AVAILABLE_MACHINE` without a try, items publish `error_code`, a manual retry clears it. Chat needs nothing (no producer route; the peer
+  chat route is synchronous and refuses a paused Mac). Test: `tests/hub_regression/cases/test_paused_group_hands_back.py`.
 - Gateway: no change needed — `/v1/audio/jobs` forwards `params` and flattens `controls` into the Hub item's params by name (checked in the sandbox).
 - Tests: `components/voice/app/tests/test_sampling_levers.py` (new, 118: defaults pinned per family, every lever clamped at both bounds and published,
   engine argument names checked against the installed mlx-audio / transformers, Breeze end-to-end through `_generate_mlx_audio`, seed once / no engine

@@ -4,6 +4,24 @@ Written to be read by the person using the app. Newest first.
 
 ## 0.6.142 - 2026-10-04
 
+### Lite Mode can be set up on the Mac itself
+
+**Settings now has a Lite Mode section** (next to Startup). A shop's cashier Mac can turn Lite Mode on or off and change
+its hours and limits right there, without the Gateway. It shows what the Mac is doing now (working, standing by,
+stepped aside or quiet hours) and today's counts. Changes apply straight away, with no restart.
+
+**Opening the app by hand always shows its window.** Opening Studio Hub from Applications or Spotlight now opens the
+window, so a Mac whose menu-bar icon is hidden can still get to Settings. Only the reopen after an update stays quiet.
+
+**"Workstation mode" is now called "Lite Mode"** everywhere you see it, including the kit's set-up commands and
+checklist.
+
+### Transcription no longer waits at a group whose Macs are all paused
+
+**A transcription sent to a group whose every Mac is paused is turned down straight away**, and the Gateway sends it to
+another group, as voice and image jobs already were in 0.6.141. Pausing the last Mac in a group hands its waiting
+transcriptions back within a few seconds, at no charge.
+
 ### Every voice model's fine-tuning settings can now be set
 
 **Nothing sounds different yet.** This release only makes the settings reachable, so the best value for each voice can be
