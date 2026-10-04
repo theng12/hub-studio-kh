@@ -3,7 +3,18 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.142** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.143** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.143 - calibrated TTS sampling defaults, gzip fleet JSON, no tiny sections, any-Mac group readiness, fleet model install, Khmer transcribe-back skipped (`release/0.6.143` = 0.6.142 aeb89a5 + `--no-ff` merges of fba7d3c `perf/controller-read`, a36ca55 `feat/kit-lite-models-copy`, 9231ee5 `fix/tiny-section`, 3543f56 `fix/0143-small`, 37eb4cd `fix/machine-counters`, fe486fa `feat/node-model-install`, 65e49f7 `fix/khmer-gate`, 2026-10-04).**
+> Calibrated defaults live only in `catalog.SAMPLING_DEFAULTS_BY_REPO` (from `_orchestra/audit-20261001/tts-sampling/REPORT.md` + `recommended.json`), pinned by
+> `test_sampling_levers.CALIBRATED_0_6_143`; family baselines stay `EFFECTIVE_IN_0_6_141`. `standalone.create_app` gzips JSON (not `application/octet-stream`).
+> Splitter drops unspeakable paragraphs and merges sections under 12 spoken chars; text-caused no-audio is a ValueError; `broker._counts_against_model` lifts stored
+> text-caused pauses on start. `memory_admission.publish_floor` makes the published tier the admission floor. `_a_joined_mac_can_run` accepts a job any joined Mac can
+> run. `activity.REFUSAL_CODES` (`INSUFFICIENT_MEMORY`) are not failures; `/api/hub/stats?activity_since=`. Fleet install routes
+> `.../fleet/nodes/{id}/model-packages/{pkg}/download` + `.../model-downloads/{run}` (contract `_orchestra/audit-20261001/INTERFACES-0143.md`). Khmer: score advisory
+> (`text_check`), `transcribe_back_applies` False (Whisper not loaded). Kit: `copy-lite-models.command` -> "2 - Copy the Lite Mode models"; shop commands retired by
+> `prepare-kit-extras.sh`; per-release script `_orchestra/audit-20261001/release-0143/prepare-kit-0143.sh`. Gate numbers, DMG and checksum:
+> `_orchestra/audit-20261001/release-0143/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.142 - every TTS model's sampling levers reachable (defaults unchanged), Khmer narration fixes, Lite Mode in Settings, paused-group rule for transcription (`release/0.6.142` = 0.6.141 + a599402 + 37c7bc7 + merges of 10e60cb `feat/lite-mode-every-role` (on 2e0edf2 `feat/workstation-app-settings`) and a2b6284 `fix/paused-group-chat-transcription`, 2026-10-04).**
 > `catalog.SAMPLING_LEVERS` is the one table (family -> request field -> engine kwarg, bound, default; `SAMPLING_DEFAULTS_BY_REPO` per checkpoint);

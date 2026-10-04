@@ -2,6 +2,52 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.143 - 2026-10-04
+
+### Steadier voices
+
+**Each voice model now starts from settings chosen by listening.** The fleet rendered every model with several settings
+and five takes each, and each model now uses the steadiest one. Breeze TTS 2 is the big change: in your voice its takes
+vary half as much, and sections that had to be redone or failed dropped from 22% to 7%. Fish S2 Pro, Qwen3-TTS, VoxCPM2
+4-bit, OmniVoice, Pocket TTS and the Khmer voice are steadier too. VoxCPM2 8-bit and the other models keep what they had.
+
+**No more failures from a "***" line or a tiny scrap of text.** A scene break such as "***", or a section with almost
+nothing to say, used to be read on its own and came out silent on every Mac. Now a line with nothing to speak is left out
+(it still gets its pause), and a very short piece joins the one next to it.
+
+**Honest messages when a voice writes no audio.** It only says memory was short when it really was.
+
+**Khmer narration is no longer turned down by the listening check.** The speech recogniser cannot read Khmer, so its
+check meant nothing and rejected good Khmer narration. It is no longer run for Khmer; the silence, length and pause checks
+still are. When a section fails every try, the message now gives the measured numbers for each try.
+
+### The fleet
+
+**Faster fleet reads.** The Gateway's view of each group now travels compressed, so the Fleet page fills in seconds
+instead of up to 20 seconds over a slow link.
+
+**A group takes a job when any of its Macs can run it.** A group used to turn a model down when only one of its other
+Macs had it installed; now the job is accepted and sent to that Mac.
+
+**A model paused because of the text is un-paused.** If a model was paused only because of bad text (such as a "***"
+line), the pause is lifted when Studio Hub starts.
+
+**Memory needs match the real limits.** For example VoxCPM2 4-bit now shows as able to run on 8 GB Macs, which it
+always could.
+
+**"Failed" counts are honest, and can be reset.** A Mac that turned a job away because it was short of memory (the job
+then ran elsewhere) no longer counts it as failed. The Gateway's "Reset counters" now starts the counts afresh, without
+deleting anything.
+
+**Install a model on a Mac from the Gateway.** Fleet > Machines can ask a Mac to download a model. A Mac turns down a
+model it could never run (too little memory), one that is shelved, or one that does not fit on its disk.
+
+### The kit
+
+**"2 - Copy the Lite Mode models"** sits next to "2 - Copy the models" on the drive. Use it on a Mac that will run Lite
+Mode: it copies only the models Lite Mode uses, then you tick Lite Mode in Studio Hub > Settings. The "Set Up a Shop Mac"
+and "Set Up the Shops Controller" commands have left the kit (an old copy on a drive is moved to that drive's trash).
+
 ## 0.6.142 - 2026-10-04
 
 ### Lite Mode on any Mac

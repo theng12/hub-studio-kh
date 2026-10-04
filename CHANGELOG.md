@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.6.143 — 2026-10-04 · Calibrated voice defaults; faster fleet reads; no tiny sections; a group takes a job any of its Macs can run; install a model from the Gateway
+
+Release of `release/0.6.143` (= 0.6.142 aeb89a5 + `--no-ff` merges of `perf/controller-read` fba7d3c, `feat/kit-lite-models-copy` a36ca55,
+`fix/tiny-section` 9231ee5, `fix/0143-small` 8cfc095..3543f56, `fix/machine-counters` 37eb4cd, `feat/node-model-install` fe486fa,
+`fix/khmer-gate` 65e49f7, then the Khmer transcribe-back skip and the calibrated sampling defaults). No textual conflicts. Gateway contract for the
+model install: `_orchestra/audit-20261001/INTERFACES-0143.md`.
+- **Fleet JSON is gzip-compressed** (`standalone.create_app`: Starlette `GZipMiddleware`, level 5, >= 1 KiB). A Gateway's read of one controller was
+  ~3.6 MB of JSON over Tailscale at 0.5-1.2 MB/s (4-20 s); it compresses 9-26x. `application/octet-stream` (release images and blobs, read with
+  `iter_raw` and resumed with Range) and Starlette's default media exclusions stay identity; a client without `Accept-Encoding` gets identity.
+- **Kit: `2 - Copy the Lite Mode models.command`** (`copy-lite-models.command` at the kit root): runs `2 - Copy the models` with
+  `STUDIOHUB_WORKSTATION=1`, copying only `components/workstation_models.py`'s models, then says to tick Lite Mode in Settings. It changes neither role
+  nor Lite Mode. `Set Up a Shop Mac.command` leaves the kit; `prepare-kit-extras.sh` moves a drive's copy (and the older `Set Up the Shops
+  Controller.command`) to `<volume>/_trash/Extras-retired/`. Docs, `release_kit` operator steps and `test_shop_kit` follow.
+- **No tiny or unspeakable section reaches a model** (`generation._sentence_safe_text_chunks`): a paragraph with nothing to speak (`***`) is left out
+  (its boundary keeps the paragraph pause), a section under 12 spoken characters (CJK counts three) joins its neighbour, and a request with nothing to
+  speak is a ValueError up front. Join pauses find sections whitespace-insensitively (`_find_section`). "Produced no audio" for a tiny/unspeakable
+  section is a ValueError (the text, not the model); memory is blamed only when free memory was below the model's loaded need.
+- **Content-caused pauses are lifted** (`broker._counts_against_model`, one classifier for new failures and stored pauses): on start,
+  `_load_model_protection` re-reads `model_protection.json` and lifts a pause whose failure was the text (incl. an old worker's "produced no audio.
+  N-character section" with N < 12); engine failures and missing weights stay paused.
+- **Published memory tier = admission floor** (`memory_admission.publish_floor`, applied by `monitor._assemble_aggregate_catalog`): VoxCPM2 4-bit
+  is memory-eligible on 8 GB Macs (was published 16 GB while dispatch enforced 8 GB); FLUX.2 Klein / Z-Image-Turbo likewise. `qualification/model_record.py`
+  reads the same floor; `docs/model-benchmarks.md` regenerated.
+- **A group accepts a job when any of its Macs can run it** (`standalone._a_joined_mac_can_run` in `_submission_readiness`): a joined Mac with the model
+  cached, runtime-ready, available, not paused, Lite-Mode-allowed and within its RAM floor is enough (group 1500 refused Fish S2 Pro 4-bit with
+  `MODEL_NOT_READY` while node 1504 had it). Model-aware dispatch sends it there.
+- **Refusals are not failures** (`activity.REFUSAL_CODES`): a Voice MemoryGuard refusal ends typed `INSUFFICIENT_MEMORY` and is neither counted as
+  `failed` nor a reason for `needs_attention` (8 GB Macs read 26 done / 192 failed). `GET /api/hub/stats?activity_since=<epoch>` counts from the
+  Gateway's "Reset counters" baseline (nothing deleted).
+- **Install a model from the Gateway** (`POST /api/hub/fleet/nodes/{node_id}/model-packages/{package_id}/download`,
+  `GET /api/hub/fleet/nodes/{node_id}/model-downloads/{run_id}`; controller runs it itself or relays to the node with the Fleet token). Same refusals as
+  the Model library download plus "too little memory to run it here"; audited on controller and node. Only these two routes join `FLEET_ALLOWED`.
+- **Khmer transcribe-back is skipped** (`fix/khmer-gate` + follow-up): Whisper large-v3 turbo cannot read Khmer (measured: 48 known-good sections score
+  syllable overlap median 0.00, max 0.11; broken audio up to 0.42; `_orchestra/audit-20261001/tts-khmer/GATE.md`). `tts_quality.check_section` records a
+  Khmer score as `text_check` "advisory" and never rejects on it (`KHMER_MIN_SYLLABLE_OVERLAP` / `KHMER_MAX_MISSING_RUN` removed), and
+  `transcribe_back_applies` is False for Khmer as for CJK, so Whisper is not loaded for a Khmer section; silence / length / internal-pause checks still
+  enforce. A section that fails every attempt names each attempt's measured value and limit in the job error (`tts_quality.rejection_numbers`, under the
+  Hub's 500-character cap); `broker` whitelists `text_check`.
+- **Calibrated per-model sampling defaults** (`catalog.SAMPLING_DEFAULTS_BY_REPO`; owner: "use all ★ recommendations"; source
+  `_orchestra/audit-20261001/tts-sampling/REPORT.md` + `recommended.json`): Breeze-TTS-2 4-bit B (temperature 0.6, top_p 0.9, top_k 40, repetition
+  1.05; Chris's section failures 22 % -> 7 %, spread 13.6 -> 7.0); Fish S2 Pro 4-bit B (0.6 / 0.7 / 30); Qwen3-TTS 1.7B 4-bit D (0.6, 0.9, 40,
+  repetition 1.6); Qwen3-TTS 0.6B 8-bit B (0.6, 0.9, 40, 1.5); VoxCPM2 4-bit B (cfg 2.0, 10 steps); OmniVoice bf16 C (position_temperature 0);
+  Pocket TTS 4-bit C (temperature 0.3); Khmer MMS B (noise 0.5 / duration noise 0.6). VoxCPM2 8-bit keeps A; models not listed keep their family's
+  values. Pinned by `test_sampling_levers.CALIBRATED_0_6_143` (and every calibrated value checked inside its lever's bound).
+- Tests: `components/voice/app/tests/test_tiny_sections.py`, `test_priority_mlx_models.py`, `test_khmer_text_handling.py`, `test_tts_quality.py`,
+  `test_sampling_levers.py`; `tests/test_activity_counters.py`, `test_shop_kit.py`; `tests/hub_regression/cases/test_group_readiness_any_mac.py`,
+  `test_memory_admission.py`, `test_model_failure_protection.py`, `test_fleet_model_install.py`, `test_hub_gap_routes.py`.
+
 ## 0.6.142 — 2026-10-04 · Every TTS model's sampling levers are request fields (defaults unchanged); Khmer narration splits, pauses and is checked correctly
 
 Release of `release/0.6.142` (= 0.6.141 + the sampling levers and Khmer fixes below + `feat/lite-mode-every-role` 10e60cb (on `feat/workstation-app-settings` 2e0edf2) + `fix/paused-group-chat-transcription` a2b6284, merged --no-ff). Owner, 2026-10-04: "find a balanced default for each of the models" after the TTS
