@@ -847,6 +847,20 @@ def _load_model_protection() -> None:
                 _model_protection[(row["studio"], row["model"])] = row
     except (OSError, ValueError, TypeError):
         pass
+    # A pause recorded under an older classifier is re-read with today's: one whose evidence no
+    # longer counts against the model (2026-10-04: a "***" section made Qwen 0.6B write no audio,
+    # and three such jobs paused it on studio-mac-1305 and -1408) is lifted, and said so. A real
+    # engine or model-file failure still counts, so its pause stays.
+    lifted = [key for key, row in _model_protection.items()
+              if row.get("blocked") and not _counts_against_model(
+                  str(row.get("reason") or ""), row.get("error_code"))]
+    for key in lifted:
+        row = _model_protection.pop(key)
+        logging.getLogger("studiohub.broker").warning(
+            "lifted the pause on %s for %s: its recorded failure is the input, not the model (%s)",
+            key[1], key[0], str(row.get("reason") or "")[:240])
+    if lifted:
+        _save_model_protection()
 
 
 def _save_model_protection() -> None:
@@ -980,15 +994,37 @@ async def recheck_model_protection(studio_id: str, model: str) -> dict:
     return {"ok": True, "studio": studio_id, "model": model, "readiness": readiness}
 
 
-_load_model_protection()
-
-
 def _is_capacity_failure(message: str) -> bool:
     value = message.lower()
     return any(token in value for token in (
         "memoryguarderror", "memory guard paused", "waiting for memory",
         "not enough memory", "insufficient memory",
     ))
+
+
+# The Voice splitter never sends a section under 12 spoken characters to a model (fix/tiny-section);
+# a worker from before it reports "produced no audio. 3-character section" as a RuntimeError.
+_TINY_SECTION_NO_AUDIO = re.compile(r"produced no audio\. (\d+)-character section")
+_TINY_SECTION_CHARACTERS = 12
+
+
+def _counts_against_model(message: str, code: str | None) -> bool:
+    """Whether a worker error is evidence against the model, not its input or this Mac's memory.
+
+    The one classifier for both a new failure (`_classify_worker_failure`) and a stored pause
+    (`_load_model_protection`), so a pause can never outlive the rule that made it.
+    """
+    if _is_capacity_failure(message):
+        return False
+    if _model_file_failure(message, code):
+        return True
+    tiny = _TINY_SECTION_NO_AUDIO.search(message)
+    if tiny and int(tiny.group(1)) < _TINY_SECTION_CHARACTERS:
+        return False
+    return message.startswith("RuntimeError:") and "ValueError:" not in message
+
+
+_load_model_protection()
 
 
 # The two sentences that refuse a job for memory, each carrying the numbers it decided on: the Hub's
@@ -3953,7 +3989,7 @@ def _classify_worker_failure(batch: dict, item: dict, studio: dict,
         missing_files = _model_file_failure(message, code)
         # Input and capacity errors are not evidence that every future request
         # to this model will fail. Reconciled errors use this same classifier.
-        if missing_files or (message.startswith("RuntimeError:") and "ValueError:" not in message):
+        if _counts_against_model(message, code):
             code = "MODEL_FILES_UNAVAILABLE" if missing_files else code
             _mark_model_failure(studio, batch["model"], job.get("model_revision"), code, message)
             if missing_files:
