@@ -44,6 +44,7 @@ from .resources import host_stats
 from . import stall
 from . import update_drain
 from . import memory_admission
+from .. import workstation
 
 _MIME_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
              "image/webp": ".webp"}
@@ -664,7 +665,8 @@ def _can_run(studio: dict, entry: dict, model: str, routing: str) -> bool:
     if (not routing_rule.allows(studio, routing)
             or (routing == routing_rule.REMOTE and peers.is_local_studio(studio))
             or not entry.get("cached", is_cached(entry))
-            or _model_block_note(studio, model, entry)):
+            or _model_block_note(studio, model, entry)
+            or not peers.lite_mode_allows(studio, model)):
         return False
     known = _known_memory_gb(studio)
     return known is None or known >= (memory_admission.requirement_gb(model, entry)[0] or 0.0)
@@ -1674,6 +1676,21 @@ def drain_holds_group() -> bool:
     working = set(_busy) | set(chat_jobs.busy_studios) | set(transcription_jobs.busy_studios)
     return not (any(peers.is_local_studio(s) for s in registry if s.get("id") in working)
                 or local & set(_external_machine_leases))
+
+
+def local_running_jobs() -> list[tuple[str, str]]:
+    """(studio id, worker job id) of every job this queue is running on this Mac's own workers -
+    what Lite Mode's loop may hand back under critical memory pressure (`workstation.tick`)."""
+    local = {s["id"] for s in _monitor().registry if peers.is_local_studio(s)}
+    return [(item["studio"], str(item["studio_job_id"])) for batch in list(batches.values())
+            for item in batch.get("items") or []
+            if item.get("state") == "running" and item.get("studio") in local
+            and item.get("studio_job_id")]
+
+
+def _is_controller() -> bool:
+    from . import control_plane
+    return control_plane.load_settings().get("role") == "controller"
 
 
 def busy_machines() -> set[str]:
@@ -3515,7 +3532,7 @@ def _eligible_studios(modality: str, routing: str,
                 or s["id"] in _maintenance or machine in leased_machines
                 or _machine_reserved_until.get(machine, 0) > time.time()):
             continue
-        if not peers.dispatch_ready(s):
+        if not peers.dispatch_ready(s) or not peers.lite_mode_allows(s, model):
             continue
         # a machine the operator has disabled stays monitored but takes no jobs
         if not machine_enabled(s.get("machine", "local")):
@@ -3753,6 +3770,8 @@ async def _dispatch_loop():
                     b["governor_note"] = (
                         "Waiting for an online remote worker; this Hub Mac is intentionally excluded"
                     )
+                elif not eligible and (lite_wait := peers.lite_mode_wait(b.get("model"))):
+                    b["governor_note"] = lite_wait   # this Mac in Lite Mode, and nobody else free
                 for studio in eligible:
                     if not queued:
                         break
@@ -4548,6 +4567,12 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                     _validate_durable_worker_job(
                         b["modality"], item, j,
                         remote=not peers.is_local_studio(studio))
+            if peers.is_local_studio(studio):
+                # This Mac's own Lite Mode stopped it (critical memory pressure): read it exactly as
+                # a node's handed-back job reads through the peer surface.
+                handed_back = workstation.rewrite_status(studio["id"], job["id"], 200, {"job": j})
+                if handed_back is not None:
+                    j = handed_back[1]["job"]
             _persist_worker_execution_started_at(b, item, j)
             _record_worker_identity(item, studio, j)
             _record_worker_resource_usage(item, j)
@@ -4686,6 +4711,10 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             item.setdefault("avoid_machines", {})[machine] = now + WORKSTATION_STANDING_BY_AVOID_S
             if _another_machine_free(b, machine):
                 item.update(state="queued", error=f"moved to another Mac: {message}")
+            elif peers.is_local_studio(studio) and not _is_controller():
+                # A standalone's or a node's own queue has no Gateway hand-back: it waits here
+                # until this Mac takes work again.
+                item.update(state="queued", error=f"waiting: {message}")
             else:
                 item.update(state="error", error=message, error_code=WORKSTATION_YIELDED)
         elif retryable and _is_capacity_failure(message) and not b["cancelled"]:

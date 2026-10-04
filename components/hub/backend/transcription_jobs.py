@@ -659,6 +659,10 @@ async def _eligible_studios(monitor, model: str, item: dict | None = None,
             if reasons is not None:
                 reasons.append(f"{sid}: machine {machine} is being avoided after a failure")
             continue
+        if peers.is_local_studio(studio) and (lite_wait := peers.lite_mode_wait(model)):
+            if reasons is not None:
+                reasons.append(f"{sid}: {lite_wait}")
+            continue
         if not peers.dispatch_ready(studio):
             if reasons is not None:
                 reasons.append(f"{sid}: worker authority is not ready")

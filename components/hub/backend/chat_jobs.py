@@ -454,7 +454,7 @@ async def _eligible_studios(
                 or not studio_enabled(machine, studio["id"])
                 or machine in broker.busy_machines()):
             continue
-        if not peers.dispatch_ready(studio):
+        if not peers.dispatch_ready(studio) or not peers.lite_mode_allows(studio, model):
             continue
         catalog = await monitor.scheduling_catalog(studio)
         entry = next((item for item in (catalog or {}).get("models", [])

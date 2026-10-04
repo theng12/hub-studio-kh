@@ -1,8 +1,11 @@
 #!/bin/sh
 # SET UP A SHOP MAC
 #
-# Double-click this file on a shop's cashier Mac (owner, 2026-10-03, "Shops"). It makes the Mac a
-# Studio Hub node in **Lite Mode**: it lends its idle time to the fleet and never its user's.
+# Double-click this file on a shop's cashier Mac - or any "work Mac" (owner, 2026-10-03, "Shops").
+# It is an optional shortcut: the usual install with ONLY the Lite Mode models, and Lite Mode
+# switched on. A work Mac can equally be set up like any other Mac and then have Lite Mode ticked in
+# Studio Hub > Settings - Lite Mode works the same on a standalone Mac, a controller or a node
+# (owner, 2026-10-04): the Mac lends its idle time and never its user's.
 #
 #   1. Lite Mode is switched on, with its defaults: every job at background priority, only the
 #      8 GB-class models, quiet (no pop-ups). "Only when idle", "Step aside when someone uses it",
@@ -11,7 +14,8 @@
 #   2. 'Update this Mac.command' then installs Studio Hub and Yam Display and copies ONLY the
 #      Lite Mode models (about 15 GB: FLUX.2 Klein 4B 4-bit, Z-Image-Turbo 4-bit, Qwen3-TTS 0.6B
 #      4-bit, VoxCPM2 4-bit, Whisper large-v3 turbo, Stable Audio 3 Medium), and starts the services.
-#   3. You join it to the Shops controller once, in the app (the last screen says how).
+#   3. If it is to be a node, you join it to its controller once, in the app, as usual (the last
+#      screen says how). A standalone Mac or a controller skips that step.
 #
 # Safe to run again: that is how a Shop Mac is updated. A Mac whose Lite Mode settings were already
 # changed keeps them.
@@ -54,13 +58,14 @@ STATUS=$?
 
 echo
 echo "============================================================"
-echo "  Last step, once: join the Shops controller"
+echo "  Last step, once, if this Mac joins a group: join its controller"
 echo "============================================================"
 echo
 echo "  1. Open Studio Hub > Connections, turn on this Mac's Tailscale address, restart the services."
-echo "  2. Join: the Shops controller's address and its Fleet token."
-echo "  After that everything else - Only when idle, Step aside, quiet hours, hiding the menu-bar"
-echo "  icon - is set in Studio Hub > Settings > Lite Mode on this Mac, or from the Gateway's Fleet page."
+echo "  2. Join: the controller's address and its Fleet token."
+echo "  A standalone Mac or a controller skips this: Lite Mode works the same on every role."
+echo "  Everything else - Only when idle, Step aside, quiet hours, hiding the menu-bar icon - is set"
+echo "  in Studio Hub > Settings > Lite Mode on this Mac, or from the Gateway's Fleet page."
 echo
 echo "  Press Return to close."
 read _ || true

@@ -207,6 +207,15 @@ class Tick(_Settings):
             self.assertEqual(self.run_tick([("image", "j2")], memo, pressure=2)["yield"], [],
                              "pressure that eased resets the clock")
 
+    def test_tick_backgrounds_this_macs_workers_only_while_on(self) -> None:
+        with mock.patch.object(workstation, "apply_priority") as priority:
+            asyncio.run(workstation.tick(_Monitor(), lambda: [], {}))
+            priority.assert_not_called()
+            workstation.save({"enabled": True})
+            with mock.patch.object(workstation, "pressure_level", return_value=1):
+                asyncio.run(workstation.tick(_Monitor(), lambda: [], {}))
+            priority.assert_called_once_with([999999], background=True)
+
     def test_background_priority_is_put_on_and_taken_off(self) -> None:
         import subprocess
         child = subprocess.Popen(["/bin/sleep", "5"])
@@ -249,8 +258,11 @@ class Controller(unittest.TestCase):
         studio = {"machine": "shop-1"}
         self.snapshot("working")
         self.assertEqual(broker._with_machine_floor({"min_free": 2.8}, studio), {"min_free": 2.8})
-        self.snapshot("working", start_free_gb=3.5)
+        self.snapshot("working", enabled=True, start_free_gb=3.5)
         self.assertEqual(broker._with_machine_floor({"min_free": 2.8}, studio), {"min_free": 3.5})
+        self.snapshot("off", enabled=False, start_free_gb=3.5)
+        self.assertEqual(broker._with_machine_floor({"min_free": 2.8}, studio), {"min_free": 2.8},
+                         "Lite Mode off: its floor does not apply")
         self.assertIsNone(broker._with_machine_floor(None, studio))
 
     def test_workstation_refusals_are_waits(self) -> None:

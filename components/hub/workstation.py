@@ -22,9 +22,15 @@ viewer and the label printer all day and are idle most of it. A Mac with ``enabl
 * takes no work in **quiet hours** (``"HH:MM-HH:MM"``, may wrap midnight);
 * is **quiet**: the app shows no pop-ups or desktop alerts and may hide its menu-bar icon.
 
-Only work a controller sends through the peer surface is governed: a Shop Mac is a node. A
-synchronous request (Subtitle's ``/api/transcribe``) is not cancelled mid-way; it is short and ends
-by itself.
+It works the same on **every role** (owner, 2026-10-04): a "work Mac" is set up like any other Mac -
+standalone, controller or node - and Lite Mode is the one extra tick. Every generation job this Mac runs
+locally is governed, wherever it came from: a controller's work through the peer surface
+(``admission_refusal`` at the door), and this Mac's own queues - a standalone's, a node's, a
+controller's own-Mac share of its group's work - through the scheduler, which treats this Mac like any
+other Lite Mode Mac (``peers.dispatch_ready`` / ``peers.lite_mode_allows`` read this file for
+``"local"``). A controller standing by keeps routing and serving; only its own generation waits, and its
+group's work goes to its nodes. On a Mac with nowhere else to send it, work waits. A synchronous
+request (Subtitle's ``/api/transcribe``) is not cancelled mid-way; it is short and ends by itself.
 
 The settings live in ``workstation.json`` in the Hub's data folder. The Mac's own Studio Hub app changes
 them in Settings > Lite Mode (``POST /api/hub/workstation``), the Gateway through the controller
@@ -236,7 +242,7 @@ def _roll_day() -> None:
 
 
 def note_job_accepted() -> None:
-    """A controller's job was accepted here (counted only while the mode is on)."""
+    """A job was accepted here (counted only while the mode is on)."""
     if load()["enabled"]:
         with _lock:
             _roll_day()
@@ -266,13 +272,13 @@ def status() -> dict[str, Any]:
 
 
 def admission_refusal(model: str) -> dict[str, Any] | None:
-    """This Mac's workstation answer to a controller's new job, or None to let it in."""
+    """This Mac's workstation answer to a new job - a controller's, or its own - or None to let it in."""
     settings, state, why = current()
     if not settings["enabled"]:
         return None
     if model and not workstation_models.is_workstation_model(model):
         return {"code": NOT_ALLOWED_CODE,
-                "detail": f"{model} is not one of the models this shop Mac runs in Lite Mode"}
+                "detail": f"{model} is not one of the models this Mac runs in Lite Mode"}
     if state != "working":
         return {"code": STANDING_BY_CODE, "detail": f"this Mac is standing by: {why}"}
     return None
