@@ -65,7 +65,7 @@ class RunnerTests(unittest.TestCase):
             self.skipTest("prepare-kit.sh is local to the release Mac")
         text = prepare.read_text().replace("\\\n", " ")
         managed = re.search(r'MANAGED="(.*?)"', text, re.S).group(1).split()
-        for name in ("RUN-8GB-TTS.command", "RUN-16GB-FISH.command", "import_kit_packages.py", "eight-gb-tts-run.sh", "README-8gb-tts.md",
+        for name in ("RUN-8GB-TTS.command", "RUN-16GB-FISH.command", "RUN-8GB-BREEZE.command", "import_kit_packages.py", "eight-gb-tts-run.sh", "README-8gb-tts.md",
                      "tts-script-S2.txt", "tts-script-S4.txt", "ssd_wear.py"):
             self.assertTrue((QUAL / name).is_file(), name)
             self.assertIn(f'"$ROOT/qualification/{name}" "$KIT/Technical/{name}"', text, f"{name} never reaches a drive")
@@ -85,6 +85,34 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(sorted(keys), ["fish4", "fish8", "fishbf16"])
         self.assertEqual(sorted(keys.values()), sorted(re.search(r'PACKAGES="([^"]+)"', text)[1].split(",")), "the wrapper imports what the runner measures")
         self.assertTrue(set(keys.values()) <= manifests)
+
+    def test_the_8gb_breeze_wrapper_imports_exactly_breeze_then_measures_only_breeze_and_ships(self):
+        wrapper = QUAL / "RUN-8GB-BREEZE.command"
+        text = wrapper.read_text()
+        self.assertEqual(subprocess.run(["sh", "-n", str(wrapper)]).returncode, 0)
+        self.assertTrue(wrapper.stat().st_mode & 0o100, "a double-click wrapper must be executable")
+        self.assertIn('bash "$TARGET" --models breeze "$@"', text)
+        self.assertLess(text.index('"$IMPORTER" --app'), text.index('bash "$TARGET" --models breeze'), "import first, then measure")
+        breeze = next(m for m in runner()["MODELS"] if m["key"] == "breeze")
+        self.assertEqual(re.search(r'PACKAGES="([^"]+)"', text)[1], breeze["pkg"], "the wrapper imports what the runner measures")
+        self.assertIn('-lt 7 ] || [ "$GIB" -gt 9 ]', text, "it refuses (before copying) on a Mac that is not 8 GB")
+
+    def test_breeze_sends_the_calibrated_sampling_the_catalog_publishes_and_gets_a_longer_limit(self):
+        ns = runner()
+        breeze = next(m for m in ns["MODELS"] if m["key"] == "breeze")
+        catalog = (ROOT / "components/voice/app/backend/catalog.py").read_text()
+        calibrated = re.search(r'"breeze_temperature": ([\d.]+), "breeze_top_p": ([\d.]+), "breeze_top_k": (\d+),\s*"breeze_repetition_penalty": ([\d.]+)}', catalog)
+        self.assertEqual(breeze["params"], {"breeze_temperature": float(calibrated[1]), "breeze_top_p": float(calibrated[2]),
+                                            "breeze_top_k": int(calibrated[3]), "breeze_repetition_penalty": float(calibrated[4])})
+        self.assertEqual(breeze["params"], {"breeze_temperature": 0.6, "breeze_top_p": 0.9, "breeze_top_k": 40, "breeze_repetition_penalty": 1.05})
+        self.assertEqual(ns["clip_limit"]("S2", breeze), 1200.0, "20 minutes: Breeze is RTF ~5 on a 16 GB M1")
+        self.assertNotIn("params", next(m for m in ns["MODELS"] if m["key"] == "qwen3"), "the other models keep their own defaults")
+
+    def test_a_missing_breeze_package_points_at_the_breeze_wrapper(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            self.precheck_with(["breeze"], packages_listed=False)["precheck"]()
+        self.assertIn("RUN-8GB-BREEZE.command", err.getvalue())
 
     def test_the_fish_models_are_opt_in_and_slower_and_the_default_list_stays_the_five(self):
         ns = runner()
@@ -174,13 +202,14 @@ class MemoryStallTests(unittest.TestCase):
         self.assertIsNone(ns["memory_wait"]("voice: needs a ~16GB machine; this one has 8GB"))
         self.assertIsNone(ns["memory_wait"](None))
 
-    def fake_hub(self, stalled, admission=False, was=None, crash_while_relaxed=False, restore_file=None, hung=(), broken=(), total=8.0):
+    def fake_hub(self, stalled, admission=False, was=None, crash_while_relaxed=False, restore_file=None, hung=(), broken=(), total=8.0,
+                 undispatched=(), item_extra=None):
         """A Hub whose `stalled` models stay queued behind the memory guard until the operator override lowers it.
         `admission=False` is a Hub older than 0.6.125 (no override route); `was` is an override already in force."""
         wav = io.BytesIO()
         with wave.open(wav, "wb") as w:
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000); w.writeframes(b"\0\0" * 8000)
-        log = {"jobs": {}, "posts": [], "deleted": [], "released": 0, "polls": 0, "puts": [], "running": {}, "override_at_post": [], "file_at_lowering": None,
+        log = {"jobs": {}, "posts": [], "bodies": [], "deleted": [], "released": 0, "polls": 0, "puts": [], "running": {}, "override_at_post": [], "file_at_lowering": None,
                "override": dict(was) if was else None}
 
         def call(method, path, body=None, raw=False, timeout=60):
@@ -204,7 +233,7 @@ class MemoryStallTests(unittest.TestCase):
                 return 200, {"batches": []}
             if path == "/api/hub/jobs" and method == "POST":
                 bid = f"b{len(log['posts'])}"
-                log["posts"].append(body["model"]); log["jobs"][bid] = body["model"]
+                log["posts"].append(body["model"]); log["jobs"][bid] = body["model"]; log["bodies"].append(body)
                 log["override_at_post"].append((body["model"], log["override"]))
                 return 200, {"batch_id": bid}
             bid = path.split("/")[4]
@@ -218,6 +247,8 @@ class MemoryStallTests(unittest.TestCase):
                 raise KeyboardInterrupt   # the owner presses Ctrl-C (or closes the window) mid-measurement
             if bid in log["deleted"]:
                 state = "cancelled"
+            elif log["jobs"][bid] in undispatched:   # the Hub never dispatches it (e.g. a total-memory floor), whatever the free guard says
+                state = "queued"
             elif log["jobs"][bid] in hung:   # a thrashing model: running, never finishes
                 state = "running"
             elif log["jobs"][bid] in broken:   # a model whose worker dies
@@ -230,8 +261,10 @@ class MemoryStallTests(unittest.TestCase):
                 state = "running" if log["running"][bid] < 40 else "done"
             else:
                 state = "done"
-            return 200, {"governor_note": NOTE if state == "queued" else None, "created_at": 0,
-                         "items": [{"state": state, "chunk_total": 1, "error": ("worker died" if log["jobs"][bid] in broken else "the cap") if state == "error" else None}]}
+            note = ("voice: needs a ~16GB machine; this one has 8GB" if log["jobs"][bid] in undispatched else NOTE) if state == "queued" else None
+            return 200, {"governor_note": note, "created_at": 0,
+                         "items": [{"state": state, "chunk_total": 1, "error": ("worker died" if log["jobs"][bid] in broken else "the cap") if state == "error" else None,
+                                    **((item_extra or {}) if state == "done" else {})}]}
         return call, log
 
     def test_a_stalled_model_is_recorded_cancelled_skipped_and_the_next_model_still_runs(self):
@@ -260,6 +293,7 @@ class MemoryStallTests(unittest.TestCase):
 
 
 QWEN = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+BREEZE = "mlx-community/Breeze-TTS-2-mlx-4bit"
 
 # --- fixtures: what `ioreg -a -c IOBlockStorageDevice -r -l -d 2` and `vm_stat` print on a Mac with an external kit SSD attached
 def ioreg_device(interconnect, location, written, product="x"):
@@ -474,6 +508,39 @@ class BypassTests(unittest.TestCase):
         self.assertIsNone(log["override"])
         self.assertIn("DOES NOT FIT", summary)
         self.assertIn("VoxCPM2 4-bit: completed 2/2", summary)
+
+    def test_breeze_clips_send_the_calibrated_params_bypass_its_16gb_tier_and_record_the_hubs_telemetry_and_sections(self):
+        extra = {"resource_usage": {"host": {"maximum_used_gb": 7.4, "minimum_available_gb": 0.6, "peak_pressure_level": "warning",
+                                             "swap_used_delta_gb": 1.25}, "worker": {"peak_rss_gb": 3.3}},
+                 "worker_accepted_params": {"breeze_temperature": 0.6},
+                 "section_quality": {"sections": [{"accepted": True}, {"accepted": False, "rejection_code": "TTS_SECTION_SILENT"}, {"accepted": True}]}}
+        ns, log, rows, summary, status = self.run_main({"admission": True, "total": 16.0, "item_extra": extra}, models=("breeze",), patch={"RAM_GB": 8})
+        self.assertEqual(status, 0)
+        self.assertEqual([r["status"] for r in rows], ["completed"] * 2)
+        self.assertEqual({json.dumps(b["items"][0]["params"], sort_keys=True) for b in log["bodies"]},
+                         {json.dumps(ns["BREEZE_CALIBRATED"], sort_keys=True)})
+        self.assertEqual(log["puts"][0], (BREEZE, 0.0, 0.0), "a 16 GB tier on an 8 GB Mac is bypassed too, then put back")
+        self.assertIsNone(log["override"])
+        r = rows[0]
+        self.assertEqual(json.loads(r["params_sent"]), ns["BREEZE_CALIBRATED"])
+        self.assertEqual((r["hub_max_used_gb"], r["hub_min_available_gb"], r["hub_peak_pressure"], r["hub_swap_delta_gb"], r["hub_worker_peak_rss_gb"]),
+                         ("7.4", "0.6", "warning", "1.25", "3.3"))
+        self.assertEqual(r["sections"], "3 sections, 2 accepted; TTS_SECTION_SILENT")
+        self.assertEqual(json.loads(r["worker_accepted_params"]), {"breeze_temperature": 0.6})
+        self.assertIn("Hub telemetry: max used 7.4 GB, min free 0.6 GB, peak pressure warning", summary)
+
+    def test_a_job_the_hub_never_dispatches_is_not_measured_rather_than_timed_out(self):
+        # 2026-10-02: Breeze sat "queued" for 480 s on both 8 GB Macs (16 GB total floor, worker idle at 0.8-1.1 GB) and read "timed out".
+        ns, log, rows, summary, status = self.run_main({"admission": True, "undispatched": {QWEN}}, timeout=0.3)
+        qwen = [r for r in rows if r["model"] == "Qwen3-TTS 0.6B"]
+        self.assertEqual([r["status"] for r in qwen], ["did not start", "skipped"])
+        self.assertIn("never dispatched it", qwen[0]["error"])
+        self.assertIn("needs a ~16GB machine", qwen[0]["hub_reason"])
+        self.assertEqual(qwen[0]["verdict"], "not measured - the Hub never dispatched the job")
+        self.assertIn("NOT MEASURED", summary)
+        self.assertNotIn("DOES NOT FIT", summary)
+        self.assertEqual([r["status"] for r in rows if r["model"] == "VoxCPM2"], ["completed"] * 2)
+        self.assertIsNone(log["override"])
 
     def test_a_model_whose_worker_dies_is_recorded_with_the_error_and_the_next_model_runs(self):
         ns, log, rows, summary, status = self.run_main({"admission": True, "broken": {QWEN}})
