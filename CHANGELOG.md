@@ -2,7 +2,8 @@
 
 ## 0.6.144 — 2026-10-04 · Longer narration pauses; a standing-by Lite Mode Mac is not free capacity
 
-Release of `release/0.6.144` (= 0.6.143 a0f8263 + `--no-ff` merge of `feat/lite-capacity` 9d13187, then the owner's pause decision). No textual conflicts.
+Release of `release/0.6.144` (= 0.6.143 a0f8263 + `--no-ff` merges of `feat/lite-capacity` 9d13187 and `feat/kit-breeze-8gb-test` d41f1dc, and the owner's
+pause decision). No textual conflicts.
 - **Narration pauses are longer and more natural: 1 second after each sentence and 1.5 seconds between paragraphs, where the text is joined**
   (owner decision 2026-10-04). `long_form_policy.UNIFORM_SENTENCE_JOIN_PAUSE_SECONDS` / `UNIFORM_PARAGRAPH_JOIN_PAUSE_SECONDS` = 1.00 / 1.50 s (were
   0.60 / 1.00); the mid-sentence soft join stays 0.15 s. They are the one source for the joiner (`_production_join_pauses_s`), the published
@@ -12,6 +13,9 @@ Release of `release/0.6.144` (= 0.6.143 a0f8263 + `--no-ff` merge of `feat/lite-
 - **A shop Mac in use (Lite Mode standing by) no longer counts as free, so work isn't held for it** (`capabilities._model_capability`: a worker with
   `standing_by` - standing by, stepped aside or quiet hours - is not `capacity_eligible`; `build_snapshot` carries `standing_by`). It re-enters the
   eligible totals as soon as it is free. Test: `hub_regression/cases/test_capability_supply.py`.
+- **Kit: 8 GB Breeze test** (`qualification/RUN-8GB-BREEZE.command`): refuses on a non-8 GB Mac, imports `breeze-tts-2-mlx-4bit` from the kit through
+  `import_kit_packages.py`, then runs `eight-gb-tts-run.sh --models breeze` (calibrated 0.6.143 sampling sent explicitly, 2.5x clip limit). A clip the Hub
+  kept queued for the whole limit is reported "did not start / NOT MEASURED", not "timed out". Copied by `prepare-kit-0144.sh` (MANAGED list too).
 
 ## 0.6.143 — 2026-10-04 · Calibrated voice defaults; faster fleet reads; no tiny sections; a group takes a job any of its Macs can run; install a model from the Gateway
 
