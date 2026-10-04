@@ -53,6 +53,17 @@ _FLEET_DEFAULTS = {
         "min_free_memory_gb": 2.8,
         "reason": "Fleet-qualified on 8 GB Apple-silicon Macs",
     },
+    # Breeze TTS 2 4-bit (owner decision 2026-10-04): manifest and catalog said 16 GB / 5.6 GB free, which 0 of the 33
+    # 8 GB Macs ever have. Measured 2026-10-04 on an 8 GB M1 (Hub 0.6.143, `_orchestra/audit-20261001/breeze-8gb/results/
+    # TTS 8GB Run 20261004-230549`): 2/2 S2 clips completed, every section accepted, each clip STARTED with 3.31-3.46 GB
+    # free, worker peak 4.69 GB, Mac max used 5.2-5.3 GB, min free 1.19-1.32 GB, pressure warning (never critical), swap
+    # <= +0.54 GB, RTF 4.1 (a 16 GB M1 runs 4.9-5.1), max stall 0.6 s. 3.2 GB free to start is just under the measured
+    # 3.31 GB. The Voice worker's own preflight takes this same floor (`worker_free_floor_gb`), not its size estimate.
+    "mlx-community/breeze-tts-2-mlx-4bit": {
+        "min_total_memory_gb": 8.0,
+        "min_free_memory_gb": 3.2,
+        "reason": "Measured on an 8 GB M1 (2026-10-04): started from 3.31 GB free, peak 4.69 GB, never critical",
+    },
 }
 
 _cache: dict[str, dict] | None = None
@@ -333,10 +344,17 @@ def set_override(model: str, *, min_total_memory_gb: float,
     return describe(model, catalog_entry)
 
 
-def override_free_gb(model: str) -> float | None:
-    """The operator's live-free floor for this model, or ``None`` when none is set."""
-    override = _read().get(_normalized(model))
-    return override["min_free_memory_gb"] if override else None
+def worker_free_floor_gb(model: str) -> float | None:
+    """The live-free floor the Voice worker's own preflight must use in place of its size estimate:
+    the operator's override, else this model's fleet measurement, else ``None`` (the worker keeps its
+    estimate). Without the measurement here, Breeze's worker asked 2.9 + 1.25 = 4.15 GB free while the
+    Hub admitted it at 3.2, so an 8 GB Mac (3.3-3.5 GB free) would refuse every job it was sent."""
+    key = _normalized(model)
+    override = _read().get(key)
+    if override:
+        return override["min_free_memory_gb"]
+    measured = _FLEET_DEFAULTS.get(key)
+    return measured["min_free_memory_gb"] if measured else None
 
 
 def reset_override(model: str, catalog_entry: dict) -> dict:

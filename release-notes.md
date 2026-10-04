@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.145 - 2026-10-04
+
+### Voices
+
+**Breeze (the English voice model) now also runs on 8 GB Macs — measured on an 8 GB M1: it fits with room to spare, at
+the same speed as a 16 GB M1 — so English narration can use the whole fleet.** "2 - Copy the models" on the kit now puts
+Breeze on 8 GB Macs too, and "Install a model" in the Gateway offers it for them.
+
 ## 0.6.144 - 2026-10-04
 
 ### Narration

@@ -91,7 +91,7 @@ status=$?
 echo
 if [ "$status" -eq 0 ]; then
     echo "Finished. Read summary.txt in the results folder named above - or send the whole folder back."
-    echo "Breeze stays on this Mac (about 3 GB); Studio Hub still keeps it for 16 GB Macs, so it gets no fleet work here."
+    echo "Breeze stays on this Mac (about 3 GB). From Studio Hub 0.6.145 it runs on 8 GB Macs, so it gets fleet work here."
 else
     echo "Stopped with status $status. The reason is printed above; send that back."
 fi

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.145 — 2026-10-04 · Breeze TTS 2 4-bit runs on 8 GB Macs
+
+Release of `release/0.6.145` (= 0.6.144 d14ad78 + the owner's Breeze decision).
+- **Breeze TTS 2 4-bit: 8 GB total-memory floor, 3.2 GB free to start** (were 16 GB / 5.6 GB; owner decision 2026-10-04). Evidence:
+  `_orchestra/audit-20261001/breeze-8gb/results/TTS 8GB Run 20261004-230549` - 8 GB M1, Hub 0.6.143, 2/2 S2 clips completed, all sections
+  accepted, each clip started with 3.31-3.46 GB free, worker peak 4.69 GB, Mac max used 5.2-5.3 GB, min free 1.19-1.32 GB, pressure warning
+  (never critical), swap <= +0.54 GB, RTF 4.1, max stall 0.6 s. One source: `memory_admission._FLEET_DEFAULTS` (measured rung of
+  `requirement_gb`), so dispatch, the published tier / `memory_eligible` (`publish_floor`), the fleet install refusal (`_memory_refusal`)
+  and `docs/model-benchmarks.md` all read 8 GB. The manifest is unchanged (digest-pinned), as for FLUX.2 Klein.
+- **The Voice worker's own preflight takes the same 3.2 GB**: `memory_admission.worker_free_floor_gb` (was `override_free_gb`) returns
+  the operator override, else the fleet measurement, and the broker forwards it as `memory_floor_gb`. Without it the worker's size
+  estimate (2.9 + 1.25 = 4.15 GB cold) would have refused every job an 8 GB Mac was admitted for. Models with no measurement keep the
+  worker's estimate. The Hub's critical-pressure safety net and the INSUFFICIENT_MEMORY hand-back are unchanged.
+- Voice catalog row: `min_unified_memory_gb` 8, `min_free_memory_gb` 3.2, note / recommended hardware / use cases from the measurement.
+- Kit: `copy_models_for_this_mac.PROVEN_SMALLER["breeze-tts-2-mlx-4bit"] = 8`, so "2 - Copy the models" carries it to 8 GB Macs. Not on
+  the Lite Mode allowlist (`components/workstation_models.py`). The 8 GB Breeze test's stale "16 GB only" sentences are updated.
+- Tests: `test_breeze_4bit_runs_on_8gb_macs_from_its_measurement` (hub_regression), `test_breeze_is_copied_to_8_gb_macs_on_its_measurement`.
+
 ## 0.6.144 — 2026-10-04 · Longer narration pauses; a standing-by Lite Mode Mac is not free capacity
 
 Release of `release/0.6.144` (= 0.6.143 a0f8263 + `--no-ff` merges of `feat/lite-capacity` 9d13187, `feat/kit-breeze-8gb-test` d41f1dc and

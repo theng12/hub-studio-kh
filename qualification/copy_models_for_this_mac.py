@@ -61,6 +61,10 @@ PROVEN_SMALLER = {
     # 1280x720 in 336 s at 5.70 GB peak MLX / 5.85 GB footprint. The manifest's own floor moved
     # 16 -> 8 on that evidence, so this is a result rather than a request to try.
     "z-image-turbo-mflux-4bit": 8,
+    # Breeze TTS 2 4-bit: the manifest says 16 GB. **Measured** on an 8 GB M1 (Hub 0.6.143) on 2026-10-04:
+    # 2/2 clips completed from 3.31-3.46 GB free, worker peak 4.69 GB, never critical memory pressure
+    # (owner decision 2026-10-04; the Hub's own floor is `memory_admission._FLEET_DEFAULTS`, 8 GB / 3.2 GB free).
+    "breeze-tts-2-mlx-4bit": 8,
 }
 
 CARRY_BELOW_TIER = {
@@ -69,8 +73,8 @@ CARRY_BELOW_TIER = {
     # stays because the mechanism is still needed: carrying a model below its own declared floor
     # to *try* it is a real thing this project does, and it must keep saying so out loud rather
     # than being quietly folded into the proven set. Nothing in here is proof of anything.
-    # Breeze TTS 2 4-bit was carried to 8 GB Macs for one day (0.6.129) and withdrawn on the owner's
-    # decision (2026-10-02): its ~5 GB footprint is too tight for 8 GB, so it stays a 16 GB model.
+    # Breeze TTS 2 4-bit was carried here for one day (0.6.129) and withdrawn (2026-10-02); the 8 GB run
+    # of 2026-10-04 then measured it, so it is in PROVEN_SMALLER now.
 }
 
 

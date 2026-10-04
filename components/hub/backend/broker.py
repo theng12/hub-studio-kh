@@ -4254,8 +4254,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
     if b["modality"] == "voice":
         body["client_request_id"] = (item.get("client_request_id")
                                      or f"studiohub:{b['id']}:{item['index']}")
-        floor = memory_admission.override_free_gb(b["model"])
-        if floor is not None:   # the worker's own preflight must honour the same override
+        floor = memory_admission.worker_free_floor_gb(b["model"])
+        if floor is not None:   # the worker's own preflight must honour the same override / measurement
             body["memory_floor_gb"] = floor
     if item["seed"] is not None:
         body["seed"] = item["seed"]

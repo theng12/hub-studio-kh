@@ -464,7 +464,7 @@ def precheck():
         hint = (["The Fish models are 16 GB-tier or bigger (bf16 is shelved), so the kit's copy step does not put them on a Mac. Double-click",
                  "RUN-16GB-FISH.command from the kit's Technical folder: it imports exactly these three from the kit first."]
                 if any(m.get("opt_in") for m in models) else
-                ["Breeze is a 16 GB-tier model, so the kit's copy step does not put it on an 8 GB Mac. Double-click",
+                ["A kit older than Studio Hub 0.6.145 does not copy Breeze to an 8 GB Mac. Double-click",
                  "RUN-8GB-BREEZE.command from the kit's Technical folder: it imports exactly Breeze from the kit first."]
                 if [m["key"] for m in models] == ["breeze"] else
                 ["The kit's copy step puts these in place: double-click '2 - Copy the models' (or 'Update this Mac') from the kit,"])

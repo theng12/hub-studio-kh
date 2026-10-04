@@ -3,7 +3,14 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.144** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.145** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.145 - Breeze TTS 2 4-bit runs on 8 GB Macs (`release/0.6.145` = 0.6.144 d14ad78 + the owner's Breeze decision, 2026-10-04).**
+> Floor 8 GB / 3.2 GB free in `memory_admission._FLEET_DEFAULTS` (measured 2026-10-04 on an 8 GB M1: started from 3.31-3.46 GB free, peak
+> 4.69 GB, never critical). `worker_free_floor_gb` (was `override_free_gb`) forwards override-or-measurement to the Voice worker as
+> `memory_floor_gb`. Kit: `PROVEN_SMALLER` carries it to 8 GB. Not Lite Mode. Per-release script
+> `_orchestra/audit-20261001/release-0145/prepare-kit-0145.sh`. Gate numbers, DMG and checksum: `_orchestra/audit-20261001/release-0145/`.
+> Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.144 - narration joins 1.0 s after a sentence / 1.5 s at a paragraph; a standing-by Lite Mode Mac is not group capacity (`release/0.6.144` = 0.6.143 a0f8263 + `--no-ff` merges of 9d13187 `feat/lite-capacity` d41f1dc `feat/kit-breeze-8gb-test` and 38402e5 `fix/install-model-visible`, 2026-10-04).**
 > Pauses: owner decision 2026-10-04, `long_form_policy.UNIFORM_SENTENCE/PARAGRAPH_JOIN_PAUSE_SECONDS` = 1.00 / 1.50 (soft 0.15 unchanged) - the one source for the

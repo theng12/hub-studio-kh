@@ -1434,21 +1434,17 @@ CATALOG: tuple[ModelEntry, ...] = (
         # on all four.
         size_gb=2.9,
         gated=False,
-        # 16 GB is the floor this catalogue claims, and it is the honest one rather than the
-        # flattering one. Two measurements disagree and only one of them is settled:
-        #   [M] resident set size held flat at ~3.3 GB in every mode, which fits 8 GB;
-        #   [M] the kernel's peak footprint reading ranged 5.41 to 23.93 GB across runs and was
-        #       never pinned down, because the samplers could not see the real process.
-        # Until that second number is settled, 8 GB is a plausible fit and not a demonstrated one,
-        # so the claim is the tier that is not at risk. 16 GB is also where 50 of the owner's ~53
-        # machines sit.
-        min_unified_memory_gb=16,
-        min_free_memory_gb=5.6,
+        # 8 GB, measured (owner decision 2026-10-04). It was 16 GB / 5.6 GB free while the kernel's peak
+        # footprint was unsettled (5.41-23.93 GB on the staging Mac). The 8 GB M1 run settled it
+        # (`_orchestra/audit-20261001/breeze-8gb/results/TTS 8GB Run 20261004-230549`): worker peak 4.69 GB,
+        # each clip started with 3.31-3.46 GB free. The Hub enforces the same 8 / 3.2 from
+        # `memory_admission._FLEET_DEFAULTS`; these literals only keep this worker's own UI in agreement.
+        min_unified_memory_gb=8,
+        min_free_memory_gb=3.2,
         min_free_memory_note=(
-            "32 GB-Mac measurement, re-measure on 8 GB: peak process footprint 4.85 GB (S2 chris, 12 s "
-            "reference) to 5.33 GB (S2 christian, 18.9 s reference; S1 4.45-4.6 GB) with the mlx_memory "
-            "bounds (2026-10-02, 32 GB M2 Max) + 0.25 GB margin. MLX peak 4.2-4.4 GB, was 9.9 GB; the "
-            "3.1 GB of weights keep it above the 4.5 GB 8 GB target."
+            "8 GB M1 (Hub 0.6.143), 2026-10-04: 2/2 S2 clips completed, all sections accepted; each started with "
+            "3.31-3.46 GB free; worker peak 4.69 GB, Mac max used 5.2-5.3 GB, min free 1.19-1.32 GB, memory "
+            "pressure warning (never critical), swap <= +0.54 GB, RTF 4.1. 3.2 GB is just under the measured start."
         ),
         # [M] Dreamlands fleet run 2026-10-03 (Gateway job records, generation_seconds /
         # audio_duration_s, 48 Breeze chapters): M1 16 GB 4.89-5.13 (jobs da960426, 73b4eace),
@@ -1461,8 +1457,8 @@ CATALOG: tuple[ModelEntry, ...] = (
                    "and 48 Breeze chapters for the character rate",
         ),
         recommended_hardware=(
-            "16 GB or more. Measured ~3.3 GB resident in every mode; the kernel peak footprint "
-            "reading was unsettled between 5.41 and 23.93 GB, so 16 GB is claimed rather than 8."
+            "8 GB or more. Measured on an 8 GB M1 (2026-10-04): peak 4.69 GB, started from 3.3 GB free, "
+            "never critical memory pressure, at the same speed as a 16 GB M1."
         ),
         capabilities=("tts", "voice-cloning", "expressive", "multilingual"),
         best_for=(
@@ -1489,7 +1485,6 @@ CATALOG: tuple[ModelEntry, ...] = (
             ("weak", "2.9 GB on disk and the heaviest voice package here after the 3B families"),
             ("weak", "Slower than it looks: measured 0.27x realtime, so about 19.8 minutes of generation per 1,000 words"),
             ("weak", "Needs the mlx-audio 0.5.7 runtime; an older voice runtime has no breeze_tts module at all"),
-            ("avoid", "An 8 GB Mac until the peak-footprint question is settled — the resident size fits, the kernel peak did not"),
         ),
     ),
 )

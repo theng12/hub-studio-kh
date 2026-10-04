@@ -68,6 +68,27 @@ def test_flux_4bit_uses_measured_8gb_fleet_default(reset):
     )[0] == "skip"
 
 
+def test_breeze_4bit_runs_on_8gb_macs_from_its_measurement(reset):
+    """Owner decision 2026-10-04 from the 8 GB M1 run (each clip started with 3.31-3.46 GB free, peak
+    4.69 GB, never critical): 8 GB total and 3.2 GB free to start, where the catalog/manifest said 16 / 5.6.
+    The Voice worker's own preflight gets the same 3.2 (it estimated 4.15 cold), so an 8 GB Mac the Hub
+    admits does not refuse the job."""
+    repo = "mlx-community/Breeze-TTS-2-mlx-4bit"
+    policy = memory_admission.describe(repo, {"repo": repo, "min_unified_memory_gb": 16,
+                                              "min_free_memory_gb": 5.6, "required_free_memory_gb": 4.15})
+    assert (policy["effective_min_total_memory_gb"], policy["min_total_source"]) == (8.0, "measured")
+    assert policy["effective_min_free_memory_gb"] == 3.2
+    assert policy["fleet_default_measured"] is True
+    requirements = broker._admission_requirements(repo, {"repo": repo})
+    assert requirements == {"min_total": 8.0, "min_free": 3.2}
+    assert broker._memory_gate(requirements, {"total_gb": 8.59, "available_gb": 3.31})[0] == "run"
+    assert broker._memory_gate(requirements, {"total_gb": 8.59, "available_gb": 3.1})[0] == "wait"
+    assert broker._memory_gate(requirements, {"total_gb": 4.0, "available_gb": 3.5})[0] == "skip"
+    assert memory_admission.worker_free_floor_gb(repo) == 3.2
+    assert memory_admission.worker_free_floor_gb("mlx-community/VoxCPM2-4bit") is None, \
+        "a model with no measurement keeps the worker's own estimate"
+
+
 def test_a_model_is_refused_a_mac_below_its_requirement(reset):
     """Was `test_no_model_is_refused_for_the_size_of_the_machine`: its premise (24 GB is a tier a
     16 GB Mac may still try) is reversed - with nothing measured and no manifest, the catalog's

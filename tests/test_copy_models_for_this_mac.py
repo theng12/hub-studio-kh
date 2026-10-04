@@ -449,10 +449,11 @@ class CarryBelowTierTests(unittest.TestCase):
         self.assertNotIn("CARRY_BELOW_TIER", origin,
                          "it is no longer a request to try")
 
-    def test_breeze_stays_a_16_gb_model(self):
+    def test_breeze_is_copied_to_8_gb_macs_on_its_measurement(self):
+        """Owner decision 2026-10-04: measured on an 8 GB M1, so "2 - Copy the models" carries it there."""
         manifest = read_json(MANIFESTS / "breeze-tts-2-mlx-4bit.json")
-        self.assertEqual(manifest["qualification"]["minimum_unified_memory_gb"], 16)
-        self.assertEqual(COPY.required_gb(manifest), 16)
+        self.assertEqual(COPY.required_gb(manifest), 8)
+        self.assertIn("PROVEN_SMALLER", COPY.floor_origin(manifest))
         self.assertNotIn("breeze-tts-2-mlx-4bit", COPY.CARRY_BELOW_TIER)
 
     def test_a_proven_model_still_takes_its_floor_from_the_proven_table(self):

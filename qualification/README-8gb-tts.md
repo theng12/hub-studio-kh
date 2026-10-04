@@ -138,7 +138,8 @@ top_k 40, repetition penalty 1.05) sent in every request, so a Hub 0.6.142 (whic
    Mac that is not 8 GB, before copying anything.
 2. **It first puts Breeze on that Mac.** Breeze is 16 GB-tier, so "2 - Copy the models" leaves it behind on 8 GB. `import_kit_packages.py`
    imports exactly `breeze-tts-2-mlx-4bit` (about 3 GB) from the kit's `model-library` through the Hub's own import code (as for Fish).
-   A second run copies nothing. Breeze stays on the Mac afterwards; the Hub still keeps it for 16 GB Macs, so it gets no fleet work there.
+   A second run copies nothing. Breeze stays on the Mac afterwards. (From 0.6.145 Breeze is an 8 GB model - measured by this test on
+   2026-10-04 - so "2 - Copy the models" puts it on 8 GB Macs too and the Hub sends them fleet work.)
 3. **Then it runs `eight-gb-tts-run.sh --models breeze`**: S2 (175 words) in both owner voices, the Hub's free-memory guard *and* its
    16 GB total-memory tier bypassed for Breeze and put back afterwards. A Breeze clip gets 2.5x the time limit (20 minutes): on the 16 GB fleet
    Breeze runs at RTF 3.6 median (M1 16 GB: about 5), so the short text alone takes about 6 minutes there.
