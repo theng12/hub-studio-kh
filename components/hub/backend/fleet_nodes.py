@@ -1228,7 +1228,7 @@ async def relay_workstation(node_id: str, changes: object, *,
     """
     if not isinstance(changes, dict):
         raise StartupRelayError(400, {"ok": False, "code": "BAD_SETTING",
-                                      "detail": "workstation settings must be an object"})
+                                      "detail": "Lite Mode settings must be an object"})
     wanted = str(node_id or "").strip().lower()
     node = _read().get(wanted)
     if node is None:
@@ -1257,7 +1257,7 @@ async def relay_workstation(node_id: str, changes: object, *,
     if response.status_code in (401, 403, 404, 405):
         raise StartupRelayError(502, {
             "ok": False, "code": "NODE_REFUSED",
-            "detail": "that Mac refused: its Studio Hub is older than workstation mode, or it holds a "
+            "detail": "that Mac refused: its Studio Hub is older than Lite Mode, or it holds a "
                       "different Fleet token. Update it first."})
     if not response.is_success or not isinstance(body, dict):
         raise StartupRelayError(502, {"ok": False, "code": "NODE_ERROR",

@@ -201,6 +201,20 @@ final class FixtureProtocol: URLProtocol {
     static var identityFailuresRemaining = 0
     static var storageBody: [String: Any]?
     static var storageLimits: [String: Any]?
+    /// Lite Mode (`/api/hub/workstation`): the settings the Hub holds, and the bodies the app posted.
+    static var workstationSettings: [String: Any] = [
+        "enabled": false, "idle_only": false, "idle_minutes": 3, "step_aside": false, "resume_after_minutes": 2,
+        "start_free_gb": NSNull(), "quiet_hours": [String](), "hide_menu_bar_icon": false]
+    static var workstationPosts: [[String: Any]] = []
+    static func workstationAnswer() -> Data {
+        lock.lock(); defer { lock.unlock() }
+        let enabled = workstationSettings["enabled"] as? Bool == true
+        var report = workstationSettings
+        report["state"] = enabled ? "standing_by" : "off"
+        report["reason"] = enabled ? "someone is using this Mac" : NSNull()
+        report["jobs_today"] = 2; report["yields_today"] = 1
+        return try! JSONSerialization.data(withJSONObject: ["ok": true, "workstation": report])
+    }
     static var storagePreviewRejects = false
     static var modelImportBody: [String: Any]?
     static var modelHealthBody: [String: Any]?
@@ -659,6 +673,18 @@ final class FixtureProtocol: URLProtocol {
             Self.modelHealthBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
             Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true,"studio":"voice","model":"fixture/paused"}"#.utf8))
+        case ("GET", "/api/hub/workstation"):
+            result = (200, "application/json", Self.workstationAnswer())
+        case ("POST", "/api/hub/workstation"):
+            let body = (try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any] ?? [:]
+            Self.lock.lock()
+            Self.workstationPosts.append(body)
+            let bad = (body["idle_minutes"] as? Int).map { !(1...60).contains($0) } ?? false
+            if !bad { Self.workstationSettings.merge(body) { _, new in new } }
+            Self.lock.unlock()
+            result = bad
+                ? (400, "application/json", Data(#"{"ok":false,"code":"BAD_SETTING","detail":"idle_minutes must be a whole number of minutes from 1 to 60"}"#.utf8))
+                : (200, "application/json", Self.workstationAnswer())
         case ("GET", "/api/hub/settings"):
             Self.lock.lock(); Self.storageCalls.append("get"); Self.lock.unlock()
             result = (200, "application/json", Self.settingsFixture)
@@ -3424,6 +3450,43 @@ struct NativeAPITests {
         require(FixtureProtocol.storageLimitsBody()?["cleanup_enabled"] as? Bool == false,
                 "the cleanup choice must reach the Hub")
         require(store.storageNote?.contains("Saved") == true, "a save needs a visible result")
+
+        // Lite Mode: read from this Mac's own Hub, saved to it whole - "each model's own" floor as an
+        // explicit null, or the Hub would keep the old figure - and the Hub's own reason for a refusal.
+        await store.refreshWorkstation()
+        require(store.workstation?.settings.enabled == false && store.workstation?.now == "Off",
+                "Lite Mode must read as off from a Hub that has it off, got: \(String(describing: store.workstation))")
+        require(store.workstation?.settings.policySentence.hasPrefix("Lite Mode is off") == true,
+                "the sentence under the toggles names Lite Mode")
+        var lite = store.workstation!.settings
+        lite.enabled = true; lite.stepAside = true; lite.quietHours = ["22:00-07:00"]; lite.startFreeGb = 3.5
+        let liteSaved = await store.saveWorkstation(lite)
+        require(liteSaved, "a valid change is saved: \(store.workstationNote ?? "")")
+        let posted = FixtureProtocol.workstationPosts.last ?? [:]
+        require(posted["enabled"] as? Bool == true && posted["step_aside"] as? Bool == true
+                    && posted["quiet_hours"] as? [String] == ["22:00-07:00"]
+                    && (posted["start_free_gb"] as? NSNumber)?.doubleValue == 3.5
+                    && posted["hide_menu_bar_icon"] as? Bool == false && posted.count == 8,
+                "every setting must reach the Hub under its own key, got: \(posted)")
+        require(store.workstation?.now == "Standing by (someone is using this Mac)"
+                    && store.workstation?.today == "Today: 2 jobs · 1 step-aside",
+                "the saved answer shows what the Mac is doing now, got: \(String(describing: store.workstation?.now))")
+        lite.startFreeGb = nil
+        _ = await store.saveWorkstation(lite)
+        require(FixtureProtocol.workstationPosts.last?["start_free_gb"] is NSNull,
+                "back to each model's own floor must be sent as null, got: \(String(describing: FixtureProtocol.workstationPosts.last))")
+        lite.idleMinutes = 90
+        let liteRefused = await store.saveWorkstation(lite)
+        require(liteRefused == false
+                    && store.workstationNote?.contains("idle_minutes must be") == true,
+                "a refused setting shows the Hub's reason, got: \(store.workstationNote ?? "nil")")
+        var sentence = NativeWorkstationSettings()
+        sentence.enabled = true
+        require(sentence.policySentence == "This Mac takes fleet work at background priority, even while someone is using it.",
+                "the Gateway sheet's sentence, off/off")
+        sentence.idleOnly = true; sentence.idleMinutes = 1
+        require(sentence.policySentence == "This Mac takes fleet work only after 1 minute without input.",
+                "the Gateway sheet's sentence, idle only")
 
         await store.restoreStorageDefaults()
         // The refresh that follows the restore appends its own reads, so this checks that the

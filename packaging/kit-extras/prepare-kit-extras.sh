@@ -47,7 +47,7 @@ copy_checked "$DMG" "$DMGNAME"
 copy_checked "$HERE/$COMMAND" "$COMMAND"
 chmod 644 "$KIT/Extras/$DMGNAME"
 chmod 755 "$KIT/Extras/$COMMAND"
-# The Shops location's two set-up commands (workstation mode, owner 2026-10-03).
+# The Shops location's two set-up commands (Lite Mode, owner 2026-10-03).
 for shop in "Set Up a Shop Mac.command" "Set Up the Shops Controller.command"; do
   copy_checked "$HERE/$shop" "$shop"
   chmod 755 "$KIT/Extras/$shop"

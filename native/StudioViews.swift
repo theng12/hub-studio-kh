@@ -556,6 +556,151 @@ private struct DoubleField: View {
     }
 }
 
+/// Lite Mode on this Mac (internally "workstation mode", `components/hub/workstation.py`): a shop's own
+/// Mac lends the fleet its idle time. The same settings, wording and sentence as the Gateway's Fleet
+/// sheet (`FleetWorkstation.swift`), read from and saved to this Mac's Hub - the one copy both edit.
+/// Saving needs no restart: the Hub reads the file on every decision and the menu-bar icon follows it
+/// within a few seconds.
+private struct LiteModeSettings: View {
+    @ObservedObject var workspace: NativeWorkspaceStore
+    let connected: Bool
+    /// What is being edited, and the saved settings it was made from. A poll that brings new saved
+    /// settings replaces the draft only while nothing has been typed.
+    @State private var draft = NativeWorkstationSettings()
+    @State private var quietText = ""
+    @State private var base: NativeWorkstationSettings?
+
+    static let idleHint = "Takes work only after this many minutes with no keyboard or mouse use, or while the screen is locked."
+    static let stepAsideHint = "When someone uses the keyboard or mouse, this Mac finishes its current job, then takes no "
+        + "new work until it has had this many minutes without input."
+    static let startFreeHint = "A job starts only when this much memory is free. A running job always finishes; it is "
+        + "stopped only if macOS reports critical memory pressure for 20 seconds (very rare), and then moves to another Mac."
+    static let quietHint = "No work during these hours. Separate several with commas, like 22:00-07:00, 12:00-13:00."
+    static let hideIconHint = "With the icon hidden, open Studio Hub from Applications or Spotlight to come back to these settings."
+
+    /// The draft as it would be saved: quiet hours from the text field.
+    private var edited: NativeWorkstationSettings {
+        var settings = draft
+        settings.quietHours = quietText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return settings
+    }
+    private var dirty: Bool { base != nil && edited != base }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HubSpace.m) { content }
+            .onAppear { adopt(workspace.workstation?.settings) }
+            .onChange(of: workspace.workstation?.settings) { _, saved in adopt(saved) }
+            // The state ("Now") changes as someone uses this Mac, so it is read again while shown.
+            .task(id: connected) {
+                guard connected else { return }
+                while !Task.isCancelled {
+                    await workspace.refreshWorkstation()
+                    try? await Task.sleep(for: .seconds(5))
+                }
+            }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let current = workspace.workstation {
+            Toggle("Lite Mode", isOn: $draft.enabled).toggleStyle(.checkbox).font(HubType.rowTitle)
+            // Follows the boxes as they are ticked, before Save, so it always describes what Save will do.
+            Text(edited.policySentence)
+                .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ValueRow("Now", value: current.now)
+            if let today = current.today {
+                Text(today).font(HubType.caption).foregroundStyle(.secondary)
+            }
+            group {
+                Toggle("Only when idle", isOn: $draft.idleOnly).toggleStyle(.checkbox)
+                indented { Text("Idle for"); minutes($draft.idleMinutes, "Idle minutes"); Text("minutes") }
+                hint(Self.idleHint)
+            }
+            group {
+                Toggle("Step aside when someone uses it", isOn: $draft.stepAside).toggleStyle(.checkbox)
+                indented { Text("Resume after"); minutes($draft.resumeAfterMinutes, "Resume minutes"); Text("minutes without input") }
+                hint(Self.stepAsideHint)
+            }
+            group {
+                Text("Free memory needed to start a job")
+                indented {
+                    Picker("Free memory needed to start a job", selection: Binding(
+                        get: { draft.startFreeGb == nil ? 0 : 1 },
+                        set: { draft.startFreeGb = $0 == 0 ? nil : (draft.startFreeGb ?? 2.8) })) {
+                        Text("Each model's own (about 2.8 GB)").tag(0)
+                        Text("Custom").tag(1)
+                    }.labelsHidden().fixedSize()
+                    TextField("GB", value: Binding(
+                        get: { draft.startFreeGb ?? 2.8 },
+                        set: { if $0.isFinite && (0.5...8).contains($0) { draft.startFreeGb = ($0 * 10).rounded() / 10 } }),
+                              format: .number.precision(.fractionLength(1)))
+                        .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 52)
+                        .disabled(draft.startFreeGb == nil).accessibilityLabel("Free memory in GB")
+                    Text("GB")
+                }
+                hint(Self.startFreeHint)
+            }
+            group {
+                Text("Quiet hours")
+                indented { TextField("22:00-07:00", text: $quietText).textFieldStyle(.roundedBorder).frame(width: 240) }
+                hint(Self.quietHint)
+            }
+            group {
+                Toggle("Hide the Studio Hub menu-bar icon", isOn: $draft.hideMenuBarIcon).toggleStyle(.checkbox)
+                hint(Self.hideIconHint)
+            }
+            HStack {
+                Button("Save") {
+                    let wanted = edited
+                    Task { if await workspace.saveWorkstation(wanted) { adopt(workspace.workstation?.settings, force: true) } }
+                }
+                .buttonStyle(.borderedProminent).disabled(!connected || !dirty || workspace.savingWorkstation)
+                if dirty { Button("Revert") { adopt(base, force: true) }.disabled(workspace.savingWorkstation) }
+                if workspace.savingWorkstation { ProgressView().controlSize(.small) }
+            }
+            if let note = workspace.workstationNote {
+                Text(note).font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Text("A fleet's Gateway can also see and change these settings from its Fleet page.")
+                .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text(connected ? (workspace.workstationNote ?? "Reading Lite Mode settings…")
+                 : "Start local services to read and change Lite Mode.")
+                .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The Hub's saved settings become the draft when nothing has been typed (or when asked to).
+    private func adopt(_ saved: NativeWorkstationSettings?, force: Bool = false) {
+        guard let saved else { return }
+        if force || base == nil || !dirty {
+            draft = saved
+            quietText = saved.quietHours.joined(separator: ", ")
+        }
+        base = saved
+    }
+
+    private func group<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: HubSpace.xs) { content() }
+    }
+    /// A control line under its heading, indented to the checkbox's text.
+    private func indented<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: HubSpace.s) { content() }.padding(.leading, 20)
+    }
+    private func hint(_ text: String) -> some View {
+        Text(text).font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 20)
+    }
+    private func minutes(_ value: Binding<Int>, _ label: String) -> some View {
+        HStack(spacing: HubSpace.xs) {
+            TextField(label, value: Binding(get: { value.wrappedValue }, set: { if (1...60).contains($0) { value.wrappedValue = $0 } }),
+                      format: .number.grouping(.never))
+                .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 44).accessibilityLabel(label)
+            Stepper(label, value: value, in: 1...60).labelsHidden()
+        }
+    }
+}
+
 /// Which history an uncertain job belongs to, so one confirmation can act on all three rows.
 private enum DiscardKind { case image, audio, music, video }
 
@@ -4469,6 +4614,9 @@ struct StudioContent: View {
         PageScaffold(title: pageTitle(.settings), subtitle: "App behavior, local storage and service controls.", scrolls: true) {
             HubSection("Startup") {
                 startupSettings
+            }
+            HubSection("Lite Mode") {
+                LiteModeSettings(workspace: workspace, connected: connected)
             }
             HubSection("General") {
                 Text("Closing the window keeps local jobs running. Quit stops the app and its services.")

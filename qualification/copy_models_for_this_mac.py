@@ -533,7 +533,7 @@ def main() -> int:
         try:
             from workstation_models import manifest_allowed  # type: ignore
         except ImportError:
-            print("  This kit's Studio Hub predates workstation mode, so it cannot set up a Shop Mac.")
+            print("  This kit's Studio Hub predates Lite Mode, so it cannot set up a Shop Mac.")
             return 2
     manifests = {m["package_id"]: m for m in
                  (json.loads(p.read_text()) for p in sorted(manifests_dir.glob("*.json")))
@@ -633,7 +633,7 @@ def main() -> int:
               "settings (see the release notes), then run this again.")
         print()
     if not_for_shop:
-        print(f"  Shop Mac: only the workstation models are copied; {len(not_for_shop)} other model(s) "
+        print(f"  Shop Mac: only the Lite Mode models are copied; {len(not_for_shop)} other model(s) "
               "stay on the SSD.")
         print()
     if skipped:

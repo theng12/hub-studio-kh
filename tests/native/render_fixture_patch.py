@@ -27,7 +27,7 @@ for name in ("audioJobs", "imageJobs", "musicJobs"):
     text = text.replace(needle, f"@Published var {name}: [NativeJob]", 1)
 # The rest of what the Models, Voices and Connections pages read, so they render with data.
 for decl, kind in (("models", "[NativeModel]"), ("voices", "[NativeVoice]"), ("hubVersion", "NativeVersion?"),
-                   ("fleetReadiness", "[String: NativeMachineReadiness]")):
+                   ("fleetReadiness", "[String: NativeMachineReadiness]"), ("workstation", "NativeWorkstation?")):
     needle = f"@Published private(set) var {decl}: {kind}"
     assert needle in text, f"{decl} moved; update render_fixture_patch.py"
     text = text.replace(needle, f"@Published var {decl}: {kind}", 1)
