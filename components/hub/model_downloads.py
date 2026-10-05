@@ -85,6 +85,16 @@ def _public(run: dict) -> dict:
     return out
 
 
+def _source_used(run_id: str) -> str | None:
+    """`lan`, `internet` or `mixed`: where a finished run's bytes came from, as the downloader's
+    closing JSON says. None when it fetched nothing (already installed) or said nothing readable."""
+    try:
+        text = (data_dir() / "model-download-runs" / run_id / "output.log").read_text(errors="replace")
+        return json.loads(text[text.index("{"):]).get("source_used")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def _mark_exited(value: dict, run_id: str, process: subprocess.Popen) -> bool:
     run = value["runs"].get(run_id)
     result = process.poll()
@@ -92,6 +102,8 @@ def _mark_exited(value: dict, run_id: str, process: subprocess.Popen) -> bool:
     if run is not None and run.get("state") == "running" and result is not None:
         run.update(state="done" if result == 0 else "error", exit_code=result,
                    finished_at=time.time())
+        if result == 0 and (used := _source_used(run_id)):
+            run["source_used"] = used
         changed = True
     if result is not None:
         _processes.pop(run_id, None)
@@ -147,7 +159,9 @@ def _free_space_check(package_id: str, needed: int, library: Path) -> None:
 
 
 def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
-          sources: dict | None) -> dict:
+          sources: dict | None, peer: str | None = None) -> dict:
+    """Start (or rejoin) the download. ``peer`` is another Mac's LAN share URL
+    (`model_packages.peer_base`), tried before the internet file by file."""
     from components import model_packages
     with _lock:
         value = reconcile()
@@ -176,11 +190,18 @@ def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
         if sources is not None:
             sources_path.write_text(json.dumps(sources), encoding="utf-8")
             sources_path.chmod(0o600)
+        # Not *.json either (same companion glob), and owner-only: the URL carries the share token.
+        peer_path = root / "peer.map"
+        if peer:
+            peer_path.write_text(json.dumps(peer), encoding="utf-8")
+            peer_path.chmod(0o600)
         tool = Path(__file__).resolve().parents[1] / "model_packages.py"
         child_command = [sys.executable, "-I", "-B", str(tool), "download", "--manifest",
                          str(manifest_path), "--library", str(library)]
         if sources is not None:
             child_command.extend(("--sources", str(sources_path)))
+        if peer:
+            child_command.extend(("--peer", str(peer_path)))
         output = root / "output.log"
         stream = output.open("w", encoding="utf-8")
         output.chmod(0o600)
@@ -194,7 +215,8 @@ def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
             stream.close()
         run = {"id": run_id, "package_id": package_id, "state": "running",
                "started_at": time.time(), "pid": process.pid,
-               "total_bytes": total_bytes, "staging": staging}
+               "total_bytes": total_bytes, "staging": staging,
+               "source": "lan" if peer else "internet"}
         value["runs"][run_id] = run
         _processes[run_id] = process
         _write(value)

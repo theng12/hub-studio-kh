@@ -1267,7 +1267,7 @@ async def relay_workstation(node_id: str, changes: object, *,
     return {"ok": True, "node": wanted, "workstation": _workstation_of(body.get("workstation"))}
 
 
-async def relay_model(node_id: str, method: str, path: str, *,
+async def relay_model(node_id: str, method: str, path: str, *, payload: Any = None,
                       client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """Pass a model install (or its status read) to one joined node's own fleet route, ``local``.
 
@@ -1285,7 +1285,8 @@ async def relay_model(node_id: str, method: str, path: str, *,
         client = _probe_client()
     try:
         response = await client.request(method, f"{node.get('address') or ''}/api/hub/fleet/nodes/local{path}",
-                                        timeout=STARTUP_RELAY_TIMEOUT)
+                                        timeout=STARTUP_RELAY_TIMEOUT,
+                                        **({"json": payload} if payload is not None else {}))
     except httpx.HTTPError as exc:
         raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
                                       "reason": _unreachable_reason(exc),
