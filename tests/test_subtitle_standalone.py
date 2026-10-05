@@ -117,10 +117,12 @@ class SubtitleFixture(unittest.TestCase):
             'whisper-turbo': TURBO_REVISION,
             'whisper-base': '1e3e249fb8d01c655324bd6841b1deadffd6d04c',
             'whisper-small': '45f3915923c7a79a5a5b5a7d909d39aeb0e5630e',
+            'phonon-2-mlx': '71936ba3bf6479d299b97fdfe2d53e36d9375fe5',
         }[package_id]
         model_id = {'whisper-turbo': 'mlx-community/whisper-large-v3-turbo',
                     'whisper-base': 'mlx-community/whisper-base-mlx',
-                    'whisper-small': 'mlx-community/whisper-small-mlx'}[package_id]
+                    'whisper-small': 'mlx-community/whisper-small-mlx',
+                    'phonon-2-mlx': 'selcukkubur/Phonon-2-mlx'}[package_id]
         source = self.root / f'source-{package_id}'
         (source / 'model').mkdir(parents=True, exist_ok=True)
         (source / 'companions' / 'processor').mkdir(parents=True, exist_ok=True)
@@ -2104,3 +2106,76 @@ class SnapshotViewReuseTests(unittest.TestCase):
         self.assertEqual(second, first, "rebuilt in place")
         self.assertTrue((second / "config.json").exists(),
                         "and its config must resolve again")
+
+
+class Phonon2SubtitleTests(SubtitleFixture):
+    """Phonon-2 (owner decision 2026-10-05): an optional English package beside Whisper."""
+
+    BLOCK = {'family': 'phonon2', 'languages': ['en'], 'segment_timestamps': True,
+             'word_timestamps': True, 'long_form': True}
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.manifests.append(self._package(
+            'phonon-2-mlx', 'model.safetensors', subtitle=dict(self.BLOCK),
+            qualification={'status': 'unqualified', 'minimum_unified_memory_gb': 8,
+                           'min_free_memory_gb': 1.5, 'min_free_memory_note': 'provisional'}))
+
+    def phonon2_manager(self):
+        from types import SimpleNamespace as NS
+        token = lambda text, start, end: NS(text=text, start=start, end=end)
+        result = NS(text='The Dreamlands sleep.', sentences=[NS(
+            text='The Dreamlands sleep.', start=0.08, end=0.96,
+            tokens=[token(' The', 0.08, 0.24), token(' Dream', 0.32, 0.56),
+                    token('lands', 0.56, 0.8), token(' sleep.', 0.8, 0.96)])])
+        calls: list[dict] = []
+
+        class Parakeet:
+            def generate(self, audio, **options):
+                calls.append(options)
+                return result
+
+        manager = self.build_manager(factory=lambda _location: Parakeet())
+        self.manager = manager
+        return manager, calls
+
+    def test_catalog_publishes_it_as_optional_english_with_word_timings(self) -> None:
+        manager, _calls = self.phonon2_manager()
+        entry = {item['package_id']: item for item in manager.catalog()}['phonon-2-mlx']
+        self.assertEqual(entry['family'], 'phonon2')
+        self.assertEqual(entry['languages'], ['en'])
+        self.assertTrue(entry['supports_word_timestamps'])
+        self.assertFalse(entry['recommended'])
+        self.assertEqual(manager.default_package(), 'whisper-turbo', 'Whisper stays the default')
+        self.assertEqual(entry['min_free_memory_gb'], 1.5)
+        self.assertNotIn('min_free_memory_gb',
+                         {item['package_id']: item for item in manager.catalog()}['whisper-turbo'])
+
+    def test_a_job_decodes_in_windows_and_publishes_whole_words(self) -> None:
+        manager, calls = self.phonon2_manager()
+        payload = manager.engine.transcribe(self.audio, package_id='phonon-2-mlx',
+                                            language='en', word_timestamps=True)
+        from backend import transcription as voice
+        self.assertEqual(calls, [{'chunk_duration': voice.PHONON2_CHUNK_SECONDS}])
+        self.assertEqual(payload['language'], 'en')
+        self.assertEqual(payload['text'], 'The Dreamlands sleep.')
+        self.assertEqual([w['word'] for w in payload['segments'][0]['words']],
+                         ['The', 'Dreamlands', 'sleep.'])
+        self.assertEqual(payload['segments'][0]['words'][1]['start'], 0.32)
+        self.assertEqual(payload['segments'][0]['words'][1]['end'], 0.8)
+        job = self.submit(manager, model='phonon-2-mlx')
+        value = self.wait(manager, job['id'])
+        self.assertEqual(value['state'], 'done', value.get('error'))
+        self.assertIn('The Dreamlands sleep.', Path(value['artifacts']['srt']['path']).read_text())
+
+    def test_another_language_is_refused_in_a_sentence_before_loading(self) -> None:
+        manager, calls = self.phonon2_manager()
+        with self.assertRaises(ValueError) as caught:
+            manager.engine.transcribe(self.audio, package_id='phonon-2-mlx', language='km')
+        self.assertIn('English only', str(caught.exception))
+        self.assertIn('whisper', str(caught.exception).lower())
+        self.assertEqual(calls, [])
+        self.assertIsNone(manager.engine.loaded_package, 'refused before the model was loaded')
+        job = self.submit(manager, model='phonon-2-mlx', language='km')
+        value = self.wait(manager, job['id'])
+        self.assertEqual(value['state'], 'error')

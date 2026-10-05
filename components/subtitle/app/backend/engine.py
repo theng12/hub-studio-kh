@@ -82,7 +82,11 @@ _DEFAULT_LABELS = {
     'whisper-turbo': 'Whisper Large v3 Turbo',
     'whisper-small': 'Whisper Small',
     'whisper-base': 'Whisper Base',
+    'phonon-2-mlx': 'Phonon-2 (English)',
 }
+# The one non-Whisper subtitle family this worker decodes: mlx-audio's Parakeet TDT with the
+# Phonon-2 packed weights, loaded and normalised by the Voice transcription module.
+PHONON2_FAMILY = 'phonon2'
 _MEMORY_CACHE: dict[str, int | None] = {}
 
 # ── The lane contract this worker publishes on every catalog row ───────────
@@ -701,6 +705,9 @@ class SubtitleEngine:
                 # package with no loadable weights.
                 'weight_format': files.get('weight_format'),
                 'min_total_memory_gb': 8,
+                # A package that records its own free floor publishes it for the Hub's admission.
+                **({'min_free_memory_gb': manifest['qualification']['min_free_memory_gb']}
+                   if 'min_free_memory_gb' in (manifest.get('qualification') or {}) else {}),
                 'qualification': manifest.get('qualification') or {},
             })
         return entries
@@ -867,6 +874,10 @@ class SubtitleEngine:
             if self.model_factory is not None:
                 model = self.model_factory(location)
                 attached = str(location.processor_folder)
+            elif self.capabilities[package_id]['family'] == PHONON2_FAMILY:
+                # Its tokenizer is the vocabulary in config.json: no companion processor.
+                model = voice_export_module(self.voice_app_dir).load_phonon2(location.model_folder)
+                attached = None
             else:
                 from mlx_audio.stt.utils import load_model
                 model = load_model(location.model_folder)
@@ -904,6 +915,13 @@ class SubtitleEngine:
         path = Path(audio_path)
         if not path.is_file():
             raise FileNotFoundError(f'audio file not found: {path}')
+        phonon2 = self.capabilities[package_id]['family'] == PHONON2_FAMILY
+        if phonon2:
+            voice = voice_export_module(self.voice_app_dir)
+            refusal = voice.english_only_refusal(
+                voice.model_for_repo(self.manifests[package_id]['model_id']), language)
+            if refusal:
+                raise ValueError(refusal)
         if cancelled is not None and cancelled():
             raise _Cancelled()
         started = time.time()
@@ -917,20 +935,24 @@ class SubtitleEngine:
                 progress(0.2)
             with decodable_audio(path, self.voice_app_dir) as media:
                 duration = audio_duration_seconds(media, self.voice_app_dir)
-                result = model.generate(
-                    str(media),
-                    language=(language or '').strip() or None,
-                    word_timestamps=bool(word_timestamps),
-                    return_timestamps=True,
-                    condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
-                )
+                if phonon2:
+                    result = model.generate(str(media), chunk_duration=voice.PHONON2_CHUNK_SECONDS)
+                else:
+                    result = model.generate(
+                        str(media),
+                        language=(language or '').strip() or None,
+                        word_timestamps=bool(word_timestamps),
+                        return_timestamps=True,
+                        condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
+                    )
             if cancelled is not None and cancelled():
                 raise _Cancelled()
             if progress is not None:
                 progress(0.9)
         raw_text = getattr(result, 'text', None)
-        detected = getattr(result, 'language', None)
-        raw_segments = getattr(result, 'segments', None) or []
+        detected = 'en' if phonon2 else getattr(result, 'language', None)
+        raw_segments = (voice._segments_from_nemotron(result, word_timestamps=bool(word_timestamps))
+                        if phonon2 else getattr(result, 'segments', None)) or []
         normalized_text, segments = normalize_segments(
             raw_segments, word_timestamps=bool(word_timestamps),
             audio_duration=duration, voice_app_dir=self.voice_app_dir)

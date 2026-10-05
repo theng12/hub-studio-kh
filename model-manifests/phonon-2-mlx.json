@@ -1,0 +1,108 @@
+{
+  "defaults": {
+    "parameters_source": "model/config.json"
+  },
+  "engine": "subtitle-mlx",
+  "files": [
+    {
+      "path": "model/ATTRIBUTION.md",
+      "sha256": "b2ad6ae5199689e432dd85654d6de8084fa5eba8bd4d97d7ad85e1e24509e9ee",
+      "size": 825,
+      "source_path": "ATTRIBUTION.md",
+      "urls": [
+        "https://huggingface.co/selcukkubur/Phonon-2-mlx/resolve/71936ba3bf6479d299b97fdfe2d53e36d9375fe5/ATTRIBUTION.md"
+      ]
+    },
+    {
+      "path": "model/LICENSE-CODE-Apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "size": 11358,
+      "source_path": "LICENSE-CODE-Apache-2.0.txt",
+      "urls": [
+        "https://huggingface.co/selcukkubur/Phonon-2-mlx/resolve/71936ba3bf6479d299b97fdfe2d53e36d9375fe5/LICENSE-CODE-Apache-2.0.txt"
+      ]
+    },
+    {
+      "path": "model/LICENSE-WEIGHTS-CC-BY-4.0.txt",
+      "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+      "size": 18657,
+      "source_path": "LICENSE-WEIGHTS-CC-BY-4.0.txt",
+      "urls": [
+        "https://huggingface.co/selcukkubur/Phonon-2-mlx/resolve/71936ba3bf6479d299b97fdfe2d53e36d9375fe5/LICENSE-WEIGHTS-CC-BY-4.0.txt"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "f320f1292511f34ec47f513755fe20fd01dbfc09a925d42730e66059a6e1ef4c",
+      "size": 244093,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/selcukkubur/Phonon-2-mlx/resolve/71936ba3bf6479d299b97fdfe2d53e36d9375fe5/config.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "56d9ee40a251ad04991f6346c7be82f6655dd12dbfa439b94cfd7c829eb0b7be",
+      "size": 189223871,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/selcukkubur/Phonon-2-mlx/resolve/71936ba3bf6479d299b97fdfe2d53e36d9375fe5/model.safetensors"
+      ]
+    }
+  ],
+  "license": {
+    "attribution": "Phonon-2 by FermionResearch (huggingface.co/FermionResearch/Phonon-2), derived from NVIDIA Parakeet TDT 0.6B v3 (huggingface.co/nvidia/parakeet-tdt-0.6b-v3), CC-BY-4.0; MLX-layout conversion by selcukkubur (huggingface.co/selcukkubur/Phonon-2-mlx).",
+    "code": "Apache-2.0",
+    "files": [
+      "model/ATTRIBUTION.md",
+      "model/LICENSE-WEIGHTS-CC-BY-4.0.txt",
+      "model/LICENSE-CODE-Apache-2.0.txt"
+    ],
+    "weights": "CC-BY-4.0"
+  },
+  "minimum_macos": "14.0",
+  "model_id": "selcukkubur/Phonon-2-mlx",
+  "package_id": "phonon-2-mlx",
+  "qualification": {
+    "memory_evidence": "Not measured. 189 MB package (2.1-bit encoder) decoded at load to ~1.2 GB of bf16 weights, transcribed in 60 s windows; 8 GB is the requested tier pending the fleet run in QUALIFICATION-PLAN.md.",
+    "min_free_memory_gb": 1.5,
+    "min_free_memory_note": "Provisional small floor requested by the owner 2026-10-05; not yet measured. Set it from the 8 GB qualification run's free memory at job start.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 8,
+    "status": "unqualified"
+  },
+  "quantization": "five-value (~2.1-bit) encoder linears + int6 tables, fp16 elsewhere",
+  "quantization_source": "FermionResearch/Phonon-2 packed_manifest.json (five_value_modules 264, dense_tables int6) and this conversion's safetensors metadata (phonon_packed, phonon_int6)",
+  "revision": "71936ba3bf6479d299b97fdfe2d53e36d9375fe5",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-09-15",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "selcukkubur/Phonon-2-mlx",
+        "revision": "71936ba3bf6479d299b97fdfe2d53e36d9375fe5"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "selcukkubur/Phonon-2-mlx",
+        "revision": "71936ba3bf6479d299b97fdfe2d53e36d9375fe5",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/selcukkubur/Phonon-2-mlx/revision/71936ba3bf6479d299b97fdfe2d53e36d9375fe5",
+        "tree_api_url": "https://huggingface.co/api/models/selcukkubur/Phonon-2-mlx/tree/71936ba3bf6479d299b97fdfe2d53e36d9375fe5?recursive=true&expand=true&limit=100"
+      }
+    ]
+  },
+  "subtitle": {
+    "family": "phonon2",
+    "languages": [
+      "en"
+    ],
+    "long_form": true,
+    "segment_timestamps": true,
+    "word_timestamps": true
+  }
+}

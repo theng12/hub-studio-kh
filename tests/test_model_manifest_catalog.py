@@ -333,6 +333,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # without it.
             "yue2-3b-mlx": "382ddaa40fe7ba50594871fe7d06bf6ee7e7443c4e882621963ca4b73d622258",
             "yue2-vae": "9baea3673de6c5ad455888d1f0aa8afc717a60fe9cf69f18caa716617055257f",
+            # Phonon-2 (owner decision 2026-10-05), captured at selcukkubur/Phonon-2-mlx 71936ba3: 5 files /
+            # 189,498,804 bytes - the packed model.safetensors, Parakeet's config.json, ATTRIBUTION.md and
+            # both licence texts (byte-identical to FermionResearch/Phonon-2's SHA256SUMS entries).
+            "phonon-2-mlx": "d2e7ee4e41a9d9824fad54eeae6451d49482f2622b3259c077af074db238686e",
         }
         # The digest map is the frozen-content half of the invariant: its keys are checked against
         # the manifests on disk (never against a hand-written list), so a package that appears
@@ -342,6 +346,36 @@ class ModelManifestCatalogTests(unittest.TestCase):
         for package_id, manifest in self.manifests.items():
             payload = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
             self.assertEqual(hashlib.sha256(payload).hexdigest(), expected_digests[package_id])
+
+    def test_phonon2_is_pinned_attributed_unqualified_and_optional(self):
+        """Phonon-2 (owner decision 2026-10-05): every byte pinned, CC-BY attribution shipped."""
+        manifest = self.manifests["phonon-2-mlx"]
+        revision = "71936ba3bf6479d299b97fdfe2d53e36d9375fe5"
+        self.assertEqual((manifest["model_id"], manifest["revision"], manifest["engine"]),
+                         ("selcukkubur/Phonon-2-mlx", revision, "subtitle-mlx"))
+        self.assertEqual({entry["path"]: (entry["size"], entry["sha256"]) for entry in manifest["files"]}, {
+            "model/model.safetensors": (189223871, "56d9ee40a251ad04991f6346c7be82f6655dd12dbfa439b94cfd7c829eb0b7be"),
+            "model/config.json": (244093, "f320f1292511f34ec47f513755fe20fd01dbfc09a925d42730e66059a6e1ef4c"),
+            "model/ATTRIBUTION.md": (825, "b2ad6ae5199689e432dd85654d6de8084fa5eba8bd4d97d7ad85e1e24509e9ee"),
+            # Byte-identical to FermionResearch/Phonon-2's own SHA256SUMS.txt entries.
+            "model/LICENSE-WEIGHTS-CC-BY-4.0.txt": (18657, "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411"),
+            "model/LICENSE-CODE-Apache-2.0.txt": (11358, "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"),
+        })
+        for entry in manifest["files"]:
+            self.assertEqual(entry["urls"], [f"https://huggingface.co/selcukkubur/Phonon-2-mlx/resolve/{revision}/"
+                                             f"{entry['source_path']}"])
+        self.assertEqual(manifest["license"]["weights"], "CC-BY-4.0")
+        for owner in ("FermionResearch", "NVIDIA"):
+            self.assertIn(owner, manifest["license"]["attribution"])
+        self.assertTrue(set(manifest["license"]["files"]) <= {e["path"] for e in manifest["files"]})
+        qualification = manifest["qualification"]
+        self.assertEqual(qualification["status"], "unqualified")
+        self.assertEqual(qualification["minimum_unified_memory_gb"], 8)
+        self.assertLess(qualification["min_free_memory_gb"], 2.0, "a small free floor, below the Hub default")
+        self.assertTrue(qualification["min_free_memory_note"])
+        self.assertNotIn("default", manifest, "Whisper stays the default subtitle model")
+        self.assertEqual(manifest["subtitle"], {"family": "phonon2", "languages": ["en"], "segment_timestamps": True,
+                                                "word_timestamps": True, "long_form": True})
 
     def test_fish_4bit_ships_the_8bit_codec_instead_of_the_publishers_codec_pth(self):
         """The 4-bit publisher's `codec.pth` makes mlx-audio 0.5.7 load the LLM as the codec (noise).

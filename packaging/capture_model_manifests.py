@@ -88,6 +88,18 @@ CHOICES: tuple[dict[str, Any], ...] = (
     {"package_id": "whisper-turbo", "model_id": "mlx-community/whisper-large-v3-turbo", "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb", "engine": "subtitle-mlx", "processor": ("openai/whisper-large-v3-turbo", "41f01f3fe87f28c78e2fbf8b568835947dd65ed9")},
     {"package_id": "whisper-small", "model_id": "mlx-community/whisper-small-mlx", "revision": "45f3915923c7a79a5a5b5a7d909d39aeb0e5630e", "engine": "subtitle-mlx", "processor": ("openai/whisper-small", "973afd24965f72e36ca33b3055d56a652f456b4d")},
     {"package_id": "whisper-base", "model_id": "mlx-community/whisper-base-mlx", "revision": "1e3e249fb8d01c655324bd6841b1deadffd6d04c", "engine": "subtitle-mlx", "processor": ("openai/whisper-base", "e37978b90ca9030d5170a5c07aadb050351a65bb")},
+    # ── Phonon-2 (owner decision 2026-10-05): optional English transcription next to Whisper ──
+    # FermionResearch/Phonon-2 is NVIDIA Parakeet TDT 0.6B v3 with a five-value (~2.1-bit) encoder
+    # and int6 tables. The official repo ships one `phonon-2.bps.tar.zst` container (needs
+    # zstandard, which the voice runtime does not carry) in HF-Transformers tensor names. This
+    # community conversion is the same bits verbatim in mlx-audio's Parakeet names plus that
+    # family's own config.json, so `transcription.load_phonon2` only unpacks the blocks.
+    # ATTRIBUTION.md and both licence texts ship: CC-BY-4.0 requires the attribution to travel.
+    {"package_id": "phonon-2-mlx", "model_id": "selcukkubur/Phonon-2-mlx", "revision": "71936ba3bf6479d299b97fdfe2d53e36d9375fe5", "engine": "subtitle-mlx",
+     "subtitle": {"family": "phonon2", "languages": ["en"], "segment_timestamps": True, "word_timestamps": True, "long_form": True},
+     "license": {"weights": "CC-BY-4.0", "code": "Apache-2.0",
+                 "attribution": "Phonon-2 by FermionResearch (huggingface.co/FermionResearch/Phonon-2), derived from NVIDIA Parakeet TDT 0.6B v3 (huggingface.co/nvidia/parakeet-tdt-0.6b-v3), CC-BY-4.0; MLX-layout conversion by selcukkubur (huggingface.co/selcukkubur/Phonon-2-mlx).",
+                 "files": ["model/ATTRIBUTION.md", "model/LICENSE-WEIGHTS-CC-BY-4.0.txt", "model/LICENSE-CODE-Apache-2.0.txt"]}},
     # ── Khmer VITS families (ST-12, owner request 2026-09-24) ──
     # Two non-MLX, single-speaker Khmer engines under the `voice-vits` packaging
     # engine. Both are payload-trimmed: the MMS release's benchmark/training
@@ -208,6 +220,10 @@ DETAILS: dict[str, dict[str, Any]] = {
     "whisper-turbo": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 8, "Adopted registry default is 8 GB; this is the only standalone subtitle model exercised end-to-end.")},
     "whisper-small": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 8, "Adopted registry default is 8 GB; model-specific subtitle accuracy and telemetry are unqualified.")},
     "whisper-base": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 8, "Adopted registry default is 8 GB; model-specific subtitle accuracy and telemetry are unqualified.")},
+    # The free floor is the owner's requested "small" one and is NOT a measurement yet: replace it
+    # with the 8 GB run's "started with N GB free" (_orchestra/audit-20261001/phonon2/QUALIFICATION-PLAN.md).
+    "phonon-2-mlx": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 8, "Not measured. 189 MB package (2.1-bit encoder) decoded at load to ~1.2 GB of bf16 weights, transcribed in 60 s windows; 8 GB is the requested tier pending the fleet run in QUALIFICATION-PLAN.md."),
+                     "qualification": {"min_free_memory_gb": 1.5, "min_free_memory_note": "Provisional small floor requested by the owner 2026-10-05; not yet measured. Set it from the 8 GB qualification run's free memory at job start."}},
     "khmer-tts-mms": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "An 83M-parameter VITS on torch; the Voice catalogue publishes an 8 GB floor and local inference measured a sub-1 GB footprint.")},
     "khmer-tts-female-onnx": {"defaults": {"parameters_source": "model/tts_meta.json"}, "memory": (8, 16, "A ~115 MB VITS ONNX graph on CPU; the Voice catalogue publishes an 8 GB floor.")},
     # `model/config.json`, not `model/generation_config.json`: the package ships no
@@ -502,6 +518,9 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
             "reason": details.get("qualification", {}).get(
                 "reason",
                 "Catalog metadata records expected bytes; local import and inference qualification remain required."),
+            # An optional free-memory floor travels with its note (AGENTS.md: a floor names where it came from).
+            **{key: details["qualification"][key] for key in ("min_free_memory_gb", "min_free_memory_note")
+               if key in details.get("qualification", {})},
         },
         "source": {"provider": "huggingface", "captured_at": CAPTURE_DATE, "sources": sources,
                    "layout": layout},
@@ -520,6 +539,9 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
         manifest["subtitle"] = subtitle
     if choice.get("default") is True:
         manifest["default"] = True
+    # Licence/attribution a person declares (CC-BY packages must carry it); passed through verbatim.
+    if choice.get("license"):
+        manifest["license"] = choice["license"]
     return manifest
 
 
@@ -556,7 +578,7 @@ def preserve_declared_blocks(manifest: dict[str, Any],
     """
     if not isinstance(previous, dict):
         return manifest
-    for key in ("subtitle", "default", "quantization", "quantization_source"):
+    for key in ("subtitle", "default", "quantization", "quantization_source", "license"):
         if key not in manifest and key in previous:
             manifest[key] = previous[key]
     return manifest
