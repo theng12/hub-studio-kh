@@ -62,9 +62,10 @@ class _Node:
     def __init__(self, status=200, body=None):
         self.status, self.body, self.calls = status, body or {}, []
 
-    async def request(self, method, url, timeout=None):
+    async def request(self, method, url, timeout=None, content=None, headers=None):
         import httpx
         self.calls.append((method, url))
+        self.sent = (content, headers, timeout)
         return httpx.Response(self.status, json=self.body, request=httpx.Request(method, url))
 
     async def aclose(self):
@@ -258,3 +259,70 @@ def test_refresh_machine_catalogs_reads_only_that_machines_studios(monkeypatch):
     seen.clear()
     asyncio.run(monitor.refresh_machine_catalogs("local"))
     assert seen == [("voice", True), ("image", True)]
+
+
+# A test transcription on one chosen Mac (0.6.147, Phonon-2 qualification from the Gateway): the node's
+# own Subtitle /api/transcribe, relayed like a model install and answered in full, words included.
+
+WORDS = {"text": "The Dreamlands sleep.", "segments": [{"start": 0.08, "end": 0.96, "text": "The Dreamlands sleep.",
+         "words": [{"word": "The", "start": 0.08, "end": 0.24}]}], "model": "phonon-2-mlx"}
+
+
+def test_a_test_transcription_is_relayed_to_the_nodes_own_route_with_its_upload_and_words(hub, monkeypatch):
+    from components.hub.backend import fleet_nodes
+    node = _Node(200, WORDS)
+    monkeypatch.setattr(fleet_nodes, "_probe_client", lambda: node)
+    answer = hub.client.post(f"/api/hub/fleet/nodes/{NODE}/transcribe",
+                             data={"model": "phonon-2-mlx", "language": "en", "word_timestamps": "true"},
+                             files={"file": ("clip.wav", b"RIFF-not-really", "audio/wav")})
+    assert answer.status_code == 200, answer.text
+    assert node.calls == [("POST", f"{ADDRESS}/api/hub/fleet/nodes/local/transcribe")]
+    content, headers, timeout = node.sent
+    assert headers["Content-Type"].startswith("multipart/form-data; boundary=")
+    assert b"RIFF-not-really" in content and b"phonon-2-mlx" in content
+    assert timeout is fleet_nodes.TRANSCRIBE_RELAY_TIMEOUT
+    assert answer.json()["segments"][0]["words"] == WORDS["segments"][0]["words"]
+    assert answer.json()["node"] == NODE
+    assert "transcribe_relay" in _events()
+
+
+def test_an_older_node_is_named_as_too_old_for_a_test_transcription(hub, monkeypatch):
+    from components.hub.backend import fleet_nodes
+    monkeypatch.setattr(fleet_nodes, "_probe_client", lambda: _Node(403, {"detail": "refused"}))
+    answer = hub.client.post(f"/api/hub/fleet/nodes/{NODE}/transcribe", files={"file": ("a.wav", b"x")})
+    assert answer.status_code == 502
+    assert answer.json()["code"] == "NODE_REFUSED" and "0.6.147" in answer.json()["detail"]
+    assert hub.client.post("/api/hub/fleet/nodes/not-joined/transcribe",
+                           files={"file": ("a.wav", b"x")}).json()["code"] == "UNKNOWN_NODE"
+
+
+def test_on_this_mac_it_is_the_subtitle_workers_own_transcribe(hub, monkeypatch):
+    import httpx
+    monitor = hub.client.app.state.monitor
+    seen = []
+
+    async def request(method, url, headers=None, content=None, timeout=None):
+        seen.append((method, url, headers, content))
+        return httpx.Response(200, json=WORDS, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(monitor, "_client", SimpleNamespace(request=request))
+    monkeypatch.setattr(monitor, "registry", [{"id": "subtitle", "machine": "local",
+                                               "base_url": "http://127.0.0.1:1", "hub_token": "worker-token"}])
+    monitor.status["subtitle"] = {"status": "up"}
+    answer = hub.client.post("/api/hub/fleet/nodes/local/transcribe",   # no model: the worker's default
+                             data={"word_timestamps": "true"},
+                             files={"file": ("clip.wav", b"RIFF-not-really", "audio/wav")})
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["segments"][0]["words"] == WORDS["segments"][0]["words"]
+    method, url, headers, content = seen[0]
+    assert (method, url) == ("POST", "http://127.0.0.1:1/api/transcribe")
+    assert headers["X-Hub-Token"] == "worker-token", "the worker is re-signed with its own token"
+    assert b"RIFF-not-really" in content
+    assert "transcribe" in _events()
+
+
+def test_the_fleet_may_ask_for_a_test_transcription_and_a_node_credential_may_not():
+    from components.hub.backend.auth import fleet_path_allowed, node_path_allowed
+    assert fleet_path_allowed("POST", "/api/hub/fleet/nodes/x/transcribe")
+    assert not fleet_path_allowed("GET", "/api/hub/fleet/nodes/x/transcribe")
+    assert not node_path_allowed("POST", "/api/hub/fleet/nodes/x/transcribe")

@@ -3,7 +3,16 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.146** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.147** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.147 - Phonon-2 loads its real weights; admin test transcription on one chosen Mac (`fix/phonon2-nzrow` off 0.6.146 a58475d, 2026-10-05).**
+> Plain: "Phonon-2 (optional English transcription) now loads its real weights correctly; still in testing, Whisper stays the default".
+> `_phonon2_dense` now reads `nz_row` as the exclusive prefix sum of per-row nonzero counts (the real file's form; G0 found 0.6.146 refused every
+> real block). New `POST /api/hub/fleet/nodes/{id|local}/transcribe` (Fleet token; local = `/studio/transcription/api/transcribe`, node = relayed to
+> its own `local` route via `relay_model`, 960 s), and Subtitle's sync `/api/transcribe` keeps segment `words` when asked. Contract
+> `_orchestra/audit-20261001/INTERFACES-0147.md` (Gateway 0.2.125 `POST /admin/api/controllers/{loc}/machines/{mid}/transcribe`). Per-release
+> script `_orchestra/audit-20261001/release-0147/prepare-kit-0147.sh`; gate numbers, DMG and checksum in `_orchestra/audit-20261001/release-0147/`.
+> Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.146 - Macs copy models from each other; Phonon-2 to try; narration timeline, text check and deadline (`release/0.6.146` = 0.6.145 76a935b + `--no-ff` merges of 5aac7dd `feat/lan-model-share`, b1abff5 `feat/phonon2-asr`, 6bf5646 `fix/breeze-failures` and 8b9b0a6 `feat/section-timeline`, 2026-10-05).**
 > Plain: "Macs on the same network can copy a model from each other instead of each downloading it from the internet (the Gateway picks a nearby Mac; every

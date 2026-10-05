@@ -2168,6 +2168,25 @@ class Phonon2SubtitleTests(SubtitleFixture):
         self.assertEqual(value['state'], 'done', value.get('error'))
         self.assertIn('The Dreamlands sleep.', Path(value['artifacts']['srt']['path']).read_text())
 
+    def test_the_synchronous_route_returns_the_word_timings_only_when_asked(self) -> None:
+        """0.6.147: model qualification reads per-word timings through the fleet transcribe relay."""
+        manager, _calls = self.phonon2_manager()
+        manager.engine.offline = True
+        client = TestClient(create_app(manager, TOKEN))
+
+        def post(word_timestamps: str) -> dict:
+            response = client.post(
+                '/api/transcribe', headers={'X-Hub-Token': TOKEN},
+                data={'model': 'phonon-2-mlx', 'language': 'en', 'word_timestamps': word_timestamps},
+                files={'file': ('clip.wav', io.BytesIO(self.audio_bytes), 'audio/wav')})
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+
+        words = post('true')['segments'][0]['words']
+        self.assertEqual([w['word'] for w in words], ['The', 'Dreamlands', 'sleep.'])
+        self.assertEqual((words[1]['start'], words[1]['end']), (0.32, 0.8))
+        self.assertNotIn('words', post('false')['segments'][0])
+
     def test_another_language_is_refused_in_a_sentence_before_loading(self) -> None:
         manager, calls = self.phonon2_manager()
         with self.assertRaises(ValueError) as caught:

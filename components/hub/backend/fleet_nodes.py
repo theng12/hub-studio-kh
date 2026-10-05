@@ -1267,13 +1267,24 @@ async def relay_workstation(node_id: str, changes: object, *,
     return {"ok": True, "node": wanted, "workstation": _workstation_of(body.get("workstation"))}
 
 
-async def relay_model(node_id: str, method: str, path: str, *, payload: Any = None,
-                      client: httpx.AsyncClient | None = None) -> dict[str, Any]:
-    """Pass a model install (or its status read) to one joined node's own fleet route, ``local``.
+#: A relayed test transcription waits for the node's answer: the node's own Subtitle deadline
+#: (900 s, `standalone.PEER_PROXY_TIMEOUT_FLOOR_S`) plus a minute for the hop.
+TRANSCRIBE_RELAY_TIMEOUT = httpx.Timeout(960.0, connect=4.0)
 
-    ``path`` is the part after ``/api/hub/fleet/nodes/local``. The node checks and audits the
-    request itself; its refusal (unknown package, shelved, disk, memory) comes back with its own
-    status and sentence. Raises `StartupRelayError`.
+
+async def relay_model(node_id: str, method: str, path: str, *, payload: Any = None,
+                      content: bytes | None = None, content_type: str = "",
+                      timeout: httpx.Timeout = STARTUP_RELAY_TIMEOUT,
+                      feature: str = "installing models from the Gateway (needs Studio Hub 0.6.143)",
+                      client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Pass a model install (or its status read, or a test transcription) to one joined node's own
+    fleet route, ``local``.
+
+    ``path`` is the part after ``/api/hub/fleet/nodes/local``. ``payload`` travels as JSON;
+    ``content`` (with its ``content_type``) travels as-is, which is how a multipart upload is relayed.
+    The node checks and audits the request itself; its refusal (unknown package, shelved, disk,
+    memory, a model it cannot run) comes back with its own status and sentence. Raises
+    `StartupRelayError`.
     """
     wanted = str(node_id or "").strip().lower()
     node = _read().get(wanted)
@@ -1284,13 +1295,15 @@ async def relay_model(node_id: str, method: str, path: str, *, payload: Any = No
     if owned:
         client = _probe_client()
     try:
+        extra: dict[str, Any] = {"json": payload} if payload is not None else {}
+        if content is not None:
+            extra = {"content": content, "headers": {"Content-Type": content_type}}
         response = await client.request(method, f"{node.get('address') or ''}/api/hub/fleet/nodes/local{path}",
-                                        timeout=STARTUP_RELAY_TIMEOUT,
-                                        **({"json": payload} if payload is not None else {}))
+                                        timeout=timeout, **extra)
     except httpx.HTTPError as exc:
         raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
                                       "reason": _unreachable_reason(exc),
-                                      "detail": "that Mac did not answer, so nothing was installed - "
+                                      "detail": "that Mac did not answer, so nothing ran there - "
                                                 "try again when it is back"}) from exc
     finally:
         if owned:
@@ -1304,9 +1317,8 @@ async def relay_model(node_id: str, method: str, path: str, *, payload: Any = No
     if response.status_code in (401, 403, 405):
         raise StartupRelayError(502, {
             "ok": False, "code": "NODE_REFUSED",
-            "detail": "that Mac refused: its Studio Hub is older than installing models from the "
-                      "Gateway (needs Studio Hub 0.6.143), or it holds a different Fleet token. "
-                      "Update it first."})
+            "detail": f"that Mac refused: its Studio Hub is older than {feature}, or it holds a "
+                      "different Fleet token. Update it first."})
     if not response.is_success:
         body = {"ok": False, **body}
         body.setdefault("detail", f"that Mac answered HTTP {response.status_code}")

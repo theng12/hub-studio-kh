@@ -375,7 +375,8 @@ def _pack_five_value(weights, lo, hi):
     nonzero = sign != 0
     is_hi = np.abs(weights) == hi[:, None]
     hi_bits = np.packbits(is_hi[nonzero], bitorder="little")
-    return trits, hi_bits, nonzero.sum(axis=1).astype(np.uint32)
+    counts = nonzero.sum(axis=1)
+    return trits, hi_bits, (np.cumsum(counts) - counts).astype(np.uint32)   # row start offsets, as shipped
 
 
 def test_phonon2_unpacks_five_value_blocks_and_int6_tables_exactly() -> None:
@@ -413,6 +414,11 @@ def test_phonon2_unpacks_five_value_blocks_and_int6_tables_exactly() -> None:
     np.testing.assert_array_equal(out["enc.ff.weight"], dense.reshape(3, 1, 12))
     np.testing.assert_array_equal(out["joint.weight"], (q * scale[:, None].astype(np.float32)).astype(np.float16))
     np.testing.assert_array_equal(out["joint.bias"], plain)
+
+    per_row_counts = (dense.reshape(3, -1) != 0).sum(axis=1).astype(np.uint32)
+    assert not np.array_equal(per_row_counts, nz_row)
+    with pytest.raises(ValueError, match="nonzero table"):
+        transcription._phonon2_dense({**tensors, "enc.ff.nz_row": per_row_counts}, metadata)
 
 
 def test_phonon2_unpack_refuses_codes_that_disagree_with_the_nonzero_table() -> None:

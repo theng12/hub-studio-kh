@@ -3446,6 +3446,36 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return await _proxy_to_worker(modality, path, request,
                                       record=_peer_job_recorder(modality, path))
 
+    @app.post("/api/hub/fleet/nodes/{node_id}/transcribe")
+    async def fleet_node_transcribe(node_id: str, request: Request) -> Response:
+        """Run one test transcription on a chosen Mac in this group (0.6.147, model qualification).
+
+        The Subtitle worker's own synchronous ``/api/transcribe`` (multipart: file, model, language,
+        word_timestamps), answered in full - segments with their ``words``. A joined node is relayed
+        to its own copy of this route (``local``), the way a model install is; this controller itself
+        is its id or ``local``. Audited here and, for a node, again on the node.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            startup_control.audit("transcribe_relay", {"node": wanted, "actor": actor})
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "POST", "/transcribe", content=await request.body(),
+                    content_type=request.headers.get("content-type") or "",
+                    timeout=fleet.TRANSCRIBE_RELAY_TIMEOUT,
+                    feature="test transcriptions from the Gateway (needs Studio Hub 0.6.147)"))
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+        startup_control.audit("transcribe", {"node": wanted, "actor": actor})
+        # The peer surface's own spelling (`/studio/transcription/api/transcribe`): same admission,
+        # machine reservation and worker re-signing as a controller's pooled transcription.
+        return await _proxy_to_worker("transcription", "api/transcribe", request)
+
     @app.post("/api/hub/chat/completions")
     async def hub_chat_completions(request: Request) -> Response:
         """Local Chat completion for this app's own Chat page.

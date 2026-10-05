@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.147 - 2026-10-05
+
+### Models
+
+**Phonon-2 (optional English transcription) now loads its real weights correctly; still in testing, Whisper stays the default.**
+
 ## 0.6.146 - 2026-10-05
 
 ### Models

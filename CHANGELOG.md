@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.147 — 2026-10-05 · Phonon-2 loads its real weights; a test transcription on one chosen Mac
+
+Branch `fix/phonon2-nzrow` off 0.6.146 a58475d.
+- **Phonon-2 (optional English transcription) now loads its real weights correctly; still in testing, Whisper stays the default.**
+  `transcription._phonon2_dense` read `<block>.nz_row` as each row's nonzero count; the published `phonon-2-mlx` file stores each row's
+  start offset in the hi-bit stream (exclusive prefix sum), so every real block was refused ("trit codes disagree with its nonzero table")
+  and no Phonon-2 transcription could start on any Mac. The check now compares `cumsum(counts) - counts` (also right for an empty
+  matrix). With it, all 697 tensors match the publisher bit for bit (`_orchestra/audit-20261001/phonon2/RESULTS.md`, G0.2). The test
+  fixture `_pack_five_value` now emits the shipped form, and a per-row-count `nz_row` is asserted refused. The Subtitle worker loads
+  through the same function (`engine.py` -> `load_phonon2`), so it has no second copy to fix.
+- **Admin test transcription on one chosen Mac (model qualification).** `POST /api/hub/fleet/nodes/{id|local}/transcribe` (Fleet token,
+  multipart `file`, `model`, `language`, `word_timestamps`): on this Mac it is the peer surface's own
+  `/studio/transcription/api/transcribe` (same admission, machine reservation and worker re-signing); for a joined node it is relayed to the
+  node's own `.../nodes/local/transcribe` by `fleet_nodes.relay_model` (the 0.6.143 install relay, now able to carry a raw body, its own
+  timeout of 960 s and its own "needs 0.6.147" refusal). Audited `transcribe_relay` / `transcribe`. Not in `NODE_ALLOWED`.
+- **Subtitle's synchronous `/api/transcribe` keeps each segment's `words`** when `word_timestamps` is on (they were measured and then
+  dropped); with it off the segment shape is unchanged. Contract: `_orchestra/audit-20261001/INTERFACES-0147.md` (Gateway 0.2.125).
+- Tests: `test_transcription_engines.py`, `tests/hub_regression/cases/test_fleet_model_install.py`, `test_subtitle_standalone.py`.
+
 ## 0.6.146 — 2026-10-05 · Macs copy models from each other; Phonon-2 to try; narration timeline; longer narration deadline
 
 Release of `release/0.6.146` (= 0.6.145 76a935b + `--no-ff` merges of `feat/lan-model-share` 5aac7dd, `feat/phonon2-asr` b1abff5 and

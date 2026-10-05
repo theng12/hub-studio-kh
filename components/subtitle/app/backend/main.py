@@ -363,7 +363,10 @@ def create_app(manager: SubtitleManager, token: str, *, app_version: str | None 
             # 15-second maximum, and the app's Transcribe button is how that transcript is
             # obtained. Dropping the timestamps here is what forced the operator to paste words
             # that the engine had just measured.
-            'segments': [{'start': s.get('start'), 'end': s.get('end'), 'text': s.get('text')}
+            # `words` only when the engine measured them (word_timestamps on): model qualification
+            # reads per-word timings through the fleet transcribe relay (0.6.147).
+            'segments': [{'start': s.get('start'), 'end': s.get('end'), 'text': s.get('text'),
+                          **({'words': s['words']} if s.get('words') else {})}
                          for s in (result.get('segments') or [])],
             'srt': _read(artifacts, 'srt'), 'vtt': _read(artifacts, 'vtt'),
             'elapsed_seconds': result.get('duration_seconds'),

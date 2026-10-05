@@ -594,6 +594,10 @@ FLEET_ALLOWED = (
     # from (`GET /api/hub/model-share/<token>/files/...`, authorised by the token itself - see the
     # middleware). Not in `NODE_ALLOWED`.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/model-packages/[^/]+/share$"),
+    # **A test transcription on one chosen Mac (0.6.147, model qualification from the Gateway).** The
+    # same Subtitle work `POST /studio/subtitle/api/transcribe` already lets the fleet send, pinned to
+    # one Mac and answered with its per-word timings. Not in `NODE_ALLOWED`.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/transcribe$"),
     ("GET", r"^/api/hub/workstation$"),
     ("POST", r"^/api/hub/workstation$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same

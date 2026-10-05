@@ -231,7 +231,9 @@ def _phonon2_dense(tensors: dict, metadata: dict) -> dict:
         trits = out.pop(f"{name}.trits").astype(np.uint16)
         codes = ((trits[..., None] // (3 ** np.arange(5, dtype=np.uint16))) % 3).reshape(rows, -1)[:, :cols]
         nonzero = codes != 1
-        if not np.array_equal(nonzero.sum(axis=1), out.pop(f"{name}.nz_row")):
+        counts = nonzero.sum(axis=1)
+        # nz_row is each row's start offset in the hi-bit stream (exclusive prefix sum), not its count.
+        if not np.array_equal(np.cumsum(counts) - counts, out.pop(f"{name}.nz_row")):
             raise ValueError(f"Phonon-2 block {name}: trit codes disagree with its nonzero table")
         out.pop(f"{name}.nz_tile", None)
         bits = np.unpackbits(out.pop(f"{name}.hi_bits"), bitorder="little")[: int(nonzero.sum())]
