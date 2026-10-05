@@ -1225,8 +1225,11 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
                          family: str, pause_s: float = _LONG_FORM_JOIN_PAUSE_S,
                          pause_sequence_s: Optional[list[float]] = None,
                          cancel_event: threading.Event | None = None,
-                         repo: str = "") -> None:
+                         repo: str = "") -> list[tuple[float, float]]:
     """Validate, level, and atomically stream independently synthesized WAV sections.
+
+    Returns where each section's speech sits in the joined file, (start_s, end_s) in order: the
+    section timeline a caller can time subtitles by without recognising the speech.
 
     A long script is rendered as independent sections, and nothing told the engine what level the
     section before it came out at. Measured on Breeze TTS 2 4-bit, the 14 sections of one
@@ -1299,6 +1302,8 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
             subtype=first_info.subtype,
         ) as destination:
             carried_tail = 0
+            written = 0
+            spans: list[tuple[float, float]] = []
             for index, path in enumerate(levelled):
                 if cancel_event is not None and cancel_event.is_set():
                     raise InterruptedError("long-form join cancelled")
@@ -1308,9 +1313,13 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
                     pause_frames = round(max(0.0, pauses[index - 1]) * sample_rate) - carried_tail - head
                     if pause_frames > 0:
                         destination.write(np.zeros((pause_frames, channels), dtype=np.float32))
+                        written += pause_frames
                 destination.write(audio)
+                spans.append(((written + head) / sample_rate, (written + len(audio) - tail) / sample_rate))
+                written += len(audio)
                 carried_tail = tail
         os.replace(joining_path, output_path)
+        return spans
     finally:
         joining_path.unlink(missing_ok=True)
         # The levelled copies are working files for one join and are never a result: leaving them
@@ -1320,6 +1329,33 @@ def _join_long_form_wavs(segment_paths: list[Path], output_path: Path,
                 written.unlink(missing_ok=True)
 
 
+
+
+def _record_section_timeline(job, text: str, chunks: list[str],
+                             spans: list[tuple[float, float]]) -> None:
+    """Where each section is in the delivered audio (seconds) and in the request's text (character
+    offsets into the text the voice spoke), riding on ``section_quality`` to the Gateway and Story so
+    subtitles can be timed from the script with no speech recognition (Story, 2026-10-05)."""
+    rows, cursor = [], 0
+    for index, (chunk, (start_s, end_s)) in enumerate(zip(chunks, spans), start=1):
+        text_start, text_end = _find_section(text, chunk, cursor)
+        if text_start < 0:
+            return  # a section not found in its text: say nothing rather than something wrong
+        rows.append({"section": index, "start_s": round(start_s, 3), "end_s": round(end_s, 3),
+                     "text_start": text_start, "text_end": text_end})
+        cursor = text_end
+    if job.section_quality is None:
+        job.section_quality = {"revision": tts_quality.REVISION, "sections": []}
+    job.section_quality["timeline"] = rows
+
+
+def _scale_section_timeline(job, speed: float) -> None:
+    """The tempo pass after the join shortens every time by the (clamped) speed."""
+    rows = (job.section_quality or {}).get("timeline") or []
+    speed = max(long_form_policy.SPEED_MINIMUM, min(float(speed), long_form_policy.SPEED_MAXIMUM))
+    for row in rows:
+        row["start_s"] = round(row["start_s"] / speed, 3)
+        row["end_s"] = round(row["end_s"] / speed, 3)
 
 
 def _join_qwen_clone_wavs(segment_paths: list[Path], output_path: Path,
@@ -3413,13 +3449,14 @@ class GenerationManager:
                 # One section is the whole request: nothing to join or level, exactly as before.
                 os.replace(segment_paths[0], output_path)
                 return
-            _join_long_form_wavs(
+            spans = _join_long_form_wavs(
                 segment_paths, output_path, model.family,
                 pause_s=_long_form_join_pause_s(model.family, model.repo),
                 repo=model.repo,
                 pause_sequence_s=_request_join_pauses_s(text, chunks, job.params),
                 cancel_event=job.cancel_event,
             )
+            _record_section_timeline(job, text, chunks, spans)
         finally:
             shutil.rmtree(segment_root, ignore_errors=True)
             if gated and any(record.get("transcribe_back") == "whisper"
@@ -3523,6 +3560,7 @@ class GenerationManager:
                                        cancel_event=job.cancel_event):
                 print(f"[gen] {model.family} applied pitch-preserving {speed:.2f}x tempo "
                       f"to the joined artifact", flush=True)
+                _scale_section_timeline(job, speed)
 
     def _dispatch_txt2speech_direct(self, job: GenerationJob, output_path: Path,
                                     *, postprocess_speed: bool = True) -> None:
