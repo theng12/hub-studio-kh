@@ -3,7 +3,19 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.145** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.146** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.146 - Macs copy models from each other; Phonon-2 to try; narration text check and deadline (`release/0.6.146` = 0.6.145 76a935b + `--no-ff` merges of 5aac7dd `feat/lan-model-share`, b1abff5 `feat/phonon2-asr` and 6bf5646 `fix/breeze-failures`, 2026-10-05).**
+> Plain: "Macs on the same network can copy a model from each other instead of each downloading it from the internet (the Gateway picks a nearby Mac; every
+> file is checked)"; "Phonon-2, a small fast English transcription model, is available to try next to Whisper"; "Narration's text check allows a little more
+> mishearing in short sections (a skipped phrase is still caught)"; "Long narration pieces get 45 minutes before they're stopped".
+> LAN share: `components/hub/model_share.py` (in-memory tokens, 30 min renewed on use, gone on restart, <= 2 transfers per Mac), share route
+> `.../fleet/nodes/{id|local}/model-packages/{pkg}/share`, serve `GET/HEAD /api/hub/model-share/{token}/files/{path}`, download route `{"source": share}`
+> with per-file internet fallback, run `source_used`; contract `_orchestra/audit-20261001/INTERFACES-0146.md` (Gateway 0.2.122). Phonon-2: package
+> `phonon-2-mlx` (unqualified, 8 GB tier), `transcription.load_phonon2`, Voice/Subtitle `phonon2`; Whisper turbo stays default; catalog count 29.
+> Breeze failures: `tts_quality` unheard share 0.15 (was 0.10), voice deadline floor 2,700 s (was 1,800 s). `feat/section-timeline` was not on origin at
+> merge time, so not included. Per-release script `_orchestra/audit-20261001/release-0146/prepare-kit-0146.sh`. Gate numbers, DMG and checksum:
+> `_orchestra/audit-20261001/release-0146/`. Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.145 - Breeze TTS 2 4-bit runs on 8 GB Macs (`release/0.6.145` = 0.6.144 d14ad78 + the owner's Breeze decision, 2026-10-04).**
 > Floor 8 GB / 3.2 GB free in `memory_admission._FLEET_DEFAULTS` (measured 2026-10-04 on an 8 GB M1: started from 3.31-3.46 GB free, peak

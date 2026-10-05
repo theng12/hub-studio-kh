@@ -2,6 +2,21 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.146 - 2026-10-05
+
+### Models
+
+**Macs on the same network can copy a model from each other instead of each downloading it from the internet (the Gateway
+picks a nearby Mac; every file is checked).**
+
+**Phonon-2, a small fast English transcription model, is available to try next to Whisper.**
+
+### Narration
+
+**Narration's text check allows a little more mishearing in short sections (a skipped phrase is still caught).**
+
+**Long narration pieces get 45 minutes before they're stopped.**
+
 ## 0.6.145 - 2026-10-04
 
 ### Voices

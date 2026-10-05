@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.146 — 2026-10-05 · Macs copy models from each other; Phonon-2 to try; longer narration deadline
+
+Release of `release/0.6.146` (= 0.6.145 76a935b + `--no-ff` merges of `feat/lan-model-share` 5aac7dd, `feat/phonon2-asr` b1abff5 and
+`fix/breeze-failures` 6bf5646). No textual conflicts. `feat/section-timeline` was not on origin when the merges and focused tests were done, so it is not in this release.
+- **Macs on the same network can copy a model from each other instead of each downloading it from the internet (the Gateway picks a
+  nearby Mac; every file is checked).** `POST /api/hub/fleet/nodes/{id|local}/model-packages/{pkg}/share` (Fleet token, relayed like the
+  0.6.143 install) returns a 30-minute, renewed-on-use, read-only token for the one verified revision; `GET/HEAD
+  /api/hub/model-share/{token}/files/{path}` serves only the manifest's files (Range, octet-stream, no gzip, <= 2 transfers per Mac,
+  429 beyond, audited). The download route takes `{"source": share}`: each file is tried from the peer, verified against the pinned
+  digests exactly as for the internet, and re-fetched from the internet on a mismatch; a peer that fails is dropped for the run. The run
+  records `source_used` (`lan` / `internet` / `mixed`). Contract: `_orchestra/audit-20261001/INTERFACES-0146.md`.
+- **Phonon-2, a small fast English transcription model, is available to try next to Whisper.** Package `phonon-2-mlx`
+  (selcukkubur/Phonon-2-mlx@71936ba3, 5 files, 189,498,804 bytes, unqualified, 8 GB tier, provisional 1.5 GB free floor);
+  `transcription.load_phonon2` unpacks it into mlx-audio's ParakeetTDT with numpy (no new dependency). Voice `phonon2` engine and the
+  Subtitle `phonon2` family; non-English requests are refused naming Whisper. NeMo-family word timestamps join SentencePiece pieces into
+  words. Whisper large-v3 turbo stays the default; the Lite Mode allowlist is unchanged. Catalog count 29.
+- **Narration's text check allows a little more mishearing in short sections (a skipped phrase is still caught).** `tts_quality` lets 15% of a
+  section's words go unheard (was 10%; measured good >= 0.938, bad <= 0.849); the dropped-clause rule (missing run > 3) is unchanged.
+- **Long narration pieces get 45 minutes before they're stopped.** Voice job deadline floor 2,700 s (was 1,800 s; slowest successful
+  1,500-character Breeze part took 1,747 s on an M1 16 GB). Stall detection is unchanged.
+- Tests: `tests/hub_regression/cases/test_lan_model_share.py`, `tests/test_model_packages.py`, `test_transcription_engines.py`,
+  `test_model_manifest_catalog.py`, `test_subtitle_standalone.py`, `test_tts_quality.py`, `test_hub_job_deadline.py`.
+
 ## 0.6.145 — 2026-10-04 · Breeze TTS 2 4-bit runs on 8 GB Macs
 
 Release of `release/0.6.145` (= 0.6.144 d14ad78 + the owner's Breeze decision).
