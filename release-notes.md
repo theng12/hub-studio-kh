@@ -15,6 +15,8 @@ picks a nearby Mac; every file is checked).**
 
 **Narration's text check allows a little more mishearing in short sections (a skipped phrase is still caught).**
 
+**Narration now reports where each piece of text sits in the audio, so subtitles can be timed exactly from the script.**
+
 **Long narration pieces get 45 minutes before they're stopped.**
 
 ## 0.6.145 - 2026-10-04

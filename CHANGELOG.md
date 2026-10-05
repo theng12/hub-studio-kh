@@ -1,9 +1,9 @@
 # Changelog
 
-## 0.6.146 — 2026-10-05 · Macs copy models from each other; Phonon-2 to try; longer narration deadline
+## 0.6.146 — 2026-10-05 · Macs copy models from each other; Phonon-2 to try; narration timeline; longer narration deadline
 
 Release of `release/0.6.146` (= 0.6.145 76a935b + `--no-ff` merges of `feat/lan-model-share` 5aac7dd, `feat/phonon2-asr` b1abff5 and
-`fix/breeze-failures` 6bf5646). No textual conflicts. `feat/section-timeline` was not on origin when the merges and focused tests were done, so it is not in this release.
+`fix/breeze-failures` 6bf5646, then `feat/section-timeline` 8b9b0a6). No textual conflicts.
 - **Macs on the same network can copy a model from each other instead of each downloading it from the internet (the Gateway picks a
   nearby Mac; every file is checked).** `POST /api/hub/fleet/nodes/{id|local}/model-packages/{pkg}/share` (Fleet token, relayed like the
   0.6.143 install) returns a 30-minute, renewed-on-use, read-only token for the one verified revision; `GET/HEAD
@@ -18,10 +18,14 @@ Release of `release/0.6.146` (= 0.6.145 76a935b + `--no-ff` merges of `feat/lan-
   words. Whisper large-v3 turbo stays the default; the Lite Mode allowlist is unchanged. Catalog count 29.
 - **Narration's text check allows a little more mishearing in short sections (a skipped phrase is still caught).** `tts_quality` lets 15% of a
   section's words go unheard (was 10%; measured good >= 0.938, bad <= 0.849); the dropped-clause rule (missing run > 3) is unchanged.
+- **Narration now reports where each piece of text sits in the audio, so subtitles can be timed exactly from the script.**
+  `section_quality.timeline = [{section, start_s, end_s, text_start, text_end}]`: speech start/end of each section in the joined file
+  (tempo-adjusted) and its character span in the request text; the broker passes it through numbers-only.
 - **Long narration pieces get 45 minutes before they're stopped.** Voice job deadline floor 2,700 s (was 1,800 s; slowest successful
   1,500-character Breeze part took 1,747 s on an M1 16 GB). Stall detection is unchanged.
 - Tests: `tests/hub_regression/cases/test_lan_model_share.py`, `tests/test_model_packages.py`, `test_transcription_engines.py`,
-  `test_model_manifest_catalog.py`, `test_subtitle_standalone.py`, `test_tts_quality.py`, `test_hub_job_deadline.py`.
+  `test_model_manifest_catalog.py`, `test_subtitle_standalone.py`, `test_tts_quality.py`, `test_hub_job_deadline.py`,
+  `test_section_quality_passthrough.py`, `test_long_form_join_edges.py`. `docs/model-benchmarks.md` regenerated for Phonon-2.
 
 ## 0.6.145 — 2026-10-04 · Breeze TTS 2 4-bit runs on 8 GB Macs
 
