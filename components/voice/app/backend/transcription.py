@@ -142,6 +142,19 @@ TRANSCRIPTION_MODELS: tuple[TranscriptionModel, ...] = (
         languages="Multilingual",
         internal_candidate=True,
     ),
+    # Owner decision 2026-10-05: optional English model next to Whisper, never the default.
+    # Package `phonon-2-mlx` (model-manifests/phonon-2-mlx.json); qualification plan in
+    # _orchestra/audit-20261001/phonon2/QUALIFICATION-PLAN.md.
+    TranscriptionModel(
+        repo="selcukkubur/Phonon-2-mlx",
+        label="Phonon-2 (English, Parakeet TDT 0.6B 2.1-bit)",
+        size_gb=0.19,
+        note=("Optional, English only. FermionResearch Phonon-2 from NVIDIA Parakeet TDT 0.6B v3 "
+              "(CC-BY-4.0). Word timestamps. Unqualified."),
+        engine="phonon2",
+        languages="English",
+        internal_candidate=True,
+    ),
 )
 
 WHISPER_MODELS = tuple(
@@ -177,6 +190,92 @@ def _unknown_engine(spec: TranscriptionModel) -> ValueError:
         "components/voice/app/backend/transcription.py, and name the engine on the "
         "TranscriptionModel row in the same file"
     )
+
+def english_only_refusal(spec: TranscriptionModel, language: Optional[str]) -> Optional[str]:
+    """The plain sentence an English-only model answers a non-English request with, or None.
+
+    No language (or ``auto``) is accepted as English. A caller that gets the sentence retries
+    with Whisper, which is multilingual.
+    """
+    lang = (language or "").strip().lower()
+    if spec.languages != "English" or lang in ("", "auto") or lang.split("-")[0] in ("en", "english"):
+        return None
+    return (f"{spec.label} transcribes English only, and {language!r} was requested; "
+            f"use Whisper ({recommended_model()}) for other languages.")
+
+
+# ───────────── Phonon-2 (packed Parakeet TDT) ─────────────
+# Long audio is cut into windows so attention memory stays flat; mlx-audio merges the overlap.
+PHONON2_CHUNK_SECONDS = 60.0
+
+
+def _phonon2_dense(tensors: dict, metadata: dict) -> dict:
+    """Unpack Phonon-2's packed blocks into dense float16 numpy arrays, keyed by mlx-audio names.
+
+    Same arithmetic as FermionResearch's own reader (`fermion_container.py`, Apache-2.0):
+    five-value weight = sign(trit - 1) * (hi if its bit is set else lo) per output row, where the
+    trits are five base-3 digits per byte and the hi bits are one little-endian bitstream over the
+    nonzero trits in row-major order; int6 tables are four 6-bit values per 3 bytes, minus 32,
+    times a per-row scale. Everything else in the file is already float16.
+
+    ponytail: dense bf16 after load (~1.2 GB). Upgrade path if the 8 GB run needs the 2.1-bit
+    footprint: the five values are exactly two 2-bit affine planes (a=(hi+lo)/2, b=(hi-lo)/2),
+    which `mlx_audio.stt.models.phonon.packed.PackedTritLinear` already evaluates.
+    """
+    import numpy as np
+
+    out = dict(tensors)
+    for row in json.loads(metadata["phonon_packed"]):
+        name, shape = row["name"], tuple(row["shape"])
+        rows, cols = shape[0], int(np.prod(shape[1:]))
+        trits = out.pop(f"{name}.trits").astype(np.uint16)
+        codes = ((trits[..., None] // (3 ** np.arange(5, dtype=np.uint16))) % 3).reshape(rows, -1)[:, :cols]
+        nonzero = codes != 1
+        if not np.array_equal(nonzero.sum(axis=1), out.pop(f"{name}.nz_row")):
+            raise ValueError(f"Phonon-2 block {name}: trit codes disagree with its nonzero table")
+        out.pop(f"{name}.nz_tile", None)
+        bits = np.unpackbits(out.pop(f"{name}.hi_bits"), bitorder="little")[: int(nonzero.sum())]
+        is_hi = np.zeros((rows, cols), dtype=bool)
+        is_hi[nonzero] = bits.astype(bool)
+        lo, hi = out.pop(f"{name}.lo"), out.pop(f"{name}.hi")
+        magnitude = np.where(is_hi, hi[:, None], lo[:, None])
+        out[row["tensor"]] = ((codes.astype(np.int8) - 1).astype(np.float16) * magnitude).reshape(shape)
+    for row in json.loads(metadata["phonon_int6"]):
+        name, shape = row["name"], tuple(row["shape"])
+        packed = out.pop(f"{name}.q6").reshape(-1, 3).astype(np.uint32)
+        word = packed[:, 0] | (packed[:, 1] << 8) | (packed[:, 2] << 16)
+        q = np.stack([(word >> shift) & 0x3F for shift in (0, 6, 12, 18)], axis=1).ravel()
+        q = (q[: int(np.prod(shape))].astype(np.int32) - 32).reshape(shape[0], -1)
+        scale = out.pop(f"{name}.scale").astype(np.float32)
+        out[row["tensor"]] = (q.astype(np.float32) * scale[:, None]).astype(np.float16).reshape(shape)
+    return out
+
+
+def load_phonon2(folder: Path):
+    """Build mlx-audio's Parakeet TDT from the package's config and load the unpacked weights.
+
+    Strict load: a key the conversion and this mlx-audio disagree on fails loudly here rather
+    than transcribing with random weights.
+    """
+    import mlx.core as mx
+    from mlx_audio.stt.models.parakeet import Model
+    from safetensors import safe_open
+
+    folder = Path(folder)
+    config = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+    with safe_open(str(folder / "model.safetensors"), framework="numpy") as handle:
+        metadata = handle.metadata() or {}
+        tensors = {key: handle.get_tensor(key) for key in handle.keys()}
+    if "phonon_packed" not in metadata or "phonon_int6" not in metadata:
+        raise RuntimeError(f"{folder}/model.safetensors is not a Phonon-2 packed checkpoint")
+    weights = {key: mx.array(value).astype(mx.bfloat16)
+               for key, value in _phonon2_dense(tensors, metadata).items()}
+    model = Model.from_config(config)
+    model.load_weights(list(weights.items()), strict=True)
+    mx.eval(model.parameters())
+    model.eval()
+    return model
+
 
 # The mlx-community whisper repos ship ONLY config.json + weights — no HF
 # processor files (preprocessor_config.json, tokenizer, vocab). mlx-audio's
@@ -524,8 +623,28 @@ def _result_field(value, name: str, default=None):
     return getattr(value, name, default)
 
 
+def _words_from_tokens(tokens) -> list[dict]:
+    """Join SentencePiece tokens into words: a piece that starts with a space starts a word.
+
+    NeMo-family decoders (Nemotron, Parakeet/Phonon-2) time each BPE piece, so "Dreamlands" can
+    arrive as " Dream" + "lands". A subtitle wants the word, spanning its first piece's start to
+    its last piece's end; punctuation stays with the word it follows.
+    """
+    words: list[dict] = []
+    for token in tokens or []:
+        text = _result_field(token, "text", "") or ""
+        start = _result_field(token, "start", 0.0)
+        end = _result_field(token, "end", 0.0)
+        if words and not text.startswith(" "):
+            words[-1]["word"] += text
+            words[-1]["end"] = end
+        else:
+            words.append({"word": text.strip(), "start": start, "end": end})
+    return words
+
+
 def _segments_from_nemotron(result, *, word_timestamps: bool) -> list[dict]:
-    """Convert mlx-audio's AlignedResult into the existing subtitle shape."""
+    """Convert mlx-audio's AlignedResult (Nemotron and Parakeet/Phonon-2) into the subtitle shape."""
     segments: list[dict] = []
     for sentence in _result_field(result, "sentences", []) or []:
         entry = {
@@ -534,14 +653,7 @@ def _segments_from_nemotron(result, *, word_timestamps: bool) -> list[dict]:
             "text": _result_field(sentence, "text", ""),
         }
         if word_timestamps:
-            entry["words"] = [
-                {
-                    "word": _result_field(token, "text", ""),
-                    "start": _result_field(token, "start", 0.0),
-                    "end": _result_field(token, "end", 0.0),
-                }
-                for token in (_result_field(sentence, "tokens", []) or [])
-            ]
+            entry["words"] = _words_from_tokens(_result_field(sentence, "tokens", []))
         segments.append(entry)
     return segments
 
@@ -815,7 +927,10 @@ class TranscriptionManager:
         from mlx_audio.stt.utils import load_model
         snapshot_path = self._snapshot_path(repo)
         print(f"[stt] loading transcription model from {snapshot_path}", flush=True)
-        model = load_model(snapshot_path)          # Path object — see v1.2.8
+        if model_for_repo(repo).engine == "phonon2":
+            model = load_phonon2(snapshot_path)
+        else:
+            model = load_model(snapshot_path)          # Path object — see v1.2.8
 
         # The mlx-community repos don't bundle the HF processor, so load_model's
         # post-hook leaves model._processor = None → "Processor not found" at
@@ -940,6 +1055,9 @@ class TranscriptionManager:
         spec = model_for_repo(repo)
         if word_timestamps and not spec.supports_word_timestamps:
             raise ValueError(f"{spec.label} does not support word timestamps")
+        refusal = english_only_refusal(spec, language)
+        if refusal:
+            raise ValueError(refusal)
         if cache.cache_state(repo) != "cached":
             raise RuntimeError(
                 f"Transcription model {repo} is not fully cached. "
@@ -998,6 +1116,8 @@ class TranscriptionManager:
                     result = model.generate(
                         str(p), language=lang or "auto", chunk_duration=30.0
                     )
+                elif spec.engine == "phonon2":
+                    result = model.generate(str(p), chunk_duration=PHONON2_CHUNK_SECONDS)
                 else:
                     raise _unknown_engine(spec)
                 telemetry_state = "completed"
@@ -1038,6 +1158,11 @@ class TranscriptionManager:
                 result, word_timestamps=word_timestamps
             )
             detected_lang = lang or "auto"
+        elif spec.engine == "phonon2":
+            raw_segments = _segments_from_nemotron(
+                result, word_timestamps=word_timestamps
+            )
+            detected_lang = "en"
         elif spec.engine == "whisper":
             raw_segments = _result_field(result, "segments")
         else:
