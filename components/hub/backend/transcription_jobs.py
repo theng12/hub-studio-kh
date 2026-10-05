@@ -1174,12 +1174,19 @@ def restore_batches() -> int:
             restored += 1
             continue
         for item in batch["items"]:
-            if item["state"] == "running":
-                if _packaged():
-                    _mark_uncertain(item, "Hub restarted after a possibly accepted Subtitle worker attempt")
-                else:
-                    item.update(state="queued", studio=None, studio_task_id=None,
-                                error="interrupted by Hub restart", interrupted=True)
+            if item["state"] == "running" and batch.get("cancelled") and _packaged():
+                _mark_uncertain(item, "Hub restarted after a possibly accepted Subtitle worker attempt")
+            elif item["state"] == "running" and int(item.get("tries") or 0) >= MAX_TRIES:
+                item.update(state="error", error_code="HUB_RESTARTED", studio_task_id=None,
+                            error=f"the Hub restarted while this was running, on its last of "
+                                  f"{MAX_TRIES} tries")
+            elif item["state"] == "running":
+                # Free local work runs again rather than holding its Mac `uncertain` for a person
+                # (owner, 2026-10-05; `broker._rerun_after_restart`). ponytail: the original is not
+                # watched or adopted here - a node still transcribing it finishes unread; add the
+                # broker's watch if that waste shows up.
+                item.update(state="queued", studio=None, studio_task_id=None, machine=None,
+                            error="interrupted by Hub restart; running it again", interrupted=True)
             if item["state"] == "queued" and not Path(item["input_path"]).is_file():
                 item.update(state="error", error="uploaded audio is missing")
         batches[batch["id"]] = batch

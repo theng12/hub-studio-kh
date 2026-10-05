@@ -145,7 +145,9 @@ def test_known_image_rejection_can_retry(fixture_monitor, no_delivery):
     assert item["retry_at"] is not None
 
 
-def test_restore_fences_image_identity_without_blocking_other_machines(fixture_monitor):
+def test_restore_reruns_image_without_holding_its_machine(fixture_monitor):
+    """Owner, 2026-10-05: a Hub restart re-runs free work (it used to fence it `uncertain`, which
+    held the Mac for 30 minutes). The original is watched for adoption, see test_free_work_reroute."""
     batch, item, studio = image_attempt(fixture_monitor)
     item["studio_job_id"] = "worker-before-restart"
     ledger.save_batch(batch)
@@ -153,14 +155,13 @@ def test_restore_fences_image_identity_without_blocking_other_machines(fixture_m
     broker._busy.clear()
     broker.restore_batches()
     restored = broker.batches[batch["id"]]["items"][0]
-    assert restored["state"] == "uncertain"
-    assert restored["studio_job_id"] == "worker-before-restart"
+    assert restored["state"] == "queued"
+    assert restored["studio_job_id"] is None
     assert restored["tries"] == 1
-    assert restored["machine"] == studio["machine"]
-    assert broker.busy_machines() == {studio["machine"]}
-    # Replaying the original client request cannot create a new item. The
-    # uncertain item has no automatic or per-item manual retry transition.
-    assert not any(row["state"] == "queued" for row in broker.batches[batch["id"]]["items"])
+    assert broker.busy_machines() == set()
+    assert [row[3] for row in broker._restored_attempts] == ["worker-before-restart"]
+    # Still one item: the restart re-runs it, it does not add another.
+    assert len(broker.batches[batch["id"]]["items"]) == 1
 
 
 def test_replay_of_uncertain_image_request_cannot_submit_a_second_job(fixture_monitor):
@@ -178,7 +179,8 @@ def test_replay_of_uncertain_image_request_cannot_submit_a_second_job(fixture_mo
     replayed = broker.submit_batch(envelope)
     assert replayed == {"batch_id": accepted["batch_id"], "items": 1, "replayed": True}
     assert list(broker.batches) == [accepted["batch_id"]]
-    assert broker.batches[accepted["batch_id"]]["items"][0]["state"] == "uncertain"
+    # The restart re-ran the one item; the replay adds no second one.
+    assert [row["state"] for row in broker.batches[accepted["batch_id"]]["items"]] == ["queued"]
 
 
 def test_reconcile_keeps_missing_or_mismatched_original_uncertain(fixture_monitor):

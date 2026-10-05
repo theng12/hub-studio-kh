@@ -166,12 +166,11 @@ registry._flags_cache = None  # simulate a fresh Hub process reading disk
 assert registry.machine_enabled("node-a") is False
 assert broker.restore_batches() == 1
 item = broker.batches["pause-proof"]["items"][0]
-assert item["state"] == "uncertain"
-assert item["studio"] == "voice"
-assert item["machine"] == "node-a"
-assert item["studio_job_id"] == "voice-job-42"
+# The active work is re-run, not dropped (owner, 2026-10-05), and its original is kept for adoption.
+assert item["state"] == "queued"
+assert [(row[2], row[3]) for row in broker._restored_attempts] == [("voice", "voice-job-42")]
 assert broker._eligible_studios("voice", "pool") == []
-print("operator pause/restart proof: flag persisted, active identity preserved, admission paused")
+print("operator pause/restart proof: flag persisted, active work kept and re-queued, admission paused")
 '''
             env = os.environ.copy()
             env["STUDIOHUB_DATA_DIR"] = str(fixture["data"])
@@ -193,7 +192,7 @@ print("operator pause/restart proof: flag persisted, active identity preserved, 
             "operator pause/restart fixture failed:\nstdout:\n%s\nstderr:\n%s"
             % (completed.stdout, completed.stderr),
         )
-        self.assertIn("active identity preserved", completed.stdout)
+        self.assertIn("active work kept and re-queued", completed.stdout)
 
     @staticmethod
     def _wait_for(predicate, timeout: float, message: str):

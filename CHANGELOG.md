@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.149 — 2026-10-05 · A Hub restart re-runs the work it interrupted instead of parking it for recovery
+
+Branch `fix/restart-lost-free-work` off 0.6.148 a7fd296. On 2026-10-05 22:14:56 the Terranash-1600 controller's Hub process restarted
+(the app itself did not stop, so `last_stop` stayed at its 18:33 update). `restore_batches` fenced its five running Z-Image items
+`uncertain` although their nodes had finished all five (22:12:56-22:15:42): the Gateway parked the jobs as "Needs recovery"
+(UNKNOWN_OUTCOME) and `busy_machines()` held those five idle Macs until the 30-minute uncertain sweep, while new work queued.
+- **Running free work is re-run after a Hub restart, on any capable Mac (owner, 2026-10-05; extends the 2026-10-03 worker/node rule).**
+  `broker._rerun_after_restart` requeues every running Image, Music, Video and Voice item of a batch that is not being cancelled -
+  this Mac's own worker or a node alike - and no Mac is held for it. Voice takes a fresh client request id, as `_abandon_attempt` does.
+  The original is watched once its studio is back in the registry (`_watch_restored_attempts` -> `_watch_abandoned_attempt`, from the
+  dispatch loop): a finished original is adopted (the re-run, if one started, is cancelled); one still running is told to stop; one that
+  finishes after the re-run is ignored. The interrupted try stays spent: on its last of MAX_TRIES a restart ends the item `error` /
+  `HUB_RESTARTED` (published, so the Gateway reads a known failure) instead of a fence.
+- **Transcription likewise**: a packaged Hub re-queues a running Subtitle item after a restart (it was fenced `uncertain` with
+  `manual_action_required`); on its last try it ends `error` / `HUB_RESTARTED`.
+- Unchanged: an item whose batch is being cancelled keeps the cautious fence; cloud work never reaches the Hub (refused at the door).
+- Tests: `hub_regression/cases/test_free_work_reroute.py` (restart re-runs every modality on this Mac and on a node and holds no Mac;
+  a finished original is adopted with no POST; original-first and re-run-first both settle on the first result; two restarts in a
+  row re-run, a third ends `HUB_RESTARTED`; a cancel in flight stays fenced); `test_voice_durability` (the original voice job is adopted
+  by its own request id after a restart); the restart expectations in `test_image_uncertainty`, `test_music_durability`,
+  `test_hub_jobs`/`_hub_dispatch_proof` (Voice, Subtitle) and `test_startup_recovery` now expect a re-run.
+
 ## 0.6.148 — 2026-10-05 · Why a LAN copy fell back is recorded; an update no longer marks finished downloads interrupted
 
 Branch `fix/lan-share-followups` off 0.6.147 85a1344 (findings: `_orchestra/audit-20261001/lan-share/ROLLOUT-20261005.md`, Hub 4 and 5).

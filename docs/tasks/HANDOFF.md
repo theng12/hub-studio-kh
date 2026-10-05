@@ -3,7 +3,12 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.148** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.149** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.149 - a Hub restart re-runs the work it interrupted (`fix/restart-lost-free-work` off 0.6.148 a7fd296, 2026-10-05).**
+> `broker._rerun_after_restart` (from `restore_batches`) requeues running Image/Music/Video/Voice items instead of fencing them
+> `uncertain`; `_watch_restored_attempts` (dispatch loop) hands each original to `_watch_abandoned_attempt` to adopt or stop it.
+> Last try -> `error`/`HUB_RESTARTED`. Transcription's `restore_batches` requeues likewise. A cancel in flight keeps the fence.
 
 > **0.6.148 - why a LAN copy fell back is recorded; finished downloads survive an update (`fix/lan-share-followups` off 0.6.147 85a1344, 2026-10-05).**
 > Plain: "Copying a model between Macs now records why a copy fell back to the internet; finished downloads are no longer marked interrupted by an update".

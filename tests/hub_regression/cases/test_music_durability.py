@@ -146,7 +146,8 @@ def test_failed_music_cancel_after_acceptance_is_uncertain(fixture_monitor, monk
     assert studio["machine"] in broker.busy_machines()
 
 
-def test_restart_keeps_music_job_uncertain_and_fenced(fixture_monitor):
+def test_restart_reruns_music_job_and_watches_the_original(fixture_monitor):
+    """Owner, 2026-10-05: free work is re-run after a Hub restart instead of fenced `uncertain`."""
     batch, item, studio, accepted = music_attempt(fixture_monitor)
     item["studio_job_id"] = accepted["id"]
     ledger.save_batch(batch)
@@ -156,12 +157,11 @@ def test_restart_keeps_music_job_uncertain_and_fenced(fixture_monitor):
     assert broker.restore_batches() == 1
 
     restored = broker.batches[batch["id"]]["items"][0]
-    assert restored["state"] == "uncertain"
-    assert restored["studio_job_id"] == accepted["id"]
-    assert restored["studio"] == studio["id"]
-    assert restored["machine"] == studio["machine"]
+    assert restored["state"] == "queued"
+    assert restored["studio_job_id"] is None and restored["studio"] is None
     assert restored["retry_at"] is None
-    assert studio["machine"] in broker.busy_machines()
+    assert studio["machine"] not in broker.busy_machines()
+    assert [(row[2], row[3]) for row in broker._restored_attempts] == [(studio["id"], accepted["id"])]
 
 
 def test_reconcile_music_adopts_only_the_original_verified_wav(

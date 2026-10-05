@@ -368,7 +368,8 @@ class HubJobProofTests(unittest.TestCase):
             self.assertEqual(waited["items"][0]["state"], "queued")
             self.assertIn("execution requirements are not ready", waited["governor_note"])
 
-        # A persisted accepted Voice attempt is never silently retried after restart.
+        # A persisted accepted Voice attempt runs again after a restart under a fresh request id
+        # (owner, 2026-10-05), and the original is watched so a finished one is adopted.
         app = standalone.create_app(start_background=False)
         with TestClient(app) as client:
             response = client.post("/api/hub/jobs", json={"modality": "voice", "model": "fixture/voice",
@@ -379,8 +380,11 @@ class HubJobProofTests(unittest.TestCase):
             broker.batches.clear()
             broker.restore_batches()
             restored = ledger.load_batch(batch["id"])
-            self.assertEqual(restored["items"][0]["state"], "uncertain")
+            self.assertEqual(restored["items"][0]["state"], "queued")
             self.assertEqual(restored["items"][0]["tries"], 1)
+            self.assertTrue(restored["items"][0]["client_request_id"].endswith(":rerun-1"))
+            self.assertEqual([row[3] for row in broker._restored_attempts], ["accepted-before-restart"])
+            broker._restored_attempts.clear()
 
     def test_packaged_subtitle_is_independent_and_restored_work_stays_gated(self) -> None:
         _manifest("fixture-subtitle", "fixture/subtitle", "subtitle-mlx")
@@ -421,7 +425,9 @@ class HubJobProofTests(unittest.TestCase):
         self.assertIn("runtime, OS, or chip", batch["governor_note"])
         transcription_jobs.batches.clear()
 
-    def test_packaged_subtitle_running_attempt_is_not_replayed_after_restart(self) -> None:
+    def test_packaged_subtitle_running_attempt_is_rerun_after_restart(self) -> None:
+        # Owner, 2026-10-05: free work interrupted by a Hub restart runs again; it used to be fenced
+        # `uncertain` for a person, holding its Mac.
         input_path = _ROOT / "accepted-subtitle.wav"
         input_path.write_bytes(_AUDIO)
         batch = {"id": "accepted-subtitle", "idempotency_key": "accepted-subtitle-key",
@@ -435,13 +441,15 @@ class HubJobProofTests(unittest.TestCase):
         restored = transcription_jobs.batches[batch["id"]]["items"][0]
         self.assertEqual((restored["state"], restored["studio"], restored["studio_task_id"],
                           restored["tries"]),
-                         ("uncertain", "subtitle", "stt-accepted-subtitle-0", 1))
-        self.assertTrue(restored["manual_action_required"])
-        self.assertEqual(transcription_jobs.retry_batch(batch["id"])[1], 0)
-        self.assertEqual(transcription_jobs.summary(transcription_jobs.batches[batch["id"]])["status"],
-                         "uncertain")
-        self.assertEqual(asyncio.run(transcription_jobs.cancel_batch(batch["id"]))["items"][0]["state"],
-                         "uncertain")
+                         ("queued", None, None, 1))
+        self.assertFalse(restored.get("manual_action_required"))
+        # On its last try a restart ends it as a known failure instead of a fence.
+        restored.update(state="running", studio="subtitle", studio_task_id="stt-3", tries=3)
+        transcription_jobs._save(transcription_jobs.batches[batch["id"]])
+        transcription_jobs.batches.clear()
+        transcription_jobs.restore_batches()
+        restored = transcription_jobs.batches[batch["id"]]["items"][0]
+        self.assertEqual((restored["state"], restored["error_code"]), ("error", "HUB_RESTARTED"))
         transcription_jobs.batches.clear()
 
     def test_genstudio_subtitle_replay_precedes_current_model_readiness(self) -> None:
@@ -619,6 +627,8 @@ class HubJobProofTests(unittest.TestCase):
         asyncio.run(check())
 
     def test_uncertain_subtitle_holds_its_physical_machine_after_hub_restart(self) -> None:
+        # An item already fenced (a lost contact, not the restart: a restart re-runs running work)
+        # keeps holding its Mac across a restart.
         machine = "physical-node-a"
         broker.configure_monitor(SimpleNamespace(registry=[
             {"id": "subtitle", "modality": "transcription", "machine": "renamed-node", "local": True},
@@ -628,7 +638,7 @@ class HubJobProofTests(unittest.TestCase):
         batch = {"id": "fenced-subtitle", "idempotency_key": "fenced-subtitle-key",
                  "created_at": time.time(), "model": "fixture/subtitle", "cancelled": False,
                  "items": [{"index": 0, "item_id": "clip-1", "filename": "clip.wav",
-                            "input_path": str(input_path), "state": "running", "tries": 1,
+                            "input_path": str(input_path), "state": "uncertain", "tries": 1,
                             "studio": "subtitle", "machine": machine,
                             "studio_task_id": "stt-fenced-subtitle-0"}]}
         transcription_jobs._save(batch)

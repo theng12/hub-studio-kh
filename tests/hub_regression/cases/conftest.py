@@ -103,6 +103,8 @@ def reset_state() -> StudioMonitor:
     auth._login_failures.clear()
     broker.batches.clear()
     broker._busy.clear()
+    broker._restored_attempts.clear()
+    broker._restored_settled.clear()
     broker._maintenance.clear()
     broker._external_machine_leases.clear()
     broker._external_lane_turn.clear()

@@ -1428,11 +1428,81 @@ def voice_recovery_item(batch_id: str, item_index: int) -> tuple[dict, dict]:
     return batch, item
 
 
+#: Originals of attempts a Hub restart gave up on, waiting for their Mac to be in the registry so
+#: `_watch_abandoned_attempt` can adopt or stop them: (batch, item, studio id, job id, body, t_start,
+#: restored at). And batches a restart settled, still to be published by `_maybe_finish`.
+_restored_attempts: list[tuple] = []
+_restored_settled: list[dict] = []
+
+
+def _rerun_after_restart(b: dict, it: dict) -> bool:
+    """Free work a Hub restart interrupted runs again; it is never left `uncertain` (owner, 2026-10-05).
+
+    The 2026-10-03 rule (a worker or Mac that dies mid-job re-runs its item) did not cover the Hub
+    itself: on 2026-10-05 a controller restart fenced five Z-Image items whose nodes had already
+    finished them, held those five Macs for the 30-minute sweep and parked the Gateway jobs as
+    "Needs recovery". All Hub work is local and free (cloud is refused at the door), so it is
+    requeued for any capable Mac, this one included, as `_abandon_attempt` does. The original is
+    watched once its Mac is back in the registry (`_watch_restored_attempts`): adopted if it
+    finished first (the re-run is then cancelled), told to stop if it is still running, ignored if
+    the re-run finished first. The try it spent stays spent: an item that has used MAX_TRIES (a job
+    that takes the Hub down every time) ends `error` / HUB_RESTARTED instead, so the Gateway gets a
+    known failure and no Mac is held. A cancel in flight keeps its own path.
+    """
+    job_id = it.get("studio_job_id")
+    if (b.get("cancelled") or it["state"] != "running"
+            or b.get("modality") not in RECEIPT_DURABLE_MODALITIES):
+        return False
+    if job_id and it.get("studio"):
+        _, prompt_field, _ = MODALITY[b["modality"]]
+        body = {**(b.get("shared_params") or {}), **(it.get("params") or {}),
+                "repo": b.get("model"), prompt_field: it.get("prompt")}
+        if it.get("seed") is not None:
+            body["seed"] = it["seed"]
+        if b.get("modality") == "voice":   # the id the original was sent with, as `_run_item` built it
+            body["client_request_id"] = (it.get("client_request_id")
+                                         or f"studiohub:{b['id']}:{it['index']}")
+        _restored_attempts.append((b, it, str(it["studio"]), str(job_id), body,
+                                   float(it.get("run_started") or b.get("created_at") or 0),
+                                   time.time()))
+    if int(it.get("tries") or 0) >= MAX_TRIES:
+        now = time.time()
+        it.update(state="error", error_code="HUB_RESTARTED", retry_at=None, finished_at=now,
+                  last_progress_at=now,
+                  error=f"the Hub restarted while this was running, on its last of {MAX_TRIES} tries")
+        _restored_settled.append(b)
+        return True
+    it.update(state="queued", studio=None, studio_job_id=None, retry_at=None,
+              error="the Hub restarted while this was running; running it again")
+    if b.get("modality") == "voice":
+        it["reruns"] = int(it.get("reruns") or 0) + 1
+        it["client_request_id"] = f"studiohub:{b['id']}:{it['index']}:rerun-{it['reruns']}"
+    return True
+
+
+async def _watch_restored_attempts(client: httpx.AsyncClient) -> None:
+    """Publish what a restart settled, and hand each original it gave up on to
+    `_watch_abandoned_attempt` once its studio is in the registry again."""
+    while _restored_settled:
+        await _maybe_finish(client, _restored_settled.pop())
+    if not _restored_attempts:
+        return
+    by_id = {row.get("id"): row for row in _monitor().registry}
+    for entry in list(_restored_attempts):
+        b, item, studio_id, job_id, body, t_start, restored_at = entry
+        studio = by_id.get(studio_id)
+        if studio is None and time.time() - restored_at < ABANDONED_WATCH_S:
+            continue  # its Mac has not answered the registry yet
+        _restored_attempts.remove(entry)
+        if studio is not None:
+            _watch_abandoned_attempt(client, b, item, studio, job_id, body, t_start)
+
+
 def restore_batches():
     """Reload unfinished batches after a Hub restart.
 
-    Accepted Voice, Image, and Music jobs remain fenced after restart. Other
-    modalities retain their historic retry behavior.
+    Running work runs again (`_rerun_after_restart`); a Voice, Image, Music or Video item whose
+    cancel was in flight stays fenced. Other modalities retain their historic retry behavior.
     """
     for b in ledger.load_unfinished_batches():
         if _expire_genstudio_batch(b):
@@ -1440,7 +1510,9 @@ def restore_batches():
             ledger.save_batch(b)
             continue
         for it in b["items"]:
-            if it["state"] in {"running", "cancel_requested"} and b.get("modality") == "voice":
+            if _rerun_after_restart(b, it):
+                pass
+            elif it["state"] in {"running", "cancel_requested"} and b.get("modality") == "voice":
                 _mark_voice_uncertain(
                     it,
                     "Hub restarted while Voice Studio work was active; "
@@ -3746,6 +3818,7 @@ async def _dispatch_loop():
     last_sweep = 0.0
     while True:
         try:
+            await _watch_restored_attempts(client)
             sweep_now = time.time()
             if sweep_now - last_sweep >= 60:
                 last_sweep = sweep_now

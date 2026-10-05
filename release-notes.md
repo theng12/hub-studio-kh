@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.149 - 2026-10-05
+
+### Jobs
+
+**When a Mac's Studio Hub restarts in the middle of a job, the job now runs again on a free Mac by itself instead of needing recovery. If the original Mac had already finished it, that result is used. The Macs it was using are free again straight away.**
+
 ## 0.6.148 - 2026-10-05
 
 ### Models

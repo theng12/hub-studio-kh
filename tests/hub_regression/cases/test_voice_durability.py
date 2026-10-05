@@ -563,9 +563,11 @@ def test_voice_dispatch_is_durable_before_worker_task_starts(
     assert item["tries"] == 0
 
 
-def test_restart_reconciles_exact_voice_job_without_another_post(
+def test_restart_adopts_the_exact_finished_voice_job_without_another_post(
     fixture_monitor, monkeypatch
 ):
+    """Owner, 2026-10-05: a Hub restart re-runs free work instead of fencing it, and the original
+    (watched by its own request id) is adopted when it had finished - with no second POST."""
     batch, item, studio, accepted = voice_attempt(fixture_monitor)
     item.update(
         studio_job_id=accepted["id"],
@@ -574,38 +576,42 @@ def test_restart_reconciles_exact_voice_job_without_another_post(
         model_revision=accepted["model_revision"],
         runtime_revision=accepted["runtime_revision"],
     )
+    finished = completed_voice_job(batch, item, accepted)
     ledger.save_batch(batch)
     broker.batches.clear()
     broker._busy.clear()
     assert broker.restore_batches() == 1
     restored = broker.batches[batch["id"]]["items"][0]
-    assert restored["state"] == "uncertain"
-    assert restored["studio_job_id"] == accepted["id"]
+    assert restored["state"] == "queued"
+    assert restored["client_request_id"] == f"studiohub:{batch['id']}:0:rerun-1"
+    assert studio["machine"] not in broker.busy_machines()
 
     adopted: list[str] = []
 
     async def adopt(client, received_batch, received_item, received_studio,
                     job, body, started_at, *, recovery=False):
-        assert recovery is True
         assert received_item["studio_job_id"] == job["id"]
+        assert body["client_request_id"] == f"studiohub:{batch['id']}:0"
         adopted.append(job["id"])
         received_item["state"] = "done"
 
-    async def noop(*args):
+    async def noop(*args, **kwargs):
         return None
 
-    finished = completed_voice_job(batch, item, accepted)
     client = WorkerClient(polled=finished)
     monkeypatch.setattr(broker, "_record_worker_success", adopt)
     monkeypatch.setattr(broker, "_post_item_webhook", noop)
     monkeypatch.setattr(broker, "_maybe_finish", noop)
 
-    result = asyncio.run(
-        broker.reconcile_voice_item(batch["id"], item["index"], client=client)
-    )
+    async def watch():
+        await broker._watch_restored_attempts(client)
+        await asyncio.gather(*broker._abandoned_peer_cancels)
 
-    assert result["reconciled"] is True
+    asyncio.run(watch())
+
     assert adopted == [accepted["id"]]
+    assert restored["state"] == "done"
+    assert restored["client_request_id"] == f"studiohub:{batch['id']}:0", "the original's own id"
     assert client.posts == 0
     assert client.gets == 1
 
