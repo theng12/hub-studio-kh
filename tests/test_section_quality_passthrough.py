@@ -50,6 +50,22 @@ class SectionQualityPassthroughTests(unittest.TestCase):
         broker._record_worker_section_quality(item, {"section_quality": None})
         self.assertNotIn("section_quality", item)
 
+    def test_the_section_timeline_passes_as_numbers_only(self) -> None:
+        item: dict = {}
+        row = {"section": 1, "start_s": 0.08, "end_s": 14.2, "text_start": 0, "text_end": 231}
+        broker._record_worker_section_quality(item, {"section_quality": {
+            "revision": "r", "sections": [],
+            "timeline": [{**row, "text": "the customer's script"}, {**row, "section": 2}]}})
+        self.assertEqual(item["section_quality"]["timeline"], [row, {**row, "section": 2}])
+
+    def test_a_timeline_with_a_missing_number_is_dropped_whole(self) -> None:
+        item: dict = {}
+        broker._record_worker_section_quality(item, {"section_quality": {
+            "revision": "r", "sections": [],
+            "timeline": [{"section": 1, "start_s": 0.0, "end_s": float("nan"), "text_start": 0,
+                          "text_end": 5}]}})
+        self.assertNotIn("timeline", item["section_quality"])
+
     def test_a_retried_attempt_does_not_keep_the_previous_workers_evidence(self) -> None:
         self.assertIn("section_quality", broker._ATTEMPT_EVIDENCE_FIELDS)
 

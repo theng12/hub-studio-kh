@@ -168,3 +168,39 @@ def test_sentence_and_paragraph_pauses_follow_the_text():
     chunks = ["The river was quiet.", "The mill stood still.", "Mara listened."]
     # Owner decision 2026-10-03: one rule for every family (2026-10-04: 1.0 s after a sentence, 1.5 s at a paragraph).
     assert generation._production_join_pauses_s(text, chunks, 1.0) == pytest.approx([1.00, 1.50])
+
+
+def test_the_join_returns_where_each_sections_speech_sits(tmp_path):
+    """The section timeline (Story times script subtitles by it): each span starts and ends at the
+    section's kept speech, and the gap between two spans is the designed pause."""
+    sections = [_section(2.0, lead_s=0.2, tail_s=1.2), _section(1.5, lead_s=0.7, tail_s=0.5),
+                _section(1.0, lead_s=1.1, tail_s=0.0)]
+    paths = []
+    for i, audio in enumerate(sections):
+        paths.append(tmp_path / f"s{i}.wav")
+        sf.write(paths[-1], audio, SR, subtype="FLOAT")
+    generation._levelled_sections = lambda paths, *a, **k: (list(paths), False)
+    spans = generation._join_long_form_wavs(paths, tmp_path / "joined.wav", "test-family",
+                                            pause_sequence_s=[1.0, 1.5])
+    runs = _speech_runs(sf.read(tmp_path / "joined.wav", dtype="float32")[0])
+    assert len(spans) == 3
+    for (start, end), (run_start, run_end) in zip(spans, runs):
+        assert abs(start - run_start) <= 0.03 and abs(end - run_end) <= 0.03
+    assert spans[1][0] - spans[0][1] == pytest.approx(1.0, abs=0.002)
+    assert spans[2][0] - spans[1][1] == pytest.approx(1.5, abs=0.002)
+
+
+def test_the_timeline_names_each_sections_text_and_follows_the_tempo():
+    class Job:
+        section_quality = None
+        params = {}
+    job = Job()
+    text = "One sentence here.  Two sentence\nthere.\n\nThree."
+    chunks = ["One sentence here.", "Two sentence there.", "Three."]
+    generation._record_section_timeline(job, text, chunks, [(0.1, 1.0), (2.0, 3.0), (4.5, 5.0)])
+    rows = job.section_quality["timeline"]
+    assert [text[r["text_start"]:r["text_end"]] for r in rows] == [
+        "One sentence here.", "Two sentence\nthere.", "Three."]
+    assert job.section_quality["sections"] == []
+    generation._scale_section_timeline(job, 2.0)
+    assert [(r["start_s"], r["end_s"]) for r in rows] == [(0.05, 0.5), (1.0, 1.5), (2.25, 2.5)]

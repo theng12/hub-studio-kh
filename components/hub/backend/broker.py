@@ -4211,6 +4211,7 @@ _SECTION_QUALITY_NUMBERS = frozenset({
     "max_duration_s", "min_voiced_s", "words_expected", "words_heard", "word_overlap",
     "check_seconds", "longest_pause_s", "max_pause_s", "longest_missing_run",
 })
+_SECTION_TIMELINE_NUMBERS = ("section", "start_s", "end_s", "text_start", "text_end")
 _SECTION_QUALITY_WORDS = {
     "transcribe_back": frozenset({"whisper", "unavailable", "memory", "script", "qwen_clone_gate"}),
     "text_check": frozenset({"advisory"}),
@@ -4239,6 +4240,14 @@ def _record_worker_section_quality(item: dict, job: dict) -> None:
                 clean[key] = value
         sections.append(clean)
     item["section_quality"] = {"revision": str(raw.get("revision") or "")[:80], "sections": sections}
+    # Where each section sits in the delivered audio and in the request's text (numbers only), so a
+    # caller can time subtitles from its own script.
+    timeline = [{key: row[key] for key in _SECTION_TIMELINE_NUMBERS
+                 if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool)
+                 and math.isfinite(row[key])}
+                for row in (raw.get("timeline") or [])[:500] if isinstance(row, dict)]
+    if timeline and all(len(row) == len(_SECTION_TIMELINE_NUMBERS) for row in timeline):
+        item["section_quality"]["timeline"] = timeline
 
 
 async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict):
