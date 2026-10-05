@@ -97,7 +97,14 @@ MODALITY_DEADLINE_FLOOR_S: dict[str, float] = {
     # 17 minutes is an observation of a failure, not a clean measurement, and 1.76x is inference.
     # The right end state is to measure a real voice part and derive this, as Z-Image's 8 GB floor
     # was derived from the owner's run.
-    "voice": 1800.0,
+    #
+    # Raised 1,800 -> 2,700 s on 2026-10-05, now on a clean measurement: the night-atlas run
+    # (2,311 TTS parts, 2026-10-04/05) had its slowest *successful* 1,500-character Breeze part take
+    # 1,747 s on an M1 16 GB (97% of the old wall), and 5 parts died at exactly 1,800 s on the same
+    # class, pushed over by section re-renders (avg 1.37, max 3.47 renders per delivered section)
+    # and model/Whisper load. 2,700 is 1.55x that measured tail. Stall detection is unchanged, so
+    # a quiet worker is still caught in minutes. The Gateway scales longer parts per Mac on top.
+    "voice": 2700.0,
 }
 
 

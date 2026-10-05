@@ -120,7 +120,7 @@ def test_a_misspelt_name_and_a_word_or_two_lost_are_not_a_mismatch():
     matched, total = tts_quality.heard_words(text, "Alara felt a wave of gratitude for her "
                                                    "reliable companion, the oak frame.")
     assert total - matched == 1          # "Alara" counts, "dark" was lost
-    # Two words may be lost on any section; beyond that, at most 10% of its words.
+    # Two words may be lost on any section; beyond that, at most 15% of its words.
     metrics = {"duration_s": 7.0, "dc_offset": 0.0, "voiced_s": 4.5, "voiced_ratio": 0.64}
     tts_quality.check_section(text, "breeze-tts", metrics, heard="Alara felt a wave of "
                               "gratitude for her companion, the oak frame.")
@@ -288,3 +288,22 @@ def test_whisper_is_not_loaded_beside_the_model_when_memory_is_short(tmp_path, m
     manager._dispatch_txt2speech(job, tmp_path / "out.wav")
 
     assert job.section_quality["sections"][0]["transcribe_back"] == "memory"
+
+
+def test_a_short_section_whisper_heard_most_of_passes_but_a_dropped_clause_still_fails():
+    # night-atlas 2026-10-05: a 27-word section, same words on 3 Macs x 4 seeds, heard 23-24/27
+    # with the misses scattered (run <= 2). The 10% share allowed 2 and failed the part.
+    text = ("The old lighthouse keeper climbed the winding stairs each evening, carrying a small "
+            "brass lamp and a worn notebook full of the names of all passing ships.")
+    metrics = {"duration_s": 14.0, "dc_offset": 0.0, "voiced_s": 9.0, "voiced_ratio": 0.64}
+    heard = ("old lighthouse keeper climbed winding stairs each evening, carrying a small "
+             "brass lamp and a worn notebook full of the names of passing ships.")
+    for lost, words in ((heard, 24), (heard.replace(" a worn", " worn"), 23)):
+        evidence = tts_quality.check_section(text, "breeze-tts", metrics, heard=lost)
+        assert (evidence["words_heard"], evidence["words_expected"]) == (words, 27), evidence
+        assert evidence["accepted"] is True and evidence["longest_missing_run"] <= 2
+    # Four words lost as one clause is still a dropped clause.
+    clause = text.replace("climbed the winding stairs ", "")
+    with pytest.raises(tts_quality.SectionQualityError) as failed:
+        tts_quality.check_section(text, "breeze-tts", metrics, heard=clause)
+    assert failed.value.evidence["longest_missing_run"] == 4

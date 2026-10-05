@@ -481,7 +481,7 @@ def for_model(model: catalog.ModelEntry,
 
 # How long one request should take on the slowest Mac allowed to run the model. The Gateway gives
 # each Hub-recommended chunk this same budget (`TTS_CHUNK_BUDGET_S`), and the Hub's own voice
-# deadline (1,800 s) is twice it.
+# deadline (2,700 s, `standalone.MODALITY_DEADLINE_FLOOR_S`) is three times it.
 REQUEST_BUDGET_SECONDS = 900.0
 # One request size for every voice model (owner decision 2026-10-03). It is Breeze's measured
 # slowest-Mac size (900 s / RTF 5.13 on an M1 16 GB x 8.58 characters per audio second = 1,505,
