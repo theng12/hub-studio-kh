@@ -1253,6 +1253,24 @@ class LanShareDownloadTests(unittest.TestCase):
         packages.download_package(self.manifest, self.libraries['lan'], peer=base, used=used)
         self.assertEqual(used, {'internet'})
 
+    def test_why_a_copy_fell_back_reaches_the_running_run(self):
+        """0.6.148: the peer's error is printed the moment the copy drops it, and the run shows it."""
+        peer = self.peer(self.files)
+        base = peer.url_base
+        peer.close()
+        out = io.StringIO()
+        with redirect_stdout(out):
+            packages.download_package(self.manifest, self.libraries['lan'], peer=base, used=set())
+        self.assertNotIn('/tok/', out.getvalue(), 'the share token never reaches the log')
+        data = Path(self.temp.name) / 'data'
+        (data / 'model-download-runs' / 'r').mkdir(parents=True)
+        (data / 'model-download-runs' / 'r' / 'output.log').write_text(out.getvalue())
+        from components.hub import model_downloads
+        with mock.patch.dict(os.environ, {'STUDIOHUB_DATA_DIR': str(data)}):
+            run = model_downloads._public({'id': 'r', 'state': 'running', 'source': 'lan'})
+        self.assertEqual(run['source_used'], 'internet')
+        self.assertIn('Error', run['lan_error'])
+
     def test_a_peer_url_must_be_plain_http_s_without_credentials(self):
         for bad in ('file:///etc', 'http://user:pw@10.0.0.2/x', 'http://10.0.0.2/x?y=1', 'ftp://h/x'):
             with self.assertRaises(packages.PackageError):

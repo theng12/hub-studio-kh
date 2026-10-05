@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.148 - 2026-10-05
+
+### Models
+
+**Copying a model between Macs now records why a copy fell back to the internet; finished downloads are no longer marked interrupted by an update.**
+
 ## 0.6.147 - 2026-10-05
 
 ### Models

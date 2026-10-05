@@ -1539,15 +1539,22 @@ def _download_file(entry, staged, urls, root, peer=None):
                     _check_stream(stream, entry)
                 os.replace(partial, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
                 os.fsync(parent_fd)
+                if lan:
+                    peer['copied'] = True
                 return 'lan' if lan else 'internet'
             except PackageError:
                 try:
                     os.unlink(partial, dir_fd=parent_fd)
                 except FileNotFoundError:
                     pass
-            except (OSError, urllib.error.URLError, http.client.HTTPException):
+            except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
                 # A later explicit retry resumes this file; completed files remain verified.
                 if lan:
+                    # The run reads this line while it runs (model_downloads._lan_fallback): why the copy
+                    # stopped, in one line, never the token-bearing share URL.
+                    reason = ' '.join(str(error).replace(peer['url_base'], '<share>').split())
+                    print(f"LAN copy failed, using the internet ({'mixed' if peer.get('copied') else 'internet'}): "
+                          f"{type(error).__name__}: {reason}", flush=True)
                     peer['url_base'] = None
                 continue
     raise PackageError(f'Download incomplete or invalid: {entry["path"]}')

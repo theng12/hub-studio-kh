@@ -57,8 +57,13 @@ assert not state or state.startswith("Z"), "owned downloader survived cancellati
 # A fresh owned child is synchronously reaped at Hub shutdown.
 shutdown_manifest={**manifest,"package_id":"fixture-shutdown","model_id":"fixture/shutdown","revision":"c"*40}
 second=model_downloads.start(package_id="fixture-shutdown", manifest=shutdown_manifest, catalog={"fixture-shutdown":shutdown_manifest}, library=library, sources=None)
+# A run that already finished (its child exited 0, nobody asked since) stays done through an update's stop.
+other=root/"models2"; other.mkdir(); model_packages.import_folder(manifest, source, other)
+finished=model_downloads.start(package_id="fixture", manifest=manifest, catalog={"fixture":manifest}, library=other, sources={})
+model_downloads._processes[finished["id"]].wait(timeout=10)
 model_downloads.shutdown()
 assert model_downloads.status(second["id"])["state"] == "interrupted"
+assert model_downloads.status(finished["id"])["state"] == "done", model_downloads.status(finished["id"])
 # Kill the actual owner only after its watcher and uncooperative child are
 # ready. The watcher must run its five-second TERM/KILL branch on owner loss.
 watcherfile=root/"watcher.pid"; readyfile=root/"watcher-child.pid"

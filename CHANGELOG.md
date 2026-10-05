@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.148 — 2026-10-05 · Why a LAN copy fell back is recorded; an update no longer marks finished downloads interrupted
+
+Branch `fix/lan-share-followups` off 0.6.147 85a1344 (findings: `_orchestra/audit-20261001/lan-share/ROLLOUT-20261005.md`, Hub 4 and 5).
+- **Copying a model between Macs now records why a copy fell back to the internet.** `model_packages._download_file` swallowed the peer's
+  error when it dropped the peer (both Shops Lite iMacs fell back on 2026-10-05 with no reason anywhere). It now prints one line the moment
+  it happens - `LAN copy failed, using the internet (internet|mixed): <ErrorType>: <reason>` (share URL masked) - and
+  `model_downloads._public` reads it, so a LAN run shows `lan_error` and `source_used: "internet"`/`"mixed"` **while it is still running**
+  (a finished run keeps the `source_used` of its closing JSON). Gateway 0.2.126 uses it to relabel the row and count it as the network's
+  one internet download. `_source_used` reads the JSON after that line.
+- **Finished downloads are no longer marked interrupted by an update.** `model_downloads.shutdown()` marked every tracked run `interrupted`
+  with the stop's exit code, including runs whose downloader had already exited 0 (1301/1302 read `interrupted, exit_code 0` with the model
+  cached). A child that has already exited is now recorded as it ended (`done`/`error`, with `source_used`); only live ones are stopped.
+- Tests: `test_model_downloads.py` (a finished run stays `done` through shutdown), `test_model_packages.py`
+  (`test_why_a_copy_fell_back_reaches_the_running_run`).
+
 ## 0.6.147 — 2026-10-05 · Phonon-2 loads its real weights; a test transcription on one chosen Mac
 
 Branch `fix/phonon2-nzrow` off 0.6.146 a58475d.

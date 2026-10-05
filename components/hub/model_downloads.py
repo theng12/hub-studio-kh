@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -82,7 +83,24 @@ def _public(run: dict) -> dict:
         out["bytes_done"] = _dir_bytes(run["staging"])
     if run.get("state") in {"error", "interrupted"}:
         out["error_tail"] = _error_tail(run["id"])
+    if run.get("source") == "lan" and (fell := _lan_fallback(run["id"])):
+        out.setdefault("source_used", fell[0])   # a finished run keeps what its closing JSON said
+        out["lan_error"] = fell[1]
     return out
+
+
+_LAN_FAILED = re.compile(r"^LAN copy failed, using the internet \((mixed|internet)\): (.*)$", re.M)
+
+
+def _lan_fallback(run_id: str) -> tuple[str, str] | None:
+    """`(source_used, reason)` once a LAN copy has dropped its peer for the internet: the downloader
+    prints that line the moment it happens, so a running copy already shows it."""
+    try:
+        text = (data_dir() / "model-download-runs" / run_id / "output.log").read_text(errors="replace")
+    except OSError:
+        return None
+    match = _LAN_FAILED.search(text)
+    return (match[1], match[2]) if match else None
 
 
 def _source_used(run_id: str) -> str | None:
@@ -90,7 +108,7 @@ def _source_used(run_id: str) -> str | None:
     closing JSON says. None when it fetched nothing (already installed) or said nothing readable."""
     try:
         text = (data_dir() / "model-download-runs" / run_id / "output.log").read_text(errors="replace")
-        return json.loads(text[text.index("{"):]).get("source_used")
+        return json.loads(text[text.find("\n{") + 1:]).get("source_used")   # after any LAN-fallback line
     except (OSError, ValueError, AttributeError):
         return None
 
@@ -272,6 +290,9 @@ def shutdown() -> None:
         value = _read()
         changed = False
         for run_id, process in list(_processes.items()):
+            if process.poll() is not None:   # it finished before the stop: keep what it did (done/error)
+                changed |= _mark_exited(value, run_id, process)
+                continue
             exit_code = _stop_owned(run_id, process)
             run = value["runs"].get(run_id)
             if run and run.get("state") == "running":

@@ -3,7 +3,15 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.147** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.148** (newest block first; the rest of this line and the blocks under it are older).
+
+> **0.6.148 - why a LAN copy fell back is recorded; finished downloads survive an update (`fix/lan-share-followups` off 0.6.147 85a1344, 2026-10-05).**
+> Plain: "Copying a model between Macs now records why a copy fell back to the internet; finished downloads are no longer marked interrupted by an update".
+> The downloader prints `LAN copy failed, using the internet (internet|mixed): <reason>` when it drops the peer; a LAN run's status carries `lan_error` and
+> `source_used` from that moment (`model_downloads._lan_fallback`). `shutdown()` records an already-exited child as it ended instead of `interrupted`.
+> Gateway 0.2.126 relabels the row and counts it as the network's internet download. Per-release script
+> `_orchestra/audit-20261001/release-0148/prepare-kit-0148.sh`; gate numbers, DMG and checksum in `_orchestra/audit-20261001/release-0148/`.
+> Not installed / not on the drives / not published until the coordinator does it.
 
 > **0.6.147 - Phonon-2 loads its real weights; admin test transcription on one chosen Mac (`fix/phonon2-nzrow` off 0.6.146 a58475d, 2026-10-05).**
 > Plain: "Phonon-2 (optional English transcription) now loads its real weights correctly; still in testing, Whisper stays the default".
