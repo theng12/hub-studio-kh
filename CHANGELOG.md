@@ -12,6 +12,8 @@ Branch `fix/lan-share-followups` off 0.6.147 85a1344 (findings: `_orchestra/audi
 - **Finished downloads are no longer marked interrupted by an update.** `model_downloads.shutdown()` marked every tracked run `interrupted`
   with the stop's exit code, including runs whose downloader had already exited 0 (1301/1302 read `interrupted, exit_code 0` with the model
   cached). A child that has already exited is now recorded as it ended (`done`/`error`, with `source_used`); only live ones are stopped.
+  `_stop_owned`'s final group SIGKILL also tolerates macOS's EPERM for a group holding only a zombie (it raised out of `shutdown()`,
+  leaving later runs unstopped; seen 1 in 6 runs of the lifecycle test once a downloader child had started).
 - Tests: `test_model_downloads.py` (a finished run stays `done` through shutdown), `test_model_packages.py`
   (`test_why_a_copy_fell_back_reaches_the_running_run`).
 

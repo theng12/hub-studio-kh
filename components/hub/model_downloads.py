@@ -263,10 +263,11 @@ def _stop_owned(run_id: str, process: subprocess.Popen) -> int | None:
         return process.wait(timeout=5)
     finally:
         # The wrapper can exit on TERM while its downloader ignores it. The
-        # child still shares this owner-created session, so reap the group.
+        # child still shares this owner-created session, so reap the group. macOS answers EPERM when
+        # the group holds only a zombie (the downloader died with the wrapper and awaits its reaper).
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
         _processes.pop(run_id, None)
 
