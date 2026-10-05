@@ -41,6 +41,12 @@ class DeadlineIsPerGeneratorTests(unittest.TestCase):
                 f"video's deadline must exceed {modality}'s — a video job is minutes-to-an-hour "
                 f"and {modality} is seconds-to-minutes")
 
+    def test_voice_covers_the_measured_slowest_mac_tail(self) -> None:
+        """night-atlas 2026-10-05: the slowest successful 1,500-character Breeze part took 1,747 s
+        on an M1 16 GB, and 5 parts died at the old 1,800 s wall. 2,700 s is 1.55x that tail."""
+        self.assertEqual(standalone.deadline_floor_seconds("voice"), 2700.0)
+        self.assertGreaterEqual(standalone.deadline_floor_seconds("voice"), 1.5 * 1747)
+
     def test_an_unmeasured_lane_gets_the_base_floor_and_nothing_more(self) -> None:
         """A lane with no measurement has no evidence to justify more than the floor."""
         self.assertEqual(standalone.deadline_floor_seconds("transcription"),
