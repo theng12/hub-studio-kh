@@ -2422,7 +2422,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             if sources is not None and not isinstance(sources, dict):
                 raise ValueError("sources must be a map of model paths to HTTPS mirrors")
             return model_downloads.start(package_id=package_id, manifest=manifest,
-                                         catalog=catalog, library=_model_library(), sources=sources)
+                                         catalog=catalog, library=_model_library(), sources=sources,
+                                         peer=_peer_source(body.get("source"), manifest))
         except model_downloads.InsufficientDiskSpace as exc:
             # 507, like the output-storage refusal: the disk is the reason, not the request.
             raise HTTPException(507, str(exc)) from exc
@@ -2430,6 +2431,19 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(404, "unknown model package") from exc
         except (OSError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
+
+    def _peer_source(source: Any, manifest: dict[str, Any]) -> str | None:
+        """The LAN share another Mac made of this package (its share route's `share` object), as
+        the URL the downloader tries first. A share of a different revision is not used: the
+        download then comes from the internet, as it would with no share at all."""
+        from components import model_packages
+        if source is None:
+            return None
+        if not isinstance(source, dict) or not isinstance(source.get("url_base"), str):
+            raise ValueError("source must be another Mac's model share: {url_base, token, files, revision}")
+        if source.get("revision") not in (None, manifest.get("revision")):
+            return None
+        return model_packages.peer_base(source["url_base"])
 
     _downloads_shown: set[str] = set()
 
@@ -2478,14 +2492,21 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         from .backend import fleet_nodes as fleet
         actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
         wanted = node_id.strip().lower()
+        # Optional `{"source": <a share from another Mac>}` (0.6.146): copy over the LAN first.
+        try:
+            body = await request.json() if await request.body() else {}
+        except ValueError:
+            body = {}
+        source = body.get("source") if isinstance(body, dict) else None
         if wanted not in ("local", fleet.this_machine()["id"].lower()):
             if control_plane.load_settings().get("role") != "controller":
                 raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
             startup_control.audit("model_download_relay", {"node": wanted, "package": package_id,
-                                                           "actor": actor})
+                                                           "actor": actor, "lan": source is not None})
             try:
-                return JSONResponse(await fleet.relay_model(wanted, "POST",
-                                                            f"/model-packages/{package_id}/download"))
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "POST", f"/model-packages/{package_id}/download",
+                    payload={"source": source} if source is not None else None))
             except fleet.StartupRelayError as error:
                 return JSONResponse(error.body, status_code=error.status)
         try:
@@ -2494,7 +2515,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 raise HTTPException(404, "unknown model package")
             _shelved_refusal(manifest)
             _memory_refusal(manifest)
-            run = download_model_package(package_id, {})
+            run = download_model_package(package_id, {"source": source})
         except (OSError, ValueError) as exc:
             run, refusal = None, HTTPException(409, str(exc))
         except HTTPException as exc:
@@ -2506,6 +2527,84 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             return JSONResponse({"ok": False, "code": _MODEL_REFUSAL_CODES.get(refusal.status_code, "REFUSED"),
                                  "detail": refusal.detail}, status_code=refusal.status_code)
         return JSONResponse({"ok": True, "node": wanted, "run": run})
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}/share")
+    async def fleet_node_model_share(node_id: str, package_id: str, request: Request) -> JSONResponse:
+        """Let another Mac copy this package from a Mac in this group over the LAN (0.6.146).
+
+        Answers a time-limited, read-only token for the one revision installed and verified on that
+        Mac, and the URL it is served under - built from the address this request reached the Mac
+        at (the controller's own address for it, for a relayed share). Refused for a package that
+        is not installed and verified there. Audited here and, for a node, again on the node.
+        """
+        from components import model_packages
+        from . import model_share
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            startup_control.audit("model_share_relay", {"node": wanted, "package": package_id,
+                                                        "actor": actor})
+            try:
+                return JSONResponse(await fleet.relay_model(wanted, "POST",
+                                                            f"/model-packages/{package_id}/share"))
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+        catalog = _model_catalog()
+        manifest = catalog.get(package_id)
+        if manifest is None or manifest.get(_MANIFEST_ERROR):
+            return JSONResponse({"ok": False, "code": "UNKNOWN_PACKAGE",
+                                 "detail": "unknown model package"}, status_code=404)
+        try:
+            files = model_packages.shared_files(manifest, _model_library(), catalog=catalog)
+        except (OSError, ValueError) as exc:
+            startup_control.audit("model_share", {"package": package_id, "actor": actor,
+                                                  "refused": str(exc)[:200]})
+            return JSONResponse({"ok": False, "code": "NOT_VERIFIED",
+                                 "detail": f"This Mac cannot share {package_id}: {exc}"}, status_code=409)
+        token, expires_at = model_share.create(package_id, manifest["revision"], files)
+        startup_control.audit("model_share", {"package": package_id, "actor": actor,
+                                              "revision": manifest["revision"]})
+        return JSONResponse({"ok": True, "node": wanted, "share": {
+            "url_base": f"{str(request.base_url).rstrip('/')}{model_share.PREFIX}{token}/files",
+            "token": token, "expires_at": expires_at, "revision": manifest["revision"],
+            "files": [{"path": e["path"], "bytes": e["size"], "sha256": e["sha256"]}
+                      for e in manifest["files"]]}})
+
+    class _ShareTransfer(FileResponse):
+        """A shared model file; frees its transfer slot when the response ends, however it ends."""
+
+        async def __call__(self, scope, receive, send) -> None:
+            from . import model_share
+            try:
+                await super().__call__(scope, receive, send)
+            finally:
+                model_share.release()
+
+    @app.api_route("/api/hub/model-share/{token}/files/{path:path}", methods=["GET", "HEAD"])
+    def serve_model_share(token: str, path: str, request: Request) -> Response:
+        """One file of a LAN share: Range-capable, identity-encoded, only the shared package's own
+        files (anything else - another path, a traversal, an expired token - is the same 404)."""
+        from . import model_share
+        found = model_share.file_for(token, path)
+        if found is None:
+            raise HTTPException(404, "no such shared model file")
+        share, target = found
+        if not model_share.acquire():
+            startup_control.audit("model_share_busy", {"package": share["package_id"],
+                                                       "peer": request.client.host if request.client else None})
+            return JSONResponse({"ok": False, "code": "SHARE_BUSY",
+                                 "detail": f"this Mac is already sending {model_share.MAX_TRANSFERS} "
+                                           f"model files; try again shortly or use the internet"},
+                                status_code=429, headers={"Retry-After": str(model_share.RETRY_AFTER_S)})
+        if request.method == "GET" and not request.headers.get("range"):
+            startup_control.audit("model_share_served", {
+                "package": share["package_id"], "file": path,
+                "peer": request.client.host if request.client else None})
+        return _ShareTransfer(target, media_type="application/octet-stream")
 
     @app.get("/api/hub/fleet/nodes/{node_id}/model-downloads/{run_id}")
     async def fleet_node_model_download_status(node_id: str, run_id: str) -> JSONResponse:

@@ -1141,5 +1141,136 @@ class SubtitleManifestContractTests(unittest.TestCase):
         self.assertEqual(set(packages.ENGINES), set(standalone._ENGINE_ROUTE))
 
 
+
+class _Peer:
+    """Another Mac's share on a real local HTTP port: ``files`` by path, under one token."""
+
+    def __init__(self, files, token='tok'):
+        import http.server
+        import threading
+        self.files, self.token, self.requests = dict(files), token, []
+        peer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                peer.requests.append(self.path)
+                prefix = f'/api/hub/model-share/{peer.token}/files/'
+                name = packages.urllib.parse.unquote(self.path[len(prefix):])
+                if not self.path.startswith(prefix) or name not in peer.files:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(peer.files[name])))
+                self.end_headers()
+                self.wfile.write(peer.files[name])
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url_base = f'http://127.0.0.1:{self.server.server_port}/api/hub/model-share/{token}/files'
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class LanShareDownloadTests(unittest.TestCase):
+    """0.6.146: a Mac copies a package from another Mac on its network, verified like the internet."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name).resolve()
+        self.files = {'weights.safetensors': b'actual weights', 'tokenizer/config.json': b'{}'}
+        self.manifest = manifest(self.files)
+        self.libraries = {}
+        for name in ('lan', 'internet'):
+            (root / name).mkdir()
+            self.libraries[name] = root / name
+        self.internet = []
+        real = packages._open_download
+
+        def download(request, **kwargs):
+            if request.full_url.startswith('https://example.test/'):
+                self.internet.append(request.full_url)
+                return Response(self.files[request.full_url.split('example.test/')[1]])
+            return real(request, **kwargs)
+        patcher = mock.patch.object(packages, '_open_download', side_effect=download)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def peer(self, files, token='tok'):
+        peer = _Peer(files, token)
+        self.addCleanup(peer.close)
+        return peer
+
+    @staticmethod
+    def record(library):
+        value = json.loads((library / '.studiohub/installed.json').read_text())
+        for files in value.values():
+            for saved in files['files'].values():
+                saved.pop('mtime_s')
+        return value
+
+    def test_lan_copy_installs_the_same_record_as_the_internet(self):
+        peer = self.peer(self.files)
+        used = set()
+        packages.download_package(self.manifest, self.libraries['lan'], peer=peer.url_base, used=used)
+        self.assertEqual(used, {'lan'})
+        self.assertEqual(self.internet, [], 'every file came from the peer')
+        self.assertEqual(len(peer.requests), 2)
+        packages.download_package(self.manifest, self.libraries['internet'])
+        self.assertEqual(self.record(self.libraries['lan']), self.record(self.libraries['internet']))
+        self.assertEqual(packages.preflight(self.manifest, self.libraries['lan'])['state'], 'files_verified')
+
+    def test_a_corrupted_peer_file_is_fetched_from_the_internet_and_still_verified(self):
+        peer = self.peer({**self.files, 'weights.safetensors': b'actual weightX'})
+        used = set()
+        installed = packages.download_package(self.manifest, self.libraries['lan'], peer=peer.url_base,
+                                              used=used)
+        self.assertEqual(used, {'lan', 'internet'})
+        self.assertEqual(self.internet, ['https://example.test/weights.safetensors'])
+        self.assertEqual((installed / 'weights.safetensors').read_bytes(), b'actual weights')
+        self.assertEqual(packages.verify_installed(self.manifest, self.libraries['lan'])['state'],
+                         'files_verified')
+
+    def test_an_expired_share_falls_back_to_the_internet_and_is_not_asked_again(self):
+        peer = self.peer(self.files, token='other')          # the token we hold is no longer served
+        used = set()
+        packages.download_package(self.manifest, self.libraries['lan'],
+                                  peer=peer.url_base.replace('/other/', '/tok/'), used=used)
+        self.assertEqual(used, {'internet'})
+        self.assertEqual(len(peer.requests), 1, 'a peer that refused once is dropped for the run')
+        self.assertEqual(packages.preflight(self.manifest, self.libraries['lan'])['state'], 'files_verified')
+
+    def test_an_unreachable_peer_falls_back_to_the_internet(self):
+        peer = self.peer(self.files)
+        base = peer.url_base
+        peer.close()
+        used = set()
+        packages.download_package(self.manifest, self.libraries['lan'], peer=base, used=used)
+        self.assertEqual(used, {'internet'})
+
+    def test_a_peer_url_must_be_plain_http_s_without_credentials(self):
+        for bad in ('file:///etc', 'http://user:pw@10.0.0.2/x', 'http://10.0.0.2/x?y=1', 'ftp://h/x'):
+            with self.assertRaises(packages.PackageError):
+                packages.peer_base(bad)
+        self.assertEqual(packages.peer_base('http://100.64.0.9:47873/a/files/'),
+                         'http://100.64.0.9:47873/a/files')
+        # The manifest's own sources stay HTTPS-only.
+        with self.assertRaises(packages.PackageError):
+            packages._url('http://100.64.0.9:47873/a')
+
+    def test_shared_files_only_for_a_verified_install(self):
+        with self.assertRaises(packages.PackageError):
+            packages.shared_files(self.manifest, self.libraries['lan'])
+        packages.download_package(self.manifest, self.libraries['lan'])
+        files = packages.shared_files(self.manifest, self.libraries['lan'])
+        self.assertEqual(set(files), set(self.files))
+        self.assertEqual(files['weights.safetensors'].read_bytes(), b'actual weights')
+
+
 if __name__ == '__main__':
     unittest.main()

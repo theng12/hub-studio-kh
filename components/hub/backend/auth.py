@@ -589,6 +589,11 @@ FLEET_ALLOWED = (
     # Not in `NODE_ALLOWED`.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/model-packages/[^/]+/download$"),
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/model-downloads/[^/]+$"),
+    # **LAN model sharing (0.6.146).** A Mac that has a package installed and verified hands out a
+    # short-lived, read-only token for that one revision, which another Mac on its network copies
+    # from (`GET /api/hub/model-share/<token>/files/...`, authorised by the token itself - see the
+    # middleware). Not in `NODE_ALLOWED`.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/model-packages/[^/]+/share$"),
     ("GET", r"^/api/hub/workstation$"),
     ("POST", r"^/api/hub/workstation$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
@@ -769,6 +774,10 @@ def make_middleware(token: str):
                     status_code=403,
                 )
         if request.url.path in PUBLIC_PATHS:
+            return await call_next(request)
+        # A LAN model share: the unguessable, expiring, single-package token in the path is the
+        # credential, checked by the route (an unknown or expired one is a 404). Read-only.
+        if request.method in {"GET", "HEAD"} and request.url.path.startswith("/api/hub/model-share/"):
             return await call_next(request)
         if (is_loopback(request)
                 and os.environ.get("STUDIOHUB_REQUIRE_AUTH") != "1"):

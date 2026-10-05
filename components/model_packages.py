@@ -109,6 +109,23 @@ def _url(value):
     return value
 
 
+def peer_base(value):
+    """The files prefix of a LAN share (``…/api/hub/model-share/<token>/files``) from another Mac.
+
+    Plain HTTP is allowed here and only here: a peer is reached over the LAN or Tailscale, and every
+    byte it sends is checked against the manifest's pinned sha256 exactly like an internet download.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        if (parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username
+                or parsed.password or parsed.query or parsed.fragment):
+            raise ValueError()
+        parsed.port
+    except (TypeError, ValueError):
+        raise PackageError('A LAN source must be a credential-free http(s) share URL') from None
+    return value.rstrip('/')
+
+
 # Every engine a manifest may declare. The Hub keeps the matching worker/modality map in
 # `_ENGINE_ROUTE` (`components/hub/standalone.py`); the two are one vocabulary in two files, so
 # they are named here and cross-checked by a test rather than left to drift. When this tuple and
@@ -1236,6 +1253,23 @@ def preflight(manifest, library, *, catalog=None, _seen=None):
             'verification': 'cached_receipt', 'companion_cache': cache}
 
 
+def shared_files(manifest, library, *, catalog=None):
+    """The files another Mac may copy of this package: ``{manifest path: absolute path}``.
+
+    Only for a package this Mac has installed and verified (the receipt check `preflight` makes),
+    and only the manifest's own files at the paths the receipt recorded - nothing else in the
+    library is reachable through a share. Raises `PackageError` with the reason otherwise.
+    """
+    report = preflight(manifest, library, catalog=catalog)
+    if report['state'] != 'files_verified':
+        raise PackageError(report.get('reason') or f"{manifest['package_id']} is {report['state']} on this Mac")
+    root = _library(library)
+    record = _index(root)[manifest['package_id']]
+    folder = root / _relative(record['folder'])
+    return {entry['path']: folder / _relative(record['files'][entry['path']]['relative'])
+            for entry in manifest['files']}
+
+
 def _installed_folder(root, manifest, record):
     """The library-relative folder this package's bytes are in, or None.
 
@@ -1437,7 +1471,11 @@ def _open_download(request, **kwargs):
     return urllib.request.build_opener(_SecureRedirect()).open(request, **kwargs)
 
 
-def _download_file(entry, staged, urls, root):
+def _download_file(entry, staged, urls, root, peer=None):
+    """Fetch one file into staging; returns where its bytes came from (``lan``/``internet``), or
+    None when staging already held it. ``peer`` (``{'url_base': ...}``) is tried before ``urls``: bytes
+    that fail verification fall through to the internet for this file only, and a peer that does not
+    answer (unreachable, 404 after expiry, 429 busy) is dropped for the rest of the run."""
     target = staged / entry['path']
     relative = target.parent.relative_to(root).as_posix()
     with _directory(root, relative, create=True) as parent_fd:
@@ -1451,8 +1489,12 @@ def _download_file(entry, staged, urls, root):
         except (OSError, PackageError):
             pass
         partial = target.name + '.part'
-        for url in urls:
-            _url(url)
+        lan_url = (peer['url_base'] + '/' + urllib.parse.quote(entry['path'])
+                   if peer and peer.get('url_base') else None)
+        for url in ([lan_url] if lan_url else []) + list(urls):
+            lan = url is lan_url
+            if not lan:
+                _url(url)
             try:
                 info = os.stat(partial, dir_fd=parent_fd, follow_symlinks=False)
                 if not stat.S_ISREG(info.st_mode):
@@ -1497,7 +1539,7 @@ def _download_file(entry, staged, urls, root):
                     _check_stream(stream, entry)
                 os.replace(partial, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
                 os.fsync(parent_fd)
-                return
+                return 'lan' if lan else 'internet'
             except PackageError:
                 try:
                     os.unlink(partial, dir_fd=parent_fd)
@@ -1505,11 +1547,13 @@ def _download_file(entry, staged, urls, root):
                     pass
             except (OSError, urllib.error.URLError, http.client.HTTPException):
                 # A later explicit retry resumes this file; completed files remain verified.
+                if lan:
+                    peer['url_base'] = None
                 continue
     raise PackageError(f'Download incomplete or invalid: {entry["path"]}')
 
 
-def _download_one(manifest, root, sources):
+def _download_one(manifest, root, sources, peer=None, used=None):
     validate_manifest(manifest)
     with _lock(root):
         current = preflight(manifest, root)
@@ -1521,13 +1565,20 @@ def _download_one(manifest, root, sources):
             urls = (sources or {}).get(entry['path'], entry.get('urls', []))
             if not isinstance(urls, list) or not urls:
                 raise PackageError(f'No download source for {entry["path"]}')
-            _download_file(entry, staged, urls, root)
+            got = _download_file(entry, staged, urls, root, peer)
+            if got and used is not None:
+                used.add(got)
         return _publish(manifest, staged, root)
 
 
-def download_package(manifest, library, *, sources=None, catalog=None):
-    """An explicit download includes its catalog-declared companion packages."""
+def download_package(manifest, library, *, sources=None, catalog=None, peer=None, used=None):
+    """An explicit download includes its catalog-declared companion packages.
+
+    ``peer`` is another Mac's share of this package (`peer_base`), tried before the internet for
+    this package's own files (companions always come from their own sources); ``used`` collects
+    ``lan``/``internet`` for every file fetched."""
     root = _library(library)
+    peer = {'url_base': peer_base(peer)} if peer else None
     ordered = []
     visited = set()
 
@@ -1548,7 +1599,8 @@ def download_package(manifest, library, *, sources=None, catalog=None):
 
     collect(manifest, set())
     for current in ordered:
-        result = _download_one(current, root, sources if current is manifest else None)
+        mine = current is manifest
+        result = _download_one(current, root, sources if mine else None, peer if mine else None, used)
     # Every package this download installed, companions included, is mirrored into the engine
     # cache: a downloaded kit is exactly the case where the network is about to go away.
     for current in ordered:
@@ -1597,6 +1649,7 @@ def main():
     parser.add_argument('--manifest', required=True, type=Path, help='Trusted catalog JSON; scan accepts a directory')
     parser.add_argument('--source', type=Path, help='Source folder for import')
     parser.add_argument('--sources', type=Path, help='Optional JSON mapping of file paths to HTTPS mirror URL lists')
+    parser.add_argument('--peer', type=Path, help="Optional JSON string: another Mac's share URL, tried first")
     args = parser.parse_args()
     try:
         if args.action == 'scan':
@@ -1618,10 +1671,14 @@ def main():
                                                                     catalog=catalog)}
             elif args.action == 'download':
                 sources = json.loads(args.sources.read_text()) if args.sources else None
-                folder = download_package(manifest, args.library, sources=sources, catalog=catalog)
+                peer = json.loads(args.peer.read_text()) if args.peer else None
+                used = set()
+                folder = download_package(manifest, args.library, sources=sources, catalog=catalog,
+                                          peer=peer, used=used)
                 result = {'folder': str(folder),
                           'companion_cache': companion_cache_status(manifest, args.library,
-                                                                    catalog=catalog)}
+                                                                    catalog=catalog),
+                          'source_used': 'mixed' if len(used) > 1 else next(iter(used), None)}
             else:
                 result = verify_installed(manifest, args.library, catalog=catalog)
         print(json.dumps(result, indent=2))
