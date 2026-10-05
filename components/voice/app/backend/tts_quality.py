@@ -39,14 +39,18 @@ DEFAULT_CHARS_PER_SECOND = (6.0, 20.0)
 SLOW_FACTOR = 0.55             # a section may run this much slower than the slowest measured rate
 FAST_FACTOR = 2.5              # and its voiced time may be this much faster than the fastest
 EDGE_ALLOWANCE_S = 2.5         # engines return up to ~1.2 s of edge silence per side
-# Whisper must hear all but max(2 words, 10%) of the section's words. Measured on 131 Dreamlands
-# Breeze sections: every good one heard >= 0.938 of its words, every failed one <= 0.849.
-MAX_MISSING_SHARE = 0.10
+# Whisper must hear all but max(2 words, 15%) of the section's words. Measured on 131 Dreamlands
+# Breeze sections: every good one heard >= 0.938 of its words, every failed one <= 0.849; the cut
+# sits at ~0.85, inside that gap. 10% (the old share) failed short sections Breeze read right: on
+# night-atlas (2026-10-05) one 27-word section rendered on 3 Macs x 4 seeds was heard 23-24/27
+# (overlap 0.852-0.889, missing run <= 2) every time - Whisper, not the voice, lost the same words.
+# A dropped clause is still caught by MAX_MISSING_RUN below.
+MAX_MISSING_SHARE = 0.15
 MAX_MISSING_WORDS = 2
 # ... and never a clause: a run of more than this many consecutive words not heard. Good sections'
 # longest run was 2 (a sentence-initial "the" lost after a pause); every bad one's was 8 or more, and
 # EP0003 Ch09 part 5 lost the clause "Silas drew the soft crest of the ridge" to a 35 s silence
-# while its 7 missing words of 76 were still inside the 10% share.
+# while its 7 missing words of 76 were still inside the share.
 MAX_MISSING_RUN = 3
 # A silence inside a section may be the longest pause its text calls for (a paragraph, 1.5 s, else a
 # sentence, 1.0 s; never less than the longest pause the caller asked for) plus this. Breeze's own sleep-narration pauses run to 3.2-3.4 s at -40 dBFS
