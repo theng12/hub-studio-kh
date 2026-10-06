@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import importlib.util
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,13 +39,23 @@ def preserve(path: Path, project: Path, bucket: str) -> Path | None:
     return destination
 
 
+def validate_stage(app: Path) -> None:
+    """Keep the existing unsigned bundle/delta format; verify every staged byte and link."""
+    spec = importlib.util.spec_from_file_location('dmg_stage_voice', ROOT / 'packaging/stage_voice.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    expected = app.with_name(app.name + '.tree-sha256').read_text().strip()
+    if module.tree_digest(app) != expected:
+        raise ValueError('staged app content differs from its recorded tree digest')
+
+
 def build(app: Path, output: Path) -> None:
     app, output = app.expanduser().resolve(), output.expanduser().absolute()
     if not (app / 'Contents/Info.plist').is_file():
         raise ValueError('source must be a staged .app bundle')
     if output.parent.resolve() != (ROOT / 'dist').resolve() or output.suffix != '.dmg':
         raise ValueError('DMG output must be in this project dist folder')
-    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
+    validate_stage(app)
     output.parent.mkdir(parents=True, exist_ok=True)
     for old in sorted(output.parent.glob('*.dmg')):
         print('Previous installer preserved:', preserve(old, ROOT, 'dist'))

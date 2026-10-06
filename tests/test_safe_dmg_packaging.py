@@ -25,6 +25,24 @@ class RecoverableDmgFiles(unittest.TestCase):
             self.assertEqual(first.read_bytes(), b'first')
             self.assertEqual(second.read_bytes(), b'second')
 
+    def test_changed_staged_content_is_rejected_before_packaging(self):
+        with tempfile.TemporaryDirectory(prefix='dmg-integrity-private-') as name:
+            app = Path(name) / 'Studio Hub.app'
+            (app / 'Contents').mkdir(parents=True)
+            (app / 'Contents/Info.plist').write_text('staged source')
+            spec = importlib.util.spec_from_file_location('safe_dmg_digest', ROOT / 'packaging/make_dmg.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.assertTrue(callable(getattr(module, 'validate_stage', None)))
+            stage_spec = importlib.util.spec_from_file_location('dmg_stage_digest', ROOT / 'packaging/stage_voice.py')
+            stage = importlib.util.module_from_spec(stage_spec)
+            stage_spec.loader.exec_module(stage)
+            app.with_name(app.name + '.tree-sha256').write_text(stage.tree_digest(app) + '\n')
+            module.validate_stage(app)
+            (app / 'Contents/Info.plist').write_text('changed payload')
+            with self.assertRaisesRegex(ValueError, 'content'):
+                module.validate_stage(app)
+
     def test_an_archive_cannot_be_moved_through_a_parent_alias(self):
         with tempfile.TemporaryDirectory(prefix='qwen-dmg-private-') as name:
             root = Path(name)
