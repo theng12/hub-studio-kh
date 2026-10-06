@@ -143,6 +143,34 @@ class CopyTests(unittest.TestCase):
             COPY.copy_folder(source, target)
             self.assertFalse((target / "abc" / "old.safetensors").exists())
             self.assertEqual((target / "abc" / "new.safetensors").read_text(), "weights")
+            archived = list((Path(tmp) / "_trash").rglob("old.safetensors"))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(archived[0].read_text(), "weights")
+
+    def test_replacement_archives_old_and_interrupted_evidence_without_touching_it(self):
+        """Every displaced tree survives under a unique archive, including unfamiliar files."""
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, target = root / "source", root / "model"
+            write(source / "new" / "weights.bin", "new weights")
+            write(target / "old" / "weights.bin", "old weights")
+            write(target / "operator-notes" / "evidence.txt", "keep unfamiliar evidence")
+            write(root / "model.incoming" / "partial.bin", "interrupted incoming")
+            write(root / "model.replaced" / "prior.bin", "interrupted replacement")
+
+            COPY.copy_folder(source, target)
+
+            self.assertEqual((target / "new" / "weights.bin").read_text(), "new weights")
+            self.assertFalse((root / "model.incoming").exists())
+            self.assertFalse((root / "model.replaced").exists())
+            archives = [path for path in (root / "_trash").iterdir() if path.is_dir()]
+            self.assertEqual(len(archives), 3)
+            evidence = {path.read_text() for archive in archives for path in archive.rglob("*")
+                        if path.is_file()}
+            self.assertEqual(evidence, {
+                "old weights", "keep unfamiliar evidence",
+                "interrupted incoming", "interrupted replacement",
+            })
 
     def test_an_interrupted_copy_leaves_the_previous_folder_in_place(self):
         """The failure that matters is a half-written model. The old one must survive it."""
@@ -154,9 +182,9 @@ class CopyTests(unittest.TestCase):
 
             def failing(command, *args, **kwargs):
                 if command[:2] == ["/bin/cp", "-Rp"]:
-                    # Simulate the copy dying partway: the staging folder exists but is empty,
-                    # so it is not the model, and the previous folder must still be intact.
-                    Path(command[3]).mkdir(parents=True, exist_ok=True)
+                    # Simulate the copy dying partway: the staging folder holds incomplete
+                    # evidence, and the previous model must still be intact.
+                    write(Path(command[3]) / "partial.bin", "partial copy evidence")
                     return type("Result", (), {"returncode": 1})()
                 return real_run(command, *args, **kwargs)
 
@@ -165,29 +193,61 @@ class CopyTests(unittest.TestCase):
                     COPY.copy_folder(source, target)
 
             self.assertEqual((target / "abc" / "model.safetensors").read_text(), "old weights")
-            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["s", "t"])
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["_trash", "s", "t"])
+            partial = list((Path(tmp) / "_trash").rglob("partial.bin"))
+            self.assertEqual(len(partial), 1)
+            self.assertEqual(partial[0].read_text(), "partial copy evidence")
 
-    def test_no_staging_or_backup_folders_are_left_behind(self):
+    def test_a_retry_restores_the_interrupted_replaced_folder_before_copying(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, target = root / "source", root / "model"
+            write(source / "new" / "weights.bin", "new weights")
+            write(root / "model.replaced" / "old" / "weights.bin", "rollback weights")
+
+            def failing(command, *args, **kwargs):
+                write(Path(command[3]) / "partial.bin", "retry evidence")
+                return type("Result", (), {"returncode": 1})()
+
+            with mock.patch.object(COPY.subprocess, "run", failing):
+                with self.assertRaises(OSError):
+                    COPY.copy_folder(source, target)
+
+            self.assertEqual(
+                (target / "old" / "weights.bin").read_text(), "rollback weights"
+            )
+            self.assertFalse((root / "model.replaced").exists())
+            evidence = list((root / "_trash").rglob("partial.bin"))
+            self.assertEqual(len(evidence), 1)
+            self.assertEqual(evidence[0].read_text(), "retry evidence")
+
+    def test_no_staging_or_backup_folders_are_left_beside_the_library(self):
         with TemporaryDirectory() as tmp:
             source, target = Path(tmp) / "s", Path(tmp) / "t"
             write(source / "abc" / "model.safetensors", "weights")
             COPY.copy_folder(source, target)
             COPY.copy_folder(source, target)
-            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["s", "t"])
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["_trash", "s", "t"])
+            self.assertFalse((Path(tmp) / "t.incoming").exists())
+            self.assertFalse((Path(tmp) / "t.replaced").exists())
+            self.assertTrue(any((Path(tmp) / "_trash").iterdir()))
 
 class PruneTests(unittest.TestCase):
     REVISION = "a" * 40
     OLDER = "b" * 40
 
-    def test_the_previous_revision_is_removed_and_reported(self):
+    def test_the_previous_revision_is_archived_and_reported(self):
         """Keeping the old revision next to the new one would double what every Mac carries."""
         with TemporaryDirectory() as tmp:
             target = Path(tmp) / "package"
             write(target / self.REVISION / "model.safetensors", "new")
             write(target / self.OLDER / "model.safetensors", "0123456789")
-            freed = COPY.prune_old_revisions(target, self.REVISION)
-            self.assertEqual(freed, 10)
+            archived = COPY.prune_old_revisions(target, self.REVISION)
+            self.assertEqual(archived, 10)
             self.assertEqual(sorted(p.name for p in target.iterdir()), [self.REVISION])
+            saved = list((Path(tmp) / "_trash").rglob("model.safetensors"))
+            self.assertEqual(len(saved), 1)
+            self.assertEqual(saved[0].read_text(), "0123456789")
 
     def test_anything_that_is_not_a_revision_folder_is_left_alone(self):
         with TemporaryDirectory() as tmp:

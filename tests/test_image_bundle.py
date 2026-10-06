@@ -214,7 +214,7 @@ class ImageLaneContractTests(unittest.TestCase):
                 self.assertEqual(parameters['aspect_ratio']['default'],
                                  model.defaults['aspect_ratio'])
                 self.assertEqual(sorted(parameters['aspect_ratio']['enum']),
-                                 sorted(self.generation.SIZE_PRESETS))
+                                 sorted(self.generation.size_presets(model)))
                 # The two facts a scheduler gets wrong by default.
                 self.assertNotIn(contract['states']['uncertain'], contract['states']['terminal'])
                 self.assertFalse(contract['states']['uncertain_is_terminal'])

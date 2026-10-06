@@ -296,6 +296,7 @@ def _declared_companions(manifest: dict[str, Any]) -> list[str]:
 # map), and the fleet join's copy.
 _ENGINE_ROUTE: dict[str, tuple[str, str]] = {
     "image-mflux": ("image", "image"),
+    "image-mlx-serve": ("image", "image"),
     "voice-mlx": ("voice", "voice"),
     "voice-vits": ("voice", "voice"),
     "subtitle-mlx": ("subtitle", "transcription"),

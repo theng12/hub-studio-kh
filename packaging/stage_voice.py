@@ -11,10 +11,15 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The Image runtime this build is qualified against, pinned by content. It is **mflux 0.20.0** -
+# The Image runtime is the proven mflux 0.20 base plus pinned mlx-serve 26.10.1 native subtree.
+# Packaged low-q4 evidence: qualification/evidence/qwen-image-21-20261006/measurement.json.
+# The native engine has clean 32 GiB CLI receipts; current-host packaged startup correctly refuses
+# insufficient headroom, and physical 24/16 GiB remain owner SSD qualification targets.
+# The Image runtime this build is qualified against, pinned by content. It includes **mflux 0.20.0** -
 # the engine `qualification/z-image-turbo-2026-09-24.md` measured Z-Image-Turbo 6B MLX 4-bit on,
 # and the one the image catalogue publishes in `measured_on`.
 #
@@ -30,9 +35,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # A version string would not have caught it - both trees contain an `mflux` package and both accept
 # the same commands. The content digest is what distinguishes them, and refusing here is what makes
 # the mistake impossible rather than merely documented.
-IMAGE_RUNTIME_SHA256 = 'c3acf7661fb9e214c2273f01a61d9ac810250847274959a30ebc2e80c646491f'
+IMAGE_RUNTIME_SHA256 = 'c5ac478f85d5687e0bd6df715eec5d55a3a59e36aae4f14da352f45ea546923a'
 # Kept so the refusal can name what it was handed and where that tree came from.
 IMAGE_RUNTIME_SUPERSEDED = {
+    'c3acf7661fb9e214c2273f01a61d9ac810250847274959a30ebc2e80c646491f':
+        'base mflux 0.20 runtime before Qwen native subtree (through 0.6.149)',
     '7b9b9ff831caa254b928c9d5d05c86df776fbc0fc459a4725cc969c898cba243':
         '.build/st03-image-runtime-worker (mflux 0.17.5, preserved for the ST-03 receipt)',
 }
@@ -308,7 +315,7 @@ def _stage_image(context: dict) -> dict | None:
             f'  required: {IMAGE_RUNTIME_SHA256}\n'
             '            mflux 0.20.0, the engine qualification/z-image-turbo-2026-09-24.md '
             'measured Z-Image-Turbo 6B MLX 4-bit on\n'
-            '  pass --image-runtime .build/image-runtime-mflux020, or update this pin with the '
+            '  pass --image-runtime .build/image-runtime (the composite Qwen runtime), or update this pin with the '
             'qualification that moved it.'
         )
     resources = context['resources']
@@ -498,6 +505,15 @@ def staged_import_gaps(resources: Path) -> list[str]:
                         f'{relative}: imports {"/".join(target)}, which is not in the bundle - '
                         f'if it is a new file, `git add` it before staging')
     return sorted(set(problems))
+
+
+def archive_failed_stage(output: Path) -> Path:
+    """Keep a failed fresh bundle and its diagnostics under a unique project archive."""
+    archive = ROOT / '_trash' / 'failed-stages'
+    archive.mkdir(parents=True, exist_ok=True)
+    destination = Path(tempfile.mkdtemp(prefix='stage-', dir=archive)) / output.name
+    shutil.move(str(output), str(destination))
+    return destination
 
 
 def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
@@ -691,10 +707,10 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     # the check that turns `git add` from a thing someone remembers into a thing the build does.
     gaps = staged_import_gaps(resources)
     if gaps:
-        shutil.rmtree(output, ignore_errors=True)
+        saved = archive_failed_stage(output)
         raise ValueError(
             'The staged bundle is missing modules its own code imports, so a worker would die at '
-            'startup. Add the new files to git and stage again:\n  ' + '\n  '.join(gaps))
+            f'startup. Failed bundle preserved at {saved}. Add the new files to git and stage again:\n  ' + '\n  '.join(gaps))
     # Hash all shipped code/resources including the worker, shell and plist.
     # The manifest is excluded from its own payload hash to avoid recursion.
     release['payload_sha256'] = tree_digest(contents)

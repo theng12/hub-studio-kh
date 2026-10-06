@@ -57,6 +57,7 @@ FLEET = [
 ENGINE_NAMES = {
     "chat-mlx": "MLX (text)",
     "image-mflux": "mflux (MLX)",
+    "image-mlx-serve": "mlx-serve (MLX)",
     "music-mlx": "MLX (audio)",
     "music-yue2": "mlx-Yue2 (MLX)",
     "subtitle-mlx": "MLX (speech-to-text)",
@@ -80,6 +81,7 @@ MODALITY_OF_ENGINE = {
     "voice-vits": "voice",
     "subtitle-mlx": "subtitle",
     "image-mflux": "image",
+    "image-mlx-serve": "image",
     "music-mlx": "music",
     "music-yue2": "music",
     "video-ltx": "video",

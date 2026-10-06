@@ -358,7 +358,9 @@ class TheCatalogIsHonestAboutAModelWithNoBoundedMode(ImageMemoryModeFixture):
                                      stated_seconds.get(configuration))
                     self.assertEqual(published[configuration]['peak_gb'],
                                      peaks.get(configuration))
-                self.assertEqual(published['measured_on'], runtime.get('measured_on'))
+                self.assertEqual(published['measured_on'],
+                                 runtime.get('measured_on')
+                                 or model.qualification.get('measured_on'))
                 self.assertEqual(published['evidence'], runtime.get('evidence'))
                 self.assertIn(model.repo, published['source'])
 

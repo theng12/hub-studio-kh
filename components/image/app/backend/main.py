@@ -1,6 +1,7 @@
-"""Private standalone Image API for the registered, qualified mflux image models."""
+"""Private standalone Image API for the registered, qualified image models."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import hmac
 import os
 from pathlib import Path
@@ -12,9 +13,9 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import loading_mode, memory_policy
 from .generation import (MEDIA_TYPE_BY_SUFFIX, MODEL_ID, MODELS, QUALIFIED_MINIMUM_MEMORY_BYTES,
-                         SIZE_PRESETS, GenerationManager, defaults_in_force, final_matches,
+                         GenerationManager, defaults_in_force, final_matches,
                          lane_contract, lane_parameters, loading_modes,
-                         missing_runtime_model_reason)
+                         missing_runtime_model_reason, size_presets)
 
 from components import app_version, model_defaults
 
@@ -57,6 +58,23 @@ def memory_warning(model, host: dict) -> str | None:
     return model.below_tier_warning.format(memory_gb=memory / 1024**3)
 
 
+def model_host_facts(model) -> dict:
+    """Apply a model's native-runtime OS floor without changing the base Image worker floor."""
+    host = _host_facts()
+    if not host.get('eligible'):
+        return host
+    try:
+        current = tuple(int(part) for part in host['macos'].split('.')[:2])
+    except (KeyError, TypeError, ValueError):
+        return {**host, 'eligible': False, 'reason': 'macOS version could not be measured'}
+    current = current + (0,) * (2 - len(current))
+    if current < model.minimum_macos:
+        required = '.'.join(str(part) for part in model.minimum_macos)
+        return {**host, 'eligible': False,
+                'reason': f'{model.label} requires macOS {required} or later'}
+    return host
+
+
 def _host_eligibility() -> dict:
     """Host capability plus the default model's tier warning.
 
@@ -70,7 +88,14 @@ def _host_eligibility() -> dict:
 def create_app(manager: GenerationManager, token: str) -> FastAPI:
     if not token:
         raise ValueError('Private Image worker requires its owning Hub credential')
-    app = FastAPI(title='Studio Hub Image', version='1')
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            manager.shutdown()
+
+    app = FastAPI(title='Studio Hub Image', version='1', lifespan=lifespan)
 
     @app.middleware('http')
     async def require_owner(request: Request, call_next):
@@ -83,7 +108,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
     def model_state(model) -> dict:
         """One model's readiness: its own installed files, on this host."""
         files = manager.preflight(model.repo)
-        host = _host_facts()
+        host = model_host_facts(model)
         ready = files['state'] == 'files_verified' and host['eligible']
         return {'ready': ready, 'files': files, 'host': host,
                 'runtime_identity': {'id': manager.runtime_sha256, 'compatible': True}}
@@ -124,9 +149,10 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         # The geometry follows the aspect ratio in force, not the one the model shipped with: a
         # stored ratio whose width/height still came from another preset would be a form that
         # disagrees with the job it starts.
-        default_width, default_height = SIZE_PRESETS[in_force['aspect_ratio']]
+        presets = size_presets(model)
+        default_width, default_height = presets[in_force['aspect_ratio']]
         sizes = [{'id': ratio, 'label': ratio, 'width': width, 'height': height}
-                 for ratio, (width, height) in SIZE_PRESETS.items()]
+                 for ratio, (width, height) in presets.items()]
         ready = state['ready']
         files = state['files']
         # How this machine's loading-size setting resolves for this model, from the model's own
@@ -136,11 +162,12 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         return {
             'label': model.label, 'name': model.label, 'repo': model.repo,
             'model_id': model.repo, 'family': model.family, 'modality': 'image',
-            'package_id': model.package_id,
+            'package_id': model.package_id, 'engine': model.engine,
             'capabilities': ['txt2img'], 'hub_operation': 'image.text_to_image',
             'model_revision': model.revision, 'qualified_revision': model.revision,
             'qualified_revision_match': True, 'runtime_revision': manager.runtime_sha256,
-            'runtime_compatible': True, 'runtime_ready': True,
+            'runtime_compatible': host['eligible'],
+            'runtime_ready': files['state'] != 'runtime_unavailable',
             # `min_total_memory_gb` is the tier the model is qualified at. The worker does not
             # refuse on it: the Hub decides (its requirement floor - measured, else manifest, else
             # this row - is enforced), and `memory_warning` tells the operator their Mac is below.
@@ -245,6 +272,11 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         state = _host_eligibility()
         if not state['eligible']:
             raise HTTPException(409, state['reason'])
+        model = MODELS.get(body.get('repo')) if isinstance(body, dict) else None
+        if model is not None:
+            model_host = model_host_facts(model)
+            if not model_host['eligible']:
+                raise HTTPException(409, model_host['reason'])
         try:
             return {'job': manager.submit(body)}
         except ValueError as exc:

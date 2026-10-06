@@ -17,10 +17,9 @@ models. It compares each model folder against the copy already here and:
   * moves a model this kit no longer offers out of the way, into `_trash` beside the library, so a
     model cut from a release does not sit on the Mac forever.
 
-Nothing is ever deleted except an old revision folder of a model that was just updated: that one is
-inside the package being replaced, and moving it aside on the same volume would not return the
-24 GB it holds. Everything else that leaves the library is a *move* into `<library>/_trash`, which
-is the operator's to empty when he is satisfied nothing in it is wanted.
+Nothing is ever deleted. Previous copies, partial copies and old revision folders are moved into a
+unique folder under `<library>/_trash`, which is the operator's to empty when he is satisfied
+nothing in it is wanted. Moving them there preserves the evidence and does not reclaim space.
 """
 from __future__ import annotations
 
@@ -168,47 +167,73 @@ def needs_copy(source: Path, target: Path) -> bool:
 def copy_folder(source: Path, target: Path) -> None:
     """Copy a model folder over the one already here, without ever leaving a half-copy behind.
 
-    The old folder is moved aside first and only deleted once the new one is in place, so an
-    interrupted run leaves either the previous good copy or the fully copied new one.
+    The old folder is moved aside first and archived once the new one is in place. A previous
+    interrupted run is recovered before another copy starts, and every partial or displaced tree
+    is retained under this library's `_trash` instead of being deleted.
     """
     staging = target.with_name(target.name + ".incoming")
-    shutil.rmtree(staging, ignore_errors=True)
+    retired = target.with_name(target.name + ".replaced")
+    library = target.parent
+
+    # A crash between moving the live folder aside and publishing the incoming one leaves the
+    # previous good copy at `.replaced`. Restore that rollback point before touching anything else.
+    if not os.path.lexists(target) and os.path.lexists(retired):
+        retired.rename(target)
+    for path, label in ((staging, f"{target.name}.incoming"),
+                        (retired, f"{target.name}.replaced")):
+        if os.path.lexists(path):
+            move_to_trash(path, library, label)
+
     result = subprocess.run(["/bin/cp", "-Rp", str(source), str(staging)])
     if result.returncode != 0:
-        shutil.rmtree(staging, ignore_errors=True)
+        if os.path.lexists(staging):
+            try:
+                move_to_trash(staging, library, f"{target.name}.incoming")
+            except OSError:
+                pass  # leave the partial beside the library when even the preserving move fails
         raise OSError(f"could not copy {source.name}")
-    retired = target.with_name(target.name + ".replaced")
-    shutil.rmtree(retired, ignore_errors=True)
-    if target.exists():
-        target.rename(retired)
     try:
+        if os.path.lexists(target):
+            target.rename(retired)
         staging.rename(target)
     except OSError:
-        if retired.exists() and not target.exists():
+        if os.path.lexists(retired) and not os.path.lexists(target):
             retired.rename(target)
+        if os.path.lexists(staging):
+            try:
+                move_to_trash(staging, library, f"{target.name}.incoming")
+            except OSError:
+                pass
         raise
-    shutil.rmtree(retired, ignore_errors=True)
+    if os.path.lexists(retired):
+        move_to_trash(retired, library, f"{target.name}.replaced")
 
 
 def prune_old_revisions(target: Path, keep: str) -> int:
-    """Delete revision folders of a just-updated model that the current manifest no longer names.
+    """Archive revision folders of an updated model that the current manifest no longer names.
 
     A model folder holds one subfolder per revision. Copying a new revision in would otherwise
-    leave the previous 24 GB revision next to it forever, doubling what each Mac carries.
+    leave the previous revision beside the active one. The archive remains under the model library
+    until its operator chooses to empty `_trash`.
     """
-    freed = 0
+    archived = 0
     try:
         children = sorted(target.iterdir())
     except OSError:
         return 0
     for child in children:
-        if not child.is_dir() or child.name == keep:
+        if child.is_symlink() or not child.is_dir() or child.name == keep:
             continue
         if len(child.name) != 40 or any(c not in "0123456789abcdef" for c in child.name):
             continue  # not a revision folder: leave anything unfamiliar alone
-        freed += sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
-        shutil.rmtree(child, ignore_errors=True)
-    return freed
+        size = sum(f.stat().st_size for f in child.rglob("*")
+                   if f.is_file() and not f.is_symlink())
+        try:
+            move_to_trash(child, target.parent, f"{target.name}.revision.{child.name}")
+        except OSError:
+            continue
+        archived += size
+    return archived
 
 
 #: Where a package this kit no longer offers is moved. A move, not a delete: the folder is still
@@ -314,7 +339,7 @@ def move_to_trash(folder: Path, library: Path, package_id: str, stamp: str | Non
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     destination = trash / f"{package_id}-{stamp}"
     suffix = 1
-    while destination.exists():  # two prunes in one second, or a second run before he empties it
+    while os.path.lexists(destination):  # never replace even a broken link in the owner's archive
         suffix += 1
         destination = trash / f"{package_id}-{stamp}-{suffix}"
     shutil.move(str(folder), str(destination))
@@ -726,7 +751,7 @@ def main() -> int:
     catalog = {manifest["package_id"]: manifest for _p, _n, manifest in chosen}
     started = time.time()
     copied = updated = failed = 0
-    freed = 0
+    archived_revision_bytes = 0
 
     total = len(new) + len(update)
     for index, (package_id, _needs, manifest, how) in enumerate(new + update, start=1):
@@ -739,7 +764,7 @@ def main() -> int:
             print(" FAILED - run this file again")
             failed += 1
             continue
-        freed += prune_old_revisions(target, manifest["revision"])
+        archived_revision_bytes += prune_old_revisions(target, manifest["revision"])
         outcome = register(verifier, manifest, destination, catalog)
         if how == "new":
             copied += 1
@@ -805,8 +830,9 @@ def main() -> int:
     print(f"  Copied {copied} new, updated {updated}, {len(current)} already up to date"
           f"{f', {repaired} record(s) repaired' if repaired else ''}"
           f"{f', {failed} failed' if failed else ''} in {time.time() - started:.0f} seconds.")
-    if freed:
-        print(f"  Removed {freed / 1e9:.1f} GB of older model versions that are no longer used.")
+    if archived_revision_bytes:
+        print(f"  Archived {archived_revision_bytes / 1e9:.1f} GB of older model versions under "
+              f"{destination / TRASH_FOLDER}; that space remains used until you empty it.")
     if moved:
         moved_gb = sum(size for _package_id, size in moved) / 1e9
         print(f"  Moved {len(moved)} model(s) this kit no longer offers, {moved_gb:.1f} GB, to:")

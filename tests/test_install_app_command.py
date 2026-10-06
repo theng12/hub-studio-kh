@@ -59,6 +59,10 @@ class InstallAppTests(unittest.TestCase):
     def leftovers(self) -> list[str]:
         return sorted(p.name for p in self.applications.iterdir() if p.name != "Studio Hub.app")
 
+    def archived(self, prefix: str) -> list[Path]:
+        trash = self.applications / "_trash"
+        return sorted(trash.glob(f"{prefix}-*")) if trash.is_dir() else []
+
     def test_a_first_install_copies_the_kit_app(self) -> None:
         build_app(self.kit / "Studio Hub.app", {"Contents/Resources/a.py": b"new"})
         result = self.run_installer()
@@ -72,11 +76,21 @@ class InstallAppTests(unittest.TestCase):
         build_app(self.kit / "Studio Hub.app", {"Contents/Resources/keep.py": b"same",
                                                 "Contents/Resources/change.py": b"new and longer",
                                                 "Contents/Resources/added.py": b"added"})
+        old = tree(self.live)
+        trash = self.applications / "_trash"
+        trash.mkdir()
+        sentinel = trash / "owner-keeps-this"
+        sentinel.write_text("untouched")
+
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(tree(self.live), tree(self.kit / "Studio Hub.app"))
         self.assertFalse((self.live / "Contents/Resources/gone.py").exists())
-        self.assertEqual(self.leftovers(), [], "the old app and the staging folder must both be cleaned up")
+        archived = self.archived("previous-app")
+        self.assertEqual(len(archived), 1, "the previous app must remain recoverable")
+        self.assertEqual(tree(archived[0]), old)
+        self.assertEqual(sentinel.read_text(), "untouched", "existing archives are owner-managed")
+        self.assertEqual(self.leftovers(), ["_trash"])
 
     def test_a_kit_app_that_is_incomplete_leaves_the_installed_app_exactly_as_it_was(self) -> None:
         build_app(self.live, {"Contents/Resources/keep.py": b"installed"}, readonly=True)
@@ -87,7 +101,15 @@ class InstallAppTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(tree(self.live), before, "a failed install must not cost the Mac its app")
         self.assertTrue(os.access(self.live / RUNTIME, os.X_OK))
-        self.assertEqual(self.leftovers(), [])
+        archived = self.archived("incomplete-copy")
+        self.assertEqual(len(archived), 1, "the rejected partial copy must remain inspectable")
+        self.assertEqual((archived[0] / "Contents/Resources/keep.py").read_bytes(), b"broken kit")
+        self.assertEqual(self.leftovers(), ["_trash"])
+
+    def test_the_installer_has_no_destructive_cleanup_command(self) -> None:
+        commands = [line.strip() for line in (ROOT / "install_app.command").read_text().splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")]
+        self.assertFalse(any("rm -rf" in line or "rm -f" in line for line in commands), commands)
 
 
 class FleetModeOpenTests(unittest.TestCase):

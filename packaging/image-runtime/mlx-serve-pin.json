@@ -1,0 +1,23 @@
+{
+  "archive": "mlx-serve-bin-macos-arm64.tar.gz",
+  "archive_root": "mlx-serve-macos-arm64",
+  "archive_sha256": "e53056e481364ff72188fafea8b3eb0aeb0b5b7cebcd6e6e7d26bf1ce4223873",
+  "base_runtime_minimum_macos": "14.0",
+  "files": [
+    "LICENSE",
+    "LICENSE-APACHE-2.0",
+    "NOTICE",
+    "lib/libjaccl.dylib",
+    "lib/libllama.dylib",
+    "lib/libmlx.dylib",
+    "lib/libmlxc.dylib",
+    "lib/libsharpyuv.dylib",
+    "lib/libwebp.dylib",
+    "lib/mlx.metallib",
+    "mlx-serve"
+  ],
+  "minimum_macos": "26.2",
+  "schema": "studiohub.mlx-serve-pin.v1",
+  "source_url": "https://github.com/ddalcu/mlx-serve/releases/download/v26.10.1/mlx-serve-bin-macos-arm64.tar.gz",
+  "version": "26.10.1"
+}

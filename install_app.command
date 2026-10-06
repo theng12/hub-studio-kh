@@ -152,7 +152,20 @@ fi
 # landed and been checked - and put back if it did not. Without an installed app, or off APFS, it
 # falls back to a plain copy. The steps are one script so the administrator prompt shows once.
 SWAP="$(mktemp -t studiohub-install)"
-trap 'rm -f "$SWAP"' EXIT
+archive_swap_script() {
+  [ -e "$SWAP" ] || return 0
+  swap_trash="$(dirname -- "$APP")/_trash"
+  mkdir -p "$swap_trash" 2>/dev/null || return 0
+  stamp=$(/bin/date -u +%Y%m%d-%H%M%S)
+  destination="$swap_trash/install-script-$stamp-$$"
+  suffix=0
+  while [ -e "$destination" ] || [ -L "$destination" ]; do
+    suffix=$((suffix + 1))
+    destination="$swap_trash/install-script-$stamp-$$-$suffix"
+  done
+  mv "$SWAP" "$destination" 2>/dev/null || true
+}
+trap archive_swap_script EXIT
 cat > "$SWAP" <<'STEPS'
 #!/bin/sh
 # usage: <kit app> <target folder> <app name>
@@ -160,29 +173,55 @@ APP="$1"; TARGET="$2"; NAME="$3"
 STAGING="$TARGET/.studiohub-incoming"
 OLD="$TARGET/.studiohub-previous"
 LIVE="$TARGET/$NAME"
+TRASH="$TARGET/_trash"
 RUNTIME="Contents/Resources/runtimes/voice/bin/python3"
-# The app ships read-only runtimes, so a plain `rm -rf` fails with "Permission denied".
-gone() { if [ -e "$1" ]; then chmod -R u+w "$1" 2>/dev/null; rm -rf "$1"; fi; return 0; }
-gone "$STAGING"; gone "$OLD"        # leftovers of an interrupted run
+present() { [ -e "$1" ] || [ -L "$1" ]; }
+archive() {
+  source="$1"; label="$2"; original_mode=""
+  present "$source" || return 0
+  mkdir -p "$TRASH" || return 1
+  stamp=$(/bin/date -u +%Y%m%d-%H%M%S)
+  destination="$TRASH/$label-$stamp-$$"
+  suffix=0
+  while present "$destination"; do
+    suffix=$((suffix + 1))
+    destination="$TRASH/$label-$stamp-$$-$suffix"
+  done
+  if [ -d "$source" ] && [ ! -w "$source" ]; then
+    original_mode=$(/usr/bin/stat -f %Lp "$source") || return 1
+    chmod u+w "$source" || return 1
+  fi
+  if mv "$source" "$destination"; then
+    [ -z "$original_mode" ] || chmod "$original_mode" "$destination"
+    return 0
+  fi
+  [ -z "$original_mode" ] || chmod "$original_mode" "$source"
+  return 1
+}
+# Recover a previous run that stopped after moving the good app aside. Other leftovers are evidence,
+# so move them into a new archive entry without changing anything already in _trash.
+if ! present "$LIVE" && present "$OLD"; then mv "$OLD" "$LIVE" || exit 10; fi
+archive "$STAGING" interrupted-incoming || exit 11
+archive "$OLD" interrupted-previous || exit 12
 if [ -d "$LIVE" ] && /bin/cp -c -R "$LIVE" "$STAGING" 2>/dev/null; then
   # The clone is read-only like the original; rsync has to write into it.
   if ! { chmod -R u+w "$STAGING" && /usr/bin/rsync -a --delete "$APP/" "$STAGING/"; }; then
-    gone "$STAGING"
-    /bin/cp -Rp "$APP" "$STAGING" || { gone "$STAGING"; exit 1; }
+    archive "$STAGING" clone-update-failed || exit 13
+    /bin/cp -Rp "$APP" "$STAGING" || { archive "$STAGING" incomplete-copy; exit 1; }
   fi
 else
-  gone "$STAGING"
-  /bin/cp -Rp "$APP" "$STAGING" || { gone "$STAGING"; exit 1; }
+  archive "$STAGING" clone-copy-failed || exit 14
+  /bin/cp -Rp "$APP" "$STAGING" || { archive "$STAGING" incomplete-copy; exit 1; }
 fi
-[ -x "$STAGING/$RUNTIME" ] || { gone "$STAGING"; exit 2; }
-if [ -e "$LIVE" ]; then mv "$LIVE" "$OLD" || { gone "$STAGING"; exit 3; }; fi
+[ -x "$STAGING/$RUNTIME" ] || { archive "$STAGING" incomplete-copy; exit 2; }
+if present "$LIVE"; then mv "$LIVE" "$OLD" || { archive "$STAGING" unpublished-copy; exit 3; }; fi
 if ! mv "$STAGING" "$LIVE" || [ ! -x "$LIVE/$RUNTIME" ]; then
-  gone "$LIVE"
-  if [ -e "$OLD" ]; then mv "$OLD" "$LIVE"; fi
-  gone "$STAGING"
+  archive "$LIVE" failed-install || exit 15
+  if present "$OLD"; then mv "$OLD" "$LIVE" || exit 16; fi
+  archive "$STAGING" failed-install || exit 17
   exit 4
 fi
-gone "$OLD"
+archive "$OLD" previous-app || exit 18
 exit 0
 STEPS
 if [ "$NEEDS_ADMIN" = "1" ]; then

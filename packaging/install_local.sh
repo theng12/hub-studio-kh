@@ -14,6 +14,32 @@ STAGED="${1:?usage: install_local.sh <path to Studio Hub.app>}"
 # worth having. Production passes neither and gets the real paths.
 TARGET="${STUDIOHUB_INSTALL_TARGET:-/Applications/Studio Hub.app}"
 DATA="${STUDIOHUB_INSTALL_DATA:-$HOME/Library/Application Support/StudioHub Standalone}"
+TARGET_PARENT="$(dirname -- "$TARGET")"
+TRASH="$TARGET_PARENT/_trash"
+
+present() { [ -e "$1" ] || [ -L "$1" ]; }
+archive() {
+  local source="$1" archive_root="$2" label="$3" stamp destination suffix original_mode=""
+  present "$source" || return 0
+  mkdir -p "$archive_root" || return 1
+  stamp=$(/bin/date -u +%Y%m%d-%H%M%S)
+  destination="$archive_root/$label-$stamp-$$"
+  suffix=0
+  while present "$destination"; do
+    suffix=$((suffix + 1))
+    destination="$archive_root/$label-$stamp-$$-$suffix"
+  done
+  if [ -d "$source" ] && [ ! -w "$source" ]; then
+    original_mode=$(/usr/bin/stat -f %Lp "$source") || return 1
+    chmod u+w "$source" || return 1
+  fi
+  if mv "$source" "$destination"; then
+    [ -z "$original_mode" ] || chmod "$original_mode" "$destination"
+    return 0
+  fi
+  [ -z "$original_mode" ] || chmod "$original_mode" "$source"
+  return 1
+}
 
 [ -d "$STAGED" ] || { echo "no staged app at $STAGED"; exit 1; }
 STAGED_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :StudioHubBuild' "$STAGED/Contents/Info.plist" 2>/dev/null)
@@ -60,25 +86,20 @@ if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; sleep 2; fi
 
 restore_previous() {
   echo "$1; restoring the previous app"
-  # **`rm -rf` cannot delete the image runtime's read-only tree on its own.** The packaged
-  # `runtimes/image/lib/tcl9` directories are `dr-xr-xr-x`, and unlinking an entry needs write
-  # permission on its *parent* directory, so the tree survives and every directory above it reports
-  # "Directory not empty". `chmod -R u+w` first, and if the path still exists afterwards, stop and
-  # say so: the `mv` below would otherwise move the previous app into the wreckage rather than over
-  # it, which is a state no later step can detect.
-  chmod -R u+w "$TARGET" 2>/dev/null || true
-  rm -rf "$TARGET" 2>/dev/null || true
-  if [ -e "$TARGET" ]; then
-    echo "FAILED: could not clear $TARGET. The previous app is intact at $OLD - move it back by hand."
+  # A partial app is evidence. Move the whole tree aside before restoring the previous app; this
+  # also avoids the old failure where a read-only partial tree caused the rollback to nest bundles.
+  if ! archive "$TARGET" "$TRASH" failed-install; then
+    echo "FAILED: could not archive $TARGET. The previous app is intact at $OLD - move it back by hand."
     exit 1
   fi
-  [ -e "$OLD" ] && mv "$OLD" "$TARGET"
+  present "$OLD" && mv "$OLD" "$TARGET"
   exit 1
 }
 
 echo "== swapping in $STAGED_VERSION / $STAGED_BUILD"
-OLD="$(dirname -- "$TARGET")/.studiohub-old-$$"
-if [ -e "$TARGET" ]; then mv "$TARGET" "$OLD" || { echo "could not move the old app aside"; exit 1; }; fi
+OLD="$TARGET_PARENT/.studiohub-old-$$"
+archive "$OLD" "$TRASH" interrupted-previous || { echo "could not archive a stale previous app"; exit 1; }
+if present "$TARGET"; then mv "$TARGET" "$OLD" || { echo "could not move the old app aside"; exit 1; }; fi
 if ! cp -Rp "$STAGED" "$TARGET"; then
   restore_previous "copy failed"
 fi
@@ -93,21 +114,14 @@ target_entries=$(find "$TARGET" | wc -l | tr -d ' ')
 if [ "$staged_entries" != "$target_entries" ]; then
   restore_previous "the copy arrived incomplete ($target_entries of $staged_entries entries)"
 fi
-if [ -e "$OLD" ]; then
-  chmod -R u+w "$OLD" 2>/dev/null || true
-  rm -rf "$OLD" 2>/dev/null || true
-  [ -e "$OLD" ] && echo "note: the previous app is still at $OLD (read-only runtime files); harmless, move it to _trash/ by hand"
-fi
-
 echo "== checking what actually landed"
 INSTALLED_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :StudioHubBuild' "$TARGET/Contents/Info.plist" 2>/dev/null)
 if [ "$INSTALLED_BUILD" != "$STAGED_BUILD" ]; then
-  echo "FAILED: $TARGET has build '$INSTALLED_BUILD', expected '$STAGED_BUILD'"
-  exit 1
+  restore_previous "FAILED: $TARGET has build '$INSTALLED_BUILD', expected '$STAGED_BUILD'"
 fi
 
 # The modes matter only because a mismatch used to brick startup; check the payload is intact.
-python3 - "$TARGET" <<'PY' || exit 1
+python3 - "$TARGET" <<'PY' || restore_previous "the installed music runtime could not be checked"
 import sys
 from hashlib import sha256
 from pathlib import Path
@@ -124,7 +138,9 @@ for p in sorted(root.rglob("*")):
 print("== music overlay (content only):", h.hexdigest()[:16])
 PY
 
-rm -f "$DATA/hub-ready.json" "$DATA/hub/music-ready.json"
+archive "$OLD" "$TRASH" previous-app || { echo "FAILED: could not archive the previous app at $OLD"; exit 1; }
+archive "$DATA/hub-ready.json" "$DATA/_trash" hub-ready || { echo "FAILED: could not archive hub-ready.json"; exit 1; }
+archive "$DATA/hub/music-ready.json" "$DATA/_trash" music-ready || { echo "FAILED: could not archive music-ready.json"; exit 1; }
 echo "== installed $STAGED_VERSION / $INSTALLED_BUILD"
 
 # **An install stopped Studio Hub and never started it again, so "installed" was not "running".**

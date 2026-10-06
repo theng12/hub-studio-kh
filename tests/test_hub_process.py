@@ -45,7 +45,8 @@ class HubProcessTests(unittest.TestCase):
         if probe.returncode:
             raise unittest.SkipTest(f"FastAPI/Uvicorn unavailable in test runtime: {probe.stderr.strip()}")
 
-    def _fixture(self, base: Path, *, failing_voice: bool = False, image: bool = False) -> dict[str, Path]:
+    def _fixture(self, base: Path, *, failing_voice: bool = False, image: bool = False,
+                 orphan_image: bool = False) -> dict[str, Path]:
         resources = base / "Proof.app" / "Contents" / "Resources"
         resources.mkdir(parents=True)
         shutil.copyfile(WORKTREE / "packaging/hub_worker.py", resources / "hub_worker.py")
@@ -109,7 +110,23 @@ class HubProcessTests(unittest.TestCase):
             backend.mkdir(parents=True)
             for package in [backend, backend.parent, backend.parent.parent]:
                 (package / "__init__.py").write_text("")
-            (backend / "main.py").write_text("from fastapi import FastAPI\ndef from_environment():\n    return FastAPI()\n")
+            image_source = "from fastapi import FastAPI\ndef from_environment():\n    return FastAPI()\n"
+            if orphan_image:
+                image_source = """from fastapi import FastAPI
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+def from_environment():
+    marker = Path(os.environ['STUDIOHUB_IMAGE_DATA_DIR']) / 'fixture-leaf.pid'
+    code = ('import os,signal,sys,time; from pathlib import Path; '
+            'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+            'Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(120)')
+    subprocess.Popen([sys.executable, '-c', code, str(marker), 'studiohub-orphan-leaf'])
+    return FastAPI()
+"""
+            (backend / "main.py").write_text(image_source)
             image_python = resources / "runtimes/image/bin/python3"
             image_python.parent.mkdir(parents=True)
             image_python.symlink_to(RUNTIME_SOURCE)
@@ -149,7 +166,8 @@ class HubProcessTests(unittest.TestCase):
         if not pid or not cls._alive(pid):
             return
         command = cls._command(pid)
-        if "voice_worker.py" not in command and "hub_worker.py" not in command:
+        if ("voice_worker.py" not in command and "hub_worker.py" not in command
+                and "studiohub-orphan-leaf" not in command):
             return
         try:
             pgid = os.getpgid(pid)
@@ -196,9 +214,11 @@ class HubProcessTests(unittest.TestCase):
             return error.code, json.loads(error.read())
 
     @contextmanager
-    def _running_hub(self, *, failing_voice: bool = False, image: bool = False):
+    def _running_hub(self, *, failing_voice: bool = False, image: bool = False,
+                     orphan_image: bool = False):
         with tempfile.TemporaryDirectory(prefix="studiohub-hub-process-") as temp:
-            fixture = self._fixture(Path(temp), failing_voice=failing_voice, image=image)
+            fixture = self._fixture(Path(temp), failing_voice=failing_voice, image=image,
+                                    orphan_image=orphan_image)
             environment = {
                 "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
                 "LANG": "en_US.UTF-8",
@@ -352,6 +372,33 @@ class HubProcessTests(unittest.TestCase):
             self.assertFalse(self._alive(again["pid"]), "Restarted Image survived Hub shutdown")
             self.assertFalse(self._alive(voice_pid), "Voice survived Hub shutdown")
             self.assertFalse(fixture["workers"].exists())
+
+    def test_image_restart_reaps_an_orphaned_leaf_from_the_old_worker_group(self):
+        """A dead worker leader must not leave its native inference leaf beside its replacement."""
+        with self._running_hub(image=True, orphan_image=True) as (
+                fixture, process, known_children):
+            _, _, workers, _ = self._await_started(fixture, process, known_children)
+            image = next(worker for worker in workers if worker["id"] == "image")
+            known_children.append(image["pid"])
+            marker = fixture["data"] / "image/fixture-leaf.pid"
+            self._wait_for(marker.exists, 5, "Image fixture leaf did not start")
+            old_leaf = int(marker.read_text())
+            known_children.append(old_leaf)
+            self.assertTrue(self._alive(old_leaf))
+            self.assertEqual(os.getpgid(old_leaf), image["pid"])
+
+            os.kill(image["pid"], signal.SIGKILL)
+            again = self._await_restart(
+                fixture, process, fixture["data"] / "hub/image-ready.json", image["pid"])
+            known_children.append(again["pid"])
+            self._wait_for(lambda: marker.exists() and int(marker.read_text()) != old_leaf,
+                           5, "Restarted Image fixture leaf did not start")
+            new_leaf = int(marker.read_text())
+            known_children.append(new_leaf)
+            self._wait_for(lambda: not self._alive(old_leaf), 5,
+                           "Old Image leaf survived its worker restart")
+            self.assertTrue(self._alive(new_leaf))
+            self.assertEqual(os.getpgid(new_leaf), again["pid"])
 
     def test_voice_startup_failure_never_publishes_hub_readiness(self):
         with self._running_hub(failing_voice=True) as (fixture, process, known_children):

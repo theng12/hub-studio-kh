@@ -668,16 +668,22 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertTrue(z_image['guidance_ignored'])
         self.assertEqual(z_image['generation_limits']['min_steps'], 2)
         self.assertEqual(z_image['max_prompt_characters'], 4000)
-        # Both entries carry the geometry the picker needs, and both are dispatchable here.
+        # Each entry carries its own qualified geometry. This fixture installs the two mflux
+        # packages; Qwen remains visible but unavailable until its separate pack/runtime exists.
+        from components.image.app.backend.generation import size_presets
         for entry in entries:
             # The lane's OWN preset table, not a literal. It asserted 12, which meant offering
             # one more qualified canvas -- a producer-side change that every consumer is
             # supposed to pick up with no code edit -- failed a test for doing the right thing.
-            from components.image.app.backend.generation import SIZE_PRESETS
-            self.assertEqual(len(entry['image_sizes']), len(SIZE_PRESETS))
-            self.assertEqual(len(entry['sizes']), len(SIZE_PRESETS))
-            self.assertTrue(entry['execution_ready'], entry['readiness'])
-            self.assertEqual(entry['cache']['state'], 'cached')
+            expected = size_presets(MODELS[entry['repo']])
+            self.assertEqual(len(entry['image_sizes']), len(expected))
+            self.assertEqual(len(entry['sizes']), len(expected))
+            if entry['repo'] not in (FLUX2_KLEIN.repo, Z_IMAGE_TURBO.repo):
+                self.assertFalse(entry['execution_ready'])
+                self.assertEqual(entry['cache']['state'], 'not_installed')
+            else:
+                self.assertTrue(entry['execution_ready'], entry['readiness'])
+                self.assertEqual(entry['cache']['state'], 'cached')
         # Z-Image's qualification publishes what is measured and what is not.
         self.assertEqual(z_image['qualification']['fleet_8gb'].split(':')[0], 'pending')
         self.assertEqual(z_image['qualification']['measured_peak_gb']['low_ram'], 7.12)

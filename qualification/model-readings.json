@@ -8,11 +8,11 @@
       "model": "Qwen3.5-9B 4-bit",
       "quantization": "uniform 4-bit MLX",
       "engine": "chat-mlx",
-      "machine": "16 GB · Apple M1",
+      "machine": "16 GB \u00b7 Apple M1",
       "tier_gb": 16,
       "outcome": "completed a 256-token completion",
       "metrics": {
-        "tokens_per_second": "12.40–12.48",
+        "tokens_per_second": "12.40\u201312.48",
         "generation_seconds": "20.64 / 20.51",
         "load_seconds": 9.08,
         "peak_mlx_gb": 5.23,
@@ -28,11 +28,11 @@
       "model": "Qwen3.5-9B 4-bit",
       "quantization": "uniform 4-bit MLX",
       "engine": "chat-mlx",
-      "machine": "16 GB · Apple M2",
+      "machine": "16 GB \u00b7 Apple M2",
       "tier_gb": 16,
       "outcome": "completed a 256-token completion",
       "metrics": {
-        "tokens_per_second": "14.14–14.02",
+        "tokens_per_second": "14.14\u201314.02",
         "generation_seconds": "18.11 / 18.26",
         "load_seconds": 13.69,
         "peak_mlx_gb": 5.23,
@@ -48,11 +48,11 @@
       "model": "Qwen3.5-9B 4-bit",
       "quantization": "uniform 4-bit MLX",
       "engine": "chat-mlx",
-      "machine": "16 GB · Apple M4",
+      "machine": "16 GB \u00b7 Apple M4",
       "tier_gb": 16,
       "outcome": "completed a 256-token completion",
       "metrics": {
-        "tokens_per_second": "18.33–18.60",
+        "tokens_per_second": "18.33\u201318.60",
         "generation_seconds": "13.97 / 13.76",
         "load_seconds": 12.48,
         "peak_mlx_gb": 5.23,
@@ -68,9 +68,9 @@
       "model": "Z-Image-Turbo 6B MLX 4-bit",
       "quantization": "4-bit mflux pack",
       "engine": "image-mflux",
-      "machine": "32 GiB · Apple M2 Max",
+      "machine": "32 GiB \u00b7 Apple M2 Max",
       "tier_gb": 16,
-      "outcome": "1280×720, 9 steps, seed 42 — completed in both configurations",
+      "outcome": "1280\u00d7720, 9 steps, seed 42 \u2014 completed in both configurations",
       "metrics": {
         "generation_seconds_default": 166,
         "generation_seconds_low_ram": 236,
@@ -89,12 +89,12 @@
       "model": "FLUX.2 Klein 4B MLX 4-bit",
       "quantization": "4-bit MLX",
       "engine": "image-mflux",
-      "machine": "32 GiB · Apple M2 Max",
+      "machine": "32 GiB \u00b7 Apple M2 Max",
       "tier_gb": 16,
       "outcome": "measured beside Z-Image in the same configuration; no stored runtime of its own",
       "metrics": {
         "peak_mlx_gb_default": 12.9,
-        "low_ram_mode": "none — this model has no bounded configuration",
+        "low_ram_mode": "none \u2014 this model has no bounded configuration",
         "weights_on_disk_gb": 4.62
       },
       "evidence": "M",
@@ -106,7 +106,7 @@
       "model": "YuE2 3B Music (8-bit AR + bf16 NAR)",
       "quantization": "8-bit AR + bf16 NAR + bf16 VAE (MLX)",
       "engine": "music-yue2",
-      "machine": "32 GiB · Apple M2 Max",
+      "machine": "32 GiB \u00b7 Apple M2 Max",
       "tier_gb": 16,
       "outcome": "three songs at 24 / 36 / 120 s of 48 kHz stereo, mode off, seed fixed; the 36 s one through this app's own runner bridge and its runtime pinned by content",
       "metrics": {
@@ -120,6 +120,24 @@
       "evidence": "M",
       "source": "three runs at port commit 9253ed133343406947bde7b67d43c7a63fb39d99 and runtime sha256 75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4, peaks by sampled footprint in the process doing the work",
       "source_path": "qualification/yue2-music-results-20260927/bridge-run.json"
+    },
+    {
+      "package_id": "qwen-image-2-1-mflux-q4",
+      "model": "Qwen Image 2.1 Low-RAM 4-bit",
+      "quantization": "MLX affine 4-bit",
+      "engine": "image-mflux",
+      "machine": "32 GB \u00b7 Apple M2 Max",
+      "tier_gb": 32,
+      "outcome": "four packaged 16-step 1K cases completed; no physical 16 GB claim",
+      "metrics": {
+        "peak_process_tree_gb": "5.513\u20135.853",
+        "wall_seconds": "176.630\u2013212.859",
+        "swap_peak_growth_gb": 0,
+        "pressure": "normal"
+      },
+      "evidence": "M",
+      "source": "packaged Image worker on physical 32 GiB M2 Max; cold/warm square, landscape, portrait",
+      "source_path": "qualification/evidence/qwen-image-21-20261006/measurement.json"
     }
   ]
 }

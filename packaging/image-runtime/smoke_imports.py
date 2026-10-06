@@ -21,6 +21,7 @@ from importlib import import_module, metadata
 import json
 from pathlib import Path
 import platform
+import subprocess
 import sys
 
 
@@ -90,7 +91,10 @@ def registry_classes(source: Path) -> list[str]:
                 or not isinstance(keyword.value.value, str):
             raise SystemExit(f"{source}: {name} has no 'model_class' string; this smoke reads it "
                              f"to import the class the worker will load.")
-        classes.append(keyword.value.value)
+        # A native engine has no Python model class to import. Its empty value is deliberate and
+        # is checked by ``native_leaf`` below instead of being turned into a fake Python import.
+        if keyword.value.value:
+            classes.append(keyword.value.value)
     if not classes:
         raise SystemExit(f"{source}: MODELS names no models, so this smoke would import nothing.")
     return classes
@@ -112,6 +116,30 @@ def _registry_names(models: ast.expr, source: Path) -> list[str]:
     return names
 
 
+def native_leaf(runtime: Path) -> dict[str, str]:
+    """The pinned native leaf staged beside the macOS-14 Python runtime."""
+    manifest_path = runtime / "manifest" / "mlx-serve.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"cannot read {manifest_path}: {error}") from error
+    binary = runtime / str(manifest.get("path") or "") / "mlx-serve"
+    if not binary.is_file():
+        raise SystemExit(f"mlx-serve native leaf is missing: {binary}")
+    result = subprocess.run(
+        [str(binary), "--version"], capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin"}, timeout=30,
+    )
+    output = result.stdout + "\n" + result.stderr
+    expected = str(manifest.get("version") or "")
+    if result.returncode != 0 or f"mlx-serve {expected}" not in output.splitlines():
+        raise SystemExit(
+            f"mlx-serve native leaf did not report pinned version {expected!r}: "
+            f"exit {result.returncode}"
+        )
+    return {"version": expected, "minimum_macos": str(manifest.get("minimum_macos"))}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", type=Path,
@@ -119,6 +147,8 @@ def main() -> int:
     arguments = parser.parse_args()
     source = registry_path(arguments.registry)
     classes = registry_classes(source)
+    runtime = Path(sys.executable).resolve().parents[1]
+    native = native_leaf(runtime)
     for module in BASE_MODULES:
         import_module(module)
     for entry in classes:
@@ -136,6 +166,7 @@ def main() -> int:
                 "python": platform.python_version(),
                 "registry": str(source),
                 "models": classes,
+                "mlx_serve": native,
                 "packages": {
                     name: metadata.version(name)
                     for name in ("mflux", "mlx", "mlx-metal", "Pillow", "numpy", "safetensors", "transformers", "fastapi", "uvicorn")

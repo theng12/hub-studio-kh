@@ -5,6 +5,22 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 source "$PROJECT_ROOT/packaging/voice-runtime/pins.env"
 BUILD_ROOT="$PROJECT_ROOT/.build"
+TRASH_ROOT="$PROJECT_ROOT/_trash/image-runtime-build"
+SMOKE_STATES=()
+stash_path() {
+  local source="$1" base stamp destination suffix
+  [[ -e "$source" ]] || return 0
+  mkdir -p "$TRASH_ROOT"
+  base="$(basename "$source")"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  destination="$TRASH_ROOT/$base.$stamp.$$"
+  suffix=0
+  while [[ -e "$destination" ]]; do
+    suffix=$((suffix + 1))
+    destination="$TRASH_ROOT/$base.$stamp.$$.$suffix"
+  done
+  mv "$source" "$destination"
+}
 if [[ -d "$PROJECT_ROOT/.build/downloads" ]]; then
   DOWNLOADS="$PROJECT_ROOT/.build/downloads"
 else
@@ -46,8 +62,12 @@ printf '%s  %s\n' 'c4fdad2f82f1c83554b581cf04b33fa79cb888d9d2ad9e87107b9bf0780e8
 STAGE="$(mktemp -d "$BUILD_ROOT/image-runtime-stage.XXXXXX")"
 RELOCATION_PARENT="$BUILD_ROOT/Relocation Check $$"
 cleanup() {
-  [[ ! -d "$STAGE" ]] || rm -rf "$STAGE"
-  [[ ! -d "$RELOCATION_PARENT" ]] || rm -rf "$RELOCATION_PARENT"
+  stash_path "$STAGE"
+  stash_path "$RELOCATION_PARENT"
+  local state
+  for state in "${SMOKE_STATES[@]}"; do
+    stash_path "$state"
+  done
 }
 trap cleanup EXIT
 tar -xzf "$PYTHON_ARCHIVE" -C "$STAGE" --strip-components=1
@@ -63,17 +83,29 @@ cp -R "$SCRIPT_DIR/licenses/." "$STAGE/licenses/"
   "$STAGE/manifest/python-distributions.json" "$STAGE/licenses/python"
 "$STAGE/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" normalize-shebangs "$STAGE"
 "$STAGE/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" sanitize-rpaths "$STAGE"
-find "$STAGE" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-find "$STAGE" -depth -type d -name __pycache__ -empty -delete
+CACHE_TRASH="$TRASH_ROOT/generated-cache.$(date -u +%Y%m%dT%H%M%SZ).$$"
+while IFS= read -r -d '' cache; do
+  relative="${cache#"$STAGE"/}"
+  mkdir -p "$CACHE_TRASH/$(dirname "$relative")"
+  mv "$cache" "$CACHE_TRASH/$relative"
+done < <(find "$STAGE" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print0)
+while IFS= read -r -d '' cache; do
+  relative="${cache#"$STAGE"/}"
+  mkdir -p "$CACHE_TRASH/$(dirname "$relative")"
+  mv "$cache" "$CACHE_TRASH/$relative"
+done < <(find "$STAGE" -depth -type d -name __pycache__ -empty -print0)
 "$STAGE/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" audit "$STAGE" \
   --target-macos 14.0 --forbid-prefix "$PROJECT_ROOT" --forbid-prefix "$STAGE"
 chmod -R a-w "$STAGE"
 chmod u+w "$STAGE/manifest"
 "$STAGE/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" manifest "$STAGE"
 chmod a-w "$STAGE/manifest/runtime-files.json" "$STAGE/manifest"
+"$STAGE/bin/python3" -I -B "$SCRIPT_DIR/append_mlx_serve.py" "$STAGE" \
+  "$DOWNLOADS/mlx-serve-bin-macos-arm64.tar.gz"
 run_smoke() {
   local runtime="$1" state
   state="$(mktemp -d "$BUILD_ROOT/image-runtime-state.XXXXXX")"
+  SMOKE_STATES+=("$state")
   mkdir -p "$state/home" "$state/tmp"
   # `--registry` names the Image worker's own model registry, because this file is executed from
   # a copy inside the runtime and cannot find the repository on its own. The smoke imports every
@@ -84,7 +116,7 @@ run_smoke() {
     "$runtime/bin/python3" -I -B "$runtime/manifest/smoke_imports.py" \
     --registry "$PROJECT_ROOT/components/image/app/backend/generation.py")
   "$runtime/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" verify "$runtime"
-  rm -rf "$state"
+  stash_path "$state"
 }
 mkdir -p "$RELOCATION_PARENT"
 RELOCATED="$RELOCATION_PARENT/Image Runtime"
@@ -97,5 +129,5 @@ mv "$RELOCATED" "$OUTPUT_DIR"
 chmod a-w "$OUTPUT_DIR"
 run_smoke "$OUTPUT_DIR"
 trap - EXIT
-[[ ! -d "$RELOCATION_PARENT" ]] || rm -rf "$RELOCATION_PARENT"
+stash_path "$RELOCATION_PARENT"
 echo "Image runtime ready: $OUTPUT_DIR"

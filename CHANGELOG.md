@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.150 — 2026-10-06 · Qwen Image 2.1 packages and physical SSD qualification
+
+- Adds ordinary selectable Qwen Image 2.1 affine 4-bit packages: pinned mlx-serve 26.10.1 native
+  backend and separate mflux q4 low-memory backend. RAM admission remains conservative at 32 GB
+  while physical 24/16 GB SSD receipts are pending. Only the native package requires macOS 26.2;
+  the existing Image models retain macOS 14 support. No language or thumbnail-only restriction.
+- The native leaf is private, loopback-only, bounded, cancelled and reaped. Hub restarts clean the
+  worker's verified isolated process group even after leader exit. Low-Qwen restores cache settings
+  after success/failure and correctly reports ignored guidance when no negative prompt is allowed.
+- SSD commands check exact runtime inventory and content digest, clone only the candidate package
+  into private state, refuse overlapping workers, and require complete footprint/pressure/swap/
+  admission-headroom measurements before a candidate pass. Peak swap growth determines pressure.
+- Model updates archive interrupted copies, replaced folders and old revisions rather than deleting
+  them. Failed app stages and native diagnostics remain recoverable; the tracked DMG builder
+  preserves previous installers and staging.
+- Focused regression checks cover lifecycle, cache restoration, request contract, package hashes,
+  qualification fail-closed behavior and model-copy recovery. Packaged and release verification
+  records are retained under `_orchestra/audit-20261006/qwen-release-0150`.
+
 ## 0.6.149 — 2026-10-05 · A Hub restart re-runs the work it interrupted instead of parking it for recovery
 
 Branch `fix/restart-lost-free-work` off 0.6.148 a7fd296. On 2026-10-05 22:14:56 the Terranash-1600 controller's Hub process restarted

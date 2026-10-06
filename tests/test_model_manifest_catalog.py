@@ -132,7 +132,8 @@ class ModelManifestCatalogTests(unittest.TestCase):
                                  list(choice.get("requires_packages") or []))
                 self.assertRegex(manifest["revision"], REVISION)
                 self.assertEqual(manifest["schema_version"], 1)
-                self.assertEqual(manifest["minimum_macos"], "14.0")
+                self.assertEqual(manifest["minimum_macos"],
+                                 choice.get("minimum_macos", "14.0"))
                 details = CAPTURE.DETAILS[package_id]
                 # A tier is `qualified` only where the capture spec records a measurement, and
                 # `unqualified` everywhere else. This asserted the literal string "unqualified" for
@@ -337,6 +338,11 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # 189,498,804 bytes - the packed model.safetensors, Parakeet's config.json, ATTRIBUTION.md and
             # both licence texts (byte-identical to FermionResearch/Phonon-2's SHA256SUMS entries).
             "phonon-2-mlx": "d2e7ee4e41a9d9824fad54eeae6451d49482f2622b3259c077af074db238686e",
+            # Qwen Image 2.1 4-bit ships as two distinct immutable packages. The native
+            # mlx-serve package declares its conditional macOS 26.2 floor; the mflux candidate
+            # retains macOS 14 and a conservative 32 GB production floor pending the SSD runs.
+            "qwen-image-2-1-mlx-serve-4bit": "a30609f839a4a25db68d58e7929c7e6fccf67bcd3883f7715677614ee13ad73e",
+            "qwen-image-2-1-mflux-q4": "a5e519cc7e83b1aaa6f907a2193c0cb2888e11de6bbdf96c9ef618d3fb045c07",
         }
         # The digest map is the frozen-content half of the invariant: its keys are checked against
         # the manifests on disk (never against a hand-written list), so a package that appears

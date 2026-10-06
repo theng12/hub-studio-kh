@@ -33,22 +33,47 @@ def write_workers(path, workers):
         Path(temporary).unlink(missing_ok=True)
 
 
-def stop_child(process):
-    if process.poll() is not None:
-        return
-    process.terminate()
+def _group_exists(pgid: int) -> bool:
     try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        # voice_worker isolates its own group; do not signal any unrelated group.
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def stop_child(process, pgid=None):
+    """Stop a private worker and every process in its verified isolated group."""
+    owned_group = pgid if pgid == process.pid and pgid > 1 else None
+    if owned_group is not None:
         try:
-            if os.getpgid(process.pid) == process.pid:
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
+            os.killpg(owned_group, signal.SIGTERM)
         except ProcessLookupError:
             pass
-        process.wait(timeout=5)
+    elif process.poll() is None:
+        process.terminate()
+    if process.poll() is None:
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            if owned_group is not None:
+                try:
+                    os.killpg(owned_group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.kill()
+            process.wait(timeout=5)
+    if owned_group is not None:
+        deadline = time.monotonic() + 2
+        while _group_exists(owned_group) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if _group_exists(owned_group):
+            try:
+                os.killpg(owned_group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def await_child(process, ready_file, timeout=120, *, label="Studio"):
@@ -347,6 +372,7 @@ def main():
             os.getpid(), offline=args.offline, port=port)
         child['process'] = subprocess.Popen(command, cwd=data,
             env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'})
+        child['pgid'] = child['process'].pid
         child['started'] = time.monotonic()
 
     def descriptor(child):
@@ -368,6 +394,8 @@ def main():
         child['failures'] += 1
         print(f"Private {label} worker exited (status {child['process'].returncode}); restarting "
               f"it in {delay} s. The other studios keep running.", file=sys.stderr, flush=True)
+        stop_child(child['process'], child.get('pgid'))
+        child['pgid'] = None
         if child_watch_stop.wait(delay):
             return
         with children_lock:
@@ -376,9 +404,12 @@ def main():
             spawn(child, child['port'])
         try:
             await_child(child['process'], child['ready'], label=label)
+            if os.getpgid(child['process'].pid) != child['process'].pid:
+                raise RuntimeError(f'Private {label} worker process group is not isolated')
         except (RuntimeError, ValueError) as exc:
             print(f"{exc}; the Hub will try again.", file=sys.stderr, flush=True)
-            stop_child(child['process'])
+            stop_child(child['process'], child.get('pgid'))
+            child['pgid'] = None
             return
         with children_lock:
             if not child_watch_stop.is_set():
@@ -396,6 +427,9 @@ def main():
         # fails here, before the Hub is ready, is still fatal: nothing has been published yet.
         for child in children:
             _, child['port'] = await_child(child['process'], child['ready'], label=child['id'].title())
+            if os.getpgid(child['process'].pid) != child['process'].pid:
+                raise RuntimeError(
+                    f'Private {child["id"].title()} worker process group is not isolated')
         write_workers(workers_file, [descriptor(child) for child in children])
         threading.Thread(target=watch_children, daemon=True,
                          name='studiohub-child-monitor').start()
@@ -407,7 +441,8 @@ def main():
             child_watch_stop.set()
         ready.unlink(missing_ok=True)
         for child in reversed(children):
-            stop_child(child['process'])
+            stop_child(child['process'], child.get('pgid'))
+            child['pgid'] = None
             child['ready'].unlink(missing_ok=True)
         workers_file.unlink(missing_ok=True)
 

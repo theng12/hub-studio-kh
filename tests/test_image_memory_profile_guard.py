@@ -30,9 +30,9 @@ class ImageMemoryProfileGuard(unittest.TestCase):
         manifests = []
         for path in sorted((PROJECT_ROOT / 'model-manifests').glob('*.json')):
             data = json.loads(path.read_text())
-            if data.get('engine') == generation.IMAGE_ENGINE:
+            if data.get('engine') in generation.IMAGE_ENGINES:
                 manifests.append(data['package_id'])
-        self.assertTrue(manifests, 'no image-mflux manifest found at all')
+        self.assertTrue(manifests, 'no Image engine manifest found at all')
         served = {model.package_id for model in generation.MODELS.values()}
         # Retired or unregistered packages are reported by the worker (`packages_without_a_runtime_model`);
         # what this guard needs is that nothing it *does* serve lacks a manifest.

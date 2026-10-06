@@ -57,6 +57,8 @@ may still run there, and one at or below may still not (see the peak-memory note
 | **Image** | | | | | | |
 | FLUX.2 Klein 4B MLX 4-bit | mflux (MLX) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | Z-Image-Turbo 6B MLX 4-bit | mflux (MLX) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
+| Qwen Image 2.1 Low-RAM 4-bit | mflux (MLX) | 32 GB | no | no | no | yes |
+| Qwen Image 2.1 | mlx-serve (MLX) | 32 GB | no | no | no | yes |
 | **Music** | | | | | | |
 | Stable Audio 3 Medium (1.4B) | MLX (audio) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | YuE2 3B Music (8-bit AR + bf16 NAR) | mlx-Yue2 (MLX) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
@@ -75,6 +77,7 @@ section below is where measurements live.
 | Z-Image-Turbo 6B MLX 4-bit | 4-bit mflux pack | 32 GiB · Apple M2 Max | [M] 1280×720, 9 steps, seed 42 — completed in both configurations — generation, default 166 s, generation, low RAM 236 s, peak MLX, default 9.84 GB, peak MLX, low RAM 6.26 GB, peak footprint, default 17.7 GB, peak footprint, low RAM 7.12 GB, swaps 0 | `qualification/z-image-turbo-2026-09-24.md` |
 | FLUX.2 Klein 4B MLX 4-bit | 4-bit MLX | 32 GiB · Apple M2 Max | [M] measured beside Z-Image in the same configuration; no stored runtime of its own — peak MLX, default 12.9 GB, low-RAM mode none — this model has no bounded configuration, weights on disk 4.62 GB | `qualification/z-image-turbo-2026-09-24.md` |
 | YuE2 3B Music (8-bit AR + bf16 NAR) | 8-bit AR + bf16 NAR + bf16 VAE (MLX) | 32 GiB · Apple M2 Max | [M] three songs at 24 / 36 / 120 s of 48 kHz stereo, mode off, seed fixed; the 36 s one through this app's own runner bridge and its runtime pinned by content — audio produced 24.0 / 36.0 / 120.0 s, generation 58.6 / 103.2 / 429.8 s, load 6.8 s, peak footprint 10.79 / 11.81 / 11.93 GB, peak RSS 6.23 GB, weights on disk 9.9 GB | `qualification/yue2-music-results-20260927/bridge-run.json` |
+| Qwen Image 2.1 Low-RAM 4-bit | MLX affine 4-bit | 32 GB · Apple M2 Max | [M] four packaged 16-step 1K cases completed; no physical 16 GB claim — peak process tree gb 5.513–5.853 GB, wall seconds 176.630–212.859 s, swap peak growth gb 0 GB, pressure normal | `qualification/evidence/qwen-image-21-20261006/measurement.json` |
 
 `[M]` on every row above: each is a run that left the record named in the last column.
 
@@ -111,12 +114,12 @@ One rule for every voice model, so a chapter sounds the same whichever model or 
 
 ## What is NOT measured
 
-24 of 29 packages have no run behind them — their floor is
+25 of 31 packages have no run behind them — their floor is
 catalog metadata, which is a starting point rather than proof. That is not a defect in any
 one of them; it is the honest state of the record, and it is the list of what a test would
 settle:
 
-`breeze-tts-2-mlx-4bit`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-4bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `omnivoice-bfloat16`, `phonon-2-mlx`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-4bit`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
+`breeze-tts-2-mlx-4bit`, `chatterbox-4bit`, `chatterbox-8bit`, `fish-audio-s2-pro-4bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `omnivoice-bfloat16`, `phonon-2-mlx`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen-image-2-1-mlx-serve-4bit`, `qwen3-tts-12hz-0-6b-base-4bit`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
 
 ## Two things that surprise people reading this
 
@@ -149,4 +152,4 @@ So that a future test does not become the thing you cannot remember:
 
 ---
 
-Generated from 29 manifests, 6 recorded readings and 5 voice runtime rows.
+Generated from 31 manifests, 7 recorded readings and 5 voice runtime rows.

@@ -326,8 +326,10 @@ class StreamingTests(unittest.TestCase):
 
     def test_the_8gb_plan_streams_and_a_16gb_plan_does_not(self):
         for model in generation.MODELS.values():
+            expected = (('text_encoder', 'transformer')
+                        if model.memory.stream_below_bytes else ())
             self.assertEqual(tuple(name for name, *_ in memory_plan(model, 8 * GiB)['stream']),
-                             ('text_encoder', 'transformer'), model.repo)
+                             expected, model.repo)
             self.assertEqual(memory_plan(model, 16 * GiB)['stream'], (), model.repo)
             self.assertEqual(memory_plan(model, 8 * GiB, 'full')['stream'], (), model.repo)
 
@@ -358,6 +360,9 @@ class MemoryProfileEvidenceTests(unittest.TestCase):
         for model in generation.MODELS.values():
             profile = model.qualification.get('memory_profile')
             with self.subTest(model=model.repo):
+                if not model.memory.stream_below_bytes:
+                    self.assertIsNone(profile)
+                    continue
                 self.assertTrue(profile, 'a bounded model publishes the memory it was measured at')
                 record = PROJECT_ROOT / profile['source']
                 rows = [json.loads(line) for line in record.read_text().splitlines() if line.strip()]

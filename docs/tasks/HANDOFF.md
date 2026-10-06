@@ -1,3 +1,13 @@
+> 2026-10-06 Qwen integration 0.6.150: ordinary selectable native Qwen Image 2.1 affine 4-bit and
+> separate mflux q4 low-memory package. RAM floor 32 GB until physical lower-tier receipts; native
+> package macOS 26.2+, base/low mflux macOS 14+. Four packaged low-memory 1K cases passed on physical
+> 32 GiB M2 Max (5.51–5.85 GB, normal pressure, zero swap). Native engine's clean 32 GiB receipts are
+> retained; current-host packaged startup needed 16.7 GB free and refused 14.9 GB, so no packaged native
+> success or 24 GB claim is made. Owner will run SSD commands on physical 24 GB normal / 16 GB low.
+> Both packs are SHA-verified on all four SSDs. Keep This Mac manually paused: owner's explicit reply.
+> Tests full gate 2169 / 13 skips; focused checks after measurement corrections pass. Composite Image
+> runtime c5ac478f85d5687e0bd6df715eec5d55a3a59e36aae4f14da352f45ea546923a; model assets outside app.
+
 # Studio Hub — session handoff
 
 **Read this first in a new session.** It is kept current with every release; see the rule in

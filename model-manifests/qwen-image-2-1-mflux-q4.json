@@ -1,0 +1,153 @@
+{
+  "defaults": {
+    "guidance": 1.0,
+    "height": 1024,
+    "parameters_source": "docs/superpowers/plans/2026-10-06-qwen-image-21.md",
+    "seed": -1,
+    "steps": 16,
+    "width": 1024
+  },
+  "engine": "image-mflux",
+  "files": [
+    {
+      "path": "model/processor/chat_template.jinja",
+      "sha256": "3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4",
+      "size": 5292,
+      "source_path": "processor/chat_template.jinja",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/processor/chat_template.jinja"
+      ]
+    },
+    {
+      "path": "model/processor/tokenizer.json",
+      "sha256": "be75606093db2094d7cd20f3c2f385c212750648bd6ea4fb2bf507a6a4c55506",
+      "size": 11422650,
+      "source_path": "processor/tokenizer.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/processor/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/processor/tokenizer_config.json",
+      "sha256": "bfbbc1983aa3f46c0f496d90a37fbbea8047581fbd7250534f112445be84b5a6",
+      "size": 417,
+      "source_path": "processor/tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/processor/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/text_encoder/0.safetensors",
+      "sha256": "c1cb30320ce8a482d353dd821f8123f15b773ddb00981580142c1a1434326c9f",
+      "size": 2138739328,
+      "source_path": "text_encoder/0.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/text_encoder/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/text_encoder/1.safetensors",
+      "sha256": "5f611e1d8ac0a245f80a79a03b1bfbe0e0ab4164462b8ed2579d16a225a0d601",
+      "size": 2119029339,
+      "source_path": "text_encoder/1.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/text_encoder/1.safetensors"
+      ]
+    },
+    {
+      "path": "model/text_encoder/model.safetensors.index.json",
+      "sha256": "6b92f45be542f40de5e297c97ff7b341e985e5c2850b3dd674b1dc97d309ba90",
+      "size": 51332,
+      "source_path": "text_encoder/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/text_encoder/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/transformer/0.safetensors",
+      "sha256": "ce0e8ab688a5cec5111972d7231c7fcc672e10f71602d24825ef375d1a8b8764",
+      "size": 2128887354,
+      "source_path": "transformer/0.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/transformer/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/transformer/1.safetensors",
+      "sha256": "e13feedb023521119a7d5d01c7f16b8ea66970157df3f6e6716bfbe76007a0ab",
+      "size": 1878195881,
+      "source_path": "transformer/1.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/transformer/1.safetensors"
+      ]
+    },
+    {
+      "path": "model/transformer/model.safetensors.index.json",
+      "sha256": "10df8a76f5191550910ee383638a14aa55483d7e03b50ba0676455602e06fe6e",
+      "size": 49743,
+      "source_path": "transformer/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/transformer/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/vae/0.safetensors",
+      "sha256": "4ef2508826e6a0679ae43160073df9249061237a82e745bfb196c3505f0543f6",
+      "size": 1323975289,
+      "source_path": "vae/0.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/vae/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/vae/model.safetensors.index.json",
+      "sha256": "b6755e8ad45dff83500666799fbce77839d606b49c9c0b1ae7dce25c72c566a7",
+      "size": 15704,
+      "source_path": "vae/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/Qwen-Image-2.1-mflux-q4/resolve/746a58556820933a2df5c75887a2570f1ad200c0/vae/model.safetensors.index.json"
+      ]
+    }
+  ],
+  "license": {
+    "weights": "Apache-2.0"
+  },
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/Qwen-Image-2.1-mflux-q4",
+  "package_id": "qwen-image-2-1-mflux-q4",
+  "qualification": {
+    "memory_evidence": "Packaged MLX 4-bit low-memory path completed four 1K 16-step cases on the physical 32 GiB M2 Max, 2026-10-06: sampled worker-tree peak 5.513\u20135.853 GB, normal pressure, zero swap growth. Evidence: qualification/evidence/qwen-image-21-20261006/measurement.json. Physical 16 GB remains pending; production floor 32 GB.",
+    "min_free_memory_gb": 14.697,
+    "min_free_memory_note": "Lowest recorded successful live-free start was 14.697 GB on the physical 32 GiB M2 Max on 2026-10-06, cold-square 16 steps 1K; qualification/evidence/qwen-image-21-20261006/measurement.json. No lower-headroom or physical 16 GB pass is inferred.",
+    "minimum_unified_memory_gb": 32,
+    "reason": "The owner's bounded physical 16 GB SSD run remains pending.",
+    "recommended_unified_memory_gb": 32,
+    "status": "unqualified",
+    "target_evidence": "Compatibility target only; no physical 16 GB pass is recorded.",
+    "target_unified_memory_gb": 16
+  },
+  "quantization": "MLX 4-bit",
+  "quantization_source": "the publisher model id states q4: mlx-community/Qwen-Image-2.1-mflux-q4",
+  "revision": "746a58556820933a2df5c75887a2570f1ad200c0",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-10-06",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/Qwen-Image-2.1-mflux-q4",
+        "revision": "746a58556820933a2df5c75887a2570f1ad200c0"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/Qwen-Image-2.1-mflux-q4",
+        "revision": "746a58556820933a2df5c75887a2570f1ad200c0",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/Qwen-Image-2.1-mflux-q4/revision/746a58556820933a2df5c75887a2570f1ad200c0",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/Qwen-Image-2.1-mflux-q4/tree/746a58556820933a2df5c75887a2570f1ad200c0?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

@@ -2,6 +2,24 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.150 - 2026-10-06
+
+### Images
+
+**Qwen Image 2.1 4-bit is available as a regular image model.** Choose it wherever you choose an
+image model. The normal package currently requires 32 GB and macOS 26.2 or later. A separate
+low-memory package is included for qualification; the SSD carries physical 24 GB normal and
+16 GB low-memory test commands. Lower RAM tiers become available after those receipts are reviewed.
+
+**Switching image models restores the normal cache settings, and restarting an Image worker stops
+its native image process before another worker starts.**
+
+### SSD kits
+
+**Interrupted model copies and replaced model revisions are preserved in `_trash`.** The Qwen test
+commands verify the packaged runtime and record memory pressure, headroom, process footprint and
+peak swap growth. Missing measurements cannot count as a pass.
+
 ## 0.6.149 - 2026-10-05
 
 ### Jobs

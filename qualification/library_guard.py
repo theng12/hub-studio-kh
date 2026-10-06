@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -67,3 +68,21 @@ if __name__ == "__main__":
     if len(sys.argv) < 4 or sys.argv[1] != "clone":
         raise SystemExit(__doc__)
     print(clone(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4:]))
+
+
+def foreign_model_processes(listing: str | None = None,
+                            *, current_pid: int | None = None) -> list[str]:
+    rows = []
+    if listing is None:
+        listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="],
+                                 capture_output=True, text=True, timeout=15, check=True).stdout
+    current_pid = os.getpid() if current_pid is None else current_pid
+    for line in listing.splitlines():
+        match = re.match(r"\s*(\d+)\s+(.*)", line)
+        if not match or int(match[1]) == current_pid:
+            continue
+        command = match[2]
+        if ("hub_worker.py" in command or "image_worker.py" in command
+                or re.search(r"(?:^|/)mlx-serve(?:\s|$)", command)):
+            rows.append(f"pid {match[1]}: {command[:180]}")
+    return rows

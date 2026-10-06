@@ -15,6 +15,10 @@
     "music-yue2": {
       "reason": "The Music lane's second engine, adopted 2026-09-27. It runs in its own pinned Python 3.12 runtime because mlx-Yue pins mlx==0.32.2 while the Voice runtime this record covers carries mlx==0.31.2; the lock and its build-side import proof are at packaging/yue2-runtime/requirements.yue2.lock.txt and smoke_imports.py, and the stager pins the built tree by content. The tier is measured, not claimed: three runs on this Mac, 10.79 / 11.81 / 11.93 GB peak by sampled footprint (qualification/yue2-music-results-20260927/).",
       "record": "docs/music-studio-adoption.md"
+    },
+    "image-mlx-serve": {
+      "reason": "Added 2026-10-06 after this 2026-09-15 record. Qwen uses the existing Image worker and composite runtimes/image tree. The Python/mflux base retains its macOS 14 audit; the pinned mlx-serve leaf has a separate conditional macOS 26.2 audit/inventory and backend readiness gate. No deployment header is retargeted. Physical 24 GB normal and 16 GB low-RAM qualification remain pending SSD receipts.",
+      "record": "packaging/image-runtime/README.md"
     }
   },
   "observed_at": "2026-09-15",

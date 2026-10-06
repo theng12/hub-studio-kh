@@ -1,0 +1,140 @@
+{
+  "schema": "studiohub.qwen-image-21-evidence.v1",
+  "actual_host": {
+    "memory_bytes": 34359738368,
+    "chip": "Apple M2 Max",
+    "macos": "27.0.1",
+    "machine": "arm64"
+  },
+  "low_package": {
+    "tier_gb": 16,
+    "package_id": "qwen-image-2-1-mflux-q4",
+    "repo": "mlx-community/Qwen-Image-2.1-mflux-q4",
+    "revision": "746a58556820933a2df5c75887a2570f1ad200c0",
+    "quantization": "MLX affine Q4",
+    "engine": "image-mflux",
+    "minimum_macos": [
+      14,
+      0
+    ],
+    "label": "Qwen Image 2.1 MLX affine Q4 (mflux low-memory)"
+  },
+  "runtime_sha256": "c5ac478f85d5687e0bd6df715eec5d55a3a59e36aae4f14da352f45ea546923a",
+  "app_version": "0.6.150",
+  "low_32gb_outcome": "NON-TARGET TRIAL COMPLETED",
+  "low_rows": [
+    {
+      "name": "cold-square",
+      "width": 1024,
+      "height": 1024,
+      "status": "completed",
+      "artifact": "cold-square-seed42.png",
+      "artifact_sha256": "f83edd122a6eff81f82494bea08073ee5024e04a54f1aafa9be59f64055ebaa5",
+      "available_gb_start": 14.697,
+      "available_gb_min": 11.202,
+      "available_gb_end": 15.883,
+      "peak_process_tree_gb": 5.513,
+      "peak_single_process_gb": 5.595,
+      "memory_pressure": "normal",
+      "swap_peak_delta_gb": 0,
+      "swap_end_delta_gb": 0,
+      "memory_metrics_complete": true,
+      "wall_seconds": 212.859
+    },
+    {
+      "name": "warm-square",
+      "width": 1024,
+      "height": 1024,
+      "status": "completed",
+      "artifact": "warm-square-seed43.png",
+      "artifact_sha256": "ab8e074bec0e6b3939b4facfbd81cdb408e398865df48e553134f36be958905f",
+      "available_gb_start": 15.867,
+      "available_gb_min": 11.022,
+      "available_gb_end": 16.197,
+      "peak_process_tree_gb": 5.634,
+      "peak_single_process_gb": 5.716,
+      "memory_pressure": "normal",
+      "swap_peak_delta_gb": 0,
+      "swap_end_delta_gb": 0,
+      "memory_metrics_complete": true,
+      "wall_seconds": 202.733
+    },
+    {
+      "name": "warm-landscape",
+      "width": 1280,
+      "height": 720,
+      "status": "completed",
+      "artifact": "warm-landscape-seed44.png",
+      "artifact_sha256": "77b880d837279d631ca3818e1a66f0761489df5ffc657f7985f1b47cb0840c9e",
+      "available_gb_start": 16.043,
+      "available_gb_min": 11.73,
+      "available_gb_end": 16.881,
+      "peak_process_tree_gb": 5.737,
+      "peak_single_process_gb": 5.839,
+      "memory_pressure": "normal",
+      "swap_peak_delta_gb": 0,
+      "swap_end_delta_gb": 0,
+      "memory_metrics_complete": true,
+      "wall_seconds": 176.63
+    },
+    {
+      "name": "warm-portrait",
+      "width": 720,
+      "height": 1280,
+      "status": "completed",
+      "artifact": "warm-portrait-seed45.png",
+      "artifact_sha256": "919e9a4906de6568ebeb6ede91175753d8c2049879550de3ee09d266e8bf6faa",
+      "available_gb_start": 16.866,
+      "available_gb_min": 12.355,
+      "available_gb_end": 15.02,
+      "peak_process_tree_gb": 5.853,
+      "peak_single_process_gb": 5.84,
+      "memory_pressure": "normal",
+      "swap_peak_delta_gb": 0,
+      "swap_end_delta_gb": 0,
+      "memory_metrics_complete": true,
+      "wall_seconds": 176.674
+    }
+  ],
+  "normal_clean_32gb_engine_probes": [
+    {
+      "case": "exclusive-wide-16-english",
+      "size": "1280x720",
+      "steps": 16,
+      "request_seconds": 138.30707579100272,
+      "peak_process_gb": 15.742723096,
+      "peak_pressure": 1,
+      "swap_growth_gb": 0.0,
+      "guard_reason": null,
+      "image_sha256": "b8b9e9f2a7325875f5ed8b6a495f67d64a2733a0a507b38ecf2958b05bfdc75c"
+    },
+    {
+      "case": "exclusive-wide-16-dense",
+      "size": "1280x720",
+      "steps": 16,
+      "request_seconds": 137.7472995829885,
+      "peak_process_gb": 15.614862432,
+      "peak_pressure": 1,
+      "swap_growth_gb": 0.0,
+      "guard_reason": null,
+      "image_sha256": "d8bd6460a3f4b0ab47192aa0c2b065ea33eec057d9b850edd679c96ef03abdc8"
+    },
+    {
+      "case": "exclusive-512-16-khmer",
+      "size": "512x512",
+      "steps": 16,
+      "request_seconds": 38.61265575001016,
+      "peak_process_gb": 14.47925376,
+      "peak_pressure": 1,
+      "swap_growth_gb": 0.0,
+      "guard_reason": null,
+      "image_sha256": "941620886a51cc6bf8b251dd4d0b6fad147f2ae1a8ec57693d47a387be086616"
+    }
+  ],
+  "normal_packaged_current_host": "Startup refused before inference: runtime needed16.7GB free; current available14.9GB. This is not a lower-tier fit verdict.",
+  "normal_physical_24gb": "PENDING owner SSD run",
+  "low_physical_16gb": "PENDING owner SSD run",
+  "prompt": "A polished cinematic travel poster for Phnom Penh at blue hour. At the top, large clean gold lettering reads exactly \"PHNOM PENH\". Beneath it, smaller lettering reads exactly \"NIGHT MARKET 2026\". The riverfront glows with warm lanterns, detailed architecture and reflections on the water. Keep every requested letter legible and add no other text.",
+  "original_harness_outcome": "CANDIDATE PASSED THIS RUN",
+  "interpretation": "All four generation cases completed on physical32GiB; this trial is not a physical16GB qualification. Original raw receipt retained outside source; corrected target-tier semantics preserve the measured rows."
+}

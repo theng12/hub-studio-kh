@@ -139,3 +139,12 @@ Measured 2026-10-01/02 on a 32 GB M2 Max (same code path as the Hub's voice chil
    grounds that its weights exceed the 8 GB tier; it is now `bounded` anyway, because its codec decode was half of its 24 GB-tier peak:
    `mlx_memory._fish_decode` runs the DAC's upsample + decoder convolutions in 64-frame slabs with 16 frames of left context, measured
    identical to 9.4e-6 on the real codec, and context 8 is *not* enough at 8.5e-5. Its reference encode, +2.2-2.7 GB once per job, is cached.)
+
+
+### Qwen Image 2.1 backends (0.6.150)
+
+`qwen-image-2-1-mlx-serve-4bit` uses the pinned native mlx-serve backend in the existing Image worker. Its `MemoryPolicy.single_mode_reason` states that the native backend owns its staging and preflight; it is not an mflux bounded profile. The worker releases resident mflux before launching one native request and stops/reaps the leaf afterward. No shared/native concurrent inference is allowed; the broker's physical-machine lease and Image inference lock remain authoritative. The native backend requires macOS 26.2; existing mflux models retain macOS 14 support.
+
+`qwen-image-2-1-mflux-q4` is a separately pinned full-q4 checkpoint with a `MemoryPolicy.single_mode_reason` documenting its always-bounded Qwen loader. It does not use the generic FLUX/Z staged hooks: the Qwen wrapper constructs quantized encoder modules, restores the process-global definition in `finally`, materializes cached prompt embeddings before eviction, sets zero allocator cache, tiles the VAE, and evicts encoder/transformer stages. These are real backend controls, not a claim that every RAM tier is qualified.
+
+The normal model has clean standalone 32 GiB evidence. Physical 24 GiB normal and 16 GiB low-RAM qualification are pending the owner's SSD test receipts; the ordinary production floor remains conservative until those tests pass. Free-before-start floors must cite successful start measurements, never peak-plus-margin or a file-size formula. The SSD test records actual hardware, start free memory, process footprint, pressure and swap, uses a private/clone library, and restores qualification-only overrides on exit.

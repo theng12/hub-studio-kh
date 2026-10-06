@@ -67,6 +67,8 @@ SUBTITLE_FIELDS: dict[str, type] = {
 
 CHOICES: tuple[dict[str, Any], ...] = (
     {"package_id": "flux2-klein-4b-mlx-4bit", "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit", "revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a", "engine": "image-mflux"},
+    {"package_id": "qwen-image-2-1-mlx-serve-4bit", "model_id": "ddalcu/Qwen-Image-2.1-MLX-Serve-4bit", "revision": "88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38", "engine": "image-mlx-serve", "minimum_macos": "26.2", "captured_at": "2026-10-06", "quantization": "MLX 4-bit", "quantization_source": "the publisher model id states it: ddalcu/Qwen-Image-2.1-MLX-Serve-4bit", "license": {"weights": "Apache-2.0"}},
+    {"package_id": "qwen-image-2-1-mflux-q4", "model_id": "mlx-community/Qwen-Image-2.1-mflux-q4", "revision": "746a58556820933a2df5c75887a2570f1ad200c0", "engine": "image-mflux", "captured_at": "2026-10-06", "quantization": "MLX 4-bit", "quantization_source": "the publisher model id states q4: mlx-community/Qwen-Image-2.1-mflux-q4", "license": {"weights": "Apache-2.0"}},
     # ── ST-16: the second Image model, Z-Image-Turbo on mflux 0.20.0 ──
     # The publisher snapshot's root *is* the model directory: `transformer/`,
     # `text_encoder/`, `vae/` and `tokenizer/` sit at the top level with no
@@ -209,6 +211,34 @@ CHOICES: tuple[dict[str, Any], ...] = (
 
 DETAILS: dict[str, dict[str, Any]] = {
     "flux2-klein-4b-mlx-4bit": {"defaults": {"size_pixels": 1024, "steps": 4, "guidance": 1.0, "parameters_source": "research/rescope-model-inventory-2026-09-15.md"}, "memory": (16, 16, "Historical 16 GB Apple-Silicon 1K text-to-image receipt; editing, reference-image and 2K are not qualified.")},
+    "qwen-image-2-1-mlx-serve-4bit": {
+        "defaults": {"width": 1024, "height": 1024, "steps": 16, "guidance": 1.0,
+                     "seed": -1,
+                     "parameters_source": "docs/superpowers/plans/2026-10-06-qwen-image-21.md"},
+        "memory": (32, 32, "Measured on the owner's 32 GB M2 Max with mlx-serve 26.10.1 and the pinned MLX 4-bit pack: the retained clean 1K-class run recorded a 15.75 GB peak process footprint. Physical 24 GB evidence is still pending."),
+        "qualification": {
+            "status": "unqualified",
+            "reason": "Standalone 32 GB evidence exists; the packaged path and the owner's physical 24 GB SSD run remain pending.",
+            "min_free_memory_gb": 25.3,
+            "min_free_memory_note": "Provisional clean-start preflight floor from the retained standalone receipt; packaged measurement is still pending.",
+            "target_unified_memory_gb": 24,
+            "target_evidence": "Compatibility target only; no physical 24 GB pass is recorded.",
+        },
+    },
+    "qwen-image-2-1-mflux-q4": {
+        "defaults": {"width": 1024, "height": 1024, "steps": 16, "guidance": 1.0,
+                     "seed": -1,
+                     "parameters_source": "docs/superpowers/plans/2026-10-06-qwen-image-21.md"},
+        "memory": (32, 32, "Packaged MLX 4-bit low-memory path completed four 1K 16-step cases on the physical 32 GiB M2 Max, 2026-10-06: sampled worker-tree peak 5.513–5.853 GB, normal pressure, zero swap growth. Evidence: qualification/evidence/qwen-image-21-20261006/measurement.json. Physical 16 GB remains pending; production floor 32 GB."),
+        "qualification": {
+            "status": "unqualified",
+            "reason": "The owner's bounded physical 16 GB SSD run remains pending.",
+            "min_free_memory_gb": 14.697,
+            "min_free_memory_note": 'Lowest recorded successful live-free start was 14.697 GB on the physical 32 GiB M2 Max on 2026-10-06, cold-square 16 steps 1K; qualification/evidence/qwen-image-21-20261006/measurement.json. No lower-headroom or physical 16 GB pass is inferred.',
+            "target_unified_memory_gb": 16,
+            "target_evidence": "Compatibility target only; no physical 16 GB pass is recorded.",
+        },
+    },
     "z-image-turbo-mflux-4bit": {"defaults": {"width": 1280, "height": 720, "steps": 9, "guidance_ignored": True, "guidance_note": "CFG is disabled on this distilled model; mflux ignores --guidance (and --negative-prompt) and warns.", "parameters_source": "qualification/z-image-turbo-2026-09-24.md"}, "memory": (8, 16, "Measured on two tiers. 32 GB M2 Max, 1280x720, 9 steps: 17.64-17.70 GB peak footprint at the engine default and 7.12-7.24 GB with --low-ram, 0 swaps. 8 GB Apple M1 (Mac mini Macmini9,1, macOS 26.6.2, 3.03 GB available at start), mflux 0.20.0, seed 42, 9 steps: 1024x1024 low-ram OK in 392 s at 5.70 GB peak MLX / 5.85 GB footprint, 1857 MB peak swap; 1280x720 low-ram OK in 336 s at 5.70 / 5.85 GB, 1274 MB peak swap; 1024x1024 low-ram + vae-tile 256 OK at 4.95 / 5.50 GB. So the 8 GB tier is MEASURED and PASSES, with low-RAM mode mandatory there - it still swaps 1.3-1.9 GB. The engine default also completed on 8 GB but ONLY by swapping 3443 MB with an 8.72 GB footprint on an 8.0 GB machine: it fits by paging, not by fitting, and must not be offered at this tier."), "qualification": {"status": "qualified", "reason": "Qualified by measurement on two tiers: a 32 GB M2 Max at 1280x720, 9 steps, and the owner's 8 GB Apple M1 Mac mini run of 2026-09-26 where low-RAM mode completed both 1024x1024 and 1280x720. Local import and inference qualification are no longer outstanding for this model, and low-RAM mode is mandatory below 24 GB."}},
     "qwen3-tts-12hz-0-6b-base-8bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (8, 16, "The 0.6B Base tier is the 8 GB cloning model, which is what the Voice catalog and the native app advertise; the earlier 16 GB figure was inventory guidance and disagreed with both.")},
     "qwen3-tts-12hz-0-6b-base-4bit": {"defaults": {"parameters_source": "model/generation_config.json"}, "memory": (8, 16, "The lighter 4-bit twin of the 8 GB cloning model: same speech tokenizer (byte-identical codec files), 1.0 GB of weights instead of 1.3 GB. 8 GB tier by the same reasoning as the 8-bit; peak footprint measured on a 32 GB Mac only, awaiting the 8 GB runner.")},
@@ -503,7 +533,7 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
         "model_id": model_id,
         "revision": revision,
         "engine": choice["engine"],
-        "minimum_macos": "14.0",
+        "minimum_macos": choice.get("minimum_macos", "14.0"),
         "files": sorted(selected, key=lambda item: item["path"]),
         "defaults": details["defaults"],
         # A measured tier says so; everything else keeps the honest catalog-metadata wording. The
@@ -521,8 +551,11 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
             # An optional free-memory floor travels with its note (AGENTS.md: a floor names where it came from).
             **{key: details["qualification"][key] for key in ("min_free_memory_gb", "min_free_memory_note")
                if key in details.get("qualification", {})},
+            **{key: details["qualification"][key]
+               for key in ("target_unified_memory_gb", "target_evidence")
+               if key in details.get("qualification", {})},
         },
-        "source": {"provider": "huggingface", "captured_at": CAPTURE_DATE, "sources": sources,
+        "source": {"provider": "huggingface", "captured_at": choice.get("captured_at", CAPTURE_DATE), "sources": sources,
                    "layout": layout},
     }
     # The key is written only when the package has companions, which is the shape the shipped
@@ -542,6 +575,9 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
     # Licence/attribution a person declares (CC-BY packages must carry it); passed through verbatim.
     if choice.get("license"):
         manifest["license"] = choice["license"]
+    for field in ("quantization", "quantization_source"):
+        if field in choice:
+            manifest[field] = choice[field]
     return manifest
 
 
@@ -600,6 +636,22 @@ def manifest_problems(choice: dict[str, Any], manifest: dict[str, Any]) -> list[
             problems.append(
                 f"{package_id}: CHOICES says {field}={choice.get(field)!r} but "
                 f"model-manifests/{package_id}.json says {manifest.get(field)!r}")
+    minimum_macos = choice.get("minimum_macos", "14.0")
+    if minimum_macos != manifest.get("minimum_macos"):
+        problems.append(
+            f"{package_id}: CHOICES says minimum_macos={minimum_macos!r} but "
+            f"model-manifests/{package_id}.json says {manifest.get('minimum_macos')!r}")
+    for field in ("quantization", "quantization_source", "license"):
+        if field in choice and choice[field] != manifest.get(field):
+            problems.append(
+                f"{package_id}: CHOICES says {field}={choice[field]!r} but "
+                f"model-manifests/{package_id}.json says {manifest.get(field)!r}")
+    captured_at = choice.get("captured_at")
+    if captured_at is not None and captured_at != (manifest.get("source") or {}).get("captured_at"):
+        problems.append(
+            f"{package_id}: CHOICES says captured_at={captured_at!r} but "
+            f"model-manifests/{package_id}.json says "
+            f"{(manifest.get('source') or {}).get('captured_at')!r}")
     declared = list(manifest.get("requires_packages") or [])
     if list(choice.get("requires_packages") or []) != declared:
         problems.append(
@@ -623,6 +675,14 @@ def manifest_problems(choice: dict[str, Any], manifest: dict[str, Any]) -> list[
                 f"{package_id}: DETAILS memory {tuple(details['memory'])!r} but "
                 f"model-manifests/{package_id}.json records (minimum, recommended, evidence)="
                 f"{recorded!r}")
+        for field in ("min_free_memory_gb", "min_free_memory_note",
+                      "target_unified_memory_gb", "target_evidence"):
+            if field in details.get("qualification", {}) \
+                    and details["qualification"][field] != qualification.get(field):
+                problems.append(
+                    f"{package_id}: DETAILS qualification {field}="
+                    f"{details['qualification'][field]!r} but model-manifests/{package_id}.json "
+                    f"says {qualification.get(field)!r}")
     # A `subtitle` contract or a `default` flag is a person's declaration, not publisher
     # metadata, so `preserve_declared_blocks` carries a shipped manifest's block forward when
     # the spec does not restate it - see the docstring there. Only a malformed spec block is a

@@ -1,8 +1,8 @@
-"""The Image worker's model registry: one dispatch table, two mflux models.
+"""The Image worker's model registry: one dispatch table for supported Image engines.
 
-Every model this worker can run is described once, in :data:`MODELS`: which mflux class
-loads it, its own generation defaults and limits, its family/label, and the memory policy
-that decides which mflux memory knobs this host needs.  :func:`validate_request`, the job
+Every model this worker can run is described once, in :data:`MODELS`: which engine and class
+load it, its own generation defaults and limits, its family/label, and the memory policy
+that decides which memory controls this host needs.  :func:`validate_request`, the job
 runner and ``/api/catalog`` all read that table, so adding a model is one entry plus its
 manifest.
 
@@ -66,6 +66,7 @@ _DELIVERED_SUFFIXES = tuple(MEDIA_TYPE_BY_SUFFIX)
 # one home in the component; the Hub's engine table is what routes a manifest here in the first
 # place (``components/hub/standalone.py:_ENGINE_ROUTE``).
 IMAGE_ENGINE = 'image-mflux'
+IMAGE_ENGINES = (IMAGE_ENGINE, 'image-mlx-serve')
 
 SIZE_PRESETS = {
     '16:9': (1280, 720), '9:16': (720, 1280), '1:1': (1024, 1024),
@@ -81,6 +82,9 @@ SIZE_PRESETS = {
     '4:3': (1152, 864), '3:4': (864, 1152), '3:2': (1200, 800),
     '2:3': (800, 1200), '5:4': (1120, 896), '4:5': (896, 1120),
     '21:9': (1680, 720), '2:1': (1408, 704), '1:2': (704, 1408),
+}
+QWEN_SIZE_PRESETS = {
+    '16:9': (1280, 720), '9:16': (720, 1280), '1:1': (1024, 1024),
 }
 TERMINAL = {'done', 'error', 'cancelled'}
 
@@ -177,6 +181,10 @@ class ImageModel:
     limits: dict
     memory: MemoryPolicy
     qualification: dict
+    engine: str = IMAGE_ENGINE
+    size_presets: dict | None = None
+    minimum_macos: tuple[int, int] = (14, 0)
+    resident_allowed: bool = True
     # The fleet tier this model is qualified at. Published per model, because a tier is a
     # property of the model and its memory policy, not of the Studio.
     qualified_minimum_memory_gb: float = 16.0
@@ -372,13 +380,89 @@ Z_IMAGE_TURBO = ImageModel(
         'other Studios are holding models.'),
 )
 
-MODELS: dict[str, ImageModel] = {model.repo: model for model in (FLUX2_KLEIN, Z_IMAGE_TURBO)}
+QWEN_IMAGE_21 = ImageModel(
+    repo='ddalcu/Qwen-Image-2.1-MLX-Serve-4bit',
+    revision='88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38',
+    package_id='qwen-image-2-1-mlx-serve-4bit',
+    label='Qwen Image 2.1',
+    family='qwen-image-2.1',
+    model_class='',
+    defaults={'aspect_ratio': '1:1', 'resolution': '1K', 'steps': 16,
+              'guidance': 1.0, 'seed': -1},
+    limits={'min_steps': 1, 'max_steps': 50, 'min_guidance': 0.0, 'max_guidance': 20.0,
+            'min_seed': -1, 'max_seed': 2**31 - 1, 'max_prompt': 4000},
+    memory=MemoryPolicy(single_mode_reason=(
+        'The native Qwen runtime has one bounded packaged configuration.')),
+    qualification={
+        'measured_on': '32 GiB M2 Max, mlx-serve 26.10.1, pinned 4-bit pack',
+        'measured_resolutions': ['1280x720', '512x512'],
+        'measured_peak_gb': {'default': 15.75},
+        'fleet_24gb': 'pending: owner physical SSD qualification required',
+        'fleet_16gb': 'unsupported by this normal pack; separate low-RAM candidate pending',
+        'packaged_inference': 'pending',
+    },
+    engine='image-mlx-serve',
+    size_presets=QWEN_SIZE_PRESETS,
+    minimum_macos=(26, 2),
+    resident_allowed=False,
+    qualified_minimum_memory_gb=32.0,
+    # The only retained clean-start receipt had 25.22 GB available. This is a start floor,
+    # deliberately not a peak+margin formula; physical packaged measurements will refine it.
+    min_free_memory_gb=25.3,
+    below_tier_warning=(
+        'This Mac has {memory_gb:.0f} GB of unified memory. Qwen Image 2.1 is qualified on '
+        '32 GB; 24 GB remains a physical qualification target.'),
+)
+
+QWEN_IMAGE_21_LOW_RAM = ImageModel(
+    repo='mlx-community/Qwen-Image-2.1-mflux-q4',
+    revision='746a58556820933a2df5c75887a2570f1ad200c0',
+    package_id='qwen-image-2-1-mflux-q4',
+    label='Qwen Image 2.1 Low-RAM 4-bit',
+    family='qwen-image-2.1',
+    model_class='components.image.app.backend.qwen_lowram:QwenLowRam',
+    defaults={'aspect_ratio': '1:1', 'resolution': '1K', 'steps': 16,
+              'guidance': 1.0, 'seed': -1},
+    limits={'min_steps': 1, 'max_steps': 50, 'min_guidance': 0.0, 'max_guidance': 20.0,
+            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
+    memory=MemoryPolicy(single_mode_reason=(
+        'This candidate always uses prompt materialization, cache zero, tiled VAE and eviction.')),
+    qualification={
+        'fleet_16gb': 'pending: owner physical SSD qualification required',
+        'packaged_inference': 'proven on 32 GiB M2 Max: four 1K cases, normal pressure, zero swap growth; qualification/evidence/qwen-image-21-20261006/measurement.json',
+        'measured_peak_gb': {'default': 5.853},
+        'min_free_memory_note': 'Lowest recorded successful live-free start was 14.697 GB on the physical 32 GiB M2 Max on 2026-10-06, cold-square 16 steps 1K; qualification/evidence/qwen-image-21-20261006/measurement.json. No lower-headroom or physical 16 GB pass is inferred.',
+    },
+    size_presets=QWEN_SIZE_PRESETS,
+    qualified_minimum_memory_gb=32.0,
+    resident_allowed=False,
+    min_free_memory_gb=14.697,
+    guidance_ignored=True,
+    below_tier_warning=(
+        'This Mac has {memory_gb:.0f} GB of unified memory. The Qwen Image 2.1 low-RAM '
+        'candidate has no qualified lower tier yet; the owner will test 16 GB physically.'),
+)
+
+MODELS: dict[str, ImageModel] = {
+    model.repo: model for model in (
+        FLUX2_KLEIN, Z_IMAGE_TURBO, QWEN_IMAGE_21, QWEN_IMAGE_21_LOW_RAM,
+    )
+}
+
+
+def size_presets(model: ImageModel) -> dict:
+    return model.size_presets or SIZE_PRESETS
+
+
+def mlx_serve_problem() -> str | None:
+    from .mlx_serve_runner import runtime_problem
+    return runtime_problem()
 
 
 def missing_runtime_model_reason(manifest: dict) -> str:
     """Why an accepted Image package cannot run here, and the file that must learn about it.
 
-    ``MODELS`` is the runtime registry: a manifest alone does not say which mflux class to
+    ``MODELS`` is the runtime registry: a manifest alone does not say which runtime class to
     load or what its defaults are, so a package with no entry genuinely cannot run. The
     message therefore names the manifest *and* the entry to add — "unavailable" with nothing
     to act on is the silence this reconciliation exists to remove.
@@ -834,7 +918,7 @@ def lane_parameters(model: ImageModel) -> list[dict]:
         {'name': 'prompt', 'type': 'string', 'required': True,
          'max_characters': model.limits['max_prompt']},
         {'name': 'aspect_ratio', 'type': 'string', 'required': False,
-         'enum': sorted(SIZE_PRESETS), 'default': model.defaults['aspect_ratio'],
+         'enum': sorted(size_presets(model)), 'default': model.defaults['aspect_ratio'],
          'note': 'width and height follow from the preset; a mismatched pair is refused'},
         {'name': 'resolution', 'type': 'string', 'required': False,
          'enum': ['1K'], 'default': '1K'},
@@ -901,17 +985,18 @@ def validate_request(raw: dict, data_dir=None) -> dict:
     prompt = raw.get('prompt')
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > model.limits['max_prompt']:
         raise ValueError(f'Prompt must contain 1–{model.limits["max_prompt"]} characters')
+    presets = size_presets(model)
     ratio = raw.get('aspect_ratio')
     if ratio is None:
         dimensions = (raw.get('width'), raw.get('height'))
         if dimensions == (None, None):
             ratio = defaults['aspect_ratio']
         else:
-            ratio = next((name for name, pixels in SIZE_PRESETS.items()
+            ratio = next((name for name, pixels in presets.items()
                           if dimensions == pixels), None)
-    if ratio not in SIZE_PRESETS or raw.get('resolution', defaults['resolution']) != '1K':
+    if ratio not in presets or raw.get('resolution', defaults['resolution']) != '1K':
         raise ValueError('Choose a qualified 1K aspect ratio')
-    width, height = SIZE_PRESETS[ratio]
+    width, height = presets[ratio]
     if type(raw.get('width', width)) is not int or type(raw.get('height', height)) is not int:
         raise ValueError('Width and height must be integer 1K preset pixels')
     if (raw.get('width', width), raw.get('height', height)) != (width, height):
@@ -1027,10 +1112,10 @@ def load_image_manifests(directory: Path, required: Path) -> tuple[dict, dict]:
     def read(path: Path, *, required_file: bool) -> None:
         try:
             candidate = json.loads(path.read_text())
-            if candidate.get('engine') != IMAGE_ENGINE:
+            if candidate.get('engine') not in IMAGE_ENGINES:
                 if required_file:
                     raise ValueError(
-                        f'Not an {IMAGE_ENGINE} manifest: {candidate.get("engine")!r}')
+                        f'Not an Image manifest: {candidate.get("engine")!r}')
                 return
             model_packages.validate_manifest(candidate)
         except (OSError, ValueError, AttributeError) as error:
@@ -1212,6 +1297,25 @@ class GenerationManager:
         finally:
             self.inference_lock.release()
 
+    def shutdown(self) -> None:
+        """Cancel outstanding jobs and stop a native leaf before worker exit."""
+        with self.lock:
+            for job_id, job in self.jobs.items():
+                if job.get('state') not in TERMINAL:
+                    event = self.cancel_events.get(job_id)
+                    if event is not None:
+                        event.set()
+        from .mlx_serve_runner import stop_active_leaf
+        stop_active_leaf(timeout_s=5)
+        if self.inference_lock.acquire(timeout=5):
+            try:
+                resident, self._resident = self._resident, None
+                if resident is not None:
+                    del resident
+                    release_mlx_memory()
+            finally:
+                self.inference_lock.release()
+
     def _restore(self) -> None:
         from components import job_history
         try:
@@ -1274,14 +1378,19 @@ class GenerationManager:
             return {'state': 'pin_mismatch', 'package_id': model.package_id,
                     'reason': (f'{model.package_id} is pinned to {manifest.get("revision")} '
                                f'but this worker runs {model.revision}')}
-        return model_packages.preflight(manifest, self.library)
+        files = model_packages.preflight(manifest, self.library)
+        if files.get('state') == 'files_verified' and model.engine == 'image-mlx-serve':
+            problem = mlx_serve_problem()
+            if problem:
+                return {**files, 'state': 'runtime_unavailable', 'reason': problem}
+        return files
 
     def packages_without_a_runtime_model(self) -> list[dict]:
         """Every Image manifest this build read that no registered model serves.
 
         ``preflight`` above is one direction of the reconciliation — a registered model whose
         manifest is missing or revision-drifted, reported for that model only. This is the
-        other: ``load_image_manifests`` accepts every ``image-mflux`` manifest the bundle
+        other: ``load_image_manifests`` accepts every supported Image-engine manifest the bundle
         ships, while the catalog is enumerated from ``MODELS``, so a package with no
         ``ImageModel`` entry was published by the Hub, offered by the kits, and simply absent
         from this worker's ``/api/catalog`` — no row, no error, no entry in the picker. The
@@ -1513,7 +1622,7 @@ class GenerationManager:
                 staged.unlink(missing_ok=True)
                 seed = job['params']['seed']
                 if seed == -1:
-                    seed = random.randint(0, 2**32 - 1)
+                    seed = random.randint(0, model.limits['max_seed'])
                 plan = memory_plan(model, self.total_memory_bytes,
                                    loading_mode.current(self.data))
                 with self.lock:
@@ -1526,46 +1635,66 @@ class GenerationManager:
                     self._persist()
                 # Pinned mflux 0.20.0 path, dispatched from the registry. ST-01's verified
                 # package adds one model/ prefix to every pack (see WEIGHTS_SUBDIRECTORY).
-                start_mlx_measurement()
-                instance, reused = self._acquire(model, model_folder, plan)
-                memory_saver = None
-                keep = False
-                try:
-                    if not reused:
-                        memory_saver = apply_memory_plan(
-                            instance, plan, model_dir=Path(model_folder) / WEIGHTS_SUBDIRECTORY)
-                    result = instance.generate_image(seed=seed, prompt=job['params']['prompt'],
-                        num_inference_steps=job['params']['steps'], height=job['params']['height'],
-                        width=job['params']['width'], guidance=job['params']['guidance'])
-                    peak = peak_mlx_bytes()
-                    keep = bool(plan['resident_ok'] and self._keep_resident())
-                finally:
-                    if keep:
-                        # Stays loaded for the next job of this model: only what MLX cached beyond
-                        # the weights goes back to macOS. Never kept after a failure - a model that
-                        # raised mid-generation is not known to be in a state worth reusing.
-                        self._remember(model.repo, instance, plan)
-                        del instance, memory_saver
+                if model.engine == 'image-mlx-serve':
+                    # The native leaf cannot overlap a resident mflux model and never becomes
+                    # resident itself. It inherits this worker's process group, so parent loss also
+                    # reaches it; the runner owns TERM -> KILL and reaping on every return path.
+                    resident, self._resident = self._resident, None
+                    if resident is not None:
+                        del resident
                         release_mlx_memory()
-                    else:
-                        # Image releases its model after every job unless the memory policy says
-                        # otherwise. mflux registers its MemorySaver on the model and the saver holds
-                        # the model, so without breaking that cycle the weights would outlive the job
-                        # until a gc pass.
-                        instance.callbacks = None
-                        del instance, memory_saver
-                        self._forget_resident()
-                        release_mlx_memory()
+                    from .mlx_serve_runner import run_image
+                    run_image(Path(model_folder) / WEIGHTS_SUBDIRECTORY, {
+                        **job['params'], 'seed': seed,
+                    }, staged, event)
+                    peak, reused = None, False
+                elif model.engine == IMAGE_ENGINE:
+                    start_mlx_measurement()
+                    instance, reused = self._acquire(model, model_folder, plan)
+                    memory_saver = None
+                    keep = False
+                    try:
+                        if not reused:
+                            memory_saver = apply_memory_plan(
+                                instance, plan, model_dir=Path(model_folder) / WEIGHTS_SUBDIRECTORY)
+                        set_cancel_event = getattr(instance, 'set_cancel_event', None)
+                        if callable(set_cancel_event):
+                            set_cancel_event(event)
+                        result = instance.generate_image(seed=seed, prompt=job['params']['prompt'],
+                            num_inference_steps=job['params']['steps'], height=job['params']['height'],
+                            width=job['params']['width'], guidance=job['params']['guidance'])
+                        peak = peak_mlx_bytes()
+                        keep = bool(model.resident_allowed and plan['resident_ok']
+                                    and self._keep_resident())
+                    finally:
+                        if keep:
+                            # Stays loaded for the next job of this model: only what MLX cached beyond
+                            # the weights goes back to macOS. Never kept after a failure - a model that
+                            # raised mid-generation is not known to be in a state worth reusing.
+                            self._remember(model.repo, instance, plan)
+                            del instance, memory_saver
+                            release_mlx_memory()
+                        else:
+                            # Image releases its model after every job unless the memory policy says
+                            # otherwise. mflux registers its MemorySaver on the model and the saver holds
+                            # the model, so without breaking that cycle the weights would outlive the job
+                            # until a gc pass.
+                            instance.callbacks = None
+                            del instance, memory_saver
+                            self._forget_resident()
+                            release_mlx_memory()
+                    if not hasattr(result, 'save'):
+                        raise RuntimeError('mflux did not return a GeneratedImage')
+                    result.save(str(staged), overwrite=True)
+                else:
+                    raise RuntimeError(f'Unsupported Image engine: {model.engine}')
                 with self.lock:
                     job['model_reused'] = reused
                     job['memory_hooks'] = list(plan.get('hooks') or [])
                 del plan
-                if not hasattr(result, 'save'):
-                    raise RuntimeError('mflux did not return a GeneratedImage')
-                result.save(str(staged), overwrite=True)
                 with Image.open(staged) as image:
                     if image.format != 'PNG':
-                        raise RuntimeError('mflux did not produce a PNG')
+                        raise RuntimeError('Image engine did not produce a PNG')
                     image.verify()
                 with Image.open(staged) as image:
                     dimensions = image.size
@@ -1574,7 +1703,7 @@ class GenerationManager:
                     raise RuntimeError(f'Generated dimensions {dimensions} differ from requested {expected}')
                 content = staged.read_bytes()
                 if not content.startswith(b'\x89PNG\r\n\x1a\n'):
-                    raise RuntimeError('mflux PNG signature is invalid')
+                    raise RuntimeError('Image engine PNG signature is invalid')
                 pending = (content, dimensions, peak)
             except Exception as exc:
                 self._record_failure(job, event, exc)
@@ -1693,4 +1822,3 @@ def encode_jpeg(source: Path, destination: Path, *, expected_size: tuple) -> byt
         if image.format != 'JPEG' or image.size != tuple(expected_size):
             raise RuntimeError('JPEG encode changed the image dimensions')
     return body
-

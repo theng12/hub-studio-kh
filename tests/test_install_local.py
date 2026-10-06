@@ -133,6 +133,10 @@ class TheInstallGuardsTest(unittest.TestCase):
         root = Path(self.tmp.name)
         stage = _stage(root, poison=True, read_only_dir=True)
         target = _previous_app(root)
+        trash = target.parent / "_trash"
+        trash.mkdir()
+        sentinel = trash / "owner-keeps-this"
+        sentinel.write_text("untouched", encoding="utf-8")
 
         completed = _run(stage, target)
 
@@ -148,6 +152,44 @@ class TheInstallGuardsTest(unittest.TestCase):
                          "the previous app was moved inside the target")
         self.assertEqual(list(target.glob("*/Studio Hub.app")), [],
                          "a whole app was nested inside another")
+        failed = list(trash.glob("failed-install-*"))
+        self.assertEqual(len(failed), 1, "the partial copy must be archived before rollback")
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "untouched")
+
+    def test_a_successful_install_archives_the_previous_app_and_readiness_markers(self) -> None:
+        root = Path(self.tmp.name)
+        stage = _stage(root)
+        target = _previous_app(root)
+        data = target.parent / "data"
+        (data / "hub").mkdir(parents=True)
+        (data / "hub-ready.json").write_text("old hub", encoding="utf-8")
+        (data / "hub" / "music-ready.json").write_text("old music", encoding="utf-8")
+        trash = target.parent / "_trash"
+        trash.mkdir()
+        sentinel = trash / "owner-keeps-this"
+        sentinel.write_text("untouched", encoding="utf-8")
+
+        completed = _run(stage, target)
+
+        output = completed.stdout + completed.stderr
+        self.assertEqual(completed.returncode, 0, output)
+        self.assertEqual((target / "Contents" / "Info.plist").read_text(encoding="utf-8"),
+                         (stage / "Contents" / "Info.plist").read_text(encoding="utf-8"))
+        previous = list(trash.glob("previous-app-*"))
+        self.assertEqual(len(previous), 1, "the replaced app must remain recoverable")
+        self.assertEqual((previous[0] / "Contents" / "Info.plist").read_text(encoding="utf-8"),
+                         "<plist>previous</plist>")
+        data_trash = data / "_trash"
+        self.assertEqual([p.read_text(encoding="utf-8") for p in data_trash.glob("hub-ready-*")],
+                         ["old hub"])
+        self.assertEqual([p.read_text(encoding="utf-8") for p in data_trash.glob("music-ready-*")],
+                         ["old music"])
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "untouched")
+
+    def test_the_local_installer_has_no_destructive_cleanup_command(self) -> None:
+        commands = [line.strip() for line in SCRIPT.read_text(encoding="utf-8").splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")]
+        self.assertFalse(any("rm -rf" in line or "rm -f" in line for line in commands), commands)
 
     def test_a_temp_path_install_never_starts_an_app(self) -> None:
         """The relaunch added for the "installed but not running" defect must not fire for a temp path.
