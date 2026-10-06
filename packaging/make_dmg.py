@@ -65,6 +65,9 @@ def build(app: Path, output: Path) -> None:
     complete = False
     try:
         subprocess.run(['/bin/cp', '-cRp', str(app), str(scratch / 'Studio Hub.app')], check=True)
+        # hdiutil's image copier and another Mac must read owner-only auxiliary runtime tools.
+        # Content/link identity and the manifest's executable flags remain unchanged.
+        subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / 'Studio Hub.app')], check=True)
         (scratch / 'Applications').symlink_to('/Applications', target_is_directory=True)
         subprocess.run(['hdiutil', 'create', '-volname', 'Studio Hub', '-srcfolder', str(scratch),
                         '-format', 'UDZO', str(output)], check=True)
