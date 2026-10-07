@@ -9,12 +9,23 @@
 > Evidence scoped to the pre-merge audit source: five fault/race cases failed on the 0.6.152 base;
 > the repaired free-work reroute suite passed 30/30 and its expanded acceptance suite passed 34/34
 > (`_orchestra/codex-remediation-20261007/hub-acceptance-green.log`). The isolated replay of 28
-> previously failing tests also passed on that old base (`hub-focused-final.log`). Neither result is
-> the combined 0.6.154 source gate. A full old-base run was stopped when 0.6.153 arrived and is invalid.
-> The first complete combined unittest/native gates are pending; their authoritative final record is
+> previously failing tests also passed on that old base (`hub-focused-final.log`). A full old-base run
+> stopped when 0.6.153 arrived and is invalid. The complete combined 0.6.154 discovery then ran 2,245
+> tests with 15 skips, 8 failures and 3 errors (`hub-unittest-0154.log`): one seed mock targeted a
+> preloaded real MLX submodule instead of the fake the product imported, seven assertions had stale
+> 31-package inventory/generated-record text, and three synthetic staging trees omitted the newly
+> required shared MLX helper. Its nested Hub regression suite passed 374/374 and Voice passed 994 with
+> 28 skips. After correcting those test fixtures, adding the generator's manifest `display_name`
+> fallback, and refreshing manifest-derived documents, the whole affected
+> neighborhood passed 35/35 with no skips (`hub-0154-repairs-focused-green.log`); the coordinator chose
+> this bounded replay instead of repeating the unchanged 2,245-test discovery. The isolated native gate
+> passed boundary, API contract, secret masking, lifecycle and release-build checks (`hub-native-0154.log`,
+> exit 0). The retained actual-view render produced and visually inspected all 24 controller/node,
+> light/dark, 1440/980 px fixtures (`hub-ui/fixture-build.xPNotG/png/`); the wide controller light and
+> dark Connections views show the renamed App Update Key labels and raw key input. Narrow Connections is
+> ordinary scroll content, so no below-the-fold key-visibility claim is made. The authoritative record is
 > `/build/Developer/_orchestra/codex-remediation-20261007/hub-delivery-receipt.md`.
-> Remaining: complete combined offline/native gates, dark/light dummy fixture captures, stage/DMG and
-> coordinator-controlled installation. Build: `bash native/build.sh`;
+> Remaining: coordinator commit/stage/DMG, push and controlled installation. Build: `bash native/build.sh`;
 > tracked stage: `packaging/stage_voice.py`; tracked DMG: `packaging/make_dmg.py`; install:
 > `bash packaging/install_local.sh <staged .app>`. The old untracked `.build/make-dmg.sh` flow is superseded.
 > The 0.6.153 Chat model-selection, progress, pending-admission and shared-cache work remains intact;

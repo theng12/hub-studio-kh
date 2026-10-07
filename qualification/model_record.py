@@ -149,7 +149,7 @@ def label_map(manifests: list[dict[str, Any]], readings: dict[str, Any]) -> dict
     for manifest in manifests:
         package_id = manifest["package_id"]
         label = (manifest.get("label") or repo_to_label.get(manifest.get("model_id", ""))
-                 or subtitle_labels.get(package_id))
+                 or subtitle_labels.get(package_id) or manifest.get("display_name"))
         if label:
             labels[package_id] = label
     # A package whose engine no studio ships any more (Video, since LTX-2.3 was retired: Gemma 3 12B

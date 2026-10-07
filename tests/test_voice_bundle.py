@@ -596,6 +596,7 @@ class StagingTests(unittest.TestCase):
                 'assets/menubar-icon.png': 'png-fixture',
                 'assets/menubar-icon@2x.png': 'png-fixture',
                 'components/voice/app/backend/main.py': '# source',
+                'components/voice/app/backend/mlx_memory.py': 'def bound_cache(): pass\n',
                 'components/voice/app/frontend/index.html': '<html>Proof</html>',
                 'components/voice/model-audits/example.audit.json': '{}',
                 'components/voice/VERSION': '2.7.2',

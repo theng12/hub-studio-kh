@@ -1312,7 +1312,7 @@ class JsonModeTests(unittest.TestCase):
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
                     mock.patch("mlx_lm.stream_generate",
                                _stream_text(lambda *a, **k: "ok")), \
-                    mock.patch("mlx.core.random.seed") as seed_call:
+                    mock.patch.object(sys.modules["mlx.core"].random, "seed") as seed_call:
                 engine.complete([{"role": "user", "content": "hi"}], seed=123)
             seed_call.assert_called_once_with(123)
 

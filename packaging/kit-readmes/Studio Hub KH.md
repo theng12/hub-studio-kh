@@ -127,7 +127,9 @@ you can read rather than guess.
 
 ## The model library
 
-The kit carries **31 model packages** (about 103.0 GB). `2 - Copy the models.command` copies
+The kit carries **34 model packages** (about 156.8 GB). Normal setup copies **31 production-allowed packages**
+(about 103.0 GB); the **3 pending Chat MLX 4-bit packages** remain on the SSD and are not copied until
+qualification. `2 - Copy the models.command` copies
 only what the Mac's memory can run, so an 8 GB Mac gets the image models and a 16 GB+ Mac
 gets the audio ones too. Voices you have saved are copied at the same time. The library on
 a drive is the library the Mac gets — there is no download step.

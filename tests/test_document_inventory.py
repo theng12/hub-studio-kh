@@ -49,6 +49,21 @@ def measured_bytes() -> int:
     return sum(file["size"] for manifest in manifests().values() for file in manifest["files"])
 
 
+def kit_manifests() -> dict[str, dict]:
+    """Packages ordinary kit setup may copy; pending qualification stays on the SSD."""
+    return {package_id: manifest for package_id, manifest in manifests().items()
+            if manifest.get("production_allowed") is not False}
+
+
+def measured_kit_packages() -> int:
+    return len(kit_manifests())
+
+
+def measured_kit_bytes() -> int:
+    return sum(file["size"] for manifest in kit_manifests().values()
+               for file in manifest["files"])
+
+
 class ManifestReadmeNumbersTests(unittest.TestCase):
     """`model-manifests/README.md` is where a person adding a model looks first."""
 
@@ -108,13 +123,13 @@ class RuntimeContractVocabularyTests(unittest.TestCase):
 
 
 class KitDocumentNumbersTests(unittest.TestCase):
-    """The documents that ship on the drive state the same measured catalog.
+    """The documents that ship on the drive state stock and the copyable subset separately.
 
     `packaging/kit-readmes/Studio Hub KH.md` goes onto every SSD and
     `qualification/SSD-KIT-README.md` is the "read this first" beside it, so the numbers there
-    are what the owner checks the drive against. They said 19 packages / 59 GB, 12 / 29 GB and
-    17 respectively against a measured 24. Retyping today's number would only reset the clock;
-    these assert the rule, so the next model fails here instead of shipping a stale readme.
+    are what the owner checks the drive against. Pending packages stay on the SSD, so they count as
+    stock, while ordinary setup refuses to copy them. Retyping today's numbers would only reset the
+    clock; these derive both inventories from the manifests.
     """
 
     KIT_README = ROOT / "packaging" / "kit-readmes" / "Studio Hub KH.md"
@@ -128,6 +143,17 @@ class KitDocumentNumbersTests(unittest.TestCase):
             match, f"the document no longer states this in the measured form {form!r}")
         return match
 
+    def _assert_copyable_inventory(self, text: str) -> None:
+        match = self._match(
+            text,
+            r"Normal setup copies \*\*(\d+) production-allowed packages\*\*\s+"
+            r"\(about ([\d.]+) GB\); the \*\*(\d+) pending Chat MLX 4-bit packages\*\*",
+            "Normal setup copies **<n> production-allowed packages** (about <gb> GB); "
+            "the **<n> pending Chat MLX 4-bit packages**")
+        self.assertEqual(int(match.group(1)), measured_kit_packages())
+        self.assertEqual(float(match.group(2)), round(measured_kit_bytes() / 1e9, 1))
+        self.assertEqual(int(match.group(3)), measured_packages() - measured_kit_packages())
+
     def test_the_kit_readme_states_the_measured_package_count_and_size(self) -> None:
         text = self.KIT_README.read_text(encoding="utf-8")
         match = self._match(
@@ -139,6 +165,7 @@ class KitDocumentNumbersTests(unittest.TestCase):
         self.assertEqual(float(match.group(2)), round(measured_bytes() / 1e9, 1),
                          "the kit README's size disagrees with the sum of the manifests' file "
                          "sizes; update the sentence")
+        self._assert_copyable_inventory(text)
 
     def test_the_ssd_readme_states_the_measured_package_count_and_size(self) -> None:
         text = self.SSD_README.read_text(encoding="utf-8")
@@ -151,6 +178,7 @@ class KitDocumentNumbersTests(unittest.TestCase):
         self.assertEqual(float(match.group(2)), round(measured_bytes() / 1e9, 1),
                          "the SSD README's size disagrees with the sum of the manifests' file "
                          "sizes; update the sentence")
+        self._assert_copyable_inventory(text)
 
     def test_the_node_checklist_states_the_measured_package_count(self) -> None:
         text = self.NODE_CHECKLIST.read_text(encoding="utf-8")
@@ -159,6 +187,7 @@ class KitDocumentNumbersTests(unittest.TestCase):
         self.assertEqual(int(match.group(1)), measured_packages(),
                          "qualification/NODE-SETUP-CHECKLIST.md's package count disagrees with "
                          "model-manifests/*.json; update the sentence")
+        self._assert_copyable_inventory(text)
 
     def test_the_kit_index_does_not_pin_the_studio_hub_version(self) -> None:
         """A version in this table went stale every release; it points at the kit receipt now."""
