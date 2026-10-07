@@ -146,6 +146,9 @@ class Family:
     # working rather than degrading, so no audit or caller may raise the budget.
     section_hard_cap_characters: Optional[int] = None
     section_refinements: tuple[SectioningRefinement, ...] = ()
+    # At most this many sentences in one section, or None for as many as fit the budget
+    # (`long_form_policy.BREEZE_TTS_MAX_SENTENCES_PER_SECTION` says why Breeze takes one).
+    max_sentences_per_section: Optional[int] = None
     # The extra request fields this family's engine resolver actually reads
     # (beyond `text` and `speed`, which every family honours). Published by the
     # lane contract, so a scheduler never sends a key the lane silently drops.
@@ -562,10 +565,12 @@ FAMILIES: dict[str, Family] = {
         requirements=("mlx", "mlx_audio", "soundfile", "numpy"),
         section_max_characters=long_form_policy.BREEZE_TTS_SECTION_MAX_CHARACTERS,
         join_pause_seconds=long_form_policy.BREEZE_TTS_JOIN_PAUSE_SECONDS,
+        max_sentences_per_section=long_form_policy.BREEZE_TTS_MAX_SENTENCES_PER_SECTION,
         section_note=(
-            "Breeze segments itself, one section per paragraph, and was measured doing it: 14 "
-            "sections of 325 to 575 characters from a 1,227-word script, every one a verbatim "
-            "continuation in order. Sections are levelled to one loudness before the join."
+            "Breeze reads one sentence per section: it pauses at a sentence break inside a "
+            "section and does not come back, so a section holding more sentences was re-rendered "
+            "more often (fleet, 7 days: 6% at one sentence, 25% at four). Sections are levelled "
+            "to one loudness before the join."
         ),
         lane_parameters=("voice_design_prompt", "normalize_text"),
         summary=(
@@ -577,14 +582,14 @@ FAMILIES: dict[str, Family] = {
         how_to_use=(
             "Describe the voice you want and it designs one, or pick a reference voice from your "
             "Voices library to clone it, or write how the line should be read. Long scripts are "
-            "split privately into sentence-safe sections of up to 250 characters, rendered with the "
-            "same voice, levelled to one loudness and joined into a single file at 0.6 s after a "
-            "sentence and 1.0 s at a paragraph break."
+            "read privately one sentence at a time, rendered with the same voice, levelled to one "
+            "loudness and joined into a single file at 1 s after a sentence and 1.5 s at a "
+            "paragraph break."
         ),
         text_guidance=TextGuidance(
             soft_max_chars=None,
             chunking="auto-split",
-            note="Long scripts are split privately into sentence-safe sections of up to 250 characters, rendered with the same voice or design, matched to one loudness, and joined into one final file at 1 s after a sentence and 1.5 s at a paragraph break.",
+            note="Long scripts are read privately one sentence at a time (a very short sentence joins its neighbour, a sentence over 250 characters is cut at a comma), rendered with the same voice or design, matched to one loudness, and joined into one final file at 1 s after a sentence and 1.5 s at a paragraph break.",
         ),
     ),
 }

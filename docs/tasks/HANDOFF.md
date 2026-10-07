@@ -1,3 +1,9 @@
+> 2026-10-07 0.6.151: Breeze reads ONE SENTENCE PER SECTION (owner approved the A/B by ear; `long_form_policy`
+> `max_sentences_per_section`, Breeze 1, others unchanged). A sentence under 30 spoken characters joins a neighbour in its
+> paragraph; joins stay 1.0 s sentence / 1.5 s paragraph. Section Whisper reuses the language detected on an accepted section
+> (one encoder pass instead of two). Not published: the coordinator runs the paced rollout and measures with
+> `_orchestra/audit-20261001/breeze-ab/measure_rollout.py` (baseline 7 d: 13.7% section rejections, 4.58 fleet-s per audio-s).
+
 > 2026-10-06 Qwen integration 0.6.150: ordinary selectable native Qwen Image 2.1 affine 4-bit and
 > separate mflux q4 low-memory package. RAM floor 32 GB until physical lower-tier receipts; native
 > package macOS 26.2+, base/low mflux macOS 14+. Four packaged low-memory 1K cases passed on physical

@@ -132,6 +132,13 @@ BREEZE_TTS_SECTION_MAX_CHARACTERS = 500
 # this project ships rather than a new one. Recorded before it was wired, on purpose: the number is
 # the owner's, not a re-measurement by whoever adopted the family.
 BREEZE_TTS_JOIN_PAUSE_SECONDS = 0.60
+# Breeze reads ONE SENTENCE PER SECTION (owner approved by ear, 2026-10-07: "A sounds better").
+# Breeze pauses at a sentence break inside a section and does not come back: over 7 days of fleet
+# traffic it rejected and re-rendered 13.6% of section attempts (about 25% of its machine time), and
+# the rate climbs with the sentences in a section - 1: 6.2%, 2: 15.3%, 3: 23.2%, 4: 25.4%. The A/B
+# (`_orchestra/audit-20261001/breeze-ab/`, 4 Story passages, 51 sentences) re-rendered 0 of 51
+# one-sentence sections against 1 of 32 today, joined at the uniform 1.0 s / 1.5 s pauses.
+BREEZE_TTS_MAX_SENTENCES_PER_SECTION = 1
 # ── families with no measurement of their own ────────────────────────────────
 # A family without a policy used to fall out of `_runtime_default` as None, and the caller read
 # "None" as "send the whole script in one call". That is how the gateway came to see an engine
@@ -240,6 +247,8 @@ class LongFormPolicy:
     section_true_peak_ceiling_dbtp: float = SECTION_TRUE_PEAK_CEILING_DBTP
     # The loudness range the pass may leave inside one section. See SECTION_LOUDNESS_TARGET_LUFS.
     section_loudness_range_lu: float = SECTION_LOUDNESS_RANGE_LU
+    # At most this many sentences in one section (None: as many as fit the character budget).
+    max_sentences_per_section: Optional[int] = None
 
     def serialize(self, *, source: str = "runtime_default") -> dict:
         payload = asdict(self)
@@ -329,6 +338,7 @@ def _runtime_default(family: str, repo: str) -> "LongFormPolicy":
         section_loudness_target_lufs=entry.section_loudness_target_lufs,
         section_true_peak_ceiling_dbtp=entry.section_true_peak_ceiling_dbtp,
         section_loudness_range_lu=entry.section_loudness_range_lu,
+        max_sentences_per_section=entry.max_sentences_per_section,
     )
     name = repo.rsplit("/", 1)[-1].lower()
     for refinement in entry.section_refinements:
@@ -346,6 +356,7 @@ def _runtime_default(family: str, repo: str) -> "LongFormPolicy":
                 section_loudness_target_lufs=policy.section_loudness_target_lufs,
                 section_true_peak_ceiling_dbtp=policy.section_true_peak_ceiling_dbtp,
                 section_loudness_range_lu=policy.section_loudness_range_lu,
+                max_sentences_per_section=policy.max_sentences_per_section,
             )
     return policy
 
@@ -410,6 +421,7 @@ def policy_for(
             section_loudness_target_lufs=policy.section_loudness_target_lufs,
             section_true_peak_ceiling_dbtp=policy.section_true_peak_ceiling_dbtp,
             section_loudness_range_lu=policy.section_loudness_range_lu,
+            max_sentences_per_section=policy.max_sentences_per_section,
         )
         return _published_policy(policy, family, source="model_audit", uniform=uniform)
 
@@ -433,6 +445,7 @@ def policy_for(
             section_loudness_target_lufs=policy.section_loudness_target_lufs,
             section_true_peak_ceiling_dbtp=policy.section_true_peak_ceiling_dbtp,
             section_loudness_range_lu=policy.section_loudness_range_lu,
+            max_sentences_per_section=policy.max_sentences_per_section,
         )
         source = "model_audit"
     return _published_policy(policy, family, source=source, uniform=uniform)

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.151 — 2026-10-07 · Breeze narration speaks one sentence per section
+
+Branch `feat/breeze-sentence-sections` off 0.6.150 fa79767 (keeps 0.6.150's Qwen Image 2.1 backends and DMG packaging).
+In 7 days of fleet traffic Breeze rejected and re-rendered 13.6% of section attempts (about 25% of its machine time), rising
+with the sentences in a section (1: 6.2%, 2: 15.3%, 3: 23.2%, 4: 25.4%): Breeze pauses at a sentence break and does not come
+back. The owner listened to the A/B (`_orchestra/audit-20261001/breeze-ab/`) and chose one sentence per section.
+- **`long_form_policy` / `catalog.Family` gain `max_sentences_per_section`**: Breeze 1, every other family None (unchanged).
+  `_sentence_safe_text_chunks(..., max_sentences=)` honours it; the 250-character cap still splits an over-long sentence.
+- **Tiny sentences**: with a sentence cap, a sentence under 30 spoken characters (`_SENTENCE_SECTION_MIN_SPOKEN_CHARACTERS`)
+  joins a neighbour in its own paragraph (forward when it opens the paragraph), so the 1.5 s paragraph pause stays put. 30 is
+  about 6 words, where the text check (max(2 words, 15%) unheard) can still reject a section; 14-day fleet Breeze sections
+  of 15-39 characters were 0/19 rejected, and 2.3% of real Breeze sentences are under 30. Other families keep 12.
+- Joins are unchanged and text-led: 1.0 s between sentences, 1.5 s at a paragraph, a request's own pauses win. The section
+  timeline (Story's script-timed subtitles) gets one row per sentence; a 1,500-character Story request is ~15 sections.
+- **Per-section Whisper cost**: with no `language` asked, Whisper auto-detected per section, which runs its encoder twice.
+  A section after an accepted one is now read in the language Whisper detected there (`GenerationJob.section_language`,
+  in memory only); a re-render detects again. Khmer sections keep their forced `km`.
+- Tests: `components/voice/app/tests/test_breeze_sentence_sections.py` (one sentence per section for Breeze only, tiny merge
+  in-paragraph and at 30, long-sentence split, pauses at joins, timeline rows, Story-size request, language reuse/retry).
+
 ## 0.6.150 — 2026-10-06 · Qwen Image 2.1 packages and physical SSD qualification
 
 - Adds ordinary selectable Qwen Image 2.1 affine 4-bit packages: pinned mlx-serve 26.10.1 native

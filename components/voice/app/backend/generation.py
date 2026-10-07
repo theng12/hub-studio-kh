@@ -761,6 +761,14 @@ _QWEN_TRAILING_CLOSERS = frozenset("\"'”’»）】〕〉")
 # scene break was cut into its own 3-character section; Qwen 0.6B wrote no audio for it on every
 # Mac, the request failed everywhere, and the Hub paused a healthy model (2026-10-04).
 _SECTION_MIN_SPOKEN_CHARACTERS = 12
+# A family read one sentence per section (Breeze) merges a sentence shorter than this into a
+# neighbour in its paragraph. 30 is where Whisper can still reject a section: the text check allows
+# max(2 words, 15%) unheard, so a 4-word "Everything is still." passes with half its words lost; 30
+# characters is about 6 words. Fleet Breeze sections (14 days, 2026-10-07): 15-39 characters 0 of 19
+# rejected, 40-59 6% (all runaway TOO_LONG), the only sub-20 failures a 3-character section (3 of 4
+# attempts); the A/B's shortest sentence was 41. Real Breeze requests: 2.3% of sentences are under 30
+# ("Let's get cosy.", "Everything is in its place."), median 97.
+_SENTENCE_SECTION_MIN_SPOKEN_CHARACTERS = 30
 
 
 def _speakable(text: str) -> bool:
@@ -768,8 +776,24 @@ def _speakable(text: str) -> bool:
     return any(ch.isalnum() for ch in text)
 
 
-def _tiny_section(text: str) -> bool:
-    return tts_quality._spoken_characters(text) < _SECTION_MIN_SPOKEN_CHARACTERS
+def _tiny_section(text: str, minimum: int = _SECTION_MIN_SPOKEN_CHARACTERS) -> bool:
+    return tts_quality._spoken_characters(text) < minimum
+
+
+def _merge_tiny_sections(chunks: list[str], minimum: int) -> list[str]:
+    """Drop sections with nothing to speak; a section under ``minimum`` joins the one before it (the
+    first joins the one after)."""
+    # ponytail: a tiny section joins its neighbour even past max_chars (by under the minimum);
+    # moving the neighbour's last sentence over instead is the upgrade if a hard limit ever needs it.
+    merged: list[str] = []
+    for chunk in chunks:
+        if not _speakable(chunk):
+            continue
+        if merged and (_tiny_section(chunk, minimum) or _tiny_section(merged[-1], minimum)):
+            merged[-1] = f"{merged[-1]} {chunk}"
+        else:
+            merged.append(chunk)
+    return merged
 
 
 def _qwen_clone_text_chunks(text: str, max_chars: int = _QWEN_CLONE_CHUNK_CHARS) -> list[str]:
@@ -784,7 +808,8 @@ def _qwen_clone_text_chunks(text: str, max_chars: int = _QWEN_CLONE_CHUNK_CHARS)
     return _sentence_safe_text_chunks(text, max_chars=max_chars)
 
 
-def _sentence_safe_text_chunks(text: str, max_chars: int) -> list[str]:
+def _sentence_safe_text_chunks(text: str, max_chars: int,
+                               max_sentences: Optional[int] = None) -> list[str]:
     """Split narration without dropping text or cutting ordinary words.
 
     This is shared by local engines whose public request can be long while
@@ -793,6 +818,10 @@ def _sentence_safe_text_chunks(text: str, max_chars: int) -> list[str]:
     whitespace, and only then an unavoidable character boundary. A paragraph with
     nothing to speak ("***") is left out, and a section under the minimum joins its
     neighbour (which may then run up to that minimum past ``max_chars``).
+
+    ``max_sentences`` caps the sentences in one section (Breeze: 1). A sentence under
+    `_SENTENCE_SECTION_MIN_SPOKEN_CHARACTERS` then joins a neighbour in its own paragraph, so the
+    paragraph pause stays where the text puts it.
     """
     if max_chars < 40:
         raise ValueError("Sentence-safe chunk size must be at least 40 characters")
@@ -826,26 +855,26 @@ def _sentence_safe_text_chunks(text: str, max_chars: int) -> list[str]:
             sentences.append(remainder)
 
         current = ""
+        held = 0
+        paragraph_chunks: list[str] = []
         for sentence in sentences:
+            if max_sentences and held >= max_sentences:
+                paragraph_chunks.append(current)
+                current, held = "", 0
             units = _split_long_text_unit(sentence, max_chars)
             for unit in units:
                 if current and len(current) + 1 + len(unit) > max_chars:
-                    chunks.append(current)
-                    current = ""
+                    paragraph_chunks.append(current)
+                    current, held = "", 0
                 current = f"{current} {unit}".strip()
+            held += 1
         if current:
-            chunks.append(current)
-    # ponytail: a tiny section joins its neighbour even past max_chars (by under the minimum);
-    # moving the neighbour's last sentence over instead is the upgrade if a hard limit ever needs it.
-    merged: list[str] = []
-    for chunk in chunks:
-        if not _speakable(chunk):
-            continue
-        if merged and (_tiny_section(chunk) or _tiny_section(merged[-1])):
-            merged[-1] = f"{merged[-1]} {chunk}"
-        else:
-            merged.append(chunk)
-    return merged
+            paragraph_chunks.append(current)
+        chunks += (_merge_tiny_sections(paragraph_chunks, _SENTENCE_SECTION_MIN_SPOKEN_CHARACTERS)
+                   if max_sentences else paragraph_chunks)
+    return _merge_tiny_sections(
+        chunks, _SENTENCE_SECTION_MIN_SPOKEN_CHARACTERS if max_sentences
+        else _SECTION_MIN_SPOKEN_CHARACTERS)
 
 
 def _split_long_text_unit(text: str, max_chars: int) -> list[str]:
@@ -930,7 +959,8 @@ def _internal_mlx_text_chunks(
     if policy is None:
         return []
     max_chars = int(max_chars_override or policy["section_max_characters"])
-    return _sentence_safe_text_chunks(text, max_chars=max_chars)
+    return _sentence_safe_text_chunks(text, max_chars=max_chars,
+                                      max_sentences=policy.get("max_sentences_per_section"))
 
 
 def _long_form_join_pause_s(family: str, repo: str) -> float:
@@ -1935,6 +1965,9 @@ class GenerationJob:
     quality_retry_count: int = 0
     quality_retry_history: list[dict] = field(default_factory=list)
     section_quality: Optional[dict] = None  # per-section acceptance evidence (tts_quality)
+    # The language Whisper detected on this job's last accepted section; later sections are read in it
+    # (in memory only, never persisted).
+    section_language: Optional[str] = None
     error_code: Optional[str] = None
     client_request_params: Optional[dict] = None  # immutable idempotency comparison
     origin: str = "unknown"
@@ -3467,8 +3500,15 @@ class GenerationManager:
     _SECTION_VALIDATOR_HEADROOM_GB = 2.0
 
     def _section_transcript_locked(self, job: GenerationJob, model, text: str,
-                                   segment_path: Path) -> tuple[Optional[str], str]:
-        """Whisper's reading of one section, or None and why the transcribe-back was skipped.
+                                   segment_path: Path, attempt: int = 0,
+                                   ) -> tuple[Optional[str], str, Optional[str]]:
+        """Whisper's reading of one section (and the language it read it in), or None and why the
+        transcribe-back was skipped.
+
+        With no language asked, Whisper detects one per call, which runs its encoder over the
+        section a second time. A section after an accepted one is read in the language detected
+        there, as Whisper itself reads a whole file in the language of its first 30 s; a re-render
+        detects again, so a wrong guess costs one render, never the job.
 
         Skipped, never failed: a Mac without Whisper turbo, or without the memory to hold it beside
         the TTS model (an 8 GB Mac), still gets the audio checks. A Qwen Base clone is checked by
@@ -3477,27 +3517,28 @@ class GenerationManager:
         from . import transcription
 
         if qwen_quality.is_qwen_base_clone(model.repo, job.params):
-            return None, "qwen_clone_gate"
+            return None, "qwen_clone_gate", None
         if not tts_quality.transcribe_back_applies(text):
-            return None, "script"
+            return None, "script", None
         repo = transcription.recommended_model()
         stt = transcription.manager
         if stt.loaded_model_key() is None or stt.loaded_model_key()[0] != repo:
             snapshot = _memory_snapshot()
             needed = transcription.model_for_repo(repo).size_gb + self._SECTION_VALIDATOR_HEADROOM_GB
             if snapshot is None or snapshot["available_gb"] < needed:
-                return None, "memory"
+                return None, "memory", None
         try:
             result = stt.transcribe_locked(
                 str(segment_path), model_repo=repo,
                 # Khmer script can only be read as Khmer: a request's `language` is often the
                 # voice's own ("en" for an English reference cloned into a Khmer story).
-                language=tts_quality.script_language(text) or job.params.get("language"))
+                language=(tts_quality.script_language(text) or job.params.get("language")
+                          or (job.section_language if attempt == 0 else None)))
         except Exception as exc:  # not installed, or it failed: the audio checks still apply
             print(f"[gen] section transcribe-back skipped: {type(exc).__name__}: {exc}",
                   file=sys.stderr, flush=True)
-            return None, "unavailable"
-        return str(result.get("text") or ""), "whisper"
+            return None, "unavailable", None
+        return str(result.get("text") or ""), "whisper", result.get("language")
 
     def _section_accepted_locked(self, job: GenerationJob, model, text: str, segment_path: Path,
                                  index: int, total: int, attempt: int) -> bool:
@@ -3505,7 +3546,8 @@ class GenerationManager:
         started = time.perf_counter()
         speed = (float(job.params.get("speed") or 1.0)
                  if _speed_delivery(model.family) == "native" else 1.0)
-        heard, transcribe_back = self._section_transcript_locked(job, model, text, segment_path)
+        heard, transcribe_back, language = self._section_transcript_locked(
+            job, model, text, segment_path, attempt)
         record = {"section": index, "attempt": attempt + 1, "transcribe_back": transcribe_back}
         try:
             record.update(tts_quality.check_section(
@@ -3514,6 +3556,8 @@ class GenerationManager:
                 requested_pause_s=max(float(job.params.get(name) or 0.0)
                                       for name in ("paragraph_pause_sec", "sentence_pause_sec")),
             ))
+            if language and not tts_quality.script_language(text):
+                job.section_language = language
             return True
         except tts_quality.SectionQualityError as exc:
             record.update(exc.evidence)

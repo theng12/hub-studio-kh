@@ -2,6 +2,15 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.151 - 2026-10-07
+
+### Voice
+
+**Breeze narration speaks one sentence at a time with even pauses — fewer bad takes and steadier
+pacing.** Each sentence is read on its own and joined with 1 s after a sentence and 1.5 s at a
+paragraph break. A very short sentence ("Let's get cosy.") is read together with the sentence next
+to it in its paragraph, and a very long one is still divided at a natural break.
+
 ## 0.6.150 - 2026-10-06
 
 ### Images
