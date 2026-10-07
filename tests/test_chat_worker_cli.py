@@ -4,11 +4,9 @@
 accepts is a bundle the Hub will try to start. These tests run the real script from a
 throwaway bundle.
 
-The packaged Chat worker is deliberately single-model - one engine, one manifest, one
-`/v1/models` entry - and that is a contract, not an accident. What the tests pin is that the
-contract is *enforced from the bundle's own catalog*: the worker serves whichever single
-`chat-mlx` manifest the release carries, whatever it is called, and refuses a bundle that
-carries none or more than one, naming the manifests.
+The packaged Chat worker validates the whole manifest-driven catalog without importing MLX or
+loading weights. Metadata for pending models may coexist with one eligible default; ambiguous,
+malformed and empty catalogs are refused before the server starts.
 """
 from __future__ import annotations
 
@@ -24,13 +22,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def chat_manifest(package_id: str, model_id: str) -> dict:
-    return {"engine": "chat-mlx", "package_id": package_id, "model_id": model_id,
-            "revision": "a" * 40, "files": []}
+def chat_manifest(package_id: str, model_id: str, *, default: bool | None = None,
+                  allowed: bool = True) -> dict:
+    manifest = {"schema_version": 1, "engine": "chat-mlx", "package_id": package_id,
+                "model_id": model_id, "revision": "a" * 40, "minimum_macos": "14.0",
+                "production_allowed": allowed,
+                "files": [{"path": "model/config.json", "size": 2,
+                           "sha256": "f" * 64, "urls": []}]}
+    if default is not None:
+        manifest["default"] = default
+    return manifest
 
 
 class ChatWorkerCliTests(unittest.TestCase):
-    def _bundle(self, root: Path, *, manifests: tuple[str, ...] = ("qwen3-5-9b-4bit.json",)):
+    def _bundle(self, root: Path, *, manifests: tuple[str, ...] = ("qwen3-5-9b-4bit.json",),
+                raw_manifests: dict[str, dict | str] | None = None):
         resources = root / "bundle" / "Contents" / "Resources"
         (resources / "components" / "chat" / "app" / "backend").mkdir(parents=True)
         (resources / "model-manifests").mkdir()
@@ -38,10 +44,24 @@ class ChatWorkerCliTests(unittest.TestCase):
         shutil.copyfile(ROOT / "packaging" / "chat_worker.py", resources / "chat_worker.py")
         shutil.copyfile(ROOT / "packaging" / "voice_worker.py", resources / "voice_worker.py")
         (resources / "components" / "chat" / "app" / "backend" / "main.py").write_text("# app\n")
+        for relative in (
+                "components/model_packages.py",
+                "components/chat/__init__.py",
+                "components/chat/app/__init__.py",
+                "components/chat/app/backend/__init__.py",
+                "components/chat/app/backend/model_manager.py",
+                "components/chat/app/backend/llm_engine.py"):
+            target = resources / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, target)
         (resources / "runtimes" / "voice" / "bin" / "python3").write_text("")
-        for name in manifests:
+        for index, name in enumerate(manifests):
             (resources / "model-manifests" / name).write_text(json.dumps(
-                chat_manifest(Path(name).stem, f"mlx-community/{Path(name).stem}")))
+                chat_manifest(Path(name).stem, f"mlx-community/{Path(name).stem}",
+                              default=index == 0, allowed=index == 0)))
+        for name, value in (raw_manifests or {}).items():
+            (resources / "model-manifests" / name).write_text(
+                value if isinstance(value, str) else json.dumps(value))
         (resources / "release-manifest.json").write_text(json.dumps({
             "schema": "studiohub.standalone-release", "schema_version": 1, "version": "0.0.0",
             "components": {"chat": {"runtime_sha256": "a" * 64}},
@@ -71,8 +91,9 @@ class ChatWorkerCliTests(unittest.TestCase):
         self.assertIn('"component": "chat"', result.stdout)
         self.assertIn("a" * 64, result.stdout)
         self.assertIn('"offline": false', result.stdout)
-        self.assertIn('"model_manifest": "qwen3-5-9b-4bit.json"', result.stdout)
-        self.assertIn('"model_id": "mlx-community/qwen3-5-9b-4bit"', result.stdout)
+        self.assertIn('"model_manifests": ["qwen3-5-9b-4bit.json"]', result.stdout)
+        self.assertIn('"model_ids": ["mlx-community/qwen3-5-9b-4bit"]', result.stdout)
+        self.assertIn('"default_model_id": "mlx-community/qwen3-5-9b-4bit"', result.stdout)
 
     def test_a_single_chat_model_under_any_name_is_served(self) -> None:
         """No file name is pinned: the catalog decides, so re-pointing the release works."""
@@ -81,18 +102,36 @@ class ChatWorkerCliTests(unittest.TestCase):
                 Path(tmp), manifests=("qwen3-6-9b-4bit.json",))
             result = self._run(resources, data, models, ready)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('"model_manifest": "qwen3-6-9b-4bit.json"', result.stdout)
+        self.assertIn('"model_manifests": ["qwen3-6-9b-4bit.json"]', result.stdout)
 
-    def test_a_second_chat_model_is_refused_naming_both_manifests(self) -> None:
-        """Silently serving one of two published models is the defect this forbids."""
+    def test_pending_models_coexist_with_one_eligible_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             resources, data, models, ready = self._bundle(
                 Path(tmp), manifests=("qwen3-5-9b-4bit.json", "qwen3-6-9b-4bit.json"))
             result = self._run(resources, data, models, ready)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("qwen3-5-9b-4bit.json", result.stdout)
+        self.assertIn("qwen3-6-9b-4bit.json", result.stdout)
+        self.assertIn('"default_model_id": "mlx-community/qwen3-5-9b-4bit"', result.stdout)
+
+    def test_ambiguous_and_duplicate_defaults_are_refused(self) -> None:
+        first = chat_manifest("one", "org/one")
+        second = chat_manifest("two", "org/two")
+        with tempfile.TemporaryDirectory() as tmp:
+            resources, data, models, ready = self._bundle(
+                Path(tmp), manifests=(), raw_manifests={"one.json": first, "two.json": second})
+            result = self._run(resources, data, models, ready)
         self.assertEqual(result.returncode, 2)
-        self.assertIn("exactly one model", result.stderr)
-        self.assertIn("qwen3-5-9b-4bit.json", result.stderr)
-        self.assertIn("qwen3-6-9b-4bit.json", result.stderr)
+        self.assertIn("no explicit default", result.stderr)
+
+        first["default"] = True
+        second["default"] = True
+        with tempfile.TemporaryDirectory() as tmp:
+            resources, data, models, ready = self._bundle(
+                Path(tmp), manifests=(), raw_manifests={"one.json": first, "two.json": second})
+            result = self._run(resources, data, models, ready)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("explicit defaults", result.stderr)
 
     def test_a_bundle_without_the_manifest_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,6 +139,17 @@ class ChatWorkerCliTests(unittest.TestCase):
             result = self._run(resources, data, models, ready)
         self.assertEqual(result.returncode, 2)
         self.assertIn("no chat-mlx manifest", result.stderr)
+
+    def test_a_malformed_manifest_is_refused_by_name(self) -> None:
+        malformed = chat_manifest("broken", "org/broken", default=True)
+        malformed["files"] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            resources, data, models, ready = self._bundle(
+                Path(tmp), manifests=(), raw_manifests={"broken.json": malformed})
+            result = self._run(resources, data, models, ready)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("broken.json", result.stderr)
+        self.assertIn("complete file manifest", result.stderr)
 
 
 if __name__ == "__main__":

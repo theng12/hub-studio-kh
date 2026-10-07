@@ -67,7 +67,7 @@ class NativeChatWiringTests(unittest.TestCase):
         request = re.search(r"private struct HubChatRequest: Encodable \{(.*?)\}", API, re.S)
         self.assertIsNotNone(request, "HubChatRequest not found")
         fields = set(re.findall(r"let ([a-zA-Z]+):", request.group(1)))
-        self.assertEqual(fields, {"model", "messages", "stream"})
+        self.assertEqual(fields, {"model", "messages", "stream", "jobID"})
 
     def test_the_chat_request_names_the_model_the_operator_chose(self) -> None:
         """`model: ""` let the worker decide, so a second chat model could not be addressed.

@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -30,6 +32,57 @@ from components.chat.app.backend.main import create_app
 
 TOKEN = "test-owner-token"
 REVISION = "8b2b98c00a6b4d291155e4890773ca8f769aee53"
+
+
+_MISSING = object()
+_ORIGINAL_MLX_MODULES = {}
+
+
+def setUpModule() -> None:
+    """Keep this worker suite fake-only even when run with the bundled MLX Python."""
+    mlx_lm = types.ModuleType("mlx_lm")
+    mlx_lm.__path__ = []
+
+    def not_stubbed(*_args, **_kwargs):  # pragma: no cover - names a broken fixture
+        raise AssertionError("test reached an unstubbed fake mlx_lm function")
+
+    mlx_lm.load = not_stubbed
+    mlx_lm.stream_generate = not_stubbed
+    sample_utils = types.ModuleType("mlx_lm.sample_utils")
+    sample_utils.make_sampler = lambda **kwargs: ("sampler", kwargs)
+    mlx_lm.sample_utils = sample_utils
+    mlx = types.ModuleType("mlx")
+    mlx.__path__ = []
+    core = types.ModuleType("mlx.core")
+    core.random = types.SimpleNamespace(seed=lambda _seed: None)
+    core.clear_cache = lambda: None
+    core.set_cache_limit = lambda _limit: None
+    mlx.core = core
+    replacements = {
+        "mlx_lm": mlx_lm,
+        "mlx_lm.sample_utils": sample_utils,
+        "mlx": mlx,
+        "mlx.core": core,
+    }
+    for name, module in replacements.items():
+        _ORIGINAL_MLX_MODULES[name] = sys.modules.get(name, _MISSING)
+        sys.modules[name] = module
+
+
+def tearDownModule() -> None:
+    for name, module in _ORIGINAL_MLX_MODULES.items():
+        if module is _MISSING:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
+
+
+def _stream_text(generate):
+    """Adapt an old text-returning fake to mlx-lm's measured response stream."""
+    def stream(*args, **kwargs):
+        kwargs.pop("prompt_progress_callback", None)
+        yield types.SimpleNamespace(text=generate(*args, **kwargs))
+    return stream
 
 
 class EngineFileTests(unittest.TestCase):
@@ -597,8 +650,7 @@ class PromptBudgetTests(unittest.TestCase):
     def test_a_prompt_that_cannot_fit_is_refused_with_the_measured_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             engine = self._engine(Path(tmp), context=100, tokens=90)
-            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(90))), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "never reached"):
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(90))):
                 with self.assertRaises(ChatContextExceeded) as caught:
                     engine.complete(self.MESSAGE, max_tokens=20)
         detail = str(caught.exception)
@@ -613,7 +665,8 @@ class PromptBudgetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             engine = self._engine(Path(tmp), context=100, tokens=80)
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(80))), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                    mock.patch("mlx_lm.stream_generate",
+                               _stream_text(lambda *a, **k: "served")):
                 outcome = engine.complete(self.MESSAGE, max_tokens=20)
         self.assertEqual(outcome["text"], "served")
 
@@ -622,7 +675,8 @@ class PromptBudgetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             engine = self._engine(Path(tmp), context=None, tokens=4_000_000)
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(4_000_000))), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                    mock.patch("mlx_lm.stream_generate",
+                               _stream_text(lambda *a, **k: "served")):
                 outcome = engine.complete(self.MESSAGE, max_tokens=20)
         self.assertEqual(outcome["text"], "served")
         self.assertIsNone(engine.context_window_tokens)
@@ -715,7 +769,7 @@ class PromptBuildingTests(unittest.TestCase):
             captured.update(kwargs)
             return "a reply"
 
-        with mock.patch("mlx_lm.generate", fake_generate):
+        with mock.patch("mlx_lm.stream_generate", _stream_text(fake_generate)):
             outcome = engine.complete([{"role": "user", "content": "hi"}],
                                       max_tokens=16, temperature=0.5, top_p=0.9)
         self.assertIn("sampler", captured)
@@ -784,7 +838,7 @@ class RealEngineIntegrationTests(unittest.TestCase):
                 return "hello there"
 
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _StubTokenizer())), \
-                    mock.patch("mlx_lm.generate", fake_generate):
+                    mock.patch("mlx_lm.stream_generate", _stream_text(fake_generate)):
                 policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
                 app = create_app(engine, policy, TOKEN, "b" * 64)
                 with TestClient(app) as client:
@@ -882,7 +936,8 @@ class StreamLockTests(unittest.TestCase):
             self.assertEqual((status["streams_started"], status["streams_finished"]), (1, 1))
             self.assertFalse(status["busy"])
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                    mock.patch("mlx_lm.stream_generate",
+                               _stream_text(lambda *a, **k: "served")):
                 outcome = self._complete_within(engine, seconds=5)
         self.assertEqual(outcome["text"], "served")
         self.assertEqual(engine.status()["streams_finished"], 1,
@@ -898,7 +953,8 @@ class StreamLockTests(unittest.TestCase):
             status = engine.status()
             self.assertEqual((status["streams_started"], status["streams_finished"]), (1, 1))
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                    mock.patch("mlx_lm.stream_generate",
+                               _stream_text(lambda *a, **k: "served")):
                 self.assertIsNotNone(self._complete_within(engine, seconds=5))
 
     def test_an_errored_stream_balances_and_frees_the_lock(self) -> None:
@@ -915,7 +971,8 @@ class StreamLockTests(unittest.TestCase):
             status = engine.status()
             self.assertEqual((status["streams_started"], status["streams_finished"]), (1, 1))
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                    mock.patch("mlx_lm.stream_generate",
+                               _stream_text(lambda *a, **k: "served")):
                 self.assertIsNotNone(self._complete_within(engine, seconds=5))
 
     def test_a_stream_that_never_started_takes_and_releases_nothing(self) -> None:
@@ -928,7 +985,8 @@ class StreamLockTests(unittest.TestCase):
             status = engine.status()
             self.assertEqual((status["streams_started"], status["streams_finished"]), (0, 0))
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                    mock.patch("mlx_lm.stream_generate",
+                               _stream_text(lambda *a, **k: "served")):
                 self.assertIsNotNone(self._complete_within(engine, seconds=5))
             self.assertEqual(engine.status()["streams_started"], 0)
 
@@ -1027,7 +1085,7 @@ class GenerationTimeTests(unittest.TestCase):
             engine = self._engine(Path(tmp))
             started = time.time()
             with mock.patch("mlx_lm.load", self._slow_load()), \
-                    mock.patch("mlx_lm.generate", slow_generate):
+                    mock.patch("mlx_lm.stream_generate", _stream_text(slow_generate)):
                 outcome = engine.complete([{"role": "user", "content": "hi"}], max_tokens=8)
             wall = time.time() - started
         self.assertGreaterEqual(wall, self.LOAD_SECONDS, "the slow model load did not happen")
@@ -1147,8 +1205,7 @@ class StreamDisconnectRouteTests(unittest.TestCase):
             thread = threading.Thread(target=server.run, daemon=True)
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
                     mock.patch("mlx_lm.stream_generate",
-                               self._stream_generate(chunks=40, delay=0.1)), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "served"):
+                               self._stream_generate(chunks=40, delay=0.1)):
                 thread.start()
                 try:
                     for _ in range(200):
@@ -1181,9 +1238,11 @@ class StreamDisconnectRouteTests(unittest.TestCase):
                     self.assertEqual(activity["latest"]["state"], "cancelled")
                     # And the next request is actually served rather than blocked forever.
                     try:
-                        second = httpx.post(url, headers=headers, timeout=10.0,
-                                            json={"messages": [{"role": "user",
-                                                                "content": "again"}]})
+                        with mock.patch("mlx_lm.stream_generate",
+                                        _stream_text(lambda *a, **k: "served")):
+                            second = httpx.post(url, headers=headers, timeout=10.0,
+                                                json={"messages": [{"role": "user",
+                                                                    "content": "again"}]})
                     except httpx.TimeoutException:
                         self.fail("the next completion blocked: the abandoned stream still "
                                   "holds the model lock")
@@ -1231,7 +1290,7 @@ class JsonModeTests(unittest.TestCase):
                 return next(replies)
 
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
-                    mock.patch("mlx_lm.generate", fake_generate):
+                    mock.patch("mlx_lm.stream_generate", _stream_text(fake_generate)):
                 outcome = engine.complete([{"role": "user", "content": "give me json"}],
                                           response_format={"type": "json_object"})
 
@@ -1251,7 +1310,8 @@ class JsonModeTests(unittest.TestCase):
             (model_dir / "tokenizer.json").write_text("{}")
             engine = ChatEngine(model_dir=model_dir, model_id="m", revision="r" * 40)
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "ok"), \
+                    mock.patch("mlx_lm.stream_generate",
+                               _stream_text(lambda *a, **k: "ok")), \
                     mock.patch("mlx.core.random.seed") as seed_call:
                 engine.complete([{"role": "user", "content": "hi"}], seed=123)
             seed_call.assert_called_once_with(123)
@@ -1271,7 +1331,7 @@ class JsonModeTests(unittest.TestCase):
                 return "plain text"
 
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _TemplateTokenizer())), \
-                    mock.patch("mlx_lm.generate", fake_generate):
+                    mock.patch("mlx_lm.stream_generate", _stream_text(fake_generate)):
                 outcome = engine.complete([{"role": "user", "content": "hi"}])
 
         self.assertEqual(len(prompts), 1)
@@ -1541,7 +1601,7 @@ class ChatLaneContractTests(unittest.TestCase):
         detail = response.json()["detail"]
         self.assertIn(self.MODEL_ID, detail)
         self.assertIn("model-manifests", detail)
-        self.assertIn("STUDIOHUB_CHAT_MANIFEST", detail)
+        self.assertIn("STUDIOHUB_MODEL_MANIFESTS", detail)
 
     def test_the_health_route_reports_the_release_not_a_word(self) -> None:
         import re

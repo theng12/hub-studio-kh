@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.153 — 2026-10-07 · Chat model selection and measured processing progress
+
+- Chat reads every immutable `chat-mlx` manifest, preserving the Qwen3.5-9B MLX 4-bit default and safe single-model legacy catalogs. One global session lock owns one resident model; switching releases the old model before loading another, and failure/cancellation returns the session safely.
+- Nemotron 3.5 Lightning 30B-A3B MLX 4-bit, Qwen3.6 35B-A3B MLX 4-bit, and Gemma 4 26B-A4B QAT MLX 4-bit have reproducible pinned runtime manifests. All three carry `production_allowed:false`, unqualified status and unknown RAM/tested-context values. No inference, throughput, quality or physical tier claim is made.
+- Explicit pending admission is enforced at the Hub, peer and worker boundaries. Legacy manifests retain their established policy. Normal kit model selection skips pending packages and preserves existing stock; a parent cannot pull a pending dependency into ordinary installation.
+- Chat reports request-scoped Waiting, Loading, Processing prompt and Generating states, exact MLX prompt/decode statistics and separate repair attempts. Hub history preserves closed, finite telemetry; the native app displays worker-stated rates and labels completion time separately. Unknown counts stay null and actual zero remains zero.
+- Native Chat polls an owner-authenticated request-scoped activity route. Preflight errors close activity; queued requests do not claim to be loading. Structured JSON streams buffer until validation and one repair have finished, and invalid output fails before HTTP200. Actual final finish reasons are preserved.
+- Chat reuses the configured shared MLX cache limit of 512,000,000 bytes before model loading; the standalone qualification probe uses the same setting. This is configuration, not measured memory eligibility.
+- Offline proofs use fake engines, tokenizer responses and synthetic preserved fixtures. Physical inference remains held until the owner closes other work, restarts and explicitly starts one model at a time. Candidate stock/hash receipts and qualification tooling are retained in `_orchestra/audit-20261007/moe-qualification/` outside the checkout.
+
 ## 0.6.152 — 2026-10-07 · Updates no longer stall while a release is still arriving
 
 Branch `fix/release-stage-race` off 0.6.151 2e38cbe. Found in the 0.6.151 rollout: a Gateway delta push stores the

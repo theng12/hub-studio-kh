@@ -318,6 +318,8 @@ def _version_parts(value: object) -> tuple[int, ...]:
 def model_readiness(model: dict[str, Any], *, macos_version: str | None = None,
                     chip: str | None = None) -> dict[str, Any]:
     """Report independent package, runtime, and OS gates before scheduler admission."""
+    from components import model_packages
+
     files_state = str(model.get("files_state") or "not_installed")
     runtime = model.get("runtime_identity")
     runtime_state = "ready" if (
@@ -329,10 +331,21 @@ def model_readiness(model: dict[str, Any], *, macos_version: str | None = None,
     os_state = "ready" if _version_parts(actual_os) >= _version_parts(minimum_os) else "unsupported"
     chip_name = str(chip or platform.processor() or platform.machine() or "unknown")
     chip_state = "ready" if chip_name.lower().startswith(("apple", "arm", "aarch64")) else "unsupported"
-    dispatch_state = "eligible" if all((
+    allowed = model_packages.production_allowed(model)
+    requirements_ready = all((
         files_state == "files_verified", runtime_state == "ready",
         os_state == "ready", chip_state == "ready",
-    )) else "ineligible"
+    ))
+    dispatch_state = "eligible" if allowed and requirements_ready else "ineligible"
+    if not allowed:
+        admission_state = "production_blocked"
+        admission_reason = "production use is disabled pending qualification"
+    elif requirements_ready:
+        admission_state = "ready"
+        admission_reason = None
+    else:
+        admission_state = "requirements_not_ready"
+        admission_reason = "model files, runtime, OS, or chip are not ready"
     return {
         "files_state": files_state,
         "runtime_state": runtime_state,
@@ -340,5 +353,8 @@ def model_readiness(model: dict[str, Any], *, macos_version: str | None = None,
         "chip_state": chip_state,
         "minimum_macos": minimum_os,
         "macos_version": actual_os,
+        "production_allowed": allowed,
+        "admission_state": admission_state,
+        "admission_reason": admission_reason,
         "dispatch_state": dispatch_state,
     }

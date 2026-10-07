@@ -69,6 +69,16 @@ def required_packages(manifest) -> list[str]:
     return ids
 
 
+def production_allowed(manifest) -> bool:
+    """Whether this manifest may serve production work.
+
+    Existing manifests predate the explicit gate and keep their established policy. A present
+    value must be the literal boolean ``True``; malformed metadata therefore fails closed even
+    before the manifest validator reports the bad field.
+    """
+    return 'production_allowed' not in manifest or manifest.get('production_allowed') is True
+
+
 def _reject_legacy_companions(manifest) -> None:
     """Refuse a manifest that declares its companions under the legacy spelling.
 
@@ -251,6 +261,10 @@ def validate_manifest(manifest):
         raise PackageError('Unsupported model manifest schema')
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,99}', str(manifest.get('package_id', ''))):
         raise PackageError('Invalid package_id')
+    if 'production_allowed' in manifest and type(manifest['production_allowed']) is not bool:
+        raise PackageError(
+            f"Manifest {manifest.get('package_id')!r} has a non-boolean 'production_allowed': "
+            f"{manifest['production_allowed']!r}")
     if not re.fullmatch(r'[0-9a-f]{40}', str(manifest.get('revision', ''))):
         raise PackageError('A full immutable model revision is required')
     # Name the engine that has no worker, and both files that carry the vocabulary. A bare

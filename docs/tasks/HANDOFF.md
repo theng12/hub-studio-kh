@@ -1,3 +1,5 @@
+> 2026-10-07 0.6.153 preparation: source and offline wiring for manifest-driven Chat selection, one resident model, pending-production gates, request-scoped phases, and worker-stated prefill/decode telemetry. New pinned Nemotron 3.5 Lightning30B-A3B MLX4-bit, Qwen3.6 35B-A3B MLX4-bit and Gemma4 26B-A4B QAT MLX4-bit all remain production_allowed:false and physically unqualified. Shared configured512MB cache limit matches the held standalone probe. No model inference or RAM/TPS/quality qualification has run. This work must not be described as installed or fleet-published; distribution state is the receipt under `_orchestra/audit-20261007/moe-qualification/`. Keep This Mac manually paused, all four SSDs mounted, and wait for owner restart/explicit go before testing one model at a time.
+
 > 2026-10-07 0.6.152: the controller update race from the 0.6.151 rollout is closed. A controller's stage waits (<=15 min,
 > `phase: downloading`) for blobs a Gateway is still pushing; a node keeps asking its controller for a blob as long; either
 > ends `not_ready` (retryable), never the disk-image fallback that 404s. The app (both roles) treats `not_ready` as no

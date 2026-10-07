@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -84,13 +85,24 @@ def _candidate_variant_priority(
 
 def _activity_value(value):
     """Keep the poll handoff scalar-only; params and prompts stay on the loop."""
-    return value if value is None or isinstance(value, (str, int, float, bool)) else None
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return value if isinstance(value, float) and math.isfinite(value) else None
 
 
 def _activity_job_view(job):
     if not isinstance(job, dict):
         return None
-    return {name: _activity_value(job.get(name)) for name in _ACTIVITY_JOB_FIELDS if name in job}
+    from . import activity
+
+    base = {name: _activity_value(job.get(name))
+            for name in _ACTIVITY_JOB_FIELDS if name in job}
+    base.update(activity._job_metrics(job))
+    return base
 
 
 def _activity_snapshot_view(snapshot):

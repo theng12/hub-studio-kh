@@ -156,11 +156,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
                 self.assertEqual(
                     [manifest["qualification"]["minimum_unified_memory_gb"],
                      manifest["qualification"]["recommended_unified_memory_gb"],
-                     manifest["qualification"]["memory_evidence"]],
+                     manifest["qualification"].get("memory_evidence")],
                     list(details["memory"]))
-        declared = [choice["package_id"] for choice in CAPTURE.CHOICES if choice.get("default")]
-        self.assertLessEqual(len(declared), 1,
-                             "at most one package in the catalog may be the default")
+        self.assertEqual(CAPTURE.duplicate_default_problems(list(CAPTURE.CHOICES)), [],
+                         "at most one package per engine may be the default")
 
     def test_a_missing_details_entry_names_the_package_and_the_file(self):
         """A bare KeyError named nothing; this one names both, before any network request."""
@@ -172,8 +171,8 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertIn("not-a-real-package", message)
         self.assertIn(CAPTURE.SPEC_FILE, message)
 
-    def test_subtitle_and_default_blocks_pass_through_and_companions_stay_optional(self):
-        """The two hand-declared blocks survive a capture; an absent companion list writes nothing.
+    def test_declared_blocks_pass_through_and_companions_stay_optional(self):
+        """Human-declared policy survives capture; an absent companion list writes nothing.
 
         Another agent declares the subtitle contract and the default package in the shipped
         manifests. Neither is derivable from a publisher tree, so `--write` must carry them: from
@@ -184,7 +183,8 @@ class ModelManifestCatalogTests(unittest.TestCase):
                     "segment_timestamps": True, "word_timestamps": False, "long_form": True}
         choice = {"package_id": "whisper-small", "model_id": "owner/repo",
                   "revision": "a" * 40, "engine": "subtitle-mlx",
-                  "requires_packages": ["whisper-turbo"], "subtitle": subtitle, "default": True}
+                  "requires_packages": ["whisper-turbo"], "subtitle": subtitle, "default": True,
+                  "production_allowed": False}
         with mock.patch.object(CAPTURE, "snapshot",
                                return_value={"config.json": {"size": 1, "oid": "a" * 40}}), \
                 mock.patch.object(CAPTURE, "captured_file",
@@ -193,10 +193,12 @@ class ModelManifestCatalogTests(unittest.TestCase):
             manifest = CAPTURE.capture(choice)
         self.assertEqual(manifest["subtitle"], subtitle)
         self.assertIs(manifest["default"], True)
+        self.assertIs(manifest["production_allowed"], False)
         self.assertEqual(manifest["requires_packages"], ["whisper-turbo"])
         choice.pop("requires_packages")
         choice.pop("subtitle")
         choice.pop("default")
+        choice.pop("production_allowed")
         with mock.patch.object(CAPTURE, "snapshot",
                                return_value={"config.json": {"size": 1, "oid": "a" * 40}}), \
                 mock.patch.object(CAPTURE, "captured_file",
@@ -206,15 +208,135 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertNotIn("requires_packages", bare)
         self.assertNotIn("subtitle", bare)
         self.assertNotIn("default", bare)
+        self.assertNotIn("production_allowed", bare)
         # A re-capture keeps a block the shipped manifest declares and the spec does not restate,
         # which is how a hand-added subtitle contract or default flag survives `--write`.
-        shipped = dict(bare, subtitle=subtitle, default=True)
+        shipped = dict(bare, subtitle=subtitle, default=True, production_allowed=False)
         kept = CAPTURE.preserve_declared_blocks(dict(bare), shipped)
         self.assertEqual(kept["subtitle"], subtitle)
         self.assertIs(kept["default"], True)
+        self.assertIs(kept["production_allowed"], False)
         # A block the spec does declare wins over the stale one on disk.
         self.assertIs(CAPTURE.preserve_declared_blocks(dict(bare, default=False),
                                                        shipped)["default"], False)
+
+    def test_production_allowed_in_capture_spec_requires_a_boolean(self):
+        choice = dict(next(item for item in CAPTURE.CHOICES
+                           if item["package_id"] == "qwen3-5-9b-4bit"))
+        choice["production_allowed"] = "false"
+        problems = CAPTURE.manifest_problems(choice, self.manifests[choice["package_id"]])
+        self.assertTrue(any("production_allowed" in problem and "boolean" in problem
+                            for problem in problems), problems)
+
+    def test_pending_nemotron_capture_reproduces_runtime_manifest_offline(self):
+        manifest = self.manifests["nemotron-lightning-4bit"]
+        choice = next(item for item in CAPTURE.CHOICES
+                      if item["package_id"] == "nemotron-lightning-4bit")
+        publisher_tree = {
+            entry["source_path"]: {
+                "size": entry["size"], "lfs": {"oid": entry["sha256"]},
+            }
+            for entry in manifest["files"]
+        }
+        # README remains in the full stock/SSD receipt, but the runtime capture's established
+        # file policy selects only the ten inference files in this manifest.
+        publisher_tree["README.md"] = {
+            "size": 1440,
+            "lfs": {"oid": "31d67cc7ae807a7984eee77d35cd7fd507289cc2ea420447e72f12f3e20d2e89"},
+        }
+        with mock.patch.object(CAPTURE, "snapshot", return_value=publisher_tree), \
+                mock.patch.object(CAPTURE, "request",
+                                  side_effect=AssertionError("capture fetched a file body")):
+            captured = CAPTURE.capture(choice)
+        self.assertEqual(captured, manifest)
+
+    def test_pending_qwen36_capture_reproduces_verified_runtime_manifest_offline(self):
+        manifest = self.manifests["qwen36-35b-4bit"]
+        choice = next(item for item in CAPTURE.CHOICES
+                      if item["package_id"] == "qwen36-35b-4bit")
+        publisher_tree = {
+            entry["source_path"]: {
+                "size": entry["size"], "lfs": {"oid": entry["sha256"]},
+            }
+            for entry in manifest["files"]
+        }
+        # The independently verified stock receipt has all sixteen canonical files. Runtime
+        # capture keeps the fifteen inference files and applies the established README policy.
+        publisher_tree["README.md"] = {
+            "size": 724,
+            "lfs": {"oid": "6f43151b34a95ac409d70a5ed81c45611004ea669b46431d30f6183d5d0ed253"},
+        }
+        with mock.patch.object(CAPTURE, "snapshot", return_value=publisher_tree), \
+                mock.patch.object(CAPTURE, "request",
+                                  side_effect=AssertionError("capture fetched a file body")):
+            captured = CAPTURE.capture(choice)
+
+        self.assertEqual(captured, manifest)
+        paths = {entry["source_path"] for entry in manifest["files"]}
+        self.assertEqual(len(paths), 15)
+        self.assertEqual(sum(entry["size"] for entry in manifest["files"]), 20_429_166_969)
+        self.assertNotIn("README.md", paths)
+        self.assertIn("generation_config.json", paths)
+        self.assertEqual(
+            next(entry["sha256"] for entry in manifest["files"]
+                 if entry["source_path"] == "config.json"),
+            "a822a9e48b0aafbe3144ec37d4fb067e178ed96615ce6e4420b3149893cc5767",
+        )
+        self.assertEqual(manifest["revision"],
+                         "38740b847e4cb78f352aba30aa41c76e08e6eb46")
+        self.assertEqual(manifest["minimum_macos"], "14.0")
+        self.assertEqual(manifest["quantization"], "MLX 4-bit")
+        self.assertIn("per-tensor 8-bit gate overrides", manifest["quantization_source"])
+        self.assertIs(manifest["production_allowed"], False)
+        self.assertNotIn("default", manifest)
+        qualification = manifest["qualification"]
+        self.assertEqual(qualification["status"], "unqualified")
+        self.assertIsNone(qualification["minimum_unified_memory_gb"])
+        self.assertIsNone(qualification["recommended_unified_memory_gb"])
+        self.assertIsNone(qualification["tested_usable_context_tokens"])
+
+    def test_pending_gemma4_capture_reproduces_verified_runtime_manifest_offline(self):
+        manifest = self.manifests["gemma4-26b-a4b-qat-4bit"]
+        choice = next(item for item in CAPTURE.CHOICES
+                      if item["package_id"] == "gemma4-26b-a4b-qat-4bit")
+        publisher_tree = {
+            entry["source_path"]: {
+                "size": entry["size"], "lfs": {"oid": entry["sha256"]},
+            }
+            for entry in manifest["files"]
+        }
+        publisher_tree["README.md"] = {
+            "size": 363,
+            "lfs": {"oid": "9995a0f5587351fb94c01c37df97179aeaba7652e78824805cb7093bfdad5d67"},
+        }
+        with mock.patch.object(CAPTURE, "snapshot", return_value=publisher_tree), \
+                mock.patch.object(CAPTURE, "request",
+                                  side_effect=AssertionError("capture fetched a file body")):
+            captured = CAPTURE.capture(choice)
+
+        self.assertEqual(captured, manifest)
+        paths = {entry["source_path"] for entry in manifest["files"]}
+        self.assertEqual(len(paths), 10)
+        self.assertEqual(sum(entry["size"] for entry in manifest["files"]), 15_641_239_295)
+        self.assertNotIn("README.md", paths)
+        self.assertIn("generation_config.json", paths)
+        self.assertEqual(
+            next(entry["sha256"] for entry in manifest["files"]
+                 if entry["source_path"] == "config.json"),
+            "29910322dd085f45c8f95c6c0f1611b20f722d6f6c8394321b34817e98a972fa",
+        )
+        self.assertEqual(manifest["revision"],
+                         "0e3cbab38ce568cf6e23543010d08d03b731910c")
+        self.assertEqual(manifest["minimum_macos"], "14.0")
+        self.assertEqual(manifest["quantization"], "QAT MLX 4-bit")
+        self.assertIn("per-tensor precision overrides", manifest["quantization_source"])
+        self.assertIs(manifest["production_allowed"], False)
+        self.assertNotIn("default", manifest)
+        qualification = manifest["qualification"]
+        self.assertEqual(qualification["status"], "unqualified")
+        self.assertIsNone(qualification["minimum_unified_memory_gb"])
+        self.assertIsNone(qualification["recommended_unified_memory_gb"])
+        self.assertIsNone(qualification["tested_usable_context_tokens"])
 
     def test_two_default_packages_are_refused(self):
         manifests = [{"package_id": "one", "default": True}, {"package_id": "two", "default": True}]
@@ -223,6 +345,13 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertIn("one", problems[0])
         self.assertIn("two", problems[0])
         self.assertEqual(CAPTURE.duplicate_default_problems(manifests[:1]), [])
+
+    def test_each_engine_may_declare_its_own_default(self):
+        manifests = [
+            {"package_id": "chat", "engine": "chat-mlx", "default": True},
+            {"package_id": "subtitle", "engine": "subtitle-mlx", "default": True},
+        ]
+        self.assertEqual(CAPTURE.duplicate_default_problems(manifests), [])
 
     def test_a_write_never_replaces_a_manifest_it_does_not_reproduce(self):
         """A capture that selects a different file set leaves the shipped manifest alone.
@@ -265,7 +394,21 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # completion at 12.40-18.60 tok/s with peak MLX 5.23 GB, so `status` moves from
             # `unqualified` to `qualified` and `memory_evidence` records the runs and their
             # source. Nothing about the pinned revision or the file inventory changed.
-            "qwen3-5-9b-4bit": "02bd5f43eb1aad04fad491e2dd21b43813becccab97dbfeeadcc84acfe16134f",
+            # Baseline remains the single default Chat package; the default declaration is part
+            # of both its producer entry and its frozen manifest identity.
+            "qwen3-5-9b-4bit": "b309fa1bd8a71bf3287139a6e5fed723c5651bf1582a02f3d219928b2bf3dbe2",
+            # Nemotron 3.5 Lightning 30B-A3B MLX 4-bit: ten runtime files / 17,792,581,692
+            # bytes. The independently verified full stock package has an eleventh file,
+            # README.md; runtime capture excludes it by the catalog's established policy.
+            "nemotron-lightning-4bit": "e74e501418a94a3bae52a33aa1f924c8d7d67a068586952deb55af834389568a",
+            # Qwen 3.6 35B-A3B MLX 4-bit: 15 runtime files / 20,429,166,969 bytes.
+            # The independently verified full 16-file SSD stock also carries README.md;
+            # runtime capture excludes only that 724-byte publisher file.
+            "qwen36-35b-4bit": "6134192255dc69ea481c97f777b0369016a1c06755f7b6d04ab8c7e7ce135ce9",
+            # Gemma 4 26B-A4B QAT MLX 4-bit: 10 runtime files / 15,641,239,295 bytes.
+            # The independently verified 11-file SSD stock remains whole; runtime capture
+            # excludes only its 363-byte README.md.
+            "gemma4-26b-a4b-qat-4bit": "01ff2567ac6c3f19f4440bebdc08f80d565c764256d09d56ef0eda2d422ce766",
             "omnivoice-bfloat16": "f2e761bd958ca3d84c6e1b8470ce7720a4ce8ded34fb57733b870f8c07d70bb4",
             "qwen3-tts-12hz-0-6b-base-8bit": "4d9e8048e6484e0225c5fb1b5644b8ee57cb969e6a6c10feb05865b330a033eb",
             "qwen3-tts-12hz-1-7b-base-4bit": "4e7c1d4f4dce6d3a65c4787052ee4772468fa23adc53ff5fefc139392a8aacbe",
@@ -494,9 +637,17 @@ class ModelManifestCatalogTests(unittest.TestCase):
             self.assertEqual(source["layout"]["model"]["revision"], manifest["revision"])
             self.assertTrue(source["sources"])
             self.assertTrue(manifest["defaults"])
-            self.assertGreaterEqual(manifest["qualification"]["minimum_unified_memory_gb"], 8)
-            self.assertGreaterEqual(manifest["qualification"]["recommended_unified_memory_gb"],
-                                    manifest["qualification"]["minimum_unified_memory_gb"])
+            qualification = manifest["qualification"]
+            if manifest.get("production_allowed", True):
+                self.assertGreaterEqual(qualification["minimum_unified_memory_gb"], 8)
+                self.assertGreaterEqual(qualification["recommended_unified_memory_gb"],
+                                        qualification["minimum_unified_memory_gb"])
+            else:
+                self.assertIs(manifest["production_allowed"], False)
+                self.assertEqual(qualification["status"], "unqualified")
+                self.assertIsNone(qualification["minimum_unified_memory_gb"])
+                self.assertIsNone(qualification["recommended_unified_memory_gb"])
+                self.assertIsNone(qualification["tested_usable_context_tokens"])
 
 
 class CaptureBoundaryTests(unittest.TestCase):

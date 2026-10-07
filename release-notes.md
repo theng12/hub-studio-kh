@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.153 - 2026-10-07
+
+### Chat
+
+**See when a model is loading, processing your prompt, or generating its answer.** Prompt processing and answer generation show their own measured token rates. Switching models releases the previous model first, and repair attempts keep their own measurements.
+
+**Three MLX 4-bit candidates are prepared for testing:** Nemotron 3.5 Lightning 30B-A3B, Qwen3.6 35B-A3B, and Gemma 4 26B-A4B QAT. They stay unavailable for ordinary generation until qualification; no RAM tier or performance result is claimed yet. Qwen3.5-9B MLX 4-bit remains the default.
+
+JSON streams wait for validation and repair before returning output. A failed load clears the running status, and incomplete replies retain the model's actual finish reason.
+
 ## 0.6.152 - 2026-10-07
 
 ### Updates

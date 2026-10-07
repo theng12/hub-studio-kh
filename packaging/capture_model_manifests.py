@@ -17,12 +17,13 @@ with ``model-manifests/``:
 * every field a spec supplies is compared with the shipped manifest, so a stale
   revision, a wrong engine or a changed memory floor is a failure rather than a
   quiet rewrite;
-* two packages declaring ``"default": true`` is refused - at most one package in
-  the catalog may be the default.
+* two packages for the same engine declaring ``"default": true`` are refused - each
+  engine may name one default.
 
 ``requires_packages`` is written only when the package has companions, and the
-optional ``subtitle`` and ``default`` blocks of a ``CHOICES`` entry are passed
-through verbatim, so a hand-declared block survives the next ``--write``.
+optional ``subtitle``, ``default`` and ``production_allowed`` declarations of a
+``CHOICES`` entry are passed through verbatim, so hand-declared policy survives
+the next ``--write``.
 """
 from __future__ import annotations
 
@@ -130,7 +131,38 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # ── ST-14: the local Chat Studio's MLX text model ──
     # Owner-selected Qwen3.5-9B, uniform 4-bit, text-only accepted. The OptiQ build was
     # rejected: its index requires an `optiq_vision` shard, making the snapshot 8.22 GB.
-    {"package_id": "qwen3-5-9b-4bit", "model_id": "mlx-community/Qwen3.5-9B-4bit", "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53", "engine": "chat-mlx"},
+    {"package_id": "qwen3-5-9b-4bit", "model_id": "mlx-community/Qwen3.5-9B-4bit", "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53", "engine": "chat-mlx", "default": True},
+    # Pending Gemma 4 MoE QAT candidate. The verified SSD stock keeps all eleven canonical files;
+    # runtime capture omits only README.md. Config identifies gemma4 and its affine 4-bit/group-64
+    # default while retaining the publisher's per-tensor precision overrides.
+    {"package_id": "gemma4-26b-a4b-qat-4bit",
+     "model_id": "mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+     "revision": "0e3cbab38ce568cf6e23543010d08d03b731910c", "engine": "chat-mlx",
+     "captured_at": "2026-10-07", "production_allowed": False,
+     "display_name": "Gemma 4 26B-A4B QAT MLX 4-bit",
+     "quantization": "QAT MLX 4-bit",
+     "quantization_source": "model/config.json quantization: affine 4-bit, group size 64; preserved publisher per-tensor precision overrides"},
+    # Pending Qwen3.6 MoE candidate. The full verified SSD stock has sixteen canonical files;
+    # runtime capture omits only README.md. The checkpoint config identifies qwen3_5_moe and
+    # keeps its per-tensor 8-bit gate overrides; no hardware tier is inferred from its bytes.
+    {"package_id": "qwen36-35b-4bit",
+     "model_id": "mlx-community/Qwen3.6-35B-A3B-4bit",
+     "revision": "38740b847e4cb78f352aba30aa41c76e08e6eb46", "engine": "chat-mlx",
+     "captured_at": "2026-10-07", "production_allowed": False,
+     "display_name": "Qwen 3.6 35B-A3B MLX 4-bit",
+     "quantization": "MLX 4-bit",
+     "quantization_source": "model/config.json quantization; preserved per-tensor 8-bit gate overrides"},
+    # Pending owner-selected MoE candidate. The full stock package keeps all eleven publisher-
+    # verified files; the runtime manifest follows the established capture policy and omits the
+    # README, leaving ten inference files. No RAM tier or usable context is inferred before the
+    # owner-authorized physical qualification.
+    {"package_id": "nemotron-lightning-4bit",
+     "model_id": "mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit",
+     "revision": "55ac8c89261109b36c04371cd3f479a4594208c8", "engine": "chat-mlx",
+     "captured_at": "2026-10-07", "production_allowed": False,
+     "display_name": "Nemotron 3.5 Lightning 30B-A3B MLX 4-bit",
+     "quantization": "MLX 4-bit affine",
+     "quantization_source": "model/config.json quantization; preserved checkpoint tensor overrides"},
     # ── ST-13.A: Kyutai Pocket TTS 4-bit, the English cloning engine ──
     # The 4-bit MLX conversion is the whole executable model: 4-bit weights, the flow-LM
     # config and the mimi codec live in one 89 MB safetensors file. It carries no tokenizer
@@ -262,6 +294,33 @@ DETAILS: dict[str, dict[str, Any]] = {
     # actually reads.
     "qwen3-5-9b-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (16, 16, "Owner-chosen common fleet model, uniform 4-bit MLX. MEASURED on the 16 GB tier, 2026-09-25: three 16 GB Macs (M1, M2, M4) each completed a 256-token completion at 12.40-18.60 tok/s, peak MLX 5.23 GB (5226237062 bytes, identical on all three - it is the model's footprint, not the host's), load 9.08-13.69 s, swap 0.00 MB on two Macs and 0.25 MB on the third. Memory available at start was 7.70-8.85 GB against the checkpoint's own 5.98 GB plus 0.5 GB of working room. Source: qualification/chat-tier-run.sh on each Mac; verdict blocks recorded in the owner's 'StudioHub Chat Tier Run m{1,2,4}-16*' folders. 8 GB: EXCLUDED by the owner's decision, 2026-09-25. It does not run there - he tried it on his 8 GB Mac - so the tier harness refuses an 8 GB Mac immediately rather than probing, because an attempt costs up to 900 s and a swapping model load to rediscover that. This is a decision, not an inference from the weight size: the earlier note's '8 GB is not viable' was arithmetic, and the refusal that followed was about FREE memory on a busy Mac rather than about the tier. Nothing is claimed to have been measured on 8 GB; what is claimed is that this fleet does not run it there. This replaces the earlier catalog-arithmetic note, which read '8 GB is not viable' as an inference from the weight size and 'local import and inference qualification remain required'."),
                        "qualification": {"status": "qualified", "reason": 'Qualified on the 16 GB tier by measurement, 2026-09-25: three 16 GB Macs completed runs. The 8 GB tier is unmeasured - a run there did not start and the reason is not yet recorded.'}},
+    "gemma4-26b-a4b-qat-4bit": {
+        "defaults": {"parameters_source": "model/generation_config.json"},
+        "memory": (None, None, None),
+        "qualification": {
+            "status": "unqualified",
+            "reason": "Downloaded and publisher-hash verified only. Import, inference, TPS, script/scene quality, usable context and RAM-tier qualification have not yet been run.",
+            "tested_usable_context_tokens": None,
+        },
+    },
+    "qwen36-35b-4bit": {
+        "defaults": {"parameters_source": "model/generation_config.json"},
+        "memory": (None, None, None),
+        "qualification": {
+            "status": "unqualified",
+            "reason": "Downloaded and publisher-hash verified only. English import, inference, TPS, script/scene quality, usable context and RAM-tier qualification have not yet been run.",
+            "tested_usable_context_tokens": None,
+        },
+    },
+    "nemotron-lightning-4bit": {
+        "defaults": {"parameters_source": "model/generation_config.json"},
+        "memory": (None, None, None),
+        "qualification": {
+            "status": "unqualified",
+            "reason": "Downloaded and publisher-hash verified only. Owner has held inference until restart and explicit permission; no RAM tier, TPS or script/scene quality has been qualified.",
+            "tested_usable_context_tokens": None,
+        },
+    },
     # ── ST-13.A: Pocket TTS 4-bit and the two companions it cannot run without ──
     # The owner's listening review on 2026-09-24 measured a 1.9 GB peak and judged this the
     # best-sounding English cloning model on the menu. A local render through the app's own
@@ -544,7 +603,8 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
             "status": details.get("qualification", {}).get("status", "unqualified"),
             "minimum_unified_memory_gb": details["memory"][0],
             "recommended_unified_memory_gb": details["memory"][1],
-            "memory_evidence": details["memory"][2],
+            **({"memory_evidence": details["memory"][2]}
+               if details["memory"][2] is not None else {}),
             "reason": details.get("qualification", {}).get(
                 "reason",
                 "Catalog metadata records expected bytes; local import and inference qualification remain required."),
@@ -552,7 +612,8 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
             **{key: details["qualification"][key] for key in ("min_free_memory_gb", "min_free_memory_note")
                if key in details.get("qualification", {})},
             **{key: details["qualification"][key]
-               for key in ("target_unified_memory_gb", "target_evidence")
+               for key in ("target_unified_memory_gb", "target_evidence",
+                           "tested_usable_context_tokens")
                if key in details.get("qualification", {})},
         },
         "source": {"provider": "huggingface", "captured_at": choice.get("captured_at", CAPTURE_DATE), "sources": sources,
@@ -562,8 +623,8 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
     # catalog uses: the field is present exactly when there is a relationship to declare.
     if choice.get("requires_packages"):
         manifest["requires_packages"] = choice["requires_packages"]
-    # Two optional per-model blocks are carried verbatim rather than derived here, because they
-    # are declarations about the model (a subtitle contract; which package is the default) that
+    # Optional per-model policy is carried verbatim rather than derived here, because these are
+    # declarations about the model (subtitle contract, default, production admission) that
     # no publisher metadata can supply. A block the spec omits is a block the manifest does not
     # carry, which is why the catalog check refuses when a shipped manifest declares one and its
     # CHOICES entry does not.
@@ -572,35 +633,40 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
         manifest["subtitle"] = subtitle
     if choice.get("default") is True:
         manifest["default"] = True
+    if "production_allowed" in choice:
+        manifest["production_allowed"] = choice["production_allowed"]
     # Licence/attribution a person declares (CC-BY packages must carry it); passed through verbatim.
     if choice.get("license"):
         manifest["license"] = choice["license"]
-    for field in ("quantization", "quantization_source"):
+    for field in ("display_name", "quantization", "quantization_source"):
         if field in choice:
             manifest[field] = choice[field]
     return manifest
 
 
 def duplicate_default_problems(manifests: list[dict[str, Any]]) -> list[str]:
-    """At most one package in a catalog may declare ``"default": true``.
+    """At most one package per engine may declare ``"default": true``.
 
-    The Subtitle worker reads that flag to pick its default model, so two of them is not a
-    tie to be broken silently - it is a catalog that cannot say what its default is.
+    Each worker reads the flag only among the models for its engine. Two defaults for one engine
+    are an ambiguous tie; Chat and Subtitle each naming their own default is the intended shape.
     """
-    declared = sorted(manifest["package_id"] for manifest in manifests
-                      if manifest.get("default") is True)
-    if len(declared) > 1:
-        return [f"{len(declared)} packages declare \"default\": true ({', '.join(declared)}); "
-                f"at most one package in the catalog may be the default"]
-    return []
+    by_engine: dict[object, list[str]] = {}
+    for manifest in manifests:
+        if manifest.get("default") is True:
+            by_engine.setdefault(manifest.get("engine"), []).append(manifest["package_id"])
+    return [
+        f"{len(declared)} packages for engine {engine!r} declare \"default\": true "
+        f"({', '.join(sorted(declared))}); at most one package per engine may be the default"
+        for engine, declared in by_engine.items() if len(declared) > 1
+    ]
 
 
 def preserve_declared_blocks(manifest: dict[str, Any],
                              previous: dict[str, Any] | None) -> dict[str, Any]:
     """Carry the blocks only a person can declare over from the manifest already on disk.
 
-    ``subtitle`` and ``default`` are declarations about a model that no publisher tree contains,
-    so a capture cannot derive them: it can only keep what the shipped manifest already says.
+    ``subtitle``, ``default`` and ``production_allowed`` are declarations about a model that no
+    publisher tree contains, so a capture cannot derive them from the snapshot.
     ``CHOICES`` remains the place to declare them for a package being captured for the first
     time, and a block supplied there wins; a block the shipped manifest carries and the spec does
     not restate survives unchanged instead of being silently dropped by ``--write``.
@@ -614,7 +680,8 @@ def preserve_declared_blocks(manifest: dict[str, Any],
     """
     if not isinstance(previous, dict):
         return manifest
-    for key in ("subtitle", "default", "quantization", "quantization_source", "license"):
+    for key in ("subtitle", "default", "production_allowed", "display_name",
+                "quantization", "quantization_source", "license"):
         if key not in manifest and key in previous:
             manifest[key] = previous[key]
     return manifest
@@ -641,7 +708,8 @@ def manifest_problems(choice: dict[str, Any], manifest: dict[str, Any]) -> list[
         problems.append(
             f"{package_id}: CHOICES says minimum_macos={minimum_macos!r} but "
             f"model-manifests/{package_id}.json says {manifest.get('minimum_macos')!r}")
-    for field in ("quantization", "quantization_source", "license"):
+    for field in ("production_allowed", "display_name", "quantization",
+                  "quantization_source", "license"):
         if field in choice and choice[field] != manifest.get(field):
             problems.append(
                 f"{package_id}: CHOICES says {field}={choice[field]!r} but "
@@ -676,7 +744,8 @@ def manifest_problems(choice: dict[str, Any], manifest: dict[str, Any]) -> list[
                 f"model-manifests/{package_id}.json records (minimum, recommended, evidence)="
                 f"{recorded!r}")
         for field in ("min_free_memory_gb", "min_free_memory_note",
-                      "target_unified_memory_gb", "target_evidence"):
+                      "target_unified_memory_gb", "target_evidence",
+                      "tested_usable_context_tokens"):
             if field in details.get("qualification", {}) \
                     and details["qualification"][field] != qualification.get(field):
                 problems.append(
@@ -694,6 +763,10 @@ def manifest_problems(choice: dict[str, Any], manifest: dict[str, Any]) -> list[
     if "default" in choice and choice["default"] is not True:
         problems.append(f"{package_id}: \"default\" in {SPEC_FILE} must be true when present, "
                         f"not {choice['default']!r}")
+    if "production_allowed" in choice and type(choice["production_allowed"]) is not bool:
+        problems.append(
+            f"{package_id}: \"production_allowed\" in {SPEC_FILE} must be a boolean, "
+            f"not {choice['production_allowed']!r}")
     exclude = tuple(choice.get("exclude") or ())
     include = tuple(choice.get("include") or ())
     keep = tuple(choice.get("keep") or ())

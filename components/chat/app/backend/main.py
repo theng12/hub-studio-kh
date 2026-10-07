@@ -8,6 +8,7 @@ the Hub owns admission, dispatch and history.
 from __future__ import annotations
 
 import hmac
+import inspect
 import json
 import math
 import os
@@ -29,8 +30,8 @@ from components import app_version, model_defaults
 from . import memory_policy as memory_policy_module
 from .llm_engine import (DEFAULT_TEMPERATURE, DEFAULT_TOP_P, FALLBACK_MAX_OUTPUT_TOKENS,
                          ChatBusy, ChatContextExceeded, ChatEngine, ChatModelUnavailable,
-                         ChatTemplateError,
-                         engine_from_environment)
+                         ChatStructuredOutputError, ChatTemplateError)
+from .model_manager import ChatModelManager
 
 # One stable creation stamp for the OpenAI model listing.
 _MODELS_CREATED = int(time.time())
@@ -80,6 +81,16 @@ def _next_or_done(iterator):
         return next(iterator)
     except StopIteration as stop:
         return _StreamDone(stop.value)
+
+
+def _accepts_progress(method) -> bool:
+    """Check old fixture compatibility without retrying a possibly-started generation."""
+    try:
+        parameters = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(parameter.kind == inspect.Parameter.VAR_KEYWORD
+               or parameter.name == "on_progress" for parameter in parameters)
 
 
 class _OwnerCredentialMiddleware:
@@ -138,6 +149,19 @@ def _usage(engine: ChatEngine, prompt_tokens: int | None, text: str) -> dict:
         total = prompt_tokens + completion
     return {"prompt_tokens": prompt_tokens, "completion_tokens": completion,
             "total_tokens": total}
+
+
+def _finish_reason(telemetry) -> str:
+    if isinstance(telemetry, dict):
+        final_attempt = telemetry.get("final_attempt")
+        attempts = telemetry.get("attempts")
+        if isinstance(attempts, list):
+            for attempt in reversed(attempts):
+                if (isinstance(attempt, dict) and attempt.get("attempt") == final_attempt
+                        and isinstance(attempt.get("finish_reason"), str)
+                        and attempt["finish_reason"]):
+                    return attempt["finish_reason"]
+    return "stop"
 
 
 def _qualified_minimum_memory_bytes(engine) -> int | None:
@@ -200,25 +224,62 @@ class ChatActivity:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._active: dict | None = None
+        self._active: dict[tuple[str, str], dict] = {}
         self._latest: dict | None = None
 
     def begin(self, *, job_id: str, model: str) -> None:
         now = time.time()
         with self._lock:
-            self._active = {
+            self._active[(job_id, model)] = {
                 "id": job_id, "state": "running", "model": model,
                 "source": "direct", "origin": "unknown",
                 "created_at": now, "started_at": now, "updated_at": now,
+                "progress_stage": "waiting",
             }
 
-    def finish(self, *, state: str, error_code: str | None = None) -> None:
-        now = time.time()
+    def progress(self, *, job_id: str, model: str, event: dict) -> None:
+        allowed = {
+            "attempt", "processed_prompt_tokens", "total_prompt_tokens",
+            "prompt_tokens", "prompt_tps", "generation_tokens", "generation_tps",
+            "peak_memory_bytes", "finish_reason",
+        }
         with self._lock:
-            active = self._active
-            self._active = None
+            active = self._active.get((job_id, model))
             if active is None:
                 return
+            update = {key: value for key, value in event.items() if key in allowed}
+            previous_attempt = active.get("attempt")
+            attempt = update.get("attempt", previous_attempt)
+            if (previous_attempt is not None and attempt != previous_attempt):
+                for key in (*allowed, "progress"):
+                    active.pop(key, None)
+            processed = update.get("processed_prompt_tokens")
+            if (attempt == previous_attempt and isinstance(processed, int)
+                    and isinstance(active.get("processed_prompt_tokens"), int)
+                    and processed < active["processed_prompt_tokens"]):
+                update.pop("processed_prompt_tokens", None)
+            active.update(update)
+            phase = event.get("phase")
+            if phase in {"waiting", "loading", "processing", "generating", "completed"}:
+                active["progress_stage"] = phase
+            processed = active.get("processed_prompt_tokens")
+            total = active.get("total_prompt_tokens")
+            if (isinstance(processed, int) and isinstance(total, int) and total > 0
+                    and 0 <= processed <= total):
+                active["progress"] = processed / total
+            else:
+                active.pop("progress", None)
+            active["updated_at"] = time.time()
+
+    def finish(self, *, job_id: str, model: str, state: str,
+               error_code: str | None = None) -> None:
+        now = time.time()
+        with self._lock:
+            key = (job_id, model)
+            active = self._active.get(key)
+            if active is None:
+                return
+            self._active.pop(key, None)
             started = float(active.get("started_at") or now)
             latest = {
                 **active, "state": state, "updated_at": now, "finished_at": now,
@@ -229,10 +290,24 @@ class ChatActivity:
                 latest["error_code"] = error_code
             self._latest = latest
 
-    def snapshot(self, engine) -> dict:
+    def snapshot(self, engine, *, job_id: str | None = None) -> dict:
         with self._lock:
-            active = dict(self._active) if self._active else None
-            latest = dict(self._latest) if self._latest else None
+            if job_id is not None:
+                active = next(
+                    (dict(item) for item in self._active.values() if item.get("id") == job_id),
+                    None,
+                )
+                latest = (dict(self._latest)
+                          if self._latest and self._latest.get("id") == job_id else None)
+            else:
+                running = next(
+                    (item for item in self._active.values()
+                     if item.get("progress_stage") in {"loading", "processing", "generating"}),
+                    None,
+                )
+                chosen = running or (next(iter(self._active.values())) if self._active else None)
+                active = dict(chosen) if chosen else None
+                latest = dict(self._latest) if self._latest else None
         return {
             "schema": ACTIVITY_SCHEMA, "studio": ACTIVITY_STUDIO,
             "observed_at": time.time(), "active": active, "latest": latest,
@@ -423,6 +498,7 @@ def _lane_contract(engine, parameters: list[dict]) -> dict:
             "enforcement": "prompt_validate_repair",
             "grammar_constrained": False,
             "repair_attempts": 1,
+            "streaming": "buffered_until_validated",
             "note": ("the format is requested in the prompt, the answer is validated, and one "
                      "repair re-ask is made when it does not parse; there is no "
                      "grammar-constrained decoding in this runtime, so a caller should validate "
@@ -431,7 +507,26 @@ def _lane_contract(engine, parameters: list[dict]) -> dict:
     }
 
 
-def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
+class _SingleEngineCatalog:
+    """Compatibility for existing callers and fake fixtures that pass one engine."""
+
+    def __init__(self, engine) -> None:
+        self.models = (engine,)
+        self.default = engine
+
+    def for_model(self, model_id: str | None):
+        if model_id in (None, "", self.default.model_id):
+            return self.default
+        raise KeyError(model_id)
+
+    def loaded(self) -> bool:
+        return bool(self.default.loaded())
+
+    def status(self) -> dict:
+        return self.default.status()
+
+
+def create_app(engine: ChatEngine | ChatModelManager, policy: memory_policy_module.MemoryPolicy,
                token: str, runtime_sha256: str,
                data_dir: str | os.PathLike[str] | None = None) -> FastAPI:
     if not token:
@@ -444,23 +539,39 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
     app = FastAPI(title="Studio Hub Chat", version="1")
     app.add_middleware(_OwnerCredentialMiddleware, token=token)
     activity = ChatActivity()
+    model_manager = engine if isinstance(engine, ChatModelManager) else _SingleEngineCatalog(engine)
+    engine = model_manager.default
 
-    def readiness() -> dict:
-        files = engine.preflight()
-        host = _host_eligibility(engine)
-        return {"ready": files["state"] == "files_verified" and host["eligible"],
+    def request_usage(stated, *, prompt_tokens=None, text="") -> dict:
+        if isinstance(stated, dict):
+            return stated
+        if isinstance(model_manager, ChatModelManager):
+            # Managed proxies always capture tokenizer counts before releasing their session.
+            # If an older managed engine omits them, keep the omission rather than reload or
+            # count with whichever model became resident next.
+            return {"prompt_tokens": prompt_tokens, "completion_tokens": None,
+                    "total_tokens": None}
+        return _usage(engine, prompt_tokens, text)
+
+    def readiness(selected) -> dict:
+        files = selected.preflight()
+        host = _host_eligibility(selected)
+        allowed = getattr(selected, "production_allowed", True)
+        reason = getattr(selected, "production_refusal", None)
+        return {"ready": allowed and files["state"] == "files_verified" and host["eligible"],
                 "files": files, "host": host,
+                "production_allowed": allowed, "production_refusal": reason,
                 "runtime_identity": {"id": runtime_sha256, "compatible": True}}
 
     @app.get("/api/health")
     def health() -> dict:
-        state = engine.status()
+        state = model_manager.status()
         return {"ok": True, **app_version.version_fields(), "generation": {
             "available": True, "busy": state["busy"], "queued": 0,
             "running": 1 if state["busy"] else 0, "runtime_revision": runtime_sha256}}
 
     @app.get("/api/fleet/activity")
-    def fleet_activity() -> dict:
+    def fleet_activity(job_id: str | None = None) -> dict:
         """This worker's own job state, in the Hub's allowlisted activity contract.
 
         Chat has no queue, so an idle worker reports an empty snapshot rather than a fabricated
@@ -469,28 +580,31 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         ``{"active": None, "latest": None}`` unconditionally, so Chat work appeared in no
         activity view anywhere even after the Hub learned to read the chat queue.
         """
-        return activity.snapshot(engine)
+        return activity.snapshot(model_manager, job_id=job_id)
 
     @app.get("/api/catalog")
     def catalog() -> dict:
-        state = readiness()
-        ready = state["ready"]
-        files = state["files"]
-        qualified_bytes = _qualified_minimum_memory_bytes(engine)
-        qualified_gb = qualified_bytes / 1e9 if qualified_bytes else None
-        # The lane's own surface, with the operator's stored defaults resolved into each
-        # `default` from the same call the completion route serves with.
-        parameters, in_force = _resolved_parameters(settings_dir, engine)
-        return {"models": [{
+        rows = []
+        for selected in model_manager.models:
+            state = readiness(selected)
+            ready = state["ready"]
+            files = state["files"]
+            allowed = state["production_allowed"]
+            qualified_bytes = _qualified_minimum_memory_bytes(selected) if allowed else None
+            qualified_gb = qualified_bytes / 1e9 if qualified_bytes else None
+            parameters, in_force = _resolved_parameters(settings_dir, selected)
+            row = {
             # The model's own label, read from its manifest/repo id - never a literal here, so
             # a second chat model cannot be published under the first one's name. It carries the
             # quantization, which is what a reader needs to check it against what was measured.
-            "label": _model_label(engine), "name": _model_label(engine),
-            "repo": engine.model_id, "model_id": engine.model_id,
-            "family": getattr(engine, "family", None), "modality": "chat",
+            "label": _model_label(selected), "name": _model_label(selected),
+            "repo": selected.model_id, "model_id": selected.model_id,
+            "family": getattr(selected, "family", None), "modality": "chat",
             "capabilities": ["chat.completion"], "hub_operation": "chat.completion",
-            "model_revision": engine.revision, "qualified_revision": engine.revision,
-            "qualified_revision_match": True, "runtime_revision": runtime_sha256,
+            "model_revision": selected.revision,
+            "qualified_revision": selected.revision if allowed else None,
+            "qualified_revision_match": True if allowed else False,
+            "runtime_revision": runtime_sha256,
             "runtime_compatible": True, "runtime_ready": True,
             "verified_token_usage": False,
             "memory_eligible": state["host"]["eligible"],
@@ -502,13 +616,15 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             "memory_warning": state["host"].get("memory_warning"),
             "cache": {"state": "cached" if files["state"] == "files_verified" else files["state"]},
             "readiness": {"ready": ready, "files": files, "host": state["host"],
-                          "reason": None if ready else files.get("reason") or state["host"].get("reason")},
+                          "production_allowed": allowed,
+                          "reason": (None if ready else state["production_refusal"]
+                                     or files.get("reason") or state["host"].get("reason"))},
             "execution_ready": ready, "available": ready,
-            "context_window_tokens": engine.context_window_tokens,
-            "max_output_tokens": engine.max_output_tokens,
+            "context_window_tokens": selected.context_window_tokens,
+            "max_output_tokens": selected.max_output_tokens,
             # Every limit with the source that states it, so a reader can label its own fallback
             # instead of inheriting this worker's number as the model's fact.
-            "model_limits": engine.model_limits() if hasattr(engine, "model_limits") else None,
+            "model_limits": selected.model_limits() if hasattr(selected, "model_limits") else None,
             # The defaults the route actually serves with: the model's own stated default for a
             # parameter nobody has chosen, the operator's stored value where one exists, and the
             # engine's constant where the lane states none. Read from the same resolution as the
@@ -519,18 +635,23 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             },
             # The dispatch contract, published by the only party that knows this API. The Hub
             # passes it through verbatim and adds its own `deadline_seconds`.
-            "lane_contract": _lane_contract(engine, parameters),
+            "lane_contract": _lane_contract(selected, parameters),
             "qualification": {
-                "owner_decision": f"{_model_label(engine)}, MLX, text-only",
+                "owner_decision": f"{_model_label(selected)}, MLX, text-only",
                 # This string used to read "pending measured proof" long after the proof existed.
                 # It now names the evidence and its dates instead of a byte count this worker
                 # cannot re-measure at publish time.
-                "packaged_inference": (
+                "packaged_inference": ((
                     "proven: the packaged worker loaded this 4-bit snapshot and produced real "
                     "completions, measured 2026-09-24 and re-checked 2026-09-25 "
-                    "(qualification/st14-chat-2026-09-24.md)"),
+                    "(qualification/st14-chat-2026-09-24.md)") if allowed else
+                    "pending: production inference is blocked until qualification"),
             },
-        }]}
+            "default": selected is model_manager.default,
+            "production_allowed": allowed,
+            }
+            rows.append(row)
+        return {"models": rows}
 
     def _job_identifier(body: dict) -> str:
         """The id this request is tracked under: the Hub's, when it named one."""
@@ -539,16 +660,16 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             return requested.strip()
         return "chatcmpl-" + uuid.uuid4().hex
 
-    def _body_model(body: dict) -> None:
+    def _body_model(body: dict):
         requested = body.get("model")
-        if requested and requested != engine.model_id:
-            directory = (str(getattr(engine, "manifest_path", None).parent)
-                         if getattr(engine, "manifest_path", None) else
-                         "the shipped model-manifests directory")
+        try:
+            return model_manager.for_model(requested)
+        except KeyError as exc:
+            offered = ", ".join(model.model_id for model in model_manager.models)
             raise HTTPException(404, (
-                f"this worker serves only {engine.model_id}. It is a single-model worker: to "
-                f"serve another model, add its manifest to {directory} and start this worker "
-                f"with STUDIOHUB_CHAT_MANIFEST pointing at that file."))
+                f"unknown Chat model {requested!r}; this worker serves {offered}. Add its "
+                "validated chat-mlx manifest to the bundled model-manifests directory selected "
+                "by STUDIOHUB_MODEL_MANIFESTS.")) from exc
 
     def _refuse_unsupported_fields(body: dict) -> None:
         """Refuse, by name, every field this worker does not honour.
@@ -577,7 +698,7 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 f"sampler as {number!r} and produces meaningless output"))
         return number
 
-    def _completion_parameters(body: dict, defaults: dict) -> dict:
+    def _completion_parameters(body: dict, defaults: dict, selected=None) -> dict:
         """Validate the asked-for surface, refusing rather than silently dropping a value.
 
         ``defaults`` is what is in force for this model - the operator's stored values over the
@@ -585,6 +706,7 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         the request supplies always wins: a default is where a request starts, never an override
         of one, or a saved number would quietly outrank the caller that asked for something else.
         """
+        selected = selected or engine
         _refuse_unsupported_fields(body)
         max_tokens = body.get("max_tokens")
         if max_tokens is None:
@@ -596,7 +718,7 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 raise HTTPException(
                     422, f"max_tokens: must be an integer of at least 1; received "
                          f"{_describe(max_tokens)}")
-            limit, source = _published_max_output_tokens(engine)
+            limit, source = _published_max_output_tokens(selected)
             if limit is not None and max_tokens > limit:
                 raise HTTPException(422, (
                     f"max_tokens: {max_tokens} is above the maximum this lane publishes "
@@ -649,7 +771,7 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 f"A non-boolean is refused rather than coerced."))
         return value
 
-    def _route_refusals(values: dict) -> dict[str, str]:
+    def _route_refusals(values: dict, selected=None) -> dict[str, str]:
         """The proposed values this lane's own completion route would refuse, by parameter.
 
         :mod:`components.model_defaults` checks a value against the bound the lane *publishes*;
@@ -666,12 +788,12 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 if name == "stream":
                     _stream_requested({name: value}, {})
                 else:
-                    _completion_parameters({name: value, "messages": []}, {})
+                    _completion_parameters({name: value, "messages": []}, {}, selected)
             except HTTPException as exc:
                 refusals[str(name)] = str(exc.detail)
         return refusals
 
-    def _defaults_repo(payload: dict, query_repo: str | None) -> str:
+    def _defaults_repo(payload: dict, query_repo: str | None):
         """The model a defaults write names, refused by name when it is not the one served.
 
         A write for a model this worker does not serve is a refusal rather than a silent no-op:
@@ -686,26 +808,31 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         else:
             raise HTTPException(422, (
                 f"repo: this route needs the model the defaults are for; received "
-                f"{_describe(offered)}. This worker serves {engine.model_id}."))
-        if repo != engine.model_id:
-            raise HTTPException(404, (
-                f"repo: this worker serves only {engine.model_id}; it has no defaults for "
-                f"{repo!r}, and storing them under a name nothing reads would look like a "
-                f"setting that took effect."))
-        return repo
+                f"{_describe(offered)}. This worker serves "
+                f"{', '.join(model.model_id for model in model_manager.models)}."))
+        try:
+            return model_manager.for_model(repo)
+        except KeyError as exc:
+            offered = ", ".join(model.model_id for model in model_manager.models)
+            raise HTTPException(
+                404, f"repo: this worker has no defaults for {repo!r}; it serves {offered}") from exc
 
-    def _defaults_status(parameters: list[dict]) -> dict:
-        return model_defaults.status(settings_dir, [(engine.model_id, parameters)])
+    def _defaults_status(selected, parameters: list[dict]) -> dict:
+        return model_defaults.status(settings_dir, [(selected.model_id, parameters)])
 
     @app.post("/v1/chat/completions")
     def chat_completions(body: dict):
-        state = readiness()
+        selected = _body_model(body)
+        state = readiness(selected)
         if not state["host"]["eligible"]:
             raise HTTPException(409, state["host"]["reason"])
+        if not state["production_allowed"]:
+            raise HTTPException(
+                409, f"{_model_label(selected)} is not qualified for production inference: "
+                     f"{state['production_refusal']}")
         if not state["ready"]:
             raise HTTPException(
-                409, f"{_model_label(engine)} is not installed in the selected model library")
-        _body_model(body)
+                409, f"{_model_label(selected)} is not installed in the selected model library")
         messages = body.get("messages")
         if not isinstance(messages, list) or not messages:
             raise HTTPException(422, "messages must be a non-empty list")
@@ -714,67 +841,129 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 raise HTTPException(422, "every message needs string content")
         # The same `resolved()` call the catalog publishes its `default` fields from: a parameter
         # the request omits takes the value in force here, and one the request supplies wins.
-        _published, defaults = _resolved_parameters(settings_dir, engine)
-        parameters = _completion_parameters(body, defaults)
+        _published, defaults = _resolved_parameters(settings_dir, selected)
+        parameters = _completion_parameters(body, defaults, selected)
         stream = _stream_requested(body, defaults)
         completion_id = _job_identifier(body)
         created = int(time.time())
 
-        if not stream:
-            activity.begin(job_id=completion_id, model=engine.model_id)
+        completed: dict[str, object] = {}
+
+        def on_progress(event: dict) -> None:
+            activity.progress(job_id=completion_id, model=selected.model_id, event=event)
+            if event.get("phase") == "completed":
+                if isinstance(event.get("telemetry"), dict):
+                    completed["telemetry"] = event["telemetry"]
+                if isinstance(event.get("usage"), dict):
+                    completed["usage"] = event["usage"]
+
+        structured_stream = stream and parameters.get("response_format") is not None
+        if not stream or structured_stream:
+            activity.begin(job_id=completion_id, model=selected.model_id)
             try:
-                outcome = engine.complete(messages, **parameters)
+                if _accepts_progress(selected.complete):
+                    outcome = selected.complete(messages, on_progress=on_progress, **parameters)
+                else:
+                    outcome = selected.complete(messages, **parameters)
             except ChatModelUnavailable as exc:
-                activity.finish(state="error", error_code="model_unavailable")
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="model_unavailable")
                 raise HTTPException(409, str(exc)) from exc
             except ChatBusy as exc:
-                activity.finish(state="error", error_code="worker_busy")
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="worker_busy")
                 raise HTTPException(409, str(exc)) from exc
             except ChatContextExceeded as exc:
-                activity.finish(state="error", error_code="context_exceeded")
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="context_exceeded")
                 raise HTTPException(422, str(exc)) from exc
             except ChatTemplateError as exc:
-                activity.finish(state="error", error_code="template_rejected")
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="template_rejected")
+                raise HTTPException(422, str(exc)) from exc
+            except ChatStructuredOutputError as exc:
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="structured_output_failed")
                 raise HTTPException(422, str(exc)) from exc
             except Exception:
-                activity.finish(state="error", error_code="generation_failed")
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="generation_failed")
                 raise
-            activity.finish(state="done")
+            activity.finish(job_id=completion_id, model=selected.model_id, state="done")
+            studio_hub = {"elapsed_seconds": outcome["elapsed_seconds"],
+                          "json_valid": outcome.get("json_valid"),
+                          "repairs": outcome.get("repairs")}
+            telemetry = outcome.get("telemetry")
+            if isinstance(telemetry, dict):
+                studio_hub["telemetry"] = telemetry
+            usage = outcome.get("usage")
             prompt_tokens = outcome.get("prompt_tokens")
-            if prompt_tokens is None:
-                prompt_tokens = engine.prompt_length(messages)
-            return {"id": completion_id, "object": "chat.completion", "created": created,
-                    "model": engine.model_id,
-                    "choices": [{"index": 0, "finish_reason": "stop",
+            if prompt_tokens is None and not isinstance(model_manager, ChatModelManager):
+                prompt_tokens = selected.prompt_length(messages)
+            usage = request_usage(usage, prompt_tokens=prompt_tokens, text=outcome["text"])
+            finish_reason = _finish_reason(telemetry)
+            response = {"id": completion_id, "object": "chat.completion", "created": created,
+                    "model": selected.model_id,
+                    "choices": [{"index": 0, "finish_reason": finish_reason,
                                  "message": {"role": "assistant", "content": outcome["text"]}}],
-                    "usage": _usage(engine, prompt_tokens, outcome["text"]),
-                    "studio_hub": {"elapsed_seconds": outcome["elapsed_seconds"],
-                                   "json_valid": outcome.get("json_valid"),
-                                   "repairs": outcome.get("repairs")}}
+                    "usage": usage,
+                    "studio_hub": studio_hub}
+            if not structured_stream:
+                return response
 
-        activity.begin(job_id=completion_id, model=engine.model_id)
+            async def structured_events():
+                chunk = {"id": completion_id, "object": "chat.completion.chunk",
+                         "created": created, "model": selected.model_id,
+                         "choices": [{"index": 0,
+                                      "delta": {"content": outcome["text"]},
+                                      "finish_reason": None}]}
+                yield f"data: {json.dumps(chunk)}\n\n"
+                final = {"id": completion_id, "object": "chat.completion.chunk",
+                         "created": created, "model": selected.model_id,
+                         "choices": [{"index": 0, "delta": {},
+                                      "finish_reason": finish_reason}],
+                         "usage": usage, "studio_hub": studio_hub}
+                yield f"data: {json.dumps(final)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(structured_events(), media_type="text/event-stream")
+
+        activity.begin(job_id=completion_id, model=selected.model_id)
 
         # A streaming response has already committed its 200 by the time the engine produces a
         # token, so a prompt that cannot fit the model's stated context is refused here, before
         # the SSE response starts.
-        check_prompt_fits = getattr(engine, "check_prompt_fits", None)
+        check_prompt_fits = getattr(selected, "check_prompt_fits", None)
         if callable(check_prompt_fits):
             try:
-                check_prompt_fits(messages, max_tokens=parameters["max_tokens"],
-                                  response_format=parameters["response_format"],
-                                  thinking=parameters["thinking"])
+                preflight = {
+                    "max_tokens": parameters["max_tokens"],
+                    "response_format": parameters["response_format"],
+                    "thinking": parameters["thinking"],
+                }
+                if _accepts_progress(check_prompt_fits):
+                    preflight["on_progress"] = on_progress
+                check_prompt_fits(messages, **preflight)
             except ChatContextExceeded as exc:
-                activity.finish(state="error", error_code="context_exceeded")
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="context_exceeded")
                 raise HTTPException(422, str(exc)) from exc
             except ChatTemplateError as exc:
-                activity.finish(state="error", error_code="template_rejected")
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="template_rejected")
                 raise HTTPException(422, str(exc)) from exc
             except ChatModelUnavailable as exc:
-                activity.finish(state="error", error_code="model_unavailable")
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="model_unavailable")
                 raise HTTPException(409, str(exc)) from exc
             except ChatBusy as exc:
-                activity.finish(state="error", error_code="worker_busy")
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="worker_busy")
                 raise HTTPException(409, str(exc)) from exc
+            except Exception:
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state="error", error_code="generation_failed")
+                raise
 
         async def events():
             collected: list[str] = []
@@ -793,7 +982,10 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             # then blocks. Driving the engine in a worker thread keeps the task-group
             # cancellation Starlette already performs on `http.disconnect` inside this body,
             # where the `finally` closes the engine's generator and releases the model.
-            stream = engine.stream(messages, **parameters)
+            if _accepts_progress(selected.stream):
+                stream = selected.stream(messages, on_progress=on_progress, **parameters)
+            else:
+                stream = selected.stream(messages, **parameters)
             try:
                 while True:
                     outcome = await run_in_threadpool(_next_or_done, stream)
@@ -805,7 +997,7 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                         continue
                     collected.append(delta)
                     chunk = {"id": completion_id, "object": "chat.completion.chunk",
-                             "created": created, "model": engine.model_id,
+                             "created": created, "model": selected.model_id,
                              "choices": [{"index": 0, "delta": {"content": delta},
                                           "finish_reason": None}]}
                     yield f"data: {json.dumps(chunk)}\n\n"
@@ -823,17 +1015,30 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
                 # Closing the engine's generator is the lock release. Without it the model
                 # stays reserved by a client that is no longer there.
                 stream.close()
-                activity.finish(state=final_state, error_code=final_error)
-            prompt_tokens = engine.prompt_length(messages)
+                activity.finish(job_id=completion_id, model=selected.model_id,
+                                state=final_state, error_code=final_error)
+            usage = completed.get("usage")
+            if not isinstance(usage, dict) and not isinstance(model_manager, ChatModelManager):
+                prompt_tokens = selected.prompt_length(messages)
+            else:
+                prompt_tokens = None
+            usage = request_usage(usage, prompt_tokens=prompt_tokens,
+                                  text="".join(collected))
+            telemetry = completed.get("telemetry")
             final = {"id": completion_id, "object": "chat.completion.chunk", "created": created,
-                     "model": engine.model_id,
-                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                     "usage": _usage(engine, prompt_tokens, "".join(collected))}
-            if generation_seconds is not None:
+                     "model": selected.model_id,
+                     "choices": [{"index": 0, "delta": {},
+                                  "finish_reason": _finish_reason(telemetry)}],
+                     "usage": usage}
+            if generation_seconds is not None or isinstance(telemetry, dict):
                 # The same field, with the same meaning, as the buffered path's: the time the
                 # engine spent generating. The Hub records it as `generation_s`; the rate itself
                 # is derived where it is displayed, not here.
-                final["studio_hub"] = {"elapsed_seconds": generation_seconds}
+                final["studio_hub"] = {}
+                if generation_seconds is not None:
+                    final["studio_hub"]["elapsed_seconds"] = generation_seconds
+                if isinstance(telemetry, dict):
+                    final["studio_hub"]["telemetry"] = telemetry
             yield f"data: {json.dumps(final)}\n\n"
             yield "data: [DONE]\n\n"
 
@@ -847,17 +1052,20 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
     def list_models() -> dict:
         """OpenAI-shaped model listing, matching the upstream Chat Studio's `/v1/models`."""
         return {"object": "list",
-                "data": [{"id": engine.model_id, "object": "model",
-                          "created": _MODELS_CREATED, "owned_by": "studio-hub"}]}
+                "data": [{"id": selected.model_id, "object": "model",
+                          "created": _MODELS_CREATED, "owned_by": "studio-hub"}
+                         for selected in model_manager.models]}
 
     @app.get("/api/chat/models")
     def chat_models() -> dict:
-        state = readiness()
-        return {"models": [{"repo": engine.model_id, "model_id": engine.model_id,
-                            "revision": engine.revision,
-                            "cached": state["files"]["state"] == "files_verified",
-                            "context_window_tokens": engine.context_window_tokens,
-                            "max_output_tokens": engine.max_output_tokens}]}
+        return {"models": [{"repo": selected.model_id, "model_id": selected.model_id,
+                            "revision": selected.revision,
+                            "cached": readiness(selected)["files"]["state"] == "files_verified",
+                            "context_window_tokens": selected.context_window_tokens,
+                            "max_output_tokens": selected.max_output_tokens,
+                            "default": selected is model_manager.default,
+                            "production_allowed": getattr(selected, "production_allowed", True)}
+                           for selected in model_manager.models]}
 
     @app.get("/api/chat/diagnostics")
     def chat_diagnostics() -> dict:
@@ -867,11 +1075,13 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             mlx_version = mx.__version__
         except Exception:
             mlx_version = None
-        state = engine.status()
-        return {"engine": "mlx-lm", "mlx": mlx_version, "model_id": engine.model_id,
-                "revision": engine.revision, "loaded": state["loaded"], "busy": state["busy"],
-                "context_window_tokens": engine.context_window_tokens,
-                "max_output_tokens": engine.max_output_tokens,
+        state = model_manager.status()
+        loaded_id = state.get("model_id") or engine.model_id
+        loaded = model_manager.for_model(loaded_id)
+        return {"engine": "mlx-lm", "mlx": mlx_version, "model_id": loaded_id,
+                "revision": loaded.revision, "loaded": state["loaded"], "busy": state["busy"],
+                "context_window_tokens": loaded.context_window_tokens,
+                "max_output_tokens": loaded.max_output_tokens,
                 "active_memory_bytes": state["active_memory_bytes"],
                 "peak_memory_bytes": state["peak_memory_bytes"],
                 "runtime_revision": runtime_sha256}
@@ -908,7 +1118,11 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         rather than offered. `defaults` is what a request that omits the parameter is served
         with; `chosen` is only what the operator actually set.
         """
-        return _defaults_status(_parameter_surface(engine))
+        return model_defaults.status(
+            settings_dir,
+            [(selected.model_id, _parameter_surface(selected))
+             for selected in model_manager.models],
+        )
 
     @app.put("/api/model-defaults")
     def model_defaults_save(body: dict | None = None) -> dict:
@@ -918,7 +1132,8 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         previous defaults exactly as they were instead of half-applying.
         """
         payload = body if isinstance(body, dict) else {}
-        repo = _defaults_repo(payload, None)
+        selected = _defaults_repo(payload, None)
+        repo = selected.model_id
         values = payload.get("values")
         if values is None:
             values = {}
@@ -926,14 +1141,14 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             raise HTTPException(422, (
                 f"values: must be an object of parameter names to values; received "
                 f"{_describe(values)}"))
-        parameters = _parameter_surface(engine)
+        parameters = _parameter_surface(selected)
         offered = {str(parameter["name"]) for parameter in model_defaults.editable(parameters)}
         # The lane's published bound first, then the lane's own enforcement: every refusal is
         # reported at once, by parameter, and the published-bound wording wins where both refuse
         # the same value, because that is the number the caller can read in the contract.
         _accepted, refusals = model_defaults.validate(parameters, values)
         for name, reason in _route_refusals(
-                {name: value for name, value in values.items() if name in offered}).items():
+                {name: value for name, value in values.items() if name in offered}, selected).items():
             refusals.setdefault(name, reason)
         if refusals:
             raise HTTPException(422, refusals)
@@ -941,7 +1156,7 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
             model_defaults.save(settings_dir, repo, values, parameters)
         except ValueError as exc:
             raise HTTPException(422, _refusals_from_save(exc)) from exc
-        return _defaults_status(parameters)
+        return _defaults_status(selected, parameters)
 
     @app.delete("/api/model-defaults")
     def model_defaults_clear(body: dict | None = None, repo: str | None = None) -> dict:
@@ -950,16 +1165,18 @@ def create_app(engine: ChatEngine, policy: memory_policy_module.MemoryPolicy,
         The repo may arrive in the body or as a query parameter; either way an unknown one is a
         refusal rather than a silent no-op.
         """
-        named = _defaults_repo(body if isinstance(body, dict) else {}, repo)
-        model_defaults.clear(settings_dir, named)
-        return _defaults_status(_parameter_surface(engine))
+        selected = _defaults_repo(body if isinstance(body, dict) else {}, repo)
+        model_defaults.clear(settings_dir, selected.model_id)
+        return _defaults_status(selected, _parameter_surface(selected))
 
     return app
 
 
 def from_environment() -> FastAPI:
-    engine = engine_from_environment()
     data = Path(os.environ["STUDIOHUB_CHAT_DATA_DIR"])
+    models = Path(os.environ["STUDIOHUB_MODELS_DIR"])
+    manifests = Path(os.environ["STUDIOHUB_MODEL_MANIFESTS"])
+    engine = ChatModelManager.from_catalog(manifests, models)
     release = json.loads(Path(os.environ["STUDIOHUB_RELEASE_MANIFEST"]).read_text())
     identity = release["components"]["chat"]["runtime_sha256"]
     if not isinstance(identity, str) or len(identity) != 64:

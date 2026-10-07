@@ -2,6 +2,7 @@
   "defaults": {
     "parameters_source": "model/config.json"
   },
+  "default": true,
   "engine": "chat-mlx",
   "files": [
     {
