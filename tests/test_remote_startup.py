@@ -125,6 +125,20 @@ class ReportTests(_Isolated):
         self.assertEqual(len(startup["app_version"]), 40)
         self.assertNotIn("evil", startup)
 
+    def test_the_apps_last_update_error_is_published_cleaned(self) -> None:
+        startup_control.sync(REPORT)
+        self.assertIsNone(startup_control.snapshot({})["last_update_error"], "no failure, nothing claimed")
+        startup_control.sync({**REPORT, "last_update_error": {
+            "phase": "downloading", "reason": "Install the update failed.\nHTTP 404 " + "x" * 400,
+            "build": "abc1234", "at": 1790000000.5, "extra": "dropped"}})
+        error = startup_control.snapshot({})["last_update_error"]
+        self.assertEqual(set(error), {"phase", "reason", "build", "at"})
+        self.assertEqual((error["phase"], error["build"], error["at"]), ("downloading", "abc1234", 1790000000.5))
+        self.assertEqual(len(error["reason"]), 300)
+        self.assertNotIn("\n", error["reason"])
+        startup_control.sync({**REPORT, "last_update_error": "not an object"})
+        self.assertIsNone(startup_control.snapshot({})["last_update_error"])
+
 
 class RequestTests(_Isolated):
     def run_request(self, *args, **kwargs):
@@ -379,6 +393,13 @@ class RosterTests(_Isolated):
         row = fleet_nodes._from_snapshot({"id": "n1"}, snapshot)
         self.assertEqual(row["state"], "reachable")
         self.assertEqual(row["startup"], startup)
+
+    def test_a_nodes_last_update_error_reaches_the_controllers_row(self) -> None:
+        error = {"phase": "staging", "reason": "the controller has not supplied a file yet", "build": "b", "at": 1.0}
+        snapshot = {"host": {}, "version": "0.6.152", "reachable": True, "auth": True,
+                    "status": "connected", "startup": {"open_at_login": True, "last_update_error": error}}
+        row = fleet_nodes._from_snapshot({"id": "n1"}, snapshot)
+        self.assertEqual(row["startup"]["last_update_error"], error)
 
     def test_a_node_that_goes_quiet_keeps_what_it_last_said_and_is_marked_stale(self) -> None:
         fleet_nodes._write({"n1": dict(self.NODE)})

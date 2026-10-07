@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.152 - 2026-10-07
+
+### Updates
+
+**Updates no longer stall when a Mac checks for an update while it is still arriving; a failed
+automatic update can be retried remotely.** A Mac that looks for the new version while its files are
+still being delivered now waits for them, and tries again later, instead of giving up. If an automatic
+update does fail, the Mac tries it again on its own after half an hour, or at once when the update is
+sent again, and the Mac's last update problem is reported to the fleet so you can see which Mac failed
+and why.
+
 ## 0.6.151 - 2026-10-07
 
 ### Voice

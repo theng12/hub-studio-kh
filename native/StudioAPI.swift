@@ -3343,8 +3343,9 @@ final class NativeWorkspaceStore: ObservableObject {
     var installVerifiedArtifact: (URL, ReleaseDescriptor) throws -> String = ReleaseInstaller.live.install
     /// Builds the offered release on this Mac's own Hub as a copy of the installed app plus only
     /// the files that changed, and returns the staged bundle - or nil, meaning "use the disk image".
-    /// Injectable so the choice between the two can be driven without a Hub.
-    var stageDeltaRelease: ((ReleaseDescriptor) async -> URL?)?
+    /// Throws `ReleaseNotReady` while the Hub is still receiving the release. Injectable so the choice
+    /// between the two can be driven without a Hub.
+    var stageDeltaRelease: ((ReleaseDescriptor) async throws -> URL?)?
     /// Verifies a staged bundle and swaps it in, restoring the old app on failure. Returns the build
     /// that landed. Injectable for the same reason as `installVerifiedArtifact`.
     var installStagedApp: (URL, ReleaseDescriptor) throws -> String = ReleaseInstaller.live.swapStagedApp
@@ -3589,6 +3590,14 @@ final class NativeWorkspaceStore: ObservableObject {
         let startServicesOnLaunch: Bool
         let appVersion: String
         var applied: [StartupOutcome] = []
+        var lastUpdateError: UpdateFailure?
+    }
+    /// Where an update stopped (`verifying`, `staging`, `downloading`, `installing`) and why, in one line.
+    struct UpdateFailure: Codable, Equatable {
+        let phase: String
+        let reason: String
+        let build: String
+        let at: Double
     }
     /// What the app did with one request the fleet sent, reported on the next call.
     struct StartupOutcome: Codable, Equatable {
@@ -3626,6 +3635,7 @@ final class NativeWorkspaceStore: ObservableObject {
         var report = provider()
         let sent = startupOutcomesToReport
         report.applied = sent
+        report.lastUpdateError = lastUpdateError
         guard let answer: StartupAnswer = try? await sendJSON(["api", "hub", "startup", "sync"],
                                                                 method: "POST", body: report) else { return }
         startupOutcomesToReport.removeAll { sent.contains($0) }
@@ -7562,6 +7572,7 @@ final class NativeWorkspaceStore: ObservableObject {
         }
         installingRelease = true
         releaseProgress = "Verifying the controller's signature…"
+        var phase = "verifying"
         defer {
             installingRelease = false
             releaseProgress = nil
@@ -7582,11 +7593,13 @@ final class NativeWorkspaceStore: ObservableObject {
             // proved on the Hub's side comes back as nil and the disk image is used as before.
             var staged: URL?
             if descriptor.raw["files_sha256"] != nil {
+                phase = "staging"
                 releaseProgress = "Preparing the update from the files that changed…"
-                staged = await (stageDeltaRelease ?? { await self.requestDeltaStage($0) })(descriptor)
+                staged = try await (stageDeltaRelease ?? { try await self.requestDeltaStage($0) })(descriptor)
             }
             var artifact: URL?
             if staged == nil {
+                phase = "downloading"
                 releaseProgress = "Downloading \(descriptor.filename) — \(descriptor.offered.sizeDisplay)…"
                 // `downloadReleaseArtifact` returns only a file it has already verified against the
                 // signed size and SHA-256, so the bytes are not hashed a second time here.
@@ -7605,6 +7618,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 }
             }
             let landed: String
+            phase = "installing"
             if let staged {
                 releaseProgress = "Installing \(descriptor.version) (\(descriptor.build))…"
                 let swap = installStagedApp
@@ -7634,20 +7648,30 @@ final class NativeWorkspaceStore: ObservableObject {
             currentAppVersion = descriptor.version
             updateOffered = false
             releaseRefusal = nil
+            lastUpdateError = nil
             // Only a completed install makes a stored download disposable. Every failure above leaves
             // them in place, so the next press reuses or resumes one rather than re-downloading.
             retireReleaseArtifacts()
             note(.success, "Installed Studio Hub \(descriptor.version) (\(landed)). Relaunching Studio Hub now — running work will stop.")
             onReleaseRestartRequested?()
             await refreshRelease()
+        } catch let wait as ReleaseNotReady {
+            // The release is still arriving on this Mac's Hub: not a failure, so the next check
+            // simply asks again. Nothing was installed, so the Mac takes work meanwhile.
+            if automatic { await endUpdateDrain() }
+            note(.success, "Studio Hub \(descriptor.version) is still arriving on this Mac (\(wait.message)); it will be installed once it is all here.")
         } catch {
-            // An update that fails on its own is not tried again for the same build until the app
-            // restarts: the failure is on screen, and a retry loop would re-copy 5 GB every minute.
+            // An update that fails on its own is not tried again for the same release for
+            // `autoUpdateFailureRetry` (a retry loop would re-copy 5 GB every minute); a re-pushed
+            // release carries a new signature and is tried at once.
+            let message = Self.actionable(error, action: "Install the update")
             if automatic {
-                autoUpdateFailedBuild = descriptor.build
+                autoUpdateFailure = (descriptor.signature, lastAutoUpdateAttempt ?? Date())
                 await endUpdateDrain()   // a failed install must not leave this Mac refusing work
             }
-            note(.failure, Self.actionable(error, action: "Install the update"))
+            lastUpdateError = UpdateFailure(phase: phase, reason: String(message.split(whereSeparator: \.isNewline).first?.prefix(300) ?? ""),
+                                            build: descriptor.build, at: Date().timeIntervalSince1970)
+            note(.failure, message)
             await refreshRelease()
         }
     }
@@ -7677,7 +7701,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// that changed, and wait for it. Returns the staged bundle, or nil for "use the disk image":
     /// the Hub said it cannot (no manifest, a file it could not fetch or verify, too much changed),
     /// it did not know the route (an older Hub), or it did not finish in time.
-    private func requestDeltaStage(_ descriptor: ReleaseDescriptor) async -> URL? {
+    private func requestDeltaStage(_ descriptor: ReleaseDescriptor) async throws -> URL? {
         func status(_ data: Data) -> [String: Any] {
             ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
         }
@@ -7692,6 +7716,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
                 answer = status(try await performData(makeRequest(["api", "hub", "release", "stage"])))
             }
+            if answer["state"] as? String == "not_ready" {
+                throw ReleaseNotReady(message: (answer["message"] as? String) ?? "its files are still arriving")
+            }
             guard answer["state"] as? String == "staged", let path = answer["staged_app"] as? String,
                   path.hasPrefix("/") else {
                 let why = (answer["message"] as? String) ?? "the Hub did not say why"
@@ -7699,6 +7726,8 @@ final class NativeWorkspaceStore: ObservableObject {
                 return nil
             }
             return URL(fileURLWithPath: path)
+        } catch let wait as ReleaseNotReady {
+            throw wait
         } catch {
             return nil
         }
@@ -7721,9 +7750,14 @@ final class NativeWorkspaceStore: ObservableObject {
 
     static let releaseCheckInterval: TimeInterval = 600
     static let autoUpdateRetryInterval: TimeInterval = 60
+    /// How long a release whose unattended install failed waits before it is tried again.
+    static let autoUpdateFailureRetry: TimeInterval = 30 * 60
     private var lastReleaseCheck: Date?
     private var lastAutoUpdateAttempt: Date?
-    private var autoUpdateFailedBuild: String?
+    /// The release (by descriptor signature) whose unattended install last failed, and when.
+    private var autoUpdateFailure: (signature: String, at: Date)?
+    /// The last update that failed here, reported up the fleet with the startup settings.
+    private(set) var lastUpdateError: UpdateFailure?
 
     /// Every Mac - node or controller - updates itself, with nobody at the keyboard.
     ///
@@ -7758,7 +7792,9 @@ final class NativeWorkspaceStore: ObservableObject {
             // Just pinned: verify on the next tick, not ten minutes from now.
             if !hadKey && releasePublisherKey != nil { lastReleaseCheck = nil }
         }
-        guard updateOffered, let build = offeredRelease?.build, build != autoUpdateFailedBuild else {
+        guard updateOffered, let signature = offeredReleaseDescriptor?.signature,
+              autoUpdateFailure.map({ $0.signature != signature || now.timeIntervalSince($0.at) >= Self.autoUpdateFailureRetry }) ?? true
+        else {
             updatePendingSince = nil
             await endUpdateDrain()
             return

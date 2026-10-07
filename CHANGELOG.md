@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.152 — 2026-10-07 · Updates no longer stall while a release is still arriving
+
+Branch `fix/release-stage-race` off 0.6.151 2e38cbe. Found in the 0.6.151 rollout: a Gateway delta push stores the
+manifest (advertising the release) ~110 s before its ~33 blobs. A controller's app that checked inside that window got
+`missing_blob` from the stage, fell back to the disk image (404: a manifest-pushed controller holds none), set
+`autoUpdateFailedBuild`, and never retried until quit; its nodes, which mirror only what their controller runs, stalled too.
+- **Controller stage waits for its blobs** (`release_sync._await_blobs`): while `app_release.missing_blobs()` is non-empty
+  (and no disk image is held) the stage reports `phase: downloading` with byte progress, up to `BLOB_WAIT_S` (15 min); still
+  missing → `state: "not_ready"` (retryable), never `fallback`. A re-push during the wait ends it as `not_ready` too.
+- **Node blob fetch keeps asking** (`release_sync._remote_blob`): a controller that cannot supply a blob (still receiving
+  it, or restarting into its own update) is asked again every `BLOB_WAIT_POLL_S` for up to `BLOB_WAIT_S`, then `not_ready`
+  instead of the disk-image relay a node cannot use.
+- **App** (`StudioAPI.installOfferedRelease`, both roles): `not_ready` is not a failure (no image download, no failure
+  memory, the drain ends, the next tick asks again). An automatic failure is remembered by descriptor **signature** (a re-push
+  is tried at once) and retried after `autoUpdateFailureRetry` (30 min) instead of never.
+- **Fleet report**: the app sends `last_update_error {phase, reason, build, at}` (phase `verifying|staging|downloading|
+  installing`, one-line reason) with `POST /api/hub/startup/sync`; `startup_control` keeps it cleaned and publishes it in
+  the `startup` object (resources, node rows, roster). Gateway shows it once it adds the key to `fleet._STARTUP_KEYS`.
+- Tests: `tests/hub_regression/cases/test_release_delta_routes.py` (controller waits then builds; not-ready timeout;
+  node keeps asking then builds; node not-ready), `tests/test_remote_startup.py` (report cleaned; node row carries it),
+  `tests/native/api_main.swift` (retry after 30 min and on re-push for node and controller roles; not_ready case; report).
+
 ## 0.6.151 — 2026-10-07 · Breeze narration speaks one sentence per section
 
 Branch `feat/breeze-sentence-sections` off 0.6.150 fa79767 (keeps 0.6.150's Qwen Image 2.1 backends and DMG packaging).

@@ -80,6 +80,16 @@ def _clean_text(value: object, limit: int) -> str | None:
     return text[:limit] or None
 
 
+def _update_error(value: object) -> dict[str, Any] | None:
+    """The app's last failed update: where it stopped (``phase``), why (one line), which build, when."""
+    if not isinstance(value, dict):
+        return None
+    at = value.get("at")
+    return {"phase": _clean_text(value.get("phase"), 40), "reason": _clean_text(value.get("reason"), 300),
+            "build": _clean_text(value.get("build"), 40),
+            "at": float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and at == at else None}
+
+
 def reset_for_tests() -> None:
     global _reported_at, _counter
     with _lock:
@@ -109,6 +119,7 @@ def sync(report: dict[str, Any], *, role: str | None = None, now: float | None =
             "start_services_on_launch": _bool_or_none(report.get("start_services_on_launch")),
             "open_at_login_saved": _bool_or_none(report.get("open_at_login_saved")),
             "app_version": _clean_text(report.get("app_version"), 40),
+            "last_update_error": _update_error(report.get("last_update_error")),
         })
         _reported_at = moment
         applied = report.get("applied")
@@ -171,6 +182,7 @@ def snapshot(studios: dict[str, str] | None = None, *, app_version: str | None =
             "studios": dict(sorted(studios.items())),
         },
         "app_version": app.get("app_version") or app_version,
+        "last_update_error": app.get("last_update_error") if fresh else None,
         "last_start_at": round(_started_at, 3),
         "app_reporting": fresh,
         "reported_at": round(reported, 3) if reported else None,

@@ -569,7 +569,10 @@ def test_the_stage_job_builds_the_release_from_the_installed_app_and_the_stored_
         os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
 
 
-def test_the_stage_job_says_fallback_when_it_cannot_prove_the_release(hub, tmp_path):
+def test_the_stage_job_says_fallback_when_it_cannot_prove_the_release(hub, tmp_path, monkeypatch):
+    from components.hub.backend import release_sync
+    monkeypatch.setattr(release_sync, "BLOB_WAIT_S", 0.3)
+    monkeypatch.setattr(release_sync, "BLOB_WAIT_POLL_S", 0.02)
     seed = _seed()
     _trust(hub, seed)
     new_files = {**FILES_A, R + "components/hub/backend/added.py": b"# added\n"}
@@ -580,12 +583,129 @@ def test_the_stage_job_says_fallback_when_it_cannot_prove_the_release(hub, tmp_p
         _push(hub, body)                                            # blobs never sent, no controller to ask
         hub.post("/api/hub/release/stage", headers=_hub_headers())
         status = _wait_for_stage(hub)
-        assert status["state"] == "fallback" and status["code"] == "missing_blob", status
+        # Still arriving after the wait: retryable, never the disk-image fallback (a manifest-pushed
+        # controller holds no image, so that would 404 and fail the update).
+        assert status["state"] == "not_ready" and status["code"] == "not_ready", status
         # A Hub that is not running from an installed app cannot stage either.
         os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
         hub.post("/api/hub/release/stage", headers=_hub_headers())
         status = _wait_for_stage(hub)
         assert status["state"] == "fallback" and status["code"] == "not_installed", status
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
+
+
+def test_a_controller_stage_waits_for_blobs_still_being_pushed_then_builds(hub, tmp_path, monkeypatch):
+    """The 0.6.151 rollout race: the release is advertised once its manifest lands, ~2 min before
+    its blobs; the controller's own app asked inside that window and failed for good."""
+    from components.hub.backend import file_manifest as fm, release_sync
+    monkeypatch.setattr(release_sync, "BLOB_WAIT_POLL_S", 0.02)
+    seed = _seed()
+    _trust(hub, seed)
+    new_files = {**FILES_A, R + "components/hub/backend/added.py": b"# added while the app waited\n"}
+    _d, body, entries, blobs = _release(seed, new_files, tmp_path)
+    _installed_app(tmp_path, FILES_A)
+    try:
+        need = _push(hub, body).json()["need"]
+        assert need
+        hub.post("/api/hub/release/stage", headers=_hub_headers())
+        deadline = time.time() + 10
+        while True:
+            status = hub.get("/api/hub/release/stage", headers=_hub_headers()).json()
+            if status.get("phase") == "downloading" or time.time() > deadline:
+                break
+            time.sleep(0.02)
+        assert status["state"] == "running" and status["phase"] == "downloading" and status["total_bytes"] > 0, status
+        _send_all(hub, blobs, need)                                 # the gateway's PUTs land
+        status = _wait_for_stage(hub)
+        assert status["state"] == "staged", status
+        assert fm.scan(Path(status["staged_app"])) == entries
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
+
+
+def _node_holding(hub, tmp_path, new_files):
+    """This Hub as a node that mirrored a manifest-only release of ``new_files``; returns its blobs."""
+    from components.hub.backend import app_release, release_sync
+    seed = _seed()
+    _d, body, entries, blobs = _release(seed, new_files, tmp_path)
+    _trust(hub, seed)
+    _push(hub, body)
+    answers = {"/api/version": {"version": "0.6.99", "build": "abc1234"},
+               "/api/hub/release": hub.get("/api/hub/release", headers=_fleet_headers()).json()}
+    raw = {"/api/hub/release/files": hub.get("/api/hub/release/files", headers=_fleet_headers()).content}
+    for name in body["file_manifest"]["groups"]:
+        raw[f"/api/hub/release/files/{name}"] = hub.get(f"/api/hub/release/files/{name}", headers=_fleet_headers()).content
+    _reset_release_store()
+    _become_a_node()
+    asyncio.run(release_sync.sync_once(_mock_client(answers, raw)))
+    assert app_release.held_manifest() is not None
+    return entries, blobs
+
+
+class _ControllerBlobs:
+    """``httpx.stream`` as a node's blob fetch sees it: refused ``failures`` times (the controller
+    restarting into its own update, or still receiving the blob), then the bytes."""
+
+    def __init__(self, blobs, failures):
+        self.blobs, self.failures, self.calls = blobs, failures, 0
+
+    def __call__(self, method, url, **_kw):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise httpx.ConnectError("the controller is restarting")
+        data = self.blobs[url.rsplit("/", 1)[1]]
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_raw(self):
+                yield data
+        return Response()
+
+
+def test_a_node_whose_controller_cannot_supply_a_blob_yet_keeps_asking_then_builds(hub, tmp_path, monkeypatch):
+    from components.hub.backend import file_manifest as fm, release_sync
+    monkeypatch.setattr(release_sync, "BLOB_WAIT_POLL_S", 0.01)
+    new_files = {**FILES_A, R + "components/hub/backend/added.py": b"# on the controller in a moment\n"}
+    entries, blobs = _node_holding(hub, tmp_path, new_files)
+    controller = _ControllerBlobs(blobs, failures=release_sync.BLOB_ATTEMPTS + 4)
+    monkeypatch.setattr(release_sync.httpx, "stream", controller)
+    _installed_app(tmp_path, FILES_A)
+    try:
+        hub.post("/api/hub/release/stage", headers=_hub_headers())
+        status = _wait_for_stage(hub)
+        assert status["state"] == "staged", status
+        assert fm.scan(Path(status["staged_app"])) == entries
+        assert controller.calls > release_sync.BLOB_ATTEMPTS, "it kept asking past the first three refusals"
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
+
+
+def test_a_node_whose_controller_never_supplies_the_blob_answers_not_ready(hub, tmp_path, monkeypatch):
+    """Not the disk-image fallback: a node holds no image, and its relay to a manifest-pushed
+    controller is a 404 that used to fail the update for good."""
+    from components.hub.backend import release_sync
+    monkeypatch.setattr(release_sync, "BLOB_WAIT_S", 0.3)
+    monkeypatch.setattr(release_sync, "BLOB_WAIT_POLL_S", 0.01)
+    new_files = {**FILES_A, R + "components/hub/backend/added.py": b"# the controller lost this one\n"}
+    _entries_, blobs = _node_holding(hub, tmp_path, new_files)
+    monkeypatch.setattr(release_sync.httpx, "stream", _ControllerBlobs(blobs, failures=10 ** 9))
+    _installed_app(tmp_path, FILES_A)
+    try:
+        hub.post("/api/hub/release/stage", headers=_hub_headers())
+        status = _wait_for_stage(hub)
+        assert status["state"] == "not_ready" and status["code"] == "not_ready", status
+        # Retryable: asking again starts a new run rather than repeating the old answer.
+        assert hub.post("/api/hub/release/stage", headers=_hub_headers()).json()["state"] == "running"
+        _wait_for_stage(hub)
     finally:
         os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
 

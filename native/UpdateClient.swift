@@ -24,6 +24,11 @@ struct ReleaseError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// The Hub is still receiving the offered release: try again later, never a failed install.
+struct ReleaseNotReady: Error {
+    let message: String
+}
+
 // MARK: - Canonical JSON
 
 /// Canonical descriptor bytes, byte for byte the same as the controller's

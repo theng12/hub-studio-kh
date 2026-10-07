@@ -1,3 +1,10 @@
+> 2026-10-07 0.6.152: the controller update race from the 0.6.151 rollout is closed. A controller's stage waits (<=15 min,
+> `phase: downloading`) for blobs a Gateway is still pushing; a node keeps asking its controller for a blob as long; either
+> ends `not_ready` (retryable), never the disk-image fallback that 404s. The app (both roles) treats `not_ready` as no
+> failure, keys an automatic failure by descriptor signature (a re-push heals it) and retries after 30 min, and reports
+> `startup.last_update_error {phase, reason, build, at}` up the fleet. Gateway follow-up: add `last_update_error` to
+> `gateway/fleet.py _STARTUP_KEYS` (sanitised) to show it on the fleet row. Not published (0.6.151 rollout in progress).
+
 > 2026-10-07 0.6.151: Breeze reads ONE SENTENCE PER SECTION (owner approved the A/B by ear; `long_form_policy`
 > `max_sentences_per_section`, Breeze 1, others unchanged). A sentence under 30 spoken characters joins a neighbour in its
 > paragraph; joins stay 1.0 s sentence / 1.5 s paragraph. Section Whisper reuses the language detected on an accepted section

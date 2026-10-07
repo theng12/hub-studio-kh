@@ -5525,6 +5525,62 @@ struct NativeAPITests {
         tick += 120
         await updateStore.releaseTick(now: tick)
         require(failedSwaps == 1, "an unattended install that failed must not loop: \(failedSwaps)")
+        require(updateStore.lastUpdateError?.phase == "installing" && updateStore.lastUpdateError?.build == "failbuild"
+                && updateStore.lastUpdateError?.reason.contains("fixture: the copy failed") == true,
+                "the failure is kept, with its phase and one-line reason, for the fleet report: \(String(describing: updateStore.lastUpdateError))")
+        // ...but the same release is tried again after half an hour (nobody has to quit the app),
+        tick += NativeWorkspaceStore.autoUpdateFailureRetry
+        await updateStore.releaseTick(now: tick)
+        require(failedSwaps == 2, "a failed release is tried again after the retry interval: \(failedSwaps)")
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(failedSwaps == 2, "and then waits out the interval again: \(failedSwaps)")
+        // ...and a re-push of the same build (a new signature) is tried at once.
+        let repushed = makeReleaseDescriptor(version: "0.6.61", build: "failbuild", artifact: artifact,
+                                             gateway: gatewayKey, controllerSigning: controllerKey)
+        require(repushed["signature"] as? String != failing["signature"] as? String,
+                "the fixture's re-push must carry a different signature")
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(repushed), artifact: artifact)
+        await updateStore.refreshRelease()
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(failedSwaps == 3, "a re-pushed release is not held back by the old one's failure: \(failedSwaps)")
+        // The failure travels up the fleet with the startup report, so the Gateway's row can show it.
+        FixtureProtocol.resetStartupSync()
+        updateStore.startupReportProvider = {
+            NativeWorkspaceStore.StartupReport(openAtLogin: true, openAtLoginSaved: true,
+                                               startServicesOnLaunch: true, appVersion: "0.6.50")
+        }
+        await updateStore.startupSyncTick()
+        updateStore.startupReportProvider = nil
+        let reportedError = FixtureProtocol.startupSyncs().last?["last_update_error"] as? [String: Any]
+        require(reportedError?["phase"] as? String == "installing" && reportedError?["build"] as? String == "failbuild"
+                && (reportedError?["reason"] as? String)?.isEmpty == false,
+                "the startup report must carry the last update error: \(String(describing: reportedError))")
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(failedSwaps == 3, "the re-pushed release that failed must not loop either: \(failedSwaps)")
+        // The cases above ran as a node (`agent`); a controller runs the same app and gets the same rule.
+        FixtureProtocol.currentRole = "controller"
+        await updateStore.refreshConnection()
+        let failingOnController = makeReleaseDescriptor(version: "0.6.61", build: "failctl", artifact: artifact,
+                                                        gateway: gatewayKey, controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(failingOnController), artifact: artifact)
+        await updateStore.refreshRelease()
+        failedSwaps = 0
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(failedSwaps == 1, "a controller's failed install does not loop: \(failedSwaps)")
+        tick += NativeWorkspaceStore.autoUpdateFailureRetry
+        await updateStore.releaseTick(now: tick)
+        require(failedSwaps == 2 && updateStore.lastUpdateError?.build == "failctl",
+                "a controller retries after the interval too, and reports it: \(failedSwaps)")
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        FixtureProtocol.currentRole = "agent"
+        await updateStore.refreshConnection()
 
         // ── Drain for update: a Mac that never goes idle stops taking NEW work, finishes, installs ──
         func offerDrain(_ build: String) async {
@@ -5800,7 +5856,31 @@ struct NativeAPITests {
         require(updateStore.connectionNotice?.kind == .failure, "a failed staged swap must be reported")
         require(!FileManager.default.fileExists(atPath: deltaStagedHolder.path), "a failed staged bundle must be removed")
 
-        // 6. An uncertain job counts only while it is younger than the longest lane deadline; after
+        // 6. A controller still receiving the release answers `not_ready`: no disk image is fetched,
+        //    nothing is reported as failed, and the next automatic check simply asks again.
+        stagedSwaps = 0
+        imageInstalls = 0
+        try FileManager.default.createDirectory(at: deltaStagedApp, withIntermediateDirectories: true)
+        updateStore.installStagedApp = { _, _ in stagedSwaps += 1; return "arrivingbuild" }
+        FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = true }       // an idle Mac updates by itself
+        _ = await offerDelta("arrivingbuild")
+        let errorBefore = updateStore.lastUpdateError
+        FixtureProtocol.setStageScript([["state": "running", "phase": "downloading", "done_bytes": 1, "total_bytes": 2],
+                                        ["state": "not_ready", "code": "not_ready",
+                                         "message": "3 files of this release have not reached this Mac yet"]])
+        FixtureProtocol.resetArtifactRequests()
+        tick += 700
+        await updateStore.releaseTick(now: tick)
+        require(stagedSwaps == 0 && imageInstalls == 0 && FixtureProtocol.releaseReads() == 0,
+                "a release still arriving must not fall back to the disk image: \(imageInstalls) image, \(FixtureProtocol.releaseReads()) reads")
+        require(updateStore.connectionNotice?.kind == .success && updateStore.lastUpdateError == errorBefore,
+                "not ready is not a failure: \(updateStore.connectionNotice?.text ?? "nil")")
+        FixtureProtocol.setStageScript([["state": "staged", "phase": "staged", "staged_app": deltaStagedApp.path]])
+        tick += 61
+        await updateStore.releaseTick(now: tick)
+        require(stagedSwaps == 1, "the next automatic check installs it once it has arrived: \(stagedSwaps)")
+
+        // 7. An uncertain job counts only while it is younger than the longest lane deadline; after
         //    that the Hub has given up on it and it must not keep the Mac from ever updating.
         FixtureProtocol.setUncertainImage(true)
         await updateStore.refresh()
