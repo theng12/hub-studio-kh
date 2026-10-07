@@ -240,6 +240,28 @@ class MoeQualificationLauncherTests(unittest.TestCase):
         self.assertIn("Peak MLX memory: 3.00 GiB", summary)
         self.assertNotIn("0.0 tokens/s", summary)
 
+    def test_summary_exposes_long_workload_counts_caps_and_largest_observed_peak(self) -> None:
+        spec = self.module.MODELS["gemma4-26b-a4b-qat-4bit"]
+        report = {
+            "parent_observed_peak_phys_footprint_bytes": 18 * 1024 ** 3,
+            "scene_batch_capacity": {"largest_passing_tested_batch_size": 25,
+                                     "failed_batch_sizes": [50]},
+            "cases": [
+                {"name": "long-script", "kernel_phys_footprint_peak_bytes": 19 * 1024 ** 3,
+                 "validation": {"chapters": [{"number": 7, "word_count": 1205, "pass": True}]}},
+                {"name": "scenes-bulk-50", "validation": {"count": 50,
+                 "length_stats": {"min_chars": 350, "max_chars": 4001, "mean_chars": 700,
+                                  "cap": 4000, "over_cap_count": 1}}},
+            ],
+        }
+        summary = self.module.summary_text(report, spec)
+        self.assertIn("Largest observed process footprint: 19.00 GiB", summary)
+        self.assertIn("Largest passing tested scene batch: 25", summary)
+        self.assertIn("Failed scene batch sizes: 50", summary)
+        self.assertIn("Chapter 07: 1205 words (PASS)", summary)
+        self.assertIn("Scene prompts: 50; characters min/mean/max: 350 / 700 / 4001", summary)
+        self.assertIn("Character cap: 4000; over cap: 1", summary)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -218,6 +218,10 @@ def summary_text(report: dict[str, Any], spec: ModelSpec) -> str:
     cold_peak = (report.get("cold_load") or {}).get("mlx_peak_bytes")
     if isinstance(cold_peak, (int, float)):
         peaks.append(cold_peak)
+    footprints = [report.get("parent_observed_peak_phys_footprint_bytes"),
+                  cold_load.get("kernel_phys_footprint_peak_bytes")]
+    footprints += [row.get("kernel_phys_footprint_peak_bytes") for row in cases]
+    footprints = [value for value in footprints if isinstance(value, (int, float))]
     lines = [
         "Studio Hub LLM Qualification Summary", "",
         f"Model: {spec.display_name}", f"Repository: {spec.repo_id}", f"Revision: {spec.revision}",
@@ -234,8 +238,15 @@ def summary_text(report: dict[str, Any], spec: ModelSpec) -> str:
         f"Final memory pressure: {_value(final_health.get('pressure_name'))}",
         f"Final swap growth: {_bytes(final_health.get('swap_delta_bytes'))}",
         f"Peak MLX memory: {_bytes(max(peaks) if peaks else None)}",
-        f"Parent-observed peak process footprint: {_bytes(report.get('parent_observed_peak_phys_footprint_bytes'))}",
+        f"Largest observed process footprint: {_bytes(max(footprints) if footprints else None)}",
     ]
+    capacity = report.get("scene_batch_capacity")
+    if isinstance(capacity, dict):
+        lines += [
+            f"Largest passing tested scene batch: {_value(capacity.get('largest_passing_tested_batch_size'))}",
+            "Failed scene batch sizes: " + (", ".join(str(n) for n in capacity.get("failed_batch_sizes", [])) or "none"),
+            "Batch scope: screening results; repeated production reliability is not established.",
+        ]
     if report.get("error"):
         lines.append(f"Error: {report['error']}")
     if report.get("inconclusive_reason"):
@@ -251,6 +262,21 @@ def summary_text(report: dict[str, Any], spec: ModelSpec) -> str:
                   f"  Decode tokens/s: {_value(row.get('decode_tps'))}",
                   f"  Peak MLX memory: {_bytes(row.get('mlx_peak_bytes'))}",
                   f"  Peak process footprint: {_bytes(row.get('kernel_phys_footprint_peak_bytes'))}"]
+        validation = row.get("validation") or {}
+        for chapter in validation.get("chapters", []):
+            number = chapter.get("number")
+            label = f"{number:02d}" if isinstance(number, int) else "unknown"
+            verdict = "PASS" if chapter.get("pass") is True else "FAIL" if chapter.get("pass") is False else "UNKNOWN"
+            lines.append(f"  Chapter {label}: {_value(chapter.get('word_count'))} words ({verdict})")
+        lengths = validation.get("length_stats")
+        if isinstance(lengths, dict):
+            lines += [
+                f"  Scene prompts: {_value(validation.get('count'))}; characters min/mean/max: "
+                f"{_value(lengths.get('min_chars'))} / {_value(lengths.get('mean_chars'))} / {_value(lengths.get('max_chars'))}",
+                f"  Character cap: {_value(lengths.get('cap'))}; over cap: {_value(lengths.get('over_cap_count'))}",
+            ]
+        for error in validation.get("errors", []):
+            lines.append(f"  Validation: {error}")
     return "\n".join(lines) + "\n"
 
 

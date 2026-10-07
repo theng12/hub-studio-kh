@@ -25,3 +25,27 @@ host; it does not qualify a smaller Mac.
 
 The reported first model load is the first load in a fresh probe process. It is not guaranteed to be
 an uncached SSD benchmark because macOS may already hold model files in its filesystem cache.
+
+## Extended workload profile (version 2)
+
+The same three `.command` files now run the full extended suite. No command typing or app update is
+needed. Older dated results stay intact; their prompt hash identifies the original profile.
+
+- One response containing **three complete chapters**, each targeting **1,200 body words**.
+  All three exact headings must appear in order, with **1,080–1,320 body words per chapter**.
+  The output allowance is **12,288 tokens**, providing room beyond the expected 3,600-word text.
+  A large allowance cannot make a model finish: an early stop, missing chapter or short chapter fails.
+- The original three 12-scene batches plus new **25- and 50-scene** batches test strict JSON,
+  every exact scene ID, completeness and prompt length. Output allowances are **6,144**, **12,288**
+  and **16,384 tokens**, respectively; the 50-scene case tests the current Hub output ceiling.
+- Aim for roughly **500–900 characters per scene**, including the style, when useful. This is
+  guidance, not a minimum. Naturally shorter prompts remain acceptable. **4,000 characters is a
+  hard ceiling, not a length target**: prompts are measured after trimming, with any deterministic
+  style prefix included, using the same UTF-16 character units as Story Studio. Nothing is truncated
+  or repaired to turn a failure into a pass.
+
+`SUMMARY.txt` shows the individual chapter word counts, scene character statistics, cap breaches,
+the largest passing tested batch and any failed batch sizes, along with timing, tokens, memory,
+pressure and swap. A passing 50-scene response is a first capacity result, not proof of reliable
+374-scene production or a different RAM tier. Start by evaluating 25-scene batches; adopt 50 only
+after the larger batch repeatedly preserves IDs and completes with useful prompts.

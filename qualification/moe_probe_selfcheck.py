@@ -43,6 +43,16 @@ def main() -> None:
         {"scene_id": "scene-002", "visual_prompt": "   "},
     ]), ids)["pass"], "empty prompts must fail"
     assert not probe.validate_scene_json('{"results":[],"comment":"fixed"}', [])["pass"], "extra keys must fail"
+    emoji_cap = probe.validate_scene_json(scene_text([
+        {"scene_id": "scene-001", "visual_prompt": "  " + "🪔" * 2000 + "  "},
+    ]), ["scene-001"], max_chars=4000)
+    assert emoji_cap["pass"] and emoji_cap["length_stats"]["max_chars"] == 4000
+    assert not probe.validate_scene_json(scene_text([
+        {"scene_id": "scene-001", "visual_prompt": "🪔" * 2000 + "a"},
+    ]), ["scene-001"], max_chars=4000)["pass"], "4001 UTF-16 units must fail"
+    assert not probe.validate_scene_json(scene_text([
+        {"scene_id": "scene-001", "visual_prompt": "a" * 3996},
+    ]), ["scene-001"], max_chars=4000, style="ink")["pass"], "style prefix counts toward cap"
 
     chapter_spec = {
         "minimum_words": 8, "maximum_words": 30,
@@ -55,9 +65,29 @@ def main() -> None:
     assert not probe.validate_chapter(chapter + " She lost the brass key.", chapter_spec)["pass"]
     assert not probe.validate_chapter(chapter + "\n<think>private trace</think>", chapter_spec)["pass"]
     assert probe.word_count("calm water, lamp-light") == 3
-    print("PASS: strict JSON, ID, nonempty prompt, chapter fact, word-count, and think-spill checks")
+
+    long_spec = {
+        "minimum_words_per_chapter": 3, "maximum_words_per_chapter": 5,
+        "chapters": [
+            {"number": 7, "title": "Quiet Meridian"},
+            {"number": 8, "title": "Lantern Ledger"},
+            {"number": 9, "title": "Dawn Watch"},
+        ],
+        "must_include": ["Mara", "brass key"], "must_not_include": ["lost the brass key"],
+    }
+    long_script = (
+        "## Chapter 07: Quiet Meridian\n\nMara holds brass key\n\n"
+        "## Chapter 08: Lantern Ledger\n\nstill stars remain calm\n\n"
+        "## Chapter 09: Dawn Watch\n\nmorning light arrives"
+    )
+    checked = probe.validate_long_script(long_script, long_spec)
+    assert checked["pass"] and [row["word_count"] for row in checked["chapters"]] == [4, 4, 3]
+    assert not probe.validate_long_script(long_script.replace(
+        "still stars remain calm", "short"), long_spec)["pass"], "every chapter needs its own length check"
+    assert not probe.validate_long_script(long_script +
+        "\n\n## Chapter 10: Extra\n\nextra body words", long_spec)["pass"], "extra chapter must fail"
+    print("PASS: strict chapter and scene identity, per-body length, UTF-16 cap, facts, and think-spill checks")
 
 
 if __name__ == "__main__":
     main()
-

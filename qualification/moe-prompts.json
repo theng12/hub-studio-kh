@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "speed": {
     "max_tokens": 256,
     "messages": [
@@ -57,9 +57,48 @@
       }
     ]
   },
+  "long_script": {
+    "case_id": "long-script-3x1200",
+    "max_tokens": 12288,
+    "target_words_per_chapter": 1200,
+    "minimum_words_per_chapter": 1080,
+    "maximum_words_per_chapter": 1320,
+    "chapters": [
+      {"number": 7, "title": "Quiet Meridian"},
+      {"number": 8, "title": "Lantern Ledger"},
+      {"number": 9, "title": "Dawn Watch"}
+    ],
+    "must_include": [
+      "Mara",
+      "October 17, 1894",
+      "Brindle Observatory",
+      "brass key",
+      "blue atlas",
+      "west table",
+      "lantern"
+    ],
+    "must_not_include": [
+      "atlas on the east table",
+      "moved the blue atlas",
+      "lost the brass key",
+      "extinguished the lantern",
+      "lantern went out"
+    ],
+    "messages": [
+      {
+        "role": "system",
+        "content": "Write calm English narrative prose for spoken narration. Keep all supplied facts stable. Do not reveal hidden reasoning. Output only the requested Markdown chapter blocks, with no fences, notes, preamble, epilogue, or word counts."
+      },
+      {
+        "role": "user",
+        "content": "Write 3 chapter(s) of an in-progress episode. You're expanding ONLY the slots listed below — the full arc is shown for context.\n\nEpisode title: The Brindle Meridian\nFormat: Historical mystery narration\nPer-chapter target: 1200 words\n\nOUTLINE (all chapters):\n  1. Hill Road — Mara approaches Brindle Observatory before the autumn weather turns.\n  2. Keeper's Note — A dated message asks her to inspect the western rooms.\n  3. Brass Threshold — The brass key opens the quiet service entrance.\n  4. Dust Almanac — Old records establish the observatory's patient daily routine.\n  5. Western Room — Mara finds the blue atlas waiting on the west table.\n  6. First Light — A burning lantern illuminates a pencilled meridian mark.\n  7. Quiet Meridian — Mara tests the silent telescope and follows the marked coordinate.\n  8. Lantern Ledger — Mara compares the observation ledger with the unmoved blue atlas.\n  9. Dawn Watch — Mara understands the watch pattern as morning reaches the dome.\n  10. Copper Dial — The telescope's setting points toward an older survey.\n  11. Orchard Line — A sightline crosses the observatory orchard and distant ridge.\n  12. Rain Measure — Weather notes explain why several observations were delayed.\n  13. North Cabinet — A sealed drawer holds copies of routine calibration figures.\n  14. Glass Plate — A photographic plate preserves a faint double star.\n  15. Margin Hand — Mara recognizes the same careful pencil notation.\n  16. Noon Bell — The town clock confirms the ledger's timing convention.\n  17. Westward Index — The atlas index connects the coordinate to a navigation table.\n  18. Second Watch — Repeated observations reveal a deliberate sequence.\n  19. Cloud Break — A clear interval lets Mara verify one position directly.\n  20. Old Survey — The observatory records align with a coastal triangulation.\n  21. Harbor Bearing — The sequence indicates a safe bearing used by night crews.\n  22. Keeper's Promise — Mara learns why the figures were preserved quietly.\n  23. Autumn Stars — The seasonal sky confirms the intended October window.\n  24. Ledger Ribbon — A faded marker identifies the final relevant page.\n  25. Meridian Room — Mara reconstructs the keeper's full method.\n  26. Morning Signal — Sunlight reveals a small alignment mark on the dome.\n  27. Recorded Truth — The evidence resolves the discrepancy without accusation.\n  28. Atlas Closed — Mara leaves every reference object in its proper place.\n  29. Hill Descent — She carries only her notes and the brass key downhill.\n  30. Brindle Light — The observatory resumes its quiet watch above the town.\n\nPREVIOUS CHAPTER TAIL (your tone + scene must flow on from this — DO NOT recap, just continue):\nMara stood beside the west table as rain softened against the dome. The blue atlas remained open beneath the steady lantern, and the brass key rested securely in her hand. On October 17, 1894, Brindle Observatory seemed to be waiting for a question precise enough to answer.\n\nSLOTS TO WRITE NOW:\n\n  Chapter 7: Quiet Meridian\n   Synopsis: Mara tests the silent telescope and follows the marked coordinate without disturbing the reference table.\n   Key beats: opening at the silent telescope; careful development through the pencilled coordinate; quiet payoff at the meridian mark.\n\n  Chapter 8: Lantern Ledger\n   Synopsis: Mara compares the observation ledger with the unmoved blue atlas while the lantern continues to burn.\n   Key beats: opening with the ledger; development through repeated watch entries; payoff revealing a deliberate pattern.\n\n  Chapter 9: Dawn Watch\n   Synopsis: Mara keeps the final watch and understands the pattern as dawn reaches the observatory.\n   Key beats: opening in late-night stillness; development through the last comparison; calm payoff in first light.\n\nOutput the chapters in this exact format (and ONLY these chapters, in numeric order):\n\n## Chapter 07: Quiet Meridian\n\n[about 1200 words of body text]\n\n## Chapter 08: Lantern Ledger\n\n[about 1200 words of body text]\n\n## Chapter 09: Dawn Watch\n\n[about 1200 words of body text]\n\nRules:\n- Write ALL 3 chapters in this single response. Do not stop early.\n- Use the chapter numbers and titles EXACTLY as shown.\n- Each chapter must contain 1080–1320 words of body text, with its own opening, development, and payoff.\n- Stable facts throughout: the guide is Mara; the date is October 17, 1894; the place is Brindle Observatory; Mara carries the brass key; the blue atlas remains on the west table; the lantern beside it keeps burning.\n- Do not move the atlas, lose the key, extinguish the lantern, introduce another named character, or change the date.\n- No meta-commentary, hidden reasoning, Markdown fences, preamble, or text outside the three chapter blocks."
+      }
+    ]
+  },
   "scene_batches": [
     {
       "batch_id": "harbor",
+      "max_tokens": 6144,
       "style": "soft painterly storybook illustration, deep blue and warm amber palette, wide cinematic composition",
       "scenes": [
         ["harbor-001", "The harbor is still before dawn, with one lantern glowing beside a tide ledger."],
@@ -78,6 +117,7 @@
     },
     {
       "batch_id": "observatory",
+      "max_tokens": 6144,
       "style": "detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting",
       "scenes": [
         ["observatory-001", "Brindle Observatory stands on a quiet hill under a clear autumn sky."],
@@ -96,6 +136,7 @@
     },
     {
       "batch_id": "orchard",
+      "max_tokens": 6144,
       "style": "hand-painted pastoral illustration, misty greens and pale gold, calm wide framing",
       "scenes": [
         ["orchard-001", "Morning mist lies between old pear trees beside a stone cottage."],
@@ -112,6 +153,66 @@
         ["orchard-012", "Mara returns toward the cottage through the now golden orchard."]
       ]
     }
-  ]
+  ],
+  "bulk_scene_profile": {
+    "profile_id": "brindle-production",
+    "style": "cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail",
+    "max_chars": 4000,
+    "sizes": [
+      {"count": 25, "max_tokens": 12288},
+      {"count": 50, "max_tokens": 16384}
+    ],
+    "scenes": [
+      ["brindle-001", "Brindle Observatory stands above the sleeping town beneath thin October clouds."],
+      ["brindle-002", "Mara climbs the wet hill road with the brass key visible in her gloved hand."],
+      ["brindle-003", "Rain beads on the observatory's copper roof and round western window."],
+      ["brindle-004", "Mara unlocks the service entrance without setting down the brass key."],
+      ["brindle-005", "A narrow corridor leads toward a warm lantern glow in the western room."],
+      ["brindle-006", "The blue atlas lies open on the west table beside the burning lantern."],
+      ["brindle-007", "Mara pauses at the table and reads a pencilled note without touching the atlas."],
+      ["brindle-008", "A wall clock marks the late hour of October 17, 1894."],
+      ["brindle-009", "Dust hangs motionless beneath the observatory dome in amber light."],
+      ["brindle-010", "Mara approaches the silent telescope while carrying the brass key."],
+      ["brindle-011", "Close view of polished telescope controls engraved with fine degree marks."],
+      ["brindle-012", "The telescope points through the open dome slit toward a quiet star field."],
+      ["brindle-013", "Mara aligns one brass dial with a pencilled meridian coordinate."],
+      ["brindle-014", "Moonlight draws a narrow silver arc across the wooden floor."],
+      ["brindle-015", "A small observation ledger waits on a separate reading stand."],
+      ["brindle-016", "Mara opens the ledger to a page of carefully ruled watch entries."],
+      ["brindle-017", "Repeated times and bearings form a subtle pattern down the ledger page."],
+      ["brindle-018", "Mara compares the ledger from a distance with the blue atlas on the west table."],
+      ["brindle-019", "The lantern flame remains steady beside the unmoved blue atlas."],
+      ["brindle-020", "Clouds part briefly beyond the dome to reveal the marked star."],
+      ["brindle-021", "Mara checks the telescope eyepiece against the recorded coordinate."],
+      ["brindle-022", "A faint star appears centered within the telescope's circular field."],
+      ["brindle-023", "Mara writes the verified position on a blank ledger line."],
+      ["brindle-024", "The brass key rests safely in Mara's palm as she closes the ledger."],
+      ["brindle-025", "First grey light gathers along the lower edge of the dome slit."],
+      ["brindle-026", "Mara notices a copper index plate fixed beneath the main telescope axis."],
+      ["brindle-027", "Fine engraved arrows on the plate match the ledger's repeated bearings."],
+      ["brindle-028", "She follows the indicated sightline toward the dark orchard beyond the observatory."],
+      ["brindle-029", "Old pear trees stand in ordered rows along the western slope."],
+      ["brindle-030", "A distant ridge aligns precisely with the telescope and orchard path."],
+      ["brindle-031", "Mara studies a rain gauge whose dated markings explain a missing watch entry."],
+      ["brindle-032", "Water droplets shine on the gauge beneath the paling sky."],
+      ["brindle-033", "A north cabinet holds neatly stacked calibration sheets behind glass."],
+      ["brindle-034", "Mara reads the top calibration sheet while leaving it inside the cabinet."],
+      ["brindle-035", "A photographic glass plate catches a faint reflection near the reading stand."],
+      ["brindle-036", "The plate shows a double star recorded in two tiny silver points."],
+      ["brindle-037", "Mara matches the plate label to the ledger's careful pencil handwriting."],
+      ["brindle-038", "The town clock tower becomes visible through thinning morning mist."],
+      ["brindle-039", "Its clock face confirms the observatory ledger's watch convention."],
+      ["brindle-040", "Mara traces the sequence of times with one finger above the page."],
+      ["brindle-041", "A faded ribbon marks the final relevant entry near the ledger's back."],
+      ["brindle-042", "The last bearing points west toward the unseen harbor beyond the ridge."],
+      ["brindle-043", "Mara understands the observations as a preserved navigation signal."],
+      ["brindle-044", "Warm dawn light begins to replace the lantern glow inside the dome."],
+      ["brindle-045", "A small alignment mark appears where sunlight touches the copper rim."],
+      ["brindle-046", "Mara records the completed pattern in her own plain notebook."],
+      ["brindle-047", "She returns the observation ledger to its reading stand."],
+      ["brindle-048", "The blue atlas remains open on the west table beside the burning lantern."],
+      ["brindle-049", "Mara closes the service door with the brass key still in her possession."],
+      ["brindle-050", "Brindle Observatory watches over the brightening town at calm sunrise."]
+    ]
+  }
 }
-

@@ -198,14 +198,103 @@ def validate_chapter(text: str, spec: dict[str, Any]) -> dict[str, Any]:
             "forbidden_phrases": forbidden, "errors": errors}
 
 
-def validate_scene_json(text: str, expected_ids: list[str]) -> dict[str, Any]:
+def validate_long_script(text: str, spec: dict[str, Any]) -> dict[str, Any]:
+    expected = [f"## Chapter {row['number']:02d}: {row['title']}" for row in spec["chapters"]]
+    matches = list(re.finditer(r"(?m)^## Chapter (\d+): ([^\n]+)$", text))
+    headings = [match.group(0) for match in matches]
+    all_h2 = re.findall(r"(?m)^## [^\n]+$", text)
     errors: list[str] = []
+    if headings != expected or all_h2 != expected or not text.startswith(expected[0]):
+        errors.append("chapter headings must exactly match the requested three chapters in order")
+
+    chapters: list[dict[str, Any]] = []
+    minimum = spec["minimum_words_per_chapter"]
+    maximum = spec["maximum_words_per_chapter"]
+    for index, match in enumerate(matches):
+        body_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        count = word_count(text[match.end():body_end].strip())
+        chapter_errors = []
+        if index >= len(expected) or match.group(0) != expected[index]:
+            chapter_errors.append("unexpected chapter number, title, or order")
+        if not minimum <= count <= maximum:
+            chapter_errors.append(f"body word count {count} is outside {minimum}-{maximum}")
+        chapters.append({
+            "number": int(match.group(1)), "title": match.group(2), "word_count": count,
+            "pass": not chapter_errors, "errors": chapter_errors,
+        })
+    if len(chapters) != len(expected):
+        errors.append(f"expected {len(expected)} chapters, got {len(chapters)}")
+    if any(not chapter["pass"] for chapter in chapters):
+        errors.append("one or more chapters failed per-chapter validation")
+
+    missing = [fact for fact in spec["must_include"] if fact.casefold() not in text.casefold()]
+    forbidden = [phrase for phrase in spec.get("must_not_include", []) if phrase.casefold() in text.casefold()]
+    if missing:
+        errors.append("missing stable facts: " + ", ".join(missing))
+    if forbidden:
+        errors.append("contradicted constraints: " + ", ".join(forbidden))
+    if "```" in text:
+        errors.append("markdown fence leaked into output")
+    if has_think_spill(text):
+        errors.append("thinking trace marker leaked into output")
+    return {"pass": not errors, "chapters": chapters, "missing_facts": missing,
+            "forbidden_phrases": forbidden, "errors": errors}
+
+
+def _utf16_length(text: str) -> int:
+    return len(text.encode("utf-16-le", errors="surrogatepass")) // 2
+
+
+JS_TRIM_CHARS = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
+
+def _js_trim(text: str) -> str:
+    return text.strip(JS_TRIM_CHARS)
+
+
+def _lead_with_style(description: str, style: str | None) -> str:
+    desc = _js_trim(description)
+    clean_style = _js_trim(style or "")
+    if not clean_style:
+        return desc
+
+    def normalize(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+    style_key = normalize(clean_style)[:40]
+    if style_key and normalize(desc).startswith(style_key):
+        return desc
+    separator = "" if re.search(r"[.!?…,;:]$", clean_style) else "."
+    return f"{clean_style}{separator} {desc}"
+
+
+def validate_scene_json(text: str, expected_ids: list[str], max_chars: int | None = None,
+                        style: str | None = None) -> dict[str, Any]:
+    errors: list[str] = []
+    lengths: list[dict[str, Any]] = []
+    cap_breaches: list[dict[str, Any]] = []
+
+    def length_stats() -> dict[str, Any]:
+        values = [item["chars"] for item in lengths]
+        return {
+            "items": lengths,
+            "count": len(lengths),
+            "min_chars": min(values) if values else None,
+            "max_chars": max(values) if values else None,
+            "mean_chars": round(sum(values) / len(values), 1) if values else None,
+            "cap": max_chars,
+            "over_cap_count": len(cap_breaches),
+            "cap_breaches": cap_breaches,
+        }
+
     try:
         data = json.loads(text)
     except (json.JSONDecodeError, TypeError) as exc:
-        return {"pass": False, "count": 0, "ids": [], "errors": [f"strict JSON parse failed: {exc}"]}
+        return {"pass": False, "count": 0, "ids": [], "length_stats": length_stats(),
+                "errors": [f"strict JSON parse failed: {exc}"]}
     if not isinstance(data, dict) or set(data) != {"results"} or not isinstance(data.get("results"), list):
-        return {"pass": False, "count": 0, "ids": [], "errors": ["expected exactly one top-level results array"]}
+        return {"pass": False, "count": 0, "ids": [], "length_stats": length_stats(),
+                "errors": ["expected exactly one top-level results array"]}
     rows = data["results"]
     ids: list[str] = []
     for index, row in enumerate(rows):
@@ -217,8 +306,15 @@ def validate_scene_json(text: str, expected_ids: list[str]) -> dict[str, Any]:
             errors.append(f"result {index} scene_id is not a string")
         else:
             ids.append(scene_id)
-        if not isinstance(prompt, str) or not prompt.strip():
+        if not isinstance(prompt, str) or not _js_trim(prompt):
             errors.append(f"result {index} visual_prompt is empty")
+        else:
+            chars = _utf16_length(_lead_with_style(prompt, style))
+            item = {"scene_id": scene_id if isinstance(scene_id, str) else None, "chars": chars}
+            lengths.append(item)
+            if max_chars is not None and chars > max_chars:
+                cap_breaches.append(item)
+                errors.append(f"result {index} final visual_prompt is {chars} characters, above cap {max_chars}")
     if len(rows) != len(expected_ids):
         errors.append(f"expected {len(expected_ids)} results, got {len(rows)}")
     if len(ids) != len(set(ids)):
@@ -227,24 +323,55 @@ def validate_scene_json(text: str, expected_ids: list[str]) -> dict[str, Any]:
         errors.append("scene_id values or order do not exactly match the request")
     if has_think_spill(text):
         errors.append("thinking trace marker leaked into output")
-    return {"pass": not errors, "count": len(rows), "ids": ids, "errors": errors}
+    return {"pass": not errors, "count": len(rows), "ids": ids,
+            "length_stats": length_stats(), "errors": errors}
 
 
 def scene_messages(batch: dict[str, Any]) -> list[dict[str, str]]:
     expected = [{"scene_id": row[0], "narration": row[1]} for row in batch["scenes"]]
+    max_chars = batch.get("max_chars", 4000)
     system = (
         "You write visual scene descriptions for an AI image generator. Return only one valid JSON object, "
         "with no markdown fences, commentary, or text outside JSON. The object must be exactly "
         "{\"results\":[{\"scene_id\":\"...\",\"visual_prompt\":\"...\"}]}. Preserve every scene_id "
-        "exactly and in order. Return exactly one nonempty visual_prompt per input. Each prompt is one concise "
-        "English paragraph naming subject, action, setting, framing, lighting, and mood. Do not reveal hidden reasoning."
+        "exactly and in order. Return exactly one nonempty visual_prompt per input. Each prompt is one English "
+        "paragraph naming subject, action, setting, framing, lighting, and mood. Aim for 500-900 characters in "
+        f"the final styled prompt; shorter is acceptable, never pad, and never exceed {max_chars} characters. Do not "
+        "reveal hidden reasoning."
     )
     user = (
         f"Art style for every prompt: {batch['style']}\n"
-        "Write all 12 prompts for these stable scene IDs and narration beats:\n"
+        f"Write all {len(batch['scenes'])} prompts for these stable scene IDs and narration beats:\n"
         + json.dumps(expected, ensure_ascii=False, indent=2)
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def scene_case_specs(prompts: dict[str, Any], suite: str) -> list[dict[str, Any]]:
+    max_chars = prompts["bulk_scene_profile"]["max_chars"]
+    baselines = prompts["scene_batches"] if suite == "full" else prompts["scene_batches"][:1]
+    cases = []
+    for source in baselines:
+        batch = dict(source, max_chars=source.get("max_chars", max_chars))
+        cases.append({"name": f"scenes-{batch['batch_id']}", "batch": batch,
+                      "max_tokens": batch.get("max_tokens", 6144), "max_chars": batch["max_chars"]})
+    if suite == "full":
+        profile = prompts["bulk_scene_profile"]
+        for size in profile["sizes"]:
+            batch = {"batch_id": profile["profile_id"], "style": profile["style"], "max_chars": max_chars,
+                     "scenes": profile["scenes"][:size["count"]]}
+            cases.append({"name": f"scenes-{profile['profile_id']}-{size['count']}",
+                          "batch": batch, "max_tokens": size["max_tokens"], "max_chars": max_chars})
+    return cases
+
+
+def scene_batch_capacity(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    passing = [row["scene_count"] for row in rows if row["mechanical_pass"]]
+    return {
+        "largest_passing_tested_batch_size": max(passing, default=None),
+        "failed_batch_sizes": sorted({row["scene_count"] for row in rows if not row["mechanical_pass"]}),
+        "scope": "single-run screening; not a production reliability guarantee",
+    }
 
 
 def render_prompt(tokenizer: Any, messages: list[dict[str, str]]) -> str:
@@ -375,14 +502,30 @@ def generate_case(model: Any, tokenizer: Any, mx: Any, stream_generate: Any,
 def run_worker(args: argparse.Namespace) -> int:
     output_dir = args.output_dir
     prompts = load_prompts()
+    scene_cases = scene_case_specs(prompts, args.suite)
     baseline_swap = int(os.environ.get("MOE_PROBE_BASELINE_SWAP", swap_used() or 0))
     report: dict[str, Any] = {
-        "schema_version": 1, "status": "running", "suite": args.suite,
+        "schema_version": 2, "suite_profile_version": 2,
+        "status": "running", "suite": args.suite,
         "model_dir": str(args.model_dir), "started_at": time.time(),
         "environment": environment_record(args.hub_source), "cache_limit_bytes": CACHE_LIMIT,
         "cache_limit_source": CACHE_LIMIT_SOURCE,
         "prompts_sha256": sha256(PROMPTS),
         "swap_abort_delta_bytes": SWAP_ABORT, "subjective_writing_review": "not_performed",
+        "suite_profile": {
+            "version": 2,
+            "long_script": {
+                "name": prompts["long_script"]["case_id"],
+                "enabled": args.suite == "full",
+                "chapter_count": len(prompts["long_script"]["chapters"]),
+                "target_words_per_chapter": prompts["long_script"]["target_words_per_chapter"],
+                "max_tokens": prompts["long_script"]["max_tokens"],
+            },
+            "scene_batches": [{
+                "name": case["name"], "scene_count": len(case["batch"]["scenes"]),
+                "max_tokens": case["max_tokens"], "max_chars": case["max_chars"],
+            } for case in scene_cases],
+        },
         "cases": [],
     }
     write_report(output_dir, report)
@@ -420,9 +563,11 @@ def run_worker(args: argparse.Namespace) -> int:
             for target in (8192, 32768):
                 messages, _ = padded_messages(tokenizer, prompts["padded"], target)
                 specs.append((f"input-{target // 1024}k", messages, prompts["padded"]["max_tokens"], "padded_benchmark"))
+            specs.append((prompts["long_script"]["case_id"], prompts["long_script"]["messages"],
+                          prompts["long_script"]["max_tokens"], "long_script_quality"))
         specs.append(("chapter", prompts["chapter"]["messages"], prompts["chapter"]["max_tokens"], "quality"))
-        batches = prompts["scene_batches"] if args.suite == "full" else prompts["scene_batches"][:1]
-        specs.extend((f"scenes-{batch['batch_id']}", scene_messages(batch), 2200, "quality") for batch in batches)
+        specs.extend((case["name"], scene_messages(case["batch"]), case["max_tokens"], "scene_quality")
+                     for case in scene_cases)
 
         for name, messages, budget, purpose in specs:
             print(f"running {name}", flush=True)
@@ -432,10 +577,16 @@ def run_worker(args: argparse.Namespace) -> int:
                                      messages, budget, sampler, baseline_swap, output_dir / f"{name}.txt"))
             if name == "chapter":
                 row["validation"] = validate_chapter((output_dir / f"{name}.txt").read_text(), prompts["chapter"])
+            elif name == prompts["long_script"]["case_id"]:
+                row["validation"] = validate_long_script(
+                    (output_dir / f"{name}.txt").read_text(), prompts["long_script"])
             elif name.startswith("scenes-"):
-                batch = next(item for item in batches if name == f"scenes-{item['batch_id']}")
+                scene_case = next(case for case in scene_cases if name == case["name"])
+                batch = scene_case["batch"]
+                row["scene_count"] = len(batch["scenes"])
                 row["validation"] = validate_scene_json(
-                    (output_dir / f"{name}.txt").read_text(), [scene[0] for scene in batch["scenes"]])
+                    (output_dir / f"{name}.txt").read_text(), [scene[0] for scene in batch["scenes"]],
+                    max_chars=scene_case["max_chars"], style=batch["style"])
             elif purpose == "padded_benchmark":
                 generated = (output_dir / f"{name}.txt").read_text().strip()
                 row["validation"] = {"pass": generated == "HARBOR LANTERN", "actual": generated}
@@ -450,6 +601,8 @@ def run_worker(args: argparse.Namespace) -> int:
         sampler.join(timeout=1)
         mechanical = all(row["mechanical_pass"] for row in report["cases"])
         report["generation_mechanical_pass"] = mechanical
+        scene_rows = [row for row in report["cases"] if row["name"].startswith("scenes-")]
+        report["scene_batch_capacity"] = scene_batch_capacity(scene_rows)
         report["physical_tier_result"] = {
             "tier_gib": report["environment"]["physical_ram_tier_gib"],
             "suite": args.suite,
@@ -498,7 +651,8 @@ def run_parent(args: argparse.Namespace) -> int:
     baseline = swap_used()
     if refusal:
         report = {
-            "schema_version": 1, "status": "inconclusive", "suite": args.suite,
+            "schema_version": 2, "suite_profile_version": 2,
+            "status": "inconclusive", "suite": args.suite,
             "model_dir": str(args.model_dir), "preflight": check,
             "inconclusive_reason": refusal, "finished_at": time.time(),
         }
@@ -527,7 +681,8 @@ def run_parent(args: argparse.Namespace) -> int:
         time.sleep(0.1)
     report_path = args.output_dir / REPORT
     report = json.loads(report_path.read_text()) if report_path.exists() else {
-        "schema_version": 1, "suite": args.suite, "model_dir": str(args.model_dir), "cases": [],
+        "schema_version": 2, "suite_profile_version": 2,
+        "suite": args.suite, "model_dir": str(args.model_dir), "cases": [],
     }
     report["preflight"] = check
     report["parent_observed_peak_phys_footprint_bytes"] = peak

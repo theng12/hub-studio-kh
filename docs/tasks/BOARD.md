@@ -9,6 +9,9 @@ All3 owner-selected checkpoints and all12 model/SSD copies fully hash-verified; 
 **SSD launcher follow-up — COMPLETE, physical qualification pending:** three model-specific `.command` launchers and portable standalone helpers committed atf2e8a17. All10 helper copies SHA256-verified on each of4 SSDs and localstudy/Technical; all15 static launcher checks passed without inference. Coordinator independently passed10 focused checks, strict probe selfcheck and real synthetic owned-process-group cancellation. Results stay in dated Desktop/StudioHub LLM Qualification folders, with SUMMARY.txt, report.json, run.log and raw English outputs. No application release/install, production activation, fleet-state change or model measurement was performed. Evidence: coordinator audit/SSD_LLM_LAUNCHERS.json.
 
 
+**Extended workload follow-up — IN PROGRESS:** owner requested three1200wordchapters in one response and12/25/50scene batches with4000charactercaps. Base da77525; same isolatedworktree, same `.command` workflow. Worker owns probe and validators, coordinator owns summary, review, commit/push and fourSSD+local copies. Preparation remains offline; model runs are owner initiated. First32GiB results reviewed in coordinator audit; production eligibility remains unchanged.
+
+
 ### ST-19 — No model may need a code change — **DONE in 0.6.61**, 2026-09-25
 
 Owner: *"my rule is never hardcoded — everything must be dynamic for all generators and models,
