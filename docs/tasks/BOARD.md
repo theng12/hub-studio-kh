@@ -2,9 +2,11 @@
 
 ## ▶ TAKE OVER HERE
 
-### ST-MOE-PREP-20261007 — selected MLX 4-bit candidates — IN PROGRESS, not released
+### ST-MOE-PREP-20261007 — selected MLX 4-bit candidates — PREPARED, qualification pending
 
-Owner-authorized isolation at `study/moe-24-32gb-20261007`, base `4e4e3a5` /0.6.152. Coordinator owns review/integration. Plan: `.planning/2026-09-10-standalone-app-feasibility/moe-preparation-20261007.md`. Nemotron3.5 Lightning30B-A3B MLX4-bit is checksum verified; Qwen3.6 35B-A3B MLX4-bit and Gemma4 26B-A4B QAT MLX4-bit are queued sequentially. Prepare explicit pending admission, one-resident-model Chat selection, and separate prompt/generation metrics. No model inference, RAM qualification, activation or fleet rollout is authorized; keep This Mac paused and all four SSDs mounted. Completion proof requires all3 downloads and all12 SSD copies fully hashed; product wiring/release status is tracked separately.
+All3 owner-selected checkpoints and all12 model/SSD copies fully hash-verified; Hub wiring committed/pushed in0.6.153 with an installable DMG. No selected-candidate inference or activation has run; ThisMac remains paused. Physical qualification requires owner initiation, one model at a time. Plan: `.planning/2026-09-10-standalone-app-feasibility/moe-preparation-20261007.md`; detailed receipts in the coordinator's audit directory.
+
+**Follow-up in progress:** owner requested SSD `.command` test launchers, matching the existing Technical-folder workflow, for ThisMac32GiB and later24GiB. Base52e0f67 /0.6.154, worktree `study/moe-24-32gb-20261007`. Bounded worker owns new portable helpers; coordinator owns review, copies to all4 SSDs, offline checks and integration. No inference during launcher preparation.
 
 
 ### ST-19 — No model may need a code change — **DONE in 0.6.61**, 2026-09-25

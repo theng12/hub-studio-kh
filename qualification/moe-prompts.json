@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "speed": {
+    "max_tokens": 256,
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a concise English-language writing assistant. Do not reveal hidden reasoning."
+      },
+      {
+        "role": "user",
+        "content": "Explain in plain English why a lighthouse keeper records weather, visibility, and lamp condition at every watch change. Use short paragraphs."
+      }
+    ]
+  },
+  "padded": {
+    "max_tokens": 32,
+    "base_messages": [
+      {
+        "role": "system",
+        "content": "You are testing long-context retrieval. Read the supplied reference material silently. Do not reveal hidden reasoning."
+      },
+      {
+        "role": "user",
+        "content": "After the reference material, reply with exactly: HARBOR LANTERN\n\nReference material follows."
+      }
+    ],
+    "padding_paragraph": "At dawn the harbor clerk checked the tide ledger, the brass clock, the north window, and the quiet line of boats. The entry was copied carefully so a later reader could compare ordinary conditions without guessing what had changed. No event in this repeated reference paragraph changes the requested answer."
+  },
+  "chapter": {
+    "max_tokens": 1800,
+    "minimum_words": 520,
+    "maximum_words": 700,
+    "must_include": [
+      "Mara",
+      "Brindle Observatory",
+      "October 17, 1894",
+      "brass key",
+      "blue atlas",
+      "lantern"
+    ],
+    "must_not_include": [
+      "atlas on the east table",
+      "moved the blue atlas",
+      "lost the brass key",
+      "extinguished the lantern",
+      "lantern went out"
+    ],
+    "messages": [
+      {
+        "role": "system",
+        "content": "Write calm English narrative prose for spoken narration. Keep all supplied facts stable. Do not reveal hidden reasoning. Output only the requested chapter heading and prose, with no notes or word count."
+      },
+      {
+        "role": "user",
+        "content": "Write one sustained chapter of about 600 words. Use the exact heading '## Chapter 07: The Quiet Meridian'. The mood is calm, observant, and gently mysterious, never frightening. Stable facts: the guide is Mara; the place is Brindle Observatory; the date is October 17, 1894; Mara carries a brass key; the blue atlas remains on the west table; a lantern burns beside it. Mara may inspect the silent telescope and discover a pencilled star coordinate, but she must not move the atlas, lose the key, extinguish the lantern, introduce another named character, or change the date. Use flowing paragraphs with a clear opening, development, and quiet payoff."
+      }
+    ]
+  },
+  "scene_batches": [
+    {
+      "batch_id": "harbor",
+      "style": "soft painterly storybook illustration, deep blue and warm amber palette, wide cinematic composition",
+      "scenes": [
+        ["harbor-001", "The harbor is still before dawn, with one lantern glowing beside a tide ledger."],
+        ["harbor-002", "Mara walks along the wet stone quay carrying a brass key."],
+        ["harbor-003", "A lighthouse beam crosses low clouds above quiet fishing boats."],
+        ["harbor-004", "Close view of rain beads on a locked blue boathouse door."],
+        ["harbor-005", "Mara unlocks the boathouse while keeping the brass key visible."],
+        ["harbor-006", "Inside, neatly coiled ropes hang above an old wooden workbench."],
+        ["harbor-007", "A folded chart shows a pencilled circle near the outer reef."],
+        ["harbor-008", "Mara studies the chart by lantern light without touching the markings."],
+        ["harbor-009", "Outside, the tide begins to cover the lowest harbor steps."],
+        ["harbor-010", "A bell buoy tilts on a gentle swell beyond the breakwater."],
+        ["harbor-011", "Mara closes the boathouse and looks toward the lighthouse."],
+        ["harbor-012", "Sunrise warms the harbor roofs while the lantern remains lit in the window."]
+      ]
+    },
+    {
+      "batch_id": "observatory",
+      "style": "detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting",
+      "scenes": [
+        ["observatory-001", "Brindle Observatory stands on a quiet hill under a clear autumn sky."],
+        ["observatory-002", "Mara enters the round library with a brass key in hand."],
+        ["observatory-003", "A blue atlas rests on the west table beside a burning lantern."],
+        ["observatory-004", "Dust glimmers in the lantern light beneath the domed ceiling."],
+        ["observatory-005", "Mara checks the silent telescope's polished brass controls."],
+        ["observatory-006", "The telescope points through the open slit toward a field of stars."],
+        ["observatory-007", "A pencilled coordinate appears in the margin of an observation ledger."],
+        ["observatory-008", "Mara compares the coordinate with a wall chart, leaving the atlas untouched."],
+        ["observatory-009", "Moonlight forms a narrow arc across the observatory floor."],
+        ["observatory-010", "Close view of the brass key resting safely in Mara's palm."],
+        ["observatory-011", "Mara writes one careful note in the observation ledger."],
+        ["observatory-012", "The lantern and blue atlas remain together on the west table at dawn."]
+      ]
+    },
+    {
+      "batch_id": "orchard",
+      "style": "hand-painted pastoral illustration, misty greens and pale gold, calm wide framing",
+      "scenes": [
+        ["orchard-001", "Morning mist lies between old pear trees beside a stone cottage."],
+        ["orchard-002", "A narrow path curves from the cottage toward a weathered wooden gate."],
+        ["orchard-003", "Mara carries an empty wicker basket beneath dew-bright branches."],
+        ["orchard-004", "A robin perches on the gatepost in soft early light."],
+        ["orchard-005", "Close view of one ripe pear hanging above moss-covered stones."],
+        ["orchard-006", "Mara gently places the pear in the wicker basket."],
+        ["orchard-007", "Wind stirs the highest leaves while the lower orchard stays still."],
+        ["orchard-008", "A shallow stream reflects pale clouds beyond the last row of trees."],
+        ["orchard-009", "Mara pauses on a small plank bridge with the basket at her side."],
+        ["orchard-010", "Sunlight reaches the cottage chimney as the mist begins to lift."],
+        ["orchard-011", "The robin follows along the fence above clusters of late flowers."],
+        ["orchard-012", "Mara returns toward the cottage through the now golden orchard."]
+      ]
+    }
+  ]
+}
+

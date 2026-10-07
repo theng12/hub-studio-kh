@@ -33,3 +33,11 @@ Spec: /build/Developer/_orchestra/audit-20261007/moe-qualification/PREPARATION.m
 - Legacy catalog/default/auth/JSON/SSE contracts remain usable and app startup never loads a pending candidate.
 
 All workers are bounded, do not commit/deploy/recurse. Use recoverable synthetic fixtures; never delete existing trash. Coordinator owns review, integration and release.
+
+## SSD LLM double-click tests — owner follow-up, 2026-10-07
+
+Preparation of all3 checkpoints and all12 full-hash SSD copies completed; source wiring shipped in0.6.153. No selected-candidate inference has run. Owner now requests the same `.command` test workflow used from each SSD's Technical folder, for ThisMac32GiB and later physical24GiB Macs. No terminal command entry, no ChatGPT process required.
+
+Bounded implementation at base52e0f678ed04535ace538cad0d2a4649e9b34fc7 (0.6.154): adopt the existing audited standalone probe and English prompts, add three thin model-specific command launchers and one portable runner, package the canonical headroom helper, retain a common per-host test lock, and persist dated reports/raw text/readable summaries on the host Desktop. Run exactly one selected pinned checkpoint per launch, auto-record actual hardware/tier, keep mechanical checks distinct from subjective writing approval. Never change production eligibility, app installation, fleet pause or model stock. Offline check mode must not import MLX or launch a probe worker. Preserve replaced helpers under the kit's own `_trash`; other Technical files stay untouched.
+
+Worker moe_ssd_launchers owns only new launcher/probe/prompt/readme/offline-test files; coordinator owns independent review, helper installer, source integration and four SSD copies. No model test is authorized during this preparation. Proving checks: spaced paths/exact pin resolution, runtime/source presence, refusal before inference, shared lock exclusion, owned-process cancellation, truthful missing metrics, helper-copy SHA256s and all three offline checks on every SSD. This is a standalone test-tool delivery, not an app release or installation.
