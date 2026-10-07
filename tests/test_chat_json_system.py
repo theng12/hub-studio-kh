@@ -10,7 +10,9 @@ from __future__ import annotations
 import glob
 import json
 import os
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -24,6 +26,64 @@ from components.chat.app.backend.main import create_app
 TOKEN = "test-owner-token"
 JSON_OBJECT = {"type": "json_object"}
 SNAPSHOT = glob.glob(os.path.expanduser("~/StudioHubModels/qwen3-5-9b-4bit/*/model"))
+
+
+_MISSING = object()
+_ORIGINAL_MLX_MODULES = {}
+
+
+def setUpModule() -> None:
+    """Keep these template tests fake-only; the optional real test loads only a tokenizer."""
+    mlx_lm = types.ModuleType("mlx_lm")
+    mlx_lm.__path__ = []
+
+    def not_stubbed(*_args, **_kwargs):  # pragma: no cover - names a broken fixture
+        raise AssertionError("test reached an unstubbed fake mlx_lm function")
+
+    mlx_lm.load = not_stubbed
+    mlx_lm.stream_generate = not_stubbed
+    sample_utils = types.ModuleType("mlx_lm.sample_utils")
+    sample_utils.make_sampler = lambda **kwargs: ("sampler", kwargs)
+    mlx_lm.sample_utils = sample_utils
+    mlx = types.ModuleType("mlx")
+    mlx.__path__ = []
+    core = types.ModuleType("mlx.core")
+    core.random = types.SimpleNamespace(seed=lambda _seed: None)
+    core.clear_cache = lambda: None
+    mlx.core = core
+    replacements = {
+        "mlx_lm": mlx_lm,
+        "mlx_lm.sample_utils": sample_utils,
+        "mlx": mlx,
+        "mlx.core": core,
+    }
+    for name, module in replacements.items():
+        _ORIGINAL_MLX_MODULES[name] = sys.modules.get(name, _MISSING)
+        sys.modules[name] = module
+
+
+def tearDownModule() -> None:
+    for name, module in _ORIGINAL_MLX_MODULES.items():
+        if module is _MISSING:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
+
+
+def _response(text: str):
+    return types.SimpleNamespace(
+        text=text, prompt_tokens=4, prompt_tps=40.0,
+        generation_tokens=2, generation_tps=8.0,
+        peak_memory=0.5, finish_reason="stop")
+
+
+def _stream_text(generate):
+    def stream(*args, **kwargs):
+        progress = kwargs.pop("prompt_progress_callback", None)
+        if progress is not None:
+            progress(4, 4)
+        yield _response(generate(*args, **kwargs))
+    return stream
 
 
 class TemplateError(Exception):
@@ -106,7 +166,7 @@ class EngineJsonSystemTests(unittest.TestCase):
                 return '{"ok": true}'
 
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), StrictTokenizer())), \
-                    mock.patch("mlx_lm.generate", fake_generate):
+                    mock.patch("mlx_lm.stream_generate", _stream_text(fake_generate)):
                 outcome = engine.complete(
                     [_msg("system", "You plan scenes."), _msg("user", "go")],
                     response_format=JSON_OBJECT)
@@ -126,7 +186,7 @@ class EngineJsonSystemTests(unittest.TestCase):
                 return next(replies)
 
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), StrictTokenizer())), \
-                    mock.patch("mlx_lm.generate", fake_generate):
+                    mock.patch("mlx_lm.stream_generate", _stream_text(fake_generate)):
                 outcome = engine.complete([_msg("system", "S"), _msg("user", "go")],
                                           response_format=JSON_OBJECT)
         self.assertEqual(outcome["repairs"], 1)
@@ -135,8 +195,7 @@ class EngineJsonSystemTests(unittest.TestCase):
     def test_template_refusal_is_a_typed_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             engine = _engine(Path(tmp))
-            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), StrictTokenizer())), \
-                    mock.patch("mlx_lm.generate", lambda *a, **k: "never"):
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), StrictTokenizer())):
                 with self.assertRaises(ChatTemplateError) as caught:
                     engine.complete([_msg("system", "only a system message")])
         self.assertIn("No user query found", str(caught.exception))
@@ -160,9 +219,8 @@ class RouteTemplateErrorTests(unittest.TestCase):
         app = create_app(engine, memory_policy_module.MemoryPolicy(Path(tmp), engine),
                          TOKEN, "b" * 64)
         with mock.patch("mlx_lm.load", lambda *a, **k: (object(), StrictTokenizer())), \
-                mock.patch("mlx_lm.generate", lambda *a, **k: '{"x": 1}'), \
                 mock.patch("mlx_lm.stream_generate",
-                           lambda *a, **k: iter([mock.Mock(text='{"x": 1}')])), \
+                           _stream_text(lambda *a, **k: '{"x": 1}')), \
                 TestClient(app) as client:
             return client.post("/v1/chat/completions", headers={"x-studio-token": TOKEN},
                                json=body)
@@ -175,7 +233,62 @@ class RouteTemplateErrorTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["choices"][0]["message"]["content"], '{"x": 1}')
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(self._post(tmp, {**body, "stream": True}).status_code, 200)
+            response = self._post(tmp, {**body, "stream": True})
+            self.assertEqual(response.status_code, 200)
+            chunks = [json.loads(line[6:]) for line in response.text.splitlines()
+                      if line.startswith("data: {")]
+            self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], '{"x": 1}')
+
+    def test_structured_stream_repairs_before_emitting_and_uses_final_finish_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = _engine(Path(tmp))
+            replies = iter(["not json", '{"x": 1}'])
+            reasons = iter(["length", "stop"])
+
+            def stream(*args, **kwargs):
+                progress = kwargs.pop("prompt_progress_callback", None)
+                if progress:
+                    progress(4, 4)
+                yield types.SimpleNamespace(
+                    text=next(replies), prompt_tokens=4, prompt_tps=40.0,
+                    generation_tokens=2, generation_tps=8.0, peak_memory=0.5,
+                    finish_reason=next(reasons))
+
+            app = create_app(engine, memory_policy_module.MemoryPolicy(Path(tmp), engine),
+                             TOKEN, "b" * 64)
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), StrictTokenizer())), \
+                    mock.patch("mlx_lm.stream_generate", stream), TestClient(app) as client:
+                response = client.post("/v1/chat/completions",
+                    headers={"x-studio-token": TOKEN}, json={
+                        "messages": [_msg("user", "go")], "response_format": JSON_OBJECT,
+                        "stream": True,
+                    })
+                contract = client.get("/api/catalog", headers={
+                    "x-studio-token": TOKEN}).json()["models"][0]["lane_contract"]
+        self.assertEqual(response.status_code, 200, response.text)
+        chunks = [json.loads(line[6:]) for line in response.text.splitlines()
+                  if line.startswith("data: {")]
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], '{"x": 1}')
+        self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(contract["structured_output"]["streaming"],
+                         "buffered_until_validated")
+
+    def test_structured_stream_refuses_two_invalid_attempts_before_http_200(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = _engine(Path(tmp))
+            app = create_app(engine, memory_policy_module.MemoryPolicy(Path(tmp), engine),
+                             TOKEN, "b" * 64)
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), StrictTokenizer())), \
+                    mock.patch("mlx_lm.stream_generate",
+                               _stream_text(lambda *a, **k: "invalid")), \
+                    TestClient(app) as client:
+                response = client.post("/v1/chat/completions",
+                    headers={"x-studio-token": TOKEN}, json={
+                        "messages": [_msg("user", "go")], "response_format": JSON_OBJECT,
+                        "stream": True,
+                    })
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("structured output", response.json()["detail"])
 
     def test_template_refusal_is_a_422_that_names_the_reason(self) -> None:
         for stream in (False, True):
@@ -216,7 +329,7 @@ class RealQwenTemplateTests(unittest.TestCase):
                 return '{"scenes": []}'
 
             with mock.patch("mlx_lm.load", lambda *a, **k: (object(), self.tokenizer)), \
-                    mock.patch("mlx_lm.generate", fake_generate):
+                    mock.patch("mlx_lm.stream_generate", _stream_text(fake_generate)):
                 engine.complete(
                     [_msg("system", "You plan scenes."), _msg("user", "Plan it."),
                      _msg("system", "late note")],

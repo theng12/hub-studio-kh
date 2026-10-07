@@ -216,7 +216,10 @@ def _manifest_error_row(manifest: dict[str, Any], reason: str, *,
     `dispatch_state` as required fields, so an error row missing them would fail the whole
     response's decoding and blank the pickers a second way.
     """
+    from components import model_packages
+
     package_id = str(manifest.get("package_id") or "unknown")
+    allowed = model_packages.production_allowed(manifest)
     text = reason if reason.endswith(".") else f"{reason}."
     if hint:
         text = f"{text} {hint}"
@@ -238,6 +241,9 @@ def _manifest_error_row(manifest: dict[str, Any], reason: str, *,
         "worker_id": None,
         "minimum_macos": manifest.get("minimum_macos"),
         "macos_version": None,
+        "production_allowed": allowed,
+        "admission_state": "manifest_invalid" if allowed else "production_blocked",
+        "admission_reason": text,
         "dispatch_state": "ineligible",
         "type": "model",
         "dependencies": _declared_companions(manifest),
@@ -542,6 +548,7 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
             "files_state": receipt["state"],
             "minimum_macos": manifest["minimum_macos"],
             "runtime_identity": (worker or {}).get("runtime_identity", {"compatible": False}),
+            "production_allowed": model_packages.production_allowed(manifest),
         }),
         "model_id": manifest["model_id"],
         "revision": manifest["revision"],
@@ -660,6 +667,26 @@ def _retired_refusal(model: object) -> dict[str, Any] | None:
     return None
 
 
+def _production_refusal(manifest: dict[str, Any],
+                        readiness: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Refuse a manifest explicitly held from production, independent of package location."""
+    from components import model_packages
+
+    if model_packages.production_allowed(manifest):
+        return None
+    state = readiness or {
+        "production_allowed": False,
+        "admission_state": "production_blocked",
+        "admission_reason": "production use is disabled pending qualification",
+    }
+    return {
+        "code": "MODEL_UNQUALIFIED",
+        "detail": str(state.get("admission_reason") or
+                      "model is not qualified for production use"),
+        "readiness": state,
+    }
+
+
 def _a_joined_mac_can_run(envelope: dict[str, Any], modality: str | None) -> bool:
     """Whether a joined Mac in this group has the model installed, runtime-ready and within its RAM floor.
 
@@ -705,6 +732,8 @@ def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> d
     # One row, built the same way the catalog route builds it, so an unusable manifest is a
     # named refusal here rather than an exception on the submission path.
     state = _model_row(manifest, catalog, monitor)
+    if (refusal := _production_refusal(manifest, state)):
+        return refusal
     if state.get("manifest_error"):
         return {"code": "MODEL_NOT_READY",
                 "detail": "this model's package manifest is unusable on this Hub",
@@ -1044,6 +1073,14 @@ def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
         return blocked
     if (retired := _retired_refusal(model)):
         return retired
+    if model:
+        try:
+            manifest = next((row for row in _model_catalog().values()
+                             if row.get("model_id") == model), None)
+            if manifest is not None and (refusal := _production_refusal(manifest)):
+                return refusal
+        except (ValueError, OSError, KeyError, TypeError):
+            pass
     # The packaged model gate only applies where this Hub actually owns a model
     # library to verify against; without one the worker remains the authority on
     # whether its own model can run.
@@ -3488,6 +3525,32 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         """
         return await _proxy_to_worker("chat", "v1/chat/completions", request,
                                       record=_peer_job_recorder("chat", "v1/chat/completions"))
+
+    @app.get("/api/hub/chat/activity")
+    async def hub_chat_activity(job_id: uuid.UUID, request: Request) -> Response:
+        """Validated private Chat activity for one caller-named completion."""
+        from .backend import activity
+
+        upstream = await _proxy_to_worker("chat", "api/fleet/activity", request)
+        if upstream.status_code >= 400:
+            return upstream
+        try:
+            payload = json.loads(upstream.body)
+        except (TypeError, ValueError):
+            raise HTTPException(502, "Chat worker returned invalid activity")
+        snapshot = activity.validate_snapshot(payload, expected_studio="chat")
+        if snapshot is None:
+            raise HTTPException(502, "Chat worker returned invalid activity")
+        for name in ("active", "latest"):
+            item = snapshot.get(name)
+            if item is not None:
+                try:
+                    correlated = uuid.UUID(item["id"]) == job_id
+                except (KeyError, TypeError, ValueError, AttributeError):
+                    correlated = False
+                if not correlated:
+                    raise HTTPException(502, "Chat worker returned activity for another job")
+        return JSONResponse(snapshot)
 
     from . import delivery, operator_controls, statistics
     delivery.register_routes(app, monitor)

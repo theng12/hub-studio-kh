@@ -4,11 +4,10 @@ Chat reuses the base ``runtimes/voice`` runtime because ``mlx-lm`` is already in
 there for Whisper/MLX-audio. A dedicated ``runtimes/chat`` is preferred automatically if
 one is ever staged, so this can move to a slimmer runtime without touching the Hub.
 
-This worker is deliberately single-model: one engine, one manifest, one entry in its own
-``/v1/models``. Which model it serves comes from the bundle's own catalog rather than a file
-name fixed here, so re-pointing the release at another chat manifest works, and a second
-``chat-mlx`` manifest in the same bundle is refused at startup instead of being routed here
-and silently answered by the wrong model.
+The worker reads every ``chat-mlx`` manifest in the bundle. Their metadata may coexist, while
+the backend keeps exactly one model's weights resident and switches under one global session
+lock. One eligible default may be explicit; a legacy catalog without a flag falls back only
+when exactly one model is production-eligible. Pending manifests remain visible but cannot load.
 """
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ import sys
 
 RESOURCES = Path(__file__).resolve().parent
 sys.path.insert(0, str(RESOURCES))
-from voice_worker import read_private_token, run_server, single_engine_manifest
+from voice_worker import read_private_token, run_server
 
 
 def _runtime(resources: Path) -> Path:
@@ -60,8 +59,11 @@ def main() -> None:
             and (runtime / 'bin/python3').is_file()):
         parser.error('Incomplete Chat bundle: release, source or runtime is missing')
     try:
-        manifest_path, manifest = single_engine_manifest(catalog, 'chat-mlx', component='Chat')
-    except ValueError as exc:
+        from components.chat.app.backend.model_manager import (read_chat_manifests,
+                                                               select_default_manifest)
+        manifests = read_chat_manifests(catalog)
+        _default_path, default_manifest = select_default_manifest(manifests)
+    except (ImportError, ValueError) as exc:
         parser.error(str(exc))
     try:
         release = json.loads(release_path.read_text())
@@ -101,7 +103,7 @@ def main() -> None:
     os.environ.update({
         'STUDIOHUB_CHAT_DATA_DIR': str(chat_data),
         'STUDIOHUB_MODELS_DIR': str(models),
-        'STUDIOHUB_CHAT_MANIFEST': str(manifest_path),
+        'STUDIOHUB_MODEL_MANIFESTS': str(catalog),
         'STUDIOHUB_RELEASE_MANIFEST': str(release_path),
         'STUDIOHUB_FLEET_TOKEN': token,
         'HF_HUB_DISABLE_TELEMETRY': '1', 'PYTHONNOUSERSITE': '1',
@@ -118,10 +120,9 @@ def main() -> None:
         print(json.dumps({'component': 'chat', 'version': release['version'],
                           'source': str(source), 'runtime_sha256': identity,
                           'data': str(chat_data), 'models': str(models),
-                          # The single model this worker serves, read from the bundle's own
-                          # catalog: the packaged Chat worker is one model by contract.
-                          'model_manifest': manifest_path.name,
-                          'model_id': manifest.get('model_id'),
+                          'model_manifests': [path.name for path, _manifest in manifests],
+                          'model_ids': [manifest.get('model_id') for _path, manifest in manifests],
+                          'default_model_id': default_manifest.get('model_id'),
                           'offline': bool(args.offline), 'managed_updates': False}))
         return
     os.chdir(chat_data)

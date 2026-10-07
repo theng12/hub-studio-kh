@@ -1,15 +1,12 @@
-"""Tokens per second on Chat, derived only from the number the worker stated.
+"""Tokens per second on Chat come from the worker's measured attempt telemetry.
 
 The owner asked for this to measure generation speed: *"now for the LLM, i also want it to display
 the tokens per seconds too. that allows me to measure the speed of generation."*
 
-The trap is which seconds. A Chat item carries two timings that look alike and are not: `runtime_s`,
-the Hub's own round trip around the proxied call, and `generation_s`, the time the Chat worker
-states *it* spent generating. On a cold turn the round trip includes the model load - measured 11.98
-s round trip where generation was ~7.2 s - so a rate computed from it would understate the model and
-quietly change meaning on the next reply. The rate here is `completion_tokens / generation_s` and
-nothing else; when the worker stated no generation time the row shows the token count and the round
-trip labelled as the round trip, or nothing.
+The old `elapsed_seconds` includes prompt processing as well as decode, while `runtime_s` is the
+Hub's whole round trip. Neither is a decode denominator. The app displays `prompt_tps` and
+`generation_tps` exactly as the worker reports them for the final attempt, and keeps old timings as
+labelled compatibility facts. Missing telemetry means no speed; literal zero remains visible.
 
 The wire half is pinned here (the JSON keys the Hub writes and the app decodes); the behaviour half
 - a fixture job with `generation_s`, one without, and a live reply with and without
@@ -37,35 +34,28 @@ def body(of: str, marker: str, stop: str = "\n    }") -> str:
 
 
 class ChatTokenSpeedSourceTests(unittest.TestCase):
-    def test_the_rate_comes_from_the_stated_generation_time_and_never_the_round_trip(self) -> None:
-        speed = body(API, "static func tokenSpeed(completionTokens: Int?, statedGenerationSeconds: Double?,\n                           roundTripSeconds: Double?) -> String {")
-        self.assertIn("Double(completionTokens) / stated", speed,
-                      "the rate must be completion_tokens over the worker's stated time")
-        for wrong in ("/ roundTripSeconds", "/ roundTrip", "completionTokens) / generationSeconds"):
+    def test_rates_are_worker_fields_and_never_derived_from_a_time(self) -> None:
+        speed = body(API, "static func chatMetrics(")
+        self.assertIn("final.promptTps", speed)
+        self.assertIn("final.generationTps", speed)
+        for wrong in ("/ roundTripSeconds", "/ statedCompletionSeconds",
+                      "completionTokens) /", "generationTokens) /"):
             with self.subTest(wrong=wrong):
                 self.assertNotIn(wrong, speed,
-                                 "a rate is being derived from a number the worker did not state")
-        # No token count, no line at all - not a zero the worker never published.
-        self.assertIn("guard let completionTokens, completionTokens > 0 else { return \"\" }", speed,
-                      "an absent token count must publish nothing, not a rate")
-        # No stated time: the round trip is named as the round trip, and there is no `tok/s`.
-        fallback = speed[speed.index("guard let roundTripSeconds"):]
-        self.assertIn("round trip", fallback,
-                      "the round trip must be labelled as the round trip, not shown as a rate")
-        self.assertNotIn("tok/s", fallback,
-                         "the fallback branch must not print a rate")
-        # The only formatter of a rate in the app. Comments are stripped first: the docstrings are
-        # allowed to name the shape they produce.
-        self.assertEqual(without_comments(API).count("tok/s"), 2,
-                         "a second place formats tokens per second; there must be one")
+                                 "a token rate is being derived in the native app")
+        self.assertIn("worker completion", speed)
+        self.assertIn("round trip", speed)
+        self.assertIn("value >= 0", body(API, "static func rateText"),
+                      "a provider-stated zero is a valid measured rate")
         self.assertEqual(without_comments(VIEWS).count("tok/s"), 0,
-                         "a view formats a rate itself instead of using NativeJob.tokenSpeed")
+                         "a view formats a rate itself instead of using NativeJob.chatMetrics")
 
     def test_both_timings_are_decoded_as_separate_facts(self) -> None:
         item = body(API, "private struct HubJobItem: Decodable")
         self.assertIn("let usage: HubUsage?", item, "the item's usage block is not decoded")
         self.assertIn("let generationS: Double?", item,
                       "the worker's own generation time is not decoded")
+        self.assertIn("let chatTelemetry: NativeChatTelemetry?", item)
         self.assertIn("let runtimeS: Double?", item, "the Hub's round trip must stay decoded")
         mapping = body(API, "private static func mapHubJob(_ wire: HubJobDetail) -> NativeJob")
         self.assertIn("generationSeconds: item?.runtimeS", mapping,
@@ -74,6 +64,7 @@ class ChatTokenSpeedSourceTests(unittest.TestCase):
                       "the stated token count must reach the row")
         self.assertIn("statedGenerationSeconds: item?.generationS", mapping,
                       "the stated generation time must reach the row beside the round trip")
+        self.assertIn("chatTelemetry: item?.chatTelemetry", mapping)
         usage = body(API, "private struct HubUsage: Decodable")
         for field in ("promptTokens", "completionTokens", "totalTokens"):
             with self.subTest(field=field):
@@ -90,22 +81,24 @@ class ChatTokenSpeedSourceTests(unittest.TestCase):
                       "the live reply's stated time must come from studio_hub.elapsed_seconds")
         studio = body(API, "private struct HubChatStudio: Decodable")
         self.assertIn("let elapsedSeconds: Double?", studio)
+        self.assertIn("let telemetry: NativeChatTelemetry?", studio)
         send = body(API, "func sendChat() async {")
         self.assertIn("completionTokens: reply.completionTokens", send,
                       "the reply's stated token count must land on the transcript turn")
         self.assertIn("statedGenerationSeconds: reply.statedGenerationSeconds", send,
                       "the reply's stated generation time must land on the transcript turn")
+        self.assertIn("chatTelemetry: reply.telemetry", send)
 
     def test_the_row_and_the_live_turn_show_it(self) -> None:
         row = body(VIEWS, "private func chatJobRow(_ job: NativeJob) -> some View")
-        self.assertIn("job.tokenSpeed", row, "the Chat job row must show the rate")
+        self.assertIn("job.chatMetrics", row, "the Chat job row must show the measured facts")
         # The round trip is shown through the shared line now, not by a copy written into this row:
         # the row keeps only the fact that is its own.
         self.assertIn("jobMetaLine(job)", row,
                       "the Chat row must draw the shared line, which carries the generation time")
-        turn = VIEWS[VIEWS.index("if !turn.speed.isEmpty"):]
-        turn = turn[:turn.index("\n", turn.index("Text(turn.speed)"))]
-        self.assertIn("Text(turn.speed)", turn,
+        turn = VIEWS[VIEWS.index("if !turn.chatMetrics.isEmpty"):]
+        turn = turn[:turn.index("\n", turn.index("Text(turn.chatMetrics)"))]
+        self.assertIn("Text(turn.chatMetrics)", turn,
                       "a live reply must show its own rate under the message")
 
     def test_the_hub_writes_the_keys_the_app_reads(self) -> None:
@@ -113,6 +106,8 @@ class ChatTokenSpeedSourceTests(unittest.TestCase):
                       "the Hub no longer records the worker's stated generation time")
         self.assertIn('"usage": usage', CHAT_JOBS,
                       "the Hub no longer records the worker's usage block")
+        self.assertIn('"chat_telemetry"', CHAT_JOBS,
+                      "the Hub no longer records measured attempt telemetry")
         self.assertIn("def _generation_seconds", CHAT_JOBS)
 
     def test_the_fixture_covers_both_timings_and_both_replies(self) -> None:
@@ -123,9 +118,9 @@ class ChatTokenSpeedSourceTests(unittest.TestCase):
         self.assertIn('"studio_hub"', NATIVE,
                       "the fixture's live reply must state studio_hub.elapsed_seconds")
         self.assertIn("a rate must not be invented for a reply that stated no generation time", NATIVE)
-        self.assertIn('chatJob.tokenSpeed == "10 tokens · 1.4 tok/s · 7.2 s"', NATIVE,
+        self.assertIn('chatJob.chatMetrics == "12 prompt tokens · 120.0 prompt tok/s', NATIVE,
                       "the exact rendered row string must be asserted")
-        self.assertIn('store.chatTurns.last?.speed == "10 tokens · 1.4 tok/s · 7.2 s"', NATIVE,
+        self.assertIn('store.chatTurns.last?.chatMetrics == "12 prompt tokens · 120.0 prompt tok/s', NATIVE,
                       "the exact rendered live-reply string must be asserted")
 
 

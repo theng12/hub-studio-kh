@@ -2,6 +2,11 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-MOE-PREP-20261007 — selected MLX 4-bit candidates — IN PROGRESS, not released
+
+Owner-authorized isolation at `study/moe-24-32gb-20261007`, base `4e4e3a5` /0.6.152. Coordinator owns review/integration. Plan: `.planning/2026-09-10-standalone-app-feasibility/moe-preparation-20261007.md`. Nemotron3.5 Lightning30B-A3B MLX4-bit is checksum verified; Qwen3.6 35B-A3B MLX4-bit and Gemma4 26B-A4B QAT MLX4-bit are queued sequentially. Prepare explicit pending admission, one-resident-model Chat selection, and separate prompt/generation metrics. No model inference, RAM qualification, activation or fleet rollout is authorized; keep This Mac paused and all four SSDs mounted. Completion proof requires all3 downloads and all12 SSD copies fully hashed; product wiring/release status is tracked separately.
+
+
 ### ST-19 — No model may need a code change — **DONE in 0.6.61**, 2026-09-25
 
 Owner: *"my rule is never hardcoded — everything must be dynamic for all generators and models,

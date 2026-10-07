@@ -15,11 +15,12 @@ Design rules, deliberately copied from the Image worker's shape:
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
 from pathlib import Path
-from typing import Generator
+from typing import Callable, Generator
 
 # Conservative default when the model publishes nothing. It is the app's own long-form budgeting
 # floor, **not a claim about this model** — Qwen3.5-9B 4-bit's own `config.json` states
@@ -75,6 +76,16 @@ def _peak_memory_bytes() -> int | None:
     return None
 
 
+def _bound_mlx_cache() -> None:
+    """Use the shared MLX cache bound from source checkout or staged app layout."""
+    try:
+        from components.voice.app.backend.mlx_memory import bound_cache
+    except ModuleNotFoundError:
+        # The app stages Voice at Resources/voice and Chat at Resources/components/chat.
+        from voice.app.backend.mlx_memory import bound_cache
+    bound_cache()
+
+
 class ChatModelUnavailable(RuntimeError):
     """The pinned model files are not present or not loadable."""
 
@@ -100,6 +111,10 @@ class ChatTemplateError(ValueError):
     worker, so it is a typed refusal that quotes the template's own reason (route: 422) instead of
     escaping as an anonymous 500.
     """
+
+
+class ChatStructuredOutputError(ValueError):
+    """The bounded structured-output attempts did not produce valid JSON."""
 
 
 def resolve_model_dir(models_dir: Path, package_id: str, revision: str) -> Path:
@@ -327,6 +342,7 @@ class ChatEngine:
             return self._model, self._tokenizer
         if not self.files_present():
             raise ChatModelUnavailable(f"model files are not installed at {self.model_dir}")
+        _bound_mlx_cache()
         from mlx_lm import load
 
         started = time.time()
@@ -519,10 +535,65 @@ class ChatEngine:
         except (TypeError, ValueError, ImportError, AttributeError):
             pass
 
+    @staticmethod
+    def _emit_progress(on_progress: Callable[[dict], None] | None, phase: str,
+                       attempt: int, **fields) -> None:
+        if on_progress is not None:
+            on_progress({"phase": phase, "attempt": attempt, **fields})
+
+    @staticmethod
+    def _response_metrics(response) -> dict:
+        """Copy only finite metrics stated by one mlx-lm GenerationResponse."""
+        metrics: dict = {}
+        for name in ("prompt_tokens", "generation_tokens"):
+            value = getattr(response, name, None)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                metrics[name] = value
+        for name in ("prompt_tps", "generation_tps"):
+            value = getattr(response, name, None)
+            if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and math.isfinite(value) and value >= 0):
+                metrics[name] = float(value)
+        # mlx-lm states peak_memory in decimal GB (mx.get_peak_memory() / 1e9).
+        peak_gb = getattr(response, "peak_memory", None)
+        if (isinstance(peak_gb, (int, float)) and not isinstance(peak_gb, bool)
+                and math.isfinite(peak_gb) and peak_gb >= 0):
+            metrics["peak_memory_bytes"] = round(peak_gb * 1_000_000_000)
+        finish_reason = getattr(response, "finish_reason", None)
+        if isinstance(finish_reason, str) and finish_reason:
+            metrics["finish_reason"] = finish_reason
+        return metrics
+
+    def _prompt_progress(self, on_progress: Callable[[dict], None] | None,
+                         attempt: int) -> Callable[[int, int], None]:
+        def report(processed, total) -> None:
+            fields = {}
+            if (isinstance(processed, int) and not isinstance(processed, bool)
+                    and processed >= 0 and isinstance(total, int)
+                    and not isinstance(total, bool) and total >= 0):
+                fields["processed_prompt_tokens"] = processed
+                fields["total_prompt_tokens"] = total
+            self._emit_progress(on_progress, "processing", attempt, **fields)
+        return report
+
+    def _usage_unlocked(self, prompt_tokens: int | None, text: str) -> dict:
+        prompt = (prompt_tokens if isinstance(prompt_tokens, int)
+                  and not isinstance(prompt_tokens, bool) and prompt_tokens >= 0 else None)
+        counted = self._count_tokens_unlocked(text)
+        completion = (counted if isinstance(counted, int)
+                      and not isinstance(counted, bool) and counted >= 0 else None)
+        total = prompt + completion if prompt is not None and completion is not None else None
+        return {"prompt_tokens": prompt, "completion_tokens": completion,
+                "total_tokens": total}
+
     def complete(self, messages: list[dict], *, max_tokens: int | None = None,
                  temperature: float = DEFAULT_TEMPERATURE, top_p: float = DEFAULT_TOP_P,
-                 response_format=None, seed=None, thinking: bool = False) -> dict:
+                 response_format=None, seed=None, thinking: bool = False,
+                 on_progress: Callable[[dict], None] | None = None) -> dict:
+        self._emit_progress(on_progress, "waiting", 1)
         with self._lock:
+            if self._model is None:
+                self._emit_progress(on_progress, "loading", 1)
             model, tokenizer = self._load_locked()
             budget = self._budget(max_tokens)
             instruction = self.json_instruction(response_format)
@@ -532,15 +603,31 @@ class ChatEngine:
             self._generating = True
             started = time.time()
             try:
-                from mlx_lm import generate
+                from mlx_lm import stream_generate
                 from mlx_lm.sample_utils import make_sampler
 
                 # mlx-lm 0.31 asks for a sampler, not raw `temp`/`top_p`: its
                 # `generate_step` has no such parameters and would raise TypeError.
                 sampler = make_sampler(temp=temperature, top_p=top_p)
                 self._apply_seed(seed)
-                text = generate(model, tokenizer, prompt=self._prompt(working, thinking=thinking),
-                                max_tokens=budget, sampler=sampler)
+                attempts: list[dict] = []
+
+                def generate(prompt: str, attempt: int) -> str:
+                    text_parts: list[str] = []
+                    attempt_metrics = {"attempt": attempt}
+                    for response in stream_generate(
+                            model, tokenizer, prompt=prompt, max_tokens=budget,
+                            sampler=sampler,
+                            prompt_progress_callback=self._prompt_progress(
+                                on_progress, attempt)):
+                        text_parts.append(getattr(response, "text", ""))
+                        metrics = self._response_metrics(response)
+                        attempt_metrics.update(metrics)
+                        self._emit_progress(on_progress, "generating", attempt, **metrics)
+                    attempts.append(attempt_metrics)
+                    return "".join(text_parts)
+
+                text = generate(self._prompt(working, thinking=thinking), 1)
                 json_valid = None
                 repairs = 0
                 if instruction:
@@ -553,12 +640,20 @@ class ChatEngine:
                             {"role": "user", "content": "That reply was not valid JSON. Return "
                              "only the JSON object, with no fences and no commentary."},
                         ]
-                        text = generate(model, tokenizer, prompt=self._prompt(correction, thinking=thinking),
-                                        max_tokens=budget, sampler=sampler)
+                        text = generate(self._prompt(correction, thinking=thinking), 2)
                         json_valid = self._valid_json(text)
             finally:
                 self._generating = False
                 self._last_activity_at = time.time()
+            telemetry = {"attempts": attempts, "final_attempt": len(attempts)}
+            usage = self._usage_unlocked(prompt_tokens, text)
+            if instruction and not json_valid:
+                raise ChatStructuredOutputError(
+                    "structured output: the model did not return valid JSON after one repair")
+            final_metrics = {key: value for key, value in attempts[-1].items()
+                             if key != "attempt"}
+            self._emit_progress(on_progress, "completed", len(attempts), **final_metrics,
+                                telemetry=telemetry, usage=usage)
             return {
                 "text": text,
                 "elapsed_seconds": round(time.time() - started, 3),
@@ -566,11 +661,14 @@ class ChatEngine:
                 "prompt_tokens": prompt_tokens,
                 "json_valid": json_valid,
                 "repairs": repairs,
+                "telemetry": telemetry,
+                "usage": usage,
             }
 
     def stream(self, messages: list[dict], *, max_tokens: int | None = None,
                temperature: float = DEFAULT_TEMPERATURE, top_p: float = DEFAULT_TOP_P,
-               response_format=None, seed=None, thinking: bool = False
+               response_format=None, seed=None, thinking: bool = False,
+               on_progress: Callable[[dict], None] | None = None,
                ) -> Generator[str, None, float]:
         """Stream one completion's text, returning the generation window it measured.
 
@@ -592,6 +690,7 @@ class ChatEngine:
         # from the finalising thread, which a `threading.RLock` refuses. One explicit release,
         # owned by this call and performed at most once, is what returns the model to the next
         # request however this stream ends - completed, errored, cancelled, or client gone.
+        self._emit_progress(on_progress, "waiting", 1)
         self._lock.acquire()
         released = False
 
@@ -604,11 +703,13 @@ class ChatEngine:
 
         self._streams_started += 1
         try:
+            if self._model is None:
+                self._emit_progress(on_progress, "loading", 1)
             model, tokenizer = self._load_locked()
             budget = self._budget(max_tokens)
             working = self._with_instruction(messages, self.json_instruction(response_format))
-            self._refuse_over_context(
-                self._count_tokens_unlocked(self._prompt(working, thinking=thinking)), budget)
+            prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
+            self._refuse_over_context(prompt_tokens, budget)
             self._generating = True
             self._last_activity_at = time.time()
             # Where `complete()` starts its own window: after `_load_locked()`, so a cold turn's
@@ -620,13 +721,28 @@ class ChatEngine:
 
                 sampler = make_sampler(temp=temperature, top_p=top_p)
                 self._apply_seed(seed)
+                attempt_metrics = {"attempt": 1}
+                text_parts: list[str] = []
                 for response in stream_generate(model, tokenizer, prompt=self._prompt(working, thinking=thinking),
-                                                max_tokens=budget, sampler=sampler):
+                                                max_tokens=budget, sampler=sampler,
+                                                prompt_progress_callback=self._prompt_progress(
+                                                    on_progress, 1)):
                     self._last_activity_at = time.time()
-                    yield getattr(response, "text", "")
+                    metrics = self._response_metrics(response)
+                    attempt_metrics.update(metrics)
+                    self._emit_progress(on_progress, "generating", 1, **metrics)
+                    piece = getattr(response, "text", "")
+                    text_parts.append(piece)
+                    yield piece
             finally:
                 self._generating = False
                 self._last_activity_at = time.time()
+            telemetry = {"attempts": [attempt_metrics], "final_attempt": 1}
+            final_metrics = {key: value for key, value in attempt_metrics.items()
+                             if key != "attempt"}
+            usage = self._usage_unlocked(prompt_tokens, "".join(text_parts))
+            self._emit_progress(on_progress, "completed", 1, **final_metrics,
+                                telemetry=telemetry, usage=usage)
             return round(max(0.0, time.time() - generation_started), 3)
         finally:
             # Count the ending before the lock is free, so a reader that sees the lock released

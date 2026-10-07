@@ -63,6 +63,13 @@ _ALLOWED_OPERATIONS = {
 # under Voice's "speech", which is how Music's history was mislabelled.
 _DEFAULT_OPERATION = dict(vocabulary.STUDIO_OPERATION)
 _MAX_ORIGIN_DEVICE = 160
+_MAX_FINISH_REASON = 80
+_PROGRESS_STAGES = frozenset({"waiting", "loading", "processing", "generating", "completed"})
+_ACTIVITY_COUNT_FIELDS = (
+    "processed_prompt_tokens", "total_prompt_tokens", "prompt_tokens",
+    "generation_tokens", "peak_memory_bytes",
+)
+_ACTIVITY_RATE_FIELDS = ("prompt_tps", "generation_tps")
 
 # The closed vocabulary for ``fleet_activity.machines[].limitation_code``.
 # ``None`` means the Hub said nothing; it is never a synonym for "no problem",
@@ -92,6 +99,36 @@ def _text(value, limit: int) -> str | None:
         return None
     value = value.strip()
     return value if value and len(value) <= limit else None
+
+
+def _whole(value, *, minimum: int = 0) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= minimum else None
+
+
+def _job_metrics(value: dict) -> dict:
+    """Allowlisted phase and MLX measurements; malformed optional facts disappear."""
+    result: dict = {}
+    if value.get("progress_stage") in _PROGRESS_STAGES:
+        result["progress_stage"] = value["progress_stage"]
+    attempt = _whole(value.get("attempt"), minimum=1)
+    if attempt is not None:
+        result["attempt"] = attempt
+    for name in _ACTIVITY_COUNT_FIELDS:
+        measured = _whole(value.get(name))
+        if measured is not None:
+            result[name] = measured
+    for name in _ACTIVITY_RATE_FIELDS:
+        measured = _finite(value.get(name), minimum=0)
+        if measured is not None:
+            result[name] = measured
+    reason = _text(value.get("finish_reason"), _MAX_FINISH_REASON)
+    if reason is not None:
+        result["finish_reason"] = reason
+    processed = result.get("processed_prompt_tokens")
+    total = result.get("total_prompt_tokens")
+    if processed is not None and total is not None and processed > total:
+        result.pop("processed_prompt_tokens", None)
+    return result
 
 
 def _job(value: object, *, studio: str) -> dict | None:
@@ -157,6 +194,7 @@ def _job(value: object, *, studio: str) -> dict | None:
         "id": job_id, "state": state, "model": model, "operation": operation,
         "source": source, "origin": origin,
         "progress": progress, "error_code": error_code, **timestamps,
+        **_job_metrics(value),
         **({"origin_device": origin_device} if origin_device else {}),
     }
 

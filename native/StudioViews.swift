@@ -1582,8 +1582,27 @@ struct StudioContent: View {
                             .font(HubType.body).padding(HubSpace.s).frame(height: 155)
                             .overlay(RoundedRectangle(cornerRadius: HubRadius.control).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
                             .accessibilityLabel("Chat message")
+                        if workspace.submittingChat {
+                            VStack(alignment: .leading, spacing: HubSpace.xs) {
+                                if let activity = workspace.chatActivity {
+                                    if let progress = activity.progress {
+                                        ProgressView(value: progress, total: 1)
+                                            .accessibilityLabel(activity.statusText)
+                                    } else {
+                                        ProgressView().progressViewStyle(.linear)
+                                            .accessibilityLabel(activity.statusText)
+                                    }
+                                    Text(activity.statusText)
+                                        .font(HubType.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                } else {
+                                    ProgressView().progressViewStyle(.linear)
+                                        .accessibilityLabel("Waiting for Chat activity")
+                                    Text("Waiting").font(HubType.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                         HStack {
-                            if workspace.submittingChat { ProgressView().controlSize(.small) }
                             Spacer()
                             Button("Send") { Task { await workspace.sendChat() } }
                                 .buttonStyle(.borderedProminent)
@@ -1665,11 +1684,10 @@ struct StudioContent: View {
                                                 .textSelection(.enabled)
                                                 .fixedSize(horizontal: false, vertical: true)
                                         }
-                                        // How fast the model answered: its own stated token count
-                                        // over its own stated generation time, and nothing else.
-                                        // A reply whose worker stated no time shows no rate.
-                                        if !turn.speed.isEmpty {
-                                            Text(turn.speed).font(HubType.caption).foregroundStyle(.secondary)
+                                        // Measured final-attempt facts come from the worker. Legacy
+                                        // times remain labelled; no rate is calculated in the app.
+                                        if !turn.chatMetrics.isEmpty {
+                                            Text(turn.chatMetrics).font(HubType.caption).foregroundStyle(.secondary)
                                         }
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -4137,11 +4155,10 @@ struct StudioContent: View {
                 VStack(alignment: .leading, spacing: HubSpace.tight) {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(3)
                     jobMetaLine(job)
-                    // Tokens per second, derived only from the Chat worker's own stated generation
-                    // time. When the worker stated none there is no rate; the row names the Hub's
-                    // round trip as the round trip rather than passing it off as the model's speed.
-                    if !job.tokenSpeed.isEmpty {
-                        Text(job.tokenSpeed).font(HubType.caption).foregroundStyle(.secondary)
+                    // Final-attempt rates are worker measurements. Legacy completion and round-trip
+                    // times stay labelled, and are never used to manufacture a rate.
+                    if !job.chatMetrics.isEmpty {
+                        Text(job.chatMetrics).font(HubType.caption).foregroundStyle(.secondary)
                     }
                     jobProgress(job)
                     if job.state == "done", !job.answer.isEmpty {

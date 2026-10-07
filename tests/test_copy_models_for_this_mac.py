@@ -419,6 +419,86 @@ class FittingPackageTests(unittest.TestCase):
             self.assertIn("Already up to date: 1", output)
 
 
+class PendingAdmissionTests(unittest.TestCase):
+    """Pending packages stay stocked without being chosen for an ordinary Mac."""
+
+    @staticmethod
+    def mark_pending(kit: Harness, manifest: dict) -> None:
+        manifest["production_allowed"] = False
+        manifest["qualification"] = {
+            "status": "unqualified",
+            "minimum_unified_memory_gb": None,
+        }
+        write(kit.manifests / f"{manifest['package_id']}.json",
+              json.dumps(manifest, indent=2))
+
+    def test_four_pending_packages_remain_on_the_ssd_on_8_and_32_gb_macs(self):
+        for memory_gb in (8, 32):
+            with self.subTest(memory_gb=memory_gb), TemporaryDirectory() as tmp:
+                kit = Harness(Path(tmp))
+                package_ids = [f"pending-stock-{number}" for number in range(1, 5)]
+                for package_id in package_ids:
+                    manifest = kit.ship(package_id)
+                    self.mark_pending(kit, manifest)
+
+                code, output, prompt = kit.run(memory_gb=memory_gb)
+
+                self.assertEqual(code, 0, output)
+                self.assertFalse(prompt.called)
+                self.assertIn("not yet qualified; retained on SSD", output)
+                for package_id in package_ids:
+                    self.assertFalse((kit.home / package_id).exists(), output)
+                    self.assertTrue((kit.library / package_id).is_dir(),
+                                    "selection must not alter the SSD's pinned stock")
+
+    def test_absent_flag_preserves_the_legacy_null_floor_selection(self):
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            manifest = kit.ship("legacy-unknown-floor")
+            manifest["qualification"]["minimum_unified_memory_gb"] = None
+            write(kit.manifests / "legacy-unknown-floor.json", json.dumps(manifest, indent=2))
+
+            code, output, _prompt = kit.run(memory_gb=8)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue((kit.home / "legacy-unknown-floor").is_dir(), output)
+            self.assertNotIn("not yet qualified", output)
+
+    def test_existing_pending_package_is_offered_and_never_pruned(self):
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            manifest = kit.ship("pending-already-here")
+            self.mark_pending(kit, manifest)
+            kit.receive("pending-already-here")
+            kit.record("pending-already-here")
+
+            code, output, _prompt = kit.run(memory_gb=8)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue((kit.home / "pending-already-here").is_dir(), output)
+            self.assertIn("pending-already-here", kit.index())
+            self.assertEqual(kit.trash(), [])
+            self.assertTrue((kit.library / "pending-already-here").is_dir())
+
+    def test_parent_is_held_back_when_its_declared_companion_is_pending(self):
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            generator = kit.ship("pending-generator")
+            self.mark_pending(kit, generator)
+            parent = kit.ship("qualified-parent", floor=8)
+            parent["requires_packages"] = ["pending-generator"]
+            write(kit.manifests / "qualified-parent.json", json.dumps(parent, indent=2))
+
+            code, output, _prompt = kit.run(memory_gb=32)
+
+            self.assertEqual(code, 0, output)
+            self.assertFalse((kit.home / "pending-generator").exists(), output)
+            self.assertFalse((kit.home / "qualified-parent").exists(), output)
+            self.assertIn("qualified-parent", output)
+            self.assertIn("requires pending-generator", output)
+            self.assertIn("not yet qualified; retained on SSD", output)
+
+
 class CarryBelowTierTests(unittest.TestCase):
     """`CARRY_BELOW_TIER` is a request to try, and it must never read as a proven result.
 

@@ -573,6 +573,12 @@ def main() -> int:
     # resolves it - under either spelling a manifest may carry, and not by a second copy of the
     # rule living here. Loaded before the selection below, which is the first thing that needs it.
     verifier = load_verifier(resources / "components")
+    admission_check = getattr(verifier, "production_allowed", None)
+    if any("production_allowed" in manifest for manifest in manifests.values()) \
+            and not callable(admission_check):
+        print("  This app cannot read the model admission policy. Update Studio Hub, then run "
+              "this file again.")
+        return 2
 
     print("=" * 68)
     print("  Studio Hub - putting this Mac's models in place")
@@ -581,8 +587,11 @@ def main() -> int:
     print(f"  This Mac has {memory} GB of memory.")
     print()
 
-    chosen, skipped, shelved, not_for_shop = [], [], [], []
+    chosen, skipped, shelved, not_for_shop, pending = [], [], [], [], []
     for package_id, manifest in sorted(manifests.items()):
+        if admission_check is not None and not admission_check(manifest):
+            pending.append((package_id, manifest))
+            continue
         if shop_mac and not manifest_allowed(manifest):
             not_for_shop.append(package_id)
             continue
@@ -593,8 +602,21 @@ def main() -> int:
         (chosen if needs <= memory else skipped).append((package_id, needs, manifest))
 
     # A model that depends on another one is no use without it, so a companion is carried along
-    # even when it would not have been picked on its own.
+    # even when it would not have been picked on its own. A pending companion cannot make a usable
+    # package, so hold the parent back and name the relationship instead of copying either one.
     carried: list[str] = []
+    blocked_by_pending: list[tuple[str, str]] = []
+    selectable = []
+    pending_ids = {package_id for package_id, _manifest in pending}
+    for package_id, needs, manifest in chosen:
+        pending_dependencies = [dependency for dependency in companion_packages(verifier, manifest)
+                                if dependency in pending_ids]
+        if pending_dependencies:
+            blocked_by_pending.extend((package_id, dependency)
+                                      for dependency in pending_dependencies)
+            continue
+        selectable.append((package_id, needs, manifest))
+    chosen = selectable
     for package_id, _needs, manifest in list(chosen):
         for dependency in companion_packages(verifier, manifest):
             if dependency in manifests and all(dependency != c[0] for c in chosen):
@@ -664,6 +686,17 @@ def main() -> int:
         print()
     if not_for_shop:
         print(f"  Lite Mode models only: {len(not_for_shop)} other model(s) stay on the SSD.")
+        print()
+    if pending:
+        print(f"  Pending models ({len(pending)}): not yet qualified; retained on SSD")
+        for package_id, _manifest in pending:
+            print(f"      {package_id}")
+        print()
+    if blocked_by_pending:
+        print("  Waiting for required pending companions:")
+        for package_id, dependency in blocked_by_pending:
+            print(f"      {package_id} requires {dependency} "
+                  "(not yet qualified; retained on SSD)")
         print()
     if skipped:
         skip_gb = sum(size_gb(m) for _p, _n, m in skipped)

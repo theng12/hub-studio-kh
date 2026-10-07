@@ -204,6 +204,33 @@ def shared_components_modules(components: Path) -> list[Path]:
     return sorted(path for path in components.glob('*.py') if path.is_file())
 
 
+# Chat imports the Voice cache policy by package path while Voice itself runs from
+# ``Resources/voice``. Stage the same canonical file at the one additional package path; copying
+# the whole Voice backend would duplicate unrelated implementation and widen the shipped surface.
+CHAT_SHARED_MODULES = (Path('components/voice/app/backend/mlx_memory.py'),)
+
+
+def stage_chat_shared_modules(resources: Path) -> None:
+    """Copy Chat's small, explicit cross-component dependency allowlist."""
+    for relative in CHAT_SHARED_MODULES:
+        source = ROOT / relative
+        if not source.is_file():
+            raise ValueError(f'Chat shared helper is missing: {relative.as_posix()}')
+        try:
+            tracked = subprocess.check_output(
+                ['git', '-C', str(ROOT), 'ls-files', '--error-unmatch', '--',
+                 relative.as_posix()], stderr=subprocess.DEVNULL).strip()
+        except subprocess.CalledProcessError as exc:
+            raise ValueError(
+                f'Chat shared helper must be tracked before staging: {relative.as_posix()}') from exc
+        if not tracked:
+            raise ValueError(
+                f'Chat shared helper must be tracked before staging: {relative.as_posix()}')
+        target = resources / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
+
 def _stage_hub(context: dict) -> dict | None:
     if not context['include_hub']:
         return None
@@ -246,6 +273,7 @@ def _stage_chat(context: dict) -> dict | None:
     resources = context['resources']
     chat_source = resources / 'components/chat'
     copy_tracked_tree(ROOT / 'components/chat', chat_source)
+    stage_chat_shared_modules(resources)
     shutil.copyfile(ROOT / 'packaging/chat_worker.py', resources / 'chat_worker.py')
     return {
         'source_sha256': tree_digest(chat_source), 'runtime': 'voice',

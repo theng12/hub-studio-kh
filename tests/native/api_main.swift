@@ -265,6 +265,12 @@ final class FixtureProtocol: URLProtocol {
     static var heldChatStarted = false
     static var chatFailureStatus: Int?
     static let releaseChat = DispatchSemaphore(value: 0)
+    /// Request-scoped Chat activity returned while the held completion is in flight. The route
+    /// records every requested id so the fixture can prove that the app never asks for an
+    /// unscoped snapshot (which could expose another request's metrics).
+    static var chatActivityPhase = "processing"
+    static var chatActivityJobIDs: [String] = []
+    static var chatActivityResponseID: String?
     static var heldCatalogPort: Int?
     static var catalogPorts: [Int] = []
     static let catalogStarted = DispatchSemaphore(value: 0)
@@ -389,6 +395,7 @@ final class FixtureProtocol: URLProtocol {
     static var chatJobGenerationSeconds: Double? = 7.2
     static var chatReplyCompletionTokens: Int? = 10
     static var chatReplyElapsedSeconds: Double? = 7.2
+    static var chatReplyTelemetry = true
     static var chatJobWithoutStatedTime = false
     /// When set, `GET /api/hub/memory/policy` answers this payload instead of the default fixture,
     /// so a machine whose Studios publish the `auto` mode with their own sentences can be read.
@@ -397,10 +404,11 @@ final class FixtureProtocol: URLProtocol {
     /// `nil` means "the worker stated none", which is the case a rate must never be invented for.
     static func setChatJobGeneration(_ value: Double?) { lock.lock(); defer { lock.unlock() }; chatJobGenerationSeconds = value }
     /// The tokens and stated generation time on the fixture's live Chat reply.
-    static func setChatReplyUsage(tokens: Int?, elapsed: Double?) {
+    static func setChatReplyUsage(tokens: Int?, elapsed: Double?, telemetry: Bool = true) {
         lock.lock(); defer { lock.unlock() }
         chatReplyCompletionTokens = tokens
         chatReplyElapsedSeconds = elapsed
+        chatReplyTelemetry = telemetry
     }
     /// Whether the Hub's job list also carries a second Chat batch whose item states usage but no
     /// generation time. Off by default, so the listing the existing assertions read is unchanged.
@@ -463,6 +471,9 @@ final class FixtureProtocol: URLProtocol {
     static func releaseHeldChat() { releaseChat.signal() }
     static func chatCallCount() -> Int { lock.lock(); defer { lock.unlock() }; return chatCalls }
     static func recordedChatBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return lastChatBody }
+    static func setChatActivityPhase(_ value: String) { lock.lock(); defer { lock.unlock() }; chatActivityPhase = value }
+    static func setChatActivityResponseID(_ value: String?) { lock.lock(); defer { lock.unlock() }; chatActivityResponseID = value }
+    static func recordedChatActivityJobIDs() -> [String] { lock.lock(); defer { lock.unlock() }; return chatActivityJobIDs }
     static func setChatFailure(_ status: Int?) { lock.lock(); defer { lock.unlock() }; chatFailureStatus = status }
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
     static func waitForCatalogStart() -> Bool { catalogStarted.wait(timeout: .now() + 2) == .success }
@@ -1193,6 +1204,17 @@ final class FixtureProtocol: URLProtocol {
                        "media_type": "text/plain; charset=utf-8",
                        "usage": ["prompt_tokens": 4, "completion_tokens": 10, "total_tokens": 14]]
             if let stated { chatItem["generation_s"] = stated }
+            chatItem["chat_telemetry"] = [
+                "attempts": [
+                    ["attempt": 1, "prompt_tokens": 12, "prompt_tps": 100.0,
+                     "generation_tokens": 2, "generation_tps": 1.0,
+                     "peak_memory_bytes": 1_400_000_000, "finish_reason": "length"],
+                    ["attempt": 2, "prompt_tokens": 12, "prompt_tps": 120.0456,
+                     "generation_tokens": 10, "generation_tps": 2.512345,
+                     "peak_memory_bytes": 1_500_000_000, "finish_reason": "stop"],
+                ],
+                "final_attempt": 2,
+            ]
             let chatJob: [String: Any] = ["id": "chat-job", "modality": "chat",
                 "model": "Qwen/Qwen3.5-9B", "created_at": 40, "items": [chatItem]]
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: chatJob))
@@ -1237,6 +1259,30 @@ final class FixtureProtocol: URLProtocol {
                 }
             }
             result = (200, "application/json", Data(#"{"batch_id":"new-job","items":1,"replayed":false}"#.utf8))
+        case ("GET", "/api/hub/chat/activity"):
+            let requested = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "job_id" }?.value ?? ""
+            Self.lock.lock()
+            Self.chatActivityJobIDs.append(requested)
+            let phase = Self.chatActivityPhase
+            let responseID = Self.chatActivityResponseID ?? requested
+            Self.lock.unlock()
+            var item: [String: Any] = [
+                "id": responseID, "state": "running", "model": "Qwen/Qwen3.5-9B",
+                "progress_stage": phase, "attempt": 2,
+            ]
+            if phase == "processing" {
+                item["processed_prompt_tokens"] = 3
+                item["total_prompt_tokens"] = 12
+                item["prompt_tokens"] = 12
+                item["prompt_tps"] = 120.0
+            } else if phase == "generating" {
+                item["generation_tokens"] = 4
+                item["generation_tps"] = 8.012345
+            }
+            result = (200, "application/json", try! JSONSerialization.data(withJSONObject: [
+                "schema": "kh-studio.activity.v1", "active": item, "latest": NSNull(),
+            ]))
         case ("POST", "/api/hub/chat/completions"):
             // The Hub's local Chat proxy: one complete reply, or the status a worker that is not
             // answering gets. The body is recorded so the request can be checked against the
@@ -1250,12 +1296,10 @@ final class FixtureProtocol: URLProtocol {
             if hold { Self.holdNextChat = false; Self.heldChatStarted = true }
             let failure = Self.chatFailureStatus
             Self.lock.unlock()
-            if hold {
-                _ = Self.releaseChat.wait(timeout: .now() + 5)
-            }
+            let chatResult: (Int, String, Data)
             if let failure {
-                result = (failure, "application/json",
-                          Data(#"{"detail":"the local Chat worker is not answering"}"#.utf8))
+                chatResult = (failure, "application/json",
+                              Data(#"{"detail":"the local Chat worker is not answering"}"#.utf8))
             } else {
                 // The live reply carries what the worker stated for this answer: its usage block
                 // and its own generation time under `studio_hub.elapsed_seconds`. A reply that
@@ -1263,6 +1307,7 @@ final class FixtureProtocol: URLProtocol {
                 Self.lock.lock()
                 let tokens = Self.chatReplyCompletionTokens
                 let elapsed = Self.chatReplyElapsedSeconds
+                let telemetry = Self.chatReplyTelemetry
                 Self.lock.unlock()
                 var payload: [String: Any] = ["choices": [[
                     "message": ["role": "assistant", "content": "Fixture reply."]]]]
@@ -1270,10 +1315,33 @@ final class FixtureProtocol: URLProtocol {
                     payload["usage"] = ["prompt_tokens": 4, "completion_tokens": tokens,
                                         "total_tokens": tokens + 4]
                 }
-                if let elapsed { payload["studio_hub"] = ["elapsed_seconds": elapsed] }
-                result = (200, "application/json",
-                          try! JSONSerialization.data(withJSONObject: payload))
+                var studio: [String: Any] = [:]
+                if let elapsed { studio["elapsed_seconds"] = elapsed }
+                if telemetry {
+                    studio["telemetry"] = [
+                        "attempts": [
+                            ["attempt": 1, "prompt_tokens": 12, "prompt_tps": 100.0,
+                             "generation_tokens": 2, "generation_tps": 1.0,
+                             "peak_memory_bytes": 1_400_000_000, "finish_reason": "length"],
+                            ["attempt": 2, "prompt_tokens": 12, "prompt_tps": 120.0456,
+                             "generation_tokens": 10, "generation_tps": 2.512345,
+                             "peak_memory_bytes": 1_500_000_000, "finish_reason": "stop"],
+                        ],
+                        "final_attempt": 2,
+                    ]
+                }
+                if !studio.isEmpty { payload["studio_hub"] = studio }
+                chatResult = (200, "application/json",
+                              try! JSONSerialization.data(withJSONObject: payload))
             }
+            if hold {
+                DispatchQueue.global().async { [self] in
+                    _ = Self.releaseChat.wait(timeout: .now() + 5)
+                    finish(chatResult)
+                }
+                return
+            }
+            result = chatResult
         case ("POST", "/api/hub/transcription/jobs"):
             let body = requestBody()
             Self.lock.lock()
@@ -4101,20 +4169,37 @@ struct NativeAPITests {
                 "the row's label is the prompt the operator sent, got: \(chatJob.text)")
         require(chatJob.answer == "It turns text into the numbers a model reads.",
                 "the answer the Hub recorded must reach the row, got: \(chatJob.answer)")
-        require(chatJob.model == "Qwen/Qwen3.5-9B" && chatJob.generationSuffix == " · took 1 min 1 s",
+        require(chatJob.model == "Qwen/Qwen3.5-9B" && chatJob.generationSuffix == " · 1 min 1 s round trip",
                 "the row must carry the model and how long it took, got: "
                     + "\(chatJob.model)\(chatJob.generationSuffix)")
 
-        // Tokens per second, from the Chat worker's own stated generation time and nothing else.
-        // The Hub's round trip stays a separate fact on the same row: it includes the model load on
-        // a cold turn (61.4 s here) where the worker stated 7.2 s of generation.
+        // Every speed is the worker's measured value from the final repair attempt. The legacy
+        // completion time and the Hub's round trip remain visible, labelled as the different facts
+        // they are; neither is divided into a token count.
         require(chatJob.completionTokens == 10,
                 "the worker's stated completion tokens must reach the row, got: \(String(describing: chatJob.completionTokens))")
         require(chatJob.statedGenerationSeconds == 7.2 && chatJob.generationSeconds == 61.4,
-                "the worker's stated generation time and the Hub's round trip must stay distinct, got: "
+                "the worker's legacy completion time and the Hub's round trip must stay distinct, got: "
                     + "\(String(describing: chatJob.statedGenerationSeconds)) / \(String(describing: chatJob.generationSeconds))")
-        require(chatJob.tokenSpeed == "10 tokens · 1.4 tok/s · 7.2 s",
-                "the row must show the rate the worker's own numbers give, got: \(chatJob.tokenSpeed)")
+        require(chatJob.chatMetrics == "12 prompt tokens · 120.0 prompt tok/s · 10 generated tokens · 2.5 generation tok/s · 1.5 GB MLX process peak · finish: stop · 1 repair · 7.2 s worker completion",
+                "the row must show the final attempt's measured facts, got: \(chatJob.chatMetrics)")
+        let zeroTelemetry = NativeChatTelemetry(attempts: [NativeChatAttempt(
+            attempt: 1, promptTokens: 0, promptTps: 0, generationTokens: 0,
+            generationTps: 0, peakMemoryBytes: 0, finishReason: "stop")], finalAttempt: 1)
+        require(NativeJob.chatMetrics(telemetry: zeroTelemetry, completionTokens: nil,
+                                      statedCompletionSeconds: nil, roundTripSeconds: nil)
+                    == "0 prompt tokens · 0.0 prompt tok/s · 0 generated tokens · 0.0 generation tok/s · 0 B MLX process peak · finish: stop",
+                "provider-stated zero measurements must remain visible")
+        let missingRateTelemetry = NativeChatTelemetry(attempts: [NativeChatAttempt(
+            attempt: 1, promptTokens: 5, promptTps: nil, generationTokens: 2,
+            generationTps: nil, peakMemoryBytes: nil, finishReason: nil)], finalAttempt: 1)
+        let missingRate = NativeJob.chatMetrics(telemetry: missingRateTelemetry, completionTokens: 2,
+                                                statedCompletionSeconds: 1, roundTripSeconds: 2)
+        require(missingRate == "5 prompt tokens · 2 generated tokens · 1.0 s worker completion · 2.0 s round trip"
+                    && !missingRate.contains("tok/s"),
+                "missing measured rates must stay absent even when legacy times exist")
+        require(NativeJob.rateText(0.03749) == "0.0375",
+                "small positive rates must keep three significant digits")
 
         // The negative control, through the same decode path: a Chat item that states usage but no
         // generation time. There is no rate to state - the Hub's round trip is not the model's
@@ -4125,10 +4210,11 @@ struct NativeAPITests {
         require(noStatedTime?.completionTokens == 10 && noStatedTime?.statedGenerationSeconds == nil,
                 "an item that stated no generation time must decode as none, got: "
                     + "\(String(describing: noStatedTime?.statedGenerationSeconds))")
-        require(noStatedTime?.tokenSpeed.contains("tok/s") == false,
-                "no rate may be derived from the round trip, got: \(noStatedTime?.tokenSpeed ?? "nil")")
-        require(noStatedTime?.tokenSpeed == "10 tokens · 1 min 1 s round trip",
-                "the round trip must be shown labelled as the round trip, got: \(noStatedTime?.tokenSpeed ?? "nil")")
+        require(noStatedTime?.chatMetrics.contains("tok/s") == false,
+                "no rate may be derived from the round trip, got: \(noStatedTime?.chatMetrics ?? "nil")")
+        require(noStatedTime?.chatMetrics == "10 generated tokens"
+                    && noStatedTime?.generationSuffix == " · 1 min 1 s round trip",
+                "the round trip must be shown once and labelled as the round trip, got: \(noStatedTime?.chatMetrics ?? "nil")\(noStatedTime?.generationSuffix ?? "")")
         FixtureProtocol.setChatJobWithoutStatedTime(false)
         await store.refresh()
         require(store.jobs(for: .chat).count == 1,
@@ -4239,6 +4325,7 @@ struct NativeAPITests {
                 "the Chat transcript and editor must start empty for this test")
         let chatCallsBefore = FixtureProtocol.chatCallCount()
         store.chatPrompt = "Hello from the fixture"
+        FixtureProtocol.setChatActivityResponseID("somebody-elses-request")
         FixtureProtocol.holdChat()
         let heldSend = Task { await store.sendChat() }
         for _ in 0..<200 where !FixtureProtocol.chatHasStarted() {
@@ -4254,6 +4341,29 @@ struct NativeAPITests {
                 "no model turn may exist before the model has answered")
         require(store.chatPrompt.isEmpty,
                 "a sent message must leave the editor at once, not when the reply lands")
+        for _ in 0..<200 where FixtureProtocol.recordedChatActivityJobIDs().isEmpty {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        require(store.chatActivity == nil,
+                "activity for another request must never be shown on this turn")
+        FixtureProtocol.setChatActivityResponseID(nil)
+        for _ in 0..<200 where store.chatActivity?.progressStage != "processing" {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        require(store.chatActivity?.id == store.chatTurns.first?.id,
+                "the visible activity must belong to the turn being sent")
+        require(store.chatActivity?.statusText == "Processing prompt 3 of 12 · 120.0 prompt tok/s",
+                "processing must show the worker's prompt numerator, denominator and stated rate, got: \(store.chatActivity?.statusText ?? "nil")")
+        require(store.chatActivity?.progress == 0.25,
+                "prompt processing is determinate only from its valid 3/12 measurement")
+        FixtureProtocol.setChatActivityPhase("generating")
+        for _ in 0..<200 where store.chatActivity?.progressStage != "generating" {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        require(store.chatActivity?.statusText == "Generating 4 tokens · 8.0 generation tok/s",
+                "generation must show the exact worker rate, got: \(store.chatActivity?.statusText ?? "nil")")
+        require(store.chatActivity?.progress == nil,
+                "generation has no determinate percentage: max_tokens is only a ceiling")
         // A second send while one is in flight is refused by the gate, not queued: the transcript
         // must not grow a second copy, and the reply must stay attached to the prompt that asked
         // for it.
@@ -4268,6 +4378,7 @@ struct NativeAPITests {
         FixtureProtocol.releaseHeldChat()
         await heldSend.value
         require(!store.submittingChat, "a completed send must release the Chat gate")
+        require(store.chatActivity == nil, "a completed send must clear and cancel its activity poll")
         require(store.chatTurns.count == 2 && store.chatTurns.first?.role == "user"
                     && store.chatTurns.last?.role == "assistant",
                 "the reply must land once, after the message that asked for it, got: "
@@ -4275,21 +4386,26 @@ struct NativeAPITests {
         require(store.chatTurns.first?.failure == nil, "a successful turn must not be marked as failed")
         require(store.chatTurns.last?.content == "Fixture reply.",
                 "the transcript must carry the worker's own text, got: \(store.chatTurns.last?.content ?? "nil")")
-        // The live reply states its own speed: the worker's token count over the worker's own
-        // generation time, exactly as the Chat job row does. Both come off the reply body.
+        // The live reply shows the final attempt's measured rates, not a rate derived from the old
+        // elapsed_seconds field (which includes prompt processing).
         require(store.chatTurns.last?.completionTokens == 10
                     && store.chatTurns.last?.statedGenerationSeconds == 7.2,
                 "the live reply's stated usage and generation time must reach the turn, got: "
                     + "\(String(describing: store.chatTurns.last?.completionTokens)) / "
                     + "\(String(describing: store.chatTurns.last?.statedGenerationSeconds))")
-        require(store.chatTurns.last?.speed == "10 tokens · 1.4 tok/s · 7.2 s",
-                "a live reply must show the same rate the job row does, got: \(store.chatTurns.last?.speed ?? "nil")")
+        require(store.chatTurns.last?.chatMetrics == "12 prompt tokens · 120.0 prompt tok/s · 10 generated tokens · 2.5 generation tok/s · 1.5 GB MLX process peak · finish: stop · 1 repair · 7.2 s worker completion",
+                "a live reply must show the final attempt's measured facts, got: \(store.chatTurns.last?.chatMetrics ?? "nil")")
         // The wire body is the conversation and nothing else: the message that was just sent, as a
         // plain user turn. A failure marker is a display fact and must never reach the Hub.
         let chatBody = FixtureProtocol.recordedChatBody()
         require(chatBody?["stream"] as? Bool == false, "the Chat request must ask for one complete reply")
         require(chatBody?["model"] as? String == "Qwen/Qwen3.5-9B",
                 "the request must name the model the operator chose, got: \(chatBody?["model"] ?? "nil")")
+        let sentJobID = chatBody?["job_id"] as? String
+        require(sentJobID == store.chatTurns.first?.id,
+                "the completion job_id must be the turn UUID shown in the transcript")
+        require(FixtureProtocol.recordedChatActivityJobIDs().allSatisfy { $0 == sentJobID },
+                "every activity poll must be scoped to the completion's own job_id")
         let sentMessages = chatBody?["messages"] as? [[String: Any]]
         require(sentMessages?.count == 1
                     && sentMessages?.first?["role"] as? String == "user"
@@ -4299,16 +4415,16 @@ struct NativeAPITests {
         // The live reply's negative control: a worker that states usage but no generation time.
         // The app does not time the call itself - its own wall clock would include the model load
         // and the network - so the turn shows the token count and no rate at all.
-        FixtureProtocol.setChatReplyUsage(tokens: 10, elapsed: nil)
+        FixtureProtocol.setChatReplyUsage(tokens: 10, elapsed: nil, telemetry: false)
         store.clearChat()
         store.chatPrompt = "A reply with no stated generation time"
         await store.sendChat()
         require(store.chatTurns.last?.statedGenerationSeconds == nil,
                 "a reply that stated no generation time must carry none")
-        require(store.chatTurns.last?.speed == "10 tokens",
-                "a reply with no stated time must show the token count and no rate, got: "
-                    + "\(store.chatTurns.last?.speed ?? "nil")")
-        require(store.chatTurns.last?.speed.contains("tok/s") == false,
+        require(store.chatTurns.last?.chatMetrics == "10 generated tokens",
+                "a reply with no measured telemetry must show only its legacy token count, got: "
+                    + "\(store.chatTurns.last?.chatMetrics ?? "nil")")
+        require(store.chatTurns.last?.chatMetrics.contains("tok/s") == false,
                 "a rate must not be invented for a reply that stated no generation time")
         FixtureProtocol.setChatReplyUsage(tokens: 10, elapsed: 7.2)
         store.clearChat()

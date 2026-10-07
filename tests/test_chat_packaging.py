@@ -10,8 +10,8 @@ not today's membership:
 * a component this Hub does not know is refused by name, not silently unspawned;
 * the Hub's component table and the staging table are the same set, so a studio cannot be
   staged without a worker or spawned without being staged;
-* the packaged Chat worker is deliberately single-model, so a bundle carrying a second
-  `chat-mlx` manifest is refused rather than silently serving the wrong model.
+* Chat validates its whole manifest catalog, permits pending metadata beside one eligible
+  default, and refuses ambiguous, malformed or empty catalogs before spawning.
 """
 from __future__ import annotations
 
@@ -34,9 +34,16 @@ NO_PRIVATE_WORKER = frozenset(
 IDENTITY = {"runtime_sha256": "a" * 64}
 
 
-def chat_manifest(package_id: str, model_id: str) -> dict:
-    return {"engine": "chat-mlx", "package_id": package_id, "model_id": model_id,
-            "revision": "a" * 40, "files": []}
+def chat_manifest(package_id: str, model_id: str, *, default: bool | None = None,
+                  allowed: bool = True) -> dict:
+    manifest = {"schema_version": 1, "engine": "chat-mlx", "package_id": package_id,
+                "model_id": model_id, "revision": "a" * 40, "minimum_macos": "14.0",
+                "production_allowed": allowed,
+                "files": [{"path": "model/config.json", "size": 2,
+                           "sha256": "f" * 64, "urls": []}]}
+    if default is not None:
+        manifest["default"] = default
+    return manifest
 
 
 class WorkerSpecTests(unittest.TestCase):
@@ -49,6 +56,12 @@ class WorkerSpecTests(unittest.TestCase):
             backend = resources / "components" / component / "app" / "backend"
             backend.mkdir(parents=True)
             (backend / "main.py").write_text(f"# {component} app\n")
+        for relative in ("components/model_packages.py",
+                         "components/chat/app/backend/model_manager.py",
+                         "components/chat/app/backend/llm_engine.py"):
+            target = resources / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT / relative).read_bytes())
         if not chat_source:
             (resources / "components" / "chat" / "app" / "backend" / "main.py").unlink()
         for worker in ("voice_worker.py", "hub_worker.py", "image_worker.py",
@@ -70,9 +83,10 @@ class WorkerSpecTests(unittest.TestCase):
             json.dumps({"engine": "video-ltx", "package_id": "ltx-2-3-22b-ram-12gb-mlx",
                         "model_id": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX", "revision": "b" * 40,
                         "files": []}))
-        for name in chat_manifests:
+        for index, name in enumerate(chat_manifests):
             (resources / "model-manifests" / name).write_text(json.dumps(
-                chat_manifest(Path(name).stem, f"mlx-community/{Path(name).stem}")))
+                chat_manifest(Path(name).stem, f"mlx-community/{Path(name).stem}",
+                              default=index == 0, allowed=index == 0)))
         for name, text in (raw_manifests or {}).items():
             (resources / "model-manifests" / name).write_text(text)
         return resources
@@ -143,18 +157,24 @@ class WorkerSpecTests(unittest.TestCase):
                 {"components": {"voice": {}, "chat": dict(IDENTITY)}}, resources)
         self.assertIn("chat", {spec["id"] for spec in specs})
 
-    def test_a_second_chat_model_is_refused_by_name(self) -> None:
-        """The single-model contract must be enforced, not merely documented (audit C9)."""
+    def test_pending_chat_models_are_accepted_with_one_eligible_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             resources = self._resources(
                 Path(tmp),
                 chat_manifests=("qwen3-5-9b-4bit.json", "qwen3-6-9b-4bit.json"))
-            with self.assertRaises(ValueError) as caught:
-                self._specs({"components": {"voice": {}, "chat": dict(IDENTITY)}}, resources)
-        message = str(caught.exception)
-        self.assertIn("exactly one model", message)
-        self.assertIn("qwen3-5-9b-4bit.json", message)
-        self.assertIn("qwen3-6-9b-4bit.json", message)
+            specs = self._specs(
+                {"components": {"voice": {}, "chat": dict(IDENTITY)}}, resources)
+        self.assertIn("chat", {spec["id"] for spec in specs})
+
+    def test_an_ambiguous_chat_catalog_is_refused(self) -> None:
+        raw = {
+            "one.json": json.dumps(chat_manifest("one", "org/one")),
+            "two.json": json.dumps(chat_manifest("two", "org/two")),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            resources = self._resources(Path(tmp), chat_manifests=(), raw_manifests=raw)
+            with self.assertRaisesRegex(ValueError, "no explicit default"):
+                self._specs({"components": {"chat": dict(IDENTITY)}}, resources)
 
     def test_an_unreadable_manifest_is_refused_by_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

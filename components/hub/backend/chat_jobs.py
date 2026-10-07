@@ -234,7 +234,7 @@ def create_batch(payload: dict) -> tuple[dict, bool]:
             "messages": _messages(raw.get("messages")), "params": _params(raw.get("params")),
             "state": "queued", "tries": 0, "studio": None,
             "duration_seconds": None, "error": None, "results": {},
-            "usage": None, "model_revision": None,
+            "usage": None, "model_revision": None, "chat_telemetry": None,
             "raw_responses": [], "started_at": None, "finished_at": None,
             "retry_at": None,
         })
@@ -372,6 +372,7 @@ def summary(batch: dict, include_raw: bool = False, include_results: bool = True
             # same fact, so a reader never has to guess which of the two numbers is the model's.
             "generation_s": pack.get("generation_s"),
             "usage": pack.get("usage"), "model_revision": pack.get("model_revision"),
+            "chat_telemetry": pack.get("chat_telemetry"),
             "missing_scene_ids": [scene_id for scene_id in pack["scene_ids"]
                                   if scene_id not in pack.get("results", {})],
         }
@@ -753,6 +754,7 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
         # None when the worker stated no usable number, never a value derived from the round trip.
         pack["duration_seconds"] = round(time.time() - started, 2)
         pack["generation_s"] = _stated_generation_seconds(payload)
+        pack["chat_telemetry"] = _stated_chat_telemetry(payload)
         if not remaining:
             pack.update(state="done", error=None, finished_at=time.time())
         elif pack["tries"] < MAX_TRIES and not batch.get("cancelled"):
@@ -963,12 +965,93 @@ def _generation_seconds(value: object) -> float | None:
     return stated if math.isfinite(stated) and stated > 0 else None
 
 
+_CHAT_TELEMETRY_MAX_ATTEMPTS = 8
+_CHAT_TELEMETRY_COUNT_FIELDS = (
+    "prompt_tokens", "generation_tokens", "peak_memory_bytes",
+)
+_CHAT_TELEMETRY_RATE_FIELDS = ("prompt_tps", "generation_tps")
+
+
+def _chat_telemetry(value: object) -> dict | None:
+    """A bounded copy of the worker's per-attempt MLX measurements."""
+    if not isinstance(value, dict):
+        return None
+    attempts = value.get("attempts")
+    final_attempt = value.get("final_attempt")
+    if (not isinstance(attempts, list) or not attempts
+            or len(attempts) > _CHAT_TELEMETRY_MAX_ATTEMPTS
+            or isinstance(final_attempt, bool) or not isinstance(final_attempt, int)
+            or final_attempt < 1):
+        return None
+    validated = []
+    for expected, raw in enumerate(attempts, 1):
+        attempt = raw.get("attempt") if isinstance(raw, dict) else None
+        if (not isinstance(raw, dict) or isinstance(attempt, bool)
+                or not isinstance(attempt, int) or attempt != expected):
+            return None
+        row = {"attempt": expected}
+        for name in _CHAT_TELEMETRY_COUNT_FIELDS:
+            measured = raw.get(name)
+            if isinstance(measured, int) and not isinstance(measured, bool) and measured >= 0:
+                row[name] = measured
+        for name in _CHAT_TELEMETRY_RATE_FIELDS:
+            measured = raw.get(name)
+            if (isinstance(measured, (int, float)) and not isinstance(measured, bool)
+                    and math.isfinite(measured) and measured >= 0):
+                row[name] = float(measured)
+        reason = raw.get("finish_reason")
+        if isinstance(reason, str) and 0 < len(reason.strip()) <= 80:
+            row["finish_reason"] = reason.strip()
+        validated.append(row)
+    if final_attempt != validated[-1]["attempt"]:
+        return None
+    return {"attempts": validated, "final_attempt": final_attempt}
+
+
 def _stated_generation_seconds(payload: dict) -> float | None:
     """``studio_hub.elapsed_seconds`` from one response body, validated."""
     studio_hub = payload.get("studio_hub")
     if not isinstance(studio_hub, dict):
         return None
     return _generation_seconds(studio_hub.get("elapsed_seconds"))
+
+
+def _stated_chat_telemetry(payload: dict) -> dict | None:
+    studio_hub = payload.get("studio_hub")
+    if not isinstance(studio_hub, dict):
+        return None
+    return _chat_telemetry(studio_hub.get("telemetry"))
+
+
+def _completion_chat_telemetry(content_type: str, content: bytes) -> dict | None:
+    """Validated telemetry from a buffered response or the SSE final chunk."""
+    payloads = []
+    if "text/event-stream" in (content_type or "").lower():
+        for line in content.decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            raw = line[len("data:"):].strip()
+            if not raw or raw == "[DONE]":
+                continue
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict):
+                payloads.append(parsed)
+    else:
+        try:
+            parsed = json.loads(content.decode("utf-8", "replace"))
+        except ValueError:
+            return None
+        if isinstance(parsed, dict):
+            payloads.append(parsed)
+    if payloads:
+        studio_hub = payloads[-1].get("studio_hub")
+        if isinstance(studio_hub, dict) and "telemetry" in studio_hub:
+            return _chat_telemetry(studio_hub["telemetry"])
+    return None
 
 
 def _streamed_completion(content: bytes) -> tuple[str, dict | None, str | None, float | None]:
@@ -1098,6 +1181,7 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
     worker_job_id = None
     model_revision = None
     generation_s = None
+    chat_telemetry = None
     error = None
     error_code = None
     answer = None
@@ -1118,6 +1202,7 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
         # here has to be a count a tokenizer could have produced. `_usage` refuses the rest and
         # answers None, which is what an item with no usable usage block carries anyway.
         usage = _usage(usage)
+        chat_telemetry = _completion_chat_telemetry(content_type, content)
         if not model:
             model = stated_model
     finished_at = time.time()
@@ -1138,6 +1223,7 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
         "duration_s": runtime_s,
         # The worker's own stated generation time, beside - never derived from - the round trip.
         "generation_s": generation_s,
+        "chat_telemetry": chat_telemetry,
         "finished_at": finished_at,
         "progress": 1.0,
         "last_progress_at": finished_at,

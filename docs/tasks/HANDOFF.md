@@ -1,4 +1,4 @@
-> **0.6.153 candidate — 2026-10-07, audit remediation (base 4e4e3a5 / 0.6.152). Not yet installed or published.**
+> **0.6.154 candidate — 2026-10-07, audit remediation merged over 0.6.153. Not yet installed or published.**
 > `broker._adopt_abandoned_attempt` finalizes a private original candidate, rechecks winner/cancellation,
 > durably writes its batch, then commits supersession and cancels the replacement. Metadata, asset-ledger
 > or batch-ledger failure leaves the replacement execution intact. `_record_worker_success` keeps
@@ -6,12 +6,21 @@
 > not overwrite a completed original. Receipt/hash checks, recovery holds and callback reservation remain.
 > Native controller trust and App updates say **App Update Key (fingerprint)**; identifiers and trust
 > semantics are unchanged. Release notes carry the owner's Gateway API Key / App Update Key wording.
-> Proof: five new fault/race cases failed on the base; focused free-work reroute suite then passed 30/30.
-> Remaining: added acceptance checks, independent review, complete offline/native gates, dark/light dummy
-> fixture captures, stage/DMG and coordinator-controlled installation. Build: `bash native/build.sh`;
+> Evidence scoped to the pre-merge audit source: five fault/race cases failed on the 0.6.152 base;
+> the repaired free-work reroute suite passed 30/30 and its expanded acceptance suite passed 34/34
+> (`_orchestra/codex-remediation-20261007/hub-acceptance-green.log`). The isolated replay of 28
+> previously failing tests also passed on that old base (`hub-focused-final.log`). Neither result is
+> the combined 0.6.154 source gate. A full old-base run was stopped when 0.6.153 arrived and is invalid.
+> The first complete combined unittest/native gates are pending; their authoritative final record is
+> `/build/Developer/_orchestra/codex-remediation-20261007/hub-delivery-receipt.md`.
+> Remaining: complete combined offline/native gates, dark/light dummy fixture captures, stage/DMG and
+> coordinator-controlled installation. Build: `bash native/build.sh`;
 > tracked stage: `packaging/stage_voice.py`; tracked DMG: `packaging/make_dmg.py`; install:
 > `bash packaging/install_local.sh <staged .app>`. The old untracked `.build/make-dmg.sh` flow is superseded.
-> Primary unrelated branch and qualification work stay untouched. Root owns release integration.
+> The 0.6.153 Chat model-selection, progress, pending-admission and shared-cache work remains intact;
+> its candidates remain physically unqualified and `production_allowed:false`. Root owns release integration.
+
+> 2026-10-07 0.6.153 preparation: source and offline wiring for manifest-driven Chat selection, one resident model, pending-production gates, request-scoped phases, and worker-stated prefill/decode telemetry. New pinned Nemotron 3.5 Lightning30B-A3B MLX4-bit, Qwen3.6 35B-A3B MLX4-bit and Gemma4 26B-A4B QAT MLX4-bit all remain production_allowed:false and physically unqualified. Shared configured512MB cache limit matches the held standalone probe. No model inference or RAM/TPS/quality qualification has run. This work must not be described as installed or fleet-published; distribution state is the receipt under `_orchestra/audit-20261007/moe-qualification/`. Keep This Mac manually paused, all four SSDs mounted, and wait for owner restart/explicit go before testing one model at a time.
 
 > 2026-10-07 0.6.152: the controller update race from the 0.6.151 rollout is closed. A controller's stage waits (<=15 min,
 > `phase: downloading`) for blobs a Gateway is still pushing; a node keeps asking its controller for a blob as long; either
@@ -41,7 +50,7 @@
 **Read this first in a new session.** It is kept current with every release; see the rule in
 `AGENTS.md`. If it disagrees with the code, the code wins — and then fix this file.
 
-Last updated: **0.6.153 candidate** (newest block first; the rest of this line and the blocks under it are older).
+Last updated: **0.6.154 candidate** (newest block first; the rest of this line and the blocks under it are older).
 
 > **0.6.149 - a Hub restart re-runs the work it interrupted (`fix/restart-lost-free-work` off 0.6.148 a7fd296, 2026-10-05).**
 > `broker._rerun_after_restart` (from `restore_batches`) requeues running Image/Music/Video/Voice items instead of fencing them

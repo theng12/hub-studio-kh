@@ -2011,6 +2011,81 @@ struct NativeStatsGroup: Decodable, Equatable {
     let modalities: [String: Int]?
 }
 
+/// One engine attempt's measured Chat facts. Every field is optional because a provider that does
+/// not report a measurement has not reported zero. A literal zero remains a real measurement.
+struct NativeChatAttempt: Decodable, Equatable {
+    let attempt: Int
+    let promptTokens: Int?
+    let promptTps: Double?
+    let generationTokens: Int?
+    let generationTps: Double?
+    let peakMemoryBytes: Int64?
+    let finishReason: String?
+}
+
+/// The worker's complete attempt record for one completion. `finalAttempt` identifies the only
+/// attempt whose speed belongs beside the answer; repair attempts stay visible as a count.
+struct NativeChatTelemetry: Decodable, Equatable {
+    let attempts: [NativeChatAttempt]
+    let finalAttempt: Int
+
+    var final: NativeChatAttempt? { attempts.last { $0.attempt == finalAttempt } }
+}
+
+/// Request-scoped live state from `kh-studio.activity.v1` while a Chat completion is in flight.
+struct NativeChatActivity: Decodable, Equatable {
+    let id: String
+    let state: String
+    let model: String
+    let progressStage: String?
+    let attempt: Int?
+    let processedPromptTokens: Int?
+    let totalPromptTokens: Int?
+    let promptTokens: Int?
+    let promptTps: Double?
+    let generationTokens: Int?
+    let generationTps: Double?
+    let peakMemoryBytes: Int64?
+    let finishReason: String?
+
+    /// Only prompt processing has a real denominator. `max_tokens` is a ceiling, so generation is
+    /// always indeterminate even when the worker reports how many tokens it has produced.
+    var progress: Double? {
+        switch progressStage {
+        case "processing":
+            guard let processedPromptTokens, let totalPromptTokens, totalPromptTokens > 0,
+                  processedPromptTokens >= 0, processedPromptTokens <= totalPromptTokens else { return nil }
+            return Double(processedPromptTokens) / Double(totalPromptTokens)
+        case "generating": return nil
+        default: return nil
+        }
+    }
+
+    var statusText: String {
+        switch progressStage {
+        case "waiting": return "Waiting"
+        case "loading": return "Loading model"
+        case "processing":
+            var text = "Processing prompt"
+            if let processedPromptTokens, let totalPromptTokens, totalPromptTokens > 0,
+               processedPromptTokens >= 0, processedPromptTokens <= totalPromptTokens {
+                text += " \(processedPromptTokens) of \(totalPromptTokens)"
+            } else if let processedPromptTokens, processedPromptTokens >= 0 {
+                text += " \(processedPromptTokens) tokens"
+            }
+            if let rate = NativeJob.rateText(promptTps) { text += " · \(rate) prompt tok/s" }
+            return text
+        case "generating":
+            var text = "Generating"
+            if let generationTokens, generationTokens >= 0 { text += " \(generationTokens) tokens" }
+            if let rate = NativeJob.rateText(generationTps) { text += " · \(rate) generation tok/s" }
+            return text
+        case "completed": return "Finishing"
+        default: return "Waiting"
+        }
+    }
+}
+
 /// One turn in the local Chat Studio transcript.
 struct NativeChatTurn: Identifiable, Equatable {
     let id: String
@@ -2026,17 +2101,21 @@ struct NativeChatTurn: Identifiable, Equatable {
     /// The tokens the worker stated it generated for this reply, when it stated a usage block.
     /// Nil is "not stated" and is never shown as zero.
     var completionTokens: Int? = nil
-    /// The worker's own stated generation time for this reply (`studio_hub.elapsed_seconds`).
-    /// The live reply carries no Hub-measured round trip, so when the worker stated no time there
-    /// is no rate at all rather than one derived from the app's own clock.
+    /// The worker's legacy completion time for this reply (`studio_hub.elapsed_seconds`). It
+    /// includes prompt processing, so it remains a labelled duration and is never a TPS denominator.
     var statedGenerationSeconds: Double? = nil
+    /// The measured per-attempt record on the completion, when this worker publishes one.
+    var chatTelemetry: NativeChatTelemetry? = nil
 
-    /// "10 tokens · 1.4 tok/s · 7.2 s", or the token count alone, or nothing.
-    var speed: String {
-        NativeJob.tokenSpeed(completionTokens: completionTokens,
-                             statedGenerationSeconds: statedGenerationSeconds,
-                             roundTripSeconds: nil)
+    var chatMetrics: String {
+        NativeJob.chatMetrics(telemetry: chatTelemetry,
+                              completionTokens: completionTokens,
+                              statedCompletionSeconds: statedGenerationSeconds,
+                              roundTripSeconds: nil)
     }
+
+    /// Kept as a source-compatible display alias for older callers; it no longer derives a speed.
+    var speed: String { chatMetrics }
 }
 
 struct NativeModelStats: Decodable, Equatable, Identifiable {
@@ -2089,11 +2168,12 @@ struct NativeJob: Identifiable, Equatable {
     /// The tokens the worker stated it generated, from the item's own `usage` block. Nil is
     /// "the worker stated none" and is never rendered as zero.
     var completionTokens: Int? = nil
-    /// The Chat worker's own stated generation time (`generation_s`), which is the only number a
-    /// rate may be derived from. It is deliberately separate from `generationSeconds`, which stays
-    /// the Hub's measured round trip: on a cold turn that includes the model load, so the two are
-    /// different facts and only one of them is the model's speed.
+    /// The Chat worker's legacy completion time (`generation_s`). It includes prompt processing,
+    /// so it remains separate from `generationSeconds` (the Hub's round trip) and neither is used
+    /// to calculate a rate.
     var statedGenerationSeconds: Double? = nil
+    /// The Chat worker's measured attempts, copied from the history item's `chat_telemetry`.
+    var chatTelemetry: NativeChatTelemetry? = nil
     /// The studio's own label for the phase it is in ("DiT sampling"), when it reports one.
     var progressStage: String? = nil
     /// How long this batch has been silent **while still active**, from the Hub's own progress
@@ -2142,7 +2222,11 @@ struct NativeJob: Identifiable, Equatable {
     /// fixture pins this derivation rather than the decode, and the plumbing is checked against a
     /// live Hub by `native/render-page.sh`.
     var generationSuffix: String {
-        Self.generationSuffix(generationSeconds: generationSeconds, runningSeconds: runningSeconds)
+        if chatTelemetry != nil || completionTokens != nil || !answer.isEmpty,
+           let generationSeconds, generationSeconds.isFinite, generationSeconds >= 0 {
+            return " · \(Self.clock(generationSeconds)) round trip"
+        }
+        return Self.generationSuffix(generationSeconds: generationSeconds, runningSeconds: runningSeconds)
     }
 
     static func generationSuffix(generationSeconds: Double?, runningSeconds: Double?) -> String {
@@ -2155,36 +2239,54 @@ struct NativeJob: Identifiable, Equatable {
         return ""
     }
 
-    /// "10 tokens · 1.4 tok/s · 7.2 s", or the token count with the round trip named as such, or
-    /// nothing when the worker stated no token count.
-    ///
-    /// The rate is `completion_tokens / generation_s` and nothing else. `generation_s` is the Chat
-    /// worker's own stated generation time. When the worker stated none, zero or a non-finite
-    /// value there is **no** rate: the Hub's round trip (`runtime_s`) is measured around the whole
-    /// proxied call and includes the model load on a cold turn, so a rate derived from it would
-    /// understate the model and change meaning between the first reply and the second. The round
-    /// trip is still shown where it exists, labelled as the round trip, which is what it is.
-    var tokenSpeed: String {
-        Self.tokenSpeed(completionTokens: completionTokens,
-                        statedGenerationSeconds: statedGenerationSeconds,
-                        roundTripSeconds: generationSeconds)
+    var chatMetrics: String {
+        Self.chatMetrics(telemetry: chatTelemetry,
+                         completionTokens: completionTokens,
+                         statedCompletionSeconds: statedGenerationSeconds,
+                         roundTripSeconds: nil)
     }
 
-    static func tokenSpeed(completionTokens: Int?, statedGenerationSeconds: Double?,
-                           roundTripSeconds: Double?) -> String {
-        // No stated token count, no rate and no token line: a count the worker never gave cannot
-        // be published, not even as the zero a default would produce.
-        guard let completionTokens, completionTokens > 0 else { return "" }
-        if let stated = statedGenerationSeconds, stated.isFinite, stated > 0 {
-            let rate = Double(completionTokens) / stated
-            let speed = rate >= 0.1 ? String(format: "%.1f tok/s", rate)
-                                    : String(format: "%.3f tok/s", rate)
-            return "\(completionTokens) tokens · \(speed) · \(clock(stated))"
+    /// Kept as a source-compatible display alias for older callers; it no longer derives a speed.
+    var tokenSpeed: String { chatMetrics }
+
+    static func rateText(_ value: Double?) -> String? {
+        guard let value, value.isFinite, value >= 0 else { return nil }
+        if value == 0 { return "0.0" }
+        return value >= 0.1 ? String(format: "%.1f", value) : String(format: "%.3g", value)
+    }
+
+    static func chatMetrics(telemetry: NativeChatTelemetry?, completionTokens: Int?,
+                            statedCompletionSeconds: Double?, roundTripSeconds: Double?) -> String {
+        var parts: [String] = []
+        if let telemetry, let final = telemetry.final {
+            if let count = final.promptTokens, count >= 0 { parts.append("\(count) prompt tokens") }
+            if let rate = rateText(final.promptTps) { parts.append("\(rate) prompt tok/s") }
+            if let count = final.generationTokens, count >= 0 {
+                parts.append("\(count) generated tokens")
+            } else if let completionTokens, completionTokens >= 0 {
+                parts.append("\(completionTokens) generated tokens")
+            }
+            if let rate = rateText(final.generationTps) { parts.append("\(rate) generation tok/s") }
+            if let bytes = final.peakMemoryBytes, bytes >= 0 {
+                parts.append(bytes >= 1_000_000_000
+                    ? String(format: "%.1f GB MLX process peak", Double(bytes) / 1_000_000_000)
+                    : "\(bytes) B MLX process peak")
+            }
+            if let reason = final.finishReason, !reason.isEmpty { parts.append("finish: \(reason)") }
+            if telemetry.finalAttempt > 1 {
+                let repairs = telemetry.finalAttempt - 1
+                parts.append("\(repairs) repair\(repairs == 1 ? "" : "s")")
+            }
+        } else if let completionTokens, completionTokens >= 0 {
+            parts.append("\(completionTokens) generated tokens")
         }
-        guard let roundTripSeconds, roundTripSeconds.isFinite, roundTripSeconds > 0 else {
-            return "\(completionTokens) tokens"
+        if let seconds = statedCompletionSeconds, seconds.isFinite, seconds >= 0 {
+            parts.append("\(clock(seconds)) worker completion")
         }
-        return "\(completionTokens) tokens · \(clock(roundTripSeconds)) round trip"
+        if let seconds = roundTripSeconds, seconds.isFinite, seconds >= 0 {
+            parts.append("\(clock(seconds)) round trip")
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// How long something took, at the scale it actually reached.
@@ -2909,6 +3011,7 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published var chatPrompt = "" { didSet { scheduleSave() } }
     @Published private(set) var chatTurns: [NativeChatTurn] = []
     @Published private(set) var submittingChat = false
+    @Published private(set) var chatActivity: NativeChatActivity?
 
     @Published private(set) var downloads: [NativeDownload] = []
     /// The saved voices on this Mac, read from the Voice worker's library.
@@ -3397,6 +3500,8 @@ final class NativeWorkspaceStore: ObservableObject {
     private var finishedJobCache: [String: NativeJob] = [:]
 
     private var pollTask: Task<Void, Never>?
+    private var chatActivityTask: Task<Void, Never>?
+    private var chatRequestToken: UUID?
     private var saveTask: Task<Void, Never>?
     private var loadingState = false
     private var pendingAudio: HubAudioRequest?
@@ -3489,6 +3594,7 @@ final class NativeWorkspaceStore: ObservableObject {
         finishedHubDownloads.removeAll()
         pollTask?.cancel()
         pollTask = nil
+        cancelChatActivity()
         saveTask?.cancel()
         saveTask = nil
         if dataDirectory != nil { try? saveState() }
@@ -4133,7 +4239,13 @@ final class NativeWorkspaceStore: ObservableObject {
         chatTurns.append(turn)
         chatPrompt = ""
         submittingChat = true
-        defer { if connectionID == requestConnection { submittingChat = false } }
+        let requestToken = UUID()
+        startChatActivityPolling(jobID: turn.id, connection: requestConnection,
+                                 requestToken: requestToken)
+        defer {
+            cancelChatActivity(requestToken: requestToken)
+            if connectionID == requestConnection { submittingChat = false }
+        }
         do {
             // The transcript *is* the conversation, and the turn just appended is the message being
             // sent, so this is the same body the Hub has always been given. `failure` never reaches
@@ -4147,7 +4259,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 // With nothing selected the field is left out entirely, which is the same request
                 // this page has always made - never a name the worker would refuse.
                 body: HubChatRequest(model: chatModel.isEmpty ? nil : chatModel,
-                                     messages: messages, stream: false))
+                                     messages: messages, stream: false, jobID: turn.id))
             guard connectionID == requestConnection else {
                 // The transcript outlived the connection it was sent on, so this reply may be an
                 // answer from a Hub the app is no longer talking to. Say so rather than dropping
@@ -4164,7 +4276,8 @@ final class NativeWorkspaceStore: ObservableObject {
             // model load and the network, which is not the model's speed.
             chatTurns.insert(NativeChatTurn(id: UUID().uuidString, role: "assistant", content: content,
                                             completionTokens: reply.completionTokens,
-                                            statedGenerationSeconds: reply.statedGenerationSeconds),
+                                            statedGenerationSeconds: reply.statedGenerationSeconds,
+                                            chatTelemetry: reply.telemetry),
                              at: answered + 1)
             error = nil
         } catch {
@@ -4187,7 +4300,45 @@ final class NativeWorkspaceStore: ObservableObject {
         chatTurns[index].failure = reason
     }
 
+    private func startChatActivityPolling(jobID: String, connection: UUID, requestToken: UUID) {
+        cancelChatActivity()
+        chatRequestToken = requestToken
+        chatActivityTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.pollChatActivity(jobID: jobID, connection: connection,
+                                             requestToken: requestToken)
+                do { try await Task.sleep(for: .milliseconds(200)) }
+                catch { break }
+            }
+        }
+    }
+
+    private func pollChatActivity(jobID: String, connection: UUID, requestToken: UUID) async {
+        do {
+            let response = try await getChatActivity(jobID: jobID)
+            guard connectionID == connection, chatRequestToken == requestToken else { return }
+            guard response.schema == "kh-studio.activity.v1" else { return }
+            guard let activity = response.active ?? response.latest, activity.id == jobID else {
+                chatActivity = nil
+                return
+            }
+            chatActivity = activity
+        } catch {
+            // Activity is best-effort context for a request that is already in flight. The
+            // completion owns its own error; a missed poll must not replace it with a second one.
+        }
+    }
+
+    private func cancelChatActivity(requestToken: UUID? = nil) {
+        if let requestToken, chatRequestToken != requestToken { return }
+        chatActivityTask?.cancel()
+        chatActivityTask = nil
+        chatRequestToken = nil
+        chatActivity = nil
+    }
+
     func clearChat() {
+        cancelChatActivity()
         chatTurns.removeAll()
     }
 
@@ -9041,6 +9192,7 @@ final class NativeWorkspaceStore: ObservableObject {
             generationSeconds: item?.runtimeS, runningSeconds: item?.elapsedS,
             completionTokens: item?.usage?.completionTokens,
             statedGenerationSeconds: item?.generationS,
+            chatTelemetry: item?.chatTelemetry,
             progressStage: item?.progressStage,
             // Taken from the DETAIL, not from the summary the loop is iterating: both are
             // `broker.batch_summary`, so they are the same number, and reading it here keeps one
@@ -9103,6 +9255,16 @@ final class NativeWorkspaceStore: ObservableObject {
 
     private func get<T: Decodable>(_ components: [String]) async throws -> T {
         try await perform(makeRequest(components))
+    }
+
+    private func getChatActivity(jobID: String) async throws -> HubChatActivityResponse {
+        var request = try makeRequest(["api", "hub", "chat", "activity"])
+        guard var components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false) else {
+            throw NativeAPIError.message("The Chat activity address is invalid.")
+        }
+        components.queryItems = [URLQueryItem(name: "job_id", value: jobID)]
+        request.url = components.url
+        return try await perform(request)
     }
 
     private func sendJSON<T: Decodable, Body: Encodable>(_ components: [String], method: String, body: Body) async throws -> T {
@@ -10017,7 +10179,12 @@ private struct HubChatMessage: Codable { let role: String; let content: String }
 /// `body.get("model")` and treats a falsy value as "serve the model I was started with", which is
 /// why an empty string could never be told apart from a real choice - the Hub had nothing to gate
 /// or dispatch by, and a second chat model could not be addressed at all.
-private struct HubChatRequest: Encodable { let model: String?; let messages: [HubChatMessage]; let stream: Bool }
+private struct HubChatRequest: Encodable {
+    let model: String?
+    let messages: [HubChatMessage]
+    let stream: Bool
+    let jobID: String
+}
 /// Token usage as a Chat worker states it. Every count is optional: a field the worker did not
 /// publish stays absent, so nothing here can be mistaken for a stated zero.
 private struct HubUsage: Decodable {
@@ -10025,9 +10192,11 @@ private struct HubUsage: Decodable {
     let completionTokens: Int?
     let totalTokens: Int?
 }
-/// `studio_hub` on a Chat completion: the worker's own generation time for the reply it just
-/// produced. This is the only number a tokens-per-second rate may be derived from.
-private struct HubChatStudio: Decodable { let elapsedSeconds: Double? }
+/// `studio_hub` on a Chat completion: the legacy whole-completion time plus measured attempts.
+private struct HubChatStudio: Decodable {
+    let elapsedSeconds: Double?
+    let telemetry: NativeChatTelemetry?
+}
 private struct HubChatCompletion: Decodable {
     struct Choice: Decodable {
         struct Message: Decodable { let content: String }
@@ -10041,6 +10210,12 @@ private struct HubChatCompletion: Decodable {
     let studioHub: HubChatStudio?
     var completionTokens: Int? { usage?.completionTokens }
     var statedGenerationSeconds: Double? { studioHub?.elapsedSeconds }
+    var telemetry: NativeChatTelemetry? { studioHub?.telemetry }
+}
+private struct HubChatActivityResponse: Decodable {
+    let schema: String
+    let active: NativeChatActivity?
+    let latest: NativeChatActivity?
 }
 private struct HubJobSummary: Decodable {
     let id: String
@@ -10133,6 +10308,8 @@ private struct HubJobItem: Decodable {
     /// `runtime_s` is the Hub's measured round trip and includes the model load on a cold turn,
     /// so a rate computed from it would understate the model.
     let generationS: Double?
+    /// The worker's measured attempts, kept separate from legacy usage and completion time.
+    let chatTelemetry: NativeChatTelemetry?
 }
 private struct HubJobParams: Decodable {
     let width: Int?

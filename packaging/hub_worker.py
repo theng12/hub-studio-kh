@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 RESOURCES = Path(__file__).resolve().parent
 sys.path.insert(0, str(RESOURCES))
-from voice_worker import read_private_token, run_server, single_engine_manifest
+from voice_worker import read_private_token, run_server
 
 
 def write_workers(path, workers):
@@ -196,12 +196,18 @@ def _chat_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dic
     chat_id = release['components']['chat'].get('runtime_sha256')
     if (not (resources / 'chat_worker.py').is_file()
             or not (resources / 'components/chat/app/backend/main.py').is_file()
+            or not (resources / 'components/chat/app/backend/model_manager.py').is_file()
+            or not (resources / 'components/chat/app/backend/llm_engine.py').is_file()
+            or not (resources / 'components/model_packages.py').is_file()
             or not _runtime_id(chat_id)):
         raise ValueError('Incomplete Chat worker or release identity')
-    # The packaged Chat worker serves exactly one model. Check the shipped catalog here, the
-    # same way the worker itself does at startup, so an ambiguous bundle stops the Hub before
-    # it publishes a chat model that no worker can serve.
-    single_engine_manifest(resources / 'model-manifests', 'chat-mlx', component='Chat')
+    try:
+        from components.chat.app.backend.model_manager import (read_chat_manifests,
+                                                               select_default_manifest)
+        manifests = read_chat_manifests(resources / 'model-manifests')
+        select_default_manifest(manifests)
+    except (ImportError, OSError, ValueError) as exc:
+        raise ValueError(str(exc)) from exc
     return {
         'id': 'chat', 'modality': 'chat', 'python': runtime / 'bin/python3',
         'runtime_id': chat_id, 'outputs': data / 'chat/outputs', 'extra_args': [],
