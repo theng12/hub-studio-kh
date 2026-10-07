@@ -1,0 +1,15 @@
+{
+  "model": "mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+  "reply": "READY",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 18,
+    "completion_tokens": 1,
+    "total_tokens": 19
+  },
+  "elapsed_s": 14.919,
+  "pressure_before": "1",
+  "pressure_after": "1",
+  "scope": "Tiny direct local packaged-worker serving smoke; not ordinary Gateway fleet work",
+  "date": "2026-10-08"
+}
