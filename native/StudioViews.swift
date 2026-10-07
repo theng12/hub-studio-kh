@@ -556,6 +556,67 @@ private struct DoubleField: View {
     }
 }
 
+/// Local registered functions and dispatch priority; neither choice resumes a paused Mac.
+private struct WorkPolicySettings: View {
+    @ObservedObject var workspace: NativeWorkspaceStore
+    let connected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HubSpace.s) {
+            Text("Choose the functions this Mac accepts. These choices apply only to this Mac.")
+                .font(HubType.secondary).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let policy = workspace.workPolicy {
+                Text(connected
+                     ? (policy.machineEnabled ? "Local work is enabled. Gateway or fleet pauses still apply."
+                        : "Local work is paused. Changing these choices keeps it paused. Gateway or fleet pauses still apply.")
+                     : "Services are disconnected. The last saved choices are shown below.")
+                    .font(HubType.secondary)
+                    .foregroundStyle(!policy.machineEnabled && connected ? HubStatus.warn.textColor : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(policy.studios) { studio in
+                    Toggle(studio.title, isOn: Binding(
+                        get: { studio.enabled },
+                        set: { enabled in Task { _ = await workspace.saveWorkStudio(studio.id, enabled: enabled) } }))
+                        .toggleStyle(.checkbox)
+                        .accessibilityHint("Accept \(studio.title) jobs on this Mac")
+                }
+                if policy.studios.isEmpty {
+                    Text("No local Studio functions are registered yet.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                }
+                Divider()
+                Toggle("Prefer LLM jobs", isOn: Binding(
+                    get: { policy.chatPriority },
+                    set: { priority in Task { _ = await workspace.saveWorkPriority(priority) } }))
+                    .toggleStyle(.checkbox)
+                    .accessibilityHint("Finish the current job, then take queued LLM jobs before new TTS or image work")
+                Text("When enabled, the current job finishes. Then queued LLM jobs run before new TTS or image jobs. This Mac takes other enabled work when no LLM jobs are waiting.")
+                    .font(HubType.secondary).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(connected ? "Reading work choices…" : "Start local services to read and change this Mac's work choices.")
+                    .font(HubType.secondary).foregroundStyle(.secondary)
+            }
+            if workspace.savingWorkPolicy {
+                ProgressView("Saving work choice…").controlSize(.small)
+            }
+            if let note = workspace.workPolicyNote {
+                Text(note).font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+        }
+        .disabled(!connected || workspace.savingWorkPolicy)
+        .task(id: "\(connected)/\(workspace.connectionGeneration)") {
+            guard connected else { return }
+            while !Task.isCancelled {
+                await workspace.refreshWorkPolicy()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+}
+
 /// Lite Mode on this Mac (internally "workstation mode", `components/hub/workstation.py`): a shop's own
 /// Mac lends the fleet its idle time. The same settings, wording and sentence as the Gateway's Fleet
 /// sheet (`FleetWorkstation.swift`), read from and saved to this Mac's Hub - the one copy both edit.
@@ -767,11 +828,16 @@ struct StudioContent: View {
     @State private var tokenMessage: String?
     @State private var savingToken = false
     @State private var imagePreview: NSImage?
+    @State private var imagePreviewError: String?
+    @State private var imagePreviewReceipt: String?
+    @State private var imagePreviewRetry = 0
     @State private var selectedImageID: String?
     /// The image shown large, over the page. Nil is closed. It is a view over the page rather than a
     /// separate window so it is the same size as the page the operator is on and Esc closes it.
     @State private var imageModalID: String?
     @State private var imageModalImage: NSImage?
+    @State private var imageModalError: String?
+    @State private var imageModalRetry = 0
     @State private var selectedMusicID: String?
     /// The clip the operator asked to preview, by job id. Nil shows the list as it was.
     @State private var previewVideoID: String?
@@ -1762,6 +1828,11 @@ struct StudioContent: View {
                             revealButton(job)
                         }
                     }
+                    if let error = imagePreviewError {
+                        HubBanner(status: .warn, symbol: "exclamationmark.triangle.fill", message: error) {
+                            Button("Retry Preview") { imagePreviewRetry += 1 }.disabled(!connected).hubRowControl()
+                        }
+                    }
                     // A card, not a pane: the picture is a fixed height so the prompt, its settings
                     // and the history below it keep the room. Click it for the large view.
                     ActiveAura(active: !activeImages.isEmpty) {
@@ -1815,18 +1886,28 @@ struct StudioContent: View {
             // guidance and seed below open on them rather than on the model's own.
             await workspace.loadModelDefaultsIfNeeded(for: selectedImageModel)
         }
-        .task(id: previewImageJob?.id) {
+        .task(id: "\(imageReceiptKey(previewImageJob))/\(imagePreviewRetry)") {
+            let receipt = imageReceiptKey(previewImageJob)
             imagePreview = nil
-            guard let job = previewImageJob else { return }
+            imagePreviewReceipt = nil
+            imagePreviewError = nil
+            loadingImage = false
+            guard connected, let job = previewImageJob else { return }
             loadingImage = true
-            defer { loadingImage = false }
+            defer { if imageReceiptKey(previewImageJob) == receipt { loadingImage = false } }
             do {
                 let data = try await workspace.imageData(for: job)
                 guard !Task.isCancelled else { return }
                 guard let image = NSImage(data: data) else { throw CocoaError(.fileReadCorruptFile) }
                 imagePreview = image
-            } catch { if !Task.isCancelled { fileActionError = error.localizedDescription } }
+                imagePreviewReceipt = receipt
+                imagePreviewError = nil
+            } catch { if !Task.isCancelled { imagePreviewError = error.localizedDescription } }
         }
+    }
+
+    private func imageReceiptKey(_ job: NativeJob?) -> String {
+        "\(connected)/\(workspace.connectionGeneration)/\(job?.id ?? "")/\(job?.outputURL ?? "")/\(job?.bytes ?? 0)/\(job?.sha256 ?? "")/\(job?.mediaType ?? "")"
     }
 
     /// Which mflux memory configuration the next Image job loads with, on this Mac.
@@ -2038,6 +2119,12 @@ struct StudioContent: View {
                         if let image = imageModalImage {
                             Image(nsImage: image).resizable().scaledToFit()
                                 .accessibilityLabel(job.text.isEmpty ? "Generated image" : job.text)
+                        } else if let error = imageModalError {
+                            VStack(spacing: HubSpace.s) {
+                                Text(error).font(HubType.secondary).textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Button("Retry Image") { imageModalRetry += 1 }.disabled(!connected)
+                            }
                         } else {
                             ProgressView("Loading image…")
                         }
@@ -2066,14 +2153,21 @@ struct StudioContent: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Image")
-            .task(id: job.id) {
-                imageModalImage = job.id == previewImageJob?.id ? imagePreview : nil
+            .task(id: "\(imageReceiptKey(job))/\(imageModalRetry)") {
+                imageModalError = nil
+                imageModalImage = imageReceiptKey(job) == imagePreviewReceipt ? imagePreview : nil
+                guard connected else {
+                    imageModalError = "Start local services to retrieve this image."
+                    return
+                }
                 guard imageModalImage == nil else { return }
                 do {
                     let data = try await workspace.imageData(for: job)
-                    guard !Task.isCancelled, let image = NSImage(data: data) else { return }
+                    guard !Task.isCancelled else { return }
+                    guard let image = NSImage(data: data) else { throw CocoaError(.fileReadCorruptFile) }
                     imageModalImage = image
-                } catch { if !Task.isCancelled { fileActionError = error.localizedDescription; imageModalID = nil } }
+                    imageModalError = nil
+                } catch { if !Task.isCancelled { imageModalError = error.localizedDescription } }
             }
         }
     }
@@ -4632,6 +4726,9 @@ struct StudioContent: View {
             HubSection("Startup") {
                 startupSettings
             }
+            HubSection("Work on this Mac") {
+                WorkPolicySettings(workspace: workspace, connected: connected)
+            }
             HubSection("Lite Mode") {
                 LiteModeSettings(workspace: workspace, connected: connected)
             }
@@ -6431,9 +6528,36 @@ struct StudioContent: View {
         }
     }
     private func saveImage(_ job: NativeJob) {
-        let panel = NSSavePanel(); panel.nameFieldStringValue = "image-\(job.id).png"; panel.allowedContentTypes = [.png]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { do { try await workspace.saveImage(job, to: url) } catch { fileActionError = error.localizedDescription } }
+        let requestConnection = workspace.connectionGeneration
+        Task {
+            do {
+                guard connected, workspace.connectionGeneration == requestConnection else {
+                    fileActionError = "The Hub connection changed before image export. Save the image again from the current connection."
+                    return
+                }
+                let mediaType = job.mediaType?.split(separator: ";").first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let jpeg: Bool
+                if let mediaType, !mediaType.isEmpty {
+                    jpeg = mediaType == "image/jpeg"
+                } else {
+                    let data = try await workspace.imageData(for: job)
+                    jpeg = data.starts(with: [0xff, 0xd8, 0xff])
+                }
+                guard connected, workspace.connectionGeneration == requestConnection else {
+                    fileActionError = "The Hub connection changed before image export. Save the image again from the current connection."
+                    return
+                }
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = "image-\(job.id).\(jpeg ? "jpg" : "png")"
+                panel.allowedContentTypes = [jpeg ? .jpeg : .png]
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                guard connected, workspace.connectionGeneration == requestConnection else {
+                    fileActionError = "The Hub connection changed before image export. Save the image again from the current connection."
+                    return
+                }
+                try await workspace.saveImage(job, to: url)
+            } catch { fileActionError = error.localizedDescription }
+        }
     }
     private func saveAudio(_ job: NativeJob) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "audio-\(job.id).wav"; panel.allowedContentTypes = [.wav]

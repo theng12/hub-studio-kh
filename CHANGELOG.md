@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.156 — 2026-10-08 · Per-Mac work choices and LLM priority
+
+- Choose which registered functions this Mac accepts in Settings > Work on this Mac. Existing local, Gateway and fleet pauses stay in place; other Macs keep their choices.
+- Prefer LLM jobs finishes current work, then runs eligible queued LLM work before new TTS or image jobs. Other enabled work uses idle time when no LLM is waiting.
+- Gateway Chat can wait within the Hub's bounded allowance. Cancelled waiting requests cannot start later, and uncertain completions stay held for recovery instead of being submitted again.
+- Preview and save verified JPEG alongside PNG, with the correct export format for older results too. Image preview errors stay on Image with a retry action and clear after a new result or successful retry.
+
 ## 0.6.155 — 2026-10-07 · Gemma 4 qualification for the 32 GiB Mac
 
 - Qualify the pinned Gemma 4 26B-A4B QAT MLX 4-bit checkpoint on the measured 32 GiB M2 Max only. The owner accepted the observed 985/800/805-word chapters and Story Studio's verified numeric parsing of Chapter 8/08. The original strict 1,200-word test remains recorded as failed; no lower RAM tier is qualified.

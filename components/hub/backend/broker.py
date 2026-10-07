@@ -725,6 +725,25 @@ def _broker_dispatchable_pool(machine: str) -> float | None:
     return best
 
 
+def chat_priority_enabled(machine: str) -> bool:
+    from . import registry
+    local = any(s.get("machine", "local") == machine and peers.is_local_studio(s)
+                for s in _monitor().registry)
+    if local:
+        return registry.chat_priority("local")
+    return (peers.cached(machine) or {}).get("chat_priority") is True
+
+
+async def priority_chat_waiting(machine: str) -> bool:
+    """Only dispatchable Chat demand defers another enabled non-render lane."""
+    if not chat_priority_enabled(machine):
+        return False
+    from . import chat_jobs, chat_priority
+    if chat_priority.pending(machine):
+        return True
+    return chat_jobs.has_queued_work() and await chat_jobs.has_dispatchable_work(_monitor(), machine)
+
+
 async def scarcer_work_waiting(machine: str, pool: float, own_lane: str) -> bool:
     """Whether another lane has strictly scarcer work that can take ``machine`` right now.
 
@@ -735,9 +754,15 @@ async def scarcer_work_waiting(machine: str, pool: float, own_lane: str) -> bool
     already orders its own queue.
     """
     from . import chat_jobs, transcription_jobs
+    if own_lane != "render" and chat_priority_enabled(machine):
+        if own_lane == "chat":
+            return False
+        if await priority_chat_waiting(machine):
+            chat_jobs._wakeup.set()
+            return True
     found = []
     # `has_queued_work` first: an idle lane costs nothing, which is nearly always.
-    if own_lane != "broker" and any(
+    if own_lane not in {"broker", "render"} and any(
             item["state"] == "queued" for b in batches.values() for item in b["items"]):
         found.append(_broker_dispatchable_pool(machine))
     if own_lane != "chat" and chat_jobs.has_queued_work():
@@ -1844,6 +1869,10 @@ def acquire_external_machine(machine: str, owner: str) -> bool:
     """Atomically reserve a physical machine for another heavy-work queue."""
     if machine in busy_machines():
         return False
+    from . import chat_priority
+    if (chat_priority_enabled(machine) and chat_priority.pending(machine)
+            and not owner.startswith(("chat:", "peer:chat:", "render:"))):
+        return False
     # Episode renders are the fleet's highest-priority queued work. Never
     # interrupt a running job, but once a render is waiting, reserve an eligible
     # render Mac so a Chat/transcription poller cannot win the next-free race.
@@ -1865,6 +1894,8 @@ def external_dispatch_allowed(
     """
     if lane not in _EXTERNAL_LANES:
         raise ValueError(f"unsupported external dispatch lane: {lane}")
+    if lane == "chat" and chat_priority_enabled(machine):
+        return True
     if not other_lane_has_work:
         return True
     return _external_lane_turn.get(machine) in {None, lane}
@@ -3919,7 +3950,8 @@ async def _dispatch_loop():
                     # Another lane's strictly scarcer job that can start on this Mac right now
                     # goes first; it is an order, not a reservation - nothing waits on an idle Mac.
                     if await scarcer_work_waiting(
-                            studio.get("machine", "local"), pool, "broker"):
+                            studio.get("machine", "local"), pool,
+                            "render" if b["modality"] == "render" else "broker"):
                         continue
                     compatible_index = next(
                         (index for index, candidate in enumerate(queued)
@@ -3988,6 +4020,11 @@ async def _dispatch_loop():
                     # Eligibility was calculated before the catalog/memory awaits.
                     # Recheck the physical lease so a transcription that claimed
                     # this Mac in the meantime never overlaps generation/render.
+                    if studio.get("machine", "local") in busy_machines():
+                        continue
+                    if (b["modality"] != "render"
+                            and await priority_chat_waiting(studio.get("machine", "local"))):
+                        continue
                     if studio.get("machine", "local") in busy_machines():
                         continue
                     generation = peers.dispatch_generation(studio)

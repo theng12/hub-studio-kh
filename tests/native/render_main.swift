@@ -117,6 +117,18 @@ struct PageRenderHarness {
                 NativeWorkstation.self, from: JSONSerialization.data(withJSONObject: report))
         }
 
+        // Work choices use local fixtures only; this never changes a live Mac's pause or preferences.
+        if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" {
+            let policy: [String: Any] = ["machine_enabled": false, "chat_priority": true,
+                "studios": [["id": "voice@local", "title": "Voice Studio", "modality": "voice", "enabled": true],
+                            ["id": "image@local", "title": "Image Studio", "modality": "image", "enabled": true],
+                            ["id": "chat@local", "title": "Chat Studio", "modality": "chat", "enabled": true],
+                            ["id": "future@local", "title": "Future registered Studio with a longer name", "modality": "future", "enabled": false]]]
+            let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+            studio.workspace.workPolicy = try? decoder.decode(
+                NativeWorkPolicy.self, from: JSONSerialization.data(withJSONObject: policy))
+        }
+
         // `STUDIOHUB_RENDER_ROLES=controller,node,node-offline,standalone` renders every page once per
         // role, with the Hub's identity and the fleet answers a Mac in that role would have. Needs the
         // fixture seams: render-page.sh applies them with STUDIOHUB_RENDER_FIXTURES=1.

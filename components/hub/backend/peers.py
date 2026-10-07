@@ -393,6 +393,7 @@ async def _refresh_stale(machines, stale, client, now):
                 # Its workstation mode, settings and state (`components/hub/workstation.py`). Absent from
                 # an older Hub, which is then never standing by.
                 "workstation": data.get("workstation") if isinstance(data.get("workstation"), dict) else None,
+                "chat_priority": data.get("chat_priority") is True,
                 "reachable": True, "auth": True, "status": "connected",
             }
             clears_rejection = False

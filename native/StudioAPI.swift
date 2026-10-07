@@ -1406,6 +1406,19 @@ struct ConnectionNotice: Identifiable, Equatable {
     let text: String
 }
 
+/// This Mac's saved function choices, dispatch priority and separate manual pause state.
+struct NativeWorkPolicy: Decodable, Equatable {
+    struct Studio: Decodable, Equatable, Identifiable {
+        let id: String
+        let title: String
+        let modality: String?
+        let enabled: Bool
+    }
+    let machineEnabled: Bool
+    let chatPriority: Bool
+    let studios: [Studio]
+}
+
 /// Lite Mode (`components/hub/workstation.py`; internally "workstation"): a shop's own Mac lends the
 /// fleet its idle time. The settings are this Mac's Hub's own (`GET/POST /api/hub/workstation`), the same
 /// ones the Gateway's Fleet page changes through the controller - one copy, kept by the Hub.
@@ -2137,6 +2150,7 @@ struct NativeJob: Identifiable, Equatable {
     let error: String?
     var bytes: Int64? = nil
     var sha256: String? = nil
+    var mediaType: String? = nil
     var imageSettings: NativeImageSettings? = nil
     var musicSettings: NativeMusicSettings? = nil
     /// What this job was asked for, for the Studio or modality that publishes those controls.
@@ -3243,6 +3257,13 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var workstation: NativeWorkstation?
     @Published private(set) var workstationNote: String?
     @Published private(set) var savingWorkstation = false
+    @Published private(set) var workPolicy: NativeWorkPolicy?
+    @Published private(set) var workPolicyNote: String?
+    @Published private(set) var savingWorkPolicy = false
+    private var workPolicyReadFailed = false
+    // A read started before a change must not replace the change's authoritative answer.
+    private var workPolicyRevision = 0
+    private var workPolicyReadID: UUID?
     /// Truthful Hub identity for the Connections screen.
     @Published private(set) var controllerIdentity: NativeControllerIdentity?
     @Published private(set) var hubVersion: NativeVersion?
@@ -3619,6 +3640,12 @@ final class NativeWorkspaceStore: ObservableObject {
         workstation = nil
         workstationNote = nil
         savingWorkstation = false
+        workPolicy = nil
+        workPolicyNote = nil
+        savingWorkPolicy = false
+        workPolicyReadFailed = false
+        workPolicyRevision += 1
+        workPolicyReadID = nil
         // The loading-size status belongs to the Image worker that answered it; the next
         // connection reads its own rather than showing this one's `effective`.
         imageLoadingMode = nil
@@ -4738,8 +4765,11 @@ final class NativeWorkspaceStore: ObservableObject {
         let data = try await performData(makeRequest(["api", "hub", "jobs", job.id, "items", "0", "artifact"]))
         guard connectionID == requestConnection else { throw NativeAPIError.message("The Hub connection changed before image retrieval completed.") }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let mediaType = data.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) ? "image/png"
+            : data.starts(with: [0xff, 0xd8, 0xff]) ? "image/jpeg" : nil
         guard Int64(data.count) == bytes, digest == sha.lowercased(),
-              data.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else {
+              let mediaType, job.mediaType == nil || job.mediaType == mediaType,
+              NSBitmapImageRep(data: data) != nil else {
             throw NativeAPIError.message("Image verification failed. Refresh the job and retrieve its original result again.")
         }
         return data
@@ -6018,6 +6048,81 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             memoryInventory = nil
             memoryNote = Self.actionable(error, action: "Read model memory settings")
+        }
+    }
+
+    func refreshWorkPolicy() async {
+        guard let requestConnection = connectionID, !savingWorkPolicy else { return }
+        let revision = workPolicyRevision
+        let readID = UUID()
+        workPolicyReadID = readID
+        do {
+            let answer: NativeWorkPolicy = try await get(["api", "hub", "work-policy"])
+            guard connectionID == requestConnection, workPolicyRevision == revision,
+                  workPolicyReadID == readID, !savingWorkPolicy else { return }
+            workPolicy = answer
+            if workPolicyReadFailed {
+                workPolicyNote = nil
+                workPolicyReadFailed = false
+            }
+        } catch {
+            guard connectionID == requestConnection, workPolicyRevision == revision,
+                  workPolicyReadID == readID, !savingWorkPolicy, !Self.isCancellation(error) else { return }
+            workPolicyNote = Self.actionable(error, action: "Read work choices for this Mac")
+            workPolicyReadFailed = true
+        }
+    }
+
+    func saveWorkPriority(_ priority: Bool) async -> Bool {
+        guard let requestConnection = connectionID, isReachable, workPolicy != nil,
+              !savingWorkPolicy else { return false }
+        savingWorkPolicy = true
+        workPolicyRevision += 1
+        workPolicyNote = nil
+        workPolicyReadFailed = false
+        defer { if connectionID == requestConnection { savingWorkPolicy = false } }
+        do {
+            let answer: NativeWorkPolicy = try await sendJSON(
+                ["api", "hub", "work-policy"], method: "POST", body: ["chat_priority": priority])
+            guard connectionID == requestConnection else { return false }
+            workPolicy = answer
+            return true
+        } catch {
+            if connectionID == requestConnection {
+                workPolicyNote = Self.actionable(error, action: "Save LLM priority")
+            }
+            return false
+        }
+    }
+
+    func saveWorkStudio(_ studioID: String, enabled: Bool) async -> Bool {
+        guard let requestConnection = connectionID, isReachable,
+              workPolicy?.studios.contains(where: { $0.id == studioID }) == true,
+              !savingWorkPolicy else { return false }
+        savingWorkPolicy = true
+        workPolicyRevision += 1
+        workPolicyNote = nil
+        workPolicyReadFailed = false
+        var saved = false
+        defer { if connectionID == requestConnection { savingWorkPolicy = false } }
+        do {
+            let _: EmptyResponse = try await sendJSON(
+                ["api", "hub", "registry", "studios", studioID, "enabled"],
+                method: "POST", body: ["enabled": enabled])
+            guard connectionID == requestConnection else { return false }
+            saved = true
+            let answer: NativeWorkPolicy = try await get(["api", "hub", "work-policy"])
+            guard connectionID == requestConnection else { return false }
+            workPolicy = answer
+            return true
+        } catch {
+            if connectionID == requestConnection {
+                workPolicyNote = saved
+                    ? "The function choice was saved. " + Self.actionable(error, action: "Refresh this Mac's work choices")
+                    : Self.actionable(error, action: "Save this Mac's function choice")
+                workPolicyReadFailed = saved
+            }
+            return false
         }
     }
 
@@ -9180,6 +9285,7 @@ final class NativeWorkspaceStore: ObservableObject {
         return NativeJob(id: wire.id, state: item?.state ?? "queued", progress: item?.progress ?? 0,
             text: item?.prompt ?? "", model: wire.model, createdAt: wire.createdAt,
             outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error, bytes: item?.bytes, sha256: item?.sha256,
+            mediaType: item?.mediaType,
             imageSettings: item?.params?.imageSettings,
             musicSettings: item?.params?.musicSettings,
             videoSettings: item?.params?.videoSettings,
@@ -10269,6 +10375,7 @@ private struct HubJobItem: Decodable {
     let error: String?
     let bytes: Int64?
     let sha256: String?
+    let mediaType: String?
     let params: HubJobParams?
     /// Where the worker wrote the artifact **on its own disk**, which the Hub records when it
     /// adopts a finished job (`artifact_path`). This is what "Show in Folder" reveals, and it is

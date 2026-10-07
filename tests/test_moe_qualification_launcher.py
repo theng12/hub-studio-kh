@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from unittest import mock
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -116,13 +117,20 @@ class MoeQualificationLauncherTests(unittest.TestCase):
         model = self._model(kit, spec.name, spec.revision, spec.model_type)
         runtime = self._runtime(self.root / "runtime", spec.model_type)
 
-        check = self.module.static_check(spec, kit, technical, runtime)
+        original_import = __import__
+
+        def metadata_only_import(name, *args, **kwargs):
+            self.assertNotIn(name.split(".", 1)[0], {"mlx", "mlx_lm"},
+                             "static preflight must not import an inference runtime")
+            return original_import(name, *args, **kwargs)
+
+        # Other suites may already have loaded MLX; reject imports by this helper instead.
+        with mock.patch("builtins.__import__", side_effect=metadata_only_import):
+            check = load_helper().static_check(spec, kit, technical, runtime)
 
         self.assertEqual(Path(check["model_dir"]), model)
         self.assertEqual(check["runtime_packages"]["mlx-lm"], "0.31.3")
         self.assertTrue(check["model_implementation"].endswith("/gemma4.py"))
-        self.assertNotIn("mlx", sys.modules)
-        self.assertNotIn("mlx_lm", sys.modules)
         self.assertFalse(marker.exists())
 
     def test_missing_model_and_runtime_fail_with_the_missing_path(self) -> None:

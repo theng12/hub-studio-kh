@@ -27,7 +27,8 @@ for name in ("audioJobs", "imageJobs", "musicJobs"):
     text = text.replace(needle, f"@Published var {name}: [NativeJob]", 1)
 # The rest of what the Models, Voices and Connections pages read, so they render with data.
 for decl, kind in (("models", "[NativeModel]"), ("voices", "[NativeVoice]"), ("hubVersion", "NativeVersion?"),
-                   ("fleetReadiness", "[String: NativeMachineReadiness]"), ("workstation", "NativeWorkstation?")):
+                   ("fleetReadiness", "[String: NativeMachineReadiness]"), ("workstation", "NativeWorkstation?"),
+                   ("workPolicy", "NativeWorkPolicy?")):
     needle = f"@Published private(set) var {decl}: {kind}"
     assert needle in text, f"{decl} moved; update render_fixture_patch.py"
     text = text.replace(needle, f"@Published var {decl}: {kind}", 1)
@@ -39,7 +40,9 @@ needle = "func imageData(for job: NativeJob) async throws -> Data {\n"
 assert needle in text, "imageData moved; update render_fixture_patch.py"
 text = text.replace(
     needle,
-    needle + '        if let p = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_IMAGE"], '
+    needle + '        if let message = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_IMAGE_ERROR"], '
+             '!message.isEmpty { throw NativeAPIError.message(message) }\n'
+             '        if let p = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_IMAGE"], '
              'let d = FileManager.default.contents(atPath: p) { return d }\n', 1)
 api.write_text(text)
 

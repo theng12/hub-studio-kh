@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import CryptoKit
+import AppKit
 
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { fatalError(message) }
@@ -47,6 +48,7 @@ final class FixtureProtocol: URLProtocol {
     static var transcriptionPorts: [Int] = []
     static var uncertainTranscription = false
     static var corruptImage = false
+    static var imageArtifact: Data?
     static var corruptAudio = false
     static var voiceListCalls = 0
     /// How many held voice-library reads were torn down before the fixture answered them. A read
@@ -202,6 +204,16 @@ final class FixtureProtocol: URLProtocol {
     static var storageBody: [String: Any]?
     static var storageLimits: [String: Any]?
     /// Lite Mode (`/api/hub/workstation`): the settings the Hub holds, and the bodies the app posted.
+    static var workPolicy: [String: Any] = ["machine_enabled": false, "chat_priority": false,
+        "studios": [["id": "voice@local", "title": "Voice Studio", "modality": "voice", "enabled": true],
+                    ["id": "future@local", "title": "Future Studio", "modality": "future", "enabled": false]]]
+    static var workPolicyPosts: [[String: Any]] = []
+    static var workPolicyRejects = false
+    static var workPolicyReadRejects = false
+    static var workPolicyReads = 0
+    static var workPolicyHeldRead: (() -> Void)?
+    static var holdNextWorkPolicyRead = false
+    static func heldWorkPolicyRead() -> (() -> Void)? { lock.lock(); defer { lock.unlock() }; return workPolicyHeldRead }
     static var workstationSettings: [String: Any] = [
         "enabled": false, "idle_only": false, "idle_minutes": 3, "step_aside": false, "resume_after_minutes": 2,
         "start_free_gb": NSNull(), "quiet_hours": [String](), "hide_menu_bar_icon": false]
@@ -220,6 +232,13 @@ final class FixtureProtocol: URLProtocol {
     static var modelHealthBody: [String: Any]?
     static var modelVerifyRejects = false
     static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
+    static let jpeg: Data = {
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
+            bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
+            colorSpaceName: .calibratedRGB, bytesPerRow: 3, bitsPerPixel: 24)!
+        bitmap.setColor(NSColor(calibratedRed: 1, green: 1, blue: 1, alpha: 1), atX: 0, y: 0)
+        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9])!
+    }()
     /// One frame of 16-bit mono 8 kHz PCM: the smallest thing that is still a WAV.
     /// A minimal ISO base media file, for the Video lane's own artifact checks: bytes 4-8 are
     /// `ftyp`, which is what the native reader verifies exactly as it verifies a PNG signature.
@@ -341,6 +360,7 @@ final class FixtureProtocol: URLProtocol {
     static func transcriptionBody() -> String { lock.lock(); defer { lock.unlock() }; return lastTranscriptionBody }
     static func recordedTranscriptionPorts() -> [Int] { lock.lock(); defer { lock.unlock() }; return transcriptionPorts }
     static func setCorruptImage(_ value: Bool) { lock.lock(); defer { lock.unlock() }; corruptImage = value }
+    static func setImageArtifact(_ value: Data?) { lock.lock(); defer { lock.unlock() }; imageArtifact = value }
     static func setCorruptAudio(_ value: Bool) { lock.lock(); defer { lock.unlock() }; corruptAudio = value }
     static func setAudioAckRejects(_ value: Bool) { lock.lock(); defer { lock.unlock() }; audioAckRejects = value }
     static func audioAcks() -> [String] { lock.lock(); defer { lock.unlock() }; return audioAckPaths }
@@ -684,6 +704,41 @@ final class FixtureProtocol: URLProtocol {
             Self.modelHealthBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
             Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true,"studio":"voice","model":"fixture/paused"}"#.utf8))
+        case ("GET", "/api/hub/work-policy"):
+            Self.lock.lock(); Self.workPolicyReads += 1
+            let body = try! JSONSerialization.data(withJSONObject: Self.workPolicy)
+            let rejects = Self.workPolicyReadRejects
+            let hold = Self.holdNextWorkPolicyRead; Self.holdNextWorkPolicyRead = false
+            if hold {
+                Self.workPolicyHeldRead = { [self] in
+                    let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                                   headerFields: ["Content-Type": "application/json"])!
+                    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                    client?.urlProtocol(self, didLoad: body)
+                    client?.urlProtocolDidFinishLoading(self)
+                }
+            }
+            Self.lock.unlock()
+            if hold { return }
+            result = rejects
+                ? (503, "application/json", Data(#"{"detail":"fixture could not read work policy"}"#.utf8))
+                : (200, "application/json", body)
+        case ("POST", "/api/hub/work-policy"), ("POST", "/api/hub/registry/studios/voice@local/enabled"):
+            let body = (try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any] ?? [:]
+            Self.lock.lock(); Self.workPolicyPosts.append(body)
+            let rejects = Self.workPolicyRejects
+            if !rejects {
+                if path.hasSuffix("work-policy") { Self.workPolicy["chat_priority"] = body["chat_priority"] }
+                else {
+                    var studios = Self.workPolicy["studios"] as! [[String: Any]]
+                    studios[0]["enabled"] = body["enabled"]; Self.workPolicy["studios"] = studios
+                }
+            }
+            let answer = try! JSONSerialization.data(withJSONObject: Self.workPolicy)
+            Self.lock.unlock()
+            result = rejects
+                ? (400, "application/json", Data(#"{"detail":"fixture refused work policy"}"#.utf8))
+                : (200, "application/json", answer)
         case ("GET", "/api/hub/workstation"):
             result = (200, "application/json", Self.workstationAnswer())
         case ("POST", "/api/hub/workstation"):
@@ -1102,15 +1157,17 @@ final class FixtureProtocol: URLProtocol {
                 "items": [["index": 0, "state": "uncertain", "prompt": "A quiet garden", "artifact_url": "/api/hub/jobs/image-uncertain/items/0/artifact", "bytes": Self.png.count, "sha256": uncertainSHA]]]
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: pending))
         case ("GET", "/api/hub/jobs/image-job"):
-            let sha = SHA256.hash(data: Self.png).map { String(format: "%02x", $0) }.joined()
-            Self.lock.lock(); let uncertain = Self.uncertainImage; Self.lock.unlock()
+            Self.lock.lock(); let uncertain = Self.uncertainImage; let artifact = Self.imageArtifact ?? Self.png; Self.lock.unlock()
+            let sha = SHA256.hash(data: artifact).map { String(format: "%02x", $0) }.joined()
+            var item: [String: Any] = ["index": 0, "state": uncertain ? "uncertain" : "done", "prompt": "A quiet garden", "artifact_url": "/api/hub/jobs/image-job/items/0/artifact", "bytes": artifact.count, "sha256": sha,
+                "params": ["width": 1280, "height": 720, "steps": 4, "guidance": 1.0, "seed": -1]]
+            if artifact.starts(with: [0xff, 0xd8, 0xff]) { item["media_type"] = "image/jpeg" }
             let body: [String: Any] = ["id": "image-job", "modality": "image", "model": "fixture/flux", "created_at": 30,
-                "items": [["index": 0, "state": uncertain ? "uncertain" : "done", "prompt": "A quiet garden", "artifact_url": "/api/hub/jobs/image-job/items/0/artifact", "bytes": Self.png.count, "sha256": sha,
-                           "params": ["width": 1280, "height": 720, "steps": 4, "guidance": 1.0, "seed": -1]]]]
+                "items": [item]]
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: body))
         case ("GET", "/api/hub/jobs/image-job/items/0/artifact"):
-            Self.lock.lock(); let corrupt = Self.corruptImage; Self.lock.unlock()
-            result = (200, "image/png", corrupt ? Data([0]) : Self.png)
+            Self.lock.lock(); let corrupt = Self.corruptImage; let artifact = Self.imageArtifact ?? Self.png; Self.lock.unlock()
+            result = (200, artifact.starts(with: [0xff, 0xd8, 0xff]) ? "image/jpeg" : "image/png", corrupt ? Data([0]) : artifact)
         case ("POST", "/api/hub/jobs/image-job/items/0/ack"):
             Self.lock.lock(); Self.imageAckPaths.append(path); let rejects = Self.imageAckRejects; Self.lock.unlock()
             // delivery.py never returns 200 {"ok": false}; a rejected acknowledgement
@@ -3519,6 +3576,56 @@ struct NativeAPITests {
                 "the cleanup choice must reach the Hub")
         require(store.storageNote?.contains("Saved") == true, "a save needs a visible result")
 
+        // Local work choices must preserve manual pause and arbitrary registered functions.
+        await store.refreshWorkPolicy()
+        require(store.workPolicy?.machineEnabled == false && store.workPolicy?.studios.last?.modality == "future",
+                "work choices must use the Hub's local registered functions and manual pause")
+        FixtureProtocol.mutate { FixtureProtocol.workPolicyReadRejects = true }
+        await store.refreshWorkPolicy()
+        require(store.workPolicy != nil && store.workPolicyNote?.contains("fixture could not read") == true,
+                "a read outage must retain the saved choices and explain the failed read")
+        FixtureProtocol.mutate { FixtureProtocol.workPolicyReadRejects = false }
+        await store.refreshWorkPolicy()
+        require(store.workPolicyNote == nil, "a recovered read must clear its stale error")
+        let prioritySaved = await store.saveWorkPriority(true)
+        require(prioritySaved && store.workPolicy?.chatPriority == true && store.workPolicy?.machineEnabled == false,
+                "priority saves must read authoritative state without resuming the Mac")
+        require(Set(FixtureProtocol.workPolicyPosts.last?.keys.map { $0 } ?? []) == ["chat_priority"],
+                "priority POST must never carry machine enablement")
+        let studioSaved = await store.saveWorkStudio("voice@local", enabled: false)
+        require(studioSaved && store.workPolicy?.studios.first?.enabled == false && store.workPolicy?.machineEnabled == false,
+                "a function save must preserve pause and refresh the registry")
+        require(Set(FixtureProtocol.workPolicyPosts.last?.keys.map { $0 } ?? []) == ["enabled"],
+                "function POST must contain only that function's enabled flag")
+        FixtureProtocol.mutate { FixtureProtocol.workPolicyRejects = true }
+        let priorityRefused = await store.saveWorkPriority(false)
+        require(!priorityRefused && store.workPolicy?.chatPriority == true && store.workPolicyNote?.contains("fixture refused") == true,
+                "failed changes must retain the saved checkbox value and expose the Hub's reason locally")
+        await store.refreshWorkPolicy()
+        require(store.workPolicyNote?.contains("fixture refused") == true,
+                "a normal poll must not erase a refused-save explanation")
+        FixtureProtocol.mutate {
+            FixtureProtocol.workPolicyRejects = false
+            FixtureProtocol.holdNextWorkPolicyRead = true
+        }
+        let stalePolicyRead = Task { await store.refreshWorkPolicy() }
+        for _ in 0..<100 {
+            if FixtureProtocol.heldWorkPolicyRead() != nil { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        require(FixtureProtocol.heldWorkPolicyRead() != nil, "the old poll must be held before saving")
+        let newerPrioritySaved = await store.saveWorkPriority(false)
+        require(newerPrioritySaved && store.workPolicy?.chatPriority == false, "the newer save must land first")
+        FixtureProtocol.heldWorkPolicyRead()?()
+        await stalePolicyRead.value
+        FixtureProtocol.mutate { FixtureProtocol.workPolicyHeldRead = nil }
+        require(store.workPolicy?.chatPriority == false, "an older poll must not overwrite a completed save")
+        let disconnectedPolicyStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        let disconnectedPrioritySaved = await disconnectedPolicyStore.saveWorkPriority(true)
+        let disconnectedStudioSaved = await disconnectedPolicyStore.saveWorkStudio("voice@local", enabled: true)
+        require(!disconnectedPrioritySaved && !disconnectedStudioSaved && disconnectedPolicyStore.workPolicy == nil,
+                "a disconnected Mac must not write work preferences")
+
         // Lite Mode: read from this Mac's own Hub, saved to it whole - "each model's own" floor as an
         // explicit null, or the Hub would keep the old figure - and the Hub's own reason for a refusal.
         await store.refreshWorkstation()
@@ -4883,6 +4990,47 @@ struct NativeAPITests {
         let image = store.imageJobs.first!
         let verifiedImage = try await store.imageData(for: image)
         require(verifiedImage == FixtureProtocol.png, "verified Image artifact")
+        // The worker delivers JPEG when requested; its own receipt still protects those bytes.
+        let imageFormatStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        let imageFormatState = temporary.appendingPathComponent("image-formats")
+        try FileManager.default.createDirectory(at: imageFormatState, withIntermediateDirectories: true)
+        FixtureProtocol.setImageArtifact(FixtureProtocol.jpeg)
+        await imageFormatStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: imageFormatState, token: "native-test-token")
+        let jpegJob = imageFormatStore.imageJobs.first!
+        let verifiedJPEG = try await imageFormatStore.imageData(for: jpegJob)
+        require(verifiedJPEG == FixtureProtocol.jpeg, "a checksum-verified delivered JPEG must be accepted")
+        require(jpegJob.mediaType == "image/jpeg", "the delivered JPEG's own media type must reach the export chooser")
+        var legacyJPEG = jpegJob
+        legacyJPEG.mediaType = nil
+        let verifiedLegacyJPEG = try await imageFormatStore.imageData(for: legacyJPEG)
+        require(verifiedLegacyJPEG == FixtureProtocol.jpeg,
+                "a legacy JPEG receipt without a media type must expose verified bytes for export format detection")
+        var missingReceipt = jpegJob
+        missingReceipt.sha256 = nil
+        do { _ = try await imageFormatStore.imageData(for: missingReceipt); fatalError("an Image without a receipt was accepted") }
+        catch { require(error.localizedDescription.contains("no verified completed result"), "an absent receipt is distinct from corruption") }
+        var changedLength = jpegJob
+        changedLength.bytes = (jpegJob.bytes ?? 0) + 1
+        do { _ = try await imageFormatStore.imageData(for: changedLength); fatalError("a JPEG with a mismatched size was accepted") }
+        catch { require(error.localizedDescription.contains("verification failed"), "a JPEG length mismatch must be rejected") }
+        var changedDigest = jpegJob
+        changedDigest.sha256 = String(repeating: "0", count: 64)
+        do { _ = try await imageFormatStore.imageData(for: changedDigest); fatalError("a JPEG with a mismatched digest was accepted") }
+        catch { require(error.localizedDescription.contains("verification failed"), "a JPEG checksum mismatch must be rejected") }
+        var changedMediaType = jpegJob
+        changedMediaType.mediaType = "image/png"
+        do { _ = try await imageFormatStore.imageData(for: changedMediaType); fatalError("a JPEG with a mismatched media type was accepted") }
+        catch { require(error.localizedDescription.contains("verification failed"), "a JPEG media type mismatch must be rejected") }
+        // Self-consistent receipts cannot make truncated JPEGs or other file types images.
+        for invalid in [Data(FixtureProtocol.jpeg.prefix(8)), Data("not an image".utf8)] {
+            FixtureProtocol.setImageArtifact(invalid)
+            imageFormatStore.disconnect()
+            await imageFormatStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: imageFormatState, token: "native-test-token")
+            do { _ = try await imageFormatStore.imageData(for: imageFormatStore.imageJobs.first!); fatalError("an invalid Image payload was accepted") }
+            catch { require(error.localizedDescription.contains("verification failed"), "invalid Image structure must be rejected") }
+        }
+        FixtureProtocol.setImageArtifact(nil)
+        imageFormatStore.disconnect()
         FixtureProtocol.setCorruptImage(true)
         do { _ = try await store.imageData(for: image); fatalError("corrupt Image artifact was accepted") }
         catch { require(error.localizedDescription.contains("verification"), "Image hash mismatch needs actionable message") }
@@ -4916,6 +5064,14 @@ struct NativeAPITests {
         require(FileManager.default.fileExists(atPath: rejectedDestination.path),
                 "the verified file must remain on disk when acknowledgement fails")
         FixtureProtocol.setImageAckRejects(false)
+        FixtureProtocol.setImageArtifact(FixtureProtocol.jpeg)
+        await imageFormatStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: imageFormatState, token: "native-test-token")
+        let jpegDestination = temporary.appendingPathComponent("saved-image.jpg")
+        try await imageFormatStore.saveImage(imageFormatStore.imageJobs.first!, to: jpegDestination)
+        let savedJPEG = try Data(contentsOf: jpegDestination)
+        require(savedJPEG == FixtureProtocol.jpeg, "JPEG export must preserve the receipt's verified bytes")
+        FixtureProtocol.setImageArtifact(nil)
+        imageFormatStore.disconnect()
         store.restoreImageDefaults()
         require(store.imageSettings?.steps == 4 && store.imageSettings?.seed == -1, "Restore Image Defaults must use runtime values")
 

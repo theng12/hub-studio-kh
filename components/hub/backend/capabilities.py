@@ -984,6 +984,17 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
     capacity_evidence = _capacity_evidence(model_supply)
     for operation, totals in capacity_evidence["by_operation"].items():
         by_operation.setdefault(operation, {}).update(totals)
+    from . import chat_priority, registry
+    local_chat = next((worker for worker in workers
+                       if worker["studio_type"] == "chat" and worker["ready"]
+                       and peers.is_local_studio(studios_by_id[worker["service_id"]])), None)
+    if local_chat is not None and registry.chat_priority("local"):
+        by_operation.setdefault("chat.completion", {}).update(
+            pending_request_slots=1,
+            pending_queue_wait_seconds=chat_priority.MAX_WAIT_SECONDS,
+            pending_request_models=[model["internal_model_id"] for model in local_chat["models"]
+                                    if model["availability"].get("capacity_eligible")],
+        )
     controller_release = None
     if isinstance(managed_release, dict) and managed_release.get("desired"):
         controller_release = managed_release.get("controller") or _missing_release_component(

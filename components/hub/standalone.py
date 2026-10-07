@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -787,6 +788,7 @@ _PEER_LEASE_TTL_S = 6 * 3600.0
 _PEER_LEASE_LOCK = threading.Lock()
 _PEER_LEASES: dict[str, tuple[str, float]] = {}   # owner -> (machine, monotonic expiry)
 _PEER_JOBS: dict[tuple[str, str], str] = {}       # (worker_id, job_id) -> owner
+_PEER_UNCERTAIN_CHAT: dict[str, str] = {}        # owner -> exact worker request id
 _PEER_TERMINAL_STATES = frozenset({
     "done", "error", "failed", "cancelled", "canceled", "expired",
 })
@@ -796,11 +798,27 @@ _PEER_JOB_PATH = re.compile(r"^/api/(?:generate/jobs|generate/transcribe/jobs)/(
 def _release_peer_lease(owner: str) -> None:
     with _PEER_LEASE_LOCK:
         row = _PEER_LEASES.pop(owner, None)
+        chat_request_id = _PEER_UNCERTAIN_CHAT.pop(owner, None)
         for key, value in list(_PEER_JOBS.items()):
             if value == owner:
                 _PEER_JOBS.pop(key, None)
     if row is not None:
         broker.release_external_machine(row[0], owner)
+    if chat_request_id is not None:
+        from .backend import chat_priority
+        chat = chat_priority.requests.get(chat_request_id)
+        if chat is not None and chat["state"] == "unknown":
+            # The six-hour lease backstop is not proof that the request never ran.
+            chat.update(lease_held=False, ready=False,
+                        expires=time.monotonic() + chat_priority.MAX_WAIT_SECONDS)
+
+
+def _retain_uncertain_chat(owner: str, row: dict) -> None:
+    """A lost synchronous response never proves the worker stopped generating."""
+    row.update(state="unknown", ready=False, lease_held=True,
+               expires=time.monotonic() + _PEER_LEASE_TTL_S)
+    with _PEER_LEASE_LOCK:
+        _PEER_UNCERTAIN_CHAT[owner] = row["id"]
 
 
 def _prune_peer_leases() -> None:
@@ -809,7 +827,7 @@ def _prune_peer_leases() -> None:
     now = time.monotonic()
     with _PEER_LEASE_LOCK:
         expired = [owner for owner, (_machine, expiry) in _PEER_LEASES.items()
-                   if expiry <= now]
+                   if expiry <= now and owner not in _PEER_UNCERTAIN_CHAT]
     for owner in expired:
         _release_peer_lease(owner)
 
@@ -825,6 +843,29 @@ async def _release_finished_peer_leases(monitor: StudioMonitor) -> None:
     """
     with _PEER_LEASE_LOCK:
         held = list(_PEER_JOBS)
+        uncertain_chat = list(_PEER_UNCERTAIN_CHAT.items())
+    for owner, request_id in uncertain_chat:
+        worker = next((row for row in monitor.registry if row.get("id") == "chat"), None)
+        if worker is None:
+            continue
+        try:
+            response = await monitor._client.get(
+                worker["base_url"] + "/api/fleet/activity", params={"job_id": request_id},
+                headers={"X-Hub-Token": worker["hub_token"]}, timeout=10.0)
+            evidence = response.json() if response.status_code == 200 else {}
+        except (httpx.HTTPError, OSError, ValueError):
+            continue
+        if not isinstance(evidence, dict):
+            continue
+        active, latest = evidence.get("active"), evidence.get("latest")
+        if (isinstance(latest, dict) and latest.get("id") == request_id
+                and latest.get("state") in _PEER_TERMINAL_STATES
+                and not (isinstance(active, dict) and active.get("id") == request_id)):
+            from .backend import chat_priority
+            chat = chat_priority.requests.get(request_id)
+            if chat is not None:
+                chat_priority.finish(chat)
+            _release_peer_lease(owner)
     for worker_id, job_id in held:
         worker = next((row for row in monitor.registry if row["id"] == worker_id), None)
         if worker is None:
@@ -1039,7 +1080,7 @@ async def _request_model(request: Request, body: bytes, content_type: str) -> st
 
 
 def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
-                            model: str) -> dict[str, Any] | None:
+                            model: str, *, ignore_busy: bool = False) -> dict[str, Any] | None:
     """This Mac's own answer, applied before its worker sees any peer request."""
     from .backend import registry
 
@@ -1060,7 +1101,7 @@ def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
             return {"code": "MODEL_PAUSED",
                     "detail": str(paused.get("reason") or "model is paused on this Mac"),
                     "readiness": paused}
-    if machine in broker.busy_machines():
+    if not ignore_busy and machine in broker.busy_machines():
         return {"code": "MACHINE_BUSY",
                 "detail": f"{machine} is reserved for other work on this Mac"}
     settings = standalone_config.load_device_settings()["effective"]
@@ -1472,13 +1513,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # Who this Mac is and what it is called now, so its controller's roster (and the Gateway)
         # follows a rename instead of keeping the name it joined with.
         from .backend import fleet_nodes as fleet_view
+        from .backend import registry as registry_view
         return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version(),
                 "disk": host.get("disk"), "startup": _startup_snapshot(),
                 "current_job": local_job, "machine": fleet_view.this_machine(),
                 # Why this Mac's Hub last stopped (quit, crash, Force Quit...), as the app recorded it.
                 "last_stop": fleet_view.this_last_stop(),
                 # Workstation mode: whether this Mac takes new work right now, and why not.
-                "workstation": workstation.status()}
+                "workstation": workstation.status(),
+                "chat_priority": registry_view.chat_priority("local")}
 
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:
@@ -3376,17 +3419,100 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         policy = _peer_lease_policy(path) if request.method == "POST" else None
         machine = str(worker.get("machine") or "local")
         owner = None
+        queued_chat = None
         _prune_peer_leases()
         if policy is not None:
             model = await _request_model(request, body, content_type)
-            refusal = _peer_admission_refusal(worker, monitor, model)
+            priority = (modality == "chat" and path.strip("/") == "v1/chat/completions"
+                        and broker.chat_priority_enabled(machine))
+            if modality == "chat" and request.headers.get("X-StudioHub-Request-ID") and not priority:
+                # A stale Gateway snapshot must not turn a cancellable queued request into an
+                # untracked immediate completion after this Mac's operator disabled priority.
+                return _peer_refusal_response({"code": "MACHINE_BUSY", "detail": "the bounded Chat queue is not enabled on this Mac"})
+            refusal = _peer_admission_refusal(worker, monitor, model, ignore_busy=priority)
             if refusal is not None:
                 return _peer_refusal_response(refusal)
-            owner = _reserve_peer_machine(worker_id, machine)
-            if owner is None:
-                return _peer_refusal_response(
-                    {"code": "MACHINE_BUSY",
-                     "detail": f"{machine} is reserved for other work on this Mac"})
+            if priority:
+                from .backend import chat_priority
+                try:
+                    payload = json.loads(body)
+                    if not isinstance(payload, dict):
+                        raise HTTPException(400, "Chat request must be an object")
+                    chat_jobs._messages(payload.get("messages"))
+                    if not model:
+                        raise HTTPException(400, "Chat request must name a model")
+                    for key in ("thinking", "stream"):
+                        if key in payload and not isinstance(payload[key], bool):
+                            raise HTTPException(422, f"{key} must be a boolean")
+                    if payload.get("stream") is True:
+                        raise HTTPException(422, "queued Chat completions require stream=false")
+                    catalog = await monitor.scheduling_catalog(worker)
+                    entry = next((row for row in (catalog or {}).get("models", [])
+                                  if row.get("repo") == model or model in (row.get("aliases") or [])), None)
+                    if entry is None or not broker._can_run(worker, entry, model, routing_rule.POOL):
+                        return _peer_refusal_response({"code": "MODEL_NOT_READY", "detail": "this Chat model is not eligible on this Mac"})
+                    request_id = request.headers.get("X-StudioHub-Request-ID") or uuid.uuid4().hex
+                    queued_chat = chat_priority.register(request_id, machine, worker_id, model)
+                    # The worker already supports a caller-supplied activity id. Correlate a lost
+                    # response to that exact invocation, without saving or replaying its output.
+                    payload["job_id"] = request_id
+                    body = json.dumps(payload).encode()
+                    raw_wait = request.headers.get("X-StudioHub-Queue-Wait-Seconds")
+                    wait_seconds = float(raw_wait) if raw_wait is not None else chat_priority.MAX_WAIT_SECONDS
+                    if not math.isfinite(wait_seconds) or wait_seconds < 0:
+                        raise HTTPException(400, "queue wait seconds must be finite and nonnegative")
+
+                    async def ready_chat():
+                        from .backend import registry
+                        if not registry.machine_enabled(machine):
+                            return {"code": "MACHINE_DISABLED", "detail": "this Mac was paused while Chat waited"}, False
+                        if not registry.studio_enabled(machine, worker_id):
+                            return {"code": "STUDIO_DISABLED", "detail": "Chat Studio was paused while this request waited"}, False
+                        if not broker.chat_priority_enabled(machine):
+                            return {"code": "MACHINE_BUSY", "detail": "Chat priority was disabled while this request waited"}, False
+                        if monitor.status.get(worker_id, {}).get("status") not in (None, "unknown", "up"):
+                            return {"code": "STUDIO_NOT_RUNNING", "detail": "Chat Studio is not answering"}, False
+                        if broker.in_maintenance(worker_id) or not broker._can_run(worker, entry, model, routing_rule.POOL):
+                            return {"code": "MODEL_NOT_READY", "detail": "this Chat model is no longer eligible"}, False
+                        if machine in broker.busy_machines():
+                            # It is valid waiting demand; lease arbitration still prevents overlap.
+                            return None, True
+                        refusal = _peer_admission_refusal(worker, monitor, model, ignore_busy=True)
+                        if refusal:
+                            return refusal, False
+                        decision, _note = await broker.prepare_machine_memory(monitor._client, worker, model, entry)
+                        return _peer_admission_refusal(worker, monitor, model, ignore_busy=True), decision == "run"
+
+                    def reserve_chat():
+                        # is_disconnected() also awaits. Recheck owner controls after that final
+                        # await, with no yield between this admission and the physical lease.
+                        refusal = _peer_admission_refusal(worker, monitor, model)
+                        if refusal:
+                            if refusal.get("code") == "MACHINE_BUSY":
+                                return None
+                            raise HTTPException(409, refusal)
+                        if not broker.chat_priority_enabled(machine) or broker.in_maintenance(worker_id):
+                            raise HTTPException(409, {"code": "MACHINE_BUSY", "detail": "Chat dispatch was paused before reservation"})
+                        return _reserve_peer_machine(worker_id, machine)
+
+                    owner = await chat_priority.wait(
+                        queued_chat, request, ready_chat, reserve_chat, wait_seconds)
+                except (ValueError, TypeError):
+                    if queued_chat is not None:
+                        chat_priority.cancel(queued_chat["id"])
+                    raise HTTPException(400, "invalid Chat request or queue wait seconds")
+                except BaseException:
+                    if queued_chat is not None:
+                        chat_priority.finish(queued_chat)
+                    raise
+            else:
+                if modality != "chat" and await broker.priority_chat_waiting(machine):
+                    return _peer_refusal_response({"code": "MACHINE_BUSY", "detail": "ready Chat work has priority on this Mac"})
+                owner = _reserve_peer_machine(worker_id, machine)
+                if owner is None:
+                    return _peer_refusal_response(
+                        {"code": "MACHINE_BUSY",
+                         "detail": f"{machine} is reserved for other work on this Mac"})
 
         def settled(**facts) -> None:
             """Hand one settled attempt to the caller's recorder, never failing the request.
@@ -3436,22 +3562,33 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     deadline_floor_seconds(modality_for_worker(worker_id)), connect=5.0),
             )
         except (httpx.HTTPError, OSError) as exc:
-            if owner is not None:
+            safe_connect = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+            uncertain_chat = (queued_chat is not None and owner is not None
+                              and not safe_connect)
+            if uncertain_chat:
+                _retain_uncertain_chat(owner, queued_chat)
+            elif queued_chat is not None:
+                queued_chat.update(state="refused", ready=False)
+            if owner is not None and not uncertain_chat:
                 _release_peer_lease(owner)
             if (handed_back := yielded_answer(502, "", b"")) is not None:
                 return handed_back   # its worker was stopped to free the memory
             settled(request_body=body, started_at=started_at,
                     runtime_s=time.time() - started_at, worker_id=worker_id, machine=machine,
                     failure="worker_unreachable", failure_detail=str(exc) or type(exc).__name__)
+            if queued_chat is not None and safe_connect:
+                return _peer_refusal_response({"code": "STUDIO_NOT_RUNNING", "detail": "Chat Studio could not be reached; no work was accepted"})
             raise HTTPException(502, f"{worker_id.title()} worker request failed") from exc
         except BaseException:
+            if queued_chat is not None and owner is not None:
+                _retain_uncertain_chat(owner, queued_chat)
             # The handler was cancelled before the worker answered - a caller that went away, a
             # shutting-down server, or any layer that cancels rather than waits. Nothing was
             # answered, so the response cannot be asked whether real work continues: the route's
             # declared disconnect policy decides. A synchronous route leaves nothing running and
             # must not pin this Mac; an asynchronous submit keeps its lease, as an accepted job
             # does.
-            if owner is not None and policy == PEER_DISCONNECT_RELEASE:
+            if owner is not None and policy == PEER_DISCONNECT_RELEASE and queued_chat is None:
                 _release_peer_lease(owner)
             settled(request_body=body, started_at=started_at,
                     runtime_s=time.time() - started_at, worker_id=worker_id, machine=machine,
@@ -3459,6 +3596,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise
         if owner is not None:
             _settle_peer_lease(owner, worker_id, upstream)
+            if queued_chat is not None:
+                chat_priority.finish(queued_chat)
             if upstream.status_code < 400:
                 workstation.note_job_accepted()
         if (handed_back := yielded_answer(upstream.status_code,
@@ -3476,6 +3615,16 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 passthrough[name] = upstream.headers[name]
         return Response(content=upstream.content, status_code=upstream.status_code,
                         headers=passthrough)
+
+    @app.get("/studio/chat/requests/{request_id}")
+    async def chat_request_status(request_id: str):
+        from .backend import chat_priority
+        return chat_priority.snapshot(request_id)
+
+    @app.delete("/studio/chat/requests/{request_id}")
+    async def cancel_chat_request(request_id: str):
+        from .backend import chat_priority
+        return chat_priority.cancel(request_id)
 
     @app.api_route("/studio/{modality}/{path:path}",
                    methods=["GET", "POST", "PUT", "PATCH", "DELETE"])

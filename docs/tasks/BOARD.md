@@ -2,6 +2,12 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-WORK-POLICY-20261007 — 0.6.156 SOURCE VERIFIED; delivery receipt owns running status
+
+Integrated over `1bb472a` / 0.6.155. Local function choices, finish-current/queued-LLM-first dispatch with idle lending, bounded Gateway waiting, verified JPEG exports and Image-local preview errors are source-verified. Full discovery recorded 2,270 tests, 15 skips, two fixture failures and no errors; the repaired affected replay passed 70 of 71, then its remaining synthetic-library Chat fixture passed in a targeted full-discovery-context run. No production behavior change repaired those gate failures. Native boundary/API passed; after a view-only privacy compile fix, unchanged API hashes guarded the passing secret/lifecycle/release compile tail. Rendering produced 24 actual-view captures; the coordinator inspected seven across Settings/Image/Video, both widths and themes. Independent review found no high-impact issue. See canonical handoff for exact logs and capture limits.
+
+Commit, installer and measured running identities belong to `/build/Developer/_orchestra/codex-remediation-20261007/WORK-POLICY-DELIVERY.md`, which the coordinator updates during delivery. Source verification does not claim installation. Keep the owner's Gateway This Mac pause. Plan source/UI checks are recorded; delivery stays open until that receipt verifies it. The 0.6.155 qualification block below is preserved.
+
 ### ST-GEMMA32-QUAL-20261007 — 0.6.155 INSTALLED on This Mac
 
 Owner accepts Gemma's observed985/800/805-word bodies and verified Story Chapter8/08 numeric equivalence. Qualified only at32GiB;24/16 excluded. Code/payload3ac4a48 installed with local canonical model verified; livecatalog ready, tiny directserving smoke returnedREADY and memoryreleased. Curated32k combinedcontext,16k workeroutputallowance;Qwen9 remainsdefault, other newMoE candidates pending. Independent102 focusedchecks and verifiedDMG completed. All4 SSD qualification records updated with backups intact, no SSDapp/fleet rollout. GatewayordinaryThisMacdispatch remainspaused. See canonicalhandoff and coordinatorrelease receipt.

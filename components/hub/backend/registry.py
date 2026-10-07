@@ -65,6 +65,21 @@ def machine_enabled(machine: str) -> bool:
     return bool(load_flags().get(machine, {}).get("enabled", True))
 
 
+def chat_priority(machine: str) -> bool:
+    row = load_flags().get(machine, {})
+    return isinstance(row, dict) and row.get("chat_priority") is True
+
+
+def set_chat_priority(machine: str, enabled: bool) -> None:
+    global _flags_cache
+    flags = dict(load_flags())
+    row = dict(flags.get(machine, {}))
+    row["chat_priority"] = enabled
+    flags[machine] = row
+    FLAGS_FILE.write_text(json.dumps(flags, indent=2) + "\n")
+    _flags_cache = flags
+
+
 def set_machine_enabled(machine: str, enabled: bool):
     global _flags_cache
     flags = dict(load_flags())

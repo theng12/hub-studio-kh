@@ -2,6 +2,20 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.156 - 2026-10-08
+
+### Work on this Mac
+
+Settings lists the functions registered on this Mac, so you can choose which work it accepts. Changing a function or priority keeps existing local, Gateway and fleet pauses in place.
+
+Turn on **Prefer LLM jobs** to finish the current job, then run queued LLM jobs before starting new TTS or image jobs. When no LLM jobs are waiting, this Mac takes other enabled work. Other Macs keep their own choices.
+
+### Image
+
+JPEG results can be previewed and saved alongside PNG results, with the correct file format for older results too.
+
+A preview error stays on the Image page, where you can retry it. A new result or successful retry clears that preview error.
+
 ## 0.6.155 - 2026-10-07
 
 ### Chat

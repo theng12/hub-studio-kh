@@ -492,6 +492,8 @@ FLEET_ALLOWED = (
     # page, and handing the fleet a second spelling of one operation is the second vocabulary
     # this project keeps paying for.
     ("POST", r"^/studio/chat/v1/chat/completions$"),
+    ("GET", r"^/studio/chat/requests/[0-9a-f]{32}$"),
+    ("DELETE", r"^/studio/chat/requests/[0-9a-f]{32}$"),
     ("POST", r"^/studio/(voice|subtitle|image|transcription)/api/transcribe$"),
     ("DELETE", r"^/studio/(voice|subtitle|image|transcription|music|video)/api/generate/[A-Za-z0-9_./-]*$"),
     # Jobs: submit, watch, collect, acknowledge, reconcile, discard, cancel.
