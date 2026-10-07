@@ -38,13 +38,13 @@
   to `_trash/dist/` automatically.** The owner's rule, 2026-09-26: **the whole cycle every time**,
   not only for something you would call a release. Write the `CHANGELOG.md` **and** `release-notes.md`
   entries (the loop says both, every time), bump `VERSION` **after** them, stage, install, build the
-  DMG, push `implementation/voice-runtime`, then `git branch -f main HEAD` and push `main`.
+  DMG, and commit/push through the current release integration flow, landing in `main` without
+  rewriting published history or moving an unrelated primary checkout branch.
   **A change is not finished while any of those is missing.**
-  `.build/make-dmg.sh` moves the previous DMG aside itself, so `dist/` holds exactly the build you
-  just made and `_trash/dist/` holds the history.
-  ⚠ **`make-dmg.sh` is not tracked by Git** — `.build/` is gitignored, so the DMG step exists only on
-  this Mac. A fresh checkout has no DMG step at all and depends on this paragraph, which is why the
-  sequence is written out here rather than left to the script.
+  The tracked DMG step is `python packaging/make_dmg.py <staged .app> "dist/Studio Hub <version>.dmg"`.
+  It verifies the stage digest and preserves previous installers in `_trash/dist/`; the old untracked
+  `.build/make-dmg.sh` is superseded. Use the project's normal integration flow without moving an
+  unrelated primary checkout branch; a coordinator performs release integration and deployment.
 - **Every release updates `docs/tasks/HANDOFF.md`.** Read it first in a new session, and
   keep it current: the version and build, anything newly learned, anything newly
   forbidden, and what is still open. A stale handoff is worse than none, because it is

@@ -5767,7 +5767,7 @@ struct NativeAPITests {
         await pinStore.releaseTick(now: tick)
         require(pinSwaps == 1 && !pinStore.updateOffered && pinStore.releasePublisherKey?.fingerprint == controllerFingerprint,
                 "an update signed under a different key must not install, and must not replace the pin")
-        require(pinStore.releaseRefusal?.contains("different release-signing key") == true,
+        require(pinStore.releaseRefusal?.contains("different App Update Key") == true,
                 "the refusal must name the changed key: \(pinStore.releaseRefusal ?? "nil")")
         FixtureProtocol.setMemoryPolicyOverride(nil)
         FixtureProtocol.setMemoryPolicyOverride(nil)

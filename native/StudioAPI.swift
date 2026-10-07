@@ -7439,7 +7439,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     offeredRelease = answer?.descriptor?.offered
                     offeredReleaseDescriptor = answer?.descriptor
                     updateOffered = false
-                    releaseRefusal = "The controller now presents a different release-signing key (\(presented.shortFingerprint)…) than the one pinned on this Mac (\(existing.shortFingerprint)…). A pinned key is only replaced by an explicit action on this Mac, so no update can be installed."
+                    releaseRefusal = "The controller now presents a different App Update Key (fingerprint \(presented.shortFingerprint)…) than the one pinned on this Mac (\(existing.shortFingerprint)…). A pinned key is only replaced by an explicit action on this Mac, so no update can be installed."
                     return
                 }
             } else {
@@ -7453,7 +7453,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 offeredRelease = answer?.descriptor?.offered
                 offeredReleaseDescriptor = answer?.descriptor
                 updateOffered = false
-                releaseRefusal = "This Mac just pinned the controller's release-signing key (\(presented.shortFingerprint)…). Check again to verify the release against it — a key read at the same time as an artifact proves nothing."
+                releaseRefusal = "This Mac just pinned the controller's App Update Key (fingerprint \(presented.shortFingerprint)…). Check again to verify the release against it — a key read at the same time as an artifact proves nothing."
                 return
             }
             guard let pinnedKey = releasePublisherKey else { return }
@@ -7471,7 +7471,7 @@ final class NativeWorkspaceStore: ObservableObject {
             offeredReleaseDescriptor = descriptor
             guard descriptor.controllerKeyId == pinnedKey.fingerprint else {
                 updateOffered = false
-                releaseRefusal = "The release names controller key \(descriptor.controllerKeyId.prefix(12))…, which is not the key pinned on this Mac (\(pinnedKey.shortFingerprint)…). Refusing it."
+                releaseRefusal = "The release names controller App Update Key (fingerprint) \(descriptor.controllerKeyId.prefix(12))…, which is not the key pinned on this Mac (\(pinnedKey.shortFingerprint)…). Refusing it."
                 return
             }
             guard ReleaseSignature.verifyControllerSignature(
@@ -7479,7 +7479,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 signatureBase64: descriptor.controllerSignature,
                 publicKeyHex: pinnedKey.publicKey) else {
                 updateOffered = false
-                releaseRefusal = "The controller's signature on this release does not verify against the key pinned on this Mac. Refusing it."
+                releaseRefusal = "The controller's signature on this release does not verify against the App Update Key pinned on this Mac. Refusing it."
                 return
             }
             if case .unsupported(let reason) = ReleaseArtifactForm.classify(filename: descriptor.filename) {
@@ -7529,12 +7529,12 @@ final class NativeWorkspaceStore: ObservableObject {
     /// existing Connections notice.
     func changePublisherKey(publicKey: String, publisherId: String = "") async -> Bool {
         guard let requestConnection = connectionID else {
-            note(.failure, "Start the local services before changing the publisher key. Nothing was sent.")
+            note(.failure, "Start the local services before changing the App Update Key. Nothing was sent.")
             return false
         }
         let key = publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else {
-            note(.failure, "Paste the gateway's Ed25519 public key before changing it — nothing was sent.")
+            note(.failure, "Paste the Gateway's App Update Key (Ed25519 public key) before changing it — nothing was sent.")
             return false
         }
         let named = publisherId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -7548,12 +7548,12 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return false }
             let fingerprint = result.fingerprint ?? result.publisherKeyId ?? "unknown"
             let listed = result.publisherId ?? (named.isEmpty ? "no publisher name" : named)
-            note(.success, "Installed the trusted gateway publisher key \(fingerprint) (\(listed)). "
+            note(.success, "Installed the trusted Gateway App Update Key (fingerprint) \(fingerprint) (\(listed)). "
                  + "This Mac now accepts app releases signed by that key.")
             return true
         } catch {
             guard connectionID == requestConnection else { return false }
-            note(.failure, Self.actionable(error, action: "Change the publisher key"))
+            note(.failure, Self.actionable(error, action: "Change the App Update Key"))
             return false
         }
     }
@@ -7583,7 +7583,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     descriptor: descriptor.raw,
                     signatureBase64: descriptor.controllerSignature,
                     publicKeyHex: pinned.publicKey) else {
-                throw ReleaseError("The controller's signature on this release does not verify against the key pinned on this Mac. Nothing was downloaded or installed.")
+                throw ReleaseError("The controller's signature on this release does not verify against the App Update Key pinned on this Mac. Nothing was downloaded or installed.")
             }
             if case .unsupported(let reason) = ReleaseArtifactForm.classify(filename: descriptor.filename) {
                 throw ReleaseError(reason)
@@ -7981,7 +7981,7 @@ final class NativeWorkspaceStore: ObservableObject {
         guard let publicKey = (object["public_key"] as? String).flatMap(ReleaseSignature.normalizedHex),
               let fingerprint = (object["fingerprint"] as? String).flatMap(ReleaseSignature.normalizedHex),
               ReleaseSignature.fingerprint(publicKeyHex: publicKey) == fingerprint else {
-            throw ReleaseError("The controller's release identity is not a 64-hex Ed25519 key whose fingerprint matches.")
+            throw ReleaseError("The controller's App Update Key is not a 64-hex Ed25519 public key whose fingerprint matches.")
         }
         return ReleaseIdentity(algorithm: algorithm, publicKey: publicKey, fingerprint: fingerprint)
     }

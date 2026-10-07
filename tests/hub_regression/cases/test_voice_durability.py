@@ -589,7 +589,8 @@ def test_restart_adopts_the_exact_finished_voice_job_without_another_post(
     adopted: list[str] = []
 
     async def adopt(client, received_batch, received_item, received_studio,
-                    job, body, started_at, *, recovery=False):
+                    job, body, started_at, *, recovery=False, adoption_item=None):
+        assert adoption_item is restored and received_item is not restored
         assert received_item["studio_job_id"] == job["id"]
         assert body["client_request_id"] == f"studiohub:{batch['id']}:0"
         adopted.append(job["id"])

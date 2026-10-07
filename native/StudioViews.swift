@@ -1285,10 +1285,10 @@ struct StudioContent: View {
         // Changing the trusted publisher key decides which Macs may update this Mac, so it is a
         // confirmation like discarding an attempt: the action is spelled out and the cost is named.
         .confirmationDialog(
-            "Change the trusted publisher key?",
+            "Change the trusted App Update Key?",
             isPresented: $confirmingPublisherKeyChange,
             titleVisibility: .visible) {
-                Button("Change Publisher Key", role: .destructive) {
+                Button("Change App Update Key", role: .destructive) {
                     let key = publisherKeyDraft
                     let publisher = publisherIdDraft
                     Task {
@@ -4763,7 +4763,7 @@ struct StudioContent: View {
                     VStack(alignment: .leading, spacing: HubSpace.xs) {
                         Text("Update available — \(release.version) (\(release.build))")
                             .font(HubType.rowTitle)
-                        Text("\(release.sizeDisplay) · signed by controller key \(release.shortSigner)… · from \(release.publisherId)")
+                        Text("\(release.sizeDisplay) · controller App Update Key (fingerprint) \(release.shortSigner)… · from \(release.publisherId)")
                             .font(HubType.secondary).foregroundStyle(.secondary)
                         Text("Installing replaces this app and relaunches it. Any work running right now will stop.")
                             .font(HubType.caption).foregroundStyle(.secondary)
@@ -4856,21 +4856,21 @@ struct StudioContent: View {
     /// This controller's own release-signing key: the fingerprint a joining node pins.
     @ViewBuilder private var publisherIdentityRow: some View {
         VStack(alignment: .leading, spacing: HubSpace.xs) {
-            Text("This Mac's publisher key").font(HubType.rowTitle)
+            Text("This Mac's App Update Key").font(HubType.rowTitle)
             if let identity = workspace.controllerReleaseIdentity {
-                ValueRow("Fingerprint") {
+                ValueRow("App Update Key (fingerprint)") {
                     Text(identity.fingerprint)
                         .font(HubType.mono)
                         .textSelection(.enabled)
                         .multilineTextAlignment(.trailing)
                 }
                 ValueRow("Algorithm", value: identity.algorithm)
-                Text("A Mac that joins this one pins this fingerprint, so this is who it will accept an app release from.")
+                Text("A Mac that joins this one pins this App Update Key fingerprint, so this is who it will accept an app release from.")
                     .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(connected
-                     ? "This Mac's publisher key is unavailable until the services refresh."
-                     : "Start the local services to read this Mac's publisher key.")
+                     ? "This Mac's App Update Key is unavailable until the services refresh."
+                     : "Start the local services to read this Mac's App Update Key.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
             }
         }
@@ -4879,9 +4879,9 @@ struct StudioContent: View {
     /// The gateway key the owner has installed, or plainly that none is installed.
     @ViewBuilder private var trustedPublisherRow: some View {
         VStack(alignment: .leading, spacing: HubSpace.xs) {
-            Text("Trusted gateway key").font(HubType.rowTitle)
+            Text("Trusted Gateway App Update Key").font(HubType.rowTitle)
             if let fingerprint = workspace.trustedPublisher?.installedFingerprint {
-                ValueRow("Fingerprint") {
+                ValueRow("App Update Key (fingerprint)") {
                     Text(fingerprint)
                         .font(HubType.mono)
                         .textSelection(.enabled)
@@ -4890,10 +4890,10 @@ struct StudioContent: View {
                 if let publisher = workspace.trustedPublisher?.publisherId {
                     ValueRow("Publisher", value: publisher)
                 }
-                Text("A release pushed by GatewayKH is accepted only when it is signed by this key.")
+                Text("A release pushed by GatewayKH is accepted only when it is signed by this App Update Key.")
                     .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("No publisher key installed yet — this Mac cannot accept an app release.")
+                Text("No App Update Key installed yet — this Mac cannot accept an app release.")
                     .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -4903,7 +4903,7 @@ struct StudioContent: View {
     /// refused with a message rather than a request.
     @ViewBuilder private var publisherKeyControl: some View {
         VStack(alignment: .leading, spacing: HubSpace.s) {
-            Text("Change publisher key").font(HubType.rowTitle)
+            Text("Change App Update Key").font(HubType.rowTitle)
             HStack {
                 TextField("64 hex or base64 Ed25519 public key", text: $publisherKeyDraft)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 360)
@@ -4912,7 +4912,7 @@ struct StudioContent: View {
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 220)
             }
             HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
-                Button("Change Publisher Key") {
+                Button("Change App Update Key") {
                     // An empty paste has nothing to confirm: refuse it with the same clear message
                     // the store gives, and never send the route.
                     if publisherKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -4924,7 +4924,7 @@ struct StudioContent: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!connected)
-                Text("Paste the public key GatewayKH publishes. It must be 64 hex characters (either case) or standard base64.")
+                Text("Paste the App Update Key public key GatewayKH publishes. It must be 64 hex characters (either case) or standard base64.")
                     .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }

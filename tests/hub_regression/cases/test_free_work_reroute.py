@@ -382,3 +382,269 @@ def test_a_cancel_in_flight_at_restart_keeps_the_cautious_fence(fixture_monitor,
 
     assert restored["state"] == "uncertain" and restored["studio_job_id"] == "job-1"
     assert broker._restored_attempts == []
+
+
+@pytest.mark.parametrize("failure", ["metadata", "asset", "batch"])
+def test_failed_original_finalization_keeps_the_replacement_execution(
+        fixture_monitor, monkeypatch, failure):
+    """Actual poll/finalization paths: no early winner flag may stop the only task."""
+    first, second = _studio("node-a", "voice"), _studio("node-b", "voice", "10.0.0.10")
+    monkeypatch.setattr(fixture_monitor, "registry", [*fixture_monitor.registry, first, second])
+    batch, item = _attempt(fixture_monitor, monkeypatch, "voice", second)
+    entered, release, at_poll, finish_rerun = (asyncio.Event() for _ in range(4))
+    original_sleep = asyncio.sleep
+    cancelled = []
+    record_asset = ledger.record_asset
+    save_batch = ledger.save_batch
+
+    async def metadata(client, candidate, studio, *args):
+        if studio["id"] == first["id"]:
+            entered.set()
+            await release.wait()
+            if failure == "metadata":
+                raise OSError("fixture metadata finalization failed")
+        candidate.update(bytes=4, sha256="a" * 64, media_type="audio/wav")
+
+    def asset(**fields):
+        if failure == "asset" and fields.get("studio") == first["id"]:
+            raise OSError("fixture asset ledger failed")
+        return record_asset(**fields)
+
+    def save(candidate):
+        if failure == "batch" and any(
+                row.get("studio") == first["id"] and row.get("state") == "done"
+                for row in candidate["items"]):
+            raise OSError("fixture batch ledger failed")
+        return save_batch(candidate)
+
+    async def stop(client, probe):
+        cancelled.append(dict(probe))
+        return True
+
+    async def pause(delay):
+        at_poll.set()
+        await entered.wait()
+
+    class Client:
+        async def post(self, url, **kwargs):
+            return _response("POST", url, {"job": {"id": "rerun", "state": "queued",
+                "params": {"client_request_id": item["client_request_id"]}}})
+
+        async def get(self, url, **kwargs):
+            await finish_rerun.wait()
+            return _response("GET", url, {"job": {"id": "rerun", "state": "done",
+                "params": {"client_request_id": body["client_request_id"]},
+                "output_url": "/api/generate/jobs/rerun/audio", "output_path": "/fixture/rerun.wav"}})
+
+    body = {"client_request_id": item["client_request_id"]}
+    original = {"id": "original", "state": "done", "params": {"client_request_id": "original-id"},
+                "output_url": "/api/generate/jobs/original/audio", "output_path": "/fixture/original.wav"}
+    monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", metadata)
+    monkeypatch.setattr(broker, "_signal_worker_cancel", stop)
+    monkeypatch.setattr(broker.asyncio, "sleep", pause)
+    monkeypatch.setattr(ledger, "record_asset", asset)
+    monkeypatch.setattr(ledger, "save_batch", save)
+    monkeypatch.setattr(broker.memory_admission, "worker_free_floor_gb", lambda *args: None)
+
+    async def scenario():
+        rerun = asyncio.create_task(broker._run_item(Client(), batch, item, second))
+        adopting = None
+        try:
+            await asyncio.wait_for(at_poll.wait(), 2)
+            adopting = asyncio.create_task(broker._adopt_abandoned_attempt(
+                Client(), batch, item, first, original, {"client_request_id": "original-id"}, time.time()))
+            await asyncio.wait_for(entered.wait(), 2)
+            for _ in range(3):
+                await original_sleep(0)
+            assert not cancelled and not rerun.done(), "live item lost its only execution task"
+            assert (item["studio"], item["studio_job_id"]) == (second["id"], "rerun")
+            release.set()
+            await asyncio.wait_for(adopting, 2)
+            assert not cancelled and not broker._superseded(item)
+            assert item["state"] == "running" and not rerun.done()
+        finally:
+            release.set()
+            finish_rerun.set()
+            if adopting:
+                await asyncio.wait_for(adopting, 2)
+            await asyncio.wait_for(rerun, 2)
+        assert item["state"] == "done" and item["studio_job_id"] == "rerun"
+        assert ledger.load_batch(batch["id"])["items"][0]["studio_job_id"] != "original"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("winner", ["original", "replacement"])
+def test_voice_metadata_race_commits_only_the_first_finalized_result(
+        fixture_monitor, monkeypatch, winner):
+    first, second = _studio("node-a", "voice"), _studio("node-b", "voice", "10.0.0.10")
+    monkeypatch.setattr(fixture_monitor, "registry", [*fixture_monitor.registry, first, second])
+    batch, item = _attempt(fixture_monitor, monkeypatch, "voice", second)
+    item["studio_job_id"] = "replacement"
+    entered = {name: asyncio.Event() for name in ("original", "replacement")}
+    release = {name: asyncio.Event() for name in entered}
+    stored = []
+    record_asset = ledger.record_asset
+    cancelled = []
+    notified = []
+
+    async def metadata(client, candidate, studio, *args):
+        name = "original" if studio["id"] == first["id"] else "replacement"
+        entered[name].set()
+        await release[name].wait()
+        candidate.update(bytes=4 if name == "original" else 8,
+                         sha256=("a" if name == "original" else "b") * 64, media_type="audio/wav")
+
+    def asset(**fields):
+        stored.append(fields["studio"])
+        return record_asset(**fields)
+
+    async def stop(client, probe):
+        cancelled.append(dict(probe))
+        return True
+
+    async def webhook(*args, **kwargs):
+        notified.append(item["studio_job_id"])
+
+    monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", metadata)
+    monkeypatch.setattr(ledger, "record_asset", asset)
+    monkeypatch.setattr(broker, "_signal_worker_cancel", stop)
+    monkeypatch.setattr(broker, "_post_item_webhook", webhook)
+    original = {"id": "original", "state": "done", "params": {"client_request_id": "original-id"},
+                "output_url": "/api/generate/jobs/original/audio", "output_path": "/fixture/original.wav"}
+    replacement = {"id": "replacement", "state": "done", "params": {"client_request_id": item["client_request_id"]},
+                   "output_url": "/api/generate/jobs/replacement/audio", "output_path": "/fixture/replacement.wav"}
+
+    async def scenario():
+        tasks = {
+            "replacement": asyncio.create_task(broker._record_worker_success(
+                None, batch, item, second, replacement,
+                {"client_request_id": item["client_request_id"]}, time.time())),
+            "original": asyncio.create_task(broker._adopt_abandoned_attempt(
+                None, batch, item, first, original, {"client_request_id": "original-id"}, time.time())),
+        }
+        await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered.values())), 2)
+        release[winner].set()
+        await asyncio.wait_for(tasks[winner], 2)
+        loser = "replacement" if winner == "original" else "original"
+        release[loser].set()
+        await asyncio.wait_for(tasks[loser], 2)
+        expected = first if winner == "original" else second
+        assert item["state"] == "done" and item["studio_job_id"] == winner
+        assert item["studio"] == expected["id"]
+        assert item["sha256"] == ("a" if winner == "original" else "b") * 64
+        assert stored == [expected["id"]], "a losing candidate must not write a second asset"
+        assert bool(cancelled) == (winner == "original")
+        # Publication still uses the existing reservation boundary exactly once.
+        batch["item_webhook"] = "http://fixture.invalid/webhook"
+        reserved = broker._reserve_item_webhook(batch, item)
+        if reserved:
+            await broker._post_item_webhook(None, batch, item, reserved=True)
+        assert not broker._reserve_item_webhook(batch, item)
+        assert notified == [winner]
+
+    asyncio.run(scenario())
+
+
+def test_original_adoption_rechecks_cancellation_after_metadata(fixture_monitor, monkeypatch):
+    first, second = _studio("node-a", "voice"), _studio("node-b", "voice")
+    batch, item = _attempt(fixture_monitor, monkeypatch, "voice", second)
+    item["studio_job_id"] = "replacement"
+    entered, release = asyncio.Event(), asyncio.Event()
+    assets, cancelled = [], []
+
+    async def metadata(*args):
+        entered.set()
+        await release.wait()
+
+    async def stop(*args):
+        cancelled.append(True)
+
+    monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", metadata)
+    monkeypatch.setattr(broker, "_signal_worker_cancel", stop)
+    monkeypatch.setattr(ledger, "record_asset", lambda **fields: assets.append(fields))
+    job = {"id": "original", "state": "done", "params": {"client_request_id": "original-id"},
+           "output_url": "/api/generate/jobs/original/audio", "output_path": "/fixture/original.wav"}
+
+    async def scenario():
+        task = asyncio.create_task(broker._adopt_abandoned_attempt(
+            None, batch, item, first, job, {"client_request_id": "original-id"}, time.time()))
+        await asyncio.wait_for(entered.wait(), 2)
+        batch["cancelled"] = True
+        item["state"] = "cancel_requested"
+        release.set()
+        await asyncio.wait_for(task, 2)
+
+    asyncio.run(scenario())
+    assert item["state"] == "cancel_requested" and item["studio_job_id"] == "replacement"
+    assert not assets and not cancelled and not broker._superseded(item)
+
+
+def test_original_adoption_rejects_a_changed_receipt_without_touching_rerun(fixture_monitor, monkeypatch):
+    first, second = _studio("node-a", "voice"), _studio("node-b", "voice")
+    batch, item = _attempt(fixture_monitor, monkeypatch, "voice", second)
+    item["studio_job_id"] = "replacement"
+    before = dict(item)
+    job = {"id": "original", "state": "done", "params": {"client_request_id": "wrong-request"},
+           "output_url": "/api/generate/jobs/original/audio", "output_path": "/fixture/original.wav"}
+    asyncio.run(broker._adopt_abandoned_attempt(
+        None, batch, item, first, job, {"client_request_id": "original-id"}, time.time()))
+    assert item == before
+
+
+def test_original_winner_is_durable_before_the_replacement_is_cancelled(fixture_monitor, monkeypatch):
+    first, second = _studio("node-a", "voice"), _studio("node-b", "voice")
+    batch, item = _attempt(fixture_monitor, monkeypatch, "voice", second)
+    item["studio_job_id"] = "replacement"
+    item["state"] = "queued"
+    cancelled = []
+
+    async def metadata(client, candidate, *args):
+        # The dispatcher starts the replacement while the original is finalized.
+        item.update(state="running", tries=2, _reserved=4.0, _dispatch_generation=11)
+        candidate.update(bytes=4, sha256="a" * 64, media_type="audio/wav")
+
+    async def stop(client, probe):
+        saved = ledger.load_batch(batch["id"])["items"][0]
+        assert saved["state"] == "done" and saved["studio_job_id"] == "original"
+        assert saved["asset_id"] == item["asset_id"] and saved["sha256"] == "a" * 64
+        assert broker._superseded(saved) and broker._superseded(item)
+        assert saved["_reserved"] == item["_reserved"] == 4.0
+        assert saved["_dispatch_generation"] == item["_dispatch_generation"] == 11
+        assert saved["tries"] == item["tries"] == 2
+        cancelled.append(dict(probe))
+        return True
+
+    monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", metadata)
+    monkeypatch.setattr(broker, "_signal_worker_cancel", stop)
+    job = {"id": "original", "state": "done", "params": {"client_request_id": "original-id"},
+           "output_url": "/api/generate/jobs/original/audio", "output_path": "/fixture/original.wav"}
+    asyncio.run(broker._adopt_abandoned_attempt(
+        None, batch, item, first, job, {"client_request_id": "original-id"}, time.time()))
+    assert cancelled == [{"studio": second["id"], "studio_job_id": "replacement"}]
+
+
+def test_successful_finalization_clears_prior_owned_errors(fixture_monitor, monkeypatch):
+    from components.hub import output_storage
+    studio = _studio("node-a", "voice")
+    batch, item = _attempt(fixture_monitor, monkeypatch, "voice", studio)
+    item.update(studio_job_id="complete", artifact_metadata_error="old hash failure",
+                output_storage_error="old registration failure", _reserved=3.0,
+                cancel_signal_sent_at=0.0)
+
+    async def metadata(client, candidate, *args):
+        candidate.update(bytes=4, sha256="a" * 64, media_type="audio/wav")
+        candidate.pop("artifact_metadata_error", None)
+        # Concurrent unrelated task state must survive this candidate's commit.
+        item["_reserved"] = 7.0
+        item["cancel_signal_sent_at"] = 123.0
+
+    monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", metadata)
+    monkeypatch.setattr(output_storage, "register_finalized_output", lambda **fields: None)
+    job = {"id": "complete", "state": "done", "params": {"client_request_id": item["client_request_id"]},
+           "output_url": "/api/generate/jobs/complete/audio", "output_path": "/fixture/complete.wav"}
+    asyncio.run(broker._record_worker_success(
+        None, batch, item, studio, job, {"client_request_id": item["client_request_id"]}, time.time()))
+    assert item["state"] == "done"
+    assert "artifact_metadata_error" not in item and "output_storage_error" not in item
+    assert item["_reserved"] == 7.0 and item["cancel_signal_sent_at"] == 123.0

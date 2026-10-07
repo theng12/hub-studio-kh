@@ -2,6 +2,20 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.153 - 2026-10-07
+
+### Jobs
+
+If a restarted job's original result cannot be saved, its replacement keeps running.
+When both finish, the first result saved successfully is kept.
+
+### Connections and updates
+
+API key is now called Gateway API Key; the release signing key is now the App Update Key
+
+App updates and controller trust use the App Update Key fingerprint so it is easier to
+recognize the key used to verify updates. Existing connections and trusted keys keep working.
+
 ## 0.6.152 - 2026-10-07
 
 ### Updates

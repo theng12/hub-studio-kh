@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.153 — 2026-10-07 · Restart recovery keeps a valid execution until its result is durable
+
+- An abandoned original finalizes on a private candidate. The broker rechecks the competing
+  result and cancellation, durably saves the winning batch, then marks the replacement
+  superseded and requests its cancellation. Metadata or ledger failure leaves the replacement
+  execution intact; a later result cannot overwrite the first finalized winner.
+- Shared finalization keeps artifact metadata private across awaits and checks ownership before
+  recording an asset. Receipt identity, hash verification and callback reservation remain enforced.
+- Controller trust, update notices and App updates use App Update Key display labels. Identifiers,
+  endpoints, persisted fields and signature/trust behavior are unchanged.
+
+API key is now called Gateway API Key; the release signing key is now the App Update Key
+
+Focused fault/race regression: five cases failed on the base, then the 30-case free-work reroute
+suite passed after repair. Additional acceptance checks, native build, dark/light fixture review,
+full gates, packaging and installation remain coordinator-owned release steps.
+
 ## 0.6.152 — 2026-10-07 · Updates no longer stall while a release is still arriving
 
 Branch `fix/release-stage-race` off 0.6.151 2e38cbe. Found in the 0.6.151 rollout: a Gateway delta push stores the

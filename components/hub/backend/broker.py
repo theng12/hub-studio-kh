@@ -2264,31 +2264,42 @@ def _watch_abandoned_attempt(client: httpx.AsyncClient, b: dict, item: dict, stu
 
 async def _adopt_abandoned_attempt(client: httpx.AsyncClient, b: dict, item: dict, studio: dict,
                                    job: dict, body: dict, t_start: float) -> None:
-    """The original finished before its re-run: keep its result, cancel the re-run."""
-    rerun = {"studio": item.get("studio"), "studio_job_id": item.get("studio_job_id")}
-    was_running = item.get("state") == "running"
-    keep = {key: item.get(key) for key in ("studio", "studio_job_id", "client_request_id",
-                                           "model_revision", "runtime_revision", "machine", "worker_id")}
-    item["superseded_by_original"] = True
+    """Finalize the original privately; publish its winner only after a durable write."""
+    candidate = dict(item)
     for key in ("model_revision", "runtime_revision", "machine", "worker_id"):
-        item.pop(key, None)  # the re-run's evidence; the original's own is recorded below
-    item.update(studio=studio.get("id"), studio_job_id=job["id"], retry_at=None, error=None)
+        candidate.pop(key, None)  # the original needs its own execution evidence
+    candidate.update(studio=studio.get("id"), studio_job_id=job["id"], retry_at=None, error=None)
     if b.get("modality") == "voice":
-        item["client_request_id"] = body.get("client_request_id")
+        candidate["client_request_id"] = body.get("client_request_id")
     try:
         if b.get("modality") == "voice":
-            _validate_voice_worker_job(item, job, expected_request_id=body.get("client_request_id"))
+            _validate_voice_worker_job(candidate, job, expected_request_id=body.get("client_request_id"))
         elif b.get("modality") in DURABLE_ASYNC_MODALITIES:
-            _validate_durable_worker_job(b["modality"], item, job,
+            _validate_durable_worker_job(b["modality"], candidate, job,
                                          remote=not peers.is_local_studio(studio))
-        await _record_worker_success(client, b, item, studio, job, body, t_start)
+        await _record_worker_success(client, b, candidate, studio, job, body, t_start,
+                                     adoption_item=item)
+        if (candidate.get("state") != "done" or b.get("cancelled")
+                or item.get("state") not in ("queued", "running") or _superseded(item)):
+            return
+        # No await between the winner recheck, durable publication and in-memory
+        # commit: a replacement finishing during metadata validation wins first.
+        rerun = {"studio": item.get("studio"), "studio_job_id": item.get("studio_job_id")}
+        was_running = item.get("state") == "running"
+        # A replacement may have been dispatched while metadata was awaited. Its
+        # task still owns these counters and must release its current reservation.
+        for key in ("tries", "_reserved", "_dispatch_generation"):
+            candidate.pop(key, None)
+            if key in item:
+                candidate[key] = item[key]
+        candidate["superseded_by_original"] = True
+        ledger.save_batch({**b, "items": [candidate if row is item else row for row in b["items"]]})
     except Exception:
         logging.getLogger("studiohub.broker").exception(
             "could not adopt the abandoned job %s; its re-run continues", job.get("id"))
-    if item.get("state") != "done":
-        item.pop("superseded_by_original", None)
-        item.update(keep)
         return
+    item.clear()
+    item.update(candidate)
     _mark_machine_success(studio)
     if rerun["studio"] and rerun["studio_job_id"]:
         await _signal_worker_cancel(client, rerun)
@@ -2716,7 +2727,8 @@ async def _verify_compressed_voice_artifact(client: httpx.AsyncClient, item: dic
 
 async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
                                  studio: dict, job: dict, body: dict,
-                                 t_start: float, *, recovery: bool = False):
+                                 t_start: float, *, recovery: bool = False,
+                                 adoption_item: dict | None = None):
     """Adopt a completed worker job into the Hub ledger.
 
     This is deliberately separate from the normal poll loop: if the network
@@ -2732,9 +2744,14 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         )
         if _voice_recovery_owns(item) and not recovery:
             return
+    if _superseded(item):
+        return
     _persist_worker_execution_started_at(b, item, job)
     if item.get("state") == "done" and item.get("asset_id"):
         return  # terminal polling/recovery is idempotent
+    target = item
+    before = dict(item)
+    item = dict(before)  # metadata awaits must never mutate a competing winner
     _record_worker_resource_usage(item, job)
     _record_worker_section_quality(item, job)
     item["artifact_path"] = job.get("output_path")
@@ -2804,7 +2821,7 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     if b["modality"] == "voice" and worker_url:
         await _cache_voice_artifact_metadata(
             client, item, studio, worker_url, job.get("bytes"), job.get("sha256"), job)
-        if _voice_recovery_owns(item) and not recovery:
+        if _voice_recovery_owns(target) and not recovery:
             return
     else:
         item["sha256"] = job.get("sha256")
@@ -2823,6 +2840,13 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     # reading the item sees the fallback rather than inferring it from the media type.
     if isinstance(job.get("delivery_fallback_reason"), str):
         item["delivery_fallback_reason"] = job["delivery_fallback_reason"][:400]
+    # The final metadata await can lose to original adoption or another terminal
+    # result. Recheck before writing any asset; the losing candidate stays private.
+    if (_superseded(target) or (target.get("state") == "done" and target.get("asset_id"))
+            or (adoption_item is not None and (
+                b.get("cancelled") or adoption_item.get("state") not in ("queued", "running")
+                or _superseded(adoption_item)))):
+        return
     item["finished_at"] = time.time()
     item["last_progress_at"] = item["finished_at"]
     item["asset_id"] = ledger.record_asset(
@@ -2862,6 +2886,12 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     # job reported 0.788 - the value after section five - because the worker finished between polls
     # and the final update was never read, so a completed artifact displayed as four fifths rendered.
     item["progress"] = 1.0
+    # Commit only this finalization's changes, including cleared errors. Fields
+    # changed concurrently by its task (reservation/cancel state) stay current.
+    for key in before.keys() - item.keys():
+        target.pop(key, None)
+    target.update((key, value) for key, value in item.items()
+                  if key not in before or value != before[key])
 
 
 class _VoiceReceiptError(ValueError):
@@ -4687,6 +4717,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                     _validate_durable_worker_job(
                         b["modality"], item, j,
                         remote=not peers.is_local_studio(studio))
+            if _superseded(item):
+                return  # the original won while this status request was in flight
             if peers.is_local_studio(studio):
                 # This Mac's own Lite Mode stopped it (critical memory pressure): read it exactly as
                 # a node's handed-back job reads through the peer surface.
