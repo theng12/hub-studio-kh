@@ -6,7 +6,7 @@
 
 All3 owner-selected checkpoints and all12 model/SSD copies fully hash-verified; Hub wiring committed/pushed in0.6.153 with an installable DMG. No selected-candidate inference or activation has run; ThisMac remains paused. Physical qualification requires owner initiation, one model at a time. Plan: `.planning/2026-09-10-standalone-app-feasibility/moe-preparation-20261007.md`; detailed receipts in the coordinator's audit directory.
 
-**Follow-up in progress:** owner requested SSD `.command` test launchers, matching the existing Technical-folder workflow, for ThisMac32GiB and later24GiB. Base52e0f67 /0.6.154, worktree `study/moe-24-32gb-20261007`. Bounded worker owns new portable helpers; coordinator owns review, copies to all4 SSDs, offline checks and integration. No inference during launcher preparation.
+**SSD launcher follow-up — COMPLETE, physical qualification pending:** three model-specific `.command` launchers and portable standalone helpers committed atf2e8a17. All10 helper copies SHA256-verified on each of4 SSDs and localstudy/Technical; all15 static launcher checks passed without inference. Coordinator independently passed10 focused checks, strict probe selfcheck and real synthetic owned-process-group cancellation. Results stay in dated Desktop/StudioHub LLM Qualification folders, with SUMMARY.txt, report.json, run.log and raw English outputs. No application release/install, production activation, fleet-state change or model measurement was performed. Evidence: coordinator audit/SSD_LLM_LAUNCHERS.json.
 
 
 ### ST-19 — No model may need a code change — **DONE in 0.6.61**, 2026-09-25
