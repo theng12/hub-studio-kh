@@ -132,13 +132,12 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # Owner-selected Qwen3.5-9B, uniform 4-bit, text-only accepted. The OptiQ build was
     # rejected: its index requires an `optiq_vision` shard, making the snapshot 8.22 GB.
     {"package_id": "qwen3-5-9b-4bit", "model_id": "mlx-community/Qwen3.5-9B-4bit", "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53", "engine": "chat-mlx", "default": True},
-    # Pending Gemma 4 MoE QAT candidate. The verified SSD stock keeps all eleven canonical files;
-    # runtime capture omits only README.md. Config identifies gemma4 and its affine 4-bit/group-64
-    # default while retaining the publisher's per-tensor precision overrides.
+    # Gemma 4 MoE QAT, qualified only on the owner's physical 32 GiB M2 Max. The verified
+    # SSD stock keeps all eleven canonical files; runtime capture omits only README.md.
     {"package_id": "gemma4-26b-a4b-qat-4bit",
      "model_id": "mlx-community/gemma-4-26B-A4B-it-qat-4bit",
      "revision": "0e3cbab38ce568cf6e23543010d08d03b731910c", "engine": "chat-mlx",
-     "captured_at": "2026-10-07", "production_allowed": False,
+     "captured_at": "2026-10-07", "production_allowed": True,
      "display_name": "Gemma 4 26B-A4B QAT MLX 4-bit",
      "quantization": "QAT MLX 4-bit",
      "quantization_source": "model/config.json quantization: affine 4-bit, group size 64; preserved publisher per-tensor precision overrides"},
@@ -296,11 +295,12 @@ DETAILS: dict[str, dict[str, Any]] = {
                        "qualification": {"status": "qualified", "reason": 'Qualified on the 16 GB tier by measurement, 2026-09-25: three 16 GB Macs completed runs. The 8 GB tier is unmeasured - a run there did not start and the reason is not yet recorded.'}},
     "gemma4-26b-a4b-qat-4bit": {
         "defaults": {"parameters_source": "model/generation_config.json"},
-        "memory": (None, None, None),
+        "memory": (32, 32, "MEASURED on the owner's physical 32 GiB M2 Max, 2026-10-07, across two Gemma 4 26B-A4B QAT MLX 4-bit runs. The first seven-case suite passed all seven mechanical checks; its largest observed process footprint was 19,813,822,128 bytes (18.45 GiB). In the extended run, the three-chapter case took 72.209 s at 43.4297 decode tok/s with a 16,486,903,472-byte (15.35 GiB) worker peak; the 50-scene case took 103.764 s at 41.7067 decode tok/s with a 16,678,416,048-byte (15.53 GiB) worker peak. Pressure remained normal with no positive new swap growth in the extended run. Physical 24 GiB and 16 GiB were not tested, so 32 GiB is both the minimum and recommended measured tier. Repository evidence: qualification/evidence/gemma4-20261007-32gb/measurement.json."),
         "qualification": {
-            "status": "unqualified",
-            "reason": "Downloaded and publisher-hash verified only. Import, inference, TPS, script/scene quality, usable context and RAM-tier qualification have not yet been run.",
-            "tested_usable_context_tokens": None,
+            "status": "qualified",
+            "reason": "Qualified only on the owner's physical 32 GiB M2 Max. The first profile passed all seven mechanical checks. The extended strict 3x1,200-word test remains FAIL: it produced 985, 800 and 805 words, and Chapter 8 rather than Chapter 08; the owner accepted those observed lengths, and the real Story Studio parser recovered chapters 7, 8 and 9 identically with or without zero padding. The 50-scene case returned all 50 exact IDs as strict JSON under the 4,000 UTF-16-unit cap (mean 422, maximum 531). qualification.context_window_tokens=32,768 is a curated hardware budget for combined input plus reserved output, not a model claim; the checkpoint retains its model-declared text_config.max_position_embeddings=262,144. tested_usable_context_tokens=32,775 records the observed input plus a tiny reply and does not prove 32k input plus the worker's 16,384-token default output. Physical 24 GiB and 16 GiB were not tested.",
+            "context_window_tokens": 32768,
+            "tested_usable_context_tokens": 32775,
         },
     },
     "qwen36-35b-4bit": {
@@ -613,7 +613,7 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
                if key in details.get("qualification", {})},
             **{key: details["qualification"][key]
                for key in ("target_unified_memory_gb", "target_evidence",
-                           "tested_usable_context_tokens")
+                           "context_window_tokens", "tested_usable_context_tokens")
                if key in details.get("qualification", {})},
         },
         "source": {"provider": "huggingface", "captured_at": choice.get("captured_at", CAPTURE_DATE), "sources": sources,
@@ -745,7 +745,7 @@ def manifest_problems(choice: dict[str, Any], manifest: dict[str, Any]) -> list[
                 f"{recorded!r}")
         for field in ("min_free_memory_gb", "min_free_memory_note",
                       "target_unified_memory_gb", "target_evidence",
-                      "tested_usable_context_tokens"):
+                      "context_window_tokens", "tested_usable_context_tokens"):
             if field in details.get("qualification", {}) \
                     and details["qualification"][field] != qualification.get(field):
                 problems.append(

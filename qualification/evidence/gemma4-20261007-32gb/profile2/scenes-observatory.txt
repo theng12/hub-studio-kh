@@ -1,0 +1,52 @@
+{
+  "results": [
+    {
+      "scene_id": "observatory-001",
+      "visual_prompt": "A wide shot of the Brindle Observatory, a solitary stone structure perched atop a gentle autumn hill. The sky is a deep midnight indigo, clear and vast, while the landscape is bathed in muted gold tones from the fading twilight. The architecture is detailed with textured stone and ivy, set against a peaceful, tranquil atmosphere. Detailed gouache illustration, cinematic lighting, serene and quiet mood."
+    },
+    {
+      "scene_id": "observatory-002",
+      "visual_prompt": "Mara, a young woman with a thoughtful expression, enters the grand round library. She holds a small, intricate brass key in her hand. The room is filled with towering wooden bookshelves and circular architecture. The lighting is tranquil and cinematic, casting long shadows in shades of midnight indigo, with soft muted gold highlights on the woodwork. Detailed gouache illustration, contemplative mood."
+    },
+    {
+      "scene_id": "observatory-003",
+      "visual_prompt": "A close-up of a thick blue atlas resting on a heavy west table. Beside the book, a vintage lantern burns with a steady, warm flame. The scene is dominated by midnight indigo shadows and the glowing, muted gold light of the lantern. The textures of the leather book cover and the wooden table are rich and tactile. Detailed gouache illustration, tranquil cinematic lighting, intimate mood."
+    },
+    {
+      "scene_id": "observatory-004",
+      "visual_prompt": "A low-angle shot looking up toward the massive domed ceiling of the observatory. Tiny particles of dust glimmer like gold flakes in the warm light of a lantern. The deep indigo shadows of the dome create a sense of immense scale and quiet solitude. The lighting is soft and cinematic, highlighting the texture of the air. Detailed gouache illustration, ethereal and tranquil mood."
+    },
+    {
+      "scene_id": "observatory-005",
+      "visual_prompt": "Mara leans in to check the polished brass controls of a large, silent telescope. Her hands are steady as she touches the gleaming metal. The scene features a color palette of midnight indigo and muted gold, with the brass reflecting the soft, tranquil light. The composition is a medium shot focusing on the interaction between the subject and the machine. Detailed gouache illustration, studious mood."
+    },
+    {
+      "scene_id": "observatory-006",
+      "visual_prompt": "The massive telescope is positioned toward a narrow open slit in the observatory dome. Through the opening, a vast field of brilliant stars is visible against a midnight indigo sky. The brass of the telescope catches the muted gold light of the interior. The shot is a wide composition emphasizing the connection between the terrestrial instrument and the celestial heavens. Detailed gouache illustration, awe-inspiring mood."
+    },
+    {
+      "scene_id": "observatory-007",
+      "visual_prompt": "An extreme close-up of an open observation ledger. A handwritten pencilled coordinate is clearly visible in the margin of the aged, cream-colored paper. The lighting is a mix of muted gold from a nearby source and deep midnight indigo shadows. The texture of the paper and the graphite of the pencil are rendered with precision. Detailed gouache illustration, mysterious and quiet mood."
+    },
+    {
+      "scene_id": "observatory-008",
+      "visual_prompt": "Mara stands before a large star chart mounted on the wall, comparing it to the handwritten coordinates. The blue atlas remains untouched on the table in the foreground, slightly out of focus. The room is filled with a tranquil cinematic lighting of muted gold and midnight indigo. The scene captures a moment of intense focus and discovery. Detailed gouache illustration, intellectual mood."
+    },
+    {
+      "scene_id": "observatory-009",
+      "visual_prompt": "A wide shot of the observatory floor, where a narrow, sharp arc of pale moonlight cuts through the darkness. The light creates a stark contrast against the midnight indigo shadows. The floor is polished and reflects the muted gold tones of the interior lamps. The atmosphere is profoundly quiet and still. Detailed gouache illustration, tranquil and cinematic mood."
+    },
+    {
+      "scene_id": "observatory-010",
+      "visual_prompt": "A macro close-up of Mara's palm, where the small brass key rests securely. The skin textures and the metallic sheen of the key are highlighted by a soft, muted gold light. The background is a deep, velvety midnight indigo, creating a sense of intimacy and importance. Detailed gouache illustration, calm and secure mood."
+    },
+    {
+      "scene_id": "observatory-011",
+      "visual_prompt": "Mara sits at a desk, focused as she writes a single, careful note in the observation ledger. The scene is lit by a soft, tranquil glow of muted gold, casting deep midnight indigo shadows across the room. The composition is a medium shot, emphasizing her concentration and the stillness of the night. Detailed gouache illustration, meditative mood."
+    },
+    {
+      "scene_id": "observatory-012",
+      "visual_prompt": "The scene returns to the west table at the first light of dawn. The blue atlas and the lantern sit together, the lantern now dim. The color palette has shifted to a soft blend of midnight indigo and pale, muted gold as the morning light begins to creep in. The atmosphere is one of peaceful completion. Detailed gouache illustration, tranquil and cinematic mood."
+    }
+  ]
+}

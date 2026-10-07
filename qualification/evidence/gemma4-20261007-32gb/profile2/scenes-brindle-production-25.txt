@@ -1,0 +1,104 @@
+{
+  "results": [
+    {
+      "scene_id": "brindle-001",
+      "visual_prompt": "A wide cinematic shot of Brindle Observatory perched atop a steep hill, overlooking a sleeping Victorian town. Thin October clouds drift through a midnight blue sky, casting soft shadows over the cobblestone streets below. The architecture is detailed with stone and timber, illuminated by a faint, warm amber glow from distant windows. Hand-painted historical storybook style with rich textures and a moody, atmospheric perspective."
+    },
+    {
+      "scene_id": "brindle-002",
+      "visual_prompt": "Mara, a woman in late 19th-century traveling attire, climbs a steep, wet hill road. The ground is slick with rain, reflecting the dim moonlight. She holds a heavy brass key firmly in her gloved hand, the metal catching a glint of amber light. Low-angle medium shot, cinematic hand-painted illustration, midnight blue and warm amber palette, focusing on the texture of the damp wool and the cold, misty air."
+    },
+    {
+      "scene_id": "brindle-003",
+      "visual_prompt": "Close-up of the observatory's copper roof and a large, round western window. Raindrops bead and glisten on the aged metal and glass, reflecting the deep midnight blue of the sky. The lighting is dim and moody, emphasizing the texture of the oxidized copper. Cinematic hand-painted historical storybook style, focusing on the rhythmic patterns of water on the surface."
+    },
+    {
+      "scene_id": "brindle-004",
+      "visual_prompt": "Mara stands at the heavy wooden service entrance of the observatory. She is in the process of inserting a large brass key into the iron lock, her expression focused. The scene is lit by a distant, warm amber lantern light clashing against the cool midnight blue of the night. Medium shot, detailed period clothing, cinematic hand-painted illustration with natural textures."
+    },
+    {
+      "scene_id": "brindle-005",
+      "visual_prompt": "A view looking down a narrow, dark stone corridor inside the observatory. At the far end, a warm amber glow spills from a doorway leading to the western room. The shadows are deep midnight blue, creating a sense of mystery and solitude. Cinematic hand-painted historical storybook style, emphasizing depth, perspective, and the soft diffusion of light through the dark hallway."
+    },
+    {
+      "scene_id": "brindle-006",
+      "visual_prompt": "An open blue celestial atlas lies flat on a heavy wooden west table. Beside it, a small oil lantern burns with a steady, warm amber flame, casting long shadows. The pages of the atlas are filled with intricate star charts. Cinematic hand-painted illustration, close-up shot, midnight blue and warm amber palette, focusing on the texture of the parchment and the wood grain."
+    },
+    {
+      "scene_id": "brindle-007",
+      "visual_prompt": "Mara stands over the wooden table, leaning slightly forward to read a small, handwritten pencilled note. She does not touch the blue atlas lying beside her. The warm amber light of the lantern illuminates her face and the paper, while the rest of the room fades into midnight blue shadows. Cinematic hand-painted historical storybook style, intimate medium shot, period-accurate details."
+    },
+    {
+      "scene_id": "brindle-008",
+      "visual_prompt": "A detailed close-up of a vintage brass wall clock hanging in the observatory. The hands point to a late hour, and the face is inscribed with the date October 17, 1894. The lighting is a mix of dim midnight blue and a soft amber glow. Cinematic hand-painted historical storybook style, focusing on the intricate mechanical details and the aged texture of the clock face."
+    },
+    {
+      "scene_id": "brindle-009",
+      "visual_prompt": "Dust motes dance and hang motionless in the air beneath the massive observatory dome. The space is filled with a thick, atmospheric amber light streaming from a nearby lantern, cutting through the midnight blue shadows. Cinematic hand-painted illustration, wide shot, emphasizing the vastness of the room and the tactile quality of the air and light."
+    },
+    {
+      "scene_id": "brindle-010",
+      "visual_prompt": "Mara approaches a massive, silent brass telescope. She holds the brass key tightly in her hand as she moves through the dark. The scene is dominated by midnight blue tones, punctuated by the warm amber highlight on the telescope's polished surface. Cinematic hand-painted historical storybook style, medium shot, focusing on the scale of the instrument and the quiet tension."
+    },
+    {
+      "scene_id": "brindle-011",
+      "visual_prompt": "Extreme close-up of the polished brass controls of a large telescope. Fine, precise degree marks are engraved into the metal. The surface reflects a soft amber light, contrasting against the deep midnight blue surroundings. Cinematic hand-painted historical storybook style, focusing on the craftsmanship, metallic textures, and the precision of the period scientific instruments."
+    },
+    {
+      "scene_id": "brindle-012",
+      "visual_prompt": "The telescope is positioned pointing upward through the narrow slit of the open observatory dome. Through the opening, a quiet, vast star field is visible in the midnight blue sky. A soft amber light from inside the observatory spills out into the night. Cinematic hand-painted illustration, low-angle shot, emphasizing the connection between the instrument and the cosmos."
+    },
+    {
+      "scene_id": "brindle-013",
+      "visual_prompt": "Mara's hands carefully align a small brass dial on the telescope with a coordinate pencilled onto a nearby surface. The lighting is a concentrated amber glow on her hands and the metal, surrounded by midnight blue shadows. Cinematic hand-painted historical storybook style, close-up shot, focusing on the precision of the movement and the texture of the brass."
+    },
+    {
+      "scene_id": "brindle-014",
+      "visual_prompt": "A beam of moonlight cuts a narrow, bright silver arc across the dark, polished wooden floor of the observatory. The rest of the room is shrouded in midnight blue and soft amber shadows. Cinematic hand-painted historical storybook style, wide shot, focusing on the play of light and shadow and the texture of the floorboards."
+    },
+    {
+      "scene_id": "brindle-015",
+      "visual_prompt": "A small, leather-bound observation ledger rests on a wooden reading stand. The scene is lit by a warm amber glow, highlighting the texture of the leather and the paper. The background is a deep, atmospheric midnight blue. Cinematic hand-painted historical storybook style, close-up shot, emphasizing the quiet, scholarly atmosphere."
+    },
+    {
+      "scene_id": "brindle-016",
+      "visual_prompt": "Mara opens the observation ledger, revealing pages filled with carefully ruled lines and handwritten entries. Her hands are partially visible in the warm amber light. The scene is set against the dark midnight blue of the observatory. Cinematic hand-painted historical storybook style, close-up shot, focusing on the tactile quality of the paper and ink."
+    },
+    {
+      "scene_id": "brindle-017",
+      "visual_prompt": "A top-down view of the ledger page, showing repeated rows of handwritten times and celestial bearings. The ink is dark against the aged, cream-colored paper. The lighting is a soft, warm amber. Cinematic hand-painted illustration, macro shot, focusing on the rhythmic pattern of the handwriting and the texture of the paper."
+    },
+    {
+      "scene_id": "brindle-018",
+      "visual_prompt": "Mara stands at a distance, looking from the open ledger toward the blue atlas on the west table. The composition uses the architecture of the room to create depth, with the warm amber light of the lantern and the midnight blue shadows creating a dramatic contrast. Cinematic hand-painted historical storybook style, wide shot, emphasizing the connection between the two texts."
+    },
+    {
+      "scene_id": "brindle-019",
+      "visual_prompt": "A close-up of a steady, flickering lantern flame. Beside it, the blue atlas remains open and unmoved on the wooden table. The lighting is a warm amber, casting soft shadows against the midnight blue background. Cinematic hand-painted historical storybook style, focusing on the stillness and the warmth of the light."
+    },
+    {
+      "scene_id": "brindle-020",
+      "visual_prompt": "Looking up through the observatory dome, the thick midnight blue clouds part briefly. A single, bright, marked star is revealed in the center of the opening. A soft amber glow from the room below catches the edge of the dome. Cinematic hand-painted historical storybook style, low-angle shot, emphasizing the celestial event."
+    },
+    {
+      "scene_id": "brindle-021",
+      "visual_prompt": "Mara leans into the telescope, her eye pressed against the eyepiece. She is carefully checking the alignment against a recorded coordinate. The scene is lit by a warm amber glow on her face, set against the dark midnight blue of the observatory. Cinematic hand-painted historical storybook style, medium close-up, focusing on her intense concentration."
+    },
+    {
+      "scene_id": "brindle-022",
+      "visual_prompt": "A view through the telescope's circular field of view. A faint, singular star is perfectly centered against a backdrop of deep midnight blue space. The edges of the view have a slight, soft blur. Cinematic hand-painted illustration, macro shot, emphasizing the clarity and the isolation of the star in the void."
+    },
+    {
+      "scene_id": "brindle-023",
+      "visual_prompt": "Mara's hand moves a pen across a blank line in the ledger, writing down the verified position. The scene is lit by warm amber light, highlighting the ink and the texture of the paper, with the rest of the room in midnight blue. Cinematic hand-painted historical storybook style, close-up shot, focusing on the act of recording the discovery."
+    },
+    {
+      "scene_id": "brindle-024",
+      "visual_prompt": "A close-up of Mara's hand as she closes the ledger. The brass key rests securely in her palm, catching the warm amber light. The background is a soft, out-of-focus midnight blue. Cinematic hand-painted historical storybook style, focusing on the texture of the skin, the metal, and the leather."
+    },
+    {
+      "scene_id": "brindle-025",
+      "visual_prompt": "A wide shot of the observatory dome as dawn approaches. A thin line of grey light gathers along the lower edge of the dome slit, signaling the end of the night. The midnight blue sky is beginning to lighten, and the warm amber glow from inside the observatory is fading. Cinematic hand-painted historical storybook style, wide shot, capturing the transition from night to morning."
+    }
+  ]
+}

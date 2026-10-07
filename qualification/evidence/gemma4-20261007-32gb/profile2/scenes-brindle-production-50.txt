@@ -1,0 +1,204 @@
+{
+  "results": [
+    {
+      "scene_id": "brindle-001",
+      "visual_prompt": "A wide cinematic shot of Brindle Observatory perched atop a steep hill, overlooking a sleeping Victorian town. Thin October clouds drift through a midnight blue sky, casting soft shadows over the dark rooftops below. The observatory's silhouette is imposing against the stars. Hand-painted historical storybook style, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-002",
+      "visual_prompt": "Mara, a woman in period-accurate 1890s hiking attire, climbs a steep, wet hill road. The ground is slick with rain, reflecting the dim moonlight. She grips a heavy brass key in her gloved hand, her expression focused. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-003",
+      "visual_prompt": "Close-up of the observatory's copper roof and a round western window. Raindrops bead on the weathered metal and glass, catching the faint amber light from within. The texture of the aged copper is rich and detailed. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-004",
+      "visual_prompt": "Mara stands at the heavy wooden service entrance of the observatory, inserting the brass key into the iron lock. She maintains a firm grip on the key, her movements precise. The scene is lit by a dim, distant light source. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-005",
+      "visual_prompt": "A view looking down a narrow, dark stone corridor. At the far end, a warm, inviting amber lantern glow spills from the western room, cutting through the midnight blue shadows. The perspective draws the eye toward the light. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-006",
+      "visual_prompt": "A large blue celestial atlas lies open on a heavy wooden west table. A single burning lantern sits beside it, casting a warm amber glow across the intricate star charts and ink drawings. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-007",
+      "visual_prompt": "Mara stands at the wooden table, leaning slightly forward to read a small pencilled note on a scrap of paper. She does not touch the open blue atlas beside her. The amber light from the lantern illuminates the paper. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-008",
+      "visual_prompt": "A close-up of an ornate Victorian wall clock. The hands indicate the late hour, and the face clearly shows the date October 17, 1894. The brass and wood textures are highly detailed. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-009",
+      "visual_prompt": "Underneath the vast observatory dome, motes of dust hang motionless in a shaft of warm amber light. The atmosphere is quiet and ancient. The midnight blue shadows of the dome create a sense of immense scale. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-010",
+      "visual_prompt": "Mara approaches a massive, silent brass telescope. She carries the heavy brass key in her hand, her silhouette framed by the dark dome. The scene is moody and contemplative. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-011",
+      "visual_prompt": "Extreme close-up of the polished brass telescope controls. Fine, precise degree marks are engraved into the metal surface. The light catches the edges of the engravings. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-012",
+      "visual_prompt": "The telescope is positioned toward the open slit in the observatory dome. Through the opening, a quiet, vast star field is visible against the deep midnight blue sky. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-013",
+      "visual_prompt": "Mara's hands are seen as she carefully aligns a small brass dial on the telescope with a coordinate pencilled onto a nearby surface. The amber light highlights the metalwork. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-014",
+      "visual_prompt": "A narrow, sharp arc of silver moonlight stretches across the dark, polished wooden floor of the observatory. The rest of the room remains in deep midnight blue shadows. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-015",
+      "visual_prompt": "A small, leather-bound observation ledger sits resting on a dedicated wooden reading stand. The scene is quiet and still, lit by a soft amber glow. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-016",
+      "visual_prompt": "Mara opens the observation ledger, revealing a page filled with carefully ruled lines and handwritten watch entries. The ink is dark against the aged paper. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-017",
+      "visual_prompt": "A top-down close-up of the ledger page. A repetitive pattern of recorded times and bearings is written in fine script, creating a rhythmic visual texture. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-018",
+      "visual_prompt": "Mara stands at a distance, looking from the open ledger in her hands toward the blue atlas resting on the west table. The two objects are separated by the amber-lit room. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-019",
+      "visual_prompt": "A close-up of a steady, flickering lantern flame. Beside it, the blue atlas remains open and undisturbed on the table. The warmth of the flame contrasts with the cool blue shadows. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-020",
+      "visual_prompt": "Through the slit in the observatory dome, the heavy clouds part briefly. A single, marked star shines brightly in the midnight blue sky, centered in the view. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-021",
+      "visual_prompt": "Mara leans in to check the telescope's eyepiece, her eye focused on the glass. She is comparing the view with a recorded coordinate in her mind. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-022",
+      "visual_prompt": "A view through the telescope's circular field of view. A faint, delicate star appears perfectly centered against the black void of space. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-023",
+      "visual_prompt": "Mara's hand moves a pen across a blank line in the ledger, recording the verified position. The amber light catches the tip of the pen. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-024",
+      "visual_prompt": "A close-up of Mara's palm as she closes the ledger. The heavy brass key rests securely in her hand. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-025",
+      "visual_prompt": "A sliver of grey, pre-dawn light begins to creep into the observatory through the bottom edge of the dome slit. The midnight blue is fading. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-026",
+      "visual_prompt": "Mara leans down to inspect a copper index plate fixed beneath the heavy main axis of the telescope. The metal reflects the dim light. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-027",
+      "visual_prompt": "Close-up of the copper index plate, showing fine engraved arrows. The arrows align with the patterns seen in the ledger's bearings. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-028",
+      "visual_prompt": "Mara follows a sightline from the telescope, looking out toward the dark, misty orchard that stretches beyond the observatory's edge. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-029",
+      "visual_prompt": "A wide view of an old orchard. Rows of pear trees stand in orderly lines along the western slope, shrouded in the blue mist of early morning. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-030",
+      "visual_prompt": "A distant ridge on the horizon aligns perfectly with the telescope's sightline and the path through the orchard. The scene is bathed in twilight. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-031",
+      "visual_prompt": "Mara examines a glass rain gauge. The dated markings on the glass are clear, revealing a gap in the observation logs. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-032",
+      "visual_prompt": "Close-up of water droplets clinging to the glass of the rain gauge. The sky above is a pale, transitioning grey. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-033",
+      "visual_prompt": "Inside the observatory, a north cabinet with glass doors holds neatly stacked, white calibration sheets. The scene is quiet and orderly. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-034",
+      "visual_prompt": "Mara reads the top calibration sheet through the glass of the cabinet, her face illuminated by the morning light. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-035",
+      "visual_prompt": "A photographic glass plate lies near the reading stand, catching a faint, ghostly reflection of the observatory interior. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-036",
+      "visual_prompt": "Close-up of the glass photographic plate. It reveals a double star, appearing as two tiny, sharp silver points against a dark background. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-037",
+      "visual_prompt": "Mara holds the photographic plate in one hand and the ledger in the other, matching the plate's label to the handwritten entries. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-038",
+      "visual_prompt": "Through the thinning morning mist, the distant town clock tower becomes visible against the brightening sky. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-039",
+      "visual_prompt": "A close-up of the town clock face, its hands confirming the time recorded in the observatory's ledger. The mist softens the edges. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-040",
+      "visual_prompt": "Mara's finger traces a sequence of recorded times on the ledger page, connecting the dots of the pattern. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-041",
+      "visual_prompt": "A close-up of the back of the ledger. A faded silk ribbon marks the final, crucial entry in the sequence. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-042",
+      "visual_prompt": "The final bearing in the ledger points west, toward the unseen harbor that lies beyond the distant ridge. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-043",
+      "visual_prompt": "Mara stands in a moment of realization, looking at the completed pattern of notes. She understands the observations are a navigation signal. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-044",
+      "visual_prompt": "Warm, golden dawn light begins to flood the observatory dome, replacing the amber lantern glow and washing over the equipment. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-045",
+      "visual_prompt": "A small, bright alignment mark appears on the copper rim of the telescope where the first rays of sunlight touch it. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-046",
+      "visual_prompt": "Mara writes the completed pattern of observations into her own plain, personal notebook. The morning light is bright and clear. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-047",
+      "visual_prompt": "Mara carefully places the heavy observation ledger back onto its reading stand, completing her task. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-048",
+      "visual_prompt": "The blue atlas remains open on the west table, its pages catching the growing morning light alongside the dying lantern flame. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-049",
+      "visual_prompt": "Mara exits through the service door, the brass key held firmly in her hand as she closes the heavy wood behind her. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    },
+    {
+      "scene_id": "brindle-050",
+      "visual_prompt": "A wide, beautiful shot of Brindle Observatory under a brightening sunrise sky. The town below is waking up, bathed in the calm, soft light of a new day. Cinematic hand-painted historical storybook illustration, midnight blue and warm amber palette, natural texture, precise period detail."
+    }
+  ]
+}

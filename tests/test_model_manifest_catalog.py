@@ -295,7 +295,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertIsNone(qualification["recommended_unified_memory_gb"])
         self.assertIsNone(qualification["tested_usable_context_tokens"])
 
-    def test_pending_gemma4_capture_reproduces_verified_runtime_manifest_offline(self):
+    def test_qualified_gemma4_capture_reproduces_verified_runtime_manifest_offline(self):
         manifest = self.manifests["gemma4-26b-a4b-qat-4bit"]
         choice = next(item for item in CAPTURE.CHOICES
                       if item["package_id"] == "gemma4-26b-a4b-qat-4bit")
@@ -330,13 +330,42 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertEqual(manifest["minimum_macos"], "14.0")
         self.assertEqual(manifest["quantization"], "QAT MLX 4-bit")
         self.assertIn("per-tensor precision overrides", manifest["quantization_source"])
-        self.assertIs(manifest["production_allowed"], False)
+        self.assertIs(manifest["production_allowed"], True)
         self.assertNotIn("default", manifest)
         qualification = manifest["qualification"]
-        self.assertEqual(qualification["status"], "unqualified")
-        self.assertIsNone(qualification["minimum_unified_memory_gb"])
-        self.assertIsNone(qualification["recommended_unified_memory_gb"])
-        self.assertIsNone(qualification["tested_usable_context_tokens"])
+        self.assertEqual(qualification["status"], "qualified")
+        self.assertEqual(qualification["minimum_unified_memory_gb"], 32)
+        self.assertEqual(qualification["recommended_unified_memory_gb"], 32)
+        self.assertEqual(qualification["context_window_tokens"], 32_768)
+        self.assertEqual(qualification["tested_usable_context_tokens"], 32_775)
+        self.assertNotIn("min_free_memory_gb", qualification)
+        self.assertNotIn("max_output_tokens", manifest)
+        self.assertIn("MEASURED", qualification["memory_evidence"])
+        self.assertIn("physical 32 GiB M2 Max", qualification["memory_evidence"])
+        self.assertIn("3x1,200-word", qualification["reason"])
+        self.assertIn("985, 800 and 805", qualification["reason"])
+        self.assertIn("owner accepted", qualification["reason"])
+        self.assertIn("32,768", qualification["reason"])
+        self.assertIn("combined input plus reserved output", qualification["reason"])
+        self.assertIn("curated hardware budget", qualification["reason"])
+        self.assertIn("32,775", qualification["reason"])
+        self.assertIn("tiny reply", qualification["reason"])
+        self.assertIn("262,144", qualification["reason"])
+        self.assertIn("model-declared", qualification["reason"])
+
+    def test_only_gemma4_is_admitted_from_the_three_moe_candidates(self):
+        gemma = self.manifests["gemma4-26b-a4b-qat-4bit"]
+        self.assertIs(gemma["production_allowed"], True)
+        self.assertEqual(gemma["qualification"]["status"], "qualified")
+        for package_id in ("nemotron-lightning-4bit", "qwen36-35b-4bit"):
+            with self.subTest(package=package_id):
+                manifest = self.manifests[package_id]
+                self.assertIs(manifest["production_allowed"], False)
+                self.assertEqual(manifest["qualification"]["status"], "unqualified")
+                self.assertIsNone(
+                    manifest["qualification"]["tested_usable_context_tokens"])
+        self.assertIs(self.manifests["qwen3-5-9b-4bit"]["default"], True)
+        self.assertNotIn("default", gemma)
 
     def test_two_default_packages_are_refused(self):
         manifests = [{"package_id": "one", "default": True}, {"package_id": "two", "default": True}]
@@ -407,8 +436,9 @@ class ModelManifestCatalogTests(unittest.TestCase):
             "qwen36-35b-4bit": "6134192255dc69ea481c97f777b0369016a1c06755f7b6d04ab8c7e7ce135ce9",
             # Gemma 4 26B-A4B QAT MLX 4-bit: 10 runtime files / 15,641,239,295 bytes.
             # The independently verified 11-file SSD stock remains whole; runtime capture
-            # excludes only its 363-byte README.md.
-            "gemma4-26b-a4b-qat-4bit": "01ff2567ac6c3f19f4440bebdc08f80d565c764256d09d56ef0eda2d422ce766",
+            # excludes only its 363-byte README.md. Only the 32 GiB qualification metadata
+            # changed here; the pinned revision and every publisher file hash stayed fixed.
+            "gemma4-26b-a4b-qat-4bit": "962823f4d412465351316da5241c7c11915ff52bae1c3e55c6c94a1a86c94e92",
             "omnivoice-bfloat16": "f2e761bd958ca3d84c6e1b8470ce7720a4ce8ded34fb57733b870f8c07d70bb4",
             "qwen3-tts-12hz-0-6b-base-8bit": "4d9e8048e6484e0225c5fb1b5644b8ee57cb969e6a6c10feb05865b330a033eb",
             "qwen3-tts-12hz-1-7b-base-4bit": "4e7c1d4f4dce6d3a65c4787052ee4772468fa23adc53ff5fefc139392a8aacbe",

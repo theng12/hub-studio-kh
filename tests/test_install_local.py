@@ -29,6 +29,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -185,6 +186,19 @@ class TheInstallGuardsTest(unittest.TestCase):
         self.assertEqual([p.read_text(encoding="utf-8") for p in data_trash.glob("music-ready-*")],
                          ["old music"])
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "untouched")
+
+    def test_install_can_archive_the_previous_app_in_project_trash(self) -> None:
+        root = Path(self.tmp.name)
+        stage = _stage(root)
+        target = _previous_app(root)
+        project_trash = root / "project" / "_trash"
+        with mock.patch.dict(os.environ, {"STUDIOHUB_INSTALL_TRASH": str(project_trash)}):
+            completed = _run(stage, target)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        previous = list(project_trash.glob("previous-app-*"))
+        self.assertEqual(len(previous), 1)
+        self.assertEqual((previous[0] / "Contents/Info.plist").read_text(), "<plist>previous</plist>")
+        self.assertFalse((target.parent / "_trash").exists())
 
     def test_the_local_installer_has_no_destructive_cleanup_command(self) -> None:
         commands = [line.strip() for line in SCRIPT.read_text(encoding="utf-8").splitlines()

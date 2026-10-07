@@ -1,0 +1,7 @@
+Lighthouse keepers record weather, visibility, and lamp conditions to ensure the safety of ships. If a storm is approaching or fog rolls in, other sailors need to know exactly when conditions changed so they can adjust their routes.
+
+The logbook also serves as a legal record. If a ship crashes near the lighthouse, officials will check the records to see if the light was working properly and if the keeper was performing their duties correctly.
+
+Tracking these details helps identify patterns. By noting how visibility and weather affect the light, keepers can predict when the lamp might need extra maintenance or when the weather might become too dangerous to manage alone.
+
+Finally, these notes help the next person on duty. Each new keeper reads the previous entries to understand what has happened during the last shift, ensuring a smooth transition and continuous safety.

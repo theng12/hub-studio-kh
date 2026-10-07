@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.155 — 2026-10-07 · Gemma 4 qualification for the 32 GiB Mac
+
+- Qualify the pinned Gemma 4 26B-A4B QAT MLX 4-bit checkpoint on the measured 32 GiB M2 Max only. The owner accepted the observed 985/800/805-word chapters and Story Studio's verified numeric parsing of Chapter 8/08. The original strict 1,200-word test remains recorded as failed; no lower RAM tier is qualified.
+- Use a curated 32,768-token combined input/reserved-output budget on this deployment. Keep the model's stated 262,144-token architecture separate, and the existing 16,384-token output allowance labelled as a worker setting rather than a measured 16k completion.
+- Retain exact publisher revisions/checksums and two-run evidence, including the successful 50-scene response under the 4,000-character cap. Qwen3.5-9B stays the default; Nemotron and Qwen3.6 remain pending.
+- Chat catalog qualification now reads the selected model's evidence instead of attributing the older Qwen proof to every allowed model. The local installer can preserve the previous app in the project's `_trash` using its archive-path option.
+
+
 ## 0.6.154 — 2026-10-07 · Restart recovery keeps a valid execution until its result is durable
 
 - An abandoned original finalizes on a private candidate. The broker rechecks the competing

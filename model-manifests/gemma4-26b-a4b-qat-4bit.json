@@ -101,11 +101,13 @@
     "parameters_source": "model/generation_config.json"
   },
   "qualification": {
-    "status": "unqualified",
-    "minimum_unified_memory_gb": null,
-    "recommended_unified_memory_gb": null,
-    "reason": "Downloaded and publisher-hash verified only. Import, inference, TPS, script/scene quality, usable context and RAM-tier qualification have not yet been run.",
-    "tested_usable_context_tokens": null
+    "status": "qualified",
+    "minimum_unified_memory_gb": 32,
+    "recommended_unified_memory_gb": 32,
+    "memory_evidence": "MEASURED on the owner's physical 32 GiB M2 Max, 2026-10-07, across two Gemma 4 26B-A4B QAT MLX 4-bit runs. The first seven-case suite passed all seven mechanical checks; its largest observed process footprint was 19,813,822,128 bytes (18.45 GiB). In the extended run, the three-chapter case took 72.209 s at 43.4297 decode tok/s with a 16,486,903,472-byte (15.35 GiB) worker peak; the 50-scene case took 103.764 s at 41.7067 decode tok/s with a 16,678,416,048-byte (15.53 GiB) worker peak. Pressure remained normal with no positive new swap growth in the extended run. Physical 24 GiB and 16 GiB were not tested, so 32 GiB is both the minimum and recommended measured tier. Repository evidence: qualification/evidence/gemma4-20261007-32gb/measurement.json.",
+    "reason": "Qualified only on the owner's physical 32 GiB M2 Max. The first profile passed all seven mechanical checks. The extended strict 3x1,200-word test remains FAIL: it produced 985, 800 and 805 words, and Chapter 8 rather than Chapter 08; the owner accepted those observed lengths, and the real Story Studio parser recovered chapters 7, 8 and 9 identically with or without zero padding. The 50-scene case returned all 50 exact IDs as strict JSON under the 4,000 UTF-16-unit cap (mean 422, maximum 531). qualification.context_window_tokens=32,768 is a curated hardware budget for combined input plus reserved output, not a model claim; the checkpoint retains its model-declared text_config.max_position_embeddings=262,144. tested_usable_context_tokens=32,775 records the observed input plus a tiny reply and does not prove 32k input plus the worker's 16,384-token default output. Physical 24 GiB and 16 GiB were not tested.",
+    "context_window_tokens": 32768,
+    "tested_usable_context_tokens": 32775
   },
   "source": {
     "provider": "huggingface",
@@ -127,7 +129,7 @@
       }
     }
   },
-  "production_allowed": false,
+  "production_allowed": true,
   "display_name": "Gemma 4 26B-A4B QAT MLX 4-bit",
   "quantization": "QAT MLX 4-bit",
   "quantization_source": "model/config.json quantization: affine 4-bit, group size 64; preserved publisher per-tensor precision overrides"

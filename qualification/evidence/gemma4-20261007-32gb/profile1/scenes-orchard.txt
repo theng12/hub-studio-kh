@@ -1,0 +1,52 @@
+{
+  "results": [
+    {
+      "scene_id": "orchard-001",
+      "visual_prompt": "A stone cottage nestled beside ancient pear trees shrouded in morning mist, hand-painted pastoral illustration, misty greens and pale gold, calm wide framing, ethereal and quiet mood."
+    },
+    {
+      "scene_id": "orchard-002",
+      "visual_prompt": "A narrow winding path leading from a rustic stone cottage toward a weathered wooden gate, hand-painted pastoral illustration, misty greens and pale gold, calm wide framing, serene and peaceful mood."
+    },
+    {
+      "scene_id": "orchard-003",
+      "visual_prompt": "A young woman named Mara carrying an empty wicker basket walking beneath dew-bright pear branches, hand-painted pastoral illustration, misty greens and pale gold, calm wide framing, gentle and fresh mood."
+    },
+    {
+      "scene_id": "orchard-004",
+      "visual_prompt": "A small robin perched atop a weathered wooden gatepost in soft early morning light, hand-painted pastoral illustration, misty greens and pale gold, calm wide framing, delicate and tranquil mood."
+    },
+    {
+      "scene_id": "orchard-005",
+      "visual_prompt": "A single ripe pear hanging from a branch directly above moss-covered stones, hand-painted pastoral illustration, misty greens and pale gold, close-up framing, soft and natural lighting, peaceful mood."
+    },
+    {
+      "scene_id": "orchard-006",
+      "visual_prompt": "Mara's hands gently placing a ripe pear into a wicker basket, hand-painted pastoral illustration, misty greens and pale gold, close-up framing, soft diffused light, tender and calm mood."
+    },
+    {
+      "scene_id": "orchard-007",
+      "visual_prompt": "Wind rustling the high canopy of pear trees while the lower orchard remains perfectly still, hand-painted pastoral illustration, misty greens and pale gold, wide framing, dynamic and airy mood."
+    },
+    {
+      "scene_id": "orchard-008",
+      "visual_prompt": "A shallow stream reflecting pale clouds and the silhouettes of the last row of orchard trees, hand-painted pastoral illustration, misty greens and pale gold, wide framing, shimmering and serene mood."
+    },
+    {
+      "scene_id": "orchard-009",
+      "visual_prompt": "Mara pausing on a small wooden plank bridge with her wicker basket at her side, hand-painted pastoral illustration, misty greens and pale gold, wide framing, contemplative and calm mood."
+    },
+    {
+      "scene_id": "orchard-010",
+      "visual_prompt": "Sunlight hitting the chimney of a stone cottage as the morning mist begins to lift, hand-painted pastoral illustration, misty greens and pale gold, wide framing, warm and hopeful mood."
+    },
+    {
+      "scene_id": "orchard-011",
+      "visual_prompt": "A robin hopping along a wooden fence above clusters of late spring flowers, hand-painted pastoral illustration, misty greens and pale gold, wide framing, cheerful and quiet mood."
+    },
+    {
+      "scene_id": "orchard-012",
+      "visual_prompt": "Mara walking back toward a stone cottage through an orchard bathed in golden sunlight, hand-painted pastoral illustration, misty greens and pale gold, wide framing, warm and harmonious mood."
+    }
+  ]
+}

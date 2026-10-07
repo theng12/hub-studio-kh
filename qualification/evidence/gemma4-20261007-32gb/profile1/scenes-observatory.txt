@@ -1,0 +1,52 @@
+{
+  "results": [
+    {
+      "scene_id": "observatory-001",
+      "visual_prompt": "A lonely stone observatory perched atop a quiet autumn hill under a vast clear sky, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, wide shot."
+    },
+    {
+      "scene_id": "observatory-002",
+      "visual_prompt": "Mara walking into a grand round library holding a small brass key, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, medium shot."
+    },
+    {
+      "scene_id": "observatory-003",
+      "visual_prompt": "A thick blue atlas resting on a heavy wooden west table next to a glowing burning lantern, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, close-up."
+    },
+    {
+      "scene_id": "observatory-004",
+      "visual_prompt": "Golden dust motes dancing in the warm lantern light beneath a high domed ceiling, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, low angle shot."
+    },
+    {
+      "scene_id": "observatory-005",
+      "visual_prompt": "Mara's hands adjusting the polished brass controls of a large silent telescope, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, close-up."
+    },
+    {
+      "scene_id": "observatory-006",
+      "visual_prompt": "A massive brass telescope pointing through an open slit in the dome toward a dense field of stars, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, wide shot."
+    },
+    {
+      "scene_id": "observatory-007",
+      "visual_prompt": "A hand-drawn pencilled coordinate written in the margin of an old observation ledger, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, extreme close-up."
+    },
+    {
+      "scene_id": "observatory-008",
+      "visual_prompt": "Mara standing by a large star chart on the wall comparing notes while leaving the atlas on the table, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, medium shot."
+    },
+    {
+      "scene_id": "observatory-009",
+      "visual_prompt": "A narrow arc of bright moonlight stretching across the dark observatory floor, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, wide shot."
+    },
+    {
+      "scene_id": "observatory-010",
+      "visual_prompt": "A close-up view of a small brass key resting securely in Mara's palm, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, macro shot."
+    },
+    {
+      "scene_id": "observatory-011",
+      "visual_prompt": "Mara writing a single careful note in a thick observation ledger, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, medium close-up."
+    },
+    {
+      "scene_id": "observatory-012",
+      "visual_prompt": "A lantern and a blue atlas resting together on a wooden table at the first light of dawn, detailed gouache illustration, midnight indigo and muted gold, tranquil cinematic lighting, close-up."
+    }
+  ]
+}

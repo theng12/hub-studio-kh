@@ -1,3 +1,8 @@
+> **0.6.155 candidate — Gemma 4 32 GiB owner-accepted qualification, not yet installed.**
+> Evidence: `qualification/evidence/gemma4-20261007-32gb/measurement.json`, exact pinned publisher files and original outputs. Owner accepts 985/800/805-word chapters and numeric Chapter 8/08 parsing verified by real Story source. Strict 3x1,200 original result remains failed. All 50 compact scene prompts passed exact IDs/JSON/4,000-character caps. Physical 24/16 GiB remain untested and excluded.
+> Working deployment context is curated 32,768 combined input/reserved output; original model configuration states 262,144. Existing 16,384 output allowance remains a worker default, not a measured 16k result. Qwen3.5 default preserved; Nemotron/Qwen3.6 remain pending.
+> This Mac's ordinary Gateway fleet dispatch must remain paused. Only this Mac's app/model registration is in scope; no remote installation or fleet release publication. Source, DMG, local installation/readiness and accurate SSD stock records still require coordinator completion.
+
 > **0.6.154 candidate — 2026-10-07, audit remediation merged over 0.6.153. Not yet installed or published.**
 > `broker._adopt_abandoned_attempt` finalizes a private original candidate, rechecks winner/cancellation,
 > durably writes its batch, then commits supersession and cancels the replacement. Metadata, asset-ledger

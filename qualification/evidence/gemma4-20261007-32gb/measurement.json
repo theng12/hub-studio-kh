@@ -1,0 +1,1608 @@
+{
+  "schema": "studiohub.owner_accepted_qualification",
+  "date": "2026-10-07",
+  "package_id": "gemma4-26b-a4b-qat-4bit",
+  "repo_id": "mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+  "revision": "0e3cbab38ce568cf6e23543010d08d03b731910c",
+  "status": "qualified_owner_accepted",
+  "qualified_physical_tier_GiB": 32,
+  "untested_tiers_GiB": [
+    8,
+    16,
+    24
+  ],
+  "owner_acceptance": {
+    "chapter_body_words": [
+      985,
+      800,
+      805
+    ],
+    "zero_padded_heading_required": false,
+    "story_parser_numeric_equivalence_verified": true,
+    "story_source_commit": "5d0a4fa49bf60d674553f562318a0f36bdebd872",
+    "original_strict_1200_word_test_still_failed": true,
+    "production_reliability_374_scenes_not_established": true
+  },
+  "deployment_policy": {
+    "context_window_tokens": 32768,
+    "context_scope": "Curated combined prompt plus reserved output budget; not the model declared 262144 and not a proof of32768input+16384output",
+    "max_output_allowance_tokens": 16384,
+    "max_output_allowance_source": "Chat worker fallback, not a measured16k completion",
+    "measured_largest_input_tokens": 32775,
+    "measured_long_input_reply_tokens": 5,
+    "measured_largest_output_tokens": 4139,
+    "minimum_required_free_memory_unknown": true
+  },
+  "sampling": {
+    "temperature": 0.6,
+    "top_p": 0.9,
+    "thinking": false,
+    "seed": 7
+  },
+  "runs": [
+    {
+      "profile": 1,
+      "original_report_sha256": "2a036afa99a62eb1bd84a8162c59bda5db99e4a0abc0ff5102d0d6dad2484dc2",
+      "prompt_sha256": "720e53141efcd1768213b22108417e29a8520fa5bc3a4b0924795707fedc4fb4",
+      "original_strict_status": "pass",
+      "environment": {
+        "python": "3.12.14",
+        "libraries": {
+          "mlx": "0.31.2",
+          "mlx-lm": "0.31.3",
+          "transformers": "5.14.1"
+        },
+        "platform": "macOS-27.0.1-arm64-arm-64bit",
+        "chip": "Apple M2 Max",
+        "machine_model": "Mac14,13",
+        "physical_ram_bytes": 34359738368,
+        "physical_ram_tier_gib": 32,
+        "available_memory_bytes_at_start": 24420646912
+      },
+      "cache_limit_bytes": 512000000,
+      "first_load": {
+        "seconds": 7.931,
+        "mlx_peak_bytes": 14469705876,
+        "kernel_phys_footprint_peak_bytes": 15797038960,
+        "health_after": {
+          "swap_used_bytes": 327680,
+          "swap_delta_bytes": 327680,
+          "pressure_level": 1,
+          "pressure_name": "normal"
+        }
+      },
+      "case_metrics": [
+        {
+          "name": "speed",
+          "purpose": "benchmark",
+          "output_file": "speed.txt",
+          "max_tokens": 256,
+          "prompt_tokens_measured": 59,
+          "prompt_tokens_reported": 59,
+          "completion_tokens": 164,
+          "prompt_tps": 23.477734607060643,
+          "decode_tps": 48.46160565405517,
+          "finish_reason": "stop",
+          "elapsed_seconds": 6.04,
+          "mlx_peak_bytes": 14600510382,
+          "kernel_phys_footprint_peak_bytes": 15296179864,
+          "health_before": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "input-8k",
+          "purpose": "padded_benchmark",
+          "output_file": "input-8k.txt",
+          "max_tokens": 32,
+          "prompt_tokens_measured": 8208,
+          "prompt_tokens_reported": 8208,
+          "completion_tokens": 5,
+          "prompt_tps": 505.8594863877756,
+          "decode_tps": 54.906011943647286,
+          "finish_reason": "stop",
+          "elapsed_seconds": 16.466,
+          "mlx_peak_bytes": 16638528368,
+          "kernel_phys_footprint_peak_bytes": 17699106480,
+          "health_before": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true,
+            "actual": "HARBOR LANTERN"
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "input-32k",
+          "purpose": "padded_benchmark",
+          "output_file": "input-32k.txt",
+          "max_tokens": 32,
+          "prompt_tokens_measured": 32775,
+          "prompt_tokens_reported": 32775,
+          "completion_tokens": 5,
+          "prompt_tps": 463.52715622371886,
+          "decode_tps": 39.4646229254086,
+          "finish_reason": "stop",
+          "elapsed_seconds": 71.011,
+          "mlx_peak_bytes": 18735737692,
+          "kernel_phys_footprint_peak_bytes": 19811266224,
+          "health_before": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true,
+            "actual": "HARBOR LANTERN"
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "chapter",
+          "purpose": "quality",
+          "output_file": "chapter.txt",
+          "max_tokens": 1800,
+          "prompt_tokens_measured": 200,
+          "prompt_tokens_reported": 200,
+          "completion_tokens": 665,
+          "prompt_tps": 313.23448985124037,
+          "decode_tps": 48.97682698189747,
+          "finish_reason": "stop",
+          "elapsed_seconds": 14.352,
+          "mlx_peak_bytes": 14784224874,
+          "kernel_phys_footprint_peak_bytes": 16028102320,
+          "health_before": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true,
+            "word_count": 572,
+            "missing_facts": [],
+            "forbidden_phrases": [],
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "scenes-harbor",
+          "purpose": "quality",
+          "output_file": "scenes-harbor.txt",
+          "max_tokens": 2200,
+          "prompt_tokens_measured": 649,
+          "prompt_tokens_reported": 649,
+          "completion_tokens": 847,
+          "prompt_tps": 482.15230124666056,
+          "decode_tps": 49.824686370290856,
+          "finish_reason": "stop",
+          "elapsed_seconds": 18.479,
+          "mlx_peak_bytes": 15175274702,
+          "kernel_phys_footprint_peak_bytes": 16161009328,
+          "health_before": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true,
+            "count": 12,
+            "ids": [
+              "harbor-001",
+              "harbor-002",
+              "harbor-003",
+              "harbor-004",
+              "harbor-005",
+              "harbor-006",
+              "harbor-007",
+              "harbor-008",
+              "harbor-009",
+              "harbor-010",
+              "harbor-011",
+              "harbor-012"
+            ],
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "scenes-observatory",
+          "purpose": "quality",
+          "output_file": "scenes-observatory.txt",
+          "max_tokens": 2200,
+          "prompt_tokens_measured": 644,
+          "prompt_tokens_reported": 644,
+          "completion_tokens": 782,
+          "prompt_tps": 476.8532863916705,
+          "decode_tps": 48.25095320862527,
+          "finish_reason": "stop",
+          "elapsed_seconds": 17.692,
+          "mlx_peak_bytes": 15170310734,
+          "kernel_phys_footprint_peak_bytes": 16179015344,
+          "health_before": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true,
+            "count": 12,
+            "ids": [
+              "observatory-001",
+              "observatory-002",
+              "observatory-003",
+              "observatory-004",
+              "observatory-005",
+              "observatory-006",
+              "observatory-007",
+              "observatory-008",
+              "observatory-009",
+              "observatory-010",
+              "observatory-011",
+              "observatory-012"
+            ],
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "scenes-orchard",
+          "purpose": "quality",
+          "output_file": "scenes-orchard.txt",
+          "max_tokens": 2200,
+          "prompt_tokens_measured": 641,
+          "prompt_tokens_reported": 641,
+          "completion_tokens": 804,
+          "prompt_tps": 491.6766846110703,
+          "decode_tps": 46.42949473781251,
+          "finish_reason": "stop",
+          "elapsed_seconds": 18.756,
+          "mlx_peak_bytes": 15165739598,
+          "kernel_phys_footprint_peak_bytes": 16173706928,
+          "health_before": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 327680,
+            "swap_delta_bytes": 327680,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true,
+            "count": 12,
+            "ids": [
+              "orchard-001",
+              "orchard-002",
+              "orchard-003",
+              "orchard-004",
+              "orchard-005",
+              "orchard-006",
+              "orchard-007",
+              "orchard-008",
+              "orchard-009",
+              "orchard-010",
+              "orchard-011",
+              "orchard-012"
+            ],
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        }
+      ],
+      "largest_parent_observed_process_bytes": 19813822128,
+      "initial_health": {
+        "swap_used_bytes": 0,
+        "swap_delta_bytes": 0,
+        "pressure_level": 1,
+        "pressure_name": "normal"
+      },
+      "final_health": {
+        "swap_used_bytes": 327680,
+        "swap_delta_bytes": 327680,
+        "pressure_level": 1,
+        "pressure_name": "normal"
+      },
+      "publisher_file_hashes": {
+        "weights": [
+          {
+            "name": "model-00001-of-00003.safetensors",
+            "bytes": 5275612587,
+            "sha256": "898863f0d5eba7153a9c9b9443aac1969809f2149e88481c725b6da40783f129"
+          },
+          {
+            "name": "model-00002-of-00003.safetensors",
+            "bytes": 5296718232,
+            "sha256": "2abdca76ed4a647cfe8af680908894e2709b4e1221ddbbbef1b1edb14f60e303"
+          },
+          {
+            "name": "model-00003-of-00003.safetensors",
+            "bytes": 5036507755,
+            "sha256": "a554f0fdb61bc9e510a5318e723a780c31434fd3e3dcdd3c16c700f835ade7b7"
+          }
+        ],
+        "configs": [
+          {
+            "name": "config.json",
+            "bytes": 33376,
+            "sha256": "29910322dd085f45c8f95c6c0f1611b20f722d6f6c8394321b34817e98a972fa"
+          },
+          {
+            "name": "generation_config.json",
+            "bytes": 203,
+            "sha256": "b69207f9be617e982d13cc273cce6fd88c98dda99a4bdc5e2d52ffe0a0d9f0a9"
+          },
+          {
+            "name": "tokenizer_config.json",
+            "bytes": 2740,
+            "sha256": "080d9e1aff284e2f6043889cd05367966f7c7b80e025fbc0b06745e218158656"
+          },
+          {
+            "name": "tokenizer.json",
+            "bytes": 32169626,
+            "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+          },
+          {
+            "name": "chat_template.jinja",
+            "bytes": 16934,
+            "sha256": "94899c0f917d93f6fe81c95744d1e8ddab2d21d39228d2e4aec1fb2a25bff413"
+          },
+          {
+            "name": "model.safetensors.index.json",
+            "bytes": 176940,
+            "sha256": "5455e83705bbdd4e3702c7d4f9d49d4900e84533036628f74500538075dd5c80"
+          }
+        ],
+        "weights_bytes": 15608838574,
+        "weights_manifest_sha256": "36e76487b4b6f67f6b01151d6cde70e61013969b093e14136dd5c68466cf734c"
+      },
+      "raw_output_artifacts": [
+        {
+          "path": "profile1/speed.txt",
+          "sha256": "bad0260e5a08ab1e1852289d042da873f165267aaf69eb8aaa0cc48e4f2039c8"
+        },
+        {
+          "path": "profile1/input-8k.txt",
+          "sha256": "60f595a2e00a2c3ca949ede66743c54a947441a108e2e6d8ae709da2539764d7"
+        },
+        {
+          "path": "profile1/input-32k.txt",
+          "sha256": "60f595a2e00a2c3ca949ede66743c54a947441a108e2e6d8ae709da2539764d7"
+        },
+        {
+          "path": "profile1/chapter.txt",
+          "sha256": "4d0f4471b4d83425031eaab68ea11a8138b9b0b07744d5bcd6303d283714c8df"
+        },
+        {
+          "path": "profile1/scenes-harbor.txt",
+          "sha256": "9b8af4b01df949fed6e536fb9e8ee857477865df091874f1f5e759121151f09c"
+        },
+        {
+          "path": "profile1/scenes-observatory.txt",
+          "sha256": "2d54f57dea800c39f1e8ae5c514170c5465a0957b5c4a04694f474cdf35ca52e"
+        },
+        {
+          "path": "profile1/scenes-orchard.txt",
+          "sha256": "3b01060f626cee6fc6a63119db2dd77f52c28428f0f604375a117af94612c0a1"
+        }
+      ]
+    },
+    {
+      "profile": 2,
+      "original_report_sha256": "042634d1f0dc7f76c6cbd409ec2279c2ce973414c56bc46b052b5b56f7cb72d8",
+      "prompt_sha256": "632be27ff436111909e9fa2a07021d653d1bee51860033e0695ac26538319d1b",
+      "original_strict_status": "fail",
+      "environment": {
+        "python": "3.12.14",
+        "libraries": {
+          "mlx": "0.31.2",
+          "mlx-lm": "0.31.3",
+          "transformers": "5.14.1"
+        },
+        "platform": "macOS-27.0.1-arm64-arm-64bit",
+        "chip": "Apple M2 Max",
+        "machine_model": "Mac14,13",
+        "physical_ram_bytes": 34359738368,
+        "physical_ram_tier_gib": 32,
+        "available_memory_bytes_at_start": 26203734016
+      },
+      "cache_limit_bytes": 512000000,
+      "first_load": {
+        "seconds": 8.41,
+        "mlx_peak_bytes": 14469705876,
+        "kernel_phys_footprint_peak_bytes": 15799693192,
+        "health_after": {
+          "swap_used_bytes": 214237184,
+          "swap_delta_bytes": 0,
+          "pressure_level": 1,
+          "pressure_name": "normal"
+        }
+      },
+      "case_metrics": [
+        {
+          "name": "speed",
+          "purpose": "benchmark",
+          "output_file": "speed.txt",
+          "max_tokens": 256,
+          "prompt_tokens_measured": 59,
+          "prompt_tokens_reported": 59,
+          "completion_tokens": 164,
+          "prompt_tps": 34.069521312397036,
+          "decode_tps": 49.4428739131558,
+          "finish_reason": "stop",
+          "elapsed_seconds": 5.186,
+          "mlx_peak_bytes": 14600456918,
+          "kernel_phys_footprint_peak_bytes": 15292526232,
+          "health_before": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "input-8k",
+          "purpose": "padded_benchmark",
+          "output_file": "input-8k.txt",
+          "max_tokens": 32,
+          "prompt_tokens_measured": 8208,
+          "prompt_tokens_reported": 8208,
+          "completion_tokens": 5,
+          "prompt_tps": 513.9745264764138,
+          "decode_tps": 45.74800853200761,
+          "finish_reason": "stop",
+          "elapsed_seconds": 16.224,
+          "mlx_peak_bytes": 16638527536,
+          "kernel_phys_footprint_peak_bytes": 17696583344,
+          "health_before": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true,
+            "actual": "HARBOR LANTERN"
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "input-32k",
+          "purpose": "padded_benchmark",
+          "output_file": "input-32k.txt",
+          "max_tokens": 32,
+          "prompt_tokens_measured": 32775,
+          "prompt_tokens_reported": 32775,
+          "completion_tokens": 5,
+          "prompt_tps": 463.97819107108813,
+          "decode_tps": 39.511128803404326,
+          "finish_reason": "stop",
+          "elapsed_seconds": 70.945,
+          "mlx_peak_bytes": 18735736860,
+          "kernel_phys_footprint_peak_bytes": 19809185456,
+          "health_before": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true,
+            "actual": "HARBOR LANTERN"
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "long-script-3x1200",
+          "purpose": "long_script_quality",
+          "output_file": "long-script-3x1200.txt",
+          "max_tokens": 12288,
+          "prompt_tokens_measured": 1165,
+          "prompt_tokens_reported": 1165,
+          "completion_tokens": 3033,
+          "prompt_tps": 521.655961322949,
+          "decode_tps": 43.42971890825906,
+          "finish_reason": "stop",
+          "elapsed_seconds": 72.209,
+          "mlx_peak_bytes": 15443448846,
+          "kernel_phys_footprint_peak_bytes": 16486903472,
+          "health_before": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": false,
+            "chapters": [
+              {
+                "number": 7,
+                "title": "Quiet Meridian",
+                "word_count": 985,
+                "pass": false,
+                "errors": [
+                  "body word count 985 is outside 1080-1320"
+                ]
+              },
+              {
+                "number": 8,
+                "title": "Lantern Ledger",
+                "word_count": 800,
+                "pass": false,
+                "errors": [
+                  "unexpected chapter number, title, or order",
+                  "body word count 800 is outside 1080-1320"
+                ]
+              },
+              {
+                "number": 9,
+                "title": "Dawn Watch",
+                "word_count": 805,
+                "pass": false,
+                "errors": [
+                  "body word count 805 is outside 1080-1320"
+                ]
+              }
+            ],
+            "missing_facts": [],
+            "forbidden_phrases": [],
+            "errors": [
+              "chapter headings must exactly match the requested three chapters in order",
+              "one or more chapters failed per-chapter validation"
+            ]
+          },
+          "generation_complete": true,
+          "mechanical_pass": false
+        },
+        {
+          "name": "chapter",
+          "purpose": "quality",
+          "output_file": "chapter.txt",
+          "max_tokens": 1800,
+          "prompt_tokens_measured": 200,
+          "prompt_tokens_reported": 200,
+          "completion_tokens": 665,
+          "prompt_tps": 342.73977916003275,
+          "decode_tps": 47.890992468542755,
+          "finish_reason": "stop",
+          "elapsed_seconds": 14.606,
+          "mlx_peak_bytes": 14784331258,
+          "kernel_phys_footprint_peak_bytes": 15889804976,
+          "health_before": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "validation": {
+            "pass": true,
+            "word_count": 572,
+            "missing_facts": [],
+            "forbidden_phrases": [],
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "scenes-harbor",
+          "purpose": "scene_quality",
+          "output_file": "scenes-harbor.txt",
+          "max_tokens": 6144,
+          "prompt_tokens_measured": 682,
+          "prompt_tokens_reported": 682,
+          "completion_tokens": 1160,
+          "prompt_tps": 484.7798872665986,
+          "decode_tps": 45.44048730378539,
+          "finish_reason": "stop",
+          "elapsed_seconds": 27.07,
+          "mlx_peak_bytes": 15213612302,
+          "kernel_phys_footprint_peak_bytes": 16197660336,
+          "health_before": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "scene_count": 12,
+          "validation": {
+            "pass": true,
+            "count": 12,
+            "ids": [
+              "harbor-001",
+              "harbor-002",
+              "harbor-003",
+              "harbor-004",
+              "harbor-005",
+              "harbor-006",
+              "harbor-007",
+              "harbor-008",
+              "harbor-009",
+              "harbor-010",
+              "harbor-011",
+              "harbor-012"
+            ],
+            "length_stats": {
+              "items": [
+                {
+                  "scene_id": "harbor-001",
+                  "chars": 451
+                },
+                {
+                  "scene_id": "harbor-002",
+                  "chars": 460
+                },
+                {
+                  "scene_id": "harbor-003",
+                  "chars": 463
+                },
+                {
+                  "scene_id": "harbor-004",
+                  "chars": 450
+                },
+                {
+                  "scene_id": "harbor-005",
+                  "chars": 432
+                },
+                {
+                  "scene_id": "harbor-006",
+                  "chars": 442
+                },
+                {
+                  "scene_id": "harbor-007",
+                  "chars": 450
+                },
+                {
+                  "scene_id": "harbor-008",
+                  "chars": 437
+                },
+                {
+                  "scene_id": "harbor-009",
+                  "chars": 441
+                },
+                {
+                  "scene_id": "harbor-010",
+                  "chars": 403
+                },
+                {
+                  "scene_id": "harbor-011",
+                  "chars": 445
+                },
+                {
+                  "scene_id": "harbor-012",
+                  "chars": 433
+                }
+              ],
+              "count": 12,
+              "min_chars": 403,
+              "max_chars": 463,
+              "mean_chars": 442.2,
+              "cap": 4000,
+              "over_cap_count": 0,
+              "cap_breaches": []
+            },
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "scenes-observatory",
+          "purpose": "scene_quality",
+          "output_file": "scenes-observatory.txt",
+          "max_tokens": 6144,
+          "prompt_tokens_measured": 677,
+          "prompt_tokens_reported": 677,
+          "completion_tokens": 1234,
+          "prompt_tps": 484.5509857687684,
+          "decode_tps": 45.20966531896842,
+          "finish_reason": "stop",
+          "elapsed_seconds": 28.827,
+          "mlx_peak_bytes": 15206993166,
+          "kernel_phys_footprint_peak_bytes": 16261918384,
+          "health_before": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "scene_count": 12,
+          "validation": {
+            "pass": true,
+            "count": 12,
+            "ids": [
+              "observatory-001",
+              "observatory-002",
+              "observatory-003",
+              "observatory-004",
+              "observatory-005",
+              "observatory-006",
+              "observatory-007",
+              "observatory-008",
+              "observatory-009",
+              "observatory-010",
+              "observatory-011",
+              "observatory-012"
+            ],
+            "length_stats": {
+              "items": [
+                {
+                  "scene_id": "observatory-001",
+                  "chars": 497
+                },
+                {
+                  "scene_id": "observatory-002",
+                  "chars": 495
+                },
+                {
+                  "scene_id": "observatory-003",
+                  "chars": 480
+                },
+                {
+                  "scene_id": "observatory-004",
+                  "chars": 472
+                },
+                {
+                  "scene_id": "observatory-005",
+                  "chars": 494
+                },
+                {
+                  "scene_id": "observatory-006",
+                  "chars": 517
+                },
+                {
+                  "scene_id": "observatory-007",
+                  "chars": 478
+                },
+                {
+                  "scene_id": "observatory-008",
+                  "chars": 482
+                },
+                {
+                  "scene_id": "observatory-009",
+                  "chars": 457
+                },
+                {
+                  "scene_id": "observatory-010",
+                  "chars": 412
+                },
+                {
+                  "scene_id": "observatory-011",
+                  "chars": 439
+                },
+                {
+                  "scene_id": "observatory-012",
+                  "chars": 454
+                }
+              ],
+              "count": 12,
+              "min_chars": 412,
+              "max_chars": 517,
+              "mean_chars": 473.1,
+              "cap": 4000,
+              "over_cap_count": 0,
+              "cap_breaches": []
+            },
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "scenes-orchard",
+          "purpose": "scene_quality",
+          "output_file": "scenes-orchard.txt",
+          "max_tokens": 6144,
+          "prompt_tokens_measured": 674,
+          "prompt_tokens_reported": 674,
+          "completion_tokens": 1289,
+          "prompt_tps": 480.00058409094913,
+          "decode_tps": 45.18663871763229,
+          "finish_reason": "stop",
+          "elapsed_seconds": 30.066,
+          "mlx_peak_bytes": 15204388110,
+          "kernel_phys_footprint_peak_bytes": 16258625200,
+          "health_before": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "scene_count": 12,
+          "validation": {
+            "pass": true,
+            "count": 12,
+            "ids": [
+              "orchard-001",
+              "orchard-002",
+              "orchard-003",
+              "orchard-004",
+              "orchard-005",
+              "orchard-006",
+              "orchard-007",
+              "orchard-008",
+              "orchard-009",
+              "orchard-010",
+              "orchard-011",
+              "orchard-012"
+            ],
+            "length_stats": {
+              "items": [
+                {
+                  "scene_id": "orchard-001",
+                  "chars": 497
+                },
+                {
+                  "scene_id": "orchard-002",
+                  "chars": 472
+                },
+                {
+                  "scene_id": "orchard-003",
+                  "chars": 499
+                },
+                {
+                  "scene_id": "orchard-004",
+                  "chars": 467
+                },
+                {
+                  "scene_id": "orchard-005",
+                  "chars": 461
+                },
+                {
+                  "scene_id": "orchard-006",
+                  "chars": 479
+                },
+                {
+                  "scene_id": "orchard-007",
+                  "chars": 473
+                },
+                {
+                  "scene_id": "orchard-008",
+                  "chars": 471
+                },
+                {
+                  "scene_id": "orchard-009",
+                  "chars": 483
+                },
+                {
+                  "scene_id": "orchard-010",
+                  "chars": 475
+                },
+                {
+                  "scene_id": "orchard-011",
+                  "chars": 454
+                },
+                {
+                  "scene_id": "orchard-012",
+                  "chars": 466
+                }
+              ],
+              "count": 12,
+              "min_chars": 454,
+              "max_chars": 499,
+              "mean_chars": 474.8,
+              "cap": 4000,
+              "over_cap_count": 0,
+              "cap_breaches": []
+            },
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "scenes-brindle-production-25",
+          "purpose": "scene_quality",
+          "output_file": "scenes-brindle-production-25.txt",
+          "max_tokens": 12288,
+          "prompt_tokens_measured": 1229,
+          "prompt_tokens_reported": 1229,
+          "completion_tokens": 2513,
+          "prompt_tps": 520.0708541145821,
+          "decode_tps": 43.30420448768795,
+          "finish_reason": "stop",
+          "elapsed_seconds": 60.53,
+          "mlx_peak_bytes": 15409152066,
+          "kernel_phys_footprint_peak_bytes": 16488804016,
+          "health_before": {
+            "swap_used_bytes": 214237184,
+            "swap_delta_bytes": 0,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 205848576,
+            "swap_delta_bytes": -8388608,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "scene_count": 25,
+          "validation": {
+            "pass": true,
+            "count": 25,
+            "ids": [
+              "brindle-001",
+              "brindle-002",
+              "brindle-003",
+              "brindle-004",
+              "brindle-005",
+              "brindle-006",
+              "brindle-007",
+              "brindle-008",
+              "brindle-009",
+              "brindle-010",
+              "brindle-011",
+              "brindle-012",
+              "brindle-013",
+              "brindle-014",
+              "brindle-015",
+              "brindle-016",
+              "brindle-017",
+              "brindle-018",
+              "brindle-019",
+              "brindle-020",
+              "brindle-021",
+              "brindle-022",
+              "brindle-023",
+              "brindle-024",
+              "brindle-025"
+            ],
+            "length_stats": {
+              "items": [
+                {
+                  "scene_id": "brindle-001",
+                  "chars": 569
+                },
+                {
+                  "scene_id": "brindle-002",
+                  "chars": 542
+                },
+                {
+                  "scene_id": "brindle-003",
+                  "chars": 503
+                },
+                {
+                  "scene_id": "brindle-004",
+                  "chars": 509
+                },
+                {
+                  "scene_id": "brindle-005",
+                  "chars": 513
+                },
+                {
+                  "scene_id": "brindle-006",
+                  "chars": 509
+                },
+                {
+                  "scene_id": "brindle-007",
+                  "chars": 523
+                },
+                {
+                  "scene_id": "brindle-008",
+                  "chars": 505
+                },
+                {
+                  "scene_id": "brindle-009",
+                  "chars": 486
+                },
+                {
+                  "scene_id": "brindle-010",
+                  "chars": 511
+                },
+                {
+                  "scene_id": "brindle-011",
+                  "chars": 516
+                },
+                {
+                  "scene_id": "brindle-012",
+                  "chars": 509
+                },
+                {
+                  "scene_id": "brindle-013",
+                  "chars": 496
+                },
+                {
+                  "scene_id": "brindle-014",
+                  "chars": 460
+                },
+                {
+                  "scene_id": "brindle-015",
+                  "chars": 468
+                },
+                {
+                  "scene_id": "brindle-016",
+                  "chars": 490
+                },
+                {
+                  "scene_id": "brindle-017",
+                  "chars": 460
+                },
+                {
+                  "scene_id": "brindle-018",
+                  "chars": 512
+                },
+                {
+                  "scene_id": "brindle-019",
+                  "chars": 452
+                },
+                {
+                  "scene_id": "brindle-020",
+                  "chars": 461
+                },
+                {
+                  "scene_id": "brindle-021",
+                  "chars": 488
+                },
+                {
+                  "scene_id": "brindle-022",
+                  "chars": 447
+                },
+                {
+                  "scene_id": "brindle-023",
+                  "chars": 477
+                },
+                {
+                  "scene_id": "brindle-024",
+                  "chars": 430
+                },
+                {
+                  "scene_id": "brindle-025",
+                  "chars": 516
+                }
+              ],
+              "count": 25,
+              "min_chars": 430,
+              "max_chars": 569,
+              "mean_chars": 494.1,
+              "cap": 4000,
+              "over_cap_count": 0,
+              "cap_breaches": []
+            },
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        },
+        {
+          "name": "scenes-brindle-production-50",
+          "purpose": "scene_quality",
+          "output_file": "scenes-brindle-production-50.txt",
+          "max_tokens": 16384,
+          "prompt_tokens_measured": 2243,
+          "prompt_tokens_reported": 2243,
+          "completion_tokens": 4139,
+          "prompt_tps": 511.10658477834863,
+          "decode_tps": 41.70673369081836,
+          "finish_reason": "stop",
+          "elapsed_seconds": 103.764,
+          "mlx_peak_bytes": 15738871256,
+          "kernel_phys_footprint_peak_bytes": 16678416048,
+          "health_before": {
+            "swap_used_bytes": 205848576,
+            "swap_delta_bytes": -8388608,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "health_after": {
+            "swap_used_bytes": 205848576,
+            "swap_delta_bytes": -8388608,
+            "pressure_level": 1,
+            "pressure_name": "normal"
+          },
+          "think_spill": false,
+          "scene_count": 50,
+          "validation": {
+            "pass": true,
+            "count": 50,
+            "ids": [
+              "brindle-001",
+              "brindle-002",
+              "brindle-003",
+              "brindle-004",
+              "brindle-005",
+              "brindle-006",
+              "brindle-007",
+              "brindle-008",
+              "brindle-009",
+              "brindle-010",
+              "brindle-011",
+              "brindle-012",
+              "brindle-013",
+              "brindle-014",
+              "brindle-015",
+              "brindle-016",
+              "brindle-017",
+              "brindle-018",
+              "brindle-019",
+              "brindle-020",
+              "brindle-021",
+              "brindle-022",
+              "brindle-023",
+              "brindle-024",
+              "brindle-025",
+              "brindle-026",
+              "brindle-027",
+              "brindle-028",
+              "brindle-029",
+              "brindle-030",
+              "brindle-031",
+              "brindle-032",
+              "brindle-033",
+              "brindle-034",
+              "brindle-035",
+              "brindle-036",
+              "brindle-037",
+              "brindle-038",
+              "brindle-039",
+              "brindle-040",
+              "brindle-041",
+              "brindle-042",
+              "brindle-043",
+              "brindle-044",
+              "brindle-045",
+              "brindle-046",
+              "brindle-047",
+              "brindle-048",
+              "brindle-049",
+              "brindle-050"
+            ],
+            "length_stats": {
+              "items": [
+                {
+                  "scene_id": "brindle-001",
+                  "chars": 531
+                },
+                {
+                  "scene_id": "brindle-002",
+                  "chars": 489
+                },
+                {
+                  "scene_id": "brindle-003",
+                  "chars": 487
+                },
+                {
+                  "scene_id": "brindle-004",
+                  "chars": 494
+                },
+                {
+                  "scene_id": "brindle-005",
+                  "chars": 495
+                },
+                {
+                  "scene_id": "brindle-006",
+                  "chars": 458
+                },
+                {
+                  "scene_id": "brindle-007",
+                  "chars": 488
+                },
+                {
+                  "scene_id": "brindle-008",
+                  "chars": 454
+                },
+                {
+                  "scene_id": "brindle-009",
+                  "chars": 479
+                },
+                {
+                  "scene_id": "brindle-010",
+                  "chars": 445
+                },
+                {
+                  "scene_id": "brindle-011",
+                  "chars": 441
+                },
+                {
+                  "scene_id": "brindle-012",
+                  "chars": 438
+                },
+                {
+                  "scene_id": "brindle-013",
+                  "chars": 446
+                },
+                {
+                  "scene_id": "brindle-014",
+                  "chars": 440
+                },
+                {
+                  "scene_id": "brindle-015",
+                  "chars": 419
+                },
+                {
+                  "scene_id": "brindle-016",
+                  "chars": 428
+                },
+                {
+                  "scene_id": "brindle-017",
+                  "chars": 426
+                },
+                {
+                  "scene_id": "brindle-018",
+                  "chars": 442
+                },
+                {
+                  "scene_id": "brindle-019",
+                  "chars": 452
+                },
+                {
+                  "scene_id": "brindle-020",
+                  "chars": 430
+                },
+                {
+                  "scene_id": "brindle-021",
+                  "chars": 416
+                },
+                {
+                  "scene_id": "brindle-022",
+                  "chars": 409
+                },
+                {
+                  "scene_id": "brindle-023",
+                  "chars": 407
+                },
+                {
+                  "scene_id": "brindle-024",
+                  "chars": 371
+                },
+                {
+                  "scene_id": "brindle-025",
+                  "chars": 412
+                },
+                {
+                  "scene_id": "brindle-026",
+                  "chars": 405
+                },
+                {
+                  "scene_id": "brindle-027",
+                  "chars": 403
+                },
+                {
+                  "scene_id": "brindle-028",
+                  "chars": 405
+                },
+                {
+                  "scene_id": "brindle-029",
+                  "chars": 413
+                },
+                {
+                  "scene_id": "brindle-030",
+                  "chars": 417
+                },
+                {
+                  "scene_id": "brindle-031",
+                  "chars": 389
+                },
+                {
+                  "scene_id": "brindle-032",
+                  "chars": 384
+                },
+                {
+                  "scene_id": "brindle-033",
+                  "chars": 408
+                },
+                {
+                  "scene_id": "brindle-034",
+                  "chars": 385
+                },
+                {
+                  "scene_id": "brindle-035",
+                  "chars": 393
+                },
+                {
+                  "scene_id": "brindle-036",
+                  "chars": 409
+                },
+                {
+                  "scene_id": "brindle-037",
+                  "chars": 401
+                },
+                {
+                  "scene_id": "brindle-038",
+                  "chars": 380
+                },
+                {
+                  "scene_id": "brindle-039",
+                  "chars": 402
+                },
+                {
+                  "scene_id": "brindle-040",
+                  "chars": 377
+                },
+                {
+                  "scene_id": "brindle-041",
+                  "chars": 377
+                },
+                {
+                  "scene_id": "brindle-042",
+                  "chars": 377
+                },
+                {
+                  "scene_id": "brindle-043",
+                  "chars": 412
+                },
+                {
+                  "scene_id": "brindle-044",
+                  "chars": 398
+                },
+                {
+                  "scene_id": "brindle-045",
+                  "chars": 388
+                },
+                {
+                  "scene_id": "brindle-046",
+                  "chars": 399
+                },
+                {
+                  "scene_id": "brindle-047",
+                  "chars": 372
+                },
+                {
+                  "scene_id": "brindle-048",
+                  "chars": 398
+                },
+                {
+                  "scene_id": "brindle-049",
+                  "chars": 387
+                },
+                {
+                  "scene_id": "brindle-050",
+                  "chars": 424
+                }
+              ],
+              "count": 50,
+              "min_chars": 371,
+              "max_chars": 531,
+              "mean_chars": 422.0,
+              "cap": 4000,
+              "over_cap_count": 0,
+              "cap_breaches": []
+            },
+            "errors": []
+          },
+          "generation_complete": true,
+          "mechanical_pass": true
+        }
+      ],
+      "largest_parent_observed_process_bytes": 19708653232,
+      "initial_health": {
+        "swap_used_bytes": 214237184,
+        "swap_delta_bytes": 0,
+        "pressure_level": 1,
+        "pressure_name": "normal"
+      },
+      "final_health": {
+        "swap_used_bytes": 205848576,
+        "swap_delta_bytes": -8388608,
+        "pressure_level": 1,
+        "pressure_name": "normal"
+      },
+      "publisher_file_hashes": {
+        "weights": [
+          {
+            "name": "model-00001-of-00003.safetensors",
+            "bytes": 5275612587,
+            "sha256": "898863f0d5eba7153a9c9b9443aac1969809f2149e88481c725b6da40783f129"
+          },
+          {
+            "name": "model-00002-of-00003.safetensors",
+            "bytes": 5296718232,
+            "sha256": "2abdca76ed4a647cfe8af680908894e2709b4e1221ddbbbef1b1edb14f60e303"
+          },
+          {
+            "name": "model-00003-of-00003.safetensors",
+            "bytes": 5036507755,
+            "sha256": "a554f0fdb61bc9e510a5318e723a780c31434fd3e3dcdd3c16c700f835ade7b7"
+          }
+        ],
+        "configs": [
+          {
+            "name": "config.json",
+            "bytes": 33376,
+            "sha256": "29910322dd085f45c8f95c6c0f1611b20f722d6f6c8394321b34817e98a972fa"
+          },
+          {
+            "name": "generation_config.json",
+            "bytes": 203,
+            "sha256": "b69207f9be617e982d13cc273cce6fd88c98dda99a4bdc5e2d52ffe0a0d9f0a9"
+          },
+          {
+            "name": "tokenizer_config.json",
+            "bytes": 2740,
+            "sha256": "080d9e1aff284e2f6043889cd05367966f7c7b80e025fbc0b06745e218158656"
+          },
+          {
+            "name": "tokenizer.json",
+            "bytes": 32169626,
+            "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+          },
+          {
+            "name": "chat_template.jinja",
+            "bytes": 16934,
+            "sha256": "94899c0f917d93f6fe81c95744d1e8ddab2d21d39228d2e4aec1fb2a25bff413"
+          },
+          {
+            "name": "model.safetensors.index.json",
+            "bytes": 176940,
+            "sha256": "5455e83705bbdd4e3702c7d4f9d49d4900e84533036628f74500538075dd5c80"
+          }
+        ],
+        "weights_bytes": 15608838574,
+        "weights_manifest_sha256": "36e76487b4b6f67f6b01151d6cde70e61013969b093e14136dd5c68466cf734c"
+      },
+      "raw_output_artifacts": [
+        {
+          "path": "profile2/speed.txt",
+          "sha256": "bad0260e5a08ab1e1852289d042da873f165267aaf69eb8aaa0cc48e4f2039c8"
+        },
+        {
+          "path": "profile2/input-8k.txt",
+          "sha256": "60f595a2e00a2c3ca949ede66743c54a947441a108e2e6d8ae709da2539764d7"
+        },
+        {
+          "path": "profile2/input-32k.txt",
+          "sha256": "60f595a2e00a2c3ca949ede66743c54a947441a108e2e6d8ae709da2539764d7"
+        },
+        {
+          "path": "profile2/long-script-3x1200.txt",
+          "sha256": "b5213fdeeee6ce23ec35860ae83fec1ba6a457e6171b903d0e7b5cc48b37f5fc"
+        },
+        {
+          "path": "profile2/chapter.txt",
+          "sha256": "4d0f4471b4d83425031eaab68ea11a8138b9b0b07744d5bcd6303d283714c8df"
+        },
+        {
+          "path": "profile2/scenes-harbor.txt",
+          "sha256": "cb778455db66ce5e4db747b9b0c181e8c63856d603f3145aa16698fd888023db"
+        },
+        {
+          "path": "profile2/scenes-observatory.txt",
+          "sha256": "027ff906e6cac2b201bc19b19c2b723b911dca0e5b5590ad779be94bf7c5782e"
+        },
+        {
+          "path": "profile2/scenes-orchard.txt",
+          "sha256": "fc7eb7bb5f6f82da9638f5857fa9e8051c0868c266dbda19d5885e576acad6da"
+        },
+        {
+          "path": "profile2/scenes-brindle-production-25.txt",
+          "sha256": "c369fb5d3566fe4806caad5d7f4ee1b189953afaa2bca880afe44772c1a751ba"
+        },
+        {
+          "path": "profile2/scenes-brindle-production-50.txt",
+          "sha256": "04c9c5cc7059e7356076cec4b823d6576813e0da69e9376f31cdedbc5e6e6e68"
+        }
+      ]
+    }
+  ]
+}

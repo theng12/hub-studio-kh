@@ -593,6 +593,9 @@ def create_app(engine: ChatEngine | ChatModelManager, policy: memory_policy_modu
             qualified_bytes = _qualified_minimum_memory_bytes(selected) if allowed else None
             qualified_gb = qualified_bytes / 1e9 if qualified_bytes else None
             parameters, in_force = _resolved_parameters(settings_dir, selected)
+            qualification = (getattr(selected, "manifest", {}) or {}).get("qualification") or {}
+            inference_evidence = qualification.get("reason") or (
+                "Production allowed by bundled policy; no model-specific inference evidence is declared.")
             row = {
             # The model's own label, read from its manifest/repo id - never a literal here, so
             # a second chat model cannot be published under the first one's name. It carries the
@@ -638,14 +641,8 @@ def create_app(engine: ChatEngine | ChatModelManager, policy: memory_policy_modu
             "lane_contract": _lane_contract(selected, parameters),
             "qualification": {
                 "owner_decision": f"{_model_label(selected)}, MLX, text-only",
-                # This string used to read "pending measured proof" long after the proof existed.
-                # It now names the evidence and its dates instead of a byte count this worker
-                # cannot re-measure at publish time.
-                "packaged_inference": ((
-                    "proven: the packaged worker loaded this 4-bit snapshot and produced real "
-                    "completions, measured 2026-09-24 and re-checked 2026-09-25 "
-                    "(qualification/st14-chat-2026-09-24.md)") if allowed else
-                    "pending: production inference is blocked until qualification"),
+                "packaged_inference": (inference_evidence if allowed else
+                                       "pending: production inference is blocked until qualification"),
             },
             "default": selected is model_manager.default,
             "production_allowed": allowed,

@@ -138,6 +138,43 @@
       "evidence": "M",
       "source": "packaged Image worker on physical 32 GiB M2 Max; cold/warm square, landscape, portrait",
       "source_path": "qualification/evidence/qwen-image-21-20261006/measurement.json"
+    },
+    {
+      "package_id": "gemma4-26b-a4b-qat-4bit",
+      "model": "Gemma 4 26B-A4B QAT MLX 4-bit",
+      "quantization": "QAT MLX 4-bit",
+      "engine": "chat-mlx",
+      "machine": "32 GiB \u00b7 Apple M2 Max",
+      "tier_gb": 32,
+      "evidence": "M",
+      "source": "Owner physical 32 GiB full-suite runs, 2026-10-07; original strict failure preserved alongside owner acceptance",
+      "source_path": "qualification/evidence/gemma4-20261007-32gb/measurement.json",
+      "outcome": "owner accepted all three generated chapters: 985/800/805 words, zero-padded or unpadded numeric heading; not an exact 1,200-word pass",
+      "metrics": {
+        "tokens_per_second": 43.4297,
+        "generation_seconds": 72.209,
+        "worker_process_peak": "15.35 GiB",
+        "output_tokens": 3033
+      }
+    },
+    {
+      "package_id": "gemma4-26b-a4b-qat-4bit",
+      "model": "Gemma 4 26B-A4B QAT MLX 4-bit",
+      "quantization": "QAT MLX 4-bit",
+      "engine": "chat-mlx",
+      "machine": "32 GiB \u00b7 Apple M2 Max",
+      "tier_gb": 32,
+      "evidence": "M",
+      "source": "Owner physical 32 GiB full-suite runs, 2026-10-07; original strict failure preserved alongside owner acceptance",
+      "source_path": "qualification/evidence/gemma4-20261007-32gb/measurement.json",
+      "outcome": "50 compact scene prompts: strict JSON, all exact IDs, all final prompts under the 4,000 UTF-16-unit cap; no physical 24 GiB claim",
+      "metrics": {
+        "tokens_per_second": 41.7067,
+        "generation_seconds": 103.764,
+        "worker_process_peak": "15.53 GiB",
+        "final_prompt_characters": "371\u2013531 (mean 422)",
+        "output_tokens": 4139
+      }
     }
   ]
 }

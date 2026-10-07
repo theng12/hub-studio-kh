@@ -335,6 +335,15 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(catalog["hub_operation"], "chat.completion")
         self.assertEqual(catalog["context_window_tokens"], 262144)
 
+    def test_catalog_qualification_uses_selected_model_evidence(self) -> None:
+        engine = _FakeEngine(verified=True)
+        engine.manifest = {"qualification": {"reason": "Owner accepted Gemma on 32 GiB, 2026-10-07; standalone packaged-runtime evidence."}}
+        catalog = self._client(engine).get(
+            "/api/catalog", headers={"x-studio-token": TOKEN}).json()["models"][0]
+        self.assertEqual(catalog["qualification"]["packaged_inference"],
+                         engine.manifest["qualification"]["reason"])
+        self.assertNotIn("2026-09-24", catalog["qualification"]["packaged_inference"])
+
     def test_completion_refused_until_model_is_installed(self) -> None:
         client = self._client(_FakeEngine(verified=False))
         response = client.post("/v1/chat/completions", headers={"x-studio-token": TOKEN},
@@ -1542,18 +1551,16 @@ class ChatLaneContractTests(unittest.TestCase):
         self.assertEqual(catalog["generation_defaults"],
                          {"temperature": DEFAULT_TEMPERATURE, "top_p": DEFAULT_TOP_P})
 
-    def test_the_catalog_states_packaged_inference_was_proven(self) -> None:
-        # F11: the row read "pending measured proof" long after the proof existed
-        # (qualification/st14-chat-2026-09-24.md), so it named a state the worker was not in.
+    def test_catalog_without_model_specific_proof_does_not_invent_it(self) -> None:
+        # A legacy fixture with no evidence must not inherit another model's proof.
         with tempfile.TemporaryDirectory() as tmp:
             engine = self._engine(Path(tmp))
             qualification = self._client(engine).get(
                 "/api/catalog", headers={"x-studio-token": TOKEN}).json()[
                     "models"][0]["qualification"]
         self.assertNotIn("pending", qualification["packaged_inference"])
-        self.assertIn("proven", qualification["packaged_inference"])
-        self.assertIn("st14-chat-2026-09-24.md", qualification["packaged_inference"],
-                      "the claim does not name the evidence a reader can check")
+        self.assertIn("no model-specific inference evidence", qualification["packaged_inference"])
+        self.assertNotIn("st14-chat-2026-09-24.md", qualification["packaged_inference"])
 
     def test_the_activity_route_is_honest_when_idle_and_reports_a_real_completion(self) -> None:
         from components.hub.backend import activity as hub_activity

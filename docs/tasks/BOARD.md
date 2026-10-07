@@ -2,6 +2,12 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-GEMMA32-QUAL-20261007 — 0.6.155 adoption IN PROGRESS
+
+Owner qualifies Gemma 4 QAT MLX 4-bit for This Mac's physical32GiB M2Max only, accepting the observed985/800/805-word bodies and numericChapter8/08 parser equivalence. Exactpublisher package retained. Producer/manifest now allow production at32GiB with curated32768combined context;24/16 remain excluded. Qwen9 remains default and other newMoE candidates remainpending. Independent102 focused checks passed; local canonical package import/full verification completed. Coordinator still owes clean source commit/push, staged155App/verifiedDMG, controlled local installation/catalog readiness and SSD qualification-record update. OrdinaryThisMacfleetpause remains required.
+
+Historical preparation and test-delivery notes below precede this owner acceptance.
+
 ### ST-MOE-PREP-20261007 — selected MLX 4-bit candidates — PREPARED, qualification pending
 
 All3 owner-selected checkpoints and all12 model/SSD copies fully hash-verified; Hub wiring committed/pushed in0.6.153 with an installable DMG. No selected-candidate inference or activation has run; ThisMac remains paused. Physical qualification requires owner initiation, one model at a time. Plan: `.planning/2026-09-10-standalone-app-feasibility/moe-preparation-20261007.md`; detailed receipts in the coordinator's audit directory.

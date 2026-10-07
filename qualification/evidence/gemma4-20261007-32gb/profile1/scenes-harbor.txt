@@ -1,0 +1,52 @@
+{
+  "results": [
+    {
+      "scene_id": "harbor-001",
+      "visual_prompt": "A single glowing lantern sits beside a weathered tide ledger on a wooden dock, pre-dawn harbor setting, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, tranquil and quiet mood."
+    },
+    {
+      "scene_id": "harbor-002",
+      "visual_prompt": "Mara walking slowly along a wet stone quay, holding a gleaming brass key, misty harbor background, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, contemplative mood."
+    },
+    {
+      "scene_id": "harbor-003",
+      "visual_prompt": "A powerful lighthouse beam cutting through low swirling clouds above silent fishing boats, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, atmospheric and vast mood."
+    },
+    {
+      "scene_id": "harbor-004",
+      "visual_prompt": "Macro close-up of glistening rain beads on a dark blue wooden boathouse door, heavy textures, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, melancholic mood."
+    },
+    {
+      "scene_id": "harbor-005",
+      "visual_prompt": "Mara inserting a brass key into a heavy lock on a boathouse door, her hand holding the key prominently, cinematic medium shot, deep blue and warm amber palette, soft painterly storybook illustration, suspenseful mood."
+    },
+    {
+      "scene_id": "harbor-006",
+      "visual_prompt": "Interior of a rustic boathouse with neatly coiled hemp ropes hanging above a worn wooden workbench, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, cozy and nostalgic mood."
+    },
+    {
+      "scene_id": "harbor-007",
+      "visual_prompt": "A folded parchment nautical chart spread out, showing a hand-drawn pencil circle near a reef, cinematic close-up, deep blue and amber tones, soft painterly storybook illustration, mysterious mood."
+    },
+    {
+      "scene_id": "harbor-008",
+      "visual_prompt": "Mara leaning over a nautical chart illuminated by a warm lantern glow, studying the markings, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, focused and quiet mood."
+    },
+    {
+      "scene_id": "harbor-009",
+      "visual_prompt": "Rising tide water washing over the lowest stone steps of a harbor, ripples reflecting the sky, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, rhythmic and natural mood."
+    },
+    {
+      "scene_id": "harbor-010",
+      "visual_prompt": "A lone bell buoy tilting on gentle ocean swells beyond a stone breakwater, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, lonely and serene mood."
+    },
+    {
+      "scene_id": "harbor-011",
+      "visual_prompt": "Mara standing outside a closed boathouse looking up toward a distant lighthouse, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, expectant mood."
+    },
+    {
+      "scene_id": "harbor-012",
+      "visual_prompt": "Golden sunrise light hitting harbor rooftops while a warm lantern glow shines from a single window, wide cinematic composition, deep blue and warm amber palette, soft painterly storybook illustration, hopeful and peaceful mood."
+    }
+  ]
+}

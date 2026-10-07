@@ -15,7 +15,7 @@ STAGED="${1:?usage: install_local.sh <path to Studio Hub.app>}"
 TARGET="${STUDIOHUB_INSTALL_TARGET:-/Applications/Studio Hub.app}"
 DATA="${STUDIOHUB_INSTALL_DATA:-$HOME/Library/Application Support/StudioHub Standalone}"
 TARGET_PARENT="$(dirname -- "$TARGET")"
-TRASH="$TARGET_PARENT/_trash"
+TRASH="${STUDIOHUB_INSTALL_TRASH:-$TARGET_PARENT/_trash}"
 
 present() { [ -e "$1" ] || [ -L "$1" ]; }
 archive() {

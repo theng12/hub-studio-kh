@@ -2,6 +2,17 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.155 - 2026-10-07
+
+### Chat
+
+**Gemma 4 26B-A4B QAT MLX 4-bit is qualified for the 32 GB Mac.** It completed real English chapter and scene-prompt tests, including a 50-scene batch. The owner accepted the generated chapter lengths; exact 1,200-word chapters are not promised.
+
+This deployment uses a 32k combined context budget. The 24 GB tier remains unqualified. Qwen3.5-9B stays the default, and the other new candidates remain unavailable until qualified.
+
+Qualification information now belongs to the selected model, so Gemma shows its own evidence.
+
+
 ## 0.6.154 - 2026-10-07
 
 ### Jobs

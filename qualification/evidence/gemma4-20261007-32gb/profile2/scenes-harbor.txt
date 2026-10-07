@@ -1,0 +1,52 @@
+{
+  "results": [
+    {
+      "scene_id": "harbor-001",
+      "visual_prompt": "A soft painterly storybook illustration of a silent harbor just before dawn. A single warm amber lantern glows softly on a weathered wooden table beside an old tide ledger. The background features deep blue twilight hues and the calm, dark water of the bay. Wide cinematic composition, tranquil and mysterious mood, heavy brushstrokes, rich textures."
+    },
+    {
+      "scene_id": "harbor-002",
+      "visual_prompt": "A soft painterly storybook illustration of Mara walking slowly along a wet, reflective stone quay. She holds a gleaming brass key in her hand, the metal catching the faint amber light. The setting is a dark harbor at dawn with deep blue shadows and misty air. Wide cinematic composition, contemplative and quiet mood, atmospheric lighting, painterly textures."
+    },
+    {
+      "scene_id": "harbor-003",
+      "visual_prompt": "A soft painterly storybook illustration of a powerful lighthouse beam slicing through low, heavy clouds. Below, quiet fishing boats bob gently on the dark water. The color palette is dominated by deep blue midnight tones and a sharp, warm amber streak from the light. Wide cinematic composition, majestic and serene mood, sweeping brushwork, ethereal atmosphere."
+    },
+    {
+      "scene_id": "harbor-004",
+      "visual_prompt": "A soft painterly storybook illustration showing a close-up view of a locked blue boathouse door. Tiny, glistening rain beads cling to the dark wood, reflecting the dim amber light. The atmosphere is cool and damp with deep blue undertones. Macro-style framing within a wide cinematic context, melancholic and still mood, detailed painterly textures."
+    },
+    {
+      "scene_id": "harbor-005",
+      "visual_prompt": "A soft painterly storybook illustration of Mara inserting a brass key into the lock of a blue boathouse. The key is held prominently in the light. The scene is set against the dark, misty harbor at dawn. Wide cinematic composition, focused and purposeful mood, deep blue and warm amber lighting, soft edges, rich painterly strokes."
+    },
+    {
+      "scene_id": "harbor-006",
+      "visual_prompt": "A soft painterly storybook illustration of the interior of a rustic boathouse. Neatly coiled thick ropes hang from the ceiling above an old, sturdy wooden workbench. Warm amber light spills across the textures of wood and hemp. The background fades into deep blue shadows. Wide cinematic composition, cozy and nostalgic mood, soft brushwork."
+    },
+    {
+      "scene_id": "harbor-007",
+      "visual_prompt": "A soft painterly storybook illustration of a folded nautical chart spread across a wooden surface. A hand-drawn pencilled circle marks a specific location near the outer reef. The lighting is a warm amber glow against a deep blue backdrop. Wide cinematic composition, investigative and intriguing mood, detailed paper textures, soft painterly style."
+    },
+    {
+      "scene_id": "harbor-008",
+      "visual_prompt": "A soft painterly storybook illustration of Mara studying the nautical chart intensely. She is illuminated by the warm amber glow of a nearby lantern, her face partially in shadow. The background is a dark, deep blue interior. Wide cinematic composition, focused and studious mood, dramatic chiaroscuro lighting, soft painterly textures."
+    },
+    {
+      "scene_id": "harbor-009",
+      "visual_prompt": "A soft painterly storybook illustration of the tide rising to cover the lowest stone steps of the harbor. The water is a deep blue, swirling gently around the dark masonry. The scene is set under a pre-dawn sky. Wide cinematic composition, rhythmic and naturalistic mood, soft painterly textures, amber light reflecting in the rising water."
+    },
+    {
+      "scene_id": "harbor-010",
+      "visual_prompt": "A soft painterly storybook illustration of a bell buoy tilting gently on a soft swell beyond the stone breakwater. The scene is set in the deep blue of early morning with hints of amber light on the horizon. Wide cinematic composition, rhythmic and lonely mood, misty sea spray, painterly brushstrokes."
+    },
+    {
+      "scene_id": "harbor-011",
+      "visual_prompt": "A soft painterly storybook illustration of Mara closing the heavy blue boathouse door. She stands looking out toward the distant lighthouse beam cutting through the dark. The palette is deep blue with a warm amber glow from the boathouse interior. Wide cinematic composition, resolute and expectant mood, atmospheric mist, soft painterly style."
+    },
+    {
+      "scene_id": "harbor-012",
+      "visual_prompt": "A soft painterly storybook illustration of the harbor at sunrise. Warm amber sunlight washes over the rooftops of the village, contrasting with the remaining deep blue shadows of the night. A single lantern remains lit in a small window. Wide cinematic composition, hopeful and peaceful mood, glowing light, rich painterly textures."
+    }
+  ]
+}
