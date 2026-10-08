@@ -547,6 +547,9 @@ struct NativeLifecycleTests {
         }
 
         SecretChecks.run()
+        let views = temporary.appendingPathComponent("views")
+        try FileManager.default.createDirectory(at: views.appendingPathComponent("models"), withIntermediateDirectories: true)
+        try ViewChecks.run(data: views.appendingPathComponent("state"), models: views.appendingPathComponent("models"))
         print("Native lifecycle checks passed")
     }
 }

@@ -2571,6 +2571,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         _downloads_shown.add(str(run.get("id")))
         await monitor.refresh_machine_catalogs(machine)
 
+    @app.get("/api/hub/model-downloads")
+    def list_model_downloads() -> dict[str, Any]:
+        from . import model_downloads
+        return {"runs": model_downloads.list_runs()}
+
     @app.get("/api/hub/model-downloads/{run_id}")
     async def model_download_status(run_id: str) -> dict[str, Any]:
         from . import model_downloads

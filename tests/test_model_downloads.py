@@ -36,8 +36,17 @@ assert (data/"model-download-runs"/run["id"]/"sources.map").is_file()
 # A different, incomplete package stays cancellable and is synchronously reaped.
 cancel_manifest={**manifest,"package_id":"fixture-cancel","model_id":"fixture/cancel","revision":"b"*40}
 run=model_downloads.start(package_id="fixture-cancel", manifest=cancel_manifest, catalog={"fixture-cancel":cancel_manifest}, library=library, sources=None)
+# Listed whoever started it (the app, a fleet install), newest first, and the list is what the app
+# adopts to show and cancel a run it did not start.
+listed=model_downloads.list_runs()
+assert listed[0]["id"] == run["id"] and listed[0]["state"] == "running" and "staging" not in listed[0], listed[0]
+stage=Path(model_downloads._read()["runs"][run["id"]]["staging"]); stage.mkdir(parents=True, exist_ok=True)
+(stage/"partial.part").write_bytes(b"x")
 cancelled=model_downloads.cancel(run["id"])
 assert cancelled["state"] == "cancelled" and run["id"] not in model_downloads._processes
+# Cancel stops the downloader only: partial bytes stay in staging for the next try to resume.
+assert (stage/"partial.part").read_bytes() == b"x"
+assert next(r for r in model_downloads.list_runs() if r["id"] == run["id"])["state"] == "cancelled"
 # A wrapper that exits on TERM must not leave its stubborn downloader orphaned.
 pidfile=root/"owned-child.pid"
 owned_script="import signal,time; signal.signal(signal.SIGTERM, lambda *_: None); time.sleep(60)"

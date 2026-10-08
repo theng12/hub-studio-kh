@@ -155,6 +155,18 @@ def test_the_status_read_on_this_mac(hub):
     assert hub.client.get("/api/hub/fleet/nodes/local/model-downloads/nope").status_code == 404
 
 
+def test_the_app_lists_a_fleet_started_run(hub, monkeypatch):
+    """The owner's app lists every run on this Mac (2026-10-08: a fleet install at 39% read "No model
+    downloads"), with the owner token; the Fleet token cannot read the list."""
+    from components.hub import model_downloads
+    monkeypatch.setattr(model_downloads, "list_runs", lambda: [
+        {"id": "run-1", "package_id": FISH, "state": "running", "total_bytes": 100, "bytes_done": 39}])
+    assert hub.client.get("/api/hub/model-downloads").status_code in (401, 403)
+    answer = hub.client.get("/api/hub/model-downloads", headers={"Authorization": "Bearer " + hub.owner})
+    assert answer.status_code == 200
+    assert answer.json()["runs"][0]["id"] == "run-1"
+
+
 def test_the_fleet_still_cannot_import_cancel_or_use_the_plain_model_routes():
     from components.hub.backend.auth import fleet_path_allowed
     assert fleet_path_allowed("POST", f"/api/hub/fleet/nodes/x/model-packages/{FISH}/download")
@@ -162,6 +174,7 @@ def test_the_fleet_still_cannot_import_cancel_or_use_the_plain_model_routes():
     for method, path in (("POST", f"/api/hub/model-packages/{FISH}/download"),
                          ("POST", f"/api/hub/model-packages/{FISH}/import"),
                          ("POST", f"/api/hub/model-packages/{FISH}/verify"),
+                         ("GET", "/api/hub/model-downloads"),
                          ("GET", "/api/hub/model-downloads/run-1"),
                          ("DELETE", "/api/hub/model-downloads/run-1"),
                          ("DELETE", "/api/hub/fleet/nodes/x/model-downloads/run-1")):

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.160 — 2026-10-08 · Every model download shows on the Jobs page, in its own tab, with Cancel
+
+- The app now lists every model download this Mac's Hub is running, not only the ones started from the app. A download started from the Gateway's fleet install (for example Qwen Image 2.1 Low-RAM) used to read "No model downloads" while it ran; it now shows its progress and a Cancel button on the Jobs page, the Models page and the Overview.
+- Model downloads have their own tab on the Jobs page, after Chat, so they no longer sit at the bottom of All. The tab shows how many are running, for example "Downloads (1)".
+- Cancel stops the download only. The part already downloaded stays in the library's staging folder, and the next install picks up from there.
+- The Hub has a new read, `GET /api/hub/model-downloads`, that lists every download on this Mac, newest first. It needs the owner's token; the Fleet token cannot read it.
+- The list shows this Mac's downloads only. A controller does not list its nodes' downloads; the Gateway's fleet install page shows those.
+
 ## 0.6.159 — 2026-10-08 · Image job time limits follow step count and Mac speed
 
 - Each image job now gets its own time limit: 120 s plus 1.5 × steps × how long a step takes on the Mac running it, between 15 minutes and 2 hours. More steps or a slower Mac get more time; a quick job on a fast Mac is still caught in 15 minutes.

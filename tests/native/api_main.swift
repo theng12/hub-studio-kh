@@ -98,6 +98,9 @@ final class FixtureProtocol: URLProtocol {
     /// What `GET /api/hub/model-downloads/hub-download-1` answers: normal, a transient 500, the
     /// Hub having forgotten the run (404), or a failed run with the downloader's own last words.
     static var hubDownloadMode = "normal"
+    /// A run the Gateway's fleet install started on this Hub, not the app: "" lists none.
+    static var fleetRunState = ""
+    static var fleetRunDeletes = 0
     static var hubDownloadReads = 0
     static var uncertainMusic = false
     static var corruptMusic = false
@@ -1096,6 +1099,13 @@ final class FixtureProtocol: URLProtocol {
             case "failed": result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"error","error_tail":"Download incomplete or invalid: model.safetensors"}"#.utf8))
             default: result = (200, "application/json", Data("{\"id\":\"hub-download-1\",\"package_id\":\"whisper-turbo\",\"state\":\"\(cancelled ? "cancelled" : "running")\",\"bytes_done\":3000000000,\"total_bytes\":12000000000}".utf8))
             }
+        case ("GET", "/api/hub/model-downloads"), ("GET", "/api/hub/model-downloads/fleet-run-1"), ("DELETE", "/api/hub/model-downloads/fleet-run-1"):
+            Self.lock.lock()
+            if method == "DELETE" { Self.fleetRunState = "cancelled"; Self.fleetRunDeletes += 1 }
+            let state = Self.fleetRunState
+            Self.lock.unlock()
+            let row = "{\"id\":\"fleet-run-1\",\"package_id\":\"fixture-flux\",\"state\":\"\(state)\",\"bytes_done\":39,\"total_bytes\":100}"
+            result = (200, "application/json", Data((path.hasSuffix("fleet-run-1") ? row : state.isEmpty ? #"{"runs":[]}"# : "{\"runs\":[\(row)]}").utf8))
         case ("DELETE", "/api/hub/model-downloads/hub-download-1"):
             Self.lock.lock(); Self.hubDownloadCancelled = true; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"cancelled"}"#.utf8))
@@ -4773,6 +4783,21 @@ struct NativeAPITests {
         store.dismissDownload(failedRun!)
         require(!store.downloads.contains { $0.id == "hub-download-1" }, "a dismissed failure must clear")
         FixtureProtocol.mutate { FixtureProtocol.hubDownloadMode = "normal" }
+        // A download the app did not start (the Gateway's fleet install, 2026-10-08) is listed with its
+        // progress and model, and Cancel reaches the Hub like the app's own.
+        FixtureProtocol.mutate { FixtureProtocol.fleetRunState = "running" }
+        await store.refresh()
+        let fleetRun = store.downloads.first { $0.id == "fleet-run-1" }
+        require(fleetRun?.repo == "fixture/flux" && fleetRun?.state == "running" && fleetRun?.percent == 39,
+                "a fleet-started download must be listed with its model and progress: \(String(describing: fleetRun))")
+        await store.cancelDownload(fleetRun!)
+        require(FixtureProtocol.fleetRunDeletes == 1, "Cancel must reach the Hub for a fleet-started download")
+        require(store.downloads.contains { $0.id == "fleet-run-1" && $0.state == "cancelled" },
+                "a cancelled fleet download must read cancelled: \(store.downloads)")
+        await store.refresh()
+        require(store.downloads.filter { $0.id == "fleet-run-1" }.count == 1, "a finished fleet run is not adopted again")
+        store.dismissDownload(store.downloads.first { $0.id == "fleet-run-1" }!)
+        FixtureProtocol.mutate { FixtureProtocol.fleetRunState = "" }
         store.audioModel = "other/tts"
         store.audioText = "Unsupported voice model"
         let submitsBeforeUnsupported = FixtureProtocol.generatedBodies().count

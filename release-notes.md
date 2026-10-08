@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.160 - 2026-10-08
+
+### Model downloads in their own tab
+
+Every model download on this Mac now shows up in the app, including ones started from the Gateway, with its progress and a Cancel button. They have their own Downloads tab on the Jobs page, so you no longer scroll to the bottom to find them. Cancelling keeps what was already downloaded, so a later install continues from there.
+
 ## 0.6.159 - 2026-10-08
 
 ### Image jobs get the time they need

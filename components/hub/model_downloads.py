@@ -247,6 +247,15 @@ def status(run_id: str) -> dict | None:
         return _public(value["runs"][run_id]) if run_id in value["runs"] else None
 
 
+def list_runs() -> list[dict]:
+    """Every run this Hub knows, newest first, whoever started it: the app, the Gateway's fleet
+    install, or a LAN copy. The app lists only the ones it started itself without this."""
+    # ponytail: the whole history every read; trim old finished runs if this file ever grows large.
+    with _lock:
+        runs = reconcile()["runs"].values()
+        return [_public(run) for run in sorted(runs, key=lambda r: r.get("started_at") or 0, reverse=True)]
+
+
 def _stop_owned(run_id: str, process: subprocess.Popen) -> int | None:
     if process.poll() is None:
         try:

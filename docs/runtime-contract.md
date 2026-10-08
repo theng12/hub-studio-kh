@@ -272,7 +272,8 @@ processes; the current wrapper starts only Voice. ST-10 adds real fleet integrat
   until reconciliation; other machines remain eligible.
 - `/api/hub/model-packages`: catalog/file/runtime readiness; `/{package_id}/import`,
   `/download` and `/verify` use the ST-01 helper. Download returns a durable run ID;
-  `/api/hub/model-downloads/{run_id}` gets or cancels that run. Explicit retries reuse
+  `/api/hub/model-downloads/{run_id}` gets or cancels that run; `GET /api/hub/model-downloads`
+  lists every run, newest first, whoever started it (app, fleet install, LAN copy). Explicit retries reuse
   validated partial bytes without changing model protection.
 - `/api/hub/settings`: GET defaults/effective values, PUT `max_bytes` and
   `retention_days`, POST `/restore-defaults`. ST-07 extends this same owner instead

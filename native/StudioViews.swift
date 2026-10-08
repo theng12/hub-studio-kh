@@ -25,13 +25,17 @@ struct StudioWindow: View {
 /// and the model pickers derive from — so a Studio added to the enum cannot arrive without its
 /// history tab. This was a hand-written list of four names, and a Studio it did not name simply
 /// had no tab, with nothing saying a tab was missing.
+///
+/// `downloads` is the model downloads on this Mac, whoever started them (owner, 2026-10-08: its own
+/// tab, not a section under every Studio's history).
 enum HistoryTab: Hashable, Identifiable {
     case all
     case studio(StudioFunction)
+    case downloads
 
     static let allCases: [HistoryTab] = [.all] + StudioFunction.allCases
         .filter { $0.hasHistoryTab }
-        .map(HistoryTab.studio)
+        .map(HistoryTab.studio) + [.downloads]
 
     var studio: StudioFunction? {
         if case .studio(let function) = self { return function }
@@ -39,6 +43,7 @@ enum HistoryTab: Hashable, Identifiable {
     }
     /// The page's owner-facing name, so the tab reads "Subtitle" and not "Transcription".
     var title: String {
+        if self == .downloads { return "Downloads" }
         guard let studio else { return "All" }
         return StudioPage.page(for: studio)?.title ?? studio.rawValue
     }
@@ -4189,11 +4194,14 @@ struct StudioContent: View {
     private var jobsWorkspace: some View {
         PageScaffold(title: pageTitle(.jobs), subtitle: "Every local generation in one place, or filtered to a single studio.", scrolls: true) {
                 Picker("History", selection: $historyTab) {
-                    ForEach(HistoryTab.allCases) { tab in Text(tab.title).tag(tab) }
+                    ForEach(HistoryTab.allCases) { tab in
+                        let running = workspace.downloads.filter { active($0.state) }.count
+                        Text(tab == .downloads && running > 0 ? "\(tab.title) (\(running))" : tab.title).tag(tab)
+                    }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(maxWidth: 420, alignment: .leading)
+                .frame(maxWidth: 520, alignment: .leading)
                 .accessibilityLabel("History filter")
                 if workspace.transcribing { transcriptionActivity }
                 // A tab for a Studio the Hub files nothing for is not nothing to show: it is the
@@ -4239,7 +4247,7 @@ struct StudioContent: View {
                       }
                     }
                 }
-                if historyTab == .all {
+                if historyTab == .downloads {
                   VStack(alignment: .leading, spacing: HubSpace.m) {
                     sectionTitle("Model downloads")
                     if workspace.downloads.isEmpty { Text("No model downloads.").font(HubType.secondary).foregroundStyle(.secondary) }

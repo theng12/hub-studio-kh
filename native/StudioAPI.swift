@@ -3876,8 +3876,10 @@ final class NativeWorkspaceStore: ObservableObject {
             async let transfers: DownloadsResponse? = try? get(["studio", "voice", "api", "downloads"])
             async let settings: TokenStatusWire? = try? get(["studio", "voice", "api", "settings"])
             async let subtitleHistory: HubTranscriptionList? = try? get(["api", "hub", "transcription", "jobs"])
-            let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue) =
-                try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory)
+            // Every download run on this Hub, whoever started it (a Gateway fleet install, a LAN copy).
+            async let hubRuns: HubModelDownloads? = try? get(["api", "hub", "model-downloads"])
+            let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue, hubRunsValue) =
+                try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory, hubRuns)
             // Torn down while reading. The child reads that use `try?` come back nil rather than
             // throwing, so without this a cancelled refresh would publish "a studio did not answer"
             // and count its missing jobs — reporting a fault that never happened.
@@ -4033,7 +4035,13 @@ final class NativeWorkspaceStore: ObservableObject {
             chatJobs = chats.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             var hubTransfers: [NativeDownload] = []
             var prunedRuns = false
-            for (runID, repo) in hubDownloadRuns {
+            // Adopt a running download this app did not start (2026-10-08: a fleet install at 39% read
+            // "No model downloads" and could not be cancelled). From here it is polled, listed and
+            // cancelled like the app's own.
+            for run in hubRunsValue?.runs ?? [] where ["running", "recovery_pending"].contains(run.state) && hubDownloadRuns[run.id] == nil {
+                hubDownloadRuns[run.id] = modelPackages.values.first { $0.packageId == run.packageId }?.modelId ?? run.packageId
+            }
+            for (runID, repo) in hubDownloadRuns.sorted(by: { $0.key < $1.key }) {
                 do {
                     let run: HubModelDownload = try await get(["api", "hub", "model-downloads", runID])
                     let download = Self.mapHubDownload(run, repo: repo)
@@ -9858,6 +9866,7 @@ private struct HubModelDownload: Decodable {
     let id: String; let packageId: String; let state: String
     let bytesDone: Int64?; let totalBytes: Int64?; let errorTail: String?
 }
+private struct HubModelDownloads: Decodable { let runs: [HubModelDownload] }
 private struct HubModelImport: Encodable { let sourceFolder: String }
 private struct RenameRequest: Codable { let name: String }
 private struct ModelHealthRecheck: Encodable { let model: String; let studio: String? }
