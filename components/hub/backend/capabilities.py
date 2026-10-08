@@ -988,7 +988,7 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
     local_chat = next((worker for worker in workers
                        if worker["studio_type"] == "chat" and worker["ready"]
                        and peers.is_local_studio(studios_by_id[worker["service_id"]])), None)
-    if local_chat is not None and registry.chat_priority("local"):
+    if local_chat is not None:
         by_operation.setdefault("chat.completion", {}).update(
             pending_request_slots=1,
             pending_queue_wait_seconds=chat_priority.MAX_WAIT_SECONDS,

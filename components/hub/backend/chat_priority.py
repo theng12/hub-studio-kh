@@ -49,6 +49,7 @@ def register(request_id: str, machine: str, studio_id: str, model: str) -> dict:
     if active >= MAX_MACHINE_REQUESTS or len(requests) >= MAX_REQUESTS:
         raise HTTPException(409, {"code": "MACHINE_BUSY", "detail": "the bounded Chat queue is full"})
     row = {"id": request_id, "machine": machine, "studio": studio_id, "model": model,
+           "created_at": time.time(),
            "state": "queued", "ready": False, "expires": time.monotonic() + MAX_WAIT_SECONDS}
     requests[request_id] = row
     return row
@@ -80,8 +81,13 @@ def cancel(request_id: str) -> dict:
 
 
 def first(row: dict) -> bool:
-    return next((r for r in requests.values()
-                 if r.get("machine") == row["machine"] and r["state"] == "queued" and r.get("ready")), None) is row
+    return oldest_ready(row["machine"]) is row
+
+
+def oldest_ready(machine: str) -> dict | None:
+    ready = [row for row in requests.values()
+             if row.get("machine") == machine and row["state"] == "queued" and row.get("ready")]
+    return min(ready, key=lambda row: (row.get("created_at", 0), row["id"]), default=None)
 
 
 def pending(machine: str) -> bool:
@@ -120,6 +126,22 @@ async def wait(row, request, ready, reserve, timeout_seconds: float) -> str:
                     row.update(state="cancelled", ready=False)
                     continue
                 if time.monotonic() >= deadline:
+                    continue
+                refusal, dispatchable = await ready()
+                row["ready"] = dispatchable
+                if refusal:
+                    raise HTTPException(409, refusal)
+                if not dispatchable:
+                    continue
+                # The final readiness check can itself yield while memory, catalog, or
+                # peer state is refreshed. Fence cancellation, disconnect, and expiry
+                # once more; reserve() is deliberately synchronous after this point.
+                if await request.is_disconnected() or row["state"] == "cancelled":
+                    row.update(state="cancelled", ready=False)
+                    continue
+                if time.monotonic() >= deadline:
+                    continue
+                if not first(row):
                     continue
                 owner = reserve()
                 if owner is not None:

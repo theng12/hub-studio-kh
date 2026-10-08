@@ -1521,6 +1521,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "last_stop": fleet_view.this_last_stop(),
                 # Workstation mode: whether this Mac takes new work right now, and why not.
                 "workstation": workstation.status(),
+                "priority_order": registry_view.priority_order("local"),
                 "chat_priority": registry_view.chat_priority("local")}
 
     @app.get("/api/hub/workers")
@@ -1704,6 +1705,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         """
         from .backend import fleet_nodes as fleet
         from .backend import ledger, peers
+        from .backend import registry as registry_view
         from .backend import resources as resource_stats
         from .backend import activity as activity_view
         measured = ledger.stats().get("by_machine") or {}
@@ -1761,6 +1763,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     "last_stop": fleet.this_last_stop(),
                     "workstation": workstation.status(),
                 }
+                row["priority_order"] = registry_view.priority_order("local")
+                row["chat_priority"] = registry_view.chat_priority("local")
             else:
                 snapshot = peers.cached(machine) or {}
                 # The roster's probe is the one read of this machine: it answers directly when no
@@ -1801,6 +1805,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     "last_stop": last_stop if isinstance(last_stop, dict) else None,
                     "workstation": workstation_row if isinstance(workstation_row, dict) else None,
                 }
+                policy_source = member if isinstance(member, dict) and (
+                    "priority_order" in member or "chat_priority" in member) else snapshot
+                remote_order = (
+                    registry_view.normalize_priority_order(policy_source.get("priority_order"))
+                    if "priority_order" in policy_source
+                    else (["chat"] if policy_source.get("chat_priority") is True else [])
+                )
+                row["priority_order"] = remote_order
+                row["chat_priority"] = bool(remote_order and remote_order[0] == "chat")
             stats = measured.get(machine) or {}
             rows.append({
                 **row,
@@ -1846,6 +1859,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "startup": member.get("startup"),
                 "last_stop": member.get("last_stop"),
                 "workstation": member.get("workstation"),
+                "priority_order": fleet._priority_order_of(member),
+                "chat_priority": bool(fleet._priority_order_of(member)
+                                      and fleet._priority_order_of(member)[0] == "chat"),
                 "memory_gb": host.get("total_gb"), "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"), "disk": host.get("disk"),
@@ -2863,6 +2879,38 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             return JSONResponse(error.body, status_code=error.status)
         return JSONResponse(answer)
 
+    @app.get("/api/hub/fleet/nodes/{node_id}/work-policy")
+    async def fleet_node_work_policy_read(node_id: str) -> JSONResponse:
+        from . import operator_controls
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            return JSONResponse({"ok": True, "node": wanted,
+                                 "work_policy": operator_controls.work_policy(monitor)})
+        try:
+            answer = await fleet.relay_work_policy(wanted, "GET")
+        except fleet.StartupRelayError as error:
+            return JSONResponse(error.body, status_code=error.status)
+        return JSONResponse(answer)
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/work-policy")
+    async def fleet_node_work_policy_write(node_id: str, body: dict[str, Any]) -> JSONResponse:
+        from . import operator_controls
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            try:
+                policy = operator_controls.save_work_policy(monitor, body)
+            except HTTPException as error:
+                return JSONResponse({"ok": False, "code": "BAD_POLICY",
+                                     "detail": error.detail}, status_code=error.status_code)
+            return JSONResponse({"ok": True, "node": wanted, "work_policy": policy})
+        try:
+            answer = await fleet.relay_work_policy(wanted, "POST", body)
+        except fleet.StartupRelayError as error:
+            return JSONResponse(error.body, status_code=error.status)
+        return JSONResponse(answer)
+
     @app.get("/api/hub/shared-voices")
     def shared_voice_list() -> dict[str, Any]:
         """What this controller holds and how far each voice has reached its nodes.
@@ -3423,16 +3471,16 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         _prune_peer_leases()
         if policy is not None:
             model = await _request_model(request, body, content_type)
-            priority = (modality == "chat" and path.strip("/") == "v1/chat/completions"
-                        and broker.chat_priority_enabled(machine))
-            if modality == "chat" and request.headers.get("X-StudioHub-Request-ID") and not priority:
-                # A stale Gateway snapshot must not turn a cancellable queued request into an
-                # untracked immediate completion after this Mac's operator disabled priority.
-                return _peer_refusal_response({"code": "MACHINE_BUSY", "detail": "the bounded Chat queue is not enabled on this Mac"})
-            refusal = _peer_admission_refusal(worker, monitor, model, ignore_busy=priority)
+            # Bounded waiting is an advertised opt-in used by the Gateway. Ordinary
+            # Chat proxy callers keep the worker's streaming and default-model contract.
+            queued_completion = (
+                modality == "chat" and path.strip("/") == "v1/chat/completions"
+                and "X-StudioHub-Queue-Wait-Seconds" in request.headers)
+            refusal = _peer_admission_refusal(
+                worker, monitor, model, ignore_busy=queued_completion)
             if refusal is not None:
                 return _peer_refusal_response(refusal)
-            if priority:
+            if queued_completion:
                 from .backend import chat_priority
                 try:
                     payload = json.loads(body)
@@ -3468,8 +3516,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                             return {"code": "MACHINE_DISABLED", "detail": "this Mac was paused while Chat waited"}, False
                         if not registry.studio_enabled(machine, worker_id):
                             return {"code": "STUDIO_DISABLED", "detail": "Chat Studio was paused while this request waited"}, False
-                        if not broker.chat_priority_enabled(machine):
-                            return {"code": "MACHINE_BUSY", "detail": "Chat priority was disabled while this request waited"}, False
                         if monitor.status.get(worker_id, {}).get("status") not in (None, "unknown", "up"):
                             return {"code": "STUDIO_NOT_RUNNING", "detail": "Chat Studio is not answering"}, False
                         if broker.in_maintenance(worker_id) or not broker._can_run(worker, entry, model, routing_rule.POOL):
@@ -3481,7 +3527,14 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                         if refusal:
                             return refusal, False
                         decision, _note = await broker.prepare_machine_memory(monitor._client, worker, model, entry)
-                        return _peer_admission_refusal(worker, monitor, model, ignore_busy=True), decision == "run"
+                        refusal = _peer_admission_refusal(worker, monitor, model, ignore_busy=True)
+                        if refusal or decision != "run":
+                            return refusal, False
+                        if await broker.higher_priority_work_waiting(
+                                machine, "chat", queued_chat["created_at"],
+                                f"direct-chat:{queued_chat['id']}"):
+                            return None, False
+                        return None, True
 
                     def reserve_chat():
                         # is_disconnected() also awaits. Recheck owner controls after that final
@@ -3491,7 +3544,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                             if refusal.get("code") == "MACHINE_BUSY":
                                 return None
                             raise HTTPException(409, refusal)
-                        if not broker.chat_priority_enabled(machine) or broker.in_maintenance(worker_id):
+                        if broker.in_maintenance(worker_id):
                             raise HTTPException(409, {"code": "MACHINE_BUSY", "detail": "Chat dispatch was paused before reservation"})
                         return _reserve_peer_machine(worker_id, machine)
 
@@ -3506,8 +3559,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                         chat_priority.finish(queued_chat)
                     raise
             else:
-                if modality != "chat" and await broker.priority_chat_waiting(machine):
-                    return _peer_refusal_response({"code": "MACHINE_BUSY", "detail": "ready Chat work has priority on this Mac"})
+                if await broker.higher_priority_work_waiting(
+                        machine, modality, time.time(), f"peer:{modality}:{uuid.uuid4().hex}"):
+                    return _peer_refusal_response({
+                        "code": "MACHINE_BUSY",
+                        "detail": "older or higher-priority work is ready on this Mac"})
+                refusal = _peer_admission_refusal(worker, monitor, model)
+                if refusal is not None:
+                    return _peer_refusal_response(refusal)
+                if broker.in_maintenance(worker_id):
+                    return _peer_refusal_response({
+                        "code": "MACHINE_BUSY",
+                        "detail": "this Studio entered maintenance before reservation"})
                 owner = _reserve_peer_machine(worker_id, machine)
                 if owner is None:
                     return _peer_refusal_response(

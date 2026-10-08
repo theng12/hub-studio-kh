@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.157 - 2026-10-08
+
+### Choose what this Mac runs first
+
+In **Settings > Work on this Mac > Job priority**, choose **Custom order** and use the arrows to rank enabled functions. Choose **No preference** to give all enabled functions equal priority.
+
+The current job finishes first. The highest-ranked eligible queued work runs next, with older work first at the same rank. Other enabled functions use free time when higher-ranked work cannot run. Continuous higher-priority demand can keep lower-ranked jobs waiting.
+
+Your existing LLM-first setting is kept. Each Mac has its own choices; changing priorities keeps pauses and enabled functions in place. Gateway can edit an updated Mac's priorities from its Fleet machine menu.
+
 ## 0.6.156 - 2026-10-08
 
 ### Work on this Mac

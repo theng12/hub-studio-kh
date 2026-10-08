@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import registry
 from .registry import DATA_DIR, LAUNCHER_ROOT
 
 FLEET_TOKEN_FILE = DATA_DIR / ".fleet_token"
@@ -377,6 +378,11 @@ async def _refresh_stale(machines, stale, client, now):
                 if store(machine, snapshot, entry, auth_generation):
                     note_reachability(machine, snapshot)
                 return
+            order = (
+                registry.normalize_priority_order(data.get("priority_order"))
+                if "priority_order" in data
+                else (["chat"] if data.get("chat_priority") is True else [])
+            )
             snapshot = {
                 "host": data.get("host"),
                 "studios": data.get("studios", {}),
@@ -393,7 +399,8 @@ async def _refresh_stale(machines, stale, client, now):
                 # Its workstation mode, settings and state (`components/hub/workstation.py`). Absent from
                 # an older Hub, which is then never standing by.
                 "workstation": data.get("workstation") if isinstance(data.get("workstation"), dict) else None,
-                "chat_priority": data.get("chat_priority") is True,
+                "priority_order": order,
+                "chat_priority": bool(order and order[0] == "chat"),
                 "reachable": True, "auth": True, "status": "connected",
             }
             clears_rejection = False

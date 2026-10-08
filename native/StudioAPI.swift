@@ -1408,6 +1408,10 @@ struct ConnectionNotice: Identifiable, Equatable {
 
 /// This Mac's saved function choices, dispatch priority and separate manual pause state.
 struct NativeWorkPolicy: Decodable, Equatable {
+    struct Function: Decodable, Equatable, Identifiable {
+        let id: String
+        let title: String
+    }
     struct Studio: Decodable, Equatable, Identifiable {
         let id: String
         let title: String
@@ -1415,8 +1419,47 @@ struct NativeWorkPolicy: Decodable, Equatable {
         let enabled: Bool
     }
     let machineEnabled: Bool
-    let chatPriority: Bool
+    var chatPriority: Bool { priorityOrder.first == "chat" }
     let studios: [Studio]
+    let priorityOrder: [String]
+    let priorityFunctions: [Function]
+    let supportsFunctionPriority: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case machineEnabled, chatPriority, studios, priorityOrder, priorityFunctions
+    }
+
+    init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        machineEnabled = try fields.decode(Bool.self, forKey: .machineEnabled)
+        studios = try fields.decode([Studio].self, forKey: .studios)
+        let legacyChatPriority = try fields.decodeIfPresent(Bool.self, forKey: .chatPriority) ?? false
+        priorityOrder = try fields.decodeIfPresent([String].self, forKey: .priorityOrder)
+            ?? (legacyChatPriority ? ["chat"] : [])
+        priorityFunctions = try fields.decodeIfPresent([Function].self, forKey: .priorityFunctions) ?? []
+        supportsFunctionPriority = fields.contains(.priorityOrder) && fields.contains(.priorityFunctions)
+    }
+
+    /// The producer owns function vocabulary; unknown Studio checkboxes remain independent.
+    var enabledPriorityFunctions: [Function] {
+        let enabled = priorityFunctions.filter { function in
+            studios.contains { $0.modality == function.id && $0.enabled }
+        }
+        return priorityOrder.compactMap { id in enabled.first { $0.id == id } }
+            + enabled.filter { !priorityOrder.contains($0.id) }
+    }
+
+    /// An explicit move ranks enabled functions; disabled saved positions stay in place.
+    func priorityOrder(moving functionID: String, by offset: Int) -> [String]? {
+        var enabled = enabledPriorityFunctions.map(\.id)
+        guard let index = enabled.firstIndex(of: functionID), enabled.indices.contains(index + offset) else { return nil }
+        enabled.swapAt(index, index + offset)
+        let enabledIDs = Set(enabled)
+        var next = enabled.makeIterator()
+        var result = priorityOrder.map { enabledIDs.contains($0) ? (next.next() ?? $0) : $0 }
+        result.append(contentsOf: next)
+        return result
+    }
 }
 
 /// Lite Mode (`components/hub/workstation.py`; internally "workstation"): a shop's own Mac lends the
@@ -6073,8 +6116,9 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
-    func saveWorkPriority(_ priority: Bool) async -> Bool {
+    func saveWorkPriority(_ priority: [String]) async -> Bool {
         guard let requestConnection = connectionID, isReachable, workPolicy != nil,
+              workPolicy?.supportsFunctionPriority == true,
               !savingWorkPolicy else { return false }
         savingWorkPolicy = true
         workPolicyRevision += 1
@@ -6083,13 +6127,13 @@ final class NativeWorkspaceStore: ObservableObject {
         defer { if connectionID == requestConnection { savingWorkPolicy = false } }
         do {
             let answer: NativeWorkPolicy = try await sendJSON(
-                ["api", "hub", "work-policy"], method: "POST", body: ["chat_priority": priority])
+                ["api", "hub", "work-policy"], method: "POST", body: ["priority_order": priority])
             guard connectionID == requestConnection else { return false }
             workPolicy = answer
             return true
         } catch {
             if connectionID == requestConnection {
-                workPolicyNote = Self.actionable(error, action: "Save LLM priority")
+                workPolicyNote = Self.actionable(error, action: "Save job priority")
             }
             return false
         }

@@ -205,9 +205,18 @@ final class FixtureProtocol: URLProtocol {
     static var storageLimits: [String: Any]?
     /// Lite Mode (`/api/hub/workstation`): the settings the Hub holds, and the bodies the app posted.
     static var workPolicy: [String: Any] = ["machine_enabled": false, "chat_priority": false,
+        "priority_order": [String](),
+        "priority_functions": [["id": "voice", "title": "Voice Studio"],
+                               ["id": "image", "title": "Image Studio"],
+                               ["id": "chat", "title": "Chat Studio"],
+                               ["id": "transcription", "title": "Subtitle Studio"]],
         "studios": [["id": "voice@local", "title": "Voice Studio", "modality": "voice", "enabled": true],
+                    ["id": "image@local", "title": "Image Studio", "modality": "image", "enabled": true],
+                    ["id": "chat@local", "title": "Chat Studio", "modality": "chat", "enabled": true],
+                    ["id": "transcription@local", "title": "Subtitle Studio", "modality": "transcription", "enabled": false],
                     ["id": "future@local", "title": "Future Studio", "modality": "future", "enabled": false]]]
     static var workPolicyPosts: [[String: Any]] = []
+    static var workPolicyNextReturnedOrder: [String]?
     static var workPolicyRejects = false
     static var workPolicyReadRejects = false
     static var workPolicyReads = 0
@@ -728,7 +737,12 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock(); Self.workPolicyPosts.append(body)
             let rejects = Self.workPolicyRejects
             if !rejects {
-                if path.hasSuffix("work-policy") { Self.workPolicy["chat_priority"] = body["chat_priority"] }
+                if path.hasSuffix("work-policy") {
+                    let order = Self.workPolicyNextReturnedOrder ?? body["priority_order"] as? [String] ?? []
+                    Self.workPolicyNextReturnedOrder = nil
+                    Self.workPolicy["priority_order"] = order
+                    Self.workPolicy["chat_priority"] = order.first == "chat"
+                }
                 else {
                     var studios = Self.workPolicy["studios"] as! [[String: Any]]
                     studios[0]["enabled"] = body["enabled"]; Self.workPolicy["studios"] = studios
@@ -3576,6 +3590,27 @@ struct NativeAPITests {
                 "the cleanup choice must reach the Hub")
         require(store.storageNote?.contains("Saved") == true, "a save needs a visible result")
 
+        // Ranked work policy is authoritative without requiring the retired boolean field.
+        let rankedPolicyDecoder = JSONDecoder()
+        rankedPolicyDecoder.keyDecodingStrategy = .convertFromSnakeCase
+        let rankedPolicyJSON = Data(#"{"machine_enabled":false,"priority_order":["chat"],"priority_functions":[{"id":"voice","title":"Voice Studio"},{"id":"chat","title":"Chat Studio"}],"studios":[{"id":"voice@local","title":"Voice Studio","modality":"voice","enabled":true},{"id":"chat@local","title":"Chat Studio","modality":"chat","enabled":true}]}"#.utf8)
+        let rankedPolicy = try rankedPolicyDecoder.decode(NativeWorkPolicy.self, from: rankedPolicyJSON)
+        require(rankedPolicy.supportsFunctionPriority && rankedPolicy.priorityOrder == ["chat"]
+                && rankedPolicy.enabledPriorityFunctions.map(\.id) == ["chat", "voice"],
+                "partial priority must leave omitted enabled functions tied, without assigning ranks")
+        require(rankedPolicy.priorityOrder(moving: "chat", by: 1) == ["voice", "chat"]
+                && rankedPolicy.priorityOrder(moving: "chat", by: -1) == nil,
+                "an explicit move ranks the enabled functions, and cannot move beyond the boundary")
+        let disabledPolicyJSON = Data(#"{"machine_enabled":false,"priority_order":["chat","transcription","image"],"priority_functions":[{"id":"voice","title":"Voice Studio"},{"id":"image","title":"Image Studio"},{"id":"chat","title":"Chat Studio"},{"id":"transcription","title":"Subtitle Studio"}],"studios":[{"id":"voice@local","title":"Voice Studio","modality":"voice","enabled":true},{"id":"image@local","title":"Image Studio","modality":"image","enabled":true},{"id":"chat@local","title":"Chat Studio","modality":"chat","enabled":true},{"id":"transcription@local","title":"Subtitle Studio","modality":"transcription","enabled":false},{"id":"future@local","title":"Future Studio","modality":"future","enabled":true}]}"#.utf8)
+        let disabledPolicy = try rankedPolicyDecoder.decode(NativeWorkPolicy.self, from: disabledPolicyJSON)
+        require(disabledPolicy.enabledPriorityFunctions.map(\.id) == ["chat", "image", "voice"]
+                && disabledPolicy.priorityOrder(moving: "image", by: -1) == ["image", "transcription", "chat", "voice"],
+                "moving enabled functions must preserve disabled saved positions and omit unknown functions")
+        let legacyPolicyJSON = Data(#"{"machine_enabled":false,"chat_priority":true,"studios":[]}"#.utf8)
+        let legacyPolicy = try rankedPolicyDecoder.decode(NativeWorkPolicy.self, from: legacyPolicyJSON)
+        require(legacyPolicy.priorityOrder == ["chat"] && !legacyPolicy.supportsFunctionPriority,
+                "an old Hub's Chat-first choice is readable without pretending ranked edits are supported")
+
         // Local work choices must preserve manual pause and arbitrary registered functions.
         await store.refreshWorkPolicy()
         require(store.workPolicy?.machineEnabled == false && store.workPolicy?.studios.last?.modality == "future",
@@ -3587,20 +3622,28 @@ struct NativeAPITests {
         FixtureProtocol.mutate { FixtureProtocol.workPolicyReadRejects = false }
         await store.refreshWorkPolicy()
         require(store.workPolicyNote == nil, "a recovered read must clear its stale error")
-        let prioritySaved = await store.saveWorkPriority(true)
-        require(prioritySaved && store.workPolicy?.chatPriority == true && store.workPolicy?.machineEnabled == false,
-                "priority saves must read authoritative state without resuming the Mac")
-        require(Set(FixtureProtocol.workPolicyPosts.last?.keys.map { $0 } ?? []) == ["chat_priority"],
+        FixtureProtocol.mutate { FixtureProtocol.workPolicyNextReturnedOrder = ["chat"] }
+        let prioritySaved = await store.saveWorkPriority(["image", "voice", "chat"])
+        require(prioritySaved && store.workPolicy?.priorityOrder == ["chat"] && store.workPolicy?.machineEnabled == false,
+                "priority saves must read authoritative returned state instead of echoing the request or resuming the Mac")
+        require(Set(FixtureProtocol.workPolicyPosts.last?.keys.map { $0 } ?? []) == ["priority_order"]
+                && FixtureProtocol.workPolicyPosts.last?["priority_order"] as? [String] == ["image", "voice", "chat"],
                 "priority POST must never carry machine enablement")
+        if let moved = store.workPolicy?.priorityOrder(moving: "image", by: -1) {
+            let movedSaved = await store.saveWorkPriority(moved)
+            require(movedSaved && store.workPolicy?.priorityOrder == ["chat", "image", "voice"]
+                    && FixtureProtocol.workPolicyPosts.last?["priority_order"] as? [String] == ["chat", "image", "voice"],
+                    "the row move must save its exact canonical function order")
+        } else { require(false, "Image must be movable ahead of the tied Voice function") }
         let studioSaved = await store.saveWorkStudio("voice@local", enabled: false)
         require(studioSaved && store.workPolicy?.studios.first?.enabled == false && store.workPolicy?.machineEnabled == false,
                 "a function save must preserve pause and refresh the registry")
         require(Set(FixtureProtocol.workPolicyPosts.last?.keys.map { $0 } ?? []) == ["enabled"],
                 "function POST must contain only that function's enabled flag")
         FixtureProtocol.mutate { FixtureProtocol.workPolicyRejects = true }
-        let priorityRefused = await store.saveWorkPriority(false)
-        require(!priorityRefused && store.workPolicy?.chatPriority == true && store.workPolicyNote?.contains("fixture refused") == true,
-                "failed changes must retain the saved checkbox value and expose the Hub's reason locally")
+        let priorityRefused = await store.saveWorkPriority([])
+        require(!priorityRefused && store.workPolicy?.priorityOrder == ["chat", "image", "voice"] && store.workPolicyNote?.contains("fixture refused") == true,
+                "failed changes must retain the saved order and expose the Hub's reason locally")
         await store.refreshWorkPolicy()
         require(store.workPolicyNote?.contains("fixture refused") == true,
                 "a normal poll must not erase a refused-save explanation")
@@ -3614,14 +3657,24 @@ struct NativeAPITests {
             try? await Task.sleep(for: .milliseconds(5))
         }
         require(FixtureProtocol.heldWorkPolicyRead() != nil, "the old poll must be held before saving")
-        let newerPrioritySaved = await store.saveWorkPriority(false)
-        require(newerPrioritySaved && store.workPolicy?.chatPriority == false, "the newer save must land first")
+        let newerPrioritySaved = await store.saveWorkPriority([])
+        require(newerPrioritySaved && store.workPolicy?.priorityOrder == [], "the newer no-preference save must land first")
         FixtureProtocol.heldWorkPolicyRead()?()
         await stalePolicyRead.value
         FixtureProtocol.mutate { FixtureProtocol.workPolicyHeldRead = nil }
-        require(store.workPolicy?.chatPriority == false, "an older poll must not overwrite a completed save")
+        require(store.workPolicy?.priorityOrder == [], "an older poll must not overwrite a completed save")
+        let modernPolicy = FixtureProtocol.workPolicy
+        FixtureProtocol.mutate { FixtureProtocol.workPolicy = ["machine_enabled": false, "chat_priority": true, "studios": []] }
+        await store.refreshWorkPolicy()
+        let postsBeforeUnsupportedSave = FixtureProtocol.workPolicyPosts.count
+        let unsupportedSaved = await store.saveWorkPriority([])
+        require(!unsupportedSaved && store.workPolicy?.priorityOrder == ["chat"]
+                && FixtureProtocol.workPolicyPosts.count == postsBeforeUnsupportedSave,
+                "an old Hub must not receive unsupported ranked edits or lose its readable legacy choice")
+        FixtureProtocol.mutate { FixtureProtocol.workPolicy = modernPolicy }
+        await store.refreshWorkPolicy()
         let disconnectedPolicyStore = NativeWorkspaceStore(sessionConfiguration: configuration)
-        let disconnectedPrioritySaved = await disconnectedPolicyStore.saveWorkPriority(true)
+        let disconnectedPrioritySaved = await disconnectedPolicyStore.saveWorkPriority(["chat"])
         let disconnectedStudioSaved = await disconnectedPolicyStore.saveWorkStudio("voice@local", enabled: true)
         require(!disconnectedPrioritySaved && !disconnectedStudioSaved && disconnectedPolicyStore.workPolicy == nil,
                 "a disconnected Mac must not write work preferences")

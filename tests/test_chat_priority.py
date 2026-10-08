@@ -35,12 +35,44 @@ with TestClient(app) as client:
  answer=client.get('/api/hub/work-policy')
  assert answer.status_code==200, answer.text
  assert answer.json()['chat_priority'] is False
+ assert answer.json()['priority_order']==[]
+ assert answer.json()['priority_functions']==[
+  {'id':'chat','title':'Chat'}, {'id':'voice','title':'Voice'}]
  assert [s['id'] for s in answer.json()['studios']]==['chat','voice']
  registry.set_studio_enabled('local','voice',False)
  assert client.post('/api/hub/work-policy',json={'chat_priority':True}).status_code==200
  assert registry.studio_enabled('local','voice') is False
  registry._flags_cache=None
  assert registry.chat_priority('local') is True
+ assert registry.priority_order('local')==['chat']
+ saved=client.post('/api/hub/work-policy',json={'priority_order':['voice','chat']})
+ assert saved.status_code==200,saved.text
+ assert saved.json()['priority_order']==['voice','chat']
+ assert saved.json()['chat_priority'] is False
+ assert registry.studio_enabled('local','voice') is False
+ registry._flags_cache=None
+ assert registry.priority_order('local')==['voice','chat']
+ assert client.post('/api/hub/work-policy',json={'priority_order':['chat','chat']}).status_code==400
+ assert client.post('/api/hub/work-policy',json={'priority_order':['subtitle']}).status_code==400
+ assert client.post('/api/hub/work-policy',json={'priority_order':['']}).status_code==400
+ assert client.post('/api/hub/work-policy',json={'priority_order':[1]}).status_code==400
+ assert registry.priority_order('local')==['voice','chat']
+ before_file=registry.FLAGS_FILE.read_bytes()
+ before_cache=registry.load_flags()
+ with patch.object(Path,'replace',side_effect=OSError('synthetic write failure')):
+  try:
+   registry.set_priority_order('local',['chat'])
+   raise AssertionError('failed policy write reported success')
+  except OSError: pass
+ assert registry.FLAGS_FILE.read_bytes()==before_file
+ assert registry.load_flags()==before_cache
+ assert list(registry.DATA_DIR.glob('.machine_flags.json-*')), 'failed write was deleted'
+ registry._flags_cache={'legacy':{'enabled':False,'chat_priority':True,
+                                  'studios':{'voice':{'enabled':False}}}}
+ assert registry.priority_order('legacy')==['chat']
+ assert registry.machine_enabled('legacy') is False
+ assert registry.studio_enabled('legacy','voice') is False
+ registry._flags_cache=None
  assert client.post('/api/hub/work-policy',json={'chat_priority':1}).status_code==400
  assert client.post('/api/hub/work-policy',json={'chat_priority':True,'enabled':True}).status_code==400
 
@@ -102,6 +134,47 @@ async def wait_proof():
  assert await chat_priority.wait(row,request,ready,reserve,1)=='lease'
  assert row['state']=='running'
  chat_priority.finish(row)
+
+ row=chat_priority.register('0'*31+'1','local','chat','model')
+ probe_count=0
+ async def cancelled_on_final_probe():
+  nonlocal probe_count
+  probe_count+=1
+  if probe_count==2:
+   await asyncio.sleep(0)
+   chat_priority.cancel(row['id'])
+  return None,True
+ try:
+  await chat_priority.wait(row,request,cancelled_on_final_probe,reserve,1)
+  raise AssertionError('cancel during final readiness probe reserved a Mac')
+ except HTTPException as e: assert e.detail['code']=='CHAT_REQUEST_CANCELLED'
+ assert leases==['lease']
+
+ row=chat_priority.register('0'*31+'2','local','chat','model')
+ class DisconnectOnFinalFence:
+  checks=0
+  async def is_disconnected(self):
+   self.checks+=1
+   return self.checks==3
+ try:
+  await chat_priority.wait(row,DisconnectOnFinalFence(),ready,reserve,1)
+  raise AssertionError('disconnect during final readiness probe reserved a Mac')
+ except HTTPException as e: assert e.detail['code']=='CHAT_REQUEST_CANCELLED'
+ assert leases==['lease']
+
+ head=chat_priority.register('0'*31+'3','local','chat','model')
+ tail=chat_priority.register('0'*31+'4','local','chat','model')
+ class EarlierReadyOnFinalFence:
+  checks=0
+  async def is_disconnected(self):
+   self.checks+=1
+   if self.checks==3: head['ready']=True
+   if self.checks==4: chat_priority.finish(head)
+   return False
+ fifo_request=EarlierReadyOnFinalFence()
+ assert await chat_priority.wait(tail,fifo_request,ready,reserve,1)=='lease'
+ assert fifo_request.checks>=6, 'final await let a later request bypass the ready FIFO head'
+ chat_priority.finish(tail)
 asyncio.run(wait_proof())
 
 async def sequence_proof():
@@ -109,6 +182,7 @@ async def sequence_proof():
   async def is_disconnected(self): return False
  async def ready(): return None,True
  broker._external_machine_leases.clear()
+ registry.set_priority_order('local',['chat','voice'])
  assert broker.acquire_external_machine('local','tts')
  a=chat_priority.register('3'*32,'local','chat','model')
  b=chat_priority.register('4'*32,'local','chat','other-model')
@@ -120,12 +194,14 @@ async def sequence_proof():
  while not a['ready'] or not b['ready']: await asyncio.sleep(0)
  assert a['state']==b['state']=='queued'
  broker.release_external_machine('local','tts')
- assert not broker.acquire_external_machine('local','peer:voice:next')
+ assert await broker.higher_priority_work_waiting(
+  'local','voice',time.time(),'peer:voice:next')
  owner=await ta
  assert a['state']=='running' and b['state']=='queued'
  chat_priority.finish(a)
  broker.release_external_machine('local',owner)
- assert not broker.acquire_external_machine('local','peer:voice:next')
+ assert await broker.higher_priority_work_waiting(
+  'local','voice',time.time(),'peer:voice:next')
  owner=await tb
  chat_priority.finish(b)
  broker.release_external_machine('local',owner)
@@ -215,22 +291,60 @@ async def routed_proof():
   hub=standalone.create_app(start_background=False)
   async with httpx.AsyncClient(transport=httpx.ASGITransport(app=hub),base_url='http://fixture-hub') as client:
    fleet_headers={'X-Hub-Token':peers.fleet_token()}
-   denied_policy=await client.get('/api/hub/work-policy',headers=fleet_headers)
-   assert denied_policy.status_code==403,(denied_policy.status_code,denied_policy.text)
+   fleet_policy=await client.get('/api/hub/work-policy',headers=fleet_headers)
+   assert fleet_policy.status_code==200,(fleet_policy.status_code,fleet_policy.text)
+   assert fleet_policy.json()['priority_order']==['chat','voice']
+   local_policy=await client.get('/api/hub/fleet/nodes/local/work-policy',headers=fleet_headers)
+   assert local_policy.status_code==200,local_policy.text
+   assert local_policy.json()['work_policy']['priority_order']==['chat','voice']
+   local_save=await client.post('/api/hub/fleet/nodes/local/work-policy',headers=fleet_headers,
+                                json={'priority_order':['chat','voice']})
+   assert local_save.status_code==200,local_save.text
+   assert local_save.json()['node']=='local'
+   registry.set_priority_order('local',['image','chat'])
+   with patch.object(broker,'_broker_dispatchable_work',return_value=[
+         ('image',time.time()-10,'broker:older-image')]):
+    image_first=await client.post(
+     '/studio/chat/v1/chat/completions',
+     headers={**fleet_headers,'X-StudioHub-Request-ID':'7'*32},
+     json={'model':'model','messages':[{'role':'user','content':'ordinary proxy'}],
+           'stream':False})
+   assert image_first.status_code==409,image_first.text
+   assert image_first.json()['code']=='MACHINE_BUSY',image_first.text
+   assert not wire, 'an ordinary Chat proxy bypassed ready Image-first work'
+   registry.set_priority_order('local',['chat','voice'])
+   async def pause_voice_during_rank(*_args):
+    registry.set_studio_enabled('local','voice',False)
+    return False
+   with patch.object(broker,'higher_priority_work_waiting',new=pause_voice_during_rank):
+    paused_voice=await client.post('/studio/voice/api/generate/fixture',headers=fleet_headers,
+                                   json={'model':'model','text':'hello'})
+   assert paused_voice.status_code==409,paused_voice.text
+   assert paused_voice.json()['code']=='STUDIO_DISABLED',paused_voice.text
+   assert not wire, 'a peer POST escaped after its Studio was paused during arbitration'
+   registry.set_studio_enabled('local','voice',True)
    assert broker.acquire_external_machine('local','tts')
    registry.set_chat_priority('local',False)
    body={'model':'model','messages':[{'role':'user','content':'hi'}],'stream':False}
    path='/studio/chat/v1/chat/completions'
-   denied=await client.post(path,headers=fleet_headers,json=body)
-   assert denied.status_code==409 and denied.json()['code']=='MACHINE_BUSY',denied.text
+   def headers(key): return {**fleet_headers,'X-StudioHub-Request-ID':key,'X-StudioHub-Queue-Wait-Seconds':'2'}
+   equal_wait=asyncio.create_task(client.post(path,headers=headers('0'*32),json=body))
+   for _ in range(1000):
+    if chat_priority.requests.get('0'*32,{}).get('ready'): break
+    await asyncio.sleep(.001)
+   assert chat_priority.snapshot('0'*32)['state']=='queued'
+   stopped=await client.delete('/studio/chat/requests/'+'0'*32,headers=fleet_headers)
+   assert stopped.status_code==200,stopped.text
+   equal_answer=await equal_wait
+   assert equal_answer.status_code==409 and equal_answer.json()['detail']['code']=='CHAT_REQUEST_CANCELLED'
    registry.set_chat_priority('local',True)
    registry.set_studio_enabled('local','chat',True)
-   def headers(key): return {**fleet_headers,'X-StudioHub-Request-ID':key,'X-StudioHub-Queue-Wait-Seconds':'2'}
    manifest['production_allowed']=False
    manifest_file.write_text(json.dumps(manifest))
    unqualified=await client.post(path,headers=headers('f'*32),json=body)
    assert unqualified.status_code==409 and unqualified.json()['code']=='MODEL_UNQUALIFIED',unqualified.text
-   assert not chat_priority.requests
+   assert not any(row['state'] in {'queued','running','unknown'}
+                  for row in chat_priority.requests.values())
    manifest['production_allowed']=True
    manifest_file.write_text(json.dumps(manifest))
    one=asyncio.create_task(client.post(path,headers=headers('8'*32),json=body))
@@ -257,7 +371,7 @@ async def routed_proof():
    assert len(wire)==2
    registry.set_chat_priority('local',False)
    late=await client.post(path,headers=headers('b'*32),json=body)
-   assert late.status_code==409 and late.json()['code']=='MACHINE_BUSY',late.text
+   assert late.status_code==409 and late.json()['detail']['code']=='CHAT_REQUEST_CANCELLED',late.text
    assert len(wire)==2
    registry.set_chat_priority('local',True)
    checks=[]
@@ -308,11 +422,17 @@ async def routed_proof():
    async with httpx.AsyncClient(transport=httpx.MockTransport(peer_resources)) as peer_client:
     await peers.refresh([remote],peer_client)
    assert broker.chat_priority_enabled('other') is True
+   assert broker.priority_order('other')==['chat']
+   peers._cache['other']=(time.time(),{'reachable':True,'auth':True,
+                                      'priority_order':['chat','chat'],'chat_priority':True})
+   assert broker.priority_order('other')==[]
+   assert broker.chat_priority_enabled('other') is False
    peers._cache['other']=(time.time(),{'reachable':True,'auth':True})
    assert broker.chat_priority_enabled('other') is False
    resources=await client.get('/api/hub/resources',headers=fleet_headers)
    assert resources.status_code==200,resources.text
    assert resources.json()['chat_priority'] is True
+   assert resources.json()['priority_order'][0]=='chat'
  await monitor._client.aclose()
 asyncio.run(routed_proof())
 print('local policy persists; one pending slot; cancellation fences late submits')

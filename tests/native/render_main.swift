@@ -119,10 +119,18 @@ struct PageRenderHarness {
 
         // Work choices use local fixtures only; this never changes a live Mac's pause or preferences.
         if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" {
+            let priorityMode = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_WORK_PRIORITY"] ?? "partial"
+            let order = priorityMode == "none" ? [] : (priorityMode == "full" ? ["image", "transcription", "voice", "chat"] : ["chat"])
             let policy: [String: Any] = ["machine_enabled": false, "chat_priority": true,
+                "priority_order": order,
+                "priority_functions": [["id": "voice", "title": "Voice Studio"],
+                                       ["id": "image", "title": "Image Studio"],
+                                       ["id": "chat", "title": "Chat Studio"],
+                                       ["id": "transcription", "title": "Subtitle Studio"]],
                 "studios": [["id": "voice@local", "title": "Voice Studio", "modality": "voice", "enabled": true],
                             ["id": "image@local", "title": "Image Studio", "modality": "image", "enabled": true],
                             ["id": "chat@local", "title": "Chat Studio", "modality": "chat", "enabled": true],
+                            ["id": "transcription@local", "title": "Subtitle Studio", "modality": "transcription", "enabled": false],
                             ["id": "future@local", "title": "Future registered Studio with a longer name", "modality": "future", "enabled": false]]]
             let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
             studio.workspace.workPolicy = try? decoder.decode(

@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import registry
 from .registry import DATA_DIR, machine_enabled
 from .peers import confirm_node, fleet_token, fresh_snapshot, held_token, nodes_on_previous_token
 from .vocabulary import NODE_MODALITIES
@@ -787,6 +788,12 @@ def _workstation_of(value: object) -> dict[str, Any] | None:
     return {key: value.get(key) for key in _WORKSTATION_KEYS}
 
 
+def _priority_order_of(snapshot: dict[str, Any]) -> list[str]:
+    if "priority_order" in snapshot:
+        return registry.normalize_priority_order(snapshot.get("priority_order"))
+    return ["chat"] if snapshot.get("chat_priority") is True else []
+
+
 def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     """A probe result derived from a peer poll's snapshot.
 
@@ -796,11 +803,14 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
     The host facts travel with it, so a roster read still shows what the node is.
     """
     host = snapshot.get("host") if isinstance(snapshot.get("host"), dict) else {}
+    order = _priority_order_of(snapshot)
     carried = {"host": host, "version": snapshot.get("version"),
                "startup": _startup_of(snapshot.get("startup"), row),
                "current_job": _current_job_of(snapshot.get("current_job")),
                "last_stop": last_stop_of(snapshot.get("last_stop")) or _last_known_stop(row),
-               "workstation": _workstation_of(snapshot.get("workstation"))}
+               "workstation": _workstation_of(snapshot.get("workstation")),
+               "priority_order": order,
+               "chat_priority": bool(order and order[0] == "chat")}
     if snapshot.get("auth") is False:
         return {**row, **carried, "state": "unauthorized",
                 "detail": _CREDENTIAL_DETAIL.format(
@@ -879,12 +889,15 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         # The probe's answer is also the host snapshot the Fleet page shows for this machine, so
         # one pass over the roster feeds both routes rather than the page waiting for the poll.
         host = body.get("host") if isinstance(body.get("host"), dict) else {}
+        order = _priority_order_of(body)
         return {**row, "state": "reachable", "detail": None, "host": host,
                 "version": body.get("version"), "source": body.get("source"),
                 "startup": _startup_of(body.get("startup"), row),
                 "current_job": _current_job_of(body.get("current_job")),
                 "last_stop": last_stop_of(body.get("last_stop")) or _last_known_stop(row),
-                "workstation": _workstation_of(body.get("workstation"))}
+                "workstation": _workstation_of(body.get("workstation")),
+                "priority_order": order,
+                "chat_priority": bool(order and order[0] == "chat")}
     except (httpx.HTTPError, OSError) as exc:
         # A message that stops at the colon ("could not reach the node: ") reads as though the
         # reason were withheld, and it happens whenever the exception carries an empty message -
@@ -1076,6 +1089,7 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
     controller from appearing in the pool as an entry with no name at all.
     """
     machine = str(row.get("id") or "")
+    order = _priority_order_of(row)
     return {
         "machine": machine,
         "label": str(row.get("name") or machine),
@@ -1098,6 +1112,8 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
         # Its workstation mode as it reported it (`components/hub/workstation.py`); None from an
         # older Hub or a Mac that is not answering.
         "workstation": row.get("workstation") if isinstance(row.get("workstation"), dict) else None,
+        "priority_order": order,
+        "chat_priority": bool(order and order[0] == "chat"),
     }
 
 
@@ -1265,6 +1281,49 @@ async def relay_workstation(node_id: str, changes: object, *,
     from . import peers
     peers.invalidate(wanted)
     return {"ok": True, "node": wanted, "workstation": _workstation_of(body.get("workstation"))}
+
+
+async def relay_work_policy(node_id: str, method: str, body: object = None, *,
+                            client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Read or change one joined Mac's policy on that Mac."""
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        raise StartupRelayError(404, {"ok": False, "code": "UNKNOWN_NODE",
+                                      "detail": f"this controller has no joined Mac {node_id!r}"})
+    if method not in {"GET", "POST"}:
+        raise ValueError("work-policy relay supports GET or POST")
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        response = await client.request(
+            method, f"{node.get('address') or ''}/api/hub/work-policy",
+            json=body if method == "POST" else None, timeout=PROBE_TIMEOUT)
+    except httpx.HTTPError as exc:
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
+                                      "reason": _unreachable_reason(exc),
+                                      "detail": "that Mac did not answer, so its priority did not change"}) from exc
+    finally:
+        if owned:
+            await client.aclose()
+    try:
+        answer = response.json()
+    except ValueError:
+        answer = {}
+    if response.status_code == 400 and isinstance(answer, dict):
+        raise StartupRelayError(400, answer)
+    if response.status_code in (401, 403, 404, 405):
+        raise StartupRelayError(409, {
+            "ok": False, "code": "WORK_POLICY_UNSUPPORTED",
+            "detail": "that Mac must update and restart Studio Hub before its job priority can be edited"})
+    if not response.is_success or not isinstance(answer, dict):
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_ERROR",
+                                      "detail": f"that Mac answered HTTP {response.status_code}"})
+    if method == "POST":
+        from . import peers
+        peers.invalidate(wanted)
+    return {"ok": True, "node": wanted, "work_policy": answer}
 
 
 #: A relayed test transcription waits for the node's answer: the node's own Subtitle deadline

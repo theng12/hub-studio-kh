@@ -15,6 +15,7 @@ studios.json format (all fields optional except id for overrides):
 
 import json
 import socket
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -65,19 +66,71 @@ def machine_enabled(machine: str) -> bool:
     return bool(load_flags().get(machine, {}).get("enabled", True))
 
 
-def chat_priority(machine: str) -> bool:
+def normalize_priority_order(value: object) -> list[str]:
+    """Read one canonical priority list; damaged explicit state is neutral."""
+    if not isinstance(value, list):
+        return []
+    from .vocabulary import NODE_MODALITIES
+    if (any(not isinstance(item, str) or item not in NODE_MODALITIES for item in value)
+            or len(value) != len(set(value))):
+        return []
+    return list(value)
+
+
+def priority_order(machine: str) -> list[str]:
     row = load_flags().get(machine, {})
-    return isinstance(row, dict) and row.get("chat_priority") is True
+    if not isinstance(row, dict):
+        return []
+    if "priority_order" in row:
+        return normalize_priority_order(row.get("priority_order"))
+    return ["chat"] if row.get("chat_priority") is True else []
+
+
+def chat_priority(machine: str) -> bool:
+    """Compatibility projection for clients that only understand LLM-first."""
+    order = priority_order(machine)
+    return bool(order and order[0] == "chat")
+
+
+def set_priority_order(machine: str, order: list[str]) -> None:
+    from .vocabulary import NODE_MODALITIES
+    if (not isinstance(order, list)
+            or any(not isinstance(item, str) or item not in NODE_MODALITIES for item in order)
+            or len(order) != len(set(order))):
+        raise ValueError("priority_order must contain unique canonical modalities")
+    global _flags_cache
+    flags = dict(load_flags())
+    saved = flags.get(machine, {})
+    row = dict(saved) if isinstance(saved, dict) else {}
+    row["priority_order"] = list(order)
+    row.pop("chat_priority", None)
+    flags[machine] = row
+    descriptor, name = tempfile.mkstemp(prefix=f".{FLAGS_FILE.name}-", dir=FLAGS_FILE.parent)
+    temporary = Path(name)
+    try:
+        with _os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(flags, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            _os.fsync(handle.fileno())
+        temporary.replace(FLAGS_FILE)
+    except BaseException:
+        # A failed policy write is evidence worth retaining, and project removals
+        # are recoverable. Move the orphan beside mutable state instead of deleting it.
+        if temporary.exists():
+            trash = DATA_DIR / "_trash" / "failed-writes"
+            try:
+                trash.mkdir(parents=True, exist_ok=True)
+                temporary.replace(trash / temporary.name)
+            except OSError:
+                pass  # Leave it in place if even the recovery move is unavailable.
+        raise
+    _flags_cache = flags
 
 
 def set_chat_priority(machine: str, enabled: bool) -> None:
-    global _flags_cache
-    flags = dict(load_flags())
-    row = dict(flags.get(machine, {}))
-    row["chat_priority"] = enabled
-    flags[machine] = row
-    FLAGS_FILE.write_text(json.dumps(flags, indent=2) + "\n")
-    _flags_cache = flags
+    """Legacy bool-only write adapter."""
+    set_priority_order(machine, ["chat"] if enabled else [])
 
 
 def set_machine_enabled(machine: str, enabled: bool):

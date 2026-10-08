@@ -20,7 +20,6 @@ and are forwarded verbatim to the studio's own generate endpoint.
 import asyncio
 import base64
 import hashlib
-import itertools
 import json
 import logging
 import math
@@ -205,13 +204,10 @@ def retry_class(modality: object) -> str:
             f"(classes: {sorted(set(MODALITY_RETRY_CLASS.values()))}) rather than letting it "
             f"take the non-durable default, where a retry can duplicate an artifact") from exc
 
-# Queue order is scarcest-first (owner decision, 2026-09-30): a Mac that frees up takes the queued
-# job whose *pool* - the number of distinct Macs that could run it at all - is smallest, so the few
-# big Macs are not spent on work the many small ones can do. Ties stay on the model the Mac already
-# holds, then first come first served. The old rule ranked audio ahead of image on every Mac; that
-# is gone, because "audio" says nothing about how many Macs can run the model. See
-# `_queued_batches`, `pool_machines` and memory_admission's requirement ladder. Nothing is preempted
-# and nothing is reserved: a Mac with eligible queued work is never left idle.
+# Queue order is a per-Mac function rank followed by stable FIFO. Only work that
+# passes its ordinary routing, catalog, qualification, memory, and pause gates
+# competes, so an ineligible preference never holds the Mac idle. Running work is
+# not preempted.
 # Episode renders stay ahead of everything (they are the Hub Mac's own assembly step, and
 # `acquire_external_machine` already reserves a render Mac for them).
 MAX_TRIES = 3
@@ -275,12 +271,9 @@ batches: dict[str, dict] = {}
 _busy: set[str] = set()  # studio ids currently running an item for us
 _maintenance: set[str] = set()  # drained by fleet maintenance/update operations
 _external_machine_leases: dict[str, str] = {}
-# The two auxiliary local queues share the same physical-machine lease. Keep a
-# small per-machine turn token so a chat or transcription wake loop cannot win
-# every newly-free lease while the other lane is waiting. This is advisory
-# process-local fairness only; the durable non-preemptive lease remains the
-# admission authority and a lone lane always stays work-conserving.
-# Derived from the retry-class table above, where those lanes are a deliberate class.
+# The auxiliary queues share the same physical-machine lease. The legacy turn
+# cache remains as a test/reset compatibility surface; ranked FIFO does not read
+# or populate it.
 _EXTERNAL_LANES = frozenset(
     modality for modality, kind in MODALITY_RETRY_CLASS.items()
     if kind == RETRY_CLASS_AUXILIARY_LANE)
@@ -697,16 +690,13 @@ def _pool_size(modality: str, model: str, routing: str = "pool") -> float:
     return len(_pool_members(modality, model, routing)) or math.inf
 
 
-def _broker_dispatchable_pool(machine: str) -> float | None:
-    """Smallest pool among this queue's batches that could start on ``machine`` right now.
-
-    The same tests the dispatch loop applies - idle studio, lease, avoid window, synced voice,
-    catalog, live memory - so another lane never yields the Mac to work that would not go.
-    """
+def _broker_dispatchable_work(machine: str) -> list[tuple[str, float, str]]:
+    """Broker work that can use ``machine`` now: modality, age, and identity."""
     now = time.time()
-    best: float | None = None
+    found = []
     for b in list(batches.values()):
-        if b.get("cancelled") or b["modality"] == "render":
+        if (b.get("cancelled") or b["modality"] == "render"
+                or execution_identity.lease_expired(b.get("genstudio_execution"))):
             continue
         queued = [i for i in b["items"]
                   if i["state"] == "queued" and (i.get("retry_at") or 0) <= now]
@@ -715,67 +705,101 @@ def _broker_dispatchable_pool(machine: str) -> float | None:
         if member is None or admission_refusal(b):
             continue
         studio, entry = member
+        fresh_reader = getattr(_monitor(), "scheduling_catalog_entries", None)
+        if callable(fresh_reader):
+            fresh = next((row.get("entry") for row in fresh_reader(
+                b.get("model") or "", modality=b["modality"])
+                if (row.get("studio") or {}).get("id") == studio.get("id")), None)
+            if fresh is None:
+                continue
+            entry = fresh
         if (studio not in _eligible_studios(b["modality"], b["routing"], b.get("model"))
+                or not _can_run(studio, entry, b.get("model") or "", b["routing"])
                 or not _supports_genstudio_voice_evidence(b, studio)
+                or not _catalog_matches_genstudio_revision(b, entry)
                 or not memory_admission_dispatchable(studio, b["model"], entry)
                 or not any(_shared_voice_allows_studio(b, i, studio)
                            and _item_allows_studio(i, studio, now) for i in queued)):
             continue
-        best = min(best or math.inf, _pool_size(b["modality"], b["model"], b["routing"]))
-    return best
+        found.append((str(b["modality"]), float(b.get("created_at") or 0),
+                      f"broker:{b['id']}"))
+    return found
 
 
-def chat_priority_enabled(machine: str) -> bool:
+def priority_order(machine: str) -> list[str]:
+    """One Mac's canonical preference, with old peers mapped to Chat-first."""
     from . import registry
     local = any(s.get("machine", "local") == machine and peers.is_local_studio(s)
                 for s in _monitor().registry)
     if local:
-        return registry.chat_priority("local")
-    return (peers.cached(machine) or {}).get("chat_priority") is True
+        return registry.priority_order("local")
+    snapshot = peers.cached(machine) or {}
+    if "priority_order" in snapshot:
+        return registry.normalize_priority_order(snapshot.get("priority_order"))
+    return ["chat"] if snapshot.get("chat_priority") is True else []
+
+
+def chat_priority_enabled(machine: str) -> bool:
+    order = priority_order(machine)
+    return bool(order and order[0] == "chat")
 
 
 async def priority_chat_waiting(machine: str) -> bool:
-    """Only dispatchable Chat demand defers another enabled non-render lane."""
-    if not chat_priority_enabled(machine):
-        return False
-    from . import chat_jobs, chat_priority
-    if chat_priority.pending(machine):
-        return True
-    return chat_jobs.has_queued_work() and await chat_jobs.has_dispatchable_work(_monitor(), machine)
+    """Compatibility answer: whether Chat is the next eligible work on this Mac."""
+    candidate = await next_work(machine)
+    return candidate is not None and candidate[3] == "chat"
+
+
+def _priority_key(machine: str, modality: str, created_at: float,
+                  identity: str) -> tuple[int, float, str]:
+    order = priority_order(machine)
+    try:
+        rank = order.index(modality)
+    except ValueError:
+        rank = len(order)
+    return rank, float(created_at), str(identity)
+
+
+async def next_work(machine: str) -> tuple[int, float, str, str] | None:
+    """Best actually dispatchable queued function for one physical Mac."""
+    from . import chat_jobs, chat_priority, transcription_jobs
+    candidates = [
+        (*_priority_key(machine, modality, created_at, identity), modality)
+        for modality, created_at, identity in _broker_dispatchable_work(machine)
+    ]
+    direct = chat_priority.oldest_ready(machine)
+    if direct is not None:
+        candidates.append((*_priority_key(
+            machine, "chat", direct.get("created_at", 0),
+            f"direct-chat:{direct['id']}"), "chat"))
+    chat = (await chat_jobs.dispatchable_candidate(_monitor(), machine)
+            if chat_jobs.has_queued_work() else None)
+    if chat is not None:
+        candidates.append((*_priority_key(machine, "chat", chat[0], f"chat:{chat[1]}"),
+                           "chat"))
+    transcription = (await transcription_jobs.dispatchable_candidate(_monitor(), machine)
+                     if transcription_jobs.has_queued_work() else None)
+    if transcription is not None:
+        candidates.append((*_priority_key(
+            machine, "transcription", transcription[0],
+            f"transcription:{transcription[1]}"), "transcription"))
+    return min(candidates, default=None)
+
+
+async def higher_priority_work_waiting(machine: str, modality: str,
+                                       created_at: float, identity: str) -> bool:
+    winner = await next_work(machine)
+    return winner is not None and winner[:3] < _priority_key(
+        machine, modality, created_at, identity)
 
 
 async def scarcer_work_waiting(machine: str, pool: float, own_lane: str) -> bool:
-    """Whether another lane has strictly scarcer work that can take ``machine`` right now.
+    """Deprecated compatibility shim for pre-ranked internal callers.
 
-    Cross-lane scarcest-first: a Mac that image, voice or music work wants is handed to the LLM
-    (or the reverse) when the other lane's job has fewer Macs to run on. Only work that can start
-    this instant defers anyone, so this can never hold a Mac idle - no reservation, just an order.
-    Each lane calls it for itself immediately before leasing; ``own_lane`` is skipped because a lane
-    already orders its own queue.
+    There are no production callers. Ranked FIFO uses
+    ``higher_priority_work_waiting`` with the candidate's exact age and stable id.
     """
-    from . import chat_jobs, transcription_jobs
-    if own_lane != "render" and chat_priority_enabled(machine):
-        if own_lane == "chat":
-            return False
-        if await priority_chat_waiting(machine):
-            chat_jobs._wakeup.set()
-            return True
-    found = []
-    # `has_queued_work` first: an idle lane costs nothing, which is nearly always.
-    if own_lane not in {"broker", "render"} and any(
-            item["state"] == "queued" for b in batches.values() for item in b["items"]):
-        found.append(_broker_dispatchable_pool(machine))
-    if own_lane != "chat" and chat_jobs.has_queued_work():
-        found.append(await chat_jobs.dispatchable_pool(_monitor(), machine))
-    if own_lane != "transcription" and transcription_jobs.has_queued_work():
-        found.append(await transcription_jobs.dispatchable_pool(_monitor(), machine))
-    scarcer = any(value is not None and value < pool for value in found)
-    if scarcer:  # wake the lanes that can use it - never the caller's own, which would spin
-        for lane, wake in (("broker", _wakeup), ("chat", chat_jobs._wakeup),
-                           ("transcription", transcription_jobs._wakeup)):
-            if lane != own_lane:
-                wake.set()
-    return scarcer
+    return False
 
 
 def _protection(machine: str) -> dict:
@@ -1869,10 +1893,6 @@ def acquire_external_machine(machine: str, owner: str) -> bool:
     """Atomically reserve a physical machine for another heavy-work queue."""
     if machine in busy_machines():
         return False
-    from . import chat_priority
-    if (chat_priority_enabled(machine) and chat_priority.pending(machine)
-            and not owner.startswith(("chat:", "peer:chat:", "render:"))):
-        return False
     # Episode renders are the fleet's highest-priority queued work. Never
     # interrupt a running job, but once a render is waiting, reserve an eligible
     # render Mac so a Chat/transcription poller cannot win the next-free race.
@@ -1885,36 +1905,22 @@ def acquire_external_machine(machine: str, owner: str) -> bool:
 
 def external_dispatch_allowed(
         machine: str, lane: str, *, other_lane_has_work: bool) -> bool:
-    """Apply the shared chat/transcription turn token for one physical Mac.
-
-    The token is consulted only while both lanes have queued work. If the
-    other lane is empty, the caller may use a free machine immediately even if
-    the previous token points elsewhere. ``acquire_external_machine`` still
-    provides the atomic lease and is the final authority before dispatch.
-    """
+    """Compatibility shim; ranked FIFO arbitration now runs immediately before lease."""
     if lane not in _EXTERNAL_LANES:
         raise ValueError(f"unsupported external dispatch lane: {lane}")
-    if lane == "chat" and chat_priority_enabled(machine):
-        return True
-    if not other_lane_has_work:
-        return True
-    return _external_lane_turn.get(machine) in {None, lane}
+    return True
 
 
 def note_external_dispatch(machine: str, lane: str) -> None:
-    """Pass the next shared-machine turn to the opposite auxiliary lane."""
+    """Deprecated compatibility hook; ranked FIFO has no alternating turn."""
     if lane not in _EXTERNAL_LANES:
         raise ValueError(f"unsupported external dispatch lane: {lane}")
-    other = next(iter(_EXTERNAL_LANES - {lane}))
-    _external_lane_turn[machine] = other
 
 
 def note_external_memory_block(machine: str, lane: str) -> None:
-    """Pass a blocked lane's shared-machine turn to its eligible opposite."""
+    """Wake ranked arbitration after a lane's memory gate blocks it."""
     if lane not in _EXTERNAL_LANES:
         raise ValueError(f"unsupported external dispatch lane: {lane}")
-    other = next(iter(_EXTERNAL_LANES - {lane}))
-    _external_lane_turn[machine] = other
     _wakeup.set()
 
 
@@ -3796,33 +3802,17 @@ def _supports_genstudio_voice_evidence(batch: dict, studio: dict) -> bool:
 
 
 def _queued_batches() -> list[tuple[float, dict]]:
-    """Queued work as ``(pool, batch)``, scarcest first.
+    """Queued broker work in render-first, then stable FIFO scan order.
 
-    A batch's *pool* is how many distinct Macs could run its model at all (`pool_machines`); a Mac
-    that frees up is offered the smallest pool first, so the few Macs that can run a big model are
-    not spent on work the many small ones can do. Equal pools go first come first served
-    (``created_at``) - the dispatch loop puts the model a Mac already holds ahead of that, per Mac.
-    A pool of zero (nobody can run it right now, or its catalog is unknown) sorts last and holds
-    nothing up. Episode renders stay ahead of everything.
-
-    This changes only the next dispatch decision: running work is never preempted, and every Mac
-    with eligible queued work is offered something, so nothing is held idle.
+    The per-Mac rank comparator decides which eligible function may lease the
+    machine. This scan keeps that decision cheap and deterministic; it no longer
+    performs a second, conflicting scarcity/model-stickiness ordering.
     """
-    pools: dict[tuple, float] = {}
-
-    def pool_of(batch: dict) -> float:
-        if batch["modality"] == "render":
-            return 0
-        key = (batch["modality"], batch.get("model") or "",
-               batch.get("routing", routing_rule.POOL))
-        if key not in pools:
-            pools[key] = _pool_size(*key)
-        return pools[key]
-
     return sorted(
-        ((pool_of(batch), batch) for batch in batches.values()
+        ((0 if batch["modality"] == "render" else 1, batch)
+         for batch in batches.values()
          if any(item.get("state") == "queued" for item in batch.get("items", []))),
-        key=lambda row: (row[0], row[1].get("created_at", 0)),
+        key=lambda row: (row[0], row[1].get("created_at", 0), row[1].get("id", "")),
     )
 
 
@@ -3897,14 +3887,9 @@ async def _dispatch_loop():
                                 and not item.get("cancel_signal_sent_at")):
                             await _signal_worker_cancel(client, item)
                             ledger.save_batch(batch)
-            # Scarcest pool first; within one pool, a Mac that already holds a model is offered that
-            # model's batch before the others (a sticky pass), then first come first served.
-            work = []
-            for _pool, rows in itertools.groupby(_queued_batches(), key=lambda row: row[0]):
-                group = [row[1] for row in rows]
-                work += [(b, _pool, True) for b in group if b.get("model") in _last_model.values()]
-                work += [(b, _pool, False) for b in group]
-            for b, pool, sticky in work:
+            # Render first, then FIFO. The final per-Mac rank/eligibility check
+            # immediately before the lease is the shared ordering authority.
+            for _sort_group, b in _queued_batches():
                 if _expire_genstudio_batch(b):
                     ledger.save_batch(b)
                     continue
@@ -3945,14 +3930,6 @@ async def _dispatch_loop():
                 for studio in eligible:
                     if not queued:
                         break
-                    if sticky and _last_model.get(studio["id"]) != b.get("model"):
-                        continue
-                    # Another lane's strictly scarcer job that can start on this Mac right now
-                    # goes first; it is an order, not a reservation - nothing waits on an idle Mac.
-                    if await scarcer_work_waiting(
-                            studio.get("machine", "local"), pool,
-                            "render" if b["modality"] == "render" else "broker"):
-                        continue
                     compatible_index = next(
                         (index for index, candidate in enumerate(queued)
                          if _shared_voice_allows_studio(b, candidate, studio)
@@ -4023,7 +4000,19 @@ async def _dispatch_loop():
                     if studio.get("machine", "local") in busy_machines():
                         continue
                     if (b["modality"] != "render"
-                            and await priority_chat_waiting(studio.get("machine", "local"))):
+                            and await higher_priority_work_waiting(
+                                studio.get("machine", "local"), b["modality"],
+                                b.get("created_at", 0), f"broker:{b['id']}")):
+                        continue
+                    candidate = queued[compatible_index]
+                    machine = studio.get("machine", "local")
+                    if (b.get("cancelled") or candidate.get("state") != "queued"
+                            or execution_identity.lease_expired(b.get("genstudio_execution"))
+                            or _monitor().status.get(studio["id"], {}).get("status") != "up"
+                            or not machine_enabled(machine)
+                            or not studio_enabled(machine, studio["id"])
+                            or studio["id"] in _maintenance
+                            or not _item_allows_studio(candidate, studio, time.time())):
                         continue
                     if studio.get("machine", "local") in busy_machines():
                         continue

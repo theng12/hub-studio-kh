@@ -550,6 +550,7 @@ def test_voice_dispatch_is_durable_before_worker_task_starts(
     monkeypatch.setattr(
         broker.asyncio, "create_task", lambda coroutine: created.append(coroutine)
     )
+    fixture_monitor.status[studio["id"]]["status"] = "up"
 
     with pytest.raises(StopDispatch):
         asyncio.run(broker._dispatch_loop())

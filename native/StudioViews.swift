@@ -586,12 +586,70 @@ private struct WorkPolicySettings: View {
                         .font(HubType.secondary).foregroundStyle(.secondary)
                 }
                 Divider()
-                Toggle("Prefer LLM jobs", isOn: Binding(
-                    get: { policy.chatPriority },
-                    set: { priority in Task { _ = await workspace.saveWorkPriority(priority) } }))
-                    .toggleStyle(.checkbox)
-                    .accessibilityHint("Finish the current job, then take queued LLM jobs before new TTS or image work")
-                Text("When enabled, the current job finishes. Then queued LLM jobs run before new TTS or image jobs. This Mac takes other enabled work when no LLM jobs are waiting.")
+                Picker("Job priority", selection: Binding(
+                    get: { !policy.priorityOrder.isEmpty },
+                    set: { custom in Task {
+                        _ = await workspace.saveWorkPriority(custom ? policy.priorityFunctions.map(\.id) : [])
+                    } })) {
+                    Text("No preference").tag(false)
+                    Text("Custom order").tag(true)
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
+                .disabled(!policy.supportsFunctionPriority || policy.priorityFunctions.isEmpty)
+                .accessibilityHint("Choose equal priority or a custom order for this Mac")
+                if !policy.supportsFunctionPriority {
+                    if policy.priorityOrder == ["chat"] {
+                        Text("Chat jobs first; other enabled functions have equal priority.")
+                            .font(HubType.secondary).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text("Restart the updated Hub to change job priority. The last saved choice is shown.")
+                        .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if !policy.priorityOrder.isEmpty {
+                    ForEach(Array(policy.enabledPriorityFunctions.enumerated()), id: \.element.id) { index, function in
+                        if !policy.priorityOrder.contains(function.id)
+                            && (index == 0 || policy.priorityOrder.contains(policy.enabledPriorityFunctions[index - 1].id)) {
+                            Text("Equal after ranked functions")
+                                .font(HubType.secondary).foregroundStyle(.secondary)
+                        }
+                        HStack(spacing: HubSpace.s) {
+                            Text(policy.priorityOrder.contains(function.id) ? "\(index + 1)." : "Equal")
+                                .font(HubType.secondary).foregroundStyle(.secondary)
+                                .frame(width: 44, alignment: .leading)
+                            Text(function.title).fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: HubSpace.s)
+                            Button {
+                                if let order = policy.priorityOrder(moving: function.id, by: -1) {
+                                    Task { _ = await workspace.saveWorkPriority(order) }
+                                }
+                            } label: { Image(systemName: "arrow.up") }
+                                .disabled(index == 0)
+                                .accessibilityLabel("Move \(function.title) up")
+                                .help("Move \(function.title) up")
+                            Button {
+                                if let order = policy.priorityOrder(moving: function.id, by: 1) {
+                                    Task { _ = await workspace.saveWorkPriority(order) }
+                                }
+                            } label: { Image(systemName: "arrow.down") }
+                                .disabled(index == policy.enabledPriorityFunctions.count - 1)
+                                .accessibilityLabel("Move \(function.title) down")
+                                .help("Move \(function.title) down")
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                    }
+                    if policy.enabledPriorityFunctions.isEmpty {
+                        Text("Enable a function above to include it in job priority.")
+                            .font(HubType.secondary).foregroundStyle(.secondary)
+                    }
+                    Text("Disabled functions keep their saved priority until enabled. Moving a function gives the enabled functions a custom order.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(policy.priorityOrder.isEmpty
+                     ? "All enabled functions have equal priority. The current job finishes, then the oldest eligible queued job runs."
+                     : "The current job finishes. Higher-ranked eligible queued work runs first, oldest first at the same rank. Other enabled work runs when higher-ranked work is not waiting.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {

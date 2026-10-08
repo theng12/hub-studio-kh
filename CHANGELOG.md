@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.157 — 2026-10-08 · Ranked work priorities on each Mac
+
+- Settings > Work on this Mac replaces Prefer LLM jobs with No preference or Custom order. Move enabled functions up or down using accessible buttons; saved disabled-function ranks are retained. Existing LLM-first settings migrate with other functions tied.
+- Finish current work, then choose the highest-ranked eligible queued function; equal ranks use oldest eligible work first. Disabled, unqualified or memory-blocked preferred work does not reserve otherwise usable capacity. Existing render precedence and physical execution leases remain enforced.
+- Each Mac publishes its order and supports authenticated Gateway controls through its controller. Changing priority never changes enabled functions or manual pauses.
+- Bounded synchronous Chat waiting is independent of rank, including No preference. Cancellation and uncertain-completion recovery retain their existing safeguards.
+
 ## 0.6.156 — 2026-10-08 · Per-Mac work choices and LLM priority
 
 - Choose which registered functions this Mac accepts in Settings > Work on this Mac. Existing local, Gateway and fleet pauses stay in place; other Macs keep their choices.

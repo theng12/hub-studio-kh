@@ -4,6 +4,39 @@ Implemented boundaries: ST-01 model package validation/import/download and pinne
 ST-02 packaged Hub ownership and common admission. Engine qualification and complete native
 workflows remain their named later tasks. This document extends the existing Hub contracts rather than defining new job APIs.
 
+## Per-Mac function priority
+
+`GET /api/hub/work-policy` returns `machine_enabled`, the registered local `studios`
+(`id`, `title`, canonical `modality`, `enabled`), `priority_functions` (`id`, `title`),
+and `priority_order`. The Hub supplies the rankable function IDs; clients do not
+maintain a second vocabulary. Subtitle uses `transcription`. Unknown registered
+studios retain their enable checkbox even when they are not rankable.
+
+`POST /api/hub/work-policy` accepts exactly `{"priority_order": ["image", "voice", "chat"]}`.
+IDs must be unique canonical functions registered on that Mac. An empty array means
+**No preference**. Listed functions rank first in order; all unlisted functions share
+equal priority below them. Disabled functions retain saved positions, but do not
+participate in dispatch. The current job finishes; the highest-ranked eligible
+queued function runs next, oldest first within a rank. Other enabled work runs when
+higher-ranked eligible work is absent. Continuous higher-ranked demand may delay
+lower-ranked work. Existing model readiness, memory, render precedence and pause
+rules still apply. A priority save changes neither enablement nor any pause.
+
+Legacy `chat_priority: true` reads as `["chat"]`; false or missing reads as `[]`.
+Migration leaves other functions tied. Native Settings offers **No preference** and
+**Custom order** with keyboard-accessible move buttons. Choosing Custom from an
+empty order deliberately seeds the displayed rankable functions; reading a partial
+order preserves its ties. An explicit reorder ranks the enabled functions while
+retaining disabled saved entries. The native client uses the save response as
+authoritative and rejects stale polls. An older Hub missing the new fields shows
+its saved legacy choice with a restart/update requirement instead of accepting
+unsupported edits.
+
+Resources and fleet rows publish `priority_order`. The authenticated controller
+`GET/POST /api/hub/fleet/nodes/{id}/work-policy` relay targets the chosen Mac,
+including the controller itself. Gateway's per-Mac editor uses this same policy;
+other Macs keep their own enablement and priorities.
+
 ## Files and callers
 
 - [model_packages.py](../components/model_packages.py): standard-library runtime helper.

@@ -446,6 +446,8 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/version$"),
     ("GET", r"^/api/hub/workers$"),
     ("GET", r"^/api/hub/resources$"),
+    ("GET", r"^/api/hub/work-policy$"),
+    ("POST", r"^/api/hub/work-policy$"),
     ("GET", r"^/api/hub/capabilities$"),
     ("GET", r"^/api/hub/catalog$"),
     ("GET", r"^/api/hub/models$"),
@@ -583,6 +585,8 @@ FLEET_ALLOWED = (
     # Gateway's change (`.../fleet/nodes/{id}/workstation`) to the Mac's own `/api/hub/workstation`,
     # which accepts only the workstation settings, validated. Not in `NODE_ALLOWED`.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/workstation$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/work-policy$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/work-policy$"),
     # **Installing a model from the Gateway (owner decision 2026-10-04: the owner's Gateway may make a
     # Mac install a model).** Only the download and its status, each through the fleet path, which
     # refuses a shelved model, an unknown package, a full disk and a model this Mac has too little

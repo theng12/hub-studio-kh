@@ -714,6 +714,34 @@ async def has_dispatchable_work(monitor, machine: str) -> bool:
     return await dispatchable_pool(monitor, machine) is not None
 
 
+async def dispatchable_candidate(monitor, machine: str) -> tuple[float, str] | None:
+    """Oldest queued transcription batch that can use this Mac now."""
+    now = time.time()
+    for batch in sorted(batches.values(),
+                        key=lambda row: (row.get("created_at", 0), row.get("id", ""))):
+        if (batch.get("cancelled")
+                or execution_identity.lease_expired(batch.get("genstudio_execution"))
+                or broker.admission_refusal(batch)):
+            continue
+        for item in batch.get("items") or []:
+            if (item.get("state") != "queued"
+                    or (item.get("retry_at") and item["retry_at"] > now)):
+                continue
+            eligible = await _eligible_studios(
+                monitor, batch["model"], item, batch.get("genstudio_execution"))
+            for studio in eligible:
+                if (studio.get("machine", "local") != machine
+                        or not routing_rule.allows(studio, _routing(batch))):
+                    continue
+                availability = await monitor.scheduling_transcription(studio)
+                entry = next((row for row in (availability or {}).get("models", [])
+                              if row.get("repo") == batch["model"]), None)
+                if entry and broker.memory_admission_dispatchable(
+                        studio, batch["model"], entry):
+                    return float(batch.get("created_at") or 0), str(batch["id"])
+    return None
+
+
 async def dispatchable_pool(monitor, machine: str) -> float | None:
     """Smallest pool among this lane's batches that can start on ``machine`` right now, else None."""
     now = time.time()
@@ -812,16 +840,9 @@ async def dispatch_once(monitor) -> int:
     assigned = 0
     while True:
         made_progress = False
-        # Scarcest first, like every lane: the batch with the fewest Macs that can run its model
-        # goes first, then first come first served.
-        pools = {}
         active = sorted(
             (batch for batch in batches.values() if not batch.get("cancelled")),
-            key=lambda batch: (
-                pools.setdefault((batch["model"], _routing(batch)), broker._pool_size(
-                    "transcription", batch["model"], _routing(batch))),
-                batch["created_at"],
-            ),
+            key=lambda batch: (batch["created_at"], batch["id"]),
         )
         for batch in active:
             if _expire_genstudio_batch(batch):
@@ -859,12 +880,6 @@ async def dispatch_once(monitor) -> int:
                 continue
             for studio in eligible:
                 machine = studio.get("machine", "local")
-                from . import chat_jobs
-                if not broker.external_dispatch_allowed(
-                        machine, "transcription",
-                        other_lane_has_work=await chat_jobs.has_dispatchable_work(
-                            monitor, machine)):
-                    continue
                 availability = await monitor.scheduling_transcription(studio)
                 entry = next((row for row in (availability or {}).get("models", [])
                               if row.get("repo") == batch["model"]),
@@ -886,15 +901,22 @@ async def dispatch_once(monitor) -> int:
                 # memory probes; recheck before leasing this physical Mac.
                 if broker.admission_refusal(batch):
                     continue
-                if await broker.scarcer_work_waiting(
-                        machine, broker._pool_size(
-                            "transcription", batch["model"], _routing(batch)),
-                        "transcription"):
+                if await broker.higher_priority_work_waiting(
+                        machine, "transcription", batch["created_at"],
+                        f"transcription:{batch['id']}"):
+                    continue
+                if (batch.get("cancelled") or item.get("state") != "queued"
+                        or execution_identity.lease_expired(batch.get("genstudio_execution"))
+                        or monitor.status.get(studio["id"], {}).get("status") != "up"
+                        or not machine_enabled(machine)
+                        or not studio_enabled(machine, studio["id"])
+                        or broker.in_maintenance(studio["id"])
+                        or broker.admission_refusal(batch)
+                        or not peers.dispatch_ready(studio, generation)):
                     continue
                 owner = f"transcription:{batch['id']}:{item['index']}"
                 if not broker.acquire_external_machine(machine, owner):
                     continue
-                broker.note_external_dispatch(machine, "transcription")
                 peers.note_dispatch(studio)
                 item.update(
                     state="running", studio=studio["id"], machine=machine, error=None,

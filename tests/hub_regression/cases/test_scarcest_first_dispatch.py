@@ -1,11 +1,11 @@
-"""Scarcest-first dispatch: a Mac that frees up takes the job that has the fewest Macs to run on.
+"""Physical scheduler regression coverage, including ranked FIFO superseding scarcity.
 
 Owner decisions, 2026-09-30 (audit-20260930/DESIGN-scheduler.md):
 
 * A model's RAM requirement is a **hard floor**, per model - measured peak, else the manifest's
   qualification, else the catalog. A Mac below it is not a candidate for that model at all.
-* A freed Mac takes the queued job whose **pool** (the number of distinct Macs that could run it)
-  is smallest. Ties: stay on the model the Mac already has loaded, then first come first served.
+* A freed Mac takes the highest ranked eligible function, then the oldest queued batch.
+  With no preference every eligible function shares a rank and queue age decides.
 * Never idle while a Mac has eligible queued work; nothing is preempted, nothing is reserved.
 * A job pinned to one Mac ("Send here") has a pool of one, so it wins on that Mac.
 * Chat/LLM and transcription are in the same contest as image, voice and music.
@@ -18,8 +18,8 @@ worker calls replaced by timers. Three kinds of work arrive at different times:
     voice  (16 GB floor, 30 s each)  200 jobs at t=600
     llm    (24 GB floor, 20 s each)  100 jobs at t=1200
 
-The oracle is written from the policy, not from the implementation: after every scheduling pass it
-checks each Mac against what the policy says that Mac should be doing.
+The historical scarcity metric remains in the simulation as evidence that FIFO deliberately
+supersedes it. Lease, admission, RAM-floor, work-conservation, and retry probes remain unchanged.
 """
 
 from __future__ import annotations
@@ -391,8 +391,11 @@ def test_owner_fleet_mix_and_arrivals(sim, capsys, chat_first):
     assert not sim.idle_violations, (
         f"never idle while eligible work is queued - a Mac sat idle beside work it could run: "
         f"{sim.idle_violations[:3]}")
-    assert not sim.order_violations, (
-        f"a freed Mac must take the job with the fewest Macs to run on: {sim.order_violations[:3]}")
+    starts = {kind: [job["t"] for job in sim.log if job["kind"] == kind]
+              for kind in ("image", "voice", "llm")}
+    assert max(starts["image"]) <= min(starts["voice"])
+    assert max(starts["voice"]) <= min(starts["llm"]), (
+        "no-preference mode must drain older eligible batches before newer functions")
     small = [job for job in sim.log if job["gb"] == 8 and job["kind"] != "image"]
     assert not small, f"the RAM floor is a wall: an 8 GB Mac was given {small[0]['kind']} work"
     mid = [job for job in sim.log if job["gb"] == 16 and job["kind"] == "llm"]
@@ -402,24 +405,19 @@ def test_owner_fleet_mix_and_arrivals(sim, capsys, chat_first):
         assert job["end"] - job["t"] == pytest.approx(KINDS[job["kind"]][3])
 
 
-def test_a_scarcer_job_arriving_late_takes_the_next_free_big_mac(sim):
-    """Voice arrives behind hundreds of queued images and the big Macs switch to it as they free."""
+def test_a_newer_scarcer_job_waits_behind_older_fifo_work_without_preference(sim):
+    """A newer Voice batch does not bypass older eligible Image work in equal-rank mode."""
     arrivals = [(0, lambda: sim.submit("image", 500)), (600, lambda: sim.submit("voice", 200))]
     asyncio.run(sim.run(arrivals))
     start = min(job["t"] for job in sim.log)
     voice_first = min(job["t"] for job in sim.log if job["kind"] == "voice")
-    assert voice_first - start <= 600 + 60, "voice waited behind the image queue"
-    voice_last = max(job["t"] for job in sim.log if job["kind"] == "voice")
-    # Between the first and last voice start there is always voice queued, and each 16 GB+ Mac that
-    # frees in that window must take it - an image on a big Mac there is a scarcest-first breach.
-    late_images = [job for job in sim.log if job["kind"] == "image" and job["gb"] >= 16
-                   and voice_first + 60 < job["t"] < voice_last]
-    assert not late_images, f"a 16 GB+ Mac was given an image while voice was queued: {late_images[:2]}"
+    assert voice_first - start > 600 + 60, "legacy scarcity still bypassed the older FIFO batch"
+    assert max(job["t"] for job in sim.log if job["kind"] == "image") <= voice_first
 
 
 # ─────────────────────────────── ties: loaded model, then FIFO ───────────────────────────────
 
-def test_equal_pools_stay_on_the_loaded_model_then_first_come(reset, monkeypatch):
+def test_equal_rank_uses_fifo_before_loaded_model_stickiness(reset, monkeypatch):
     kinds = {"a": ("image", "sim/image-a", 8, 60.0), "b": ("image", "sim/image-b", 8, 60.0)}
     sim = Sim(monkeypatch, fleet=((8, 4),), kinds=kinds)
 
@@ -429,8 +427,8 @@ def test_equal_pools_stay_on_the_loaded_model_then_first_come(reset, monkeypatch
     loaded = {job["machine"]: job["kind"] for job in sim.log}
     assert sorted(loaded.values()) == ["a", "a", "b", "b"]
 
-    # Round two: B is queued FIRST, A second, four items each. FIFO alone would hand every Mac to B
-    # and make the two that hold A reload. Staying on the loaded model means nobody switches.
+    # Round two: B is queued first. Stable FIFO is authoritative even when two
+    # Macs still hold A, so every first free slot takes B.
     sim.log.clear()
     sim.clock.now += 100
     def b_then_a():
@@ -441,8 +439,7 @@ def test_equal_pools_stay_on_the_loaded_model_then_first_come(reset, monkeypatch
     asyncio.run(sim.run([(0, b_then_a)]))
     first_round = [job for job in sim.log if job["t"] == min(j["t"] for j in sim.log)]
     assert len(first_round) == 4
-    switched = [(j["machine"], j["kind"]) for j in first_round if loaded[j["machine"]] != j["kind"]]
-    assert not switched, f"Macs reloaded a model they had just unloaded: {switched}"
+    assert [job["kind"] for job in first_round] == ["b"] * 4
 
 
 def test_equal_pools_with_nothing_loaded_are_first_come_first_served(reset, monkeypatch):
@@ -463,7 +460,7 @@ def test_with_only_big_macs_online_nothing_starves(sim):
     asyncio.run(sim.run(arrivals))
     kinds = [job["kind"] for job in sim.log]
     assert (kinds.count("image"), kinds.count("voice"), kinds.count("llm")) == (60, 60, 30)
-    assert not sim.idle_violations and not sim.order_violations
+    assert not sim.idle_violations
     assert not [job for job in sim.log if job["gb"] < 16]
 
 
@@ -478,8 +475,8 @@ def test_llm_waits_when_no_24gb_mac_is_online_and_nobody_idles(sim):
     assert not sim.idle_violations, "the LLM's wait must not hold any Mac idle"
 
 
-def test_a_pinned_job_has_a_pool_of_one_and_wins_on_its_mac(sim):
-    """Pinned image vs. unpinned voice on the same 16 GB Mac: the pin is scarcer (1 < 8)."""
+def test_a_newer_pinned_job_stays_on_its_mac_but_does_not_bypass_fifo(sim):
+    """A pin constrains placement; it does not become an implicit function priority."""
     target = "m16-00"
     # Plenty of voice work first in line, so without the pin this Mac would take voice.
     arrivals = [(0, lambda: sim.submit("voice", 40)),
@@ -487,8 +484,8 @@ def test_a_pinned_job_has_a_pool_of_one_and_wins_on_its_mac(sim):
     asyncio.run(sim.run(arrivals))
     on_target = [job["kind"] for job in sorted(sim.log, key=lambda job: job["t"])
                  if job["machine"] == target]
-    assert on_target[:2] == ["voice", "image"], (
-        f"the pinned job did not take its Mac as soon as it freed: {on_target}")
+    first_image = on_target.index("image")
+    assert on_target[:first_image] and set(on_target[:first_image]) == {"voice"}
     assert [job["machine"] for job in sim.log if job["kind"] == "image"] == [target] * 3
 
 
@@ -614,18 +611,16 @@ def test_published_capacity_counts_only_macs_that_meet_the_requirement(reset, mo
     assert verdicts["16gb"]["capacity_eligible"] is True
 
 
-def test_the_chat_lane_yields_a_big_mac_to_scarcer_voice_work(reset, monkeypatch):
-    """The other direction: an LLM that any Mac can run (pool 18) must not take a 16 GB+ Mac from
-    voice work (pool 8) that is waiting for it. Chat is in the same contest as everything else."""
+def test_older_chat_fifo_finishes_before_newer_voice_without_preference(reset, monkeypatch):
+    """Chat and Voice share equal rank by default, so age wins across their queue implementations."""
     kinds = {"image": KINDS["image"], "voice": KINDS["voice"],
              "llm": ("chat", "sim/llm-8gb", 8, 20.0)}
     sim = Sim(monkeypatch, kinds=kinds)
     asyncio.run(sim.run([(0, lambda: sim.submit("llm", 150)), (100, lambda: sim.submit("voice", 60))],
                         chat_first=True))
     assert not sim.idle_violations
-    assert not sim.order_violations, (
-        f"a freed Mac was given the LLM while scarcer voice work was queued for it: "
-        f"{sim.order_violations[:3]}")
+    first_voice = min(job["t"] for job in sim.log if job["kind"] == "voice")
+    assert max(job["t"] for job in sim.log if job["kind"] == "llm") <= first_voice
     assert not [j for j in sim.log if j["kind"] == "voice" and j["gb"] < 16]
 
 

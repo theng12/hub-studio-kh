@@ -508,6 +508,39 @@ async def has_dispatchable_work(monitor, machine: str) -> bool:
     return await dispatchable_pool(monitor, machine) is not None
 
 
+async def dispatchable_candidate(monitor, machine: str) -> tuple[float, str] | None:
+    """Oldest queued Chat batch that can use this Mac now."""
+    now = time.time()
+    for batch in sorted(batches.values(),
+                        key=lambda row: (row.get("created_at", 0), row.get("id", ""))):
+        if (batch.get("cancelled")
+                or execution_identity.lease_expired(batch.get("genstudio_execution"))):
+            continue
+        queued = [pack for pack in batch.get("packs") or []
+                  if pack.get("state") == "queued"
+                  and (not pack.get("retry_at") or pack["retry_at"] <= now)]
+        if not queued:
+            continue
+        output_limits = [
+            value for pack in queued for value in (
+                pack.get("params", {}).get("max_tokens")
+                or pack.get("params", {}).get("max_completion_tokens"),)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0]
+        eligible = await _eligible_studios(
+            monitor, batch["model"], batch.get("genstudio_execution"),
+            max(output_limits, default=0))
+        for studio in eligible:
+            if studio.get("machine", "local") != machine:
+                continue
+            catalog = await monitor.scheduling_catalog(studio)
+            entry = next((item for item in (catalog or {}).get("models", [])
+                          if item.get("repo") == batch["model"]
+                          or batch["model"] in (item.get("aliases") or [])), None)
+            if entry and broker.memory_admission_dispatchable(studio, batch["model"], entry):
+                return float(batch.get("created_at") or 0), str(batch["id"])
+    return None
+
+
 async def dispatchable_pool(monitor, machine: str) -> float | None:
     """Smallest pool among this lane's batches that can start on ``machine`` right now, else None."""
     now = time.time()
@@ -561,16 +594,9 @@ async def dispatch_once(monitor) -> int:
     assigned = 0
     while True:
         made_progress = False
-        # Scarcest first, like every lane: the batch with the fewest Macs that can run its model
-        # goes first, then first come first served.
-        pools = {}
         active = sorted(
             (batch for batch in batches.values() if not batch.get("cancelled")),
-            key=lambda batch: (
-                pools.setdefault(batch["model"], broker._pool_size(
-                    "chat", batch["model"], _routing(batch))),
-                batch["created_at"],
-            ),
+            key=lambda batch: (batch["created_at"], batch["id"]),
         )
         for position, batch in enumerate(active):
             if _expire_genstudio_batch(batch):
@@ -617,12 +643,6 @@ async def dispatch_once(monitor) -> int:
             dispatched_this_batch = False
             for studio in eligible:
                 machine = studio.get("machine", "local")
-                from . import transcription_jobs
-                if not broker.external_dispatch_allowed(
-                        machine, "chat",
-                        other_lane_has_work=await transcription_jobs.has_dispatchable_work(
-                            monitor, machine)):
-                    continue
                 catalog = await monitor.scheduling_catalog(studio)
                 entry = next((item for item in (catalog or {}).get("models", [])
                               if item.get("repo") == batch["model"]
@@ -637,14 +657,20 @@ async def dispatch_once(monitor) -> int:
                 generation = peers.dispatch_generation(studio)
                 if not peers.dispatch_ready(studio, generation):
                     continue
-                if await broker.scarcer_work_waiting(
-                        machine, broker._pool_size("chat", batch["model"], _routing(batch)),
-                        "chat"):
+                if await broker.higher_priority_work_waiting(
+                        machine, "chat", batch["created_at"], f"chat:{batch['id']}"):
+                    continue
+                if (batch.get("cancelled") or pack.get("state") != "queued"
+                        or execution_identity.lease_expired(batch.get("genstudio_execution"))
+                        or monitor.status.get(studio["id"], {}).get("status") != "up"
+                        or not machine_enabled(machine)
+                        or not studio_enabled(machine, studio["id"])
+                        or broker.in_maintenance(studio["id"])
+                        or not peers.dispatch_ready(studio, generation)):
                     continue
                 owner = f"chat:{batch['id']}:{pack['index']}"
                 if not broker.acquire_external_machine(machine, owner):
                     continue
-                broker.note_external_dispatch(machine, "chat")
                 peers.note_dispatch(studio)
                 pack.update(
                     state="running", studio=studio["id"], error=None,
