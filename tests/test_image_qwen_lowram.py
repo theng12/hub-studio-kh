@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import math
 import sys
 import types
 import unittest
@@ -83,24 +84,30 @@ def fake_mflux():
 
 
 class QwenLowRamTests(unittest.TestCase):
-    def test_free_start_floor_names_its_stored_successful_start(self):
+    def test_free_start_floor_is_the_stored_peak_plus_two_gb(self):
+        """Owner decision 2026-10-08: the floor is measured peak + 2 GB (rounded up to 0.5 GB), so a
+        16 GB Mac (8-10 GB free when idle) can start it; the measured starts were all >= 14.697 GB."""
         root = Path(__file__).resolve().parents[1]
         evidence = root / "qualification/evidence/qwen-image-21-20261006/measurement.json"
         rows = json.loads(evidence.read_text())["low_rows"]
-        measured_start = min(row["available_gb_start"] for row in rows)
+        peak = max(max(row["peak_process_tree_gb"], row["available_gb_start"] - row["available_gb_min"])
+                   for row in rows)
         model = generation.QWEN_IMAGE_21_LOW_RAM
-        self.assertEqual(model.min_free_memory_gb, measured_start)
+        self.assertEqual(model.min_free_memory_gb, math.ceil((peak + 2.0) * 2) / 2)
+        self.assertEqual(model.min_free_memory_gb, 8.0)
         self.assertIn(evidence.name, model.qualification["min_free_memory_note"])
 
-    def test_candidate_has_a_distinct_pinned_identity_without_a_lower_tier_claim(self) -> None:
+    def test_candidate_has_a_distinct_pinned_identity_and_the_owners_16_gb_tier(self) -> None:
         model = generation.QWEN_IMAGE_21_LOW_RAM
         self.assertIs(generation.MODELS[model.repo], model)
         self.assertEqual(model.repo, "mlx-community/Qwen-Image-2.1-mflux-q4")
         self.assertEqual(model.revision, "746a58556820933a2df5c75887a2570f1ad200c0")
         self.assertEqual(model.package_id, "qwen-image-2-1-mflux-q4")
         self.assertEqual(model.engine, "image-mflux")
-        self.assertEqual(model.qualified_minimum_memory_gb, 32.0)
-        self.assertIn("pending", model.qualification["fleet_16gb"])
+        self.assertEqual(model.qualified_minimum_memory_gb, 16.0)
+        self.assertIn("owner's decision", model.qualification["fleet_16gb"])
+        self.assertIn("without a physical 16 GB", model.qualification["fleet_16gb"])
+        self.assertEqual(model.qualification["fleet_8gb"], "not qualified")
         self.assertFalse(model.resident_allowed)
         self.assertTrue(model.guidance_ignored)
         guidance = next(parameter for parameter in generation.lane_parameters(model)

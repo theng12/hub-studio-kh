@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.158 — 2026-10-08 · Qwen Image 2.1 Low-RAM is the fleet's Qwen; Qwen Image 2.1 runs on 24 GB
+
+- Qwen Image 2.1 Low-RAM is now the fleet's Qwen (16 GB and up); the regular Qwen Image 2.1 is qualified on 24 GB and up and can be installed on request.
+- Regular Qwen Image 2.1 (MLX affine 4-bit, native mlx-serve) is qualified on 24 GB from the owner's physical 24 GiB M4 run: four 16-step cases in 440–500 s, peak 9.8 GB, normal memory pressure, no swap. It stays on the SSD and is not copied to Macs by the model copy step; install it from the Gateway when wanted.
+- Qwen Image 2.1 Low-RAM (MLX 4-bit) is qualified on 16 GB and up by the owner's decision. Its evidence is the 32 GiB run (peak 5.85 GB); no 16 GB run is recorded. 8 GB is not qualified. The copy step now puts it on every 16 GB and larger Mac.
+- A Qwen job starts when the Mac has its measured peak plus 2 GB free: 12.5 GB for regular, 8.0 GB for Low-RAM. Idle models on that Mac are released first. Gemma 4 26B stays 32 GB only.
+- Image jobs may now run up to 30 minutes (was 15) before the Hub stops waiting, and a regular Qwen job's own limit grows with its step count, so a 40- or 50-step job on a 24 GB Mac is no longer cut off.
+- This is the first fleet release of 0.6.155–0.6.157: Gemma 4 qualification on 32 GiB, per-Mac work choices, and ranked job priorities.
+
 ## 0.6.157 — 2026-10-08 · Ranked work priorities on each Mac
 
 - Settings > Work on this Mac replaces Prefer LLM jobs with No preference or Custom order. Move enabled functions up or down using accessible buttons; saved disabled-function ranks are retained. Existing LLM-first settings migrate with other functions tied.

@@ -512,10 +512,11 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # both licence texts (byte-identical to FermionResearch/Phonon-2's SHA256SUMS entries).
             "phonon-2-mlx": "d2e7ee4e41a9d9824fad54eeae6451d49482f2622b3259c077af074db238686e",
             # Qwen Image 2.1 4-bit ships as two distinct immutable packages. The native
-            # mlx-serve package declares its conditional macOS 26.2 floor; the mflux candidate
-            # retains macOS 14 and a conservative 32 GB production floor pending the SSD runs.
-            "qwen-image-2-1-mlx-serve-4bit": "a30609f839a4a25db68d58e7929c7e6fccf67bcd3883f7715677614ee13ad73e",
-            "qwen-image-2-1-mflux-q4": "a5e519cc7e83b1aaa6f907a2193c0cb2888e11de6bbdf96c9ef618d3fb045c07",
+            # mlx-serve package declares its conditional macOS 26.2 floor and is qualified on
+            # 24 GB (physical M4 run, 2026-10-08); the low-RAM mflux package keeps macOS 14 and
+            # is qualified on 16 GB by the owner's decision of 2026-10-08.
+            "qwen-image-2-1-mlx-serve-4bit": "495b421b598de55822d597b9425851880b6266960502186a06b71c86999b9945",
+            "qwen-image-2-1-mflux-q4": "8b04eed27b2362334111cd035ee87d7ac8cb494fb1e5c9c061bd80a4f6850e1a",
         }
         # The digest map is the frozen-content half of the invariant: its keys are checked against
         # the manifests on disk (never against a hand-written list), so a package that appears

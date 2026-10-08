@@ -48,8 +48,8 @@ class QwenImageModelTests(unittest.TestCase):
         self.assertEqual(model.defaults["guidance"], 1.0)
         self.assertEqual(model.defaults["seed"], -1)
         self.assertEqual(model.limits["max_seed"], 2_147_483_647)
-        self.assertEqual(model.qualified_minimum_memory_gb, 32.0)
-        self.assertEqual(model.min_free_memory_gb, 25.3)
+        self.assertEqual(model.qualified_minimum_memory_gb, 24.0)
+        self.assertEqual(model.min_free_memory_gb, 12.5)
         self.assertEqual(model.minimum_macos, (26, 2))
 
     def test_qwen_offers_only_bounded_one_megapixel_presets(self) -> None:

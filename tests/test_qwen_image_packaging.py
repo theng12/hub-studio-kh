@@ -51,9 +51,11 @@ class QwenManifestTests(unittest.TestCase):
         self.assertEqual(low_ram.get("minimum_macos", "14.0"), "14.0")
         self.assertEqual(low_ram["quantization"], "MLX 4-bit")
 
-        for package_id, target in (
-            ("qwen-image-2-1-mlx-serve-4bit", 24),
-            ("qwen-image-2-1-mflux-q4", 16),
+        # Native: measured on the owner's physical 24 GiB M4 (2026-10-08). Low-RAM: qualified on
+        # 16 GB by the owner's decision of 2026-10-08, its evidence the 32 GiB run of 2026-10-06.
+        for package_id, tier, evidence, floor in (
+            ("qwen-image-2-1-mlx-serve-4bit", 24, "qwen-image-21-20261008-24gb", 12.5),
+            ("qwen-image-2-1-mflux-q4", 16, "qwen-image-21-20261006", 8.0),
         ):
             with self.subTest(package=package_id):
                 item = details[package_id]
@@ -65,14 +67,19 @@ class QwenManifestTests(unittest.TestCase):
                     "seed": -1,
                     "parameters_source": "docs/superpowers/plans/2026-10-06-qwen-image-21.md",
                 })
-                self.assertEqual(item["memory"][:2], (32, 32))
-                self.assertEqual(item["qualification"]["status"], "unqualified")
-                self.assertEqual(item["qualification"]["target_unified_memory_gb"], target)
-                self.assertNotIn("qualified", item["qualification"]["reason"].lower())
+                self.assertEqual(item["memory"][:2], (tier, tier))
+                self.assertIn(evidence, item["memory"][2])
+                qualification = item["qualification"]
+                self.assertEqual(qualification["status"], "qualified")
+                self.assertIn(evidence, qualification["reason"])
+                self.assertNotIn("target_unified_memory_gb", qualification)
+                self.assertEqual(qualification["min_free_memory_gb"], floor)
+                self.assertIn(evidence, qualification["min_free_memory_note"])
 
-        native_qualification = details["qwen-image-2-1-mlx-serve-4bit"]["qualification"]
-        self.assertEqual(native_qualification["min_free_memory_gb"], 25.3)
-        self.assertIn("Provisional", native_qualification["min_free_memory_note"])
+        low_ram = details["qwen-image-2-1-mflux-q4"]["qualification"]
+        self.assertIn("owner's decision", low_ram["reason"])
+        self.assertIn("without a physical 16 GB receipt", low_ram["reason"])
+        self.assertIn("8 GB is not qualified", low_ram["reason"])
 
     def test_qwen_manifests_are_reproducible_capture_outputs_and_not_defaults(self):
         self.assertEqual(CAPTURE.catalog_problems(ROOT / "model-manifests"), [])

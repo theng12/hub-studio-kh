@@ -76,6 +76,16 @@ CARRY_BELOW_TIER = {
     # of 2026-10-04 then measured it, so it is in PROVEN_SMALLER now.
 }
 
+# Offered but not stocked (owner decision 2026-10-08): the model stays on the SSD, in the catalog and
+# installable on request (the Gateway's "Install a model..." / `POST /admin/api/fleet/model-installs`),
+# but this step does not copy it to a Mac. Unlike a shelved model (`components/shelved_models.py`) the
+# Hub neither moves it out nor refuses to download it. A Mac marked keep-all copies it like any other.
+NOT_STOCKED = {
+    # Qwen Image 2.1 (native mlx-serve 4-bit), qualified on 24 GB; the fleet's stocked Qwen is the
+    # low-RAM `qwen-image-2-1-mflux-q4` (16 GB and up).
+    "qwen-image-2-1-mlx-serve-4bit",
+}
+
 
 def machine_memory_gb() -> int:
     """Installed memory in whole GiB, the way the machine is sold."""
@@ -587,7 +597,7 @@ def main() -> int:
     print(f"  This Mac has {memory} GB of memory.")
     print()
 
-    chosen, skipped, shelved, not_for_shop, pending = [], [], [], [], []
+    chosen, skipped, shelved, not_for_shop, pending, not_stocked = [], [], [], [], [], []
     for package_id, manifest in sorted(manifests.items()):
         if admission_check is not None and not admission_check(manifest):
             pending.append((package_id, manifest))
@@ -597,6 +607,9 @@ def main() -> int:
             continue
         if not keep_all and manifest_shelved(manifest):
             shelved.append(package_id)
+            continue
+        if not keep_all and package_id in NOT_STOCKED:
+            not_stocked.append(package_id)
             continue
         needs = required_gb(manifest)
         (chosen if needs <= memory else skipped).append((package_id, needs, manifest))
@@ -686,6 +699,10 @@ def main() -> int:
         print()
     if not_for_shop:
         print(f"  Lite Mode models only: {len(not_for_shop)} other model(s) stay on the SSD.")
+        print()
+    if not_stocked:
+        print(f"  Installed on request only, not copied ({len(not_stocked)}): {', '.join(not_stocked)}")
+        print("  They stay on the SSD; install one from the Gateway's Install a model... menu.")
         print()
     if pending:
         print(f"  Pending models ({len(pending)}): not yet qualified; retained on SSD")

@@ -246,28 +246,30 @@ DETAILS: dict[str, dict[str, Any]] = {
         "defaults": {"width": 1024, "height": 1024, "steps": 16, "guidance": 1.0,
                      "seed": -1,
                      "parameters_source": "docs/superpowers/plans/2026-10-06-qwen-image-21.md"},
-        "memory": (32, 32, "Measured on the owner's 32 GB M2 Max with mlx-serve 26.10.1 and the pinned MLX 4-bit pack: the retained clean 1K-class run recorded a 15.75 GB peak process footprint. Physical 24 GB evidence is still pending."),
+        "memory": (24, 24, "MEASURED on the owner's physical 24 GiB Apple M4 (macOS 27.0.1, Studio Hub 0.6.152 packaged Image worker, mlx-serve 26.10.1, pinned MLX affine 4-bit pack), 2026-10-08: four 16-step cases (1024x1024 cold and warm, 1280x720, 720x1280) completed in 440.6-500.3 s wall; sampled worker-tree peak 9.235-9.787 GB; available memory 19.01-19.88 GB at start and never below 9.24 GB; pressure normal; zero swap growth; SSD net writes at most 0.05 GB. Evidence: qualification/evidence/qwen-image-21-20261008-24gb/measurement.json. 16 GB is not claimed for this package."),
         "qualification": {
-            "status": "unqualified",
-            "reason": "Standalone 32 GB evidence exists; the packaged path and the owner's physical 24 GB SSD run remain pending.",
-            "min_free_memory_gb": 25.3,
-            "min_free_memory_note": "Provisional clean-start preflight floor from the retained standalone receipt; packaged measurement is still pending.",
-            "target_unified_memory_gb": 24,
-            "target_evidence": "Compatibility target only; no physical 24 GB pass is recorded.",
+            "status": "qualified",
+            "reason": "Qualified on 24 GB and above by the owner's physical 24 GiB M4 run of 2026-10-08: four packaged 16-step cases completed with normal pressure and no swap growth (qualification/evidence/qwen-image-21-20261008-24gb/measurement.json). Earlier standalone 32 GB evidence agrees.",
+            # ponytail: peak demand + 2 GB, not the lowest recorded start (19.01 GB): the fleet's
+            # only 24 GB Mac idles near 17.9 GB. Ceiling: no run started below 19.01 GB; raise this
+            # if a lower-headroom start ever shows pressure or swap.
+            "min_free_memory_gb": 12.5,
+            "min_free_memory_note": "Measured peak demand plus 2 GB, rounded up to 0.5 GB: the largest drop in available memory during the physical 24 GiB M4 run of 2026-10-08 was 10.35 GB (cold-square 1024x1024, 19.88 to 9.53 GB; worker-tree peak 9.79 GB), so a job admitted at 12.5 GB keeps at least 2 GB available at its peak. The Hub runs one job per Mac and releases idle resident models before it waits on this floor. Every measured start had 19.01 GB or more; qualification/evidence/qwen-image-21-20261008-24gb/measurement.json.",
         },
     },
     "qwen-image-2-1-mflux-q4": {
         "defaults": {"width": 1024, "height": 1024, "steps": 16, "guidance": 1.0,
                      "seed": -1,
                      "parameters_source": "docs/superpowers/plans/2026-10-06-qwen-image-21.md"},
-        "memory": (32, 32, "Packaged MLX 4-bit low-memory path completed four 1K 16-step cases on the physical 32 GiB M2 Max, 2026-10-06: sampled worker-tree peak 5.513–5.853 GB, normal pressure, zero swap growth. Evidence: qualification/evidence/qwen-image-21-20261006/measurement.json. Physical 16 GB remains pending; production floor 32 GB."),
+        "memory": (16, 16, "MEASURED on the physical 32 GiB M2 Max only: the packaged MLX 4-bit low-memory path completed four 1K 16-step cases, 2026-10-06: sampled worker-tree peak 5.513–5.853 GB, normal pressure, zero swap growth. Evidence: qualification/evidence/qwen-image-21-20261006/measurement.json. The 16 GB tier is the owner's decision of 2026-10-08; no physical 16 GB run is recorded. 8 GB is not claimed."),
         "qualification": {
-            "status": "unqualified",
-            "reason": "The owner's bounded physical 16 GB SSD run remains pending.",
-            "min_free_memory_gb": 14.697,
-            "min_free_memory_note": 'Lowest recorded successful live-free start was 14.697 GB on the physical 32 GiB M2 Max on 2026-10-06, cold-square 16 steps 1K; qualification/evidence/qwen-image-21-20261006/measurement.json. No lower-headroom or physical 16 GB pass is inferred.',
-            "target_unified_memory_gb": 16,
-            "target_evidence": "Compatibility target only; no physical 16 GB pass is recorded.",
+            "status": "qualified",
+            "reason": "Qualified on 16 GB and above by the owner's decision of 2026-10-08, without a physical 16 GB receipt. The evidence is the packaged run on the physical 32 GiB M2 Max of 2026-10-06 (four 1K 16-step cases, peak 5.85 GB, normal pressure, no swap growth; qualification/evidence/qwen-image-21-20261006/measurement.json). 8 GB is not qualified.",
+            # ponytail: peak + 2 GB, not the lowest recorded start (14.697 GB), which no 16 GB Mac
+            # reaches (they idle at 8-10 GB). Ceiling: measured only on 32 GiB; raise this if a
+            # 16 GB run shows pressure or swap.
+            "min_free_memory_gb": 8.0,
+            "min_free_memory_note": "Measured peak plus 2 GB, rounded up to 0.5 GB: the worker-tree peak was 5.853 GB on the physical 32 GiB M2 Max on 2026-10-06 (the largest drop in available memory was 4.85 GB), so a job admitted at 8.0 GB keeps at least 2 GB available at its peak. The Hub runs one job per Mac and releases idle resident models before it waits on this floor. Every measured start had 14.697 GB or more; no physical 16 GB start is recorded; qualification/evidence/qwen-image-21-20261006/measurement.json.",
         },
     },
     "z-image-turbo-mflux-4bit": {"defaults": {"width": 1280, "height": 720, "steps": 9, "guidance_ignored": True, "guidance_note": "CFG is disabled on this distilled model; mflux ignores --guidance (and --negative-prompt) and warns.", "parameters_source": "qualification/z-image-turbo-2026-09-24.md"}, "memory": (8, 16, "Measured on two tiers. 32 GB M2 Max, 1280x720, 9 steps: 17.64-17.70 GB peak footprint at the engine default and 7.12-7.24 GB with --low-ram, 0 swaps. 8 GB Apple M1 (Mac mini Macmini9,1, macOS 26.6.2, 3.03 GB available at start), mflux 0.20.0, seed 42, 9 steps: 1024x1024 low-ram OK in 392 s at 5.70 GB peak MLX / 5.85 GB footprint, 1857 MB peak swap; 1280x720 low-ram OK in 336 s at 5.70 / 5.85 GB, 1274 MB peak swap; 1024x1024 low-ram + vae-tile 256 OK at 4.95 / 5.50 GB. So the 8 GB tier is MEASURED and PASSES, with low-RAM mode mandatory there - it still swaps 1.3-1.9 GB. The engine default also completed on 8 GB but ONLY by swapping 3443 MB with an 8.72 GB footprint on an 8.0 GB machine: it fits by paging, not by fitting, and must not be offered at this tier."), "qualification": {"status": "qualified", "reason": "Qualified by measurement on two tiers: a 32 GB M2 Max at 1280x720, 9 steps, and the owner's 8 GB Apple M1 Mac mini run of 2026-09-26 where low-RAM mode completed both 1024x1024 and 1280x720. Local import and inference qualification are no longer outstanding for this model, and low-RAM mode is mandatory below 24 GB."}},

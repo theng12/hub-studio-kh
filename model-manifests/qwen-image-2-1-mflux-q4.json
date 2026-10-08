@@ -116,15 +116,13 @@
   "model_id": "mlx-community/Qwen-Image-2.1-mflux-q4",
   "package_id": "qwen-image-2-1-mflux-q4",
   "qualification": {
-    "memory_evidence": "Packaged MLX 4-bit low-memory path completed four 1K 16-step cases on the physical 32 GiB M2 Max, 2026-10-06: sampled worker-tree peak 5.513\u20135.853 GB, normal pressure, zero swap growth. Evidence: qualification/evidence/qwen-image-21-20261006/measurement.json. Physical 16 GB remains pending; production floor 32 GB.",
-    "min_free_memory_gb": 14.697,
-    "min_free_memory_note": "Lowest recorded successful live-free start was 14.697 GB on the physical 32 GiB M2 Max on 2026-10-06, cold-square 16 steps 1K; qualification/evidence/qwen-image-21-20261006/measurement.json. No lower-headroom or physical 16 GB pass is inferred.",
-    "minimum_unified_memory_gb": 32,
-    "reason": "The owner's bounded physical 16 GB SSD run remains pending.",
-    "recommended_unified_memory_gb": 32,
-    "status": "unqualified",
-    "target_evidence": "Compatibility target only; no physical 16 GB pass is recorded.",
-    "target_unified_memory_gb": 16
+    "memory_evidence": "MEASURED on the physical 32 GiB M2 Max only: the packaged MLX 4-bit low-memory path completed four 1K 16-step cases, 2026-10-06: sampled worker-tree peak 5.513\u20135.853 GB, normal pressure, zero swap growth. Evidence: qualification/evidence/qwen-image-21-20261006/measurement.json. The 16 GB tier is the owner's decision of 2026-10-08; no physical 16 GB run is recorded. 8 GB is not claimed.",
+    "min_free_memory_gb": 8.0,
+    "min_free_memory_note": "Measured peak plus 2 GB, rounded up to 0.5 GB: the worker-tree peak was 5.853 GB on the physical 32 GiB M2 Max on 2026-10-06 (the largest drop in available memory was 4.85 GB), so a job admitted at 8.0 GB keeps at least 2 GB available at its peak. The Hub runs one job per Mac and releases idle resident models before it waits on this floor. Every measured start had 14.697 GB or more; no physical 16 GB start is recorded; qualification/evidence/qwen-image-21-20261006/measurement.json.",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Qualified on 16 GB and above by the owner's decision of 2026-10-08, without a physical 16 GB receipt. The evidence is the packaged run on the physical 32 GiB M2 Max of 2026-10-06 (four 1K 16-step cases, peak 5.85 GB, normal pressure, no swap growth; qualification/evidence/qwen-image-21-20261006/measurement.json). 8 GB is not qualified.",
+    "recommended_unified_memory_gb": 16,
+    "status": "qualified"
   },
   "quantization": "MLX 4-bit",
   "quantization_source": "the publisher model id states q4: mlx-community/Qwen-Image-2.1-mflux-q4",

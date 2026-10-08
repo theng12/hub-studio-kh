@@ -250,3 +250,31 @@ def test_voxcpm2_4bit_is_published_eligible_on_an_8gb_mac(reset, fixture_monitor
     assert rows[repo]["memory_eligible"] is True
     assert rows[FLUX_REPO]["min_unified_memory_gb"] == 8.0
     assert rows[FLUX_REPO]["memory_eligible"] is False
+
+
+def test_qwen_image_tiers_and_gemma_admit_only_their_qualified_macs(reset):
+    """Owner decisions 2026-10-08: Qwen Image 2.1 (native) holds a 24 GB Mac, Qwen Image 2.1
+    Low-RAM holds 16 GB and up (8 GB stays out), and Gemma 4 26B stays 32 GB only. Totals are
+    what the fleet's Macs report: GiB as decimal GB (8.59 / 17.18 / 25.77 / 34.36)."""
+    from components.image.app.backend import generation as image_generation
+
+    native = image_generation.QWEN_IMAGE_21
+    low_ram = image_generation.QWEN_IMAGE_21_LOW_RAM
+    gemma = "mlx-community/gemma-4-26B-A4B-it-qat-4bit"
+    expected = {
+        native.repo: (24.0, {8.59: False, 17.18: False, 25.77: True, 34.36: True}),
+        low_ram.repo: (16.0, {8.59: False, 17.18: True, 25.77: True, 34.36: True}),
+        gemma: (32.0, {17.18: False, 25.77: False, 34.36: True}),
+    }
+    workers = {native.repo: native.qualified_minimum_memory_gb,
+               low_ram.repo: low_ram.qualified_minimum_memory_gb, gemma: None}
+    for repo, (floor, by_total) in expected.items():
+        row = {"repo": repo}
+        if workers[repo] is not None:
+            row["min_unified_memory_gb"] = workers[repo]
+        assert memory_admission.requirement_gb(repo, row, use_override=False) == (floor, "manifest")
+        for total, eligible in by_total.items():
+            published = memory_admission.publish_floor(dict(row, memory_eligible=True), total)
+            assert published["memory_eligible"] is eligible, (repo, total)
+            assert broker._memory_gate({"min_total": floor}, {
+                "total_gb": total, "available_gb": total})[0] == ("run" if eligible else "skip")

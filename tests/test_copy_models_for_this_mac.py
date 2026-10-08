@@ -659,5 +659,47 @@ class TheCopyUsesTheAppYouInstalledTest(unittest.TestCase):
             self.assertIn(str(chosen), out.getvalue() + str(chosen))
 
 
+
+class QwenStockingTests(unittest.TestCase):
+    """Owner decision 2026-10-08: the low-RAM Qwen Image 2.1 is the fleet's stocked Qwen (16 GB and
+    up); the native one is qualified on 24 GB, stays on the SSD and is installed on request only."""
+
+    LOW_RAM, NATIVE = "qwen-image-2-1-mflux-q4", "qwen-image-2-1-mlx-serve-4bit"
+
+    def test_low_ram_is_copied_from_16_gb_and_native_never_is(self):
+        floors = {package_id: json.loads((MANIFESTS / f"{package_id}.json").read_text())
+                  ["qualification"]["minimum_unified_memory_gb"]
+                  for package_id in (self.LOW_RAM, self.NATIVE)}
+        self.assertEqual(floors, {self.LOW_RAM: 16, self.NATIVE: 24})
+        self.assertIn(self.NATIVE, COPY.NOT_STOCKED)
+        self.assertNotIn(self.LOW_RAM, COPY.NOT_STOCKED)
+        for memory_gb in (8, 16, 24, 32):
+            with self.subTest(memory_gb=memory_gb), TemporaryDirectory() as tmp:
+                kit = Harness(Path(tmp))
+                for package_id, floor in floors.items():
+                    kit.ship(package_id, floor=floor)
+
+                code, output, _prompt = kit.run(answer="y\n", memory_gb=memory_gb)
+
+                self.assertEqual(code, 0, output)
+                self.assertEqual((kit.home / self.LOW_RAM).is_dir(), memory_gb >= 16, output)
+                self.assertFalse((kit.home / self.NATIVE).exists(), output)
+                self.assertTrue((kit.library / self.NATIVE).is_dir(), "it stays on the SSD")
+                self.assertIn("Installed on request only", output)
+
+    def test_native_already_on_a_mac_is_offered_and_never_pruned(self):
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship(self.NATIVE, floor=24)
+            kit.receive(self.NATIVE)
+            kit.record(self.NATIVE)
+
+            code, output, _prompt = kit.run(answer="y\n", memory_gb=32)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue((kit.home / self.NATIVE).is_dir(), output)
+            self.assertEqual(kit.trash(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

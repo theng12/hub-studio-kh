@@ -228,5 +228,23 @@ class MlxServeRunnerTests(unittest.TestCase):
             self.assertFalse(destination.exists())
 
 
+
+class JobTimeoutTests(unittest.TestCase):
+    """The native leaf's own limit scales with steps from the 24 GiB M4 measurement (500.3 s for
+    16 steps, 2026-10-08) and stays under the Hub's Image deadline, so a long job is not cut off
+    and the worker's own failure arrives before the Hub stops waiting."""
+
+    def test_default_jobs_keep_900_s_and_the_step_maximum_fits_the_hub_deadline(self) -> None:
+        from components.hub import standalone
+
+        self.assertEqual(mlx_serve_runner.job_timeout_s(16), 900.0)
+        measured_per_step = 500.277 / 16
+        for steps in (16, 26, 40, 50):
+            with self.subTest(steps=steps):
+                limit = mlx_serve_runner.job_timeout_s(steps)
+                self.assertGreaterEqual(limit, 1.1 * measured_per_step * steps)
+                self.assertLess(limit, standalone.deadline_floor_seconds("image"))
+
+
 if __name__ == "__main__":
     unittest.main()

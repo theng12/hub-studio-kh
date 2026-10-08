@@ -77,9 +77,10 @@ MODALITY_DEADLINE_FLOOR_S: dict[str, float] = {
     # ~403 tokens each is 12,090 tokens, 1,008 s on an M1. They asked for the whole Hub ceiling to
     # go to 1,800 s to cover it, and stated the cost they were accepting — *"every job may hang 30
     # min instead of 15, including fast ones."* **That cost is not necessary and is not paid here.**
-    # Because this table is per generator, chat gets 1,800 s and subtitle, voice, music and image
-    # keep 900 s, so a broken subtitle job is still noticed in 15 minutes rather than 30. This is
-    # the whole reason the deadline stopped being one flat number.
+    # Because this table is per generator, chat gets 1,800 s and subtitle and music keep 900 s
+    # (voice and image were raised later, each on its own measurement), so a broken subtitle job
+    # is still noticed in 15 minutes rather than 30. This is the whole reason the deadline stopped
+    # being one flat number.
     "chat": 1800.0,
     # Voice, raised 900 -> 1,800 s on 2026-09-26 at Story Studio's report. This lane is the one
     # that actually failed in the field: a **~17-minute narration part was killed at the 900 s
@@ -106,6 +107,12 @@ MODALITY_DEADLINE_FLOOR_S: dict[str, float] = {
     # and model/Whisper load. 2,700 is 1.55x that measured tail. Stall detection is unchanged, so
     # a quiet worker is still caught in minutes. The Gateway scales longer parts per Mac on top.
     "voice": 2700.0,
+    # Image, raised 900 -> 1,800 s on 2026-10-08 with Qwen Image 2.1 qualified on 24 GB: the owner's
+    # 24 GiB M4 took 440.6-500.3 s for 16 steps (qualification/evidence/qwen-image-21-20261008-24gb),
+    # and the model accepts up to 50 steps. The worker's own limit for that model
+    # (`mlx_serve_runner.job_timeout_s`, 34.4 s per step, at most 1,720 s) stays below this, so the
+    # worker reports its own failure before this ceiling is reached.
+    "image": 1800.0,
 }
 
 

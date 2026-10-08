@@ -122,13 +122,32 @@
       "source_path": "qualification/yue2-music-results-20260927/bridge-run.json"
     },
     {
+      "package_id": "qwen-image-2-1-mlx-serve-4bit",
+      "model": "Qwen Image 2.1",
+      "quantization": "MLX affine 4-bit",
+      "engine": "image-mlx-serve",
+      "machine": "24 GiB \u00b7 Apple M4",
+      "tier_gb": 24,
+      "outcome": "four packaged 16-step cases completed (1024x1024 cold and warm, 1280x720, 720x1280); qualified on 24 GB",
+      "metrics": {
+        "peak_process_tree_gb": "9.235\u20139.787",
+        "wall_seconds": "440.637\u2013500.277",
+        "available_gb_at_start": "19.01\u201319.879",
+        "swap_peak_growth_gb": 0,
+        "pressure": "normal"
+      },
+      "evidence": "M",
+      "source": "owner's physical 24 GiB M4 SSD run, Studio Hub 0.6.152 packaged Image worker, 2026-10-08",
+      "source_path": "qualification/evidence/qwen-image-21-20261008-24gb/measurement.json"
+    },
+    {
       "package_id": "qwen-image-2-1-mflux-q4",
       "model": "Qwen Image 2.1 Low-RAM 4-bit",
       "quantization": "MLX affine 4-bit",
       "engine": "image-mflux",
       "machine": "32 GB \u00b7 Apple M2 Max",
       "tier_gb": 32,
-      "outcome": "four packaged 16-step 1K cases completed; no physical 16 GB claim",
+      "outcome": "four packaged 16-step 1K cases completed; the 16 GB tier is the owner's decision of 2026-10-08, no physical 16 GB run",
       "metrics": {
         "peak_process_tree_gb": "5.513\u20135.853",
         "wall_seconds": "176.630\u2013212.859",

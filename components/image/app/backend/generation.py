@@ -394,24 +394,28 @@ QWEN_IMAGE_21 = ImageModel(
     memory=MemoryPolicy(single_mode_reason=(
         'The native Qwen runtime has one bounded packaged configuration.')),
     qualification={
-        'measured_on': '32 GiB M2 Max, mlx-serve 26.10.1, pinned 4-bit pack',
-        'measured_resolutions': ['1280x720', '512x512'],
-        'measured_peak_gb': {'default': 15.75},
-        'fleet_24gb': 'pending: owner physical SSD qualification required',
-        'fleet_16gb': 'unsupported by this normal pack; separate low-RAM candidate pending',
-        'packaged_inference': 'pending',
+        'measured_on': '24 GiB Apple M4 (packaged, Hub 0.6.152); earlier 32 GiB M2 Max standalone, mlx-serve 26.10.1, pinned 4-bit pack',
+        'measured_resolutions': ['1024x1024', '1280x720', '720x1280'],
+        'measured_peak_gb': {'default': 9.787},
+        'fleet_24gb': ('measured 2026-10-08 on the owner\'s physical 24 GiB M4: four 16-step cases, '
+                       '440.6-500.3 s, worker-tree peak 9.235-9.787 GB, normal pressure, zero swap growth; '
+                       'qualification/evidence/qwen-image-21-20261008-24gb/measurement.json'),
+        'fleet_16gb': 'unsupported by this normal pack; use the qualified low-RAM package',
+        'packaged_inference': ('proven on 24 GiB M4: four 1K-class cases; '
+                               'qualification/evidence/qwen-image-21-20261008-24gb/measurement.json'),
     },
     engine='image-mlx-serve',
     size_presets=QWEN_SIZE_PRESETS,
     minimum_macos=(26, 2),
     resident_allowed=False,
-    qualified_minimum_memory_gb=32.0,
-    # The only retained clean-start receipt had 25.22 GB available. This is a start floor,
-    # deliberately not a peak+margin formula; physical packaged measurements will refine it.
-    min_free_memory_gb=25.3,
+    qualified_minimum_memory_gb=24.0,
+    # ponytail: measured peak demand (10.35 GB drop in available memory, 24 GiB M4, 2026-10-08)
+    # + 2 GB, not the lowest recorded start (19.01 GB). Ceiling: no run started below 19.01 GB;
+    # raise it if a lower-headroom start shows pressure or swap. Same rule as the low-RAM package.
+    min_free_memory_gb=12.5,
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. Qwen Image 2.1 is qualified on '
-        '32 GB; 24 GB remains a physical qualification target.'),
+        '24 GB and above.'),
 )
 
 QWEN_IMAGE_21_LOW_RAM = ImageModel(
@@ -428,19 +432,24 @@ QWEN_IMAGE_21_LOW_RAM = ImageModel(
     memory=MemoryPolicy(single_mode_reason=(
         'This candidate always uses prompt materialization, cache zero, tiled VAE and eviction.')),
     qualification={
-        'fleet_16gb': 'pending: owner physical SSD qualification required',
+        'fleet_16gb': ('qualified by the owner\'s decision of 2026-10-08 without a physical 16 GB '
+                       'receipt; evidence is the 32 GiB M2 Max run below'),
+        'fleet_8gb': 'not qualified',
         'packaged_inference': 'proven on 32 GiB M2 Max: four 1K cases, normal pressure, zero swap growth; qualification/evidence/qwen-image-21-20261006/measurement.json',
         'measured_peak_gb': {'default': 5.853},
-        'min_free_memory_note': 'Lowest recorded successful live-free start was 14.697 GB on the physical 32 GiB M2 Max on 2026-10-06, cold-square 16 steps 1K; qualification/evidence/qwen-image-21-20261006/measurement.json. No lower-headroom or physical 16 GB pass is inferred.',
+        'min_free_memory_note': 'Measured peak 5.853 GB + 2 GB, rounded up to 0.5 GB (32 GiB M2 Max, 2026-10-06; every measured start had 14.697 GB or more); qualification/evidence/qwen-image-21-20261006/measurement.json. No physical 16 GB start is recorded.',
     },
     size_presets=QWEN_SIZE_PRESETS,
-    qualified_minimum_memory_gb=32.0,
+    qualified_minimum_memory_gb=16.0,
     resident_allowed=False,
-    min_free_memory_gb=14.697,
+    # ponytail: measured peak + 2 GB, not the lowest recorded start (14.697 GB), which no 16 GB Mac
+    # reaches (they idle at 8-10 GB available). Ceiling: measured only on 32 GiB; raise it if a
+    # 16 GB run shows pressure or swap.
+    min_free_memory_gb=8.0,
     guidance_ignored=True,
     below_tier_warning=(
-        'This Mac has {memory_gb:.0f} GB of unified memory. The Qwen Image 2.1 low-RAM '
-        'candidate has no qualified lower tier yet; the owner will test 16 GB physically.'),
+        'This Mac has {memory_gb:.0f} GB of unified memory. Qwen Image 2.1 Low-RAM is '
+        'qualified on 16 GB and above; 8 GB is not qualified.'),
 )
 
 MODELS: dict[str, ImageModel] = {

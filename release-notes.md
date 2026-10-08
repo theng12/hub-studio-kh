@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.158 - 2026-10-08
+
+### Qwen Image on more Macs
+
+Qwen Image 2.1 Low-RAM is now the fleet's Qwen image model, on every Mac with 16 GB or more. The regular Qwen Image 2.1 now runs on 24 GB Macs too; it stays on the SSD and can be installed on a Mac when you ask for it from the Gateway.
+
+Long image jobs (many steps) are no longer stopped after 15 minutes; the limit is now 30 minutes.
+
+This release also brings 0.6.155–0.6.157 to every Mac: Gemma 4 on 32 GB Macs, choosing which work each Mac accepts, and ranked job priorities.
+
 ## 0.6.157 - 2026-10-08
 
 ### Choose what this Mac runs first

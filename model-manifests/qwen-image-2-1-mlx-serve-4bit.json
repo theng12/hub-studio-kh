@@ -14,121 +14,151 @@
       "sha256": "cbabe59300c9bb4d01232d90fad196b4c58733bc5fd1dd8fe456999ad84311bc",
       "size": 117,
       "source_path": "config.json",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/config.json"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/config.json"
+      ]
     },
     {
       "path": "model/model_index.json",
       "sha256": "cf1ecd104ea090855d60d8cec0895c1e9d6ee41b2f87e231b678beecd1cf7809",
       "size": 447,
       "source_path": "model_index.json",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/model_index.json"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/model_index.json"
+      ]
     },
     {
       "path": "model/processor/tokenizer.json",
       "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
       "size": 11422654,
       "source_path": "processor/tokenizer.json",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/processor/tokenizer.json"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/processor/tokenizer.json"
+      ]
     },
     {
       "path": "model/processor/tokenizer_config.json",
       "sha256": "81ec7bb9530159b326c0bef1d0b6c33d392090524014ea3f0123a3c1eb9c2af5",
       "size": 5445,
       "source_path": "processor/tokenizer_config.json",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/processor/tokenizer_config.json"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/processor/tokenizer_config.json"
+      ]
     },
     {
       "path": "model/scheduler/scheduler_config.json",
       "sha256": "5895f3a167c14a967fe9ac70c64924ae5acc79799e0679fd12907e594a713cd1",
       "size": 485,
       "source_path": "scheduler/scheduler_config.json",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/scheduler/scheduler_config.json"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/scheduler/scheduler_config.json"
+      ]
     },
     {
       "path": "model/text_encoder/config.json",
       "sha256": "6001331949f7f86ab6d791a80b12246d4f8da5159fa08c3e62368a39f36d63a9",
       "size": 1517,
       "source_path": "text_encoder/config.json",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/config.json"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/config.json"
+      ]
     },
     {
       "path": "model/text_encoder/model-00001-of-00004.safetensors",
       "sha256": "914e05c39a32b5982db0dc6fe804321fcf014c2326f4acde90b651c30c1b7978",
       "size": 1976165037,
       "source_path": "text_encoder/model-00001-of-00004.safetensors",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/model-00001-of-00004.safetensors"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/model-00001-of-00004.safetensors"
+      ]
     },
     {
       "path": "model/text_encoder/model-00002-of-00004.safetensors",
       "sha256": "eb7dbd0345c3c33ba397f65b789e40b73c82f19fefd226ba17b54a0b48eaea74",
       "size": 1382808291,
       "source_path": "text_encoder/model-00002-of-00004.safetensors",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/model-00002-of-00004.safetensors"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/model-00002-of-00004.safetensors"
+      ]
     },
     {
       "path": "model/text_encoder/model-00003-of-00004.safetensors",
       "sha256": "a9cdc253f7b6cc676256de82ba6204c534a0017b008b818f925273cd787316b0",
       "size": 1382808327,
       "source_path": "text_encoder/model-00003-of-00004.safetensors",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/model-00003-of-00004.safetensors"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/model-00003-of-00004.safetensors"
+      ]
     },
     {
       "path": "model/text_encoder/model-00004-of-00004.safetensors",
       "sha256": "98b02a3ef8de4da20df504bf8804854e601797bf8c0a56a7730baf84b07d165e",
       "size": 410603847,
       "source_path": "text_encoder/model-00004-of-00004.safetensors",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/model-00004-of-00004.safetensors"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/text_encoder/model-00004-of-00004.safetensors"
+      ]
     },
     {
       "path": "model/transformer/config.json",
       "sha256": "56ae3281c4e6c2d1aa3658252d187488071815fd79bef15808bb0205fc1a2241",
       "size": 370,
       "source_path": "transformer/config.json",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/transformer/config.json"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/transformer/config.json"
+      ]
     },
     {
       "path": "model/transformer/diffusion_pytorch_model-00001-of-00002.safetensors",
       "sha256": "0ccdbb08066e2a30ba0b98567b94d1e920af19ab0cf829f36e801befaf0ee15f",
       "size": 2974367042,
       "source_path": "transformer/diffusion_pytorch_model-00001-of-00002.safetensors",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/transformer/diffusion_pytorch_model-00001-of-00002.safetensors"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/transformer/diffusion_pytorch_model-00001-of-00002.safetensors"
+      ]
     },
     {
       "path": "model/transformer/diffusion_pytorch_model-00002-of-00002.safetensors",
       "sha256": "0b1f03fca0e8178d628adc444112291015af7ddf6c64e62ccd76e471aee31875",
       "size": 1223193789,
       "source_path": "transformer/diffusion_pytorch_model-00002-of-00002.safetensors",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/transformer/diffusion_pytorch_model-00002-of-00002.safetensors"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/transformer/diffusion_pytorch_model-00002-of-00002.safetensors"
+      ]
     },
     {
       "path": "model/vae/config.json",
       "sha256": "9785d527b278cb8b210e9f48a8028d92a4190968ce7e24c8fc85d9d1b82f6ba2",
       "size": 2079,
       "source_path": "vae/config.json",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/vae/config.json"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/vae/config.json"
+      ]
     },
     {
       "path": "model/vae/diffusion_pytorch_model.safetensors",
       "sha256": "63ad547a30bd9cd520ced933b747bacdbbed8e37ea7eb1ab3b47921644dc47b4",
       "size": 1323975004,
       "source_path": "vae/diffusion_pytorch_model.safetensors",
-      "urls": ["https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/vae/diffusion_pytorch_model.safetensors"]
+      "urls": [
+        "https://huggingface.co/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/resolve/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38/vae/diffusion_pytorch_model.safetensors"
+      ]
     }
   ],
-  "license": {"weights": "Apache-2.0"},
+  "license": {
+    "weights": "Apache-2.0"
+  },
   "minimum_macos": "26.2",
   "model_id": "ddalcu/Qwen-Image-2.1-MLX-Serve-4bit",
   "package_id": "qwen-image-2-1-mlx-serve-4bit",
   "qualification": {
-    "memory_evidence": "Measured on the owner's 32 GB M2 Max with mlx-serve 26.10.1 and the pinned MLX 4-bit pack: the retained clean 1K-class run recorded a 15.75 GB peak process footprint. Physical 24 GB evidence is still pending.",
-    "min_free_memory_gb": 25.3,
-    "min_free_memory_note": "Provisional clean-start preflight floor from the retained standalone receipt; packaged measurement is still pending.",
-    "minimum_unified_memory_gb": 32,
-    "reason": "Standalone 32 GB evidence exists; the packaged path and the owner's physical 24 GB SSD run remain pending.",
-    "recommended_unified_memory_gb": 32,
-    "status": "unqualified",
-    "target_evidence": "Compatibility target only; no physical 24 GB pass is recorded.",
-    "target_unified_memory_gb": 24
+    "memory_evidence": "MEASURED on the owner's physical 24 GiB Apple M4 (macOS 27.0.1, Studio Hub 0.6.152 packaged Image worker, mlx-serve 26.10.1, pinned MLX affine 4-bit pack), 2026-10-08: four 16-step cases (1024x1024 cold and warm, 1280x720, 720x1280) completed in 440.6-500.3 s wall; sampled worker-tree peak 9.235-9.787 GB; available memory 19.01-19.88 GB at start and never below 9.24 GB; pressure normal; zero swap growth; SSD net writes at most 0.05 GB. Evidence: qualification/evidence/qwen-image-21-20261008-24gb/measurement.json. 16 GB is not claimed for this package.",
+    "min_free_memory_gb": 12.5,
+    "min_free_memory_note": "Measured peak demand plus 2 GB, rounded up to 0.5 GB: the largest drop in available memory during the physical 24 GiB M4 run of 2026-10-08 was 10.35 GB (cold-square 1024x1024, 19.88 to 9.53 GB; worker-tree peak 9.79 GB), so a job admitted at 12.5 GB keeps at least 2 GB available at its peak. The Hub runs one job per Mac and releases idle resident models before it waits on this floor. Every measured start had 19.01 GB or more; qualification/evidence/qwen-image-21-20261008-24gb/measurement.json.",
+    "minimum_unified_memory_gb": 24,
+    "reason": "Qualified on 24 GB and above by the owner's physical 24 GiB M4 run of 2026-10-08: four packaged 16-step cases completed with normal pressure and no swap growth (qualification/evidence/qwen-image-21-20261008-24gb/measurement.json). Earlier standalone 32 GB evidence agrees.",
+    "recommended_unified_memory_gb": 24,
+    "status": "qualified"
   },
   "quantization": "MLX 4-bit",
   "quantization_source": "the publisher model id states it: ddalcu/Qwen-Image-2.1-MLX-Serve-4bit",
@@ -136,14 +166,22 @@
   "schema_version": 1,
   "source": {
     "captured_at": "2026-10-06",
-    "layout": {"model": {"destination": "model", "repo": "ddalcu/Qwen-Image-2.1-MLX-Serve-4bit", "revision": "88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38"}},
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "ddalcu/Qwen-Image-2.1-MLX-Serve-4bit",
+        "revision": "88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38"
+      }
+    },
     "provider": "huggingface",
-    "sources": [{
-      "repo": "ddalcu/Qwen-Image-2.1-MLX-Serve-4bit",
-      "revision": "88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38",
-      "role": "model",
-      "snapshot_api_url": "https://huggingface.co/api/models/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/revision/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38",
-      "tree_api_url": "https://huggingface.co/api/models/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/tree/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38?recursive=true&expand=true&limit=100"
-    }]
+    "sources": [
+      {
+        "repo": "ddalcu/Qwen-Image-2.1-MLX-Serve-4bit",
+        "revision": "88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/revision/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38",
+        "tree_api_url": "https://huggingface.co/api/models/ddalcu/Qwen-Image-2.1-MLX-Serve-4bit/tree/88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38?recursive=true&expand=true&limit=100"
+      }
+    ]
   }
 }
