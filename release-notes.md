@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.159 - 2026-10-08
+
+### Image jobs get the time they need
+
+An image job's time limit now grows with its number of steps and with how fast the Mac running it is, up to 2 hours. A 50-step Qwen image on a slower Mac is no longer stopped halfway. Short jobs are still given at least as long as before.
+
+Qwen Image 2.1 Low-RAM has now been measured on a real 16 GB Mac: about 8 to 9 minutes for a 16-step image, with memory to spare.
+
 ## 0.6.158 - 2026-10-08
 
 ### Qwen Image on more Macs

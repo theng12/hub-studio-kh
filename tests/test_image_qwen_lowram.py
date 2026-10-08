@@ -96,8 +96,16 @@ class QwenLowRamTests(unittest.TestCase):
         self.assertEqual(model.min_free_memory_gb, math.ceil((peak + 2.0) * 2) / 2)
         self.assertEqual(model.min_free_memory_gb, 8.0)
         self.assertIn(evidence.name, model.qualification["min_free_memory_note"])
+        # The physical 16 GiB M4 run (2026-10-08) supports the floor: every start was above it and
+        # its largest drop in available memory + 2 GB fits inside it.
+        sixteen = root / "qualification/evidence/qwen-image-21-20261008-16gb/measurement.json"
+        rows = json.loads(sixteen.read_text())["rows"]
+        self.assertTrue(all(row["available_gb_start"] >= model.min_free_memory_gb for row in rows))
+        drop = max(row["available_gb_start"] - row["available_gb_min"] for row in rows)
+        self.assertLessEqual(drop + 2.0, model.min_free_memory_gb)
+        self.assertIn("qwen-image-21-20261008-16gb", model.qualification["min_free_memory_note"])
 
-    def test_candidate_has_a_distinct_pinned_identity_and_the_owners_16_gb_tier(self) -> None:
+    def test_candidate_has_a_distinct_pinned_identity_and_a_measured_16_gb_tier(self) -> None:
         model = generation.QWEN_IMAGE_21_LOW_RAM
         self.assertIs(generation.MODELS[model.repo], model)
         self.assertEqual(model.repo, "mlx-community/Qwen-Image-2.1-mflux-q4")
@@ -105,8 +113,8 @@ class QwenLowRamTests(unittest.TestCase):
         self.assertEqual(model.package_id, "qwen-image-2-1-mflux-q4")
         self.assertEqual(model.engine, "image-mflux")
         self.assertEqual(model.qualified_minimum_memory_gb, 16.0)
-        self.assertIn("owner's decision", model.qualification["fleet_16gb"])
-        self.assertIn("without a physical 16 GB", model.qualification["fleet_16gb"])
+        self.assertIn("physical 16 GiB M4", model.qualification["fleet_16gb"])
+        self.assertIn("qwen-image-21-20261008-16gb", model.qualification["fleet_16gb"])
         self.assertEqual(model.qualification["fleet_8gb"], "not qualified")
         self.assertFalse(model.resident_allowed)
         self.assertTrue(model.guidance_ignored)

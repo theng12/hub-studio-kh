@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.159 — 2026-10-08 · Image job time limits follow step count and Mac speed
+
+- Each image job now gets its own time limit: 120 s plus 1.5 × steps × how long a step takes on the Mac running it, between 15 minutes and 2 hours. More steps or a slower Mac get more time; a quick job on a fast Mac is still caught in 15 minutes.
+- "How long a step takes" is the Mac's own median from its last 20 finished jobs of that model (3 or more). Without that history it is the stored measurement for that chip (for example Qwen Image 2.1 Low-RAM: 13.3 s on an M2 Max, 33.6 s on an M4), and for a chip nobody has measured, such as an M1, twice the model's slowest measurement.
+- The Mac running the job states the limit on the job. The Hub shows it on the batch item, the regular Qwen engine stops at it, and Gateway 0.2.147 waits for it. Gateway still waits at least 30 minutes for every image job, as before.
+- Qwen Image 2.1 Low-RAM now has a real 16 GB receipt: the owner's 16 GiB M4 finished four 16-step cases in 463–538 s, peak 6.0 GB, starting with 9.3–10.6 GB free, no swap. The tier, the 8.0 GB start floor and the published notes cite it.
+- The model benchmarks page no longer points at the SSD test runners, which were retired today.
+
 ## 0.6.158 — 2026-10-08 · Qwen Image 2.1 Low-RAM is the fleet's Qwen; Qwen Image 2.1 runs on 24 GB
 
 - Qwen Image 2.1 Low-RAM is now the fleet's Qwen (16 GB and up); the regular Qwen Image 2.1 is qualified on 24 GB and up and can be installed on request.

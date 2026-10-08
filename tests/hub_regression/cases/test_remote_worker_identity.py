@@ -134,3 +134,42 @@ def test_a_peer_job_given_up_on_is_cancelled_on_its_node(fixture_monitor, monkey
 
     assert item.get("studio_job_id") is None, "the job was not given up on"
     assert [url.endswith("/api/generate/jobs/job-1") for url in worker.deleted] == [True]
+
+
+def test_a_peer_jobs_own_deadline_is_published_on_its_item(fixture_monitor, monkeypatch):
+    """Owner 2026-10-08: an Image job's limit scales with its steps and the Mac running it. The
+    worker states it on its job (`deadline_s`); the Hub puts it on the batch item the Gateway polls,
+    so both stop at the worker's own number, and a retry elsewhere does not keep the old one."""
+    import asyncio
+
+    monkeypatch.setattr(broker, "POLL_S", 0.0)
+    monkeypatch.setattr(broker, "RECOVERY_WINDOW_S", 0.0)
+    submitted = broker.submit_batch({"modality": "image", "model": "model-a", "routing": "pool",
+                                     "items": [{"prompt": "hello"}]})
+    batch = broker.batches[submitted["batch_id"]]
+    item = batch["items"][0]
+    studio = {"id": "image@node-a", "modality": "image", "machine": "node-a",
+              "host": "10.0.0.9", "port": 51201, "hub_port": 51201, "hub_token": "fleet-token",
+              "local": False, "runtime_identity": {"id": "fleet:node-a", "compatible": True}}
+    item.update(state="running", studio=studio["id"], tries=1)
+    broker._busy.add(studio["id"])
+    seen: list = []
+
+    class Worker(_PeerWorker):
+        async def post(self, url, **kwargs):
+            import httpx
+            return httpx.Response(200, json={"job": {"id": "job-1", "state": "queued",
+                                                     "worker_id": "image", "machine_id": "local",
+                                                     "deadline_s": 2640.0}},
+                                  request=httpx.Request("POST", url))
+
+        async def get(self, url, **kwargs):
+            seen.append(broker.public_item(batch, item).get("deadline_s"))
+            return await super().get(url, **kwargs)
+
+    worker = Worker([{"state": "running"}, {"state": "error", "error": "stop here",
+                                            "error_code": "WORKER_OWN_ERROR"}])
+    asyncio.run(broker._run_item(worker, batch, item, studio))
+
+    assert seen and set(seen) == {2640.0}, seen
+    assert "deadline_s" in broker._ATTEMPT_EVIDENCE_FIELDS

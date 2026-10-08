@@ -14,6 +14,7 @@ it runs in the memory-bounded configurations the policy below describes (``stagi
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from hashlib import sha256
 import gc
 import importlib
@@ -24,6 +25,7 @@ from pathlib import Path
 import queue
 import random
 import resource
+import statistics
 import subprocess
 import threading
 import time
@@ -203,6 +205,9 @@ class ImageModel:
     # publish nothing rather than an estimate - a guessed runtime is how a scheduler sets a
     # deadline that fails on use.
     measured_runtime: dict | None = None
+    # Seconds per step on each measured chip (`machdep.cpu.brand_string`): a stored run's whole wall
+    # time divided by its steps, so load and decode are inside the figure. Read by `job_deadline_s`.
+    seconds_per_step: dict | None = None
 
 
 FLUX2_KLEIN = ImageModel(
@@ -284,6 +289,8 @@ FLUX2_KLEIN = ImageModel(
                         'tree c9cd56a6'),
         'evidence': 'measured',
     },
+    # 105.94 s / 4 steps, the row above.
+    seconds_per_step={'Apple M4': 26.5},
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. FLUX is qualified on 16 GB and has '
         'run on 8 GB in production, but Image work here is below the qualified tier and may be '
@@ -372,6 +379,8 @@ Z_IMAGE_TURBO = ImageModel(
         'measured_on': '32 GiB M2 Max, mflux 0.20.0, 4-bit pack',
         'evidence': 'measured',
     },
+    # The slower (low-RAM) row above: 236 s / 9 steps.
+    seconds_per_step={'Apple M2 Max': 26.2},
     guidance_ignored=True,
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. Z-Image-Turbo is qualified at '
@@ -413,6 +422,8 @@ QWEN_IMAGE_21 = ImageModel(
     # + 2 GB, not the lowest recorded start (19.01 GB). Ceiling: no run started below 19.01 GB;
     # raise it if a lower-headroom start shows pressure or swap. Same rule as the low-RAM package.
     min_free_memory_gb=12.5,
+    # Slowest 16-step case, 500.277 s, qualification/evidence/qwen-image-21-20261008-24gb.
+    seconds_per_step={'Apple M4': 31.3},
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. Qwen Image 2.1 is qualified on '
         '24 GB and above.'),
@@ -432,20 +443,32 @@ QWEN_IMAGE_21_LOW_RAM = ImageModel(
     memory=MemoryPolicy(single_mode_reason=(
         'This candidate always uses prompt materialization, cache zero, tiled VAE and eviction.')),
     qualification={
-        'fleet_16gb': ('qualified by the owner\'s decision of 2026-10-08 without a physical 16 GB '
-                       'receipt; evidence is the 32 GiB M2 Max run below'),
+        'fleet_16gb': ('measured 2026-10-08 on the owner\'s physical 16 GiB M4: four 16-step cases, '
+                       '462.9-538.3 s, worker-tree peak 5.487-6.032 GB, starts at 9.31-10.65 GB free, '
+                       'normal pressure, zero swap growth; '
+                       'qualification/evidence/qwen-image-21-20261008-16gb/measurement.json'),
         'fleet_8gb': 'not qualified',
-        'packaged_inference': 'proven on 32 GiB M2 Max: four 1K cases, normal pressure, zero swap growth; qualification/evidence/qwen-image-21-20261006/measurement.json',
-        'measured_peak_gb': {'default': 5.853},
-        'min_free_memory_note': 'Measured peak 5.853 GB + 2 GB, rounded up to 0.5 GB (32 GiB M2 Max, 2026-10-06; every measured start had 14.697 GB or more); qualification/evidence/qwen-image-21-20261006/measurement.json. No physical 16 GB start is recorded.',
+        'packaged_inference': ('proven on 16 GiB M4 and 32 GiB M2 Max: four 1K cases each, normal '
+                               'pressure, zero swap growth; '
+                               'qualification/evidence/qwen-image-21-20261008-16gb/measurement.json, '
+                               'qualification/evidence/qwen-image-21-20261006/measurement.json'),
+        'measured_peak_gb': {'default': 6.032},
+        'min_free_memory_note': (
+            'Measured peak 5.853 GB + 2 GB, rounded up to 0.5 GB (32 GiB M2 Max, 2026-10-06; '
+            'qualification/evidence/qwen-image-21-20261006/measurement.json). The 16 GiB M4 run of '
+            '2026-10-08 supports it: starts at 9.31-10.65 GB free, largest drop 4.47 GB, never below '
+            '6.05 GB, no swap; qualification/evidence/qwen-image-21-20261008-16gb/measurement.json.'),
     },
     size_presets=QWEN_SIZE_PRESETS,
     qualified_minimum_memory_gb=16.0,
     resident_allowed=False,
-    # ponytail: measured peak + 2 GB, not the lowest recorded start (14.697 GB), which no 16 GB Mac
-    # reaches (they idle at 8-10 GB available). Ceiling: measured only on 32 GiB; raise it if a
-    # 16 GB run shows pressure or swap.
+    # ponytail: measured peak + 2 GB (32 GiB run). The physical 16 GiB M4 run started at 9.31 GB or
+    # more and dropped at most 4.47 GB, so an 8.0 GB start keeps ~3.5 GB. Ceiling: no 16 GB start
+    # below 9.31 GB is recorded; raise it if a lower-headroom start shows pressure or swap.
     min_free_memory_gb=8.0,
+    # Slowest 16-step case per Mac: 212.859 s on the 32 GiB M2 Max (qualification/evidence/
+    # qwen-image-21-20261006) and 538.349 s on the 16 GiB M4 (qwen-image-21-20261008-16gb).
+    seconds_per_step={'Apple M2 Max': 13.3, 'Apple M4': 33.6},
     guidance_ignored=True,
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. Qwen Image 2.1 Low-RAM is '
@@ -504,6 +527,52 @@ def host_memory_bytes() -> int:
         return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     except (ValueError, OSError, AttributeError):
         return 0
+
+
+# One image job's time limit (owner request 2026-10-08: "make the timeout scale with steps and mac
+# speed"): 120 s + 1.5 x steps x this Mac's seconds per step, clamped to [900 s, 7,200 s]. The worker
+# states it on the job (`deadline_s`), the Hub copies it onto the batch item, the native leaf is
+# stopped at it and the Gateway polls to it (never below the lane's 1,800 s): one number, one owner.
+#
+# Seconds per step, in order: this Mac's own median over its last 20 finished jobs of this model
+# (3 or more; `jobs.json` keeps 90 days); else the model's reading for this chip; else twice the
+# model's slowest reading, so an unmeasured Mac (an M1) is allowed half the slowest measured speed.
+#
+# Steps only, not pixels: every preset is 0.4-1.3x the pixels of the measured 1K scenes, and the
+# measured 1280x720 cases took 0.88x the 1024x1024 ones for 0.88x the pixels, so the 1.5x margin
+# already covers the largest preset; a pixel term would add a second reference for no change.
+IMAGE_DEADLINE_OVERHEAD_S = 120.0
+IMAGE_DEADLINE_MARGIN = 1.5
+IMAGE_DEADLINE_FLOOR_S = 900.0  # the native leaf's old flat limit; the Gateway still waits >= 1,800 s
+# ponytail: one flat 2 h ceiling (the video lane's and the narration ceiling). Qwen at 50 steps on an
+# unmeasured Mac gets ~5,200 s; only 100-step FLUX/Z-Image there, or a very slow own history, reach
+# it. Raise it per model if a real job needs longer.
+IMAGE_DEADLINE_CEILING_S = 7200.0
+UNMEASURED_SLOWDOWN = 2.0
+DEADLINE_HISTORY_JOBS = 20
+DEADLINE_HISTORY_MIN_JOBS = 3
+
+
+def job_deadline_s(model: ImageModel, steps, chip: str | None = None, history=()) -> float:
+    """Seconds one job of `steps` may run on this Mac; `history` is its own past seconds per step."""
+    recent = list(history)[-DEADLINE_HISTORY_JOBS:]
+    if len(recent) >= DEADLINE_HISTORY_MIN_JOBS:
+        per_step = statistics.median(recent)
+    else:
+        readings = model.seconds_per_step or {}
+        per_step = readings.get(chip) or UNMEASURED_SLOWDOWN * max(readings.values(), default=0.0)
+    seconds = IMAGE_DEADLINE_OVERHEAD_S + IMAGE_DEADLINE_MARGIN * int(steps or 0) * per_step
+    return round(min(IMAGE_DEADLINE_CEILING_S, max(IMAGE_DEADLINE_FLOOR_S, seconds)), 1)
+
+
+@lru_cache(maxsize=1)
+def host_chip() -> str | None:
+    """This Mac's chip as `sysctl` names it ("Apple M4"), or None when it cannot be read."""
+    try:
+        return subprocess.check_output(['/usr/sbin/sysctl', '-n', 'machdep.cpu.brand_string'],
+                                       text=True, timeout=3).strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def _under_memory_pressure() -> bool:
@@ -1511,6 +1580,7 @@ class GenerationManager:
                'model_reused': None, 'memory_hooks': None,
                'worker_id': 'image', 'machine_id': self.machine, 'acknowledged': False}
         with self.lock:
+            job['deadline_s'] = self._deadline_s(params)
             self.jobs[job_id] = job
             self.cancel_events[job_id] = threading.Event()
             try:
@@ -1521,6 +1591,16 @@ class GenerationManager:
                 raise
         self._enqueue(self._run, job_id, files['folder'])
         return dict(job)
+
+    def _deadline_s(self, params: dict) -> float:
+        """This job's limit on this Mac (`job_deadline_s`), from this Mac's own finished jobs."""
+        done = sorted((job for job in self.jobs.values()
+                       if job.get('state') == 'done' and job.get('steps')
+                       and (job.get('params') or {}).get('repo') == params['repo']
+                       and isinstance(job.get('duration_seconds'), (int, float))),
+                      key=lambda job: job.get('finished_at') or 0)
+        return job_deadline_s(MODELS[params['repo']], params['steps'], host_chip(),
+                              [job['duration_seconds'] / job['steps'] for job in done])
 
     def _enqueue(self, function, *args) -> None:
         """Run ``function`` on the one inference thread, in submission order.
@@ -1655,7 +1735,7 @@ class GenerationManager:
                     from .mlx_serve_runner import run_image
                     run_image(Path(model_folder) / WEIGHTS_SUBDIRECTORY, {
                         **job['params'], 'seed': seed,
-                    }, staged, event)
+                    }, staged, event, timeout_s=job['deadline_s'])
                     peak, reused = None, False
                 elif model.engine == IMAGE_ENGINE:
                     start_mlx_measurement()

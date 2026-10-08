@@ -109,9 +109,9 @@ MODALITY_DEADLINE_FLOOR_S: dict[str, float] = {
     "voice": 2700.0,
     # Image, raised 900 -> 1,800 s on 2026-10-08 with Qwen Image 2.1 qualified on 24 GB: the owner's
     # 24 GiB M4 took 440.6-500.3 s for 16 steps (qualification/evidence/qwen-image-21-20261008-24gb),
-    # and the model accepts up to 50 steps. The worker's own limit for that model
-    # (`mlx_serve_runner.job_timeout_s`, 34.4 s per step, at most 1,720 s) stays below this, so the
-    # worker reports its own failure before this ceiling is reached.
+    # and the model accepts up to 50 steps. Since 0.6.159 each Image job also carries its own
+    # `deadline_s` (steps x that Mac's speed, 900-7,200 s; `generation.job_deadline_s`) on its batch
+    # item; the Gateway polls to the larger of the two, so this stays the minimum any job gets.
     "image": 1800.0,
 }
 

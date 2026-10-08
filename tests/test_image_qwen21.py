@@ -159,6 +159,9 @@ class QwenImageModelTests(unittest.TestCase):
             choose_seed.assert_called_once_with(0, model.limits["max_seed"])
             self.assertEqual(calls[0]["weights"], model_folder / "model")
             self.assertEqual(calls[0]["params"]["steps"], 16)
+            # The leaf stops at the job's own published limit, never below 0.6.158's 900 s.
+            self.assertEqual(calls[0]["timeout_s"], job["deadline_s"])
+            self.assertGreaterEqual(job["deadline_s"], 900.0)
             self.assertFalse(calls[0]["cancel_event"].is_set())
             self.assertTrue(Path(finished["output_path"]).is_file())
 

@@ -214,24 +214,12 @@ def _leaf_state(outputs: Path):
         _archive_generated(state)
 
 
-# Slowest qualified tier, measured: the owner's 24 GiB M4 took 500.3 s for 16 steps at 1024x1024
-# (qualification/evidence/qwen-image-21-20261008-24gb). Counting all of it as step time is 31.3 s per
-# step; x1.1 headroom. At the model's 50-step maximum that is 1,720 s, under the Hub's 1,800 s Image
-# deadline (`standalone.MODALITY_DEADLINE_FLOOR_S`).
-SECONDS_PER_STEP = 34.4
-MIN_TIMEOUT_S = 900.0
-
-
-def job_timeout_s(steps) -> float:
-    """How long one job may take, from its step count; never below the old flat 900 s."""
-    return max(MIN_TIMEOUT_S, SECONDS_PER_STEP * int(steps or 0))
-
-
 def run_image(weights: Path, params: dict, destination: Path, cancel_event,
-              timeout_s: float | None = None) -> None:
-    """Generate one image with a private, non-resident native leaf."""
-    if timeout_s is None:
-        timeout_s = job_timeout_s(params.get("steps"))
+              timeout_s: float) -> None:
+    """Generate one image with a private, non-resident native leaf, stopped at `timeout_s`.
+
+    The limit is the job's own (`generation.job_deadline_s`), the number the Hub publishes for it.
+    """
     problem = runtime_problem()
     if problem:
         raise MlxServeFailure(problem)
@@ -316,7 +304,8 @@ def run_image(weights: Path, params: dict, destination: Path, cancel_event,
                         raise MlxServeFailure("mlx-serve exited during generation")
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise MlxServeFailure("mlx-serve generation timed out")
+                        raise MlxServeFailure(
+                            f"mlx-serve generation ran past this job's {timeout_s:.0f} s limit")
                     try:
                         ok, value = completed.get(timeout=min(0.1, remaining))
                         break

@@ -16,9 +16,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 # The Image runtime is the proven mflux 0.20 base plus pinned mlx-serve 26.10.1 native subtree.
-# Packaged low-q4 evidence: qualification/evidence/qwen-image-21-20261006/measurement.json.
 # The native engine is qualified on 24 GiB (packaged M4 run, qualification/evidence/qwen-image-21-20261008-24gb);
-# the low-q4 package is qualified on 16 GB and up by the owner's decision of 2026-10-08.
+# the low-q4 package on 16 GiB (packaged M4 run, qualification/evidence/qwen-image-21-20261008-16gb).
 # The Image runtime this build is qualified against, pinned by content. It includes **mflux 0.20.0** -
 # the engine `qualification/z-image-turbo-2026-09-24.md` measured Z-Image-Turbo 6B MLX 4-bit on,
 # and the one the image catalogue publishes in `measured_on`.

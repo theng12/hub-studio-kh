@@ -4212,7 +4212,7 @@ _OUTCOME_STATES = frozenset({"done", "error", "cancelled"})
 _ATTEMPT_EVIDENCE_FIELDS = (
     "machine", "worker_id", "model_revision", "runtime_revision",
     "resource_usage", "error_code", "runtime_s", "duration_s", "finished_at",
-    "worker_accepted_params", "section_quality",
+    "worker_accepted_params", "section_quality", "deadline_s",
 )
 
 
@@ -4603,6 +4603,12 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         _record_worker_resource_usage(item, job)
         _record_worker_section_quality(item, job)
         item["studio_job_id"] = job["id"]
+        # The worker's own limit for this job on this Mac (Image: steps x that Mac's speed). Published
+        # on the item so the Gateway polls to the same number the worker stops at.
+        deadline = job.get("deadline_s")
+        if (isinstance(deadline, (int, float)) and not isinstance(deadline, bool)
+                and math.isfinite(deadline) and deadline > 0):
+            item["deadline_s"] = float(deadline)
         if b["modality"] == "music" and isinstance(job.get("params"), dict):
             # Music normalizes aliases, defaults and prompt whitespace inside
             # its validator. Retain that worker-owned canonical request in the
