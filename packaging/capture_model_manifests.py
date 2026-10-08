@@ -243,7 +243,7 @@ CHOICES: tuple[dict[str, Any], ...] = (
 DETAILS: dict[str, dict[str, Any]] = {
     "flux2-klein-4b-mlx-4bit": {"defaults": {"size_pixels": 1024, "steps": 4, "guidance": 1.0, "parameters_source": "research/rescope-model-inventory-2026-09-15.md"}, "memory": (16, 16, "Historical 16 GB Apple-Silicon 1K text-to-image receipt; editing, reference-image and 2K are not qualified.")},
     "qwen-image-2-1-mlx-serve-4bit": {
-        "defaults": {"width": 1024, "height": 1024, "steps": 16, "guidance": 1.0,
+        "defaults": {"width": 1024, "height": 1024, "steps": 20, "guidance": 1.0,
                      "seed": -1,
                      "parameters_source": "docs/superpowers/plans/2026-10-06-qwen-image-21.md"},
         "memory": (24, 24, "MEASURED on the owner's physical 24 GiB Apple M4 (macOS 27.0.1, Studio Hub 0.6.152 packaged Image worker, mlx-serve 26.10.1, pinned MLX affine 4-bit pack), 2026-10-08: four 16-step cases (1024x1024 cold and warm, 1280x720, 720x1280) completed in 440.6-500.3 s wall; sampled worker-tree peak 9.235-9.787 GB; available memory 19.01-19.88 GB at start and never below 9.24 GB; pressure normal; zero swap growth; SSD net writes at most 0.05 GB. Evidence: qualification/evidence/qwen-image-21-20261008-24gb/measurement.json. 16 GB is not claimed for this package."),
@@ -258,7 +258,7 @@ DETAILS: dict[str, dict[str, Any]] = {
         },
     },
     "qwen-image-2-1-mflux-q4": {
-        "defaults": {"width": 1024, "height": 1024, "steps": 16, "guidance": 1.0,
+        "defaults": {"width": 1024, "height": 1024, "steps": 20, "guidance": 1.0,
                      "seed": -1,
                      "parameters_source": "docs/superpowers/plans/2026-10-06-qwen-image-21.md"},
         "memory": (16, 16, "MEASURED on the owner's physical 16 GiB Apple M4 (macOS 27.0.1, Studio Hub 0.6.152 packaged Image worker, pinned MLX affine Q4 pack), 2026-10-08: four 16-step cases (1024x1024 cold and warm, 1280x720, 720x1280) completed in 462.9-538.3 s wall; sampled worker-tree peak 5.487-6.032 GB; available memory 9.31-10.65 GB at start and never below 6.05 GB; pressure normal; zero swap growth. Evidence: qualification/evidence/qwen-image-21-20261008-16gb/measurement.json. Earlier: the physical 32 GiB M2 Max, 2026-10-06, four 1K 16-step cases, peak 5.513-5.853 GB (qualification/evidence/qwen-image-21-20261006/measurement.json). 8 GB is not claimed."),

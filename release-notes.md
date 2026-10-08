@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.161 - 2026-10-08
+
+### Qwen images use 20 steps
+
+Qwen Image 2.1 now uses 20 steps by default, up from 16, for both the regular and the Low-RAM version. In a thumbnail test, 16 steps was acceptable and 24 looked best, so 20 is the middle ground. Each image takes about a quarter longer. If you saved your own default steps for this model on a Mac, that Mac keeps your setting.
+
 ## 0.6.160 - 2026-10-08
 
 ### Model downloads in their own tab

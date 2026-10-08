@@ -62,7 +62,7 @@ class QwenManifestTests(unittest.TestCase):
                 self.assertEqual(item["defaults"], {
                     "width": 1024,
                     "height": 1024,
-                    "steps": 16,
+                    "steps": 20,
                     "guidance": 1.0,
                     "seed": -1,
                     "parameters_source": "docs/superpowers/plans/2026-10-06-qwen-image-21.md",

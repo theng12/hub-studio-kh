@@ -44,7 +44,7 @@ class QwenImageModelTests(unittest.TestCase):
         self.assertEqual(model.package_id, "qwen-image-2-1-mlx-serve-4bit")
         self.assertEqual(model.engine, "image-mlx-serve")
         self.assertEqual(model.label, "Qwen Image 2.1")
-        self.assertEqual(model.defaults["steps"], 16)
+        self.assertEqual(model.defaults["steps"], 20)
         self.assertEqual(model.defaults["guidance"], 1.0)
         self.assertEqual(model.defaults["seed"], -1)
         self.assertEqual(model.limits["max_seed"], 2_147_483_647)
@@ -158,7 +158,7 @@ class QwenImageModelTests(unittest.TestCase):
             release.assert_called_once_with()
             choose_seed.assert_called_once_with(0, model.limits["max_seed"])
             self.assertEqual(calls[0]["weights"], model_folder / "model")
-            self.assertEqual(calls[0]["params"]["steps"], 16)
+            self.assertEqual(calls[0]["params"]["steps"], 20)
             # The leaf stops at the job's own published limit, never below 0.6.158's 900 s.
             self.assertEqual(calls[0]["timeout_s"], job["deadline_s"])
             self.assertGreaterEqual(job["deadline_s"], 900.0)

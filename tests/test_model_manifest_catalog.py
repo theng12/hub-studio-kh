@@ -515,8 +515,8 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # mlx-serve package declares its conditional macOS 26.2 floor and is qualified on
             # 24 GB (physical M4 run, 2026-10-08); the low-RAM mflux package keeps macOS 14 and
             # is qualified on 16 GB by the owner's physical 16 GiB M4 run of 2026-10-08.
-            "qwen-image-2-1-mlx-serve-4bit": "495b421b598de55822d597b9425851880b6266960502186a06b71c86999b9945",
-            "qwen-image-2-1-mflux-q4": "44ff2b3d2aacb9358b8d65f3ac3b47dcf478bad3e28c5001776237cfc762d793",
+            "qwen-image-2-1-mlx-serve-4bit": "6a0e552d93718bee1f7ef7546dad19ea3798e7506d2b32d099a9af430ff4d97d",
+            "qwen-image-2-1-mflux-q4": "6aabd0eb5b79856a836c91b6aa243f717c88582c4e7b9c4c1b09a3c4a8d595ac",
         }
         # The digest map is the frozen-content half of the invariant: its keys are checked against
         # the manifests on disk (never against a hand-written list), so a package that appears

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.161 — 2026-10-08 · Qwen Image 2.1 uses 20 steps by default
+
+- Qwen Image 2.1 now uses 20 steps by default (owner's choice after a thumbnail test; 16 was acceptable, 24 looked best). This covers both packages, the regular one and Low-RAM. The allowed range is still 1–50.
+- A Mac where someone saved its own default steps for this model keeps that number. A request that names its own steps also keeps them.
+- Each image job's time limit is still based on the steps the job actually runs, so a 20-step job gets a longer limit than a 16-step one.
+- The two Qwen manifests were regenerated with the capture tool. Only their `defaults` changed. The files and install identity are the same, so installed copies don't need to be verified again.
+- The kit readme no longer lists the retired SSD test runners (`RUN-16GB-FISH`, `RUN-8GB-TTS`).
+
 ## 0.6.160 — 2026-10-08 · Every model download shows on the Jobs page, in its own tab, with Cancel
 
 - The app now lists every model download this Mac's Hub is running, not only the ones started from the app. A download started from the Gateway's fleet install (for example Qwen Image 2.1 Low-RAM) used to read "No model downloads" while it ran; it now shows its progress and a Cancel button on the Jobs page, the Models page and the Overview.
