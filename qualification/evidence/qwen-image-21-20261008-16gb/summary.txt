@@ -1,0 +1,16 @@
+Qwen Image 2.1 MLX affine Q4 — 16 GB qualification
+Outcome: CANDIDATE PASSED THIS RUN
+
+Mac: Apple M4, 16.0 GiB, macOS 27.0.1
+App: 0.6.152 at /Volumes/KH-STUDIO-ORICO/Video Generation Kit/Studio Hub KH/Studio Hub.app
+Package: qwen-image-2-1-mflux-q4 / 746a58556820933a2df5c75887a2570f1ad200c0
+Runtime identity: c5ac478f85d5687e0bd6df715eec5d55a3a59e36aae4f14da352f45ea546923a
+
+cold-square: 1024x1024, 16 steps — completed; 538.349 s wall; 5.487 GB peak worker tree; available 9.308→6.051→10.591 GB (start/min/end); pressure normal; swap peak +0 GB (end +0 GB); SSD net 0.175 GB
+warm-square: 1024x1024, 16 steps — completed; 528.966 s wall; 5.821 GB peak worker tree; available 10.531→6.361→10.68 GB (start/min/end); pressure normal; swap peak +0 GB (end +0 GB); SSD net 0.128 GB
+warm-landscape: 1280x720, 16 steps — completed; 462.9 s wall; 5.912 GB peak worker tree; available 10.654→6.487→10.702 GB (start/min/end); pressure normal; swap peak +0 GB (end +0 GB); SSD net 0.021 GB
+warm-portrait: 720x1280, 16 steps — completed; 470.392 s wall; 6.032 GB peak worker tree; available 10.637→6.17→10.511 GB (start/min/end); pressure normal; swap peak +0 GB (end +0 GB); SSD net 0.131 GB
+
+This receipt describes this physical Mac and exact pinned package only.
+An 8 GB result is never inferred; unsupported or unrun tiers remain NOT MEASURED.
+Generated images are evidence for visual review, not an automatic language or product-selection rule.
