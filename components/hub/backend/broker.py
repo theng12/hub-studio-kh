@@ -231,6 +231,11 @@ INSUFFICIENT_MEMORY = "INSUFFICIENT_MEMORY"
 # INSUFFICIENT_MEMORY with the needs-X/has-Y sentence, so the Gateway can re-route it. A job waiting
 # behind our own running work on the Mac is ordinary queueing and keeps waiting.
 ADMISSION_WAIT_HANDBACK_S = 240.0
+# The same wait when another Mac in this job's pool (`pool_machines`) offers the model: the job has
+# somewhere else to go, so it is handed back sooner. 240 s stays for a Mac that is the only one.
+# ponytail: 60 s is a fixed guess (the 2026-10-09 review: 304 job-minutes lost to 240 s waits on 8 GB
+# Macs whose free memory did not come back); measure the time-to-recover if hand-backs ping-pong.
+ADMISSION_WAIT_HANDBACK_ELSEWHERE_S = 60.0
 # A Mac another queue has reserved is not free *yet*. It is not a reason to park the item: the
 # refusal takes that machine out of selection for this long - for every item aimed at it, through
 # `_machine_reserved_until` - and the dispatcher's own heartbeat retries after that. It keeps its
@@ -347,8 +352,10 @@ def _machine_has_active_work(studio: dict) -> bool:
                if row.get("machine", "local") == machine) or studio.get("id") in active
 
 
-def _admission_wait_expired(item: dict, studio: dict, mem: dict, note: str | None, now: float) -> bool:
-    """Whether this item has waited ADMISSION_WAIT_HANDBACK_S on an unmet free-memory floor.
+def _admission_wait_expired(item: dict, studio: dict, mem: dict, note: str | None, now: float,
+                            b: dict | None = None) -> bool:
+    """Whether this item has waited ADMISSION_WAIT_HANDBACK_S on an unmet free-memory floor
+    (ADMISSION_WAIT_HANDBACK_ELSEWHERE_S when another Mac in batch ``b``'s pool offers the model).
 
     The clock runs only while the shortage is real (the Mac's own free memory is below the floor, not
     merely below it after our reservations), the wait is the memory wait itself (not a busy sibling),
@@ -365,7 +372,11 @@ def _admission_wait_expired(item: dict, studio: dict, mem: dict, note: str | Non
         item.pop("admission_wait_started_at", None)
         return False
     started = item.setdefault("admission_wait_started_at", now)
-    return now - float(started) >= ADMISSION_WAIT_HANDBACK_S
+    limit = ADMISSION_WAIT_HANDBACK_S
+    if b is not None and pool_machines(b["modality"], b.get("model") or "",
+                                       b.get("routing", "pool")) - {studio.get("machine", "local")}:
+        limit = min(limit, ADMISSION_WAIT_HANDBACK_ELSEWHERE_S)
+    return now - float(started) >= limit
 
 
 def _local_gate(mem: dict, host: dict) -> tuple[str, str | None]:
@@ -1099,7 +1110,8 @@ def _insufficient_memory_text(b: dict, studio: dict, decision: str, failures: in
                                for pattern in _MEMORY_DECISION_NUMBERS)), None)
     numbers = (f"needs about {float(match[1]):.1f} GB free and has about {float(match[2]):.1f} GB free"
                if match else "does not have enough free memory")
-    why = (f"it waited {max(1, round(waited_s / 60))} minutes" if waited_s is not None
+    minutes = max(1, round(waited_s / 60)) if waited_s is not None else 0
+    why = (f"it waited {minutes} minute{'s' if minutes != 1 else ''}" if waited_s is not None
            else f"it refused {failures} times")
     return (f"{machine} {numbers} for {b['model']} ({why}). "
             f"Another Mac with more free memory can run this job.")
@@ -3986,10 +3998,11 @@ async def _dispatch_loop():
                             # start floor included), and the sentence the gate's own numbers.
                             if not (decision == "wait" and _admission_wait_expired(
                                     queued[compatible_index], studio,
-                                    _with_machine_floor(mem, studio), note, now)):
+                                    _with_machine_floor(mem, studio), note, now, b)):
                                 continue
+                            waited_s = now - float(queued[compatible_index]["admission_wait_started_at"])
                             queued[compatible_index]["_memory_handback"] = _insufficient_memory_text(
-                                b, studio, note, waited_s=ADMISSION_WAIT_HANDBACK_S)
+                                b, studio, note, waited_s=waited_s)
                         else:
                             queued[compatible_index].pop("admission_wait_started_at", None)
                             queued[compatible_index].pop("_memory_handback", None)
@@ -4488,6 +4501,14 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 timeout=120.0,
             )
             if r.status_code >= 400:
+                rejection = _worker_http_error(r)
+                if _is_machine_reservation_refusal(rejection):
+                    # The serving Mac's lease answered before its worker saw the reference: the
+                    # same 409 MACHINE_BUSY the generate POST below meets, so the same wait (the
+                    # `_is_machine_reservation_refusal` branch of the handler) - queued, that Mac
+                    # avoided briefly, the try given back. 2026-10-09: 276 attempts overnight.
+                    item["error_code"] = _sanitize_public_error_code(rejection.error_code)
+                    raise rejection
                 # The worker refused the reference. Until this check existed the refusal was
                 # discarded, the job was accepted anyway with no reference attached, and the
                 # operator saw only "Voice cloning needs a reference voice or private reference

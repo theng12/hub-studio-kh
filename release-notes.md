@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.162 - 2026-10-09
+
+### Fewer narration jobs fail for no good reason
+
+- A cloned-voice job sent to a busy Mac now waits for a free Mac instead of failing.
+- The check that narration says its text no longer rejects a correct reading because a year or a joined word is written differently, such as "1880s" for "eighteen-eighties" or "wash houses" for "washhouses".
+- A job that is waiting on a Mac without enough free memory moves on after 1 minute, instead of 4, when another Mac can run it.
+
 ## 0.6.161 - 2026-10-08
 
 ### Qwen images use 20 steps

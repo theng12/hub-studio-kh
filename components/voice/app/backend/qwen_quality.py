@@ -187,6 +187,8 @@ _SCALE_NUMBERS = {
     "million": 1_000_000,
     "billion": 1_000_000_000,
 }
+# A decade said as a plural tens word: "the eighties" is Whisper's "80s", "eighteen-eighties" its "1880s".
+_DECADE_NUMBERS = {word[:-1] + "ies": word for word in _TENS_NUMBERS}
 _NUMBER_WORDS = (
     frozenset(_UNIT_NUMBERS)
     | frozenset(_TEEN_NUMBERS)
@@ -271,7 +273,7 @@ def _render_number_run(words: list[str]) -> str:
     return _canonical_digit_token(rendered)
 
 
-def _number_token_runs(tokens: list[str]) -> dict[int, int]:
+def _number_token_runs(tokens: list[str], stops: frozenset[int] | set[int] = frozenset()) -> dict[int, int]:
     """Map each number-run start index to its inclusive end index.
 
     A connective "and" joins a run only when a scale word precedes it and a
@@ -286,7 +288,7 @@ def _number_token_runs(tokens: list[str]) -> dict[int, int]:
             index += 1
             continue
         end = index
-        while end + 1 < total:
+        while end + 1 < total and end not in stops:   # a decade ("eighties") ends its run
             following = tokens[end + 1]
             if following in _NUMBER_WORDS:
                 end += 1
@@ -309,7 +311,9 @@ def _canonical_tokens(tokens: list[str]) -> list[str]:
     """Fold spelled numerals and digit strings into one comparable token form."""
     if not tokens:
         return []
-    runs = _number_token_runs(tokens)
+    decades = {index for index, token in enumerate(tokens) if token in _DECADE_NUMBERS}
+    tokens = [_DECADE_NUMBERS.get(token, token) for token in tokens]
+    runs = _number_token_runs(tokens, decades)
     canonical: list[str] = []
     index = 0
     while index < len(tokens):
@@ -318,11 +322,10 @@ def _canonical_tokens(tokens: list[str]) -> list[str]:
             canonical.append(_canonical_digit_token(tokens[index]))
             index += 1
             continue
-        canonical.append(
-            _render_number_run(
-                [token for token in tokens[index:end + 1] if token != "and"]
-            )
+        rendered = _render_number_run(
+            [token for token in tokens[index:end + 1] if token != "and"]
         )
+        canonical.append(rendered + "s" if end in decades else rendered)
         index = end + 1
     return canonical
 

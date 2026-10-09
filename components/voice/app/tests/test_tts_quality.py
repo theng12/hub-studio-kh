@@ -134,6 +134,32 @@ def test_numbers_are_compared_the_way_the_qwen_gate_compares_them():
                                    "She counted 24 threads.") == (4, 4)
 
 
+def test_decades_and_split_compounds_are_the_words_the_text_says():
+    """EP0028 (night-atlas, 2026-10-09): Section 2 of 5 failed 12 renders on 3 Macs, each "heard 14/17,
+    missing run 2" - 0.6.161 reproduces it from this transcript. Whisper wrote the decade as digits
+    and the compound as two words; the voice read the sentence right."""
+    text = ("This tall storage vessel stood beside washhouses and kitchen doors across northern "
+            "England during the eighteen-eighties.")
+    heard = ("This tall storage vessel stood beside wash houses and kitchen doors across northern "
+             "England during the 1880s.")
+    metrics = {"duration_s": 8.72, "dc_offset": 0.0, "voiced_s": 7.26, "voiced_ratio": 0.833}
+    evidence = tts_quality.check_section(text, "breeze-tts", metrics, heard=heard)
+    assert evidence["accepted"] and evidence["words_heard"] == evidence["words_expected"] == 16
+    # The other way round, and the other decade/year shapes.
+    assert tts_quality.heard_words("beside the wash houses", "beside the washhouses") == (4, 4)
+    assert tts_quality.heard_words("It was the eighties.", "It was the 80s.") == (4, 4)
+    assert tts_quality.heard_words("In nineteen fifty-two it rained.", "In 1952 it rained.") == (4, 4)
+    # Spaces are removed only to pair a missing word with spare heard ones, never to excuse others.
+    assert tts_quality.heard_words("the wash house", "the washhouse door") == (3, 3)
+    assert tts_quality.heard_words("the washhouse", "the wash") == (1, 2)
+    # A genuinely wrong reading of the same sentence still fails.
+    wrong = ("This tall storage vessel stood beside the river and garden walls across southern "
+             "Spain during the 1920s.")
+    with pytest.raises(tts_quality.SectionQualityError) as failed:
+        tts_quality.check_section(text, "breeze-tts", metrics, heard=wrong)
+    assert failed.value.code == "TTS_SECTION_TEXT_MISMATCH"
+
+
 def test_breeze_section_token_budget_follows_the_text():
     short = tts_quality.max_tokens_for_section("One quiet clause of about forty chars.", "breeze-tts")
     long = tts_quality.max_tokens_for_section("word " * 100, "breeze-tts")

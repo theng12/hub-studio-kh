@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.162 — 2026-10-09 · Three fixes from the overnight review
+
+- A cloned-voice job no longer fails when the Mac it was sent to is busy with other work. That Mac answers "reserved for other work" before it even looks at the voice reference. The job now stays queued, skips that Mac for a few seconds, and doesn't use up one of its tries. This is how the rest of a job already handled a busy Mac. Overnight this caused 276 failed tries on 252 jobs, mostly at sites 1600 and 1500.
+- The Breeze check that the audio says its text no longer fails a correct reading over how a word is written. "Eighteen-eighties" now matches Whisper's "1880s", "the eighties" matches "80s", and "nineteen fifty-two" matches "1952". "Washhouses" matches "wash houses", and the other way round. Joined and split words are only compared after the normal word match, and a wrong sentence still fails. The EP0028 sentence that failed 12 times on 3 Macs now passes.
+- When a Mac doesn't have enough free memory to start a job and another Mac can run the same model, the job is handed back after 1 minute instead of 4. When this Mac is the only one that can run it, the job still waits 4 minutes.
+
 ## 0.6.161 — 2026-10-08 · Qwen Image 2.1 uses 20 steps by default
 
 - Qwen Image 2.1 now uses 20 steps by default (owner's choice after a thumbnail test; 16 was acceptable, 24 looked best). This covers both packages, the regular one and Low-RAM. The allowed range is still 1–50.

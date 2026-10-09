@@ -42,6 +42,43 @@ def test_the_clock_runs_only_while_the_shortage_is_the_macs_own(fixture_monitor,
     assert "admission_wait_started_at" not in item
 
 
+def test_the_wait_is_one_minute_when_another_mac_offers_the_model(fixture_monitor, monkeypatch):
+    """2026-10-09 review: 304 job-minutes went to 240 s waits on 8 GB Macs whose free memory never
+    came back, while other Macs had the model. With somewhere else to go it is handed back after
+    ADMISSION_WAIT_HANDBACK_ELSEWHERE_S; the only Mac that can run it keeps the four minutes."""
+    studio = _studio(fixture_monitor)
+    monkeypatch.setattr(broker, "_host_for_studio", lambda s: {"total_gb": 8.0, "available_gb": 1.0})
+    note = "waiting for memory: needs ~3.0GB, ~1.0GB free"
+    batch = {"modality": "image", "model": "model-a", "routing": "pool"}
+    seen = []
+
+    def pool(modality, model, routing="pool"):
+        seen.append((modality, model, routing))
+        return machines
+    monkeypatch.setattr(broker, "pool_machines", pool)
+    assert broker.ADMISSION_WAIT_HANDBACK_ELSEWHERE_S == 60.0
+
+    machines = {"local", "node-b"}                     # another Mac offers it
+    item = {}
+    assert broker._admission_wait_expired(item, studio, MEM, note, 1000.0, batch) is False
+    assert broker._admission_wait_expired(item, studio, MEM, note, 1059.0, batch) is False
+    assert broker._admission_wait_expired(item, studio, MEM, note, 1060.0, batch) is True
+    assert seen[-1] == ("image", "model-a", "pool")
+
+    machines = {"local"}                               # this Mac is the only one
+    item = {}
+    assert broker._admission_wait_expired(item, studio, MEM, note, 1000.0, batch) is False
+    assert broker._admission_wait_expired(item, studio, MEM, note, 1060.0, batch) is False
+    assert broker._admission_wait_expired(item, studio, MEM, note, 1000.0 + broker.ADMISSION_WAIT_HANDBACK_S - 1, batch) is False
+    assert broker._admission_wait_expired(item, studio, MEM, note, 1000.0 + broker.ADMISSION_WAIT_HANDBACK_S, batch) is True
+
+    machines = set()                                   # pool unknown: nobody else either
+    item = {}
+    assert broker._admission_wait_expired(item, studio, MEM, note, 1000.0, batch) is False
+    assert broker._admission_wait_expired(item, studio, MEM, note, 1100.0, batch) is False
+    assert "(it waited 1 minute)" in broker._insufficient_memory_text(batch, studio, note, waited_s=60.0)
+
+
 def test_a_job_that_waits_past_the_bound_is_handed_back_with_the_sentence(fixture_monitor, monkeypatch):
     submitted = broker.submit_batch({"modality": "image", "model": "model-a", "items": [{"prompt": "hello"}]})
     batch = broker.batches[submitted["batch_id"]]

@@ -736,6 +736,10 @@ def _legacy_error_rates(expected: str, observed: str) -> tuple[float, float]:
         ("twenty four silver bells", ["24", "silver", "bells"]),
         # "and" only joins a run that a scale word opened.
         ("one and two", ["1", "and", "2"]),
+        # A decade said as words is the decade Whisper writes, and it ends its run.
+        ("the eighteen-eighties", ["the", "1880s"]),
+        ("the eighties two years on", ["the", "80s", "2", "years", "on"]),
+        ("1880s and '80s", ["1880s", "and", "80s"]),
     ],
 )
 def test_numeral_canonicalization_units(text: str, expected: list[str]) -> None:

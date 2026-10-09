@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import long_form_policy, qwen_quality
 
-REVISION = "voicestudio.tts-section-quality.v2"
+REVISION = "voicestudio.tts-section-quality.v3"
 SECTION_RETRIES = 3
 FRAME_S = 0.02
 DRIFT_WINDOW_S = 0.05          # a moving average this long is "DC" and is removed before levels
@@ -186,20 +186,45 @@ def max_tokens_for_section(text: str, family: str, engine_cap: int = 1200) -> in
 
 
 def heard_words(expected: str, heard: str) -> tuple[int, int]:
-    """(words heard, words expected); numbers fold as in the Qwen gate, and a close spelling (a
-    name Whisper spells differently) counts as heard."""
-    want = Counter(_words(expected))
-    got = Counter(_words(heard))
+    """(words heard, words expected); numbers fold as in the Qwen gate, a close spelling (a
+    name Whisper spells differently) counts as heard, and so does a compound written joined on one
+    side and split on the other ("washhouses" / "wash houses")."""
+    want_words, got_words = _words(expected), _words(heard)
+    want, got = Counter(want_words), Counter(got_words)
     total = sum(want.values())
     matched = sum((want & got).values())
     spare = list((got - want).elements())
+    missing = Counter()
     for word in (want - got).elements():
         for index, other in enumerate(spare):
             if _close(word, other):
                 matched += 1
                 del spare[index]
                 break
-    return matched, total
+        else:
+            missing[word] += 1
+    return matched + _joined_matches(want_words, got_words, missing, Counter(spare)), total
+
+
+def _joined_matches(want: list[str], got: list[str], missing: Counter, spare: Counter) -> int:
+    """Expected words still missing that the heard words spell with the spaces removed: one word
+    heard as two adjacent ones, or two adjacent words heard as one. Only after the word match.
+
+    ponytail: pairs only; a three-part compound split three ways still counts as missing words."""
+    found = 0
+    for left, right in zip(got, got[1:]):          # "washhouses" heard as "wash houses"
+        if missing[left + right] and spare[left] and spare[right] and (left != right or spare[left] > 1):
+            missing[left + right] -= 1
+            spare[left] -= 1
+            spare[right] -= 1
+            found += 1
+    for left, right in zip(want, want[1:]):        # "wash houses" heard as "washhouses"
+        if spare[left + right] and missing[left] and missing[right] and (left != right or missing[left] > 1):
+            spare[left + right] -= 1
+            missing[left] -= 1
+            missing[right] -= 1
+            found += 2
+    return found
 
 
 def longest_missing_run(expected: str, heard: str) -> int:
