@@ -2810,7 +2810,13 @@ async def _cache_voice_artifact_metadata(client: httpx.AsyncClient, item: dict,
     artifact is the only one, so the node is freed the moment it ends.
 
     A metadata failure never retries an already-completed generation: the
-    result remains available but is marked unverified and therefore unbillable.
+    result remains available but is marked unverified and therefore unbillable. It still carries
+    the size and SHA-256 it is served with (`_keep_served_digest`), so a client can check it.
+
+    An empty or unplayable file is not a completed generation (orchestrator, 2026-10-09, after a
+    0-byte m4a from studio-mac-1504 was published ``done``): it raises
+    `artifact_metadata.UnusableArtifact`, which `_record_worker_success` turns into a failed,
+    retryable attempt (``EMPTY_OUTPUT`` / ``INVALID_OUTPUT``).
 
     The artifact's format decides how. A WAV (the default) is decoded here, because the Hub
     derives its billable duration from the bytes themselves. A compressed artifact (``m4a``,
@@ -2819,14 +2825,17 @@ async def _cache_voice_artifact_metadata(client: httpx.AsyncClient, item: dict,
     encoded from and reports the duration, rate and channels of that, which the Hub keeps once the
     delivered bytes are proven to be the ones the worker described.
     """
+    if type(expected_bytes) is int and expected_bytes == 0:
+        raise artifact_metadata.EmptyArtifact("the worker reported an empty file")
     reported = (job or {}).get("media_type")
     if isinstance(reported, str) and reported.split(";", 1)[0].strip().lower() != "audio/wav":
         await _verify_compressed_voice_artifact(
             client, item, studio, worker_url, expected_bytes, expected_sha256, job or {})
         return
+    verifier = artifact_metadata.WavStreamVerifier()
+    downloaded = False
     try:
         url, headers = studio_request(studio, worker_url)
-        verifier = artifact_metadata.WavStreamVerifier()
         # Long-form 40k narration can produce a 100–160 MB PCM WAV. Give an
         # authenticated fleet transfer enough time on slower Tailscale links;
         # generation remains protected by the renewable GenStudio lease.
@@ -2839,6 +2848,7 @@ async def _cache_voice_artifact_metadata(client: httpx.AsyncClient, item: dict,
             response = await client.get(url, headers=headers, timeout=600.0)
             response.raise_for_status()
             verifier.feed(response.content)
+        downloaded = True
         metadata = verifier.finish()
         if expected_bytes is not None:
             if type(expected_bytes) is not int or expected_bytes <= 0:
@@ -2847,20 +2857,69 @@ async def _cache_voice_artifact_metadata(client: httpx.AsyncClient, item: dict,
             raise ValueError("worker byte count does not match downloaded artifact")
         if expected_sha256 and str(expected_sha256).lower() != metadata["sha256"]:
             raise ValueError("worker checksum does not match downloaded artifact")
+    except artifact_metadata.UnusableArtifact:
+        raise
     except (OverflowError, TypeError, ValueError, httpx.HTTPError) as exc:
         item["artifact_metadata_error"] = str(exc)
+        _keep_served_digest(item, (verifier.total, verifier.sha256) if downloaded else None,
+                            expected_bytes, expected_sha256)
         return
     item.update(metadata)
     item.pop("artifact_metadata_error", None)
+
+
+def _keep_served_digest(item: dict, measured, expected_bytes, expected_sha256) -> None:
+    """An unverified voice artifact is still served, so it still gets a size and SHA-256.
+
+    The bytes the Hub itself downloaded win; when the download did not finish, the worker's own
+    report is used if it is well-formed. Only the audio facts stay unset (unbillable).
+    """
+    if measured is not None:
+        item["bytes"], item["sha256"] = measured
+        return
+    digest = str(expected_sha256 or "").lower()
+    if (type(expected_bytes) is int and expected_bytes > 0 and len(digest) == 64
+            and all(ch in "0123456789abcdef" for ch in digest)):
+        item["bytes"], item["sha256"] = expected_bytes, digest
 
 
 async def _verify_compressed_voice_artifact(client: httpx.AsyncClient, item: dict,
                                             studio: dict, worker_url: str,
                                             expected_bytes, expected_sha256,
                                             job: dict) -> None:
-    """Prove a non-WAV voice artifact is the one the worker described, without buffering it."""
+    """Prove a non-WAV voice artifact is the one the worker described, without buffering it.
+
+    The file is streamed once. Whether it is playable at all (not empty; an MP4 with ``ftyp``,
+    ``moov`` and no box cut off; the bytes match the reported type) is decided first and raises
+    `UnusableArtifact`; only then are the worker's claims checked, and those are metadata errors.
+    """
+    from components.audio_encode import Mp4Boxes
+    measured = None
     try:
         media_type = artifact_metadata.trusted_media_type(job.get("media_type"), "voice")
+        url, headers = studio_request(studio, worker_url)
+        hasher, boxes = hashlib.sha256(), Mp4Boxes()
+        head = b""
+        async with client.stream("GET", url, headers=headers, timeout=600.0) as response:
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes(1024 * 1024):
+                if not head:
+                    head = chunk[:16]
+                hasher.update(chunk)
+                boxes.feed(chunk)
+        received = boxes.total
+        measured = (received, hasher.hexdigest())
+        if received == 0:
+            raise artifact_metadata.EmptyArtifact("the delivered file is empty")
+        proven = artifact_metadata.sniff_media_type(head)
+        if "audio/mp4" in (media_type, proven) or proven == "video/mp4":
+            if boxes.problem():
+                raise artifact_metadata.UnusableArtifact(
+                    f"the delivered file is not a playable MP4: {boxes.problem()}")
+        if media_type is not None and proven not in (media_type, None) and not (
+                media_type == "audio/mp4" and proven == "video/mp4"):
+            raise artifact_metadata.UnusableArtifact(
+                "downloaded artifact is not the media type the worker reported")
         if media_type is None:
             raise ValueError("worker reported an unsupported voice media type")
         if type(expected_bytes) is not int or expected_bytes <= 0:
@@ -2875,27 +2934,15 @@ async def _verify_compressed_voice_artifact(client: httpx.AsyncClient, item: dic
                 or duration_s <= 0 or type(rate) is not int or rate <= 0
                 or type(channels) is not int or channels not in (1, 2)):
             raise ValueError("worker did not report the decoded duration, rate and channels")
-        url, headers = studio_request(studio, worker_url)
-        hasher = hashlib.sha256()
-        received = 0
-        head = b""
-        async with client.stream("GET", url, headers=headers, timeout=600.0) as response:
-            response.raise_for_status()
-            async for chunk in response.aiter_bytes(1024 * 1024):
-                if not head:
-                    head = chunk[:16]
-                hasher.update(chunk)
-                received += len(chunk)
         if received != expected_bytes:
             raise ValueError("worker byte count does not match downloaded artifact")
-        if hasher.hexdigest() != digest:
+        if measured[1] != digest:
             raise ValueError("worker checksum does not match downloaded artifact")
-        proven = artifact_metadata.sniff_media_type(head)
-        if proven not in (media_type, None) and not (
-                media_type == "audio/mp4" and proven == "video/mp4"):
-            raise ValueError("downloaded artifact is not the media type the worker reported")
+    except artifact_metadata.UnusableArtifact:
+        raise
     except (OverflowError, TypeError, ValueError, httpx.HTTPError) as exc:
         item["artifact_metadata_error"] = str(exc)
+        _keep_served_digest(item, measured, expected_bytes, expected_sha256)
         return
     item.update({
         "media_type": media_type, "format": str(job.get("format") or media_type.split("/")[-1]),
@@ -3002,8 +3049,17 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     item["runtime_s"] = runtime
     item["duration_s"] = runtime  # compatibility: historic duration_s meant runtime
     if b["modality"] == "voice" and worker_url:
-        await _cache_voice_artifact_metadata(
-            client, item, studio, worker_url, job.get("bytes"), job.get("sha256"), job)
+        try:
+            await _cache_voice_artifact_metadata(
+                client, item, studio, worker_url, job.get("bytes"), job.get("sha256"), job)
+        except artifact_metadata.UnusableArtifact as exc:
+            # Not a completed generation, so not "done": fail this attempt, retryably, like any
+            # worker failure. Nothing is published and the worker's file is never acknowledged.
+            logging.getLogger("studiohub.broker").warning(
+                "voice job %s on %s delivered an unusable file (%s; worker reported %r bytes): %s",
+                job.get("id"), studio.get("id"), exc.code, job.get("bytes"), exc)
+            target["error_code"] = exc.code
+            raise _worker_terminal_error(f"The voice output is unusable: {exc}", exc.code) from exc
         if _voice_recovery_owns(target) and not recovery:
             return
     else:
@@ -3328,7 +3384,11 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
         except _VoiceReceiptError:
             _mark_voice_receipt_invalid(item)
             return False
-        except Exception:
+        except Exception as exc:
+            if getattr(exc, "worker_terminal", False):
+                # The job finished but its file is unusable: a failed job, not a dropped link.
+                return {**job, "state": "error", "error": str(exc),
+                        "error_code": getattr(exc, "error_code", None)}
             # Tailscale/Wi-Fi and a busy worker can briefly drop the HTTP
             # connection. Back off while retaining the same worker lease.
             await asyncio.sleep(delay)

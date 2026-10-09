@@ -41,6 +41,63 @@ class EncodeError(RuntimeError):
     """The master could not be compressed; deliver it unchanged."""
 
 
+class Mp4Boxes:
+    """Walk an MP4/M4A's top-level boxes as its bytes pass, holding nothing but one box header.
+
+    `problem()` says why a player could not open the file: it is empty, does not start with
+    ``ftyp``, has no ``moov`` ("moov atom not found"), or ends inside a box (cut off). Shared by the
+    encoder, which checks its own output, and the Hub, which checks what a worker delivered.
+    """
+
+    def __init__(self) -> None:
+        self.total = 0
+        self._next = 0              # offset of the next top-level box
+        self._header = b""          # that box's header bytes seen so far
+        self._first: bytes | None = None
+        self._kinds: set[bytes] = set()
+        self._broken: str | None = None
+
+    def feed(self, chunk: bytes) -> None:
+        start = self.total
+        self.total += len(chunk)
+        while self._broken is None and self._next < self.total:
+            index = self._next + len(self._header) - start
+            if index >= len(chunk):
+                return
+            large = len(self._header) >= 8 and self._header[:4] == b"\0\0\0\1"
+            self._header += bytes(chunk[index:index + (16 if large else 8) - len(self._header)])
+            if len(self._header) < 8:
+                return
+            size = int.from_bytes(self._header[:4], "big")
+            if size == 1:
+                if len(self._header) < 16:
+                    continue
+                size = int.from_bytes(self._header[8:16], "big")
+            kind, header = self._header[4:8], len(self._header)
+            self._header = b""
+            self._first = self._first or kind
+            self._kinds.add(kind)
+            if size == 0:                       # the last box, running to the end of the file
+                self._next = float("inf")
+            elif size < header:
+                self._broken = f"box {kind!r} has an impossible size {size}"
+            else:
+                self._next += size
+
+    def problem(self) -> str | None:
+        if self.total == 0:
+            return "the file is empty"
+        if self._broken:
+            return self._broken
+        if self._first != b"ftyp":
+            return "it does not start with an ftyp box"
+        if self._header or float("inf") > self._next > self.total:
+            return "it ends inside a box (cut off)"
+        if b"moov" not in self._kinds:
+            return "it has no moov box"
+        return None
+
+
 def find_tool(name: str = "ffmpeg") -> Path | None:
     """The bundled ffmpeg/ffprobe, found beside the worker's own interpreter.
 
@@ -85,9 +142,10 @@ def encode_m4a(master: Path, destination: Path, *, profile: str,
                expected_seconds: float | None = None) -> dict:
     """Encode ``master`` to ``destination`` (``.m4a``) and return the delivered file's facts.
 
-    The file is written under a hidden partial name, fsynced, verified (``ftyp`` box, non-empty,
-    decoded length within a quarter second of the master), then renamed. Anything else raises
-    :class:`EncodeError` after removing the partial; the master is never touched.
+    The file is written under a hidden partial name, fsynced, verified (non-empty, ``ftyp`` then
+    a ``moov`` box, no box cut off, decoded length within a quarter second of the master), then
+    renamed. Anything else raises :class:`EncodeError` after removing the partial; the master is
+    never touched.
     """
     bitrate, channels = PROFILES[profile]
     ffmpeg = find_tool("ffmpeg")
@@ -110,14 +168,15 @@ def encode_m4a(master: Path, destination: Path, *, profile: str,
             raise EncodeError("AAC encode failed: " + (result.stderr or "").strip()[-300:])
         if not partial.is_file() or partial.stat().st_size <= 0:
             raise EncodeError("AAC encode produced no file")
-        digest = hashlib.sha256()
+        digest, boxes = hashlib.sha256(), Mp4Boxes()
         with partial.open("rb") as handle:
-            head = handle.read(12)
-            digest.update(head)
             for block in iter(lambda: handle.read(1 << 20), b""):
                 digest.update(block)
-        if head[4:8] != b"ftyp":
-            raise EncodeError("AAC encode did not produce an MP4 container")
+                boxes.feed(block)
+        # The duration probe below is skipped when ffprobe is missing or cannot run, so the
+        # container itself is checked here: a file without `moov` must never be delivered.
+        if boxes.problem():
+            raise EncodeError(f"AAC encode is not a readable MP4: {boxes.problem()}")
         if expected_seconds:
             seconds = probe_duration(partial)
             if seconds is not None and abs(seconds - float(expected_seconds)) > DURATION_TOLERANCE_SECONDS:

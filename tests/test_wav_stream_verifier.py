@@ -100,8 +100,9 @@ class RealStreamingDownload(unittest.TestCase):
         self.assertIn("checksum", item["artifact_metadata_error"])
         item, _ = self.run_case(data, len(data) + 1, None)
         self.assertIn("byte count", item["artifact_metadata_error"])
-        item, _ = self.run_case(data[:-10], None, None)
-        self.assertIn("truncated", item["artifact_metadata_error"])
+        # A cut-off WAV is not a completed generation: it fails instead (`UnusableArtifact`).
+        with self.assertRaisesRegex(am.UnusableArtifact, "truncated"):
+            self.run_case(data[:-10], None, None)
 
 
 if __name__ == "__main__":

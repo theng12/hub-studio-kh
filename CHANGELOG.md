@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.164 — 2026-10-09 · An empty or broken narration file is a failed job, not a finished one
+
+- On 10-09 at 08:04 a narration job on studio-mac-1504 (Hub batch `ebcfd92c1a`) produced an empty (0-byte) m4a. The Hub noticed the file could not be checked, but still marked the job finished, following the rule "never retry a completed generation", and handed out the empty file with no size or checksum.
+- Now an empty file, or one no player could open, is a failed try and not a finished job. The job then retries and moves to another Mac like any other failure. The error code says which: `EMPTY_OUTPUT` for an empty file, `INVALID_OUTPUT` for one that cannot be opened. That covers an m4a with no `moov` box or cut off partway, a WAV with no audio or cut off, and bytes that are not the type the Mac said it sent (for example an HTML error page).
+- A file that plays but whose extra check could not finish still counts as finished, exactly as before. Examples are a size or checksum that differs from what the Mac reported, or a Mac that did not report the duration. It is still marked unchecked and not billed.
+- Every finished narration file now comes with its size and SHA-256, including the unchecked ones. The Hub uses the bytes it downloaded. When the download could not run, it uses the size and checksum the Mac reported. Before, only the unchecked files were missing these, so the Hub served them with no `Content-Length` and no `X-Content-SHA256`.
+- The m4a encoder now checks the file it writes: it must start with `ftyp`, contain `moov`, and have no box cut off. Before, it only checked the first box, and the length check is skipped when `ffprobe` cannot run. A broken encode now delivers the WAV instead, as an encode error already did.
+- When this happens, the Hub log says which job and which Mac it was, and how many bytes the Mac reported.
+
 ## 0.6.163 — 2026-10-09 · Qwen thumbnails go to the fastest free Mac
 
 - Owner decision: "Prefer fast Macs for Qwen." Inside a site, a Qwen Image job (any model whose id contains `qwen-image`) now goes to the Mac expected to finish it soonest. It used to go to the smallest Mac, which on sites 1100–1400 often meant an M1 at about 949 s while the M4 would take about 605 s.

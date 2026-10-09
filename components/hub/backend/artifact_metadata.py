@@ -12,6 +12,15 @@ import hashlib
 import io
 import wave
 
+class UnusableArtifact(ValueError):
+    """The delivered file itself cannot be played: the generation failed, it did not merely go unverified."""
+    code = "INVALID_OUTPUT"
+
+
+class EmptyArtifact(UnusableArtifact):
+    code = "EMPTY_OUTPUT"
+
+
 # The media types each modality's artifacts are expected to carry. This is the *narrowing* set:
 # a worker for one of these lanes cannot claim another lane's type.
 #
@@ -191,7 +200,7 @@ class WavStreamVerifier:
     def _scan_head(self) -> None:
         head = self._head
         if len(head) >= 12 and (not head.startswith(b"RIFF") or head[8:12] != b"WAVE"):
-            raise ValueError("artifact is not a RIFF/WAVE file")
+            raise UnusableArtifact("artifact is not a RIFF/WAVE file")
         position = 12
         while len(head) >= position + 8:
             name = bytes(head[position:position + 4])
@@ -210,24 +219,32 @@ class WavStreamVerifier:
                 self._fmt = (tag, channels, rate, (bits + 7) // 8)
             position = body + size + (size & 1)
         if len(head) > self._HEAD_LIMIT:
-            raise ValueError("invalid WAV artifact: no audio data chunk in its header")
+            raise UnusableArtifact("invalid WAV artifact: no audio data chunk in its header")
+
+    @property
+    def sha256(self) -> str:
+        return self._digest.hexdigest()
 
     def finish(self) -> dict:
+        """The WAV's facts. A file nothing can play raises `UnusableArtifact` (`EmptyArtifact` for
+        0 bytes); a readable WAV the Hub cannot bill (compressed) raises a plain ``ValueError``."""
+        if self.total == 0:
+            raise EmptyArtifact("the delivered file is empty")
         if self.total < 12 or self._data_offset is None:
             if self.total >= 12 and not self._head.startswith(b"RIFF"):
-                raise ValueError("artifact is not a RIFF/WAVE file")
-            raise ValueError("invalid WAV artifact: truncated before its audio data")
+                raise UnusableArtifact("artifact is not a RIFF/WAVE file")
+            raise UnusableArtifact("invalid WAV artifact: truncated before its audio data")
         if self._fmt is None:
-            raise ValueError("invalid WAV artifact: no fmt chunk before the audio data")
+            raise UnusableArtifact("invalid WAV artifact: no fmt chunk before the audio data")
         tag, channels, rate, width = self._fmt
         if tag not in (1, 0xFFFE):
             raise ValueError("compressed WAV is not supported for billing metadata")
         block = channels * width
         frames = self._data_size // block if block else 0
         if frames <= 0 or rate <= 0 or channels not in (1, 2):
-            raise ValueError("WAV has invalid duration, sample rate, or channel count")
+            raise UnusableArtifact("WAV has invalid duration, sample rate, or channel count")
         if self.total - self._data_offset < frames * block:
-            raise ValueError("WAV artifact is truncated before its declared frames end")
+            raise UnusableArtifact("WAV artifact is truncated before its declared frames end")
         duration_s = frames / rate
         return {
             "media_type": "audio/wav",

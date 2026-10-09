@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.164 - 2026-10-09
+
+### An empty narration file is retried, not delivered
+
+If a Mac produces an empty or broken narration file, the job now tries again, on another Mac when one is free, instead of being marked finished. Every finished narration file now comes with its size and checksum.
+
 ## 0.6.163 - 2026-10-09
 
 ### Qwen thumbnails go to the fastest Mac

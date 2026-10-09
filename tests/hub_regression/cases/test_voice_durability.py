@@ -1005,11 +1005,9 @@ def test_cancel_racing_malformed_voice_acceptance_stays_uncertain(
         (lambda job: job.update(bytes=1644.5), wav_bytes()),
         (lambda job: job.update(bytes=1), wav_bytes()),
         (lambda job: job.update(sha256="0" * 64), wav_bytes()),
-        (lambda job: None, b"not a wav artifact"),
     ),
     ids=(
         "invalid-byte-count", "fractional-byte-count", "mismatched-byte-count", "mismatched-hash",
-        "invalid-media",
     ),
 )
 def test_voice_artifact_verification_failure_remains_terminal_and_unverified(

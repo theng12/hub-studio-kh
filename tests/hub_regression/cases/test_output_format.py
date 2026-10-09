@@ -222,7 +222,13 @@ class StreamingClient:
         return Context()
 
 
-M4A = b"\x00\x00\x00\x1cftypM4A \x00\x00\x00\x00M4A mp42isom" + b"\x11" * 5000
+def _box(kind: bytes, body: bytes) -> bytes:
+    return (8 + len(body)).to_bytes(4, "big") + kind + body
+
+
+# The shape ffmpeg's `-f ipod -movflags +faststart` writes: ftyp, moov, free, mdat.
+M4A = (b"\x00\x00\x00\x1cftypM4A \x00\x00\x00\x00M4A mp42isom" + _box(b"moov", b"\x22" * 400)
+       + _box(b"free", b"") + _box(b"mdat", b"\x11" * 5000))
 
 
 def _m4a_job(payload=M4A, **changes):
