@@ -621,6 +621,139 @@ def _placement_key(modality: str, model: str | None = None):
     return key
 
 
+#: **Prefer fast Macs for Qwen** (owner decision 2026-10-09). The Gateway (0.2.156,
+#: `fleet.speed_ranked`) picks the *site* by expected finish time; this is the same rule, with the
+#: same numbers, for the Mac *inside* this site. 20-step medians on 10-08: M2 Max 228 s, M4 600-610 s,
+#: M2 16 GB 812 s, M1 16 GB 949 s. Every other model keeps `_placement_key`.
+def speed_ranked(model: str | None) -> bool:
+    return "qwen-image" in str(model or "").lower()
+
+
+#: The fallback when no Mac of a class has history for the model: those medians by chip family.
+_CHIP_SECONDS = {"M2 Max": 228.0, "M4": 605.0, "M2": 812.0, "M1": 949.0}
+#: A Mac with neither history nor a known chip is assumed as slow as the slowest measured.
+_UNMEASURED_S = 949.0
+#: Half a job: how long, on average, the job a busy Mac is running still has to go.
+_RUNNING_REMAINDER = 0.5
+_SPEED_TTL_S = 60.0
+_speed_cache: dict[str, tuple[float, list]] = {}
+#: Unified-memory sizes Apple ships; a Mac reports its total in GB or GiB (16 GiB = 17.18 GB).
+_MEMORY_CLASSES = (8, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192, 256, 512)
+
+
+def mac_class(chip: object, memory_gb: object) -> str:
+    """"M4 · 16 GB": the chip family without "Apple", and the shipped memory size (as the Gateway)."""
+    family = str(chip or "").replace("Apple", "").strip() or "unknown chip"
+    try:
+        gb = float(memory_gb)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return f"{family} · ? GB"
+    size = max((c for c in _MEMORY_CLASSES if c <= gb + 0.5), default=round(gb))
+    return f"{family} · {size} GB"
+
+
+def _speed_samples(model: str) -> list[tuple[str, float]]:
+    """`(machine, seconds)` of this model's finished items on this Hub, read at most once a minute."""
+    now = time.monotonic()
+    cached = _speed_cache.get(model)
+    if cached is not None and now - cached[0] < _SPEED_TTL_S:
+        return cached[1]
+    try:
+        rows = ledger.load_finished_batches(500, payload_like="%qwen-image%")
+    except Exception:  # noqa: BLE001 - no history is "unmeasured", never a failed dispatch
+        rows = []
+    machines = {s["id"]: s.get("machine", "local") for s in _monitor().registry}
+    samples = []
+    for b in rows:
+        if b.get("model") != model:
+            continue
+        for item in b.get("items") or []:
+            runtime = item.get("runtime_s", item.get("duration_s"))
+            sid = str(item.get("studio") or "")
+            if (item.get("state") == "done" and sid and not isinstance(runtime, bool)
+                    and isinstance(runtime, (int, float)) and runtime > 0):
+                machine = machines.get(sid) or (sid.split("@", 1)[1] if "@" in sid else "local")
+                samples.append((machine, float(runtime)))
+    _speed_cache[model] = (now, samples)
+    return samples
+
+
+def _mac_seconds(modality: str, model: str):
+    """`machine -> expected seconds` for this model: its own median, else its class's, else its chip's."""
+    import statistics
+
+    samples = _speed_samples(model)
+    studios = {s.get("machine", "local"): s for s in _monitor().registry
+               if s.get("modality") == modality}
+    classes: dict[str, str] = {}
+
+    def klass(machine: str) -> str:
+        if machine not in classes:
+            host = (_host_for_studio(studios[machine]) if machine in studios else None) or {}
+            classes[machine] = mac_class(host.get("chip"), host.get("total_gb"))
+        return classes[machine]
+
+    def seconds(machine: str) -> float:
+        own = [value for m, value in samples if m == machine]
+        if own:
+            return statistics.median(own)
+        known = klass(machine)
+        if "unknown" not in known and "?" not in known:
+            same = [value for m, value in samples if klass(m) == known]
+            if same:
+                return statistics.median(same)
+        return _CHIP_SECONDS.get(known.split(" · ")[0], _UNMEASURED_S)
+
+    return seconds
+
+
+def _queued_ahead(batch: dict, item: dict) -> int:
+    """Speed-ranked items queued on this Hub before this one, in dispatch (FIFO) order."""
+    def key(b: dict, i: dict) -> tuple:
+        return (b.get("created_at", 0), b.get("id", ""), i.get("index", 0))
+    mine = key(batch, item)
+    return sum(1 for b in list(batches.values())
+               if not b.get("cancelled") and speed_ranked(b.get("model"))
+               for i in b.get("items") or []
+               if i.get("state") == "queued" and key(b, i) < mine)
+
+
+def _wait_for_faster_mac(batch: dict, item: dict, studio: dict) -> bool:
+    """A free Mac leaves a Qwen item for a busy faster one that would still finish it sooner.
+
+    The Gateway's rule: a busy Mac finishes after half its own job plus the items queued ahead of
+    this one (each given to whichever busy Mac would finish it first); the free Mac takes the item
+    only when its own time beats that. Free faster Macs are not counted - the fastest-first order
+    offered them the item already. A Mac whose owner switched Image off or put another function
+    above Image is never waited for (0.6.156/0.6.157 priorities win).
+    ponytail: whatever a busy Mac runs is taken as half a Qwen job, like the Gateway; read the
+    running item's own clock if long non-Qwen work holds Qwen back.
+    """
+    model = batch.get("model")
+    if not speed_ranked(model):
+        return False
+    modality = batch["modality"]
+    here = studio.get("machine", "local")
+    leased = busy_machines()
+    seconds = _mac_seconds(modality, model)
+    finish: dict[str, list[float]] = {}
+    for machine, (other, _entry) in _pool_members(
+            modality, model, batch.get("routing", routing_rule.POOL)).items():
+        if machine == here or (other["id"] not in _busy and machine not in leased):
+            continue
+        order = priority_order(machine)
+        if order and order[0] != modality:
+            continue
+        own = seconds(machine)
+        finish[machine] = [own * (1 + _RUNNING_REMAINDER), own]
+    if not finish:
+        return False
+    for _ in range(_queued_ahead(batch, item)):
+        best = min(finish, key=lambda m: finish[m][0])
+        finish[best][0] += finish[best][1]
+    return min(done for done, _own in finish.values()) < seconds(here)
+
+
 def _pool_members(modality: str, model: str, routing: str = "pool") -> dict[str, tuple]:
     """machine -> (studio, catalog row) for every distinct Mac that could run this model at all.
 
@@ -730,7 +863,8 @@ def _broker_dispatchable_work(machine: str) -> list[tuple[str, float, str]]:
                 or not _catalog_matches_genstudio_revision(b, entry)
                 or not memory_admission_dispatchable(studio, b["model"], entry)
                 or not any(_shared_voice_allows_studio(b, i, studio)
-                           and _item_allows_studio(i, studio, now) for i in queued)):
+                           and _item_allows_studio(i, studio, now)
+                           and not _wait_for_faster_mac(b, i, studio) for i in queued)):
             continue
         found.append((str(b["modality"]), float(b.get("created_at") or 0),
                       f"broker:{b['id']}"))
@@ -3741,6 +3875,11 @@ def _eligible_studios(modality: str, routing: str,
                    .get("render_score", 0)),
             s["id"],
         ))
+    elif speed_ranked(model):
+        # Qwen: fastest expected Mac first; a Mac below the model's floor still sorts last.
+        seconds = _mac_seconds(modality, model)
+        floor = _placement_key(modality, model)
+        out.sort(key=lambda s: (floor(s)[0] == 1, seconds(s.get("machine", "local")), s["id"]))
     else:
         # Smallest capable machine first, for every lane. Capability is the model's own published
         # floor and admission enforces it; this only orders the machines that can all run the job,
@@ -3794,6 +3933,8 @@ def _no_candidate_note(batch: dict, queued: list[dict], studio: dict) -> str:
     if any(not _shared_voice_allows_studio(batch, item, studio) for item in queued):
         return ("Waiting for a Voice Studio where the selected "
                 "shared voice is synchronized")
+    if any(_wait_for_faster_mac(batch, item, studio) for item in queued):
+        return f"Waiting for a faster Mac: it should finish sooner than {studio['id']}"
     return ("Waiting for a free machine: every eligible one is temporarily "
             "avoided (reserved by other work, or recently failed)")
 
@@ -3945,7 +4086,8 @@ async def _dispatch_loop():
                     compatible_index = next(
                         (index for index, candidate in enumerate(queued)
                          if _shared_voice_allows_studio(b, candidate, studio)
-                         and _item_allows_studio(candidate, studio, now)),
+                         and _item_allows_studio(candidate, studio, now)
+                         and not _wait_for_faster_mac(b, candidate, studio)),
                         None,
                     )
                     if compatible_index is None:

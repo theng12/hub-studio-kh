@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.163 — 2026-10-09 · Qwen thumbnails go to the fastest free Mac
+
+- Owner decision: "Prefer fast Macs for Qwen." Inside a site, a Qwen Image job (any model whose id contains `qwen-image`) now goes to the Mac expected to finish it soonest. It used to go to the smallest Mac, which on sites 1100–1400 often meant an M1 at about 949 s while the M4 would take about 605 s.
+- How long a Mac takes is its own median for that model from this Hub's finished jobs. Without that, it is the median for Macs of the same chip and memory. Without that, it is the 10-08 measurement for its chip: M2 Max 228 s, M4 605 s, M2 812 s, M1 949 s, and 949 s for an unknown chip. These are the same rule and numbers Gateway 0.2.156 uses to choose the site.
+- A slower free Mac takes a Qwen job only if it would finish before a busy faster Mac would, after that Mac's current job and the Qwen jobs queued ahead of this one. Example: when This Mac is busy and nothing else is queued, an idle M1 leaves the job for it (342 s against 949 s). With three Qwen jobs queued ahead, the M1 takes it.
+- While a job waits like this, the job says "Waiting for a faster Mac". The waiting Mac stays free for its other functions.
+- Owner settings still win. A Mac with Image switched off gets no Image work, and a Mac that puts another function above Image is never waited for. Other models are placed exactly as before.
+
 ## 0.6.162 — 2026-10-09 · Three fixes from the overnight review
 
 - A cloned-voice job no longer fails when the Mac it was sent to is busy with other work. That Mac answers "reserved for other work" before it even looks at the voice reference. The job now stays queued, skips that Mac for a few seconds, and doesn't use up one of its tries. This is how the rest of a job already handled a busy Mac. Overnight this caused 276 failed tries on 252 jobs, mostly at sites 1600 and 1500.

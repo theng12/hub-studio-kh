@@ -689,18 +689,23 @@ def load_unfinished_batches() -> list[dict]:
     return [json.loads(r[0]) for r in rows]
 
 
-def load_finished_batches(limit: int | None = None) -> list[dict]:
+def load_finished_batches(limit: int | None = None,
+                          payload_like: str | None = None) -> list[dict]:
     """Load terminal broker batches: all of them for operator-requested history cleanup, or only
     the newest ``limit`` for a listing (the table only grows, and a listing that parses every
-    payload ever stored costs ~0.5 ms per batch on every poll)."""
+    payload ever stored costs ~0.5 ms per batch on every poll). ``payload_like`` narrows to
+    payloads matching that SQL LIKE pattern (case-insensitive), e.g. one model family's history."""
+    like = "" if payload_like is None else " AND payload LIKE ?"
+    args: tuple = () if payload_like is None else (payload_like,)
     with _conn() as conn:
         if limit is None:
             rows = conn.execute(
-                "SELECT payload FROM batches WHERE finished = 1").fetchall()
+                "SELECT payload FROM batches WHERE finished = 1" + like, args).fetchall()
         else:
             rows = conn.execute(
                 "SELECT payload FROM batches WHERE id IN (SELECT id FROM batches "
-                "WHERE finished = 1 ORDER BY created_at DESC LIMIT ?)", (int(limit),)).fetchall()
+                "WHERE finished = 1" + like + " ORDER BY created_at DESC LIMIT ?)",
+                args + (int(limit),)).fetchall()
     return [json.loads(r[0]) for r in rows]
 
 

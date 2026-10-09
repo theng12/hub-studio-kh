@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.163 - 2026-10-09
+
+### Qwen thumbnails go to the fastest Mac
+
+A Qwen Image job now goes to the Mac that will finish it soonest, not the smallest one. A slower Mac only takes it when waiting for a faster Mac would take longer. A Mac where Image is switched off, or placed below another function, keeps that setting.
+
 ## 0.6.162 - 2026-10-09
 
 ### Fewer narration jobs fail for no good reason
