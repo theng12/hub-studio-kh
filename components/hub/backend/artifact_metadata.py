@@ -38,6 +38,7 @@ _MEDIA_TYPES = {
     "transcription": {"application/x-subrip", "text/vtt", "text/plain",
                       "application/json"},
     "chat": {"application/json", "text/plain"},
+    "embeddings": {"application/json"},
 }
 
 # Every media type the Hub is willing to echo at all. A modality the Hub has never been taught

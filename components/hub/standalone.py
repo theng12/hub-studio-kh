@@ -322,6 +322,7 @@ _ENGINE_ROUTE: dict[str, tuple[str, str]] = {
     "chat-mlx": ("chat", "chat"),
     # Video is one engine: `video-ltx`, the LTX-2.3 22B pack (Lance was retired in 0.6.120).
     "video-ltx": ("video", "video"),
+    "embed-mlx": ("embeddings", "embeddings"),
 }
 
 _ENGINE_REGISTRATION_HINT = (
@@ -1014,6 +1015,13 @@ _PEER_WORK_PREFIXES: dict[str, str] = {
 # documented intent always said so; the single broad prefix did not, so a cancel or an ack took a
 # lease of its own.
 _PEER_NON_WORK_PREFIXES = ("api/generate/jobs/",)
+
+
+# Work that runs beside whatever holds this Mac's lease. An embedding batch is a ~130 MB model and
+# well under a second for a whole idea history, so making it wait behind a 40-minute narration would
+# turn an interactive check into a timeout. Admission (pause, Lite Mode, readiness) still applies.
+# ponytail: no lease and no queue; give it the Chat queue's bounded wait if batches ever contend.
+_PEER_UNLEASED_PATHS = frozenset({"embeddings/v1/embeddings"})
 
 
 def _peer_lease_policy(path: str) -> str | None:
@@ -3478,6 +3486,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         content_type = request.headers.get("content-type") or ""
         policy = _peer_lease_policy(path) if request.method == "POST" else None
         machine = str(worker.get("machine") or "local")
+        if request.method == "POST" and f"{modality}/{path.strip('/')}" in _PEER_UNLEASED_PATHS:
+            refusal = _peer_admission_refusal(
+                worker, monitor, await _request_model(request, body, content_type),
+                ignore_busy=True)
+            if refusal is not None:
+                return _peer_refusal_response(refusal)
         owner = None
         queued_chat = None
         _prune_peer_leases()

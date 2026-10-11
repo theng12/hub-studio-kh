@@ -1,0 +1,1 @@
+"""Embeddings Studio application package."""

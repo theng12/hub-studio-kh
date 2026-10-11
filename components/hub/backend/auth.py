@@ -440,7 +440,7 @@ def presented_owner_token(request: Request, hub_token: str) -> bool:
 # `video` was added with the lane it names (2026-09-26). Same reasoning as chat: once a Video
 # worker exists, a controller shown the video catalog must be able to read its health, its
 # memory policy and its activity, or the failure is a 403 against a model the fleet advertises.
-_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music|chat|video)"
+_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music|chat|video|embeddings)"
 FLEET_ALLOWED = (
     ("GET", r"^/api/health$"),
     ("GET", r"^/api/version$"),
@@ -495,6 +495,8 @@ FLEET_ALLOWED = (
     # this project keeps paying for.
     ("POST", r"^/studio/chat/v1/chat/completions$"),
     ("GET", r"^/studio/chat/requests/[0-9a-f]{32}$"),
+    # Embeddings' one work route (Story's meaning check). Short and synchronous, like Chat's.
+    ("POST", r"^/studio/embeddings/v1/embeddings$"),
     ("DELETE", r"^/studio/chat/requests/[0-9a-f]{32}$"),
     ("POST", r"^/studio/(voice|subtitle|image|transcription)/api/transcribe$"),
     ("DELETE", r"^/studio/(voice|subtitle|image|transcription|music|video)/api/generate/[A-Za-z0-9_./-]*$"),

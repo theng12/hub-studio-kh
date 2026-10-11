@@ -56,6 +56,7 @@ FLEET = [
 # What each engine is, in the owner's terms, so the table reads without a decoder ring.
 ENGINE_NAMES = {
     "chat-mlx": "MLX (text)",
+    "embed-mlx": "MLX (text embeddings)",
     "image-mflux": "mflux (MLX)",
     "image-mlx-serve": "mlx-serve (MLX)",
     "music-mlx": "MLX (audio)",
@@ -66,7 +67,7 @@ ENGINE_NAMES = {
     "voice-vits": "VITS / ONNX",
 }
 
-MODALITY_ORDER = ["chat", "voice", "subtitle", "image", "music", "video"]
+MODALITY_ORDER = ["chat", "voice", "subtitle", "image", "music", "video", "embeddings"]
 MODALITY_TITLES = {
     "chat": "Chat (LLM)",
     "voice": "Voice (TTS)",
@@ -74,6 +75,7 @@ MODALITY_TITLES = {
     "image": "Image",
     "music": "Music",
     "video": "Video",
+    "embeddings": "Embeddings",
 }
 MODALITY_OF_ENGINE = {
     "chat-mlx": "chat",
@@ -85,6 +87,7 @@ MODALITY_OF_ENGINE = {
     "music-mlx": "music",
     "music-yue2": "music",
     "video-ltx": "video",
+    "embed-mlx": "embeddings",
 }
 
 

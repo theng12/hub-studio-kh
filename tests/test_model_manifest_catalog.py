@@ -517,6 +517,9 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # is qualified on 16 GB by the owner's physical 16 GiB M4 run of 2026-10-08.
             "qwen-image-2-1-mlx-serve-4bit": "6a0e552d93718bee1f7ef7546dad19ea3798e7506d2b32d099a9af430ff4d97d",
             "qwen-image-2-1-mflux-q4": "6aabd0eb5b79856a836c91b6aa243f717c88582c4e7b9c4c1b09a3c4a8d595ac",
+            # BGE small en v1.5 MLX bf16 (owner decision 2026-10-11), captured at
+            # mlx-community/bge-small-en-v1.5-bf16 0e415031: 10 files / 67,702,966 bytes.
+            "bge-small-en-v1-5-bf16": "726de16948b3602205ff7c34fac9ccfe096df263a8b0e59949de4b858d3554c9",
         }
         # The digest map is the frozen-content half of the invariant: its keys are checked against
         # the manifests on disk (never against a hand-written list), so a package that appears

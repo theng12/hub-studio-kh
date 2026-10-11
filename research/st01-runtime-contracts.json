@@ -19,6 +19,10 @@
     "image-mlx-serve": {
       "reason": "Added 2026-10-06 after this 2026-09-15 record. Qwen uses the existing Image worker and composite runtimes/image tree. The Python/mflux base retains its macOS 14 audit; the pinned mlx-serve leaf has a separate conditional macOS 26.2 audit/inventory and backend readiness gate. No deployment header is retargeted. Physical 24 GB normal and 16 GB low-RAM qualification remain pending SSD receipts.",
       "record": "packaging/image-runtime/README.md"
+    },
+    "embed-mlx": {
+      "reason": "Adopted 2026-10-11, after this record was observed. The Embeddings worker reuses runtimes/voice (mlx and tokenizers live there) and adds no package, so the voice-mlx entry below is its runtime input record; the encoder is plain MLX code in this repository.",
+      "record": "components/embeddings/app/backend/encoder.py"
     }
   },
   "observed_at": "2026-09-15",

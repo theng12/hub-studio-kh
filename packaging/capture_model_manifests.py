@@ -238,6 +238,16 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # and it is listed in the pack's `requires_packages` so the Hub marks it a dependency rather
     # than offering it in a picker as if it were a video model.
     # (Gemma 3 12B 4-bit, LTX's text encoder, retired 0.6.128: its capture row is gone; its manifest lives dormant in components/video/retired/.)
+    # ── Embeddings (owner decision 2026-10-11): Story's meaning-based idea duplicate check ──
+    # BGE small en v1.5 in mlx-community's bf16 MLX build: a plain BERT encoder, 384 dimensions,
+    # MIT. Run by the Embeddings worker in pure MLX on the shared Voice runtime (no new package).
+    {"package_id": "bge-small-en-v1-5-bf16", "model_id": "mlx-community/bge-small-en-v1.5-bf16",
+     "revision": "0e415031434cdf5f1b89d584e11be33b82abfc8d", "engine": "embed-mlx",
+     "captured_at": "2026-10-11", "default": True,
+     "display_name": "BGE small en v1.5 MLX bf16",
+     "quantization": "MLX bf16",
+     "quantization_source": "the publisher model id states it: mlx-community/bge-small-en-v1.5-bf16",
+     "license": {"weights": "MIT"}},
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
@@ -370,6 +380,14 @@ DETAILS: dict[str, dict[str, Any]] = {
                      "parameters_source": "components/music/app/backend/catalog.py"},
         "memory": (16, 24, "MEASURED here [M], three runs, by sampled `footprint phys_footprint_peak` in the process doing the work: 600 tokens -> 24.0 s of 48 kHz stereo audio, 58.6 s end to end, peak 10.79 GB; 900 tokens through the runner bridge -> 36.0 s, 103.2 s, peak 11.81 GB (receipt qualification/yue2-music-results-20260927/bridge-run.json); 3000 tokens -> 120.0 s, 429.8 s, peak 11.93 GB. The peak barely moves with length because the weights dominate: 2.66 GB 8-bit AR + 2.93 GB bf16 NAR + 0.51 GB VAE. A 16 GB Mac therefore has roughly 4 GB left for macOS, and the port's own monitor defaults to a 16 GiB process budget and fails closed on more than 64 MiB of new swap. An 8 GB Mac cannot run it in any configuration this port offers: the AR is the only quantizable part, and 4-bit would save about 1 GB against an 11.9 GB peak."),
         "qualification": {"status": "qualified", "reason": "MEASURED by three local runs on the owner's 32 GB M2 Max through the port's own pipeline at the pinned commit 9253ed133343406947bde7b67d43c7a63fb39d99, two of them through this app's runner bridge, with the peak taken by sampled `footprint` in the process doing the work rather than from MLX's own allocator (which reports about half). What is NOT covered and is not claimed: no 16 GB or 24 GB machine has run it - the tier is a floor from a host under no memory pressure, and the 16 GB verdict is the owner's run to make. The port's own README targets a 16 GiB process budget and states it was tested on an M3 Max (128 GB) and an M5 Air (32 GB); it publishes no memory table of its own, so the numbers above are the only measured ones that exist."},
+    },
+    # Pooling and normalisation are the model's own facts (BAAI/bge-small-en-v1.5
+    # 1_Pooling/config.json: pooling_mode_cls_token; modules.json: Normalize). The MLX build
+    # drops the 1_Pooling folder, so they are recorded here rather than assumed by the worker.
+    "bge-small-en-v1-5-bf16": {
+        "defaults": {"pooling": "cls", "normalize": True, "dimensions": 384, "max_tokens": 512,
+                     "parameters_source": "BAAI/bge-small-en-v1.5@5c38ec7c 1_Pooling/config.json and modules.json; model/config.json hidden_size and max_position_embeddings"},
+        "memory": (8, 8, "A 67 MB bf16 BERT encoder (33M parameters) held as float32 (~134 MB). Peak and speed are measured in the Embeddings worker tests and recorded in the release notes."),
     },
     "yue2-vae": {
         "defaults": {"parameters_source": "model/config.json"},

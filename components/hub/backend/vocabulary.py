@@ -34,6 +34,9 @@ WORKER_FOR_MODALITY: dict[str, str] = {
     # Video is a real worker now, not a placeholder: `components/video` serves both the
     # text-to-video JSON door and the image-to-video multipart door the broker already had.
     "video": "video",
+    # Text embeddings for Story's meaning check: synchronous like Chat, but never takes the Mac's
+    # lease (see `standalone._PEER_UNLEASED_PATHS`).
+    "embeddings": "embeddings",
 }
 
 # Every modality a node may offer, derived so it cannot drift from the routing table.
@@ -58,6 +61,7 @@ STUDIO_OPERATION: dict[str, str] = {
     "music": "music",
     "chat": "chat",
     "video": "video",
+    "embeddings": "embeddings",
 }
 
 # The operations the Hub will file a job under when a studio names one of them.

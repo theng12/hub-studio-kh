@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.165 - 2026-10-11
+
+### A free, local meaning check for ideas
+
+Studio Hub has a new Embeddings Studio. It turns short texts into numbers that say what they mean, so Story Studio can tell when two ideas are the same idea in different words. It runs on your own Macs with a small free model (BGE small en v1.5 MLX bf16, 67 MB, MIT licence). It needs no outside app and costs nothing. A thousand idea titles take about a quarter of a second, and it never waits for a narration or an image job to finish.
+
 ## 0.6.164 - 2026-10-09
 
 ### An empty narration file is retried, not delivered

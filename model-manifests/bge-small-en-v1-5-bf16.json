@@ -1,0 +1,141 @@
+{
+  "default": true,
+  "defaults": {
+    "dimensions": 384,
+    "max_tokens": 512,
+    "normalize": true,
+    "parameters_source": "BAAI/bge-small-en-v1.5@5c38ec7c 1_Pooling/config.json and modules.json; model/config.json hidden_size and max_position_embeddings",
+    "pooling": "cls"
+  },
+  "display_name": "BGE small en v1.5 MLX bf16",
+  "engine": "embed-mlx",
+  "files": [
+    {
+      "path": "model/config.json",
+      "sha256": "cb9e758b43f5baf05b2f551dc8b25b2e972aa9e1788e8ef05c88a49dd0651d81",
+      "size": 722,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/config.json"
+      ]
+    },
+    {
+      "path": "model/config_sentence_transformers.json",
+      "sha256": "940d5f50db195fa6e5e6a4f122c095f77880de259d74b14a65779ed48bdd7c56",
+      "size": 124,
+      "source_path": "config_sentence_transformers.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/config_sentence_transformers.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "24b98ebfe6c7a76b703465db8b295185462023282ceaa4a0aec24608bf0f86a0",
+      "size": 66742096,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "sha256": "c4fa728095e478dd9baf4db8bb9785a3eb1ab05244b8426a591f7da47b7f1992",
+      "size": 14752,
+      "source_path": "model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/modules.json",
+      "sha256": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf",
+      "size": 349,
+      "source_path": "modules.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/modules.json"
+      ]
+    },
+    {
+      "path": "model/sentence_bert_config.json",
+      "sha256": "84e39fda68ccbff05bfa723ae9c0e70e23e2ec373b76e0f8c6e71af72a693cbf",
+      "size": 52,
+      "source_path": "sentence_bert_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/sentence_bert_config.json"
+      ]
+    },
+    {
+      "path": "model/special_tokens_map.json",
+      "sha256": "5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a",
+      "size": 695,
+      "source_path": "special_tokens_map.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+      "size": 711396,
+      "source_path": "tokenizer.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "7b082b48a08a0b5c5939d99472e33addce3d96202155e33f7928cecd171186a0",
+      "size": 1272,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/vocab.txt",
+      "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
+      "size": 231508,
+      "source_path": "vocab.txt",
+      "urls": [
+        "https://huggingface.co/mlx-community/bge-small-en-v1.5-bf16/resolve/0e415031434cdf5f1b89d584e11be33b82abfc8d/vocab.txt"
+      ]
+    }
+  ],
+  "license": {
+    "weights": "MIT"
+  },
+  "minimum_macos": "14.0",
+  "model_id": "mlx-community/bge-small-en-v1.5-bf16",
+  "package_id": "bge-small-en-v1-5-bf16",
+  "qualification": {
+    "memory_evidence": "A 67 MB bf16 BERT encoder (33M parameters) held as float32 (~134 MB). Peak and speed are measured in the Embeddings worker tests and recorded in the release notes.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 8,
+    "status": "unqualified"
+  },
+  "quantization": "MLX bf16",
+  "quantization_source": "the publisher model id states it: mlx-community/bge-small-en-v1.5-bf16",
+  "revision": "0e415031434cdf5f1b89d584e11be33b82abfc8d",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-10-11",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/bge-small-en-v1.5-bf16",
+        "revision": "0e415031434cdf5f1b89d584e11be33b82abfc8d"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mlx-community/bge-small-en-v1.5-bf16",
+        "revision": "0e415031434cdf5f1b89d584e11be33b82abfc8d",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/bge-small-en-v1.5-bf16/revision/0e415031434cdf5f1b89d584e11be33b82abfc8d",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/bge-small-en-v1.5-bf16/tree/0e415031434cdf5f1b89d584e11be33b82abfc8d?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

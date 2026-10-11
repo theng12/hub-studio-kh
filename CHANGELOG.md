@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.165 — 2026-10-11 · Embeddings Studio: local text embeddings for Story's meaning check
+
+- Owner decision 2026-10-11 (ideas plan Q1): embeddings run in our own apps, not Ollama. New worker `embeddings` (`components/embeddings`, `packaging/embeddings_worker.py`), engine `embed-mlx`, modality `embeddings`, registered in `vocabulary.WORKER_FOR_MODALITY`, `_ENGINE_ROUTE`, `model_packages.ENGINES`, `hub_worker.COMPONENT_WORKERS` and `stage_voice.COMPONENT_STAGERS`. It runs on the shared Voice runtime and adds no package.
+- Model: **BGE small en v1.5 MLX bf16** (`mlx-community/bge-small-en-v1.5-bf16` @ `0e415031`, package `bge-small-en-v1-5-bf16`, 10 files / 67,702,966 bytes, MIT). A BERT encoder written in plain MLX (`encoder.py`); it loads the publisher's safetensors by name, keeps float32 in memory, and pools and normalises as the manifest's `defaults` say (`cls`, normalised, 384 dimensions, 512 tokens). It matches Hugging Face `BertModel` to 5e-7 on the real checkpoint and to 1e-5 on random weights (`tests/test_embeddings_worker.py`, offline).
+- Why this model: nomic-embed-text-v1.5 has no MLX build, its own weights are 547 MB fp32 (over the approved ~270 MB) and it needs a custom architecture with remote code. BERT is the architecture the bundled MLX runs most simply, and BGE small v1.5 scores clearly above all-MiniLM-L6-v2 on MTEB.
+- `POST /v1/embeddings` on the worker (OpenAI shape: `{model, input}` → `{data:[{embedding, index}], model, usage}`); up to 2,048 inputs, each under 512 tokens (a longer one is refused by index, never cut). `[M]` M2 Max 32 GB: load 0.07 s, 1,000 short texts 0.24–0.31 s, peak MLX 486 MB, max RSS 155 MB. Memory policy is Chat's (`components/embeddings/app/backend/memory_policy.py` re-exports it).
+- Peer surface `/studio/embeddings/v1/embeddings` (fleet credential allowed). It is admitted like other work (paused Mac, paused Studio, Lite Mode, model readiness, update drain) but **takes no machine lease**, so it runs beside a narration or image job instead of waiting behind it (`standalone._PEER_UNLEASED_PATHS`). `ponytail:` no queue; add Chat's bounded wait if batches ever contend.
+- Downloaded once into this Mac's library (owner-approved). Other Macs get it only when it is installed on them.
+
 ## 0.6.164 — 2026-10-09 · An empty or broken narration file is a failed job, not a finished one
 
 - On 10-09 at 08:04 a narration job on studio-mac-1504 (Hub batch `ebcfd92c1a`) produced an empty (0-byte) m4a. The Hub noticed the file could not be checked, but still marked the job finished, following the rule "never retry a completed generation", and handed out the empty file with no size or checksum.

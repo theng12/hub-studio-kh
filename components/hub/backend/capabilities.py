@@ -31,6 +31,7 @@ OPERATION_BY_MODALITY = {
     "chat": "chat.completion",
     "video": "video.generation",
     "render": "video.render",
+    "embeddings": "text.embedding",
 }
 
 _IMMUTABLE_REVISION = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{40,64}$")

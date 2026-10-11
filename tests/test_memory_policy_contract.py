@@ -664,8 +664,11 @@ def studio_policy_modules() -> dict:
     modules = {}
     for worker in sorted((PROJECT_ROOT / "components").glob("*/app/backend/main.py")):
         name = worker.parents[2].name
-        modules[name] = importlib.import_module(
-            f"components.{name}.app.backend.memory_policy")
+        module = importlib.import_module(f"components.{name}.app.backend.memory_policy")
+        # A Studio that reuses another's policy (Embeddings uses Chat's) is checked as the module
+        # that actually runs, so the seams below are patched where the rule reads them.
+        owner = getattr(getattr(module, "MemoryPolicy", None), "__module__", module.__name__)
+        modules[name] = sys.modules.get(owner, module)
     return modules
 
 
@@ -812,7 +815,7 @@ def worker_status(module, name: str, directory: Path, total_bytes: int) -> dict:
     """
     settings = Path(directory) / "memory_policy.json"
     with patch.object(module, "machine_bytes", lambda: total_bytes):
-        if name == "chat":
+        if module.__name__.startswith("components.chat."):
             return module.MemoryPolicy(Path(directory), _PolicyEngine()).status()
         if name == "voice":
             with patch.object(module, "SETTINGS_FILE", settings), \
@@ -826,7 +829,7 @@ def worker_status(module, name: str, directory: Path, total_bytes: int) -> dict:
 
 def selected_mode(module, name: str, settings: Path, directory: Path) -> str:
     """The mode one worker selects from a settings file, through its own reader."""
-    if name == "chat":
+    if module.__name__.startswith("components.chat."):
         policy = module.MemoryPolicy(directory, _PolicyEngine())
         policy._settings = settings
         return policy.mode()

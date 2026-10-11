@@ -1,0 +1,1 @@
+"""Standalone Embeddings Studio component."""

@@ -214,6 +214,19 @@ def _chat_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dic
     }
 
 
+def _embeddings_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
+    # Reuses the base runtime (mlx and tokenizers live there) and Chat's memory-policy module.
+    embeddings_id = release['components']['embeddings'].get('runtime_sha256')
+    if (not (resources / 'embeddings_worker.py').is_file()
+            or not (resources / 'components/embeddings/app/backend/main.py').is_file()
+            or not _runtime_id(embeddings_id)):
+        raise ValueError('Incomplete Embeddings worker or release identity')
+    return {
+        'id': 'embeddings', 'modality': 'embeddings', 'python': runtime / 'bin/python3',
+        'runtime_id': embeddings_id, 'outputs': data / 'embeddings/outputs', 'extra_args': [],
+    }
+
+
 # One entry per key the release manifest's `components` map may carry, and the only place a
 # studio is registered with the Hub. The Hub spawns exactly what the manifest lists, in the
 # order the manifest lists it; a component with no private child process of its own (the Hub
@@ -228,6 +241,7 @@ COMPONENT_WORKERS: dict[str, Callable[[dict, Path, Path, Path], dict] | None] = 
     'music': _music_spec,
     'chat': _chat_spec,
     'video': _video_spec,
+    'embeddings': _embeddings_spec,
 }
 
 

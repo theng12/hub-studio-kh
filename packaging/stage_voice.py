@@ -280,6 +280,21 @@ def _stage_chat(context: dict) -> dict | None:
     }
 
 
+def _stage_embeddings(context: dict) -> dict | None:
+    """The Embeddings Studio: its own process and state root on the shared Voice runtime (mlx and
+    tokenizers). It imports Chat's memory policy, so it is staged after Chat."""
+    if not context['include_hub']:
+        return None
+    resources = context['resources']
+    source = resources / 'components/embeddings'
+    copy_tracked_tree(ROOT / 'components/embeddings', source)
+    shutil.copyfile(ROOT / 'packaging/embeddings_worker.py', resources / 'embeddings_worker.py')
+    return {
+        'source_sha256': tree_digest(source), 'runtime': 'voice',
+        'runtime_sha256': context['runtime_hash'],
+    }
+
+
 def _stage_music(context: dict) -> dict | None:
     if not context['include_hub']:
         return None
@@ -436,6 +451,7 @@ COMPONENT_STAGERS: dict[str, Callable[[dict], dict | None]] = {
     'hub': _stage_hub,
     'subtitle': _stage_subtitle,
     'chat': _stage_chat,
+    'embeddings': _stage_embeddings,
     'music': _stage_music,
     'image': _stage_image,
     'video': _stage_video,
