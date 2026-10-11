@@ -624,6 +624,8 @@ class StagingTests(unittest.TestCase):
                 # retired), so every Hub bundle stages it and the fixture has to carry it.
                 'components/music/app/backend/main.py': '# music fixture',
                 'packaging/music_worker.py': '# music worker',
+                'components/embeddings/app/backend/main.py': '# embeddings fixture',
+                'packaging/embeddings_worker.py': '# embeddings worker',
             }
             for name, content in files.items():
                 path = repo / name
