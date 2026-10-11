@@ -87,6 +87,7 @@ class NoWorkerInventsAVersionTests(unittest.TestCase):
             # reports the build it came from rather than a word.
             "video": "app_version.version_fields()",
             "embeddings": "app_version.version_fields()",
+            "vision": "app_version.version_fields()",
         }
         for main in worker_mains():
             name = main.parents[2].name

@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.166 - 2026-10-11
+
+### Your Macs can now look at a picture
+
+Studio Hub has a new Vision Studio. Given a scene picture it says how far away each part is (a depth map), where the main subject is, where the other interesting things are, and outlines the sky, water, clouds and flames. Story Studio will use this for the new 3D-photo moves, zoom to subject, the guided tour and sky-only clouds. It runs on your own Macs with free models (Depth Anything V2 Small, 99 MB, Apache licence; Florence-2 base, 469 MB, MIT licence). A larger Florence-2 can be switched in later if the outlines need to be sharper. It never waits for a narration or an image job to finish.
+
 ## 0.6.165 - 2026-10-11
 
 ### A free, local meaning check for ideas

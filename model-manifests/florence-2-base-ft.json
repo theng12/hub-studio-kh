@@ -1,0 +1,155 @@
+{
+  "default": true,
+  "defaults": {
+    "kind": "florence",
+    "max_new_tokens": 1024,
+    "parameters_source": "model/generation_config.json (3 beams, no repeated 3-grams, forced BOS/EOS) and model/processor_config.json",
+    "tasks": [
+      "subject",
+      "points",
+      "segments"
+    ],
+    "text_dtype": "float32",
+    "vision_dtype": "float32"
+  },
+  "display_name": "Florence-2 base (ft)",
+  "engine": "vision-mlx",
+  "files": [
+    {
+      "path": "model/added_tokens.json",
+      "sha256": "1d75deda84dfa81fb6c09301f3fed00f9695059568bbb1403a6bf299cd84fc37",
+      "size": 22430,
+      "source_path": "added_tokens.json",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/added_tokens.json"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "2a4dfe9885d183da121f239ada734bd700ee6908b650a7a25ab32eb104fe1d7a",
+      "size": 2387,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/config.json"
+      ]
+    },
+    {
+      "path": "model/generation_config.json",
+      "sha256": "0251459c49cc358ac033b5d4b8569e61ac22bde5d76be404b97a44cfb33fb12e",
+      "size": 292,
+      "source_path": "generation_config.json",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/generation_config.json"
+      ]
+    },
+    {
+      "path": "model/merges.txt",
+      "sha256": "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5",
+      "size": 456318,
+      "source_path": "merges.txt",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/merges.txt"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "ab06dea66b16d5e54513256d64854be2194443452fd0d84353b40a278bf87d42",
+      "size": 463178864,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/preprocessor_config.json",
+      "sha256": "1396ec5a0a7adfe1c04fb777b09e8ba753be6dbb5868212ab3c3ef39d91fe031",
+      "size": 603,
+      "source_path": "preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/processor_config.json",
+      "sha256": "cd0e3bf41a39b1276503fbd273bc03b9afc70d7a15ea681a92a1b4b77f858ee6",
+      "size": 2264,
+      "source_path": "processor_config.json",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/processor_config.json"
+      ]
+    },
+    {
+      "path": "model/special_tokens_map.json",
+      "sha256": "72ff172dc769bc1551b1b4211628ce3271643bc60379e4da45d85a9be9332c39",
+      "size": 146627,
+      "source_path": "special_tokens_map.json",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/special_tokens_map.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "3ad7001f773409abe6bba33eac92662611a73d72f459bda2f00d2a221dd31ce4",
+      "size": 3748144,
+      "source_path": "tokenizer.json",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "cb5f80bd9afa767bb1bb798ee5f0a79eae45239b8e72506166b4218175a16723",
+      "size": 197922,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/vocab.json",
+      "sha256": "ed19656ea1707df69134c4af35c8ceda2cc9860bf2c3495026153a133670ab5e",
+      "size": 798293,
+      "source_path": "vocab.json",
+      "urls": [
+        "https://huggingface.co/florence-community/Florence-2-base-ft/resolve/0b03b6f15a4a211370fb204aee4e7dd48887ea37/vocab.json"
+      ]
+    }
+  ],
+  "license": {
+    "weights": "MIT"
+  },
+  "minimum_macos": "14.0",
+  "model_id": "florence-community/Florence-2-base-ft",
+  "package_id": "florence-2-base-ft",
+  "qualification": {
+    "memory_evidence": "0.23B parameters held as float32 (~0.93 GB): float16 drifted from transformers' float32 reference, float32 is token-identical (vision/hub/parity, 2026-10-11).",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 8,
+    "status": "unqualified"
+  },
+  "quantization": "float16",
+  "quantization_source": "the publisher's config.json states dtype float16; the worker computes in float32",
+  "revision": "0b03b6f15a4a211370fb204aee4e7dd48887ea37",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-10-11",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "florence-community/Florence-2-base-ft",
+        "revision": "0b03b6f15a4a211370fb204aee4e7dd48887ea37"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "florence-community/Florence-2-base-ft",
+        "revision": "0b03b6f15a4a211370fb204aee4e7dd48887ea37",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/florence-community/Florence-2-base-ft/revision/0b03b6f15a4a211370fb204aee4e7dd48887ea37",
+        "tree_api_url": "https://huggingface.co/api/models/florence-community/Florence-2-base-ft/tree/0b03b6f15a4a211370fb204aee4e7dd48887ea37?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

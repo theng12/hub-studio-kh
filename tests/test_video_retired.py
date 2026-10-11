@@ -240,7 +240,7 @@ class ReleaseWithoutVideoTests(unittest.TestCase):
             components = {name: record for name, record in helper._components().items() if name != "video"}
             specs = helper._specs({"components": components}, resources)
         self.assertEqual({spec["id"] for spec in specs},
-                         {"voice", "image", "subtitle", "music", "chat", "embeddings"})
+                         {"voice", "image", "subtitle", "music", "chat", "embeddings", "vision"})
 
     def test_the_installer_accepts_releases_with_or_without_video(self) -> None:
         """`verifyDeclaredComponents` checks only the components a manifest declares, and its table

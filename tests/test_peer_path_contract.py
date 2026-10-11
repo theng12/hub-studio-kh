@@ -71,7 +71,7 @@ def concrete_studio_paths(text: str) -> set[str]:
 
 class PeerPathContractTests(unittest.TestCase):
     def test_the_routing_table_is_what_the_app_expects(self):
-        self.assertEqual(hub_modalities(), {"image", "voice", "transcription", "music", "chat", "video", "embeddings"})
+        self.assertEqual(hub_modalities(), {"image", "voice", "transcription", "music", "chat", "video", "embeddings", "vision"})
 
     def test_every_studio_path_in_the_app_names_a_routed_modality(self):
         routed = hub_modalities()

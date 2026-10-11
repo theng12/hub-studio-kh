@@ -323,6 +323,7 @@ _ENGINE_ROUTE: dict[str, tuple[str, str]] = {
     # Video is one engine: `video-ltx`, the LTX-2.3 22B pack (Lance was retired in 0.6.120).
     "video-ltx": ("video", "video"),
     "embed-mlx": ("embeddings", "embeddings"),
+    "vision-mlx": ("vision", "vision"),
 }
 
 _ENGINE_REGISTRATION_HINT = (
@@ -1021,7 +1022,10 @@ _PEER_NON_WORK_PREFIXES = ("api/generate/jobs/",)
 # well under a second for a whole idea history, so making it wait behind a 40-minute narration would
 # turn an interactive check into a timeout. Admission (pause, Lite Mode, readiness) still applies.
 # ponytail: no lease and no queue; give it the Chat queue's bounded wait if batches ever contend.
-_PEER_UNLEASED_PATHS = frozenset({"embeddings/v1/embeddings"})
+# A picture's analysis is ~0.1 s of depth and a few seconds of Florence-2 on ~1 GB of weights, so
+# it runs beside the lease holder too (owner rule 2026-10-11: analyse on the Mac that just made the
+# picture, which is usually busy making the next one).
+_PEER_UNLEASED_PATHS = frozenset({"embeddings/v1/embeddings", "vision/v1/vision/analyze"})
 
 
 def _peer_lease_policy(path: str) -> str | None:
@@ -1092,6 +1096,17 @@ async def _request_model(request: Request, body: bytes, content_type: str) -> st
             return ""
         return str(form.get("model") or form.get("repo") or "").strip()
     return ""
+
+
+def _request_models(body: bytes, content_type: str) -> list[str]:
+    """The models a JSON work request names as a list (`{"model": [...]}`), else []."""
+    if (content_type or "").split(";", 1)[0].strip().lower() != "application/json":
+        return []
+    try:
+        named = json.loads(body).get("model")
+    except (ValueError, AttributeError):
+        return []
+    return [str(m).strip() for m in named if str(m).strip()] if isinstance(named, list) else []
 
 
 def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
@@ -3487,11 +3502,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         policy = _peer_lease_policy(path) if request.method == "POST" else None
         machine = str(worker.get("machine") or "local")
         if request.method == "POST" and f"{modality}/{path.strip('/')}" in _PEER_UNLEASED_PATHS:
-            refusal = _peer_admission_refusal(
-                worker, monitor, await _request_model(request, body, content_type),
-                ignore_busy=True)
-            if refusal is not None:
-                return _peer_refusal_response(refusal)
+            # Vision may name a list of models (one picture, depth plus Florence): each is admitted.
+            for model in _request_models(body, content_type) or [
+                    await _request_model(request, body, content_type)]:
+                refusal = _peer_admission_refusal(worker, monitor, model, ignore_busy=True)
+                if refusal is not None:
+                    return _peer_refusal_response(refusal)
         owner = None
         queued_chat = None
         _prune_peer_leases()
@@ -3751,6 +3767,30 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # The peer surface's own spelling (`/studio/transcription/api/transcribe`): same admission,
         # machine reservation and worker re-signing as a controller's pooled transcription.
         return await _proxy_to_worker("transcription", "api/transcribe", request)
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/vision/analyze")
+    async def fleet_node_vision(node_id: str, request: Request) -> Response:
+        """Analyse one picture on a chosen Mac in this group (0.6.166, the Gateway's locality rule).
+
+        The Vision worker's own `POST /v1/vision/analyze` (JSON), answered in full. A joined node is
+        relayed to its own copy of this route (`local`), like a test transcription; this controller
+        itself is its id or `local`, admitted at the door like the peer route and never leased.
+        """
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "POST", "/vision/analyze", content=await request.body(),
+                    content_type=request.headers.get("content-type") or "application/json",
+                    timeout=fleet.VISION_RELAY_TIMEOUT,
+                    feature="picture analysis from the Gateway (needs Studio Hub 0.6.166)"))
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+        return await _proxy_to_worker("vision", "v1/vision/analyze", request,
+                                      record=_peer_job_recorder("vision", "v1/vision/analyze"))
 
     @app.post("/api/hub/chat/completions")
     async def hub_chat_completions(request: Request) -> Response:

@@ -535,7 +535,7 @@ final class FixtureProtocol: URLProtocol {
     /// not derive the answer from the app. It previously answered `/studio/subtitle/...`, which
     /// the real Hub refuses with 404 "unknown studio" - so every gate passed while the app's
     /// Transcribe button could not work, and only the owner clicking it found out.
-    private static let hubRoutedModalities: Set<String> = ["image", "voice", "transcription", "music", "chat", "video", "embeddings"]
+    private static let hubRoutedModalities: Set<String> = ["image", "voice", "transcription", "music", "chat", "video", "embeddings", "vision"]
 
     override func startLoading() {
         let path = request.url?.path ?? ""

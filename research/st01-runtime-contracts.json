@@ -23,6 +23,10 @@
     "embed-mlx": {
       "reason": "Adopted 2026-10-11, after this record was observed. The Embeddings worker reuses runtimes/voice (mlx and tokenizers live there) and adds no package, so the voice-mlx entry below is its runtime input record; the encoder is plain MLX code in this repository.",
       "record": "components/embeddings/app/backend/encoder.py"
+    },
+    "vision-mlx": {
+      "reason": "Adopted 2026-10-11, after this record was observed. The Vision worker reuses runtimes/voice (mlx, numpy, Pillow, tokenizers live there) and adds no package, so the voice-mlx entry below is its runtime input record; Depth Anything V2 Small and Florence-2 are plain MLX code in this repository, checked against transformers in tests/test_vision_worker.py.",
+      "record": "components/vision/app/backend/main.py"
     }
   },
   "observed_at": "2026-09-15",

@@ -39,6 +39,7 @@ _MEDIA_TYPES = {
                       "application/json"},
     "chat": {"application/json", "text/plain"},
     "embeddings": {"application/json"},
+    "vision": {"application/json"},
 }
 
 # Every media type the Hub is willing to echo at all. A modality the Hub has never been taught

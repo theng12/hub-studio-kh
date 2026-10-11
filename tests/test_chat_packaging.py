@@ -52,7 +52,7 @@ class WorkerSpecTests(unittest.TestCase):
                    raw_manifests: dict[str, str] | None = None) -> Path:
         resources = root / "Resources"
         (resources / "model-manifests").mkdir(parents=True)
-        for component in ("image", "subtitle", "music", "chat", "video", "embeddings"):
+        for component in ("image", "subtitle", "music", "chat", "video", "embeddings", "vision"):
             backend = resources / "components" / component / "app" / "backend"
             backend.mkdir(parents=True)
             (backend / "main.py").write_text(f"# {component} app\n")
@@ -66,7 +66,7 @@ class WorkerSpecTests(unittest.TestCase):
             (resources / "components" / "chat" / "app" / "backend" / "main.py").unlink()
         for worker in ("voice_worker.py", "hub_worker.py", "image_worker.py",
                        "subtitle_worker.py", "music_worker.py", "chat_worker.py",
-                       "video_worker.py", "embeddings_worker.py"):
+                       "video_worker.py", "embeddings_worker.py", "vision_worker.py"):
             (resources / worker).write_text(f"# {worker}\n")
         for runtime, binary in (("runtimes/voice/bin/python3", True),
                                 ("runtimes/image/bin/python3", image_runtime),

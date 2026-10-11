@@ -6,7 +6,7 @@ built on.
 
 - **App:** `Studio Hub.app` — its version and build are in `focused-release-manifest.json`,
   written beside it when the kit was staged (a pinned version here goes stale the next build)
-- **Models:** `model-library/` — 35 verified packages, ~156.9 GB. Normal setup copies **33 production-allowed packages** (about 118.7 GB); the **2 pending Chat MLX 4-bit packages** remain on the SSD and are not copied until qualification.
+- **Models:** `model-library/` — 38 verified packages, ~159.0 GB. Normal setup copies **36 production-allowed packages** (about 120.8 GB); the **2 pending Chat MLX 4-bit packages** remain on the SSD and are not copied until qualification.
 - **Receipts:** `focused-release-manifest.json`, `Studio Hub.app.tree-sha256`
 **Layout:** the app and `model-library/` sit side by side at the top of the kit folder — no nested folders to hunt through.
 - **Guide:** `INSTALL-AND-TEST.md` (the long-form operator guide)

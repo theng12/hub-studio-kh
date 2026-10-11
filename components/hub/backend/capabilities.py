@@ -32,6 +32,7 @@ OPERATION_BY_MODALITY = {
     "video": "video.generation",
     "render": "video.render",
     "embeddings": "text.embedding",
+    "vision": "image.analysis",
 }
 
 _IMMUTABLE_REVISION = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{40,64}$")

@@ -248,6 +248,30 @@ CHOICES: tuple[dict[str, Any], ...] = (
      "quantization": "MLX bf16",
      "quantization_source": "the publisher model id states it: mlx-community/bge-small-en-v1.5-bf16",
      "license": {"weights": "MIT"}},
+    # ── Vision (owner decisions 2026-10-11): Story's scene analysis for the E2-E4 effects ──
+    # Depth Anything V2 *Small* only: Base and Large are CC-BY-NC-4.0 and the channels are monetised.
+    # Run by the Vision worker in plain MLX (components/vision/app/backend/depth.py), no new package.
+    {"package_id": "depth-anything-v2-small", "model_id": "depth-anything/Depth-Anything-V2-Small-hf",
+     "revision": "5426e4f0f36572d16453bbda7a8389317b1bef99", "engine": "vision-mlx",
+     "captured_at": "2026-10-11", "display_name": "Depth Anything V2 Small",
+     "quantization": "float32",
+     "quantization_source": "the publisher's model.safetensors stores F32 tensors",
+     "license": {"weights": "Apache-2.0"}},
+    # Florence-2 in the transformers-native layout (florence-community, MIT; safetensors, no remote
+    # code). Base is the default (owner: "start with BASE"); Large is the same code and switches in
+    # by installing its package and naming it, with no release (components/vision/app/backend/florence.py).
+    {"package_id": "florence-2-base-ft", "model_id": "florence-community/Florence-2-base-ft",
+     "revision": "0b03b6f15a4a211370fb204aee4e7dd48887ea37", "engine": "vision-mlx",
+     "captured_at": "2026-10-11", "default": True, "display_name": "Florence-2 base (ft)",
+     "quantization": "float16",
+     "quantization_source": "the publisher's config.json states dtype float16; the worker computes in float32",
+     "license": {"weights": "MIT"}},
+    {"package_id": "florence-2-large-ft", "model_id": "florence-community/Florence-2-large-ft",
+     "revision": "26b734a54fdfbf9c398351eedfabb7f27fc470b7", "engine": "vision-mlx",
+     "captured_at": "2026-10-11", "display_name": "Florence-2 large (ft)",
+     "quantization": "float16",
+     "quantization_source": "the publisher's config.json states dtype float16; the worker computes in float32",
+     "license": {"weights": "MIT"}},
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
@@ -384,6 +408,25 @@ DETAILS: dict[str, dict[str, Any]] = {
     # Pooling and normalisation are the model's own facts (BAAI/bge-small-en-v1.5
     # 1_Pooling/config.json: pooling_mode_cls_token; modules.json: Normalize). The MLX build
     # drops the 1_Pooling folder, so they are recorded here rather than assumed by the worker.
+    # Vision: `kind` picks the code, `tasks` is what the model publishes (the Gateway validates
+    # requests against it), dtypes and the token budget are the measured parity settings.
+    "depth-anything-v2-small": {
+        "defaults": {"kind": "depth", "tasks": ["depth"], "input_short_side": 518,
+                     "parameters_source": "model/preprocessor_config.json (DPT: keep aspect, 518, multiple of 14) and model/config.json"},
+        "memory": (8, 8, "24.8M parameters held as float32 (~99 MB). One 768x432 picture: 0.06 s on an M2 Max; parity with transformers' DepthAnythingForDepthEstimation within 1e-4 relative (vision/hub/parity, 2026-10-11)."),
+    },
+    "florence-2-base-ft": {
+        "defaults": {"kind": "florence", "tasks": ["subject", "points", "segments"],
+                     "text_dtype": "float32", "vision_dtype": "float32", "max_new_tokens": 1024,
+                     "parameters_source": "model/generation_config.json (3 beams, no repeated 3-grams, forced BOS/EOS) and model/processor_config.json"},
+        "memory": (8, 8, "0.23B parameters held as float32 (~0.93 GB): float16 drifted from transformers' float32 reference, float32 is token-identical (vision/hub/parity, 2026-10-11)."),
+    },
+    "florence-2-large-ft": {
+        "defaults": {"kind": "florence", "tasks": ["subject", "points", "segments"],
+                     "text_dtype": "float32", "vision_dtype": "float32", "max_new_tokens": 1024,
+                     "parameters_source": "model/generation_config.json (3 beams, no repeated 3-grams, forced BOS/EOS) and model/processor_config.json"},
+        "memory": (16, 16, "0.77B parameters held as float32 (~3.1 GB); the 16 GB floor leaves room beside a generator. Not installed by default: the owner switches it in if Base is not precise enough."),
+    },
     "bge-small-en-v1-5-bf16": {
         "defaults": {"pooling": "cls", "normalize": True, "dimensions": 384, "max_tokens": 512,
                      "parameters_source": "BAAI/bge-small-en-v1.5@5c38ec7c 1_Pooling/config.json and modules.json; model/config.json hidden_size and max_position_embeddings"},

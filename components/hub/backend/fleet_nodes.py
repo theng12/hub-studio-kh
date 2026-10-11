@@ -1329,6 +1329,8 @@ async def relay_work_policy(node_id: str, method: str, body: object = None, *,
 #: A relayed test transcription waits for the node's answer: the node's own Subtitle deadline
 #: (900 s, `standalone.PEER_PROXY_TIMEOUT_FLOOR_S`) plus a minute for the hop.
 TRANSCRIBE_RELAY_TIMEOUT = httpx.Timeout(960.0, connect=4.0)
+#: A relayed picture analysis: four outlines on a slow 8 GB Mac stay well inside this.
+VISION_RELAY_TIMEOUT = httpx.Timeout(150.0, connect=4.0)
 
 
 async def relay_model(node_id: str, method: str, path: str, *, payload: Any = None,

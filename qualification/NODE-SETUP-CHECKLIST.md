@@ -2,8 +2,8 @@
 
 Version being deployed: the one this kit's own `focused-release-manifest.json` records (its
 `version` and `implementation_commit` — a version pinned in this sentence went stale every
-build), with **35** model packages (Stable Audio 3 Medium and YuE2 3B are the music models).
-Normal setup copies **33 production-allowed packages** (about 118.7 GB); the **2 pending Chat MLX 4-bit packages** remain on the SSD and are not copied until qualification.
+build), with **38** model packages (Stable Audio 3 Medium and YuE2 3B are the music models).
+Normal setup copies **36 production-allowed packages** (about 120.8 GB); the **2 pending Chat MLX 4-bit packages** remain on the SSD and are not copied until qualification.
 
 ## What I have verified
 

@@ -520,6 +520,13 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # BGE small en v1.5 MLX bf16 (owner decision 2026-10-11), captured at
             # mlx-community/bge-small-en-v1.5-bf16 0e415031: 10 files / 67,702,966 bytes.
             "bge-small-en-v1-5-bf16": "726de16948b3602205ff7c34fac9ccfe096df263a8b0e59949de4b858d3554c9",
+            # Vision (owner decisions 2026-10-11), captured 2026-10-11: Depth Anything V2 Small
+            # (Apache-2.0, 3 files / 99,175,385 bytes) and Florence-2 base ft / large ft (MIT,
+            # florence-community transformers-native safetensors, 11 files / 468,554,144 and
+            # 1,546,333,353 bytes).
+            "depth-anything-v2-small": "855881450f41103025797c1229db0e4f2497ee2065335c9028116a0637fc14ba",
+            "florence-2-base-ft": "053b462afd0d40dfea570c6e769aa9e46425fa290f88cbce6dbea9edef99a23b",
+            "florence-2-large-ft": "5e30ad737154f25afb01d524d9f2ba6a4aeb7779cbd9ee1f2b640850fcc0cd56",
         }
         # The digest map is the frozen-content half of the invariant: its keys are checked against
         # the manifests on disk (never against a hand-written list), so a package that appears

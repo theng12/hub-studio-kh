@@ -227,6 +227,19 @@ def _embeddings_spec(release: dict, data: Path, runtime: Path, resources: Path) 
     }
 
 
+def _vision_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
+    # Reuses the base runtime (mlx, numpy, Pillow, tokenizers) and Chat's memory-policy module.
+    vision_id = release['components']['vision'].get('runtime_sha256')
+    if (not (resources / 'vision_worker.py').is_file()
+            or not (resources / 'components/vision/app/backend/main.py').is_file()
+            or not _runtime_id(vision_id)):
+        raise ValueError('Incomplete Vision worker or release identity')
+    return {
+        'id': 'vision', 'modality': 'vision', 'python': runtime / 'bin/python3',
+        'runtime_id': vision_id, 'outputs': data / 'vision/outputs', 'extra_args': [],
+    }
+
+
 # One entry per key the release manifest's `components` map may carry, and the only place a
 # studio is registered with the Hub. The Hub spawns exactly what the manifest lists, in the
 # order the manifest lists it; a component with no private child process of its own (the Hub
@@ -242,6 +255,7 @@ COMPONENT_WORKERS: dict[str, Callable[[dict, Path, Path, Path], dict] | None] = 
     'chat': _chat_spec,
     'video': _video_spec,
     'embeddings': _embeddings_spec,
+    'vision': _vision_spec,
 }
 
 

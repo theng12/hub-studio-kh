@@ -295,6 +295,21 @@ def _stage_embeddings(context: dict) -> dict | None:
     }
 
 
+def _stage_vision(context: dict) -> dict | None:
+    """The Vision Studio: its own process and state root on the shared Voice runtime (mlx, numpy,
+    Pillow, tokenizers). It imports Chat's memory policy, so it is staged after Chat."""
+    if not context['include_hub']:
+        return None
+    resources = context['resources']
+    source = resources / 'components/vision'
+    copy_tracked_tree(ROOT / 'components/vision', source)
+    shutil.copyfile(ROOT / 'packaging/vision_worker.py', resources / 'vision_worker.py')
+    return {
+        'source_sha256': tree_digest(source), 'runtime': 'voice',
+        'runtime_sha256': context['runtime_hash'],
+    }
+
+
 def _stage_music(context: dict) -> dict | None:
     if not context['include_hub']:
         return None
@@ -452,6 +467,7 @@ COMPONENT_STAGERS: dict[str, Callable[[dict], dict | None]] = {
     'subtitle': _stage_subtitle,
     'chat': _stage_chat,
     'embeddings': _stage_embeddings,
+    'vision': _stage_vision,
     'music': _stage_music,
     'image': _stage_image,
     'video': _stage_video,

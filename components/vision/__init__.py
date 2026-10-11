@@ -1,0 +1,1 @@
+"""Standalone Vision Studio component."""

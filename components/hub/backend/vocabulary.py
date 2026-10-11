@@ -37,6 +37,9 @@ WORKER_FOR_MODALITY: dict[str, str] = {
     # Text embeddings for Story's meaning check: synchronous like Chat, but never takes the Mac's
     # lease (see `standalone._PEER_UNLEASED_PATHS`).
     "embeddings": "embeddings",
+    # Image analysis (depth, subject, points, outlines) for Story's effects: synchronous and
+    # unleased like Embeddings.
+    "vision": "vision",
 }
 
 # Every modality a node may offer, derived so it cannot drift from the routing table.
@@ -62,6 +65,7 @@ STUDIO_OPERATION: dict[str, str] = {
     "chat": "chat",
     "video": "video",
     "embeddings": "embeddings",
+    "vision": "vision",
 }
 
 # The operations the Hub will file a job under when a studio names one of them.

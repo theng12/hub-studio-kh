@@ -1,3 +1,6 @@
+> **0.6.166 — 2026-10-11; Vision Studio (depth, subject, points and outlines for Story's effects E2–E4).**
+> New worker `vision` (engine `vision-mlx`, modality `vision`) on the shared Voice runtime: plain-MLX Depth Anything V2 Small (`depth.py`) and Florence-2 (`florence.py`, base default, large switchable by installing its package). Peer route `POST /studio/vision/v1/vision/analyze` and node relay `POST /api/hub/fleet/nodes/{id}/vision/analyze`, admitted at the door but never leased. Gateway 0.2.167 `POST /v1/vision/analyze` routes to it (source Mac, then caller's site, then any). Delivery receipt: `/build/Developer/_orchestra/audit-20261011/vision/DELIVERY.md`.
+
 > **0.6.165 — 2026-10-11; Embeddings Studio (local text embeddings for Story's meaning check).**
 > New worker `embeddings` (engine `embed-mlx`, modality `embeddings`) on the shared Voice runtime, plain-MLX BERT (`components/embeddings/app/backend/encoder.py`). Model BGE small en v1.5 MLX bf16 (`mlx-community/bge-small-en-v1.5-bf16`, 67 MB, MIT), installed on This Mac only. Peer route `POST /studio/embeddings/v1/embeddings` is admitted at the door but never leased (`standalone._PEER_UNLEASED_PATHS`). Gateway `POST /v1/embeddings` routes to it. Delivery receipt: `/build/Developer/_orchestra/audit-20261011/embeddings/DELIVERY.md`.
 

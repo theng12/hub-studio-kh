@@ -1,0 +1,78 @@
+{
+  "defaults": {
+    "input_short_side": 518,
+    "kind": "depth",
+    "parameters_source": "model/preprocessor_config.json (DPT: keep aspect, 518, multiple of 14) and model/config.json",
+    "tasks": [
+      "depth"
+    ]
+  },
+  "display_name": "Depth Anything V2 Small",
+  "engine": "vision-mlx",
+  "files": [
+    {
+      "path": "model/config.json",
+      "sha256": "c56698d3643dde1f83ea2212759e6b31a22b8f827246a36dd007ee8a22b3ff75",
+      "size": 950,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf/resolve/5426e4f0f36572d16453bbda7a8389317b1bef99/config.json"
+      ]
+    },
+    {
+      "path": "model/model.safetensors",
+      "sha256": "3152477ce0d8d6978d76b995120de97cb5b928701fd0f817769f59e249a16b70",
+      "size": 99173660,
+      "source_path": "model.safetensors",
+      "urls": [
+        "https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf/resolve/5426e4f0f36572d16453bbda7a8389317b1bef99/model.safetensors"
+      ]
+    },
+    {
+      "path": "model/preprocessor_config.json",
+      "sha256": "d41175c0d889477ca8fc67191e540faef14baf6275157b3fdecf78469e6bbf84",
+      "size": 775,
+      "source_path": "preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf/resolve/5426e4f0f36572d16453bbda7a8389317b1bef99/preprocessor_config.json"
+      ]
+    }
+  ],
+  "license": {
+    "weights": "Apache-2.0"
+  },
+  "minimum_macos": "14.0",
+  "model_id": "depth-anything/Depth-Anything-V2-Small-hf",
+  "package_id": "depth-anything-v2-small",
+  "qualification": {
+    "memory_evidence": "24.8M parameters held as float32 (~99 MB). One 768x432 picture: 0.06 s on an M2 Max; parity with transformers' DepthAnythingForDepthEstimation within 1e-4 relative (vision/hub/parity, 2026-10-11).",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "recommended_unified_memory_gb": 8,
+    "status": "unqualified"
+  },
+  "quantization": "float32",
+  "quantization_source": "the publisher's model.safetensors stores F32 tensors",
+  "revision": "5426e4f0f36572d16453bbda7a8389317b1bef99",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-10-11",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "depth-anything/Depth-Anything-V2-Small-hf",
+        "revision": "5426e4f0f36572d16453bbda7a8389317b1bef99"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "depth-anything/Depth-Anything-V2-Small-hf",
+        "revision": "5426e4f0f36572d16453bbda7a8389317b1bef99",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/depth-anything/Depth-Anything-V2-Small-hf/revision/5426e4f0f36572d16453bbda7a8389317b1bef99",
+        "tree_api_url": "https://huggingface.co/api/models/depth-anything/Depth-Anything-V2-Small-hf/tree/5426e4f0f36572d16453bbda7a8389317b1bef99?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

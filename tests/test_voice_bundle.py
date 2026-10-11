@@ -626,6 +626,8 @@ class StagingTests(unittest.TestCase):
                 'packaging/music_worker.py': '# music worker',
                 'components/embeddings/app/backend/main.py': '# embeddings fixture',
                 'packaging/embeddings_worker.py': '# embeddings worker',
+                'components/vision/app/backend/main.py': '# vision fixture',
+                'packaging/vision_worker.py': '# vision worker',
             }
             for name, content in files.items():
                 path = repo / name

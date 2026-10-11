@@ -57,6 +57,7 @@ FLEET = [
 ENGINE_NAMES = {
     "chat-mlx": "MLX (text)",
     "embed-mlx": "MLX (text embeddings)",
+    "vision-mlx": "MLX (image analysis)",
     "image-mflux": "mflux (MLX)",
     "image-mlx-serve": "mlx-serve (MLX)",
     "music-mlx": "MLX (audio)",
@@ -67,7 +68,7 @@ ENGINE_NAMES = {
     "voice-vits": "VITS / ONNX",
 }
 
-MODALITY_ORDER = ["chat", "voice", "subtitle", "image", "music", "video", "embeddings"]
+MODALITY_ORDER = ["chat", "voice", "subtitle", "image", "music", "video", "embeddings", "vision"]
 MODALITY_TITLES = {
     "chat": "Chat (LLM)",
     "voice": "Voice (TTS)",
@@ -76,6 +77,7 @@ MODALITY_TITLES = {
     "music": "Music",
     "video": "Video",
     "embeddings": "Embeddings",
+    "vision": "Vision",
 }
 MODALITY_OF_ENGINE = {
     "chat-mlx": "chat",
@@ -88,6 +90,7 @@ MODALITY_OF_ENGINE = {
     "music-yue2": "music",
     "video-ltx": "video",
     "embed-mlx": "embeddings",
+    "vision-mlx": "vision",
 }
 
 

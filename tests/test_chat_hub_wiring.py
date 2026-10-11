@@ -1548,6 +1548,7 @@ class FleetWorkRouteCoverageTests(unittest.TestCase):
         "chat": "/studio/chat/v1/chat/completions",
         "transcription": "/studio/transcription/api/transcribe",
         "embeddings": "/studio/embeddings/v1/embeddings",
+        "vision": "/studio/vision/v1/vision/analyze",
     }
     # A modality that runs work but has no fleet work route, with the reason. Empty today; the
     # test proves a modality named here really has no allowed route, so the table cannot be used
@@ -1599,7 +1600,7 @@ class FleetWorkRouteCoverageTests(unittest.TestCase):
                     f"modality's models through /api/hub/catalog and refuses the work")
                 tail = route.split(f"/studio/{modality}/", 1)[1]
                 if f"{modality}/{tail}" in standalone._PEER_UNLEASED_PATHS:
-                    continue  # admitted at the door, never leased (embeddings)
+                    continue  # admitted at the door, never leased (embeddings, vision)
                 self.assertTrue(
                     standalone._peer_work_request("POST", tail),
                     f"{route} is not a path the proxy treats as new work")

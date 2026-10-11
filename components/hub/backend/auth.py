@@ -440,7 +440,7 @@ def presented_owner_token(request: Request, hub_token: str) -> bool:
 # `video` was added with the lane it names (2026-09-26). Same reasoning as chat: once a Video
 # worker exists, a controller shown the video catalog must be able to read its health, its
 # memory policy and its activity, or the failure is a 403 against a model the fleet advertises.
-_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music|chat|video|embeddings)"
+_FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music|chat|video|embeddings|vision)"
 FLEET_ALLOWED = (
     ("GET", r"^/api/health$"),
     ("GET", r"^/api/version$"),
@@ -497,6 +497,8 @@ FLEET_ALLOWED = (
     ("GET", r"^/studio/chat/requests/[0-9a-f]{32}$"),
     # Embeddings' one work route (Story's meaning check). Short and synchronous, like Chat's.
     ("POST", r"^/studio/embeddings/v1/embeddings$"),
+    # Vision's one work route (Story's scene analysis), short and synchronous like Embeddings'.
+    ("POST", r"^/studio/vision/v1/vision/analyze$"),
     ("DELETE", r"^/studio/chat/requests/[0-9a-f]{32}$"),
     ("POST", r"^/studio/(voice|subtitle|image|transcription)/api/transcribe$"),
     ("DELETE", r"^/studio/(voice|subtitle|image|transcription|music|video)/api/generate/[A-Za-z0-9_./-]*$"),
@@ -606,6 +608,10 @@ FLEET_ALLOWED = (
     # same Subtitle work `POST /studio/subtitle/api/transcribe` already lets the fleet send, pinned to
     # one Mac and answered with its per-word timings. Not in `NODE_ALLOWED`.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/transcribe$"),
+    # **One picture's analysis on one chosen Mac (0.6.166).** The same Vision work
+    # `POST /studio/vision/v1/vision/analyze` lets the fleet send, pinned to the Mac the Gateway
+    # picked (the one that made the picture, owner rule 2026-10-11). Not in `NODE_ALLOWED`.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/vision/analyze$"),
     ("GET", r"^/api/hub/workstation$"),
     ("POST", r"^/api/hub/workstation$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
