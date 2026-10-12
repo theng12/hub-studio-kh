@@ -31,7 +31,7 @@ origins must converge on one contract and produce identical worker behaviour:
 | `transcript` | optional | The exact words spoken in the clip. Optional **at the Hub**, required **by the Base model** (§4). |
 | `transcript_segments` | optional | JSON array `[{"start_seconds","end_seconds","text"}, …]` (also accepts `start`/`end`). Only needed when the clip must be trimmed to a model's maximum duration. |
 | `language` | optional | ISO code, stored with the asset. |
-| `ttl_seconds` | optional | Default 86400, clamped to `[300, 172800]` (48 h). |
+| `ttl_seconds` | optional | Default 86400, clamped to `[300, 345600]` (96 h). |
 | `source_asset_id` | optional | **Omit** for local uploads. **Send** for GenStudio pushes; when present it keeps the existing required-source semantics. |
 | `sha256` | optional | If supplied, a full 64-hex digest that must equal the uploaded bytes' SHA-256. Local uploads may omit it; the Hub computes and stores the digest either way. |
 

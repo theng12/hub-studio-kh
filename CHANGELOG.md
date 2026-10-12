@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.167 — 2026-10-12 · Staged voice copies last 4 days, so Gateway's 3-day reuse holds
+
+- Owner decision 2026-10-11: a staged voice clip is reused for 3 days instead of being re-sent to every Mac each time. Gateway 0.2.168 asks the Hub to keep it 84 h (72 h reuse + 12 h headroom), but the Hub capped every staged copy at 48 h, so Gateway stopped reusing it after about 36 h.
+- `execution_assets.MAX_TTL_SECONDS` 48 h → 96 h. The default (24 h) and the cleanup are unchanged: `cleanup_expired` still deletes each copy when its own `expires_at` passes, from the storage sweep.
+- Test: `test_hub_voice_references` stages with an 84 h TTL and checks the copy keeps at least that (it got 48 h before).
+
 ## 0.6.166 — 2026-10-11 · Vision Studio: depth maps, subjects and outlines for Story's effects
 
 - Owner decisions 2026-10-11 (effects plan E2–E4): the depth model and Florence-2 are approved, run in our own apps on the fleet and are reached through Gateway KH (0.2.167 `POST /v1/vision/analyze`). New worker `vision` (`components/vision`, `packaging/vision_worker.py`), engine `vision-mlx`, modality `vision`, operation `image.analysis`, registered where 0.6.165 registered Embeddings. It runs on the shared Voice runtime and adds no package; no PyTorch runs in the Hub.

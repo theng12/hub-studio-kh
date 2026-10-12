@@ -306,6 +306,12 @@ class VoiceReferenceRouteTests(unittest.TestCase):
         long = self._stage(ttl_seconds=10_000_000).json()
         self.assertLessEqual(long["expires_at"] - time.time(), execution_assets.MAX_TTL_SECONDS + 5)
 
+    def test_gateway_three_day_reuse_is_kept(self) -> None:
+        import time
+        # Gateway 0.2.168 reuses a clip for 72 h and asks for 72 h + 12 h headroom.
+        payload = self._stage(ttl_seconds=84 * 3600).json()
+        self.assertGreaterEqual(payload["expires_at"] - time.time(), 84 * 3600 - 5)
+
     def test_transcript_is_optional_at_the_hub_but_stored_when_given(self) -> None:
         payload = self._stage().json()
         metadata, _path = execution_assets.resolve_voice_reference(payload["asset_id"])

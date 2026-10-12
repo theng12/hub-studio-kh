@@ -1,3 +1,6 @@
+> **0.6.167 — 2026-10-12; staged voice copies kept up to 96 h (was 48 h).**
+> `execution_assets.MAX_TTL_SECONDS` = 96 h so Gateway 0.2.168's 3-day voice reuse (it asks for 84 h: `_STAGED_TTL_S` in `gateway/adapters/studio_hub.py`) is honoured; Gateway cut reuse at Hub `expires_at` − 12 h, i.e. ~36 h before. Default TTL 24 h and the expiry sweep (`cleanup_expired` via `job_storage`) unchanged. Receipt: `/build/Developer/_orchestra/audit-20261012/voice-ttl-0167/DELIVERY.md`.
+
 > **0.6.166 — 2026-10-11; Vision Studio (depth, subject, points and outlines for Story's effects E2–E4).**
 > New worker `vision` (engine `vision-mlx`, modality `vision`) on the shared Voice runtime: plain-MLX Depth Anything V2 Small (`depth.py`) and Florence-2 (`florence.py`, base default, large switchable by installing its package). Peer route `POST /studio/vision/v1/vision/analyze` and node relay `POST /api/hub/fleet/nodes/{id}/vision/analyze`, admitted at the door but never leased. Gateway 0.2.167 `POST /v1/vision/analyze` routes to it (source Mac, then caller's site, then any). Delivery receipt: `/build/Developer/_orchestra/audit-20261011/vision/DELIVERY.md`.
 

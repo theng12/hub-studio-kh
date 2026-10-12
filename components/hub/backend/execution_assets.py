@@ -25,7 +25,8 @@ from .registry import DATA_DIR
 ROOT = DATA_DIR / "execution_assets" / "voice_references"
 MAX_BYTES = 25_000_000
 DEFAULT_TTL_SECONDS = 24 * 60 * 60
-MAX_TTL_SECONDS = 48 * 60 * 60
+# 96 h: Gateway reuses a staged clip for 3 days and asks for 84 h (owner, 2026-10-11).
+MAX_TTL_SECONDS = 96 * 60 * 60
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".webm"}
 MIME_BY_EXTENSION = {
     ".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",

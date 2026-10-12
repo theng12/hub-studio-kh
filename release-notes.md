@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.167 - 2026-10-12
+
+### A voice is sent to each Mac once every 3 days
+
+A cloned voice's copy on a Mac now stays for up to 4 days, so the Gateway can reuse it for the full 3 days you asked for instead of sending it again after about a day and a half. Old copies are still cleaned up on their own.
+
 ## 0.6.166 - 2026-10-11
 
 ### Your Macs can now look at a picture
