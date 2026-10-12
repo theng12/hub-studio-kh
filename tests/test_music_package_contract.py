@@ -369,6 +369,44 @@ class MusicPackageContractTests(unittest.TestCase):
                          "a published row still names the retired model")
 
 
+class ConvertedPackageCoverageTests(unittest.TestCase):
+    """A converted package's manifest carries every file its own `conversion.json` lists (0.6.168).
+
+    The YuE2 port refuses a converted tree that is missing any of them ("Converted directory has missing
+    or unexpected files: missing=['LICENSE']" on every fleet Mac, 2026-10-12). The list below is the
+    `files` of `yue2-3b-mlx`'s conversion.json at fa66d203 (measured on the owner's Mac); when a
+    converted package is installed here, its own conversion.json is read instead.
+    """
+
+    CONVERSION_FILES = {"yue2-3b-mlx": {
+        "LICENSE": (20309, "060985741d20e70613b4c189c7de106cabd3fb2109fbbfb6d705c9d619417dd0"),
+        "THIRD_PARTY_NOTICES.md": None, "ar-8bit.safetensors": None, "ar-bf16.safetensors": None,
+        "config.json": None, "licenses/SnakeBeta-NVIDIA-MIT.txt": None,
+        "licenses/stable-audio-tools-MIT.txt": None, "nar-bf16.safetensors": None, "qwen.tiktoken": None,
+    }}
+
+    def test_every_file_conversion_json_lists_is_in_the_manifest(self):
+        checked = 0
+        for path in sorted((ROOT / "model-manifests").glob("*.json")):
+            manifest = json.loads(path.read_text())
+            entries = {f["path"]: f for f in manifest.get("files", []) if isinstance(f, dict)}
+            if "model/conversion.json" not in entries:
+                continue
+            listed = dict(self.CONVERSION_FILES.get(manifest["package_id"]) or {})
+            installed = Path.home() / "StudioHubModels" / manifest["package_id"] / manifest["revision"] / "model" / "conversion.json"
+            if installed.is_file():
+                live = json.loads(installed.read_text())["files"]
+                listed.update({name: (row["bytes"], row["sha256"]) for name, row in live.items()})
+            self.assertTrue(listed, f"{path.name} is a converted package with no known conversion.json file list")
+            for name, identity in listed.items():
+                entry = entries.get(f"model/{name}")
+                self.assertIsNotNone(entry, f"{path.name} lacks model/{name}, which its conversion.json requires")
+                if identity:
+                    self.assertEqual((entry["size"], entry["sha256"]), tuple(identity), f"{path.name} model/{name}")
+            checked += 1
+        self.assertGreaterEqual(checked, 1)
+
+
 class _VerifiedCache:
     def __init__(self, *unused, library=None, **also_unused):
         self.library = Path(library)

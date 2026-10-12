@@ -9,6 +9,15 @@
   "engine": "music-yue2",
   "files": [
     {
+      "path": "model/LICENSE",
+      "sha256": "060985741d20e70613b4c189c7de106cabd3fb2109fbbfb6d705c9d619417dd0",
+      "size": 20309,
+      "source_path": "LICENSE",
+      "urls": [
+        "https://huggingface.co/vanch007/mlx-Yue2-3B/resolve/fa66d203dd56d7e033e05ee8b32269768984c4cc/LICENSE"
+      ]
+    },
+    {
       "path": "model/THIRD_PARTY_NOTICES.md",
       "sha256": "14d3fd9f6fee86b4260b69b0979735b99ffec8c6b4db254567047a4215cd9af3",
       "size": 793,

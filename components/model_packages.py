@@ -1575,6 +1575,40 @@ def _download_file(entry, staged, urls, root, peer=None):
     raise PackageError(f'Download incomplete or invalid: {entry["path"]}')
 
 
+def _seed_from_installed(manifest, root, staged):
+    """Hard-link the files an older install of this package already holds into its staging folder.
+
+    A manifest that gains a file at the same revision (`yue2-3b-mlx` gained `model/LICENSE` in 0.6.168) sent
+    every Mac back for the whole package. `_download_file` still hash-checks each seeded file and
+    fetches only what is missing or differs; a hard link writes no second copy, and the old folder
+    is left exactly as it is.
+    ponytail: same volume only (`os.link`); anything that cannot be linked simply downloads.
+    """
+    record = _index(root).get(manifest['package_id'])
+    # The same revision only: a new revision is a new download, and its failure must stay one.
+    if not isinstance(record, dict) or not record.get('folder') or record.get('revision') != manifest['revision']:
+        return
+    try:
+        old = root / _relative(record['folder'])
+    except PackageError:
+        return
+    for entry in manifest['files']:
+        saved = (record.get('files') or {}).get(entry['path']) or {}
+        try:
+            source = old / _relative(saved.get('relative') or entry['path'])
+        except PackageError:
+            continue
+        target = staged / entry['path']
+        if (target.exists() or source.is_symlink() or not source.is_file()
+                or source.stat().st_size != entry['size']):
+            continue
+        try:
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.link(source, target)
+        except OSError:
+            pass
+
+
 def _download_one(manifest, root, sources, peer=None, used=None):
     validate_manifest(manifest)
     with _lock(root):
@@ -1583,6 +1617,7 @@ def _download_one(manifest, root, sources, peer=None, used=None):
             record = _index(root)[manifest['package_id']]
             return root / record['folder']
         staged = _stage(manifest, root)
+        _seed_from_installed(manifest, root, staged)
         for entry in manifest['files']:
             urls = (sources or {}).get(entry['path'], entry.get('urls', []))
             if not isinstance(urls, list) or not urls:

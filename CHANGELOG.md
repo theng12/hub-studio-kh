@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.168 — 2026-10-12 · YuE2 can sing on the fleet: its package carries the licence file the engine requires
+
+- Measured 2026-10-12 (Gateway probe `f97b7ba8`, three Macs: 1300, 1100, 1200): every fleet YuE2 run failed at load with `Converted directory has missing or unexpected files: missing=['LICENSE']`. The port (`lyra/conversion.py`, pinned 9253ed13) requires the publisher's `LICENSE` in the converted tree; the capture's publisher-furniture rule dropped it, so YuE2 had never sung on the fleet.
+- `model-manifests/yue2-3b-mlx.json` gains `model/LICENSE` (20,309 bytes, sha256 `060985741d20…` — the value the port pins); the capture entry keeps it (`keep: ("LICENSE",)`). 10 files / 9,920,189,064 bytes.
+- `model_packages._download_one` hard-links the files an install of the **same revision** already holds into the new staging folder before downloading; each is still hash-checked, so a manifest that gains a file fetches only that file and writes no second copy. The old folder is left as it is. Test: `test_a_manifest_that_gains_a_file_downloads_only_that_file`.
+- Test `ConvertedPackageCoverageTests`: a converted package's manifest carries every file its `conversion.json` lists (with LICENSE's size and hash). `yue2-vae` needs no LICENSE: the port loads the decoder by `config.json` + `model.safetensors` identity only.
+- After this release YuE2 reads as not installed on every Mac until it is installed again (Gateway → Install to fleet `yue2-3b-mlx`); that install fetches the 20 KB file.
+
 ## 0.6.167 — 2026-10-12 · Staged voice copies last 4 days, so Gateway's 3-day reuse holds
 
 - Owner decision 2026-10-11: a staged voice clip is reused for 3 days instead of being re-sent to every Mac each time. Gateway 0.2.168 asks the Hub to keep it 84 h (72 h reuse + 12 h headroom), but the Hub capped every staged copy at 48 h, so Gateway stopped reusing it after about 36 h.

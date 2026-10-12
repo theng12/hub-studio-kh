@@ -504,8 +504,9 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # runs on this 32 GB Mac: 10.79 GB / 11.81 GB / 11.93 GB peak by sampled `footprint`.
             # The generator's capture deliberately includes `ar-bf16.safetensors`, the 4.33 GB file
             # the 8-bit AR was quantized from, because the port's `verify_conversion` refuses a tree
-            # without it.
-            "yue2-3b-mlx": "382ddaa40fe7ba50594871fe7d06bf6ee7e7443c4e882621963ca4b73d622258",
+            # without it. 0.6.168: the generator also carries the publisher's `LICENSE` (20,309 bytes;
+            # 10 files / 9,920,189,064 bytes), which the port's load check requires.
+            "yue2-3b-mlx": "ff5e47647ca8167179a6502e084cb29c6cb74da80c8d03ad8bf8d2e8e1cc2957",
             "yue2-vae": "9baea3673de6c5ad455888d1f0aa8afc717a60fe9cf69f18caa716617055257f",
             # Phonon-2 (owner decision 2026-10-05), captured at selcukkubur/Phonon-2-mlx 71936ba3: 5 files /
             # 189,498,804 bytes - the packed model.safetensors, Parakeet's config.json, ATTRIBUTION.md and

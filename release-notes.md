@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.168 - 2026-10-12
+
+### Songs with singing work on your Macs
+
+YuE2, the model that sings, could not start on any Mac: its download was missing one small licence file that the model checks for. The file is now part of it. Install YuE2 again on the 16 GB Macs and only that small file is fetched; the 9.9 GB already there is reused.
+
 ## 0.6.167 - 2026-10-12
 
 ### A voice is sent to each Mac once every 3 days

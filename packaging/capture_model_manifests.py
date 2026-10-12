@@ -116,9 +116,12 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # refuses a converted tree that does not carry it — the bf16 file is what the 8-bit one was
     # quantized from, and the port uses it to prove the tree is the one it produced. Measured
     # 2026-09-27: the three weight files plus the two licence notices are what a run needs.
+    # `LICENSE` is kept (0.6.168): the port refuses a tree without it ("Converted directory has
+    # missing or unexpected files: missing=['LICENSE']", every fleet Mac, 2026-10-12), and the
+    # furniture rule had dropped it, so YuE2 had never sung on the fleet.
     {"package_id": "yue2-3b-mlx", "model_id": "vanch007/mlx-Yue2-3B",
      "revision": "fa66d203dd56d7e033e05ee8b32269768984c4cc", "engine": "music-yue2",
-     "requires_packages": ("yue2-vae",),
+     "requires_packages": ("yue2-vae",), "keep": ("LICENSE",),
      "exclude": ("assets/*", "*.png", "*.pdf", "*.svg", "__pycache__/*")},
     # The decoder. The port's own README installs it from this repository and passes it as
     # `--vae`; the generator pack ships without it, so a run without this companion fails at load

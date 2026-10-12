@@ -412,6 +412,26 @@ class ModelPackageTests(unittest.TestCase):
         packages.import_folder(newer, self.source, self.library)
         self.assertEqual(packages.preflight(newer, self.library)['state'], 'files_verified')
 
+    def test_a_manifest_that_gains_a_file_downloads_only_that_file(self):
+        # 0.6.168: yue2-3b-mlx gained `model/LICENSE`; every Mac must fetch the 20 KB, not 9.9 GB.
+        installed = packages.import_folder(self.manifest, self.source, self.library)
+        grown = manifest({**self.files, 'LICENSE': b'licence text'})
+        fetched = []
+
+        def download(request, **kwargs):
+            name = request.full_url.split('example.test/')[1]
+            fetched.append(name)
+            return Response({**self.files, 'LICENSE': b'licence text'}[name])
+        with mock.patch.object(packages, '_open_download', side_effect=download):
+            folder = packages.download_package(grown, self.library)
+        self.assertEqual(fetched, ['LICENSE'])
+        self.assertEqual(packages.preflight(grown, self.library)['state'], 'files_verified')
+        # A hard link, not a copy; the old folder is untouched.
+        self.assertEqual((folder / 'weights.safetensors').stat().st_ino,
+                         (installed / 'weights.safetensors').stat().st_ino)
+        self.assertEqual((installed / 'weights.safetensors').read_bytes(), b'actual weights')
+        self.assertFalse((installed / 'LICENSE').exists())
+
     def test_failed_new_revision_download_preserves_previous_receipt(self):
         packages.import_folder(self.manifest, self.source, self.library)
         newer = copy.deepcopy(self.manifest)
