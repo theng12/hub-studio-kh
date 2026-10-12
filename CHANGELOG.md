@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.169 — 2026-10-12 · YuE2 gets the whole Mac: idle Studios release first, then it starts at normal pressure
+
+- Measured 2026-10-12 after 0.6.168: YuE2 loaded on 16 GB Macs (studio-mac-1103-m2-16, studio-mac-1201-m2-16) and then failed 150–180 s into the song with `System memory pressure is not normal (level=2)` — the port's own guard (`lyra/measure.py`: pressure must stay 1, ≥ 2 GiB available, no new swap). The 24 GB studio-mac-1300 sang (60 s song, 230 s). On This Mac, releasing idle Studios before each song gave zero failures.
+- `broker.CLEAR_MACHINE_MODELS` (`vanch007/mlx-Yue2-3B`): `prepare_machine_memory` asks every idle Studio on the target Mac to release its models before a YuE2 job, not only when free memory is short. A busy Studio is never preempted; the job waits its turn (`wait`), as one generation per Mac already makes it.
+- `yue2_runner.wait_for_normal_pressure`: before loading, the bridge waits up to 120 s for `kern.memorystatus_vm_pressure_level` to read normal (unknown never blocks). The port's guard is unchanged.
+- Tests: `tests/test_yue2_clear_machine.py`.
+
 ## 0.6.168 — 2026-10-12 · YuE2 can sing on the fleet: its package carries the licence file the engine requires
 
 - Measured 2026-10-12 (Gateway probe `f97b7ba8`, three Macs: 1300, 1100, 1200): every fleet YuE2 run failed at load with `Converted directory has missing or unexpected files: missing=['LICENSE']`. The port (`lyra/conversion.py`, pinned 9253ed13) requires the publisher's `LICENSE` in the converted tree; the capture's publisher-furniture rule dropped it, so YuE2 had never sung on the fleet.

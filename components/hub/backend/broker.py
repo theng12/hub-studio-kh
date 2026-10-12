@@ -471,9 +471,24 @@ async def release_idle_siblings(client: httpx.AsyncClient, target: dict) -> dict
     return result
 
 
+#: Models that get the whole Mac: every idle Studio on it releases its models before one starts, not
+#: only when free memory is short (0.6.169). YuE2 peaks at ~10.7-11.9 GB and its port fails closed the
+#: moment macOS memory pressure leaves "normal"; on a 16 GB Mac an idle Breeze, Whisper or image model
+#: left resident tripped it mid-song (1100/1200, 2026-10-12). A busy Studio is never preempted: the job
+#: waits its turn, as one generation per Mac already makes it.
+CLEAR_MACHINE_MODELS = frozenset({"vanch007/mlx-Yue2-3B"})
+
+
 async def prepare_machine_memory(client: httpx.AsyncClient, studio: dict,
                                  model: str, entry: dict) -> tuple[str, str | None]:
     """Run admission, coordinated idle handoff, then one fresh admission check."""
+    if model in CLEAR_MACHINE_MODELS:
+        handoff = await release_idle_siblings(client, studio)
+        if handoff["busy"]:
+            return "wait", "waiting for the other work on this Mac before clearing it for YuE2"
+        if handoff["released"] and not peers.is_local_studio(studio):
+            peers.invalidate(studio.get("machine", "local"))
+            await peers.refresh(_monitor().registry, client)
     mem = _with_machine_floor(_admission_requirements(model, entry), studio)
     if mem is None:
         return "run", None

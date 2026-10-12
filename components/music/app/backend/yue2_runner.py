@@ -88,6 +88,24 @@ class FootprintSampler:
             self._stop.wait(self.interval)
 
 
+def pressure_level() -> int | None:
+    """macOS `kern.memorystatus_vm_pressure_level` (1 normal, 2 warning, 4 critical), or None."""
+    try:
+        out = subprocess.run(["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        return int(out)
+    except Exception:  # noqa: BLE001 - unknown pressure never blocks a run
+        return None
+
+
+def wait_for_normal_pressure(limit_s: float, poll_s: float = 2.0) -> float:
+    """Wait (at most `limit_s`) until pressure is normal or unknown; the seconds waited."""
+    started = time.time()
+    while time.time() - started < limit_s and pressure_level() not in (None, 1):
+        time.sleep(poll_s)
+    return time.time() - started if time.time() - started >= poll_s else 0.0
+
+
 def emit(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
@@ -152,6 +170,12 @@ def main(argv: list[str]) -> int:
         max_tokens=max(1, min(int(spec.get("max_tokens") or 9000), 24576)),
     )
 
+    # The port's guard stops the run the moment macOS memory pressure is not normal. The Hub has just
+    # asked this Mac's idle Studios to release their models (`broker.CLEAR_MACHINE_MODELS`); give
+    # macOS a bounded moment to settle before loading, rather than starting into a pressure spike.
+    waited = wait_for_normal_pressure(float(spec.get("pressure_wait_s") or 120))
+    if waited:
+        emit({"stage": "pressure", "detail": f"waited {waited:.0f}s for normal memory pressure"})
     emit({"stage": "loading", "detail": f"YuE2 {precision} generator + decoder"})
     load_started = time.time()
     try:

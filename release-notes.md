@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.169 - 2026-10-12
+
+### Songs on 16 GB Macs no longer stop half-way
+
+Before a song starts, the other Studios on that Mac put away the models they are not using, and the song waits a moment for memory to settle. Work that is already running is never stopped; the song simply waits its turn.
+
 ## 0.6.168 - 2026-10-12
 
 ### Songs with singing work on your Macs
