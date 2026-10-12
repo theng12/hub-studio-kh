@@ -486,6 +486,10 @@ async def prepare_machine_memory(client: httpx.AsyncClient, studio: dict,
         handoff = await release_idle_siblings(client, studio)
         if handoff["busy"]:
             return "wait", "waiting for the other work on this Mac before clearing it for YuE2"
+        if handoff["failed"]:
+            # Not cleared is not a start (0.6.170: guaranteed, not best-effort): another Mac takes it.
+            return "skip", ("could not clear this Mac for YuE2 (" + ", ".join(map(str, handoff["failed"]))
+                            + " kept its models) — trying other machines")
         if handoff["released"] and not peers.is_local_studio(studio):
             peers.invalidate(studio.get("machine", "local"))
             await peers.refresh(_monitor().registry, client)

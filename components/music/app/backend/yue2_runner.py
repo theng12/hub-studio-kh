@@ -176,6 +176,10 @@ def main(argv: list[str]) -> int:
     waited = wait_for_normal_pressure(float(spec.get("pressure_wait_s") or 120))
     if waited:
         emit({"stage": "pressure", "detail": f"waited {waited:.0f}s for normal memory pressure"})
+    if pressure_level() not in (None, 1):
+        # Never start a song the port's guard will stop half-way (0.6.170): fail now, another Mac tries.
+        return fail(f"memory pressure on this Mac did not return to normal within {waited:.0f}s "
+                    f"(level {pressure_level()}); the song was not started")
     emit({"stage": "loading", "detail": f"YuE2 {precision} generator + decoder"})
     load_started = time.time()
     try:

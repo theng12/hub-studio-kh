@@ -39,6 +39,28 @@ MEDIA_TYPE = "audio/flac"
 # closed rather than thrashing, so this is generous on purpose and still bounded.
 DEFAULT_TIMEOUT_SECONDS = 7200.0
 
+# One song's limit, stated on the job as `deadline_s` (0.6.170). Owner's rule 2026-10-12: one number for
+# every Mac, from the SLOWEST measured one — its seconds of compute per second of song x the requested
+# length, plus its load, x 2 (100 % overhead). Measured 2026-10-12, 3.5 min songs (7 sections) on the
+# fleet: M1 16 GB 1,415.5 s for 199.5 s (7.09 s/s, the slowest), M2 16 GB 5.92, M4 16 GB 4.77,
+# M4 24 GB 4.90 (`_orchestra/audit-20261012/lyrics-flow/SPEED-fleet.md`). The figure includes the
+# model load, so the load term is headroom. A 210 s request gets 2 x (7.1 x 210 + 120) = 3,222 s.
+# The music lane's flat 900 s cut 7 of 18 fleet songs at 15:44. The bridge stops at this number, the
+# Hub copies it onto the batch item and the Gateway polls to it (Gateway 0.2.175 uses the same constants).
+# Re-measure and raise SLOWEST_S_PER_SONG_S if a slower Mac joins.
+SLOWEST_S_PER_SONG_S = 7.1
+SLOWEST_LOAD_S = 120.0
+DEADLINE_MARGIN = 2.0
+
+
+def job_deadline_s(duration_seconds) -> float:
+    """Seconds one YuE2 song of `duration_seconds` may run on any Mac."""
+    try:
+        song = max(0.0, float(duration_seconds or 0))
+    except (TypeError, ValueError):
+        song = 0.0
+    return round(DEADLINE_MARGIN * (SLOWEST_S_PER_SONG_S * song + SLOWEST_LOAD_S), 1)
+
 
 class Yue2Error(RuntimeError):
     """A YuE2 run that did not produce a verified audio file."""
@@ -134,6 +156,26 @@ def generate(*, model_dir: Path, vae_dir: Path | None, output: Path, prompt: str
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
         cwd=str(output.parent))
     progress = Yue2Progress(on_progress or (lambda *_: None))
+    # **A watcher, not the line loop, stops the bridge** (0.6.170). The bridge prints nothing for
+    # minutes while it generates, so a cancel or the deadline checked only between lines was seen
+    # late or never ("the Mac did not confirm it stopped"). Every 2 s: cancelled or past the job's
+    # own deadline -> terminate; the stdout loop then ends and the reason is raised below.
+    stopped_for: list[str] = []
+    done = threading.Event()
+
+    def watch() -> None:
+        while not done.wait(2.0):
+            if cancel_event is not None and cancel_event.is_set():
+                stopped_for.append("cancelled")
+            elif time.time() - started > timeout_seconds:
+                stopped_for.append("deadline")
+            else:
+                continue
+            process.terminate()
+            return
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
     try:
         assert process.stdout is not None
         for line in process.stdout:
@@ -159,6 +201,10 @@ def generate(*, model_dir: Path, vae_dir: Path | None, output: Path, prompt: str
                 process.terminate()
                 raise Yue2Cancelled("cancelled")
         code = process.wait(timeout=60)
+        if stopped_for == ["deadline"]:
+            raise Yue2Error(f"YuE2 did not finish within its {timeout_seconds:.0f} s deadline; the run was stopped")
+        if stopped_for == ["cancelled"]:
+            raise Yue2Cancelled("cancelled")
     except Yue2Cancelled:
         _stop(process)
         output.unlink(missing_ok=True)
@@ -168,6 +214,7 @@ def generate(*, model_dir: Path, vae_dir: Path | None, output: Path, prompt: str
         output.unlink(missing_ok=True)
         raise
     finally:
+        done.set()
         spec_path.unlink(missing_ok=True)
         if process.poll() is None:
             _stop(process)

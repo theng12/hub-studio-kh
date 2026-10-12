@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.170 — 2026-10-12 · A song's own deadline, a bridge that stops when told, and no YuE2 start on an uncleared Mac
+
+- The music lane's flat 900 s cut 3–4 min YuE2 songs on the fleet (7 of 18 at 15:44, "did not finish within 900s … the Mac did not confirm it stopped"). Each YuE2 job now states `deadline_s` = 2 × (7.1 s per song-second × requested length + 120 s), the owner's rule: the slowest measured Mac (M1 16 GB, 1,415.5 s for a 199.5 s song) for everyone, doubled. The Hub copies it onto the batch item; Gateway 0.2.175 polls to the same number.
+- `yue2.generate` enforces it: a watcher thread checks every 2 s for a cancel or the deadline and terminates the bridge. Before, the timeout argument was ignored and a cancel was only seen when the bridge printed a line, which it does not do for minutes while generating.
+- `broker.prepare_machine_memory`: a YuE2 job is not started on a Mac whose idle Studios could not all release their models (`skip` → another Mac). `yue2_runner` fails fast when memory pressure has not returned to normal after its 120 s wait, instead of starting a song the port's guard would stop half-way.
+- Tests: `tests/test_yue2_clear_machine.py` (deadline, watcher on deadline and cancel, skip).
+
 ## 0.6.169 — 2026-10-12 · YuE2 gets the whole Mac: idle Studios release first, then it starts at normal pressure
 
 - Measured 2026-10-12 after 0.6.168: YuE2 loaded on 16 GB Macs (studio-mac-1103-m2-16, studio-mac-1201-m2-16) and then failed 150–180 s into the song with `System memory pressure is not normal (level=2)` — the port's own guard (`lyra/measure.py`: pressure must stay 1, ≥ 2 GiB available, no new swap). The 24 GB studio-mac-1300 sang (60 s song, 230 s). On This Mac, releasing idle Studios before each song gave zero failures.

@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.170 - 2026-10-12
+
+### Long songs get the time they need
+
+A song's time limit now follows its length: twice what the slowest Mac needs for a song that long. A 3½-minute song gets about 54 minutes instead of 15. When a song is stopped, the Mac now really stops it straight away.
+
 ## 0.6.169 - 2026-10-12
 
 ### Songs on 16 GB Macs no longer stop half-way

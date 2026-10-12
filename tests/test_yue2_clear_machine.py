@@ -35,15 +35,20 @@ class ClearMachineTests(unittest.TestCase):
         return decision, release.await_count
 
     def test_yue2_releases_idle_studios_even_when_memory_looks_ample(self):
-        self.assertEqual(self.run_gate("vanch007/mlx-Yue2-3B", {"busy": [], "released": 2}), (("run", None), 1))
+        self.assertEqual(self.run_gate("vanch007/mlx-Yue2-3B", {"busy": [], "released": 2, "failed": []}), (("run", None), 1))
 
     def test_yue2_waits_its_turn_behind_busy_work_and_nothing_is_preempted(self):
-        (decision, note), calls = self.run_gate("vanch007/mlx-Yue2-3B", {"busy": ["image"], "released": 0})
+        (decision, note), calls = self.run_gate("vanch007/mlx-Yue2-3B", {"busy": ["image"], "released": 0, "failed": []})
         self.assertEqual((decision, calls), ("wait", 1))
         self.assertIn("YuE2", note)
 
+    def test_a_mac_that_cannot_be_cleared_is_skipped_not_started(self):
+        (decision, note), _ = self.run_gate("vanch007/mlx-Yue2-3B", {"busy": [], "released": 1, "failed": ["voice"]})
+        self.assertEqual(decision, "skip")
+        self.assertIn("voice", note)
+
     def test_other_models_keep_the_free_memory_gate_only(self):
-        self.assertEqual(self.run_gate("stabilityai/stable-audio-3-optimized", {"busy": [], "released": 0}),
+        self.assertEqual(self.run_gate("stabilityai/stable-audio-3-optimized", {"busy": [], "released": 0, "failed": []}),
                          (("run", None), 0))
 
 
@@ -61,3 +66,37 @@ class PressureWaitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SongDeadlineTests(unittest.TestCase):
+    """0.6.170: a song's own deadline (the lane's flat 900 s cut 3-4 min songs on the fleet's M4s)."""
+
+    def test_the_deadline_is_twice_the_slowest_macs_time_for_the_song(self):
+        from components.music.app.backend import yue2
+        # 2 x (slowest 7.1 s per song-second x length + 120 s load), the same number on every Mac.
+        self.assertEqual(yue2.job_deadline_s(210), 3222.0)
+        self.assertGreater(yue2.job_deadline_s(210), 1415.5, "covers the slowest measured 3.5 min song")
+        self.assertEqual(yue2.job_deadline_s(None), 240.0)
+
+    def test_a_silent_bridge_is_stopped_at_its_deadline_and_on_cancel(self):
+        import tempfile, threading, time
+        from components.music.app.backend import yue2
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            fake = tmp / "python3"
+            fake.write_text("#!/bin/sh\nexec sleep 60\n")
+            fake.chmod(0o755)
+            (tmp / "vae").mkdir()
+            args = dict(model_dir=tmp, vae_dir=tmp / "vae", output=tmp / "out" / "song.flac", prompt="folk",
+                        lyrics="[Verse]\nla", mode="off", precision="8bit", duration_seconds=60, max_tokens=900,
+                        min_tokens=200, steps=32, guidance_scale=1.5, seed=1, interpreter=fake)
+            started = time.time()
+            with self.assertRaisesRegex(yue2.Yue2Error, "deadline"):
+                yue2.generate(**args, timeout_seconds=1)
+            self.assertLess(time.time() - started, 20, "stopped by the watcher, not by the bridge ending")
+            cancel = threading.Event()
+            threading.Timer(1.0, cancel.set).start()
+            started = time.time()
+            with self.assertRaises(yue2.Yue2Cancelled):
+                yue2.generate(**args, cancel_event=cancel)
+            self.assertLess(time.time() - started, 20, "a cancel is seen while the bridge prints nothing")

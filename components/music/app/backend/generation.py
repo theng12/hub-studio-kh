@@ -827,6 +827,10 @@ class GenerationManager:
             "machine_id": self.machine, "acknowledged": False,
             "error": None, "error_code": None,
         }
+        if model.runtime == catalog.RUNTIME_YUE2:
+            # This song's own limit (0.6.170): the bridge stops at it, the Hub copies it onto the batch
+            # item and the Gateway polls to it, instead of the music lane's flat 900 s.
+            job["deadline_s"] = yue2.job_deadline_s(params.get("duration_seconds"))
         with self.lock:
             self.jobs[job_id] = job
             self.cancel_events[job_id] = threading.Event()
@@ -1100,7 +1104,8 @@ class GenerationManager:
                     steps=params["steps"], guidance_scale=params["guidance_scale"],
                     seed=seed, interpreter=interpreter,
                     cancel_event=self.cancel_events.get(job_id),
-                    on_progress=lambda ratio, label: self._progress(job_id, ratio, label))
+                    on_progress=lambda ratio, label: self._progress(job_id, ratio, label),
+                    timeout_seconds=float(job.get("deadline_s") or yue2.DEFAULT_TIMEOUT_SECONDS))
             # The inference lock is released: compressing never delays the next generation.
             delivered_path, delivered, delivery = self._deliver_audio(
                 job_id, job, final, facts, media_type=YUE2_MEDIA_TYPE,
