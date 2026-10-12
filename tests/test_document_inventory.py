@@ -153,9 +153,10 @@ class KitDocumentNumbersTests(unittest.TestCase):
         self.assertEqual(int(match.group(1)), measured_kit_packages())
         self.assertEqual(float(match.group(2)), round(measured_kit_bytes() / 1e9, 1))
         self.assertEqual(int(match.group(3)), measured_packages() - measured_kit_packages())
-        self.assertRegex(match.group(4), r"2 Chat MLX 4-bit.*1 Qwen Image 2\.1 Turbo MLX 4-bit",
-                         "the pending-package breakdown must distinguish Chat candidates from "
-                         "the Qwen Image 2.1 Turbo 4-bit candidate")
+        self.assertRegex(match.group(4), r"2 Chat MLX 4-bit",
+                         "the pending-package breakdown must name the two remaining Chat candidates")
+        self.assertNotIn("Qwen Image 2.1 Turbo", match.group(4),
+                         "owner-adopted Turbo is production-allowed, not pending")
 
     def test_the_kit_readme_states_the_measured_package_count_and_size(self) -> None:
         text = self.KIT_README.read_text(encoding="utf-8")

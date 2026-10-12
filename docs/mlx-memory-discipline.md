@@ -111,9 +111,13 @@ Results, before and after, same seeds and prompts, with the table and side-by-si
 `_orchestra/audit-20261001/image-memory/` (`index.html`, `table.md`); the probe and report scripts are
 `qualification/image_memory_probe.py` and `qualification/image_memory_report.py`.
 
-### Qwen Image 2.1 Turbo MLX 4-bit — isolated candidate
+### Qwen Image 2.1 Turbo MLX 4-bit
 
-**Source preparation on `feature/qwen-image-turbo`, integrating main 0.6.171; not released, installed or physically qualified.**
+**Owner-adopted for normal production on 16 GB and larger Macs on 2026-10-13.** The owner waived a
+separate physical Turbo memory-fit qualification after confirming regular Qwen Image 2.1 Low-RAM
+MLX 4-bit operates on 16 GB. This is an operational adoption decision: Turbo-specific peak memory,
+speed and output results remain unmeasured, and no 8 GB support is claimed.
+
 Package `qwen-image-2-1-turbo-mflux-q4` pins the MFlux Community conversion of the official Turbo checkpoint.
 It always uses the Qwen low-RAM recipe: quantized text encoder, materialized prompt embeddings before encoder
 release, transformer eviction before tiled VAE decoding, zero MLX cache while generating, and release after
@@ -125,11 +129,12 @@ exactly eight steps, guidance 1, and the existing roughly-one-megapixel square/l
 negative prompt, reference image, LoRA or block-streaming support is claimed. The adapter normalizes the new
 saved component names for the existing pinned runtime, rather than upgrading the runtimes of other images.
 
-**16 GB is a qualification target, not a passing result.** `production_allowed: false` keeps this candidate
-out of production; the private qualification runner is the only opt-in. No free-memory start floor, measured
-peak, render time or per-chip `seconds_per_step` is copied from ordinary Qwen. Those require a new physical
-receipt. 8 GB remains unsupported. The shared handoff records the completed 0.6.171 rollout and ongoing fleet song checks; finish existing
-model work before isolated physical qualification. See the active planning record
+The manifest's 16 GB minimum makes the Hub and normal model-copy flow exclude 8 GB Macs. Its 8.0 GB
+free-before-start floor is a provisional inherited operational assumption from regular Qwen Image 2.1
+Low-RAM MLX 4-bit, explicitly authorized by the owner as an exception to rule 13 above; it is not a Turbo
+measurement. No peak, render time or per-chip `seconds_per_step` is published. Until operational evidence
+supports a different floor, the Hub uses that conservative start guard and the worker keeps its existing
+900-second unmeasured deadline floor. See the active planning record
 `.planning/2026-09-10-standalone-app-feasibility/qwen-image-turbo-20261012.md`.
 
 ## Voice

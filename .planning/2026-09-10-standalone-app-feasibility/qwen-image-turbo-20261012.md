@@ -7,7 +7,7 @@ Purpose: faster images on 16 GB and larger Macs, keeping the existing low-RAM Qw
 ## Constraints
 - The current Hub task (now C2b) is in progress and C3 is running in the shared iCloud HANDOFF.md. No release publication before the current Hub task is Done; no inference or running-Hub change on This Mac before C3 Done. Preserve pauses and one generation per machine.
 - Pin the public Turbo 4-bit package revision and every file checksum; verify the official eight-node schedule from its checkpoint. CFG off; 1024x1024, 1280x720, 720x1280 only; zero MLX cache, prompt materialization, component eviction, tiled decoding, no resident model.
-- Do not borrow ordinary Qwen measurements. Candidate production_allowed=false; no measured start floor or seconds_per_step until physical target-tier evidence exists. Qualification remains incomplete.
+- Historical preparation rule, superseded by the owner's 2026-10-13 production-adoption decision below: do not borrow ordinary Qwen measurements, keep the candidate disabled, and wait for physical Turbo qualification.
 - Workers must not commit, publish, deploy or recursively delegate. Removals go to project _trash. No real profile/library access from tests.
 
 ## Bounded tasks
@@ -54,3 +54,9 @@ Latest shared iCloud HANDOFF.md shows C2b Building and C3 71/82 done (C2 progres
 - Merging latest main into the published feature branch without rewriting history; keep both released YuE2 and unreleased Turbo notes. Merge verification/commit pending.
 - Download remains the single resumable PID35445 process; 13/19 files now verified, 7,262,868,526 of 9,963,443,598 bytes. No final receipt or inference yet.
 - Primary untracked kit helper Breeze omission repaired with a backup under `studio-hub-kh/_trash/build-helpers/`; targeted proof still pending while Story holds the sole test lease.
+
+### Owner production adoption — 2026-10-13
+- The owner explicitly adopted Qwen Image 2.1 Turbo MLX 4-bit for normal production on 16 GB and larger Macs and waived a separate physical Turbo memory-fit qualification. This supersedes the disabled/private-qualification rules above. Regular Qwen Image 2.1 Low-RAM MLX 4-bit already operates on 16 GB; that is the owner's adoption basis, not a Turbo measurement.
+- The normal manifest sets `production_allowed: true`, `minimum_unified_memory_gb: 16` and `recommended_unified_memory_gb: 16`. The Hub's manifest-backed admission and the ordinary kit copy flow accept 16 GB and larger Macs and exclude 8 GB Macs. Turbo is not in `NOT_STOCKED`.
+- The registry retains the one bounded recipe, exact eight steps, CFG off, roughly-one-megapixel presets and per-job release. It uses 8.0 GB free-before-start as a provisional inherited operational assumption from regular Qwen Image 2.1 Low-RAM MLX 4-bit. This is not Turbo-specific evidence and replaces no future measured floor.
+- Turbo-specific peak memory, speed and output results remain unmeasured. No `seconds_per_step`, measured peak or 8 GB claim is published; scheduling and cancellation code are unchanged. The generic explicit-`false` production gate remains fail-closed for future candidates.

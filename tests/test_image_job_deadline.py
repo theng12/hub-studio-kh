@@ -56,15 +56,19 @@ class JobDeadlineTests(unittest.TestCase):
             self.assertGreaterEqual(g.job_deadline_s(QWEN, steps, "Apple M4"),
                                     max(900.0, 34.4 * steps))
 
-    def test_every_production_model_has_a_reading(self) -> None:
+    def test_production_model_without_a_reading_names_its_unmeasured_adoption(self) -> None:
         root = Path(__file__).resolve().parents[1]
         for model in g.MODELS.values():
             manifest = json.loads(
                 (root / "model-manifests" / f"{model.package_id}.json").read_text())
             if model_packages.production_allowed(manifest):
-                self.assertTrue(model.seconds_per_step, model.package_id)
+                if model.seconds_per_step is None:
+                    self.assertEqual(model.qualification.get("adoption_basis"),
+                                     "owner decision 2026-10-13", model.package_id)
+                    self.assertEqual(model.qualification.get("turbo_measurements"),
+                                     "unmeasured", model.package_id)
 
-    def test_unqualified_turbo_borrows_no_deadline_measurement(self) -> None:
+    def test_owner_adopted_turbo_borrows_no_deadline_measurement(self) -> None:
         turbo = g.QWEN_IMAGE_21_TURBO
 
         self.assertIsNone(turbo.seconds_per_step)

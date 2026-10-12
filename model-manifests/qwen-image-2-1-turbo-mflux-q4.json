@@ -189,15 +189,15 @@
   "minimum_macos": "14.0",
   "model_id": "mflux-community/qwen-image-2-1-turbo-mflux-q4",
   "package_id": "qwen-image-2-1-turbo-mflux-q4",
-  "production_allowed": false,
+  "production_allowed": true,
   "qualification": {
-    "memory_evidence": "16 GB is the target tier, not measured; Turbo remains unqualified until physical tier evidence is recorded.",
-    "minimum_unified_memory_gb": null,
-    "reason": "Target tier: 16 GB. This is a compatibility target, not measured physical qualification; no inference or memory proof has been recorded.",
-    "recommended_unified_memory_gb": null,
-    "status": "unqualified",
-    "target_unified_memory_gb": 16,
-    "tested_usable_context_tokens": null
+    "memory_evidence": "Owner-adopted production floor, not a Turbo measurement: normal production is enabled on 16 GB and larger Macs by the owner's decision of 2026-10-13. Turbo-specific peak memory, speed and output results remain unmeasured; 8 GB is not claimed.",
+    "min_free_memory_gb": 8.0,
+    "min_free_memory_note": "Provisional inherited operational assumption, not a Turbo measurement: use the regular Qwen Image 2.1 Low-RAM MLX 4-bit free-before-start floor of 8.0 GB until Turbo-specific operations establish a different floor.",
+    "minimum_unified_memory_gb": 16,
+    "reason": "Owner adopted Qwen Image 2.1 Turbo MLX 4-bit for normal production on 16 GB and larger Macs on 2026-10-13, waiving separate physical Turbo memory-fit qualification because regular Qwen Image 2.1 Low-RAM MLX 4-bit operates on 16 GB. Turbo-specific peak memory, speed and output results remain unmeasured; 8 GB is not claimed.",
+    "recommended_unified_memory_gb": 16,
+    "status": "unqualified"
   },
   "quantization": "MLX 4-bit",
   "quantization_source": "the publisher checkpoint is the Qwen Image 2.1 Turbo quantized MLX 4-bit conversion",

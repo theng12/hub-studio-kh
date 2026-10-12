@@ -492,18 +492,29 @@ QWEN_IMAGE_21_TURBO = ImageModel(
         'encoder/transformer eviction.')),
     qualification={
         'status': 'unqualified',
-        'target_tier_gb': 16,
-        'fleet_16gb': 'not measured',
-        'fleet_24gb': 'not measured',
-        'packaged_inference': 'not measured',
+        'adoption_basis': 'owner decision 2026-10-13',
+        'turbo_measurements': 'unmeasured',
+        'fleet_16gb': ('owner-adopted for production without separate physical Turbo '
+                       'qualification; regular Qwen Image 2.1 Low-RAM MLX 4-bit operates on '
+                       'this tier'),
+        'fleet_8gb': 'not claimed',
+        'packaged_inference': ('owner-adopted for normal production; Turbo-specific peak memory, '
+                               'speed and output results remain unmeasured'),
+        'min_free_memory_note': (
+            'Provisional inherited operational assumption, not a Turbo measurement: use the '
+            'regular Qwen Image 2.1 Low-RAM MLX 4-bit free-before-start floor of 8.0 GB until '
+            'Turbo-specific operations establish a different floor.'),
     },
     size_presets=QWEN_SIZE_PRESETS,
     qualified_minimum_memory_gb=16.0,
     resident_allowed=False,
+    # Provisional owner-adopted operational assumption: regular Qwen Image 2.1 Low-RAM uses
+    # 8.0 GB. This is not a Turbo measurement; keep it until Turbo operations establish a floor.
+    min_free_memory_gb=8.0,
     guidance_ignored=True,
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. Qwen Image 2.1 Turbo Low-RAM '
-        'MLX 4-bit targets 16 GB and above but remains unqualified pending a physical run.'),
+        'MLX 4-bit is available on 16 GB and above; 8 GB is not supported.'),
 )
 
 MODELS: dict[str, ImageModel] = {

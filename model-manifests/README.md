@@ -8,10 +8,10 @@ quality check and do not copy its weights again.
 Both numbers are measured, not maintained by hand: `tests/test_document_inventory.py` recomputes
 them from the manifests in this directory and fails if this paragraph disagrees with them.
 
-The source catalog includes Qwen Image 2.1 Turbo MLX 4-bit candidate metadata. It is
-unqualified and withheld from production: its weights have not been physically installed,
-and the existing SSD kit has not been refreshed to include this candidate. Updating the
-source catalog does not update a drive.
+The source catalog includes Qwen Image 2.1 Turbo MLX 4-bit, owner-adopted for normal
+production on 16 GB and larger Macs on 2026-10-13. Its Turbo-specific peak memory, speed
+and output results remain unmeasured, and 8 GB is not claimed. Production eligibility does
+not say whether a particular SSD or Mac already has the weights; its kit/install receipt does.
 
 Each JSON manifest is schema version 1 and records the exact Hugging Face
 commit, package paths, byte counts, SHA-256 values and immutable resolve URLs.

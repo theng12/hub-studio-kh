@@ -24,8 +24,20 @@ def load_capture():
 CAPTURE = load_capture()
 
 
+def load_copy_models():
+    path = ROOT / "qualification" / "copy_models_for_this_mac.py"
+    spec = importlib.util.spec_from_file_location("copy_qwen_turbo_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+COPY_MODELS = load_copy_models()
+
+
 class QwenTurboPackageTests(unittest.TestCase):
-    def test_capture_spec_pins_turbo_as_unqualified_16gb_target(self):
+    def test_capture_spec_pins_owner_adopted_unmeasured_turbo_at_16gb(self):
         choices = {choice["package_id"]: choice for choice in CAPTURE.CHOICES}
         choice = choices[PACKAGE_ID]
         details = CAPTURE.DETAILS[PACKAGE_ID]
@@ -33,7 +45,7 @@ class QwenTurboPackageTests(unittest.TestCase):
         self.assertEqual(choice["model_id"], MODEL_ID)
         self.assertEqual(choice["revision"], REVISION)
         self.assertEqual(choice["engine"], "image-mflux")
-        self.assertFalse(choice["production_allowed"])
+        self.assertTrue(choice["production_allowed"])
         self.assertIn("MLX 4-bit", choice["display_name"])
         self.assertEqual(choice["quantization"], "MLX 4-bit")
         self.assertEqual(choice["license"]["weights"], "qwen-research")
@@ -50,12 +62,16 @@ class QwenTurboPackageTests(unittest.TestCase):
             details["defaults"]["schedule_source"],
             "model/model_index.json sample_sigmas",
         )
-        self.assertEqual(details["memory"][:2], (None, None))
-        self.assertIn("target", details["memory"][2].lower())
-        self.assertIn("not measured", details["memory"][2].lower())
+        self.assertEqual(details["memory"][:2], (16, 16))
+        self.assertIn("owner", details["memory"][2].lower())
+        self.assertIn("unmeasured", details["memory"][2].lower())
         self.assertEqual(details["qualification"]["status"], "unqualified")
-        self.assertEqual(details["qualification"]["target_unified_memory_gb"], 16)
-        self.assertNotIn("min_free_memory_gb", details["qualification"])
+        self.assertEqual(details["qualification"]["adoption_basis"],
+                         "owner decision 2026-10-13")
+        self.assertEqual(details["qualification"]["turbo_measurements"], "unmeasured")
+        self.assertEqual(details["qualification"]["min_free_memory_gb"], 8.0)
+        self.assertIn("regular Qwen Image 2.1 Low-RAM",
+                      details["qualification"]["min_free_memory_note"])
         self.assertFalse(any("seconds_per_step" in key for key in details["qualification"]))
 
     def test_manifest_captures_pinned_inference_files_with_immutable_digests(self):
@@ -66,12 +82,18 @@ class QwenTurboPackageTests(unittest.TestCase):
         self.assertEqual(manifest["model_id"], MODEL_ID)
         self.assertEqual(manifest["revision"], REVISION)
         self.assertEqual(manifest["engine"], "image-mflux")
-        self.assertEqual(manifest["production_allowed"], False)
+        self.assertEqual(manifest["production_allowed"], True)
         self.assertEqual(manifest["license"]["weights"], "qwen-research")
         self.assertEqual(manifest["qualification"]["status"], "unqualified")
-        self.assertEqual(manifest["qualification"]["target_unified_memory_gb"], 16)
-        self.assertNotIn("min_free_memory_gb", manifest["qualification"])
+        self.assertEqual(manifest["qualification"]["minimum_unified_memory_gb"], 16)
+        self.assertEqual(manifest["qualification"]["recommended_unified_memory_gb"], 16)
+        self.assertEqual(manifest["qualification"]["min_free_memory_gb"], 8.0)
+        self.assertIn("Owner adopted", manifest["qualification"]["reason"])
+        self.assertIn("remain unmeasured", manifest["qualification"]["reason"])
         self.assertNotIn("seconds_per_step", manifest["qualification"])
+
+        self.assertEqual(COPY_MODELS.required_gb(manifest), 16)
+        self.assertNotIn(PACKAGE_ID, COPY_MODELS.NOT_STOCKED)
 
         files = {entry["path"]: entry for entry in manifest["files"]}
         for path in (

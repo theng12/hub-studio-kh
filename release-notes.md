@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.173 — 2026-10-13 · Qwen Image 2.1 Turbo MLX 4-bit
+
+Qwen Image 2.1 Turbo Low-RAM MLX 4-bit is now available for normal model installation and image generation on Macs with 16 GB or more memory. It draws in eight steps and keeps the existing low-memory loading and cleanup. Regular Qwen Image 2.1 Low-RAM 4-bit stays available.
+
+Generation speed and image quality are being compared through normal fleet jobs. The 16 GB minimum and starting-memory allowance are adopted operating limits; no new Turbo memory measurement or speed result is claimed yet.
+
 ## 0.6.172 - 2026-10-13
 
 ### Clearer reasons when a job waits

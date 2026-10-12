@@ -260,6 +260,7 @@ class QwenTurboQualificationTests(unittest.TestCase):
             manifests.mkdir(parents=True)
             candidate = json.loads(
                 (ROOT / "model-manifests/qwen-image-2-1-turbo-mflux-q4.json").read_text())
+            candidate["production_allowed"] = False
             (manifests / f"{candidate['package_id']}.json").write_text(json.dumps(candidate))
             private = root / "Kit/_qualification-private/run"
             data, models = private / "state", private / "library"

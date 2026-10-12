@@ -72,7 +72,7 @@ CHOICES: tuple[dict[str, Any], ...] = (
     {"package_id": "qwen-image-2-1-mflux-q4", "model_id": "mlx-community/Qwen-Image-2.1-mflux-q4", "revision": "746a58556820933a2df5c75887a2570f1ad200c0", "engine": "image-mflux", "captured_at": "2026-10-06", "quantization": "MLX 4-bit", "quantization_source": "the publisher model id states q4: mlx-community/Qwen-Image-2.1-mflux-q4", "license": {"weights": "Apache-2.0"}},
     # Qwen Image 2.1 Turbo is a distinct official eight-step checkpoint, not the Viggle LoRA.
     # The pinned model_index.json declares its eight sample_sigmas and pipeline components.
-    {"package_id": "qwen-image-2-1-turbo-mflux-q4", "model_id": "mflux-community/qwen-image-2-1-turbo-mflux-q4", "revision": "bda8951ec6b8cc288a961432fe15c22433521a1d", "engine": "image-mflux", "captured_at": "2026-10-12", "production_allowed": False, "display_name": "Qwen Image 2.1 Turbo Low-RAM MLX 4-bit", "quantization": "MLX 4-bit", "quantization_source": "the publisher checkpoint is the Qwen Image 2.1 Turbo quantized MLX 4-bit conversion", "license": {"weights": "qwen-research"}},
+    {"package_id": "qwen-image-2-1-turbo-mflux-q4", "model_id": "mflux-community/qwen-image-2-1-turbo-mflux-q4", "revision": "bda8951ec6b8cc288a961432fe15c22433521a1d", "engine": "image-mflux", "captured_at": "2026-10-12", "production_allowed": True, "display_name": "Qwen Image 2.1 Turbo Low-RAM MLX 4-bit", "quantization": "MLX 4-bit", "quantization_source": "the publisher checkpoint is the Qwen Image 2.1 Turbo quantized MLX 4-bit conversion", "license": {"weights": "qwen-research"}},
     # ── ST-16: the second Image model, Z-Image-Turbo on mflux 0.20.0 ──
     # The publisher snapshot's root *is* the model directory: `transformer/`,
     # `text_encoder/`, `vae/` and `tokenizer/` sit at the top level with no
@@ -317,12 +317,14 @@ DETAILS: dict[str, dict[str, Any]] = {
                      "seed": -1,
                      "parameters_source": ".planning/2026-09-10-standalone-app-feasibility/qwen-image-turbo-20261012.md",
                      "schedule_source": "model/model_index.json sample_sigmas"},
-        "memory": (None, None, "16 GB is the target tier, not measured; Turbo remains unqualified until physical tier evidence is recorded."),
+        "memory": (16, 16, "Owner-adopted production floor, not a Turbo measurement: normal production is enabled on 16 GB and larger Macs by the owner's decision of 2026-10-13. Turbo-specific peak memory, speed and output results remain unmeasured; 8 GB is not claimed."),
         "qualification": {
             "status": "unqualified",
-            "target_unified_memory_gb": 16,
-            "tested_usable_context_tokens": None,
-            "reason": "Target tier: 16 GB. This is a compatibility target, not measured physical qualification; no inference or memory proof has been recorded.",
+            "reason": "Owner adopted Qwen Image 2.1 Turbo MLX 4-bit for normal production on 16 GB and larger Macs on 2026-10-13, waiving separate physical Turbo memory-fit qualification because regular Qwen Image 2.1 Low-RAM MLX 4-bit operates on 16 GB. Turbo-specific peak memory, speed and output results remain unmeasured; 8 GB is not claimed.",
+            "adoption_basis": "owner decision 2026-10-13",
+            "turbo_measurements": "unmeasured",
+            "min_free_memory_gb": 8.0,
+            "min_free_memory_note": "Provisional inherited operational assumption, not a Turbo measurement: use the regular Qwen Image 2.1 Low-RAM MLX 4-bit free-before-start floor of 8.0 GB until Turbo-specific operations establish a different floor.",
         },
     },
     "z-image-turbo-mflux-4bit": {"defaults": {"width": 1280, "height": 720, "steps": 9, "guidance_ignored": True, "guidance_note": "CFG is disabled on this distilled model; mflux ignores --guidance (and --negative-prompt) and warns.", "parameters_source": "qualification/z-image-turbo-2026-09-24.md"}, "memory": (8, 16, "Measured on two tiers. 32 GB M2 Max, 1280x720, 9 steps: 17.64-17.70 GB peak footprint at the engine default and 7.12-7.24 GB with --low-ram, 0 swaps. 8 GB Apple M1 (Mac mini Macmini9,1, macOS 26.6.2, 3.03 GB available at start), mflux 0.20.0, seed 42, 9 steps: 1024x1024 low-ram OK in 392 s at 5.70 GB peak MLX / 5.85 GB footprint, 1857 MB peak swap; 1280x720 low-ram OK in 336 s at 5.70 / 5.85 GB, 1274 MB peak swap; 1024x1024 low-ram + vae-tile 256 OK at 4.95 / 5.50 GB. So the 8 GB tier is MEASURED and PASSES, with low-RAM mode mandatory there - it still swaps 1.3-1.9 GB. The engine default also completed on 8 GB but ONLY by swapping 3443 MB with an 8.72 GB footprint on an 8.0 GB machine: it fits by paging, not by fitting, and must not be offered at this tier."), "qualification": {"status": "qualified", "reason": "Qualified by measurement on two tiers: a 32 GB M2 Max at 1280x720, 9 steps, and the owner's 8 GB Apple M1 Mac mini run of 2026-09-26 where low-RAM mode completed both 1024x1024 and 1280x720. Local import and inference qualification are no longer outstanding for this model, and low-RAM mode is mandatory below 24 GB."}},

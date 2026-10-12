@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.173 — 2026-10-13 · Qwen Image 2.1 Turbo MLX 4-bit on the fleet
+
+The owner adopted the pinned Turbo 4-bit package for normal Hub distribution and generation on 16 GB and larger Macs. It retains the official eight-step schedule, guidance 1, roughly-one-megapixel sizes, staged low-RAM loading, tiled decode and release after every job. The 8.0 GB free-before-start floor is inherited provisionally from regular Qwen Image 2.1 Low-RAM 4-bit, not a measured Turbo result. Turbo timing and image-quality comparisons remain runtime evidence; no measured speedup, memory peak or 8 GB support is claimed. Other candidates retain their production gates.
+
 ## 0.6.172 — 2026-10-13 · Explain dispatch waits and prepare Turbo 4-bit safely
 
 The broker retains bounded, fixed-code evidence from the last blocked dispatch pass and the eventual selected Mac. Evidence survives terminal persistence; routing, priority, memory admission and owner pauses keep their existing rules. Gateway 0.2.176 exposes this evidence through an authenticated admin read.
