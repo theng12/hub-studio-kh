@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.171 — 2026-10-12 · YuE2 carries on at "warning" memory pressure (owner: "let them continue")
+
+- On the 16 GB M1/M2 Macs YuE2 alone pushes macOS to pressure "warning", and the port's guard (`lyra.measure.GPUExecution._check_sample`) stopped about half the 3.5 min songs mid-way even after the Mac was cleared (M1 1302 at 577 s, M2 1103 at 460 s). Owner decision 2026-10-12: carry on at warning; still stop at critical, under 2 GB free, or when the Mac starts swapping.
+- `yue2_runner.tolerate_warning_pressure` wraps the port's check once per run: a "warning" sample is passed on as normal, so every other stop stays the port's own (critical pressure, < 2 GiB available, the process over its budget, > 64 MiB of new swap-outs or > 128 MiB swap growth). The pre-load gate now refuses only critical pressure. Checked against the installed port: level 2 passes, level 4 still stops.
+- Test: `WarningPressureTests` (fails on the old guard).
+
 ## 0.6.170 — 2026-10-12 · A song's own deadline, a bridge that stops when told, and no YuE2 start on an uncleared Mac
 
 - The music lane's flat 900 s cut 3–4 min YuE2 songs on the fleet (7 of 18 at 15:44, "did not finish within 900s … the Mac did not confirm it stopped"). Each YuE2 job now states `deadline_s` = 2 × (7.1 s per song-second × requested length + 120 s), the owner's rule: the slowest measured Mac (M1 16 GB, 1,415.5 s for a 199.5 s song) for everyone, doubled. The Hub copies it onto the batch item; Gateway 0.2.175 polls to the same number.

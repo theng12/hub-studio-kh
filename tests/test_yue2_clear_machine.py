@@ -100,3 +100,55 @@ class SongDeadlineTests(unittest.TestCase):
             with self.assertRaises(yue2.Yue2Cancelled):
                 yue2.generate(**args, cancel_event=cancel)
             self.assertLess(time.time() - started, 20, "a cancel is seen while the bridge prints nothing")
+
+
+class WarningPressureTests(unittest.TestCase):
+    """0.6.171 (owner 2026-10-12, "let them continue"): YuE2 carries on at macOS "warning" pressure; it
+    still stops at "critical", under 2 GiB available and on new swapping."""
+
+    class Guard:
+        """The port's `GPUExecution._check_sample`, copied at pinned commit 9253ed13 (lyra/measure.py)."""
+
+        def __init__(self):
+            self._baseline = None
+            self.memory_budget_gib = 12.0
+
+        def _check_sample(self, sample):
+            gib, mib = 1024 ** 3, 1024 ** 2
+            if self._baseline is None:
+                self._baseline = sample
+            if sample["physical_footprint_bytes"] > self.memory_budget_gib * gib:
+                raise MemoryError("footprint")
+            if sample["system_memory_pressure_level"] != 1:
+                raise MemoryError(f"System memory pressure is not normal (level={sample['system_memory_pressure_level']})")
+            if sample["system_available_bytes"] < 2 * gib:
+                raise MemoryError("Less than 2 GiB of available system memory remains")
+            swapped = sample["system_swap_out_bytes"] - self._baseline["system_swap_out_bytes"]
+            if swapped > 64 * mib:
+                raise MemoryError("Stopping GPU workload after new swapping")
+
+    @staticmethod
+    def sample(level=1, available_gib=3.0, swap_out_mib=0):
+        return {"physical_footprint_bytes": 11 * 1024 ** 3, "system_memory_pressure_level": level,
+                "system_available_bytes": int(available_gib * 1024 ** 3),
+                "system_swap_out_bytes": swap_out_mib * 1024 ** 2, "system_swap_used_bytes": 0}
+
+    def test_the_old_guard_stops_at_warning_and_the_new_one_carries_on(self):
+        old = self.Guard()
+        old._check_sample(self.sample())
+        with self.assertRaisesRegex(MemoryError, "level=2"):
+            old._check_sample(self.sample(level=2))
+
+        class Patched(self.Guard):
+            pass
+        runner.tolerate_warning_pressure(Patched)
+        runner.tolerate_warning_pressure(Patched)  # idempotent
+        guard = Patched()
+        guard._check_sample(self.sample())
+        guard._check_sample(self.sample(level=2))
+        with self.assertRaisesRegex(MemoryError, "level=4"):
+            guard._check_sample(self.sample(level=4))
+        with self.assertRaisesRegex(MemoryError, "2 GiB"):
+            guard._check_sample(self.sample(level=2, available_gib=1.5))
+        with self.assertRaisesRegex(MemoryError, "swapping"):
+            guard._check_sample(self.sample(level=2, swap_out_mib=100))

@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.171 - 2026-10-12
+
+### Songs on 16 GB M1 and M2 Macs keep going
+
+A song no longer stops just because macOS says memory is getting tight ("warning"). It still stops if memory becomes critical, if less than 2 GB is free, or if the Mac starts swapping.
+
 ## 0.6.170 - 2026-10-12
 
 ### Long songs get the time they need
