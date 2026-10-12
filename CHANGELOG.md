@@ -1,13 +1,12 @@
 # Changelog
 
-## Unreleased candidate — Qwen Image 2.1 Turbo Low-RAM MLX 4-bit
+## 0.6.172 — 2026-10-13 · Explain dispatch waits and prepare Turbo 4-bit safely
 
-Not installed or published. Preparation on `feature/qwen-image-turbo`, integrating released Hub 0.6.171. The prior Hub rollout and repair are complete; physical qualification, candidate release and paced rollout remain pending under the shared handoff.
+The broker retains bounded, fixed-code evidence from the last blocked dispatch pass and the eventual selected Mac. Evidence survives terminal persistence; routing, priority, memory admission and owner pauses keep their existing rules. Gateway 0.2.176 exposes this evidence through an authenticated admin read.
 
-- Added a separately identified, revision/checksum-pinned Turbo 4-bit image package with the official eight-step unshifted Euler schedule, guidance 1 and roughly-one-megapixel presets.
-- Reused Qwen's prompt materialization, zero cache, component eviction and tiled decode. A Turbo-only naming adaptation loads the newer export with the existing runtime; ordinary Qwen source is unchanged.
-- The package remains production-disabled and unqualified. Private physical 16/24/32 GB qualification uses copy-on-write data/library isolation, blocks the 8 GB bypass and refuses standalone heavy model processes. No peak, free-memory floor, timing or speedup is inferred.
-- Hardware qualification, version assignment, DMG, main integration and paced rollout remain pending. Source verification is recorded in the active Qwen Turbo planning note.
+- Qwen progress stays monotonic while publishing denoise iteration counts. A private qualification cancellation passes only after the denoise callback observes Cancel, the job ends cancelled without an artifact, and the worker releases memory and remains responsive.
+- The separately pinned Qwen Image 2.1 Turbo Low-RAM MLX 4-bit package uses its official eight-step Euler schedule, guidance 1 and roughly-one-megapixel presets. Its prompt materialization, zero cache, component eviction and tiled decode reuse the existing Qwen adapter.
+- Turbo remains production-disabled and physically unqualified. No 8 GB support, measured peak, free-memory floor, per-chip timing or speedup is claimed. Physical 16 GB qualification comes first using the private guarded kit.
 
 ## 0.6.171 — 2026-10-12 · YuE2 carries on at "warning" memory pressure (owner: "let them continue")
 

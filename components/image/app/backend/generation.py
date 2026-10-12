@@ -37,6 +37,7 @@ from PIL import Image
 from components import model_defaults
 
 from . import loading_mode
+from .qwen_lowram import DenoiseCancelled
 from .loading_mode import DEFAULT_MODE as DEFAULT_LOADING_MODE
 from .loading_mode import MODE_AUTO, MODE_FULL, MODE_LOW
 from .loading_mode import MODES as LOADING_MODES
@@ -1636,7 +1637,8 @@ class GenerationManager:
             raise RuntimeError(f'MODEL_FILES_UNAVAILABLE: {files.get("reason") or files["state"]}')
         job_id = uuid4().hex
         job = {'id': job_id, 'mode': 'txt2img', 'params': params, 'state': 'queued',
-               'progress': 0.0, 'created_at': time.time(), 'started_at': None,
+               'progress': 0.0, 'denoise_step': None, 'denoise_steps': None,
+               'created_at': time.time(), 'started_at': None,
                'finished_at': None, 'generated_at': None, 'duration_seconds': None,
                'output_path': None, 'output_url': None, 'sha256': None, 'bytes': None,
                'width': None, 'height': None, 'steps': None, 'resolved_seed': None,
@@ -1703,6 +1705,18 @@ class GenerationManager:
                     job.update(state='cancelled', finished_at=time.time())
                     self._persist()
             return dict(job)
+
+    def _record_denoise_step(self, job_id: str, step: int, total: int) -> None:
+        """Persist the observed mflux denoise iteration used by bounded cancellation probes."""
+        if not isinstance(step, int) or not isinstance(total, int) or not (0 < step <= total):
+            return
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is None or job.get('state') != 'running':
+                return
+            job.update(denoise_step=step, denoise_steps=total,
+                       progress=max(job.get('progress', 0.0), step / total))
+            self._persist()
 
     def ack(self, job_id: str) -> dict | None:
         with self.lock:
@@ -1808,6 +1822,7 @@ class GenerationManager:
                     instance, reused = self._acquire(model, model_folder, plan)
                     memory_saver = None
                     keep = False
+                    set_step_callback = None
                     try:
                         if not reused:
                             memory_saver = apply_memory_plan(
@@ -1815,6 +1830,10 @@ class GenerationManager:
                         set_cancel_event = getattr(instance, 'set_cancel_event', None)
                         if callable(set_cancel_event):
                             set_cancel_event(event)
+                        set_step_callback = getattr(instance, 'set_step_callback', None)
+                        if callable(set_step_callback):
+                            set_step_callback(lambda step, total: self._record_denoise_step(
+                                job_id, step, total))
                         result = instance.generate_image(seed=seed, prompt=job['params']['prompt'],
                             num_inference_steps=job['params']['steps'], height=job['params']['height'],
                             width=job['params']['width'], guidance=job['params']['guidance'])
@@ -1822,6 +1841,10 @@ class GenerationManager:
                         keep = bool(model.resident_allowed and plan['resident_ok']
                                     and self._keep_resident())
                     finally:
+                        if callable(set_step_callback):
+                            set_step_callback(None)
+                        set_step_callback = None
+                        set_cancel_event = None
                         if keep:
                             # Stays loaded for the next job of this model: only what MLX cached beyond
                             # the weights goes back to macOS. Never kept after a failure - a model that
@@ -1888,6 +1911,7 @@ class GenerationManager:
         with self.lock:
             if event.is_set():
                 job.update(state='cancelled', error=None, error_code=None)
+                job['denoise_cancel_observed'] = isinstance(exc, DenoiseCancelled)
             else:
                 detail = str(exc)
                 if job.get('error_code') not in ('JOB_PERSISTENCE_FAILED',

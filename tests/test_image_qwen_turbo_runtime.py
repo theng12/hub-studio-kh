@@ -368,6 +368,20 @@ class QwenTurboRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Generation cancelled"):
                 cancel.call_in_loop()
 
+    def test_turbo_reports_observed_denoise_iteration_from_mflux_callback(self) -> None:
+        modules, _observed, *_ = fake_mflux()
+        with tempfile.TemporaryDirectory() as temp, patch.dict(sys.modules, modules):
+            write_checkpoint(Path(temp))
+            instance = qwen_turbo.QwenTurbo(model_path=temp)
+            instance.set_cancel_event(types.SimpleNamespace(is_set=lambda: False))
+            seen = []
+            instance.set_step_callback(lambda step, total: seen.append((step, total)))
+            cancel = next(callback for callback in instance._model.callbacks.registered
+                          if callback.__class__.__name__ == "_CancelReporter")
+            cancel.call_in_loop(3, 1, "p", None,
+                                types.SimpleNamespace(num_inference_steps=8), None)
+            self.assertEqual(seen, [(4, 8)])
+
 
 if __name__ == "__main__":
     unittest.main()

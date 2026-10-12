@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 
+class DenoiseCancelled(RuntimeError):
+    """The denoise callback observed the job's cancellation event."""
+
+
 class PromptMaterializer:
     """Evaluate cached prompt arrays before the text encoder is evicted."""
 
@@ -22,10 +26,17 @@ class _CancelReporter:
         self._owner = owner
 
     def call_in_loop(self, *args, **kwargs) -> None:
-        del args, kwargs
         event = self._owner._cancel_event
         if event is not None and event.is_set():
-            raise RuntimeError("Generation cancelled")
+            raise DenoiseCancelled("Generation cancelled")
+        callback = self._owner._step_callback
+        if callback is None:
+            return
+        t = kwargs.get("t", args[0] if args else None)
+        config = kwargs.get("config", args[4] if len(args) > 4 else None)
+        total = getattr(config, "num_inference_steps", None)
+        if isinstance(t, int) and isinstance(total, int) and total > 0:
+            callback(t + 1, total)
 
 
 class QwenLowRam:
@@ -55,6 +66,7 @@ class QwenLowRam:
             Qwen21WeightDefinition.get_components = staticmethod(original_components)
 
         self._cancel_event = None
+        self._step_callback = None
         self._model.tiling_config = TilingConfig()
         self._model.callbacks.register(PromptMaterializer(self._model))
         self._model.callbacks.register(_CancelReporter(self))
@@ -72,6 +84,9 @@ class QwenLowRam:
 
     def set_cancel_event(self, event) -> None:
         self._cancel_event = event
+
+    def set_step_callback(self, callback) -> None:
+        self._step_callback = callback
 
     def generate_image(self, **kwargs):
         from .generation import _set_mlx_cache_limit

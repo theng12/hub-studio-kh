@@ -2,11 +2,13 @@
 
 Written to be read by the person using the app. Newest first.
 
-## Unreleased candidate — not available in the installed app
+## 0.6.172 - 2026-10-13
 
-Qwen Image 2.1 Turbo 4-bit is being prepared as a faster image option for 16 GB and larger Macs.
-It stays unavailable until real-Mac image quality, memory and speed checks pass. The existing Qwen
-and 8 GB image choices are unchanged. This preparation has not been installed or rolled out.
+### Clearer reasons when a job waits
+
+The Hub keeps a short record of why each Mac could not take a waiting job, so support can diagnose placement without guessing. Qwen image progress also stays steady instead of briefly moving backward.
+
+Qwen Image 2.1 Turbo 4-bit is included for isolated evaluation. It stays unavailable for production until real-Mac quality, memory, speed and cancellation checks pass. It is not an 8 GB model.
 
 ## 0.6.171 - 2026-10-12
 

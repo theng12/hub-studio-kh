@@ -24,6 +24,171 @@ def load_image_worker():
 
 
 class QwenTurboQualificationTests(unittest.TestCase):
+    def test_cancellation_probe_waits_for_middle_denoise_receipt_before_delete(self) -> None:
+        profile = qwen.profile_for_tier(16, turbo=True)
+        calls = []
+        running = {"id": "job1", "state": "running", "progress": 0.5,
+                   "denoise_step": 4, "denoise_steps": 8}
+        cancelled = {**running, "state": "cancelled", "finished_at": 123.0,
+                     "denoise_cancel_observed": True}
+
+        def request(_base, _token, method, path, payload=None, **_kwargs):
+            calls.append((method, path))
+            if method == "POST" and path == "/api/generate/txt2img":
+                return 200, {"job": {"id": "job1", "state": "queued"}}
+            if method == "GET" and path == "/api/generate/jobs/job1":
+                return (200, {"job": running}) if calls.count((method, path)) == 1 else (200, {"job": cancelled})
+            if method == "DELETE":
+                return 200, {"job": running}
+            if method == "GET" and path.endswith("/image"):
+                return 404, {"detail": "final image unavailable"}
+            if method == "GET" and path == "/api/memory-policy":
+                return 200, {"busy": False, "active_work": False, "loaded_models": [], "resident": False}
+            if method == "POST" and path == "/api/memory/release":
+                return 200, {"released": False, "busy": False, "loaded_models": []}
+            if method == "GET" and path == "/api/health":
+                return 200, {"status": "ok"}
+            raise AssertionError((method, path, payload))
+
+        with TemporaryDirectory() as temporary, patch.object(qwen, "request_json", side_effect=request):
+            receipt = qwen.run_cancellation_probe(
+                "http://private", "token", profile, "prompt", 42, Path(temporary),
+                deadline=1.0, poll_interval=0.0,
+            )
+
+        self.assertEqual(receipt["status"], "passed")
+        self.assertEqual(receipt["trigger"]["denoise_step"], 4)
+        self.assertEqual(receipt["cancel_request_ack"]["state"], "running")
+        self.assertEqual(receipt["terminal_state"], "cancelled")
+        self.assertEqual(receipt["artifact_http_status"], 404)
+        self.assertIn(("DELETE", "/api/generate/jobs/job1"), calls)
+
+        # A coincident inference error after DELETE must not qualify as a callback stop.
+        cancelled.pop("denoise_cancel_observed")
+        calls.clear()
+        with TemporaryDirectory() as temporary, patch.object(qwen, "request_json", side_effect=request):
+            receipt = qwen.run_cancellation_probe(
+                "http://private", "token", profile, "prompt", 42, Path(temporary),
+                deadline=1.0, poll_interval=0.0,
+            )
+        self.assertEqual(receipt["status"], "failed")
+        self.assertIn("callback", receipt["reason"])
+
+    def test_cancellation_probe_rejects_initial_progress_without_denoise_receipt(self) -> None:
+        profile = qwen.profile_for_tier(16, turbo=True)
+        calls = []
+
+        def request(_base, _token, method, path, payload=None, **_kwargs):
+            calls.append((method, path))
+            if method == "POST":
+                return 200, {"job": {"id": "job1", "state": "queued"}}
+            if method == "GET":
+                return 200, {"job": {"id": "job1", "state": "running", "progress": 0.05}}
+            raise AssertionError((method, path, payload))
+
+        with TemporaryDirectory() as temporary, patch.object(qwen, "request_json", side_effect=request):
+            receipt = qwen.run_cancellation_probe(
+                "http://private", "token", profile, "prompt", 42, Path(temporary),
+                deadline=0.001, poll_interval=0.0,
+            )
+
+        self.assertEqual(receipt["status"], "failed")
+        self.assertIn("middle denoise", receipt["reason"])
+        self.assertNotIn(("DELETE", "/api/generate/jobs/job1"), calls)
+
+    def test_outcome_fails_when_turbo_cancellation_receipt_is_not_passed(self) -> None:
+        rows = [{"name": "cold-square", "status": "completed", "memory_metrics_complete": True}]
+        self.assertEqual(
+            qwen.outcome(rows, expected_names=["cold-square"], target_tier_verified=True,
+                         cancellation={"status": "failed"}, require_cancellation=True),
+            "MEASURED FAILURE",
+        )
+
+    def test_cancellation_probe_rejects_artifact_and_still_busy_worker(self) -> None:
+        profile = qwen.profile_for_tier(16, turbo=True)
+
+        def request(_base, _token, method, path, payload=None, **_kwargs):
+            if method == "POST":
+                return 200, {"job": {"id": "job1", "state": "queued"}}
+            if method == "GET" and path.endswith("job1"):
+                request.polls += 1
+                job = {"id": "job1", "state": "running", "denoise_step": 4,
+                       "denoise_steps": 8, "progress": 0.5}
+                return 200, {"job": job if request.polls == 1 else {
+                    **job, "state": "cancelled", "denoise_cancel_observed": True}}
+            if method == "DELETE":
+                return 200, {"job": {"id": "job1", "state": "running"}}
+            if method == "GET" and path.endswith("/image"):
+                return 200, b"png"
+            if method == "GET" and path == "/api/memory-policy":
+                return 200, {"busy": False, "active_work": False, "loaded_models": []}
+            raise AssertionError((method, path))
+
+        request.polls = 0
+        with TemporaryDirectory() as temporary, patch.object(qwen, "request_json", side_effect=request):
+            receipt = qwen.run_cancellation_probe(
+                "http://private", "token", profile, "prompt", 42, Path(temporary),
+                deadline=1.0, settle_deadline=1.0, poll_interval=0.0,
+            )
+        self.assertEqual(receipt["status"], "failed")
+        self.assertIn("HTTP 200", receipt["reason"])
+
+        def busy_request(_base, _token, method, path, payload=None, **_kwargs):
+            if method == "POST":
+                return 200, {"job": {"id": "job1", "state": "queued"}}
+            if method == "GET" and path.endswith("job1"):
+                busy_request.polls += 1
+                job = {"id": "job1", "state": "running", "denoise_step": 4,
+                       "denoise_steps": 8, "progress": 0.5}
+                return 200, {"job": job if busy_request.polls == 1 else {
+                    **job, "state": "cancelled", "denoise_cancel_observed": True}}
+            if method == "DELETE":
+                return 200, {"job": {"id": "job1", "state": "running"}}
+            if method == "GET" and path.endswith("/image"):
+                return 404, {"detail": "final image unavailable"}
+            if method == "GET" and path == "/api/memory-policy":
+                return 200, {"busy": True, "active_work": True, "loaded_models": [["repo"]]}
+            raise AssertionError((method, path))
+
+        busy_request.polls = 0
+        with TemporaryDirectory() as temporary, patch.object(qwen, "request_json", side_effect=busy_request):
+            receipt = qwen.run_cancellation_probe(
+                "http://private", "token", profile, "prompt", 42, Path(temporary),
+                deadline=1.0, settle_deadline=0.001, poll_interval=0.0,
+            )
+        self.assertEqual(receipt["status"], "failed")
+        self.assertIn("cleanup did not settle", receipt["reason"])
+
+    def test_cancellation_probe_rejects_wrong_terminal_state_or_refused_delete(self) -> None:
+        profile = qwen.profile_for_tier(16, turbo=True)
+        for delete_status, terminal_state, expected in (
+            (409, "cancelled", "acknowledgement failed"),
+            (200, "error", "did not become cancelled"),
+        ):
+            def request(_base, _token, method, path, payload=None, **_kwargs):
+                if method == "POST":
+                    return 200, {"job": {"id": "job1", "state": "queued"}}
+                if method == "GET" and path.endswith("job1"):
+                    request.polls += 1
+                    job = {"id": "job1", "state": "running", "denoise_step": 4,
+                           "denoise_steps": 8, "progress": 0.5}
+                    state = "running" if request.polls == 1 else terminal_state
+                    return 200, {"job": {**job, "state": state}}
+                if method == "DELETE":
+                    return delete_status, {"detail": "refused"} if delete_status != 200 else {
+                        "job": {"id": "job1", "state": "running"}}
+                raise AssertionError((method, path))
+
+            request.polls = 0
+            with self.subTest(delete_status=delete_status), TemporaryDirectory() as temporary, \
+                    patch.object(qwen, "request_json", side_effect=request):
+                receipt = qwen.run_cancellation_probe(
+                    "http://private", "token", profile, "prompt", 42, Path(temporary),
+                    deadline=1.0, poll_interval=0.0,
+                )
+            self.assertEqual(receipt["status"], "failed")
+            self.assertIn(expected, receipt["reason"])
+
     def test_turbo_profiles_use_one_exact_candidate_at_both_supported_tiers(self) -> None:
         manifest = json.loads(
             (ROOT / "model-manifests/qwen-image-2-1-turbo-mflux-q4.json").read_text())

@@ -539,6 +539,152 @@ def verify_qualification_worker(base: str, token: str, profile: Profile) -> dict
     return row
 
 
+def run_cancellation_probe(base: str, token: str, profile: Profile, prompt: str, seed: int,
+                           output_dir: Path, *, deadline: float = 60.0,
+                           settle_deadline: float = 60.0, poll_interval: float = 0.1) -> dict:
+    """Prove DELETE stops a real middle denoise callback before any artifact is delivered."""
+    started = time.monotonic()
+    receipt: dict = {"status": "failed", "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+
+    def fail(reason: str) -> dict:
+        receipt["reason"] = reason
+        receipt["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        return receipt
+
+    def poll_job(job_id: str, until: float) -> dict | None:
+        timeout = max(0.001, min(5.0, until - time.monotonic()))
+        status, payload = request_json(
+            base, token, "GET", f"/api/generate/jobs/{job_id}", timeout=timeout)
+        if status != 200 or not isinstance(payload, dict) or not isinstance(payload.get("job"), dict):
+            receipt["last_poll"] = {"http_status": status, "payload": str(payload)[:500]}
+            return None
+        return payload["job"]
+
+    try:
+        submit_timeout = max(0.001, min(5.0, deadline))
+        status, accepted = request_json(base, token, "POST", "/api/generate/txt2img", {
+            "repo": profile.repo, "prompt": prompt, "width": 1024, "height": 1024,
+            "steps": 8, "guidance": 1.0, "seed": seed,
+        }, timeout=submit_timeout)
+        if status >= 400 or not isinstance(accepted, dict) or not isinstance(accepted.get("job"), dict):
+            return fail(f"submit failed: HTTP {status}: {str(accepted)[:500]}")
+        job_id = accepted["job"].get("id")
+        if not isinstance(job_id, str) or not job_id:
+            return fail("submit returned no job id")
+        receipt["job_id"] = job_id
+
+        trigger_deadline = time.monotonic() + deadline
+        trigger = None
+        while time.monotonic() < trigger_deadline:
+            job = poll_job(job_id, trigger_deadline)
+            if job is None:
+                return fail("job poll failed before middle denoise callback")
+            step, total = job.get("denoise_step"), job.get("denoise_steps")
+            if (job.get("state") == "running" and isinstance(step, int)
+                    and isinstance(total, int) and total == 8 and 1 < step < total):
+                trigger = {"state": job["state"], "denoise_step": step,
+                           "denoise_steps": total, "progress": job.get("progress")}
+                break
+            if job.get("state") in TERMINAL:
+                return fail(f"job reached {job.get('state')} before middle denoise callback")
+            if poll_interval > 0:
+                time.sleep(min(poll_interval, max(0.0, trigger_deadline - time.monotonic())))
+        if trigger is None:
+            return fail("no persisted middle denoise callback (initial progress is insufficient)")
+        receipt["trigger"] = trigger
+
+        ack_timeout = max(0.001, min(5.0, settle_deadline))
+        ack_status, ack_payload = request_json(
+            base, token, "DELETE", f"/api/generate/jobs/{job_id}", timeout=ack_timeout)
+        ack_job = ack_payload.get("job") if isinstance(ack_payload, dict) else None
+        receipt["cancel_request_ack"] = {
+            "http_status": ack_status,
+            "state": ack_job.get("state") if isinstance(ack_job, dict) else None,
+            "progress": ack_job.get("progress") if isinstance(ack_job, dict) else None,
+        }
+        if (ack_status != 200 or not isinstance(ack_job, dict)
+                or ack_job.get("id") != job_id):
+            return fail(f"DELETE acknowledgement failed: HTTP {ack_status}: {str(ack_payload)[:500]}")
+
+        settle_until = time.monotonic() + settle_deadline
+        terminal_deadline = settle_until
+        terminal = None
+        while time.monotonic() < terminal_deadline:
+            terminal = poll_job(job_id, terminal_deadline)
+            if terminal is None:
+                return fail("job poll failed after DELETE acknowledgement")
+            if terminal.get("state") in TERMINAL:
+                break
+            if poll_interval > 0:
+                time.sleep(min(poll_interval, max(0.0, terminal_deadline - time.monotonic())))
+        if not isinstance(terminal, dict) or terminal.get("state") != "cancelled":
+            return fail(f"job did not become cancelled after DELETE: {str(terminal)[:500]}")
+        receipt["terminal_state"] = terminal.get("state")
+        receipt["terminal_finished_at"] = terminal.get("finished_at")
+        receipt["denoise_cancel_observed"] = terminal.get("denoise_cancel_observed") is True
+        if not receipt["denoise_cancel_observed"]:
+            return fail("denoise callback did not confirm observing cancellation")
+
+        # Cancellation is persisted before the inference lock and staged-file cleanup finish. Keep
+        # polling the same terminal job until the artifact, worker activity, and model residency
+        # have all settled, so a legitimate cleanup race is not reported as a failed probe.
+        final = {}
+        settled = False
+        while time.monotonic() < settle_until:
+            current = poll_job(job_id, settle_until)
+            if current is not None:
+                terminal = current
+            artifact_timeout = max(0.001, min(5.0, settle_until - time.monotonic()))
+            artifact_status, _artifact = request_json(
+                base, token, "GET", f"/api/generate/jobs/{job_id}/image",
+                raw=True, timeout=artifact_timeout)
+            leftovers = sorted(path.name for path in output_dir.glob(f"*{job_id}*"))
+            policy_timeout = max(0.001, min(5.0, settle_until - time.monotonic()))
+            policy_status, policy = request_json(
+                base, token, "GET", "/api/memory-policy", timeout=policy_timeout)
+            final = {"job": terminal, "artifact_http_status": artifact_status,
+                     "output_files": leftovers, "memory_policy": policy,
+                     "memory_policy_http_status": policy_status}
+            idle = (policy_status == 200 and isinstance(policy, dict)
+                    and policy.get("busy") is False and policy.get("active_work") is False
+                    and policy.get("loaded_models") == [])
+            if artifact_status == 200:
+                receipt["final_observations"] = final
+                return fail("cancelled job artifact endpoint returned HTTP 200")
+            if (terminal.get("state") == "cancelled" and artifact_status == 404
+                    and not leftovers and idle):
+                settled = True
+                break
+            if poll_interval > 0:
+                time.sleep(min(poll_interval, max(0.0, settle_until - time.monotonic())))
+        receipt["final_observations"] = final
+        if not settled:
+            return fail(f"cancelled job cleanup did not settle: {str(final)[:500]}")
+        receipt["artifact_http_status"] = final["artifact_http_status"]
+        receipt["output_files"] = final["output_files"]
+        receipt["memory_policy"] = final["memory_policy"]
+
+        if time.monotonic() >= settle_until:
+            return fail("settle deadline expired before memory release")
+        release_timeout = max(0.001, min(5.0, settle_until - time.monotonic()))
+        release_status, release = request_json(
+            base, token, "POST", "/api/memory/release", timeout=release_timeout)
+        receipt["memory_release"] = release
+        if release_status != 200:
+            return fail(f"memory release endpoint failed: HTTP {release_status}")
+        health_timeout = 5.0
+        health_status, health = request_json(
+            base, token, "GET", "/api/health", timeout=health_timeout)
+        receipt["health_http_status"] = health_status
+        if health_status != 200 or not isinstance(health, dict):
+            return fail(f"worker did not remain responsive: HTTP {health_status}")
+        receipt["status"] = "passed"
+        receipt["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        return receipt
+    except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
+        return fail(f"cancellation probe error: {str(exc)[:500]}")
+
+
 def swap_gb() -> float | None:
     match = re.search(r"used = ([\d.]+)([MG])",
                       run_text(["/usr/sbin/sysctl", "-n", "vm.swapusage"]))
@@ -778,7 +924,8 @@ def run_workload(base: str, token: str, profile: Profile, case: Workload,
 
 
 def outcome(rows: list[dict], *, expected_names: list[str] | None = None,
-            target_tier_verified: bool = False) -> str:
+            target_tier_verified: bool = False, cancellation: dict | None = None,
+            require_cancellation: bool = False) -> str:
     if not rows:
         return "NOT MEASURED"
     if any(row.get("status") != "completed" for row in rows):
@@ -788,6 +935,9 @@ def outcome(rows: list[dict], *, expected_names: list[str] | None = None,
         return "NOT MEASURED"
     if any(not row.get("memory_metrics_complete", False) for row in rows):
         return "NOT MEASURED"
+    if require_cancellation and (not isinstance(cancellation, dict)
+                                 or cancellation.get("status") != "passed"):
+        return "MEASURED FAILURE" if isinstance(cancellation, dict) and cancellation.get("status") == "failed" else "NOT MEASURED"
     if any(row.get("memory_pressure") == "critical" or not row.get("responsive", True)
            or ((row.get("swap_peak_delta_gb") or 0) > 1.0)
            for row in rows):
@@ -814,6 +964,12 @@ def summary_text(record: dict) -> str:
         f"Runtime identity: {record['bundle']['runtime_sha256']}",
         "",
     ]
+    if profile["package_id"] == TURBO_PACKAGE_ID:
+        cancellation = record.get("cancellation") or {}
+        lines.append(f"Cancellation probe: {cancellation.get('status', 'not run')}")
+        if cancellation.get("reason"):
+            lines.append(f"  Cancellation detail: {cancellation['reason']}")
+        lines.append("")
     for row in rows:
         lines.append(
             f"{row['name']}: {row['width']}x{row['height']}, {row['steps']} steps — "
@@ -928,7 +1084,7 @@ def main(argv: list[str] | None = None) -> int:
         "available_memory_source": "packaged components/host_memory.py + psutil.virtual_memory()",
         "prompt": args.prompt,
         "workloads": [asdict(case) for case in cases],
-        "rows": [], "outcome": "STARTED",
+        "rows": [], "cancellation": None, "outcome": "STARTED",
     }
     write_record(result_dir, record)
 
@@ -968,7 +1124,9 @@ def main(argv: list[str] | None = None) -> int:
                         "app_version": bundle["version"]})
             record["rows"].append(row)
             record["outcome"] = outcome(record["rows"], expected_names=[case["name"] for case in record["workloads"]],
-                                      target_tier_verified=record["host_status"]["target_tier_verified"])
+                                      target_tier_verified=record["host_status"]["target_tier_verified"],
+                                      cancellation=record.get("cancellation"),
+                                      require_cancellation=args.turbo)
             write_record(result_dir, record)
             print(f"  {row['status']}: {row.get('wall_seconds')} s, "
                   f"peak {row.get('peak_process_tree_gb')} GB, "
@@ -977,9 +1135,25 @@ def main(argv: list[str] | None = None) -> int:
                   f"pressure {row.get('memory_pressure')}", flush=True)
             if row["status"] != "completed":
                 break
+        if args.turbo:
+            if record["rows"] and all(row.get("status") == "completed" for row in record["rows"]):
+                record["cancellation"] = run_cancellation_probe(
+                    base, token, profile, args.prompt, 1001, data / "image" / "outputs",
+                    deadline=args.timeout)
+            else:
+                record["cancellation"] = {
+                    "status": "not_run", "reason": "normal workload did not complete"
+                }
+            record["outcome"] = outcome(
+                record["rows"], expected_names=[case["name"] for case in record["workloads"]],
+                target_tier_verified=record["host_status"]["target_tier_verified"],
+                cancellation=record.get("cancellation"), require_cancellation=True)
+            write_record(result_dir, record)
     except KeyboardInterrupt:
         record["outcome"] = outcome(record["rows"], expected_names=[case["name"] for case in record["workloads"]],
-                                      target_tier_verified=record["host_status"]["target_tier_verified"]) if record["rows"] else "NOT MEASURED"
+                                      target_tier_verified=record["host_status"]["target_tier_verified"],
+                                      cancellation=record.get("cancellation"),
+                                      require_cancellation=args.turbo) if record["rows"] else "NOT MEASURED"
         record["interrupted"] = True
     except Exception as exc:  # preserve a useful receipt for worker start/lifecycle failures
         record["outcome"] = "MEASURED FAILURE" if record["rows"] else "NOT MEASURED"
@@ -989,7 +1163,9 @@ def main(argv: list[str] | None = None) -> int:
         log.close()
         record["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         record["outcome"] = outcome(record["rows"], expected_names=[case["name"] for case in record["workloads"]],
-                                      target_tier_verified=record["host_status"]["target_tier_verified"]) if record["rows"] else record["outcome"]
+                                      target_tier_verified=record["host_status"]["target_tier_verified"],
+                                      cancellation=record.get("cancellation"),
+                                      require_cancellation=args.turbo) if record["rows"] else record["outcome"]
         write_record(result_dir, record)
 
     print("\n" + summary_text(record), end="")

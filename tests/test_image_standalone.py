@@ -1,16 +1,19 @@
 """Image's private API, pinned files, finalized PNG and restart contract."""
 from __future__ import annotations
 
+import gc
 from hashlib import sha256
 import io
 import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
 from unittest.mock import patch
+import weakref
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -74,7 +77,8 @@ def unregistered_image_manifest() -> dict:
 
 
 def fake_mflux(save_delay: float = 0.0, *, steps: int = 4, guidance_value: float = 1.0,
-               z_steps: int | None = None, z_ignores_guidance: bool = True):
+               z_steps: int | None = None, z_ignores_guidance: bool = True,
+               step_controller: dict | None = None):
     """Stand-in for mflux 0.20.0, with both registered model classes.
 
     The FLUX fake keeps the original assertions; the Z-Image fake records every construction
@@ -92,10 +96,28 @@ def fake_mflux(save_delay: float = 0.0, *, steps: int = 4, guidance_value: float
             assert Path(model_path).is_dir()
             assert (Path(model_path) / 'text_encoder/0.safetensors').is_file()
             assert quantize is None and lora_paths is None and lora_scales is None
+            self._cancel_event = None
+            self._step_callback = None
+            if step_controller is not None:
+                step_controller['instance_ref'] = weakref.ref(self)
+
+        def set_cancel_event(self, event):
+            self._cancel_event = event
+
+        def set_step_callback(self, callback):
+            self._step_callback = callback
 
         def generate_image(self, *, seed, prompt, num_inference_steps, height, width, guidance):
             assert num_inference_steps == steps and guidance == guidance_value
             assert isinstance(seed, int) and prompt
+            for step in range(num_inference_steps):
+                if self._cancel_event is not None and self._cancel_event.is_set():
+                    raise RuntimeError('Generation cancelled')
+                if self._step_callback is not None:
+                    self._step_callback(step + 1, num_inference_steps)
+                if step_controller is not None and step == 2:
+                    step_controller['entered'].set()
+                    step_controller['release'].wait(2)
 
             class Result:
                 def save(self, path, overwrite):
@@ -421,6 +443,86 @@ class ImageStandaloneTests(unittest.TestCase):
             job = self.wait(job_id)
             self.assertEqual(job['state'], 'cancelled')
             self.assertFalse((self.manager.outputs / f'{job_id}.png').exists())
+            self.assertEqual(
+                self.client.get(f'/api/generate/jobs/{job_id}/image', headers=self.headers).status_code,
+                404,
+            )
+            policy = self.client.get('/api/memory-policy', headers=self.headers)
+            self.assertEqual(policy.status_code, 200)
+            self.assertFalse(policy.json()['busy'])
+            self.assertFalse(policy.json()['active_work'])
+            self.assertIsInstance(policy.json()['loaded_models'], list)
+            self.assertEqual(self.client.post('/api/memory/release', headers=self.headers).status_code, 200)
+            self.assertEqual(self.client.get('/api/health', headers=self.headers).status_code, 200)
+
+    def test_delete_between_fake_denoise_steps_reaches_cancelled_and_cleans_up(self):
+        controller = {'entered': threading.Event(), 'release': threading.Event()}
+        (self.data / 'memory_policy.json').write_text('{"mode":"immediate"}', encoding='utf-8')
+        with (patch.dict(sys.modules, fake_mflux(step_controller=controller)),
+              patch('components.image.app.backend.main._host_eligibility',
+                    return_value={'eligible': True, 'macos': '26.6.2'})):
+            job_id = self.client.post('/api/generate/txt2img', json=self.request(),
+                                      headers=self.headers).json()['job']['id']
+            self.assertTrue(controller['entered'].wait(1), 'fake worker did not reach step 3/4')
+            running = self.client.get(f'/api/generate/jobs/{job_id}', headers=self.headers).json()['job']
+            self.assertEqual((running['state'], running['denoise_step'], running['denoise_steps']),
+                             ('running', 3, 4))
+            acknowledgement = self.client.delete(f'/api/generate/jobs/{job_id}', headers=self.headers)
+            self.assertEqual(acknowledgement.status_code, 200)
+            self.assertEqual(acknowledgement.json()['job']['state'], 'running')
+            controller['release'].set()
+            job = self.wait(job_id)
+            self.assertEqual(job['state'], 'cancelled')
+            for _ in range(50):
+                gc.collect()
+                if controller['instance_ref']() is None:
+                    break
+                time.sleep(0.02)
+            self.assertIsNone(controller['instance_ref']())
+            self.assertFalse(any(self.manager.outputs.glob(f'*{job_id}*')))
+            self.assertEqual(self.client.get(f'/api/generate/jobs/{job_id}/image',
+                             headers=self.headers).status_code, 404)
+            policy = self.client.get('/api/memory-policy', headers=self.headers).json()
+            self.assertEqual((policy['busy'], policy['active_work'], policy['loaded_models']),
+                             (False, False, []))
+            self.assertEqual(self.client.get('/api/health', headers=self.headers).status_code, 200)
+
+    def test_mflux_denoise_step_is_persisted_separately_from_generic_progress(self):
+        job_id = 'synthetic-denoise-job'
+        self.manager.jobs[job_id] = {
+            'id': job_id, 'state': 'running', 'progress': 0.05,
+            'denoise_step': None, 'denoise_steps': None,
+        }
+        self.manager._record_denoise_step(job_id, 4, 8)
+        job = self.manager.get(job_id)
+        self.assertEqual((job['denoise_step'], job['denoise_steps']), (4, 8))
+        self.assertEqual(job['progress'], 0.5)
+
+    def test_first_of_fifty_denoise_steps_never_moves_progress_backwards(self):
+        job_id = 'long-denoise-job'
+        self.manager.jobs[job_id] = {'id': job_id, 'state': 'running', 'progress': 0.05}
+        self.manager._record_denoise_step(job_id, 1, 50)
+        job = self.manager.get(job_id)
+        self.assertEqual((job['denoise_step'], job['denoise_steps']), (1, 50))
+        self.assertEqual(job['progress'], 0.05)
+
+    def test_only_callback_cancellation_provides_denoise_observation(self):
+        from components.image.app.backend import qwen_lowram
+        for callback_observed in (False, True):
+            with self.subTest(callback_observed=callback_observed):
+                event = threading.Event()
+                event.set()
+                job = {'id': 'cancel-origin', 'state': 'running', 'started_at': time.time()}
+                self.manager.jobs[job['id']] = job
+                error = RuntimeError('Unrelated inference failure')
+                if callback_observed:
+                    reporter = qwen_lowram._CancelReporter(types.SimpleNamespace(_cancel_event=event))
+                    try:
+                        reporter.call_in_loop()
+                    except RuntimeError as exc:
+                        error = exc
+                self.manager._record_failure(job, event, error)
+                self.assertEqual(job.get('denoise_cancel_observed', False), callback_observed)
 
     def test_native_style_dimensions_infer_preset_and_editable_controls_reach_mflux(self):
         with (patch.dict(sys.modules, fake_mflux(steps=6, guidance_value=2.5)),

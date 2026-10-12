@@ -2273,6 +2273,7 @@ def batch_summary(b: dict) -> dict:
         "governor_note": (b.get("governor_note")
                           if any(state in ("queued", "running", "cancel_requested")
                                  for state in states) else None),
+        "dispatch_trace": b.get("dispatch_trace"),
         "label": b.get("label"),
         "total": len(states),
         "queued": states.count("queued") - len(retrying),
@@ -3912,39 +3913,176 @@ def _retain_async_terminal_persistence_uncertainty(
     return True
 
 
+_DISPATCH_TRACE_GATES = frozenset({
+    "admission_refused",
+    "batch_cancelled",
+    "catalog_missing",
+    "execution_lease_expired",
+    "faster_machine_preferred",
+    "higher_priority_work",
+    "item_no_longer_queued",
+    "item_temporarily_ineligible",
+    "lite_mode_blocked",
+    "machine_blocked",
+    "machine_disabled",
+    "machine_lease_busy",
+    "machine_reserved",
+    "memory_skip",
+    "memory_wait",
+    "model_not_cached",
+    "model_protected",
+    "peer_not_dispatch_ready",
+    "remote_local_excluded",
+    "revision_evidence_missing",
+    "revision_mismatch",
+    "routing_excluded",
+    "studio_busy",
+    "studio_disabled",
+    "studio_maintenance",
+    "unknown",
+    "voice_not_synchronized",
+    "worker_not_up",
+})
+_DISPATCH_TRACE_ROWS = 65
+_DISPATCH_TRACE_BYTES = 32 * 1024
+_DISPATCH_TRACE_ID = re.compile(r"^[A-Za-z0-9_.:@-]{1,80}$")
+
+
+def _safe_dispatch_trace_id(value: object) -> str:
+    text = str(value or "")
+    return text if _DISPATCH_TRACE_ID.fullmatch(text) else "unknown"
+
+
+def _record_dispatch_gate(rows: list[dict], studio: dict, gate: str) -> None:
+    """Keep one candidate's first fixed-code refusal for this scheduler pass."""
+    studio_id = _safe_dispatch_trace_id(studio.get("id"))
+    if any(row.get("studio") == studio_id for row in rows):
+        return
+    rows.append({
+        "machine": _safe_dispatch_trace_id(studio.get("machine", "local")),
+        "studio": studio_id,
+        "gate": gate if gate in _DISPATCH_TRACE_GATES else "unknown",
+    })
+
+
+def _store_blocked_dispatch_trace(batch: dict, queued: list[dict],
+                                  rows: list[dict], *, now: float | None = None) -> bool:
+    """Replace the last blocked snapshot only when its bounded evidence changed."""
+    candidates = []
+    for row in rows[:_DISPATCH_TRACE_ROWS]:
+        candidates.append({
+            "machine": _safe_dispatch_trace_id(row.get("machine")),
+            "studio": _safe_dispatch_trace_id(row.get("studio")),
+            "gate": (str(row.get("gate")) if row.get("gate") in _DISPATCH_TRACE_GATES
+                     else "unknown"),
+        })
+    all_queued_items = [item.get("index") for item in queued
+                        if type(item.get("index")) is int]
+    queued_items = all_queued_items[:_DISPATCH_TRACE_ROWS]
+    truncated = (len(rows) > len(candidates)
+                 or len(all_queued_items) > len(queued_items))
+    trace = {
+        "version": 1,
+        "blocked_at": time.time() if now is None else now,
+        "queued_items": queued_items,
+        "candidates": candidates,
+        "truncated": truncated,
+    }
+    previous = batch.get("dispatch_trace")
+    if isinstance(previous, dict) and isinstance(previous.get("selected"), dict):
+        trace["selected"] = previous["selected"]
+    while len(json.dumps(trace, separators=(",", ":")).encode()) > _DISPATCH_TRACE_BYTES and candidates:
+        candidates.pop()
+        trace["truncated"] = True
+    while len(json.dumps(trace, separators=(",", ":")).encode()) > _DISPATCH_TRACE_BYTES and queued_items:
+        queued_items.pop()
+        trace["truncated"] = True
+    semantic_keys = ("version", "queued_items", "candidates", "truncated")
+    if isinstance(previous, dict) and all(previous.get(key) == trace.get(key)
+                                          for key in semantic_keys):
+        return False
+    batch["dispatch_trace"] = trace
+    return True
+
+
+def _store_dispatch_selection(batch: dict, item: dict, studio: dict,
+                              *, now: float | None = None) -> None:
+    trace = dict(batch.get("dispatch_trace") or {"version": 1, "truncated": False})
+    trace["selected"] = {
+        "at": time.time() if now is None else now,
+        "item_index": item.get("index") if type(item.get("index")) is int else None,
+        "machine": _safe_dispatch_trace_id(studio.get("machine", "local")),
+        "studio": _safe_dispatch_trace_id(studio.get("id")),
+    }
+    batch["dispatch_trace"] = trace
+
+
 def _eligible_studios(modality: str, routing: str,
-                      model: str | None = None) -> list[dict]:
+                      model: str | None = None,
+                      trace: list[dict] | None = None) -> list[dict]:
     mon = _monitor()
     out = []
     leased_machines = busy_machines()
     for s in mon.registry:
+        if s["modality"] != modality:
+            continue
         # A pin is the operator's instruction, so it beats the automatic choice: a Mac that
         # has the model is still skipped when another Mac was named.
         if not routing_rule.allows(s, routing):
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "routing_excluded")
             continue
         machine = s.get("machine", "local")
         # A remote render deliberately keeps the Hub Mac as the control plane.
         # It waits for an external Render Studio rather than quietly consuming
         # the Hub machine's CPU / Media Engine as a fallback.
         if routing == "remote" and peers.is_local_studio(s):
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "remote_local_excluded")
             continue
-        if (s["modality"] != modality or s["id"] in _busy
-                or s["id"] in _maintenance or machine in leased_machines
-                or _machine_reserved_until.get(machine, 0) > time.time()):
+        if s["id"] in _busy:
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "studio_busy")
             continue
-        if not peers.dispatch_ready(s) or not peers.lite_mode_allows(s, model):
+        if s["id"] in _maintenance:
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "studio_maintenance")
+            continue
+        if machine in leased_machines:
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "machine_lease_busy")
+            continue
+        if _machine_reserved_until.get(machine, 0) > time.time():
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "machine_reserved")
+            continue
+        if not peers.dispatch_ready(s):
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "peer_not_dispatch_ready")
+            continue
+        if not peers.lite_mode_allows(s, model):
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "lite_mode_blocked")
             continue
         # a machine the operator has disabled stays monitored but takes no jobs
         if not machine_enabled(s.get("machine", "local")):
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "machine_disabled")
             continue
         # App-specific pauses are scheduler-only: current work finishes and the
         # Studio remains online for monitoring, lifecycle control, and updates.
         if not studio_enabled(machine, s["id"]):
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "studio_disabled")
             continue
         if _machine_blocked(machine):
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "machine_blocked")
             continue
         if mon.status.get(s["id"], {}).get("status") == "up":
             out.append(s)
+        elif trace is not None:
+            _record_dispatch_gate(trace, s, "worker_not_up")
     if modality == "render":
         # Render workers publish a normalized score in /api/health. M4 16 GB
         # machines rank above older/smaller Macs, while every healthy worker
@@ -4141,12 +4279,18 @@ async def _dispatch_loop():
                     b["governor_note"] = str(refusal.get("detail") or "model is not ready")
                     ledger.save_batch(b)
                     continue
-                eligible = _eligible_studios(b["modality"], b["routing"], b.get("model"))
-                evidence_eligible = [
-                    studio
-                    for studio in eligible
-                    if _supports_genstudio_voice_evidence(b, studio)
-                ]
+                trace_candidates: list[dict] = []
+                eligible = _eligible_studios(
+                    b["modality"], b["routing"], b.get("model"), trace_candidates,
+                )
+                evidence_eligible = []
+                for studio in eligible:
+                    if _supports_genstudio_voice_evidence(b, studio):
+                        evidence_eligible.append(studio)
+                    else:
+                        _record_dispatch_gate(
+                            trace_candidates, studio, "revision_evidence_missing"
+                        )
                 if eligible and not evidence_eligible:
                     b["governor_note"] = (
                         "Waiting for Voice Studio 1.20.13 or newer so GenStudio "
@@ -4159,6 +4303,7 @@ async def _dispatch_loop():
                     )
                 elif not eligible and (lite_wait := peers.lite_mode_wait(b.get("model"))):
                     b["governor_note"] = lite_wait   # this Mac in Lite Mode, and nobody else free
+                batch_assigned = False
                 for studio in eligible:
                     if not queued:
                         break
@@ -4171,6 +4316,14 @@ async def _dispatch_loop():
                     )
                     if compatible_index is None:
                         b["governor_note"] = _no_candidate_note(b, queued, studio)
+                        first = queued[0]
+                        if not _shared_voice_allows_studio(b, first, studio):
+                            gate = "voice_not_synchronized"
+                        elif not _item_allows_studio(first, studio, now):
+                            gate = "item_temporarily_ineligible"
+                        else:
+                            gate = "faster_machine_preferred"
+                        _record_dispatch_gate(trace_candidates, studio, gate)
                         continue
                     # ── model-aware dispatch (heterogeneous machines) ──
                     # A studio only gets work for models it actually has. This
@@ -4179,21 +4332,25 @@ async def _dispatch_loop():
                     if entry is None:
                         b["governor_note"] = (
                             f"'{b['model']}' not in {studio['id']}'s catalog")
+                        _record_dispatch_gate(trace_candidates, studio, "catalog_missing")
                         continue
                     if not _catalog_matches_genstudio_revision(b, entry):
                         b["governor_note"] = (
                             "Waiting for a worker with the exact immutable model "
                             "revision assigned by GenStudio"
                         )
+                        _record_dispatch_gate(trace_candidates, studio, "revision_mismatch")
                         continue
                     protection_note = _model_block_note(studio, b["model"], entry)
                     if protection_note:
                         b["governor_note"] = f"{studio['id']}: {protection_note}"
+                        _record_dispatch_gate(trace_candidates, studio, "model_protected")
                         continue
                     if not entry.get("is_cloud") and not is_cached(entry):
                         b["governor_note"] = (
                             f"'{b['model']}' not downloaded on {studio['id']} "
                             f"— download it on that Mac, or pin another")
+                        _record_dispatch_gate(trace_candidates, studio, "model_not_cached")
                         continue
                     # ── fleet memory governor ──
                     # Peer Hubs report their own host snapshots, so we can
@@ -4220,6 +4377,10 @@ async def _dispatch_loop():
                             if not (decision == "wait" and _admission_wait_expired(
                                     queued[compatible_index], studio,
                                     _with_machine_floor(mem, studio), note, now, b)):
+                                _record_dispatch_gate(
+                                    trace_candidates, studio,
+                                    "memory_wait" if decision == "wait" else "memory_skip",
+                                )
                                 continue
                             waited_s = now - float(queued[compatible_index]["admission_wait_started_at"])
                             queued[compatible_index]["_memory_handback"] = _insufficient_memory_text(
@@ -4232,30 +4393,67 @@ async def _dispatch_loop():
                     # Recheck the physical lease so a transcription that claimed
                     # this Mac in the meantime never overlaps generation/render.
                     if studio.get("machine", "local") in busy_machines():
+                        _record_dispatch_gate(
+                            trace_candidates, studio, "machine_lease_busy"
+                        )
                         continue
                     if (b["modality"] != "render"
                             and await higher_priority_work_waiting(
                                 studio.get("machine", "local"), b["modality"],
                                 b.get("created_at", 0), f"broker:{b['id']}")):
+                        _record_dispatch_gate(
+                            trace_candidates, studio, "higher_priority_work"
+                        )
                         continue
                     candidate = queued[compatible_index]
                     machine = studio.get("machine", "local")
-                    if (b.get("cancelled") or candidate.get("state") != "queued"
-                            or execution_identity.lease_expired(b.get("genstudio_execution"))
-                            or _monitor().status.get(studio["id"], {}).get("status") != "up"
-                            or not machine_enabled(machine)
-                            or not studio_enabled(machine, studio["id"])
-                            or studio["id"] in _maintenance
-                            or not _item_allows_studio(candidate, studio, time.time())):
+                    if b.get("cancelled"):
+                        _record_dispatch_gate(trace_candidates, studio, "batch_cancelled")
+                        continue
+                    if candidate.get("state") != "queued":
+                        _record_dispatch_gate(
+                            trace_candidates, studio, "item_no_longer_queued"
+                        )
+                        continue
+                    if execution_identity.lease_expired(b.get("genstudio_execution")):
+                        _record_dispatch_gate(
+                            trace_candidates, studio, "execution_lease_expired"
+                        )
+                        continue
+                    if _monitor().status.get(studio["id"], {}).get("status") != "up":
+                        _record_dispatch_gate(trace_candidates, studio, "worker_not_up")
+                        continue
+                    if not machine_enabled(machine):
+                        _record_dispatch_gate(trace_candidates, studio, "machine_disabled")
+                        continue
+                    if not studio_enabled(machine, studio["id"]):
+                        _record_dispatch_gate(trace_candidates, studio, "studio_disabled")
+                        continue
+                    if studio["id"] in _maintenance:
+                        _record_dispatch_gate(
+                            trace_candidates, studio, "studio_maintenance"
+                        )
+                        continue
+                    if not _item_allows_studio(candidate, studio, time.time()):
+                        _record_dispatch_gate(
+                            trace_candidates, studio, "item_temporarily_ineligible"
+                        )
                         continue
                     if studio.get("machine", "local") in busy_machines():
+                        _record_dispatch_gate(
+                            trace_candidates, studio, "machine_lease_busy"
+                        )
                         continue
                     generation = peers.dispatch_generation(studio)
                     if not peers.dispatch_ready(studio, generation):
+                        _record_dispatch_gate(
+                            trace_candidates, studio, "peer_not_dispatch_ready"
+                        )
                         continue
                     refusal = admission_refusal(b)
                     if refusal:
                         b["governor_note"] = str(refusal.get("detail") or "model is not ready")
+                        _record_dispatch_gate(trace_candidates, studio, "admission_refused")
                         ledger.save_batch(b)
                         continue
                     b["governor_note"] = None
@@ -4275,6 +4473,8 @@ async def _dispatch_loop():
                     _busy.add(studio["id"])
                     _last_model[studio["id"]] = b["model"]
                     b["last_dispatched_at"] = time.time()
+                    previous_dispatch_trace = b.get("dispatch_trace")
+                    _store_dispatch_selection(b, item, studio)
                     if b["modality"] in RECEIPT_DURABLE_MODALITIES:
                         # A crash after POST may lose its response. Persist the
                         # attempt identity before the worker can accept it.
@@ -4289,9 +4489,25 @@ async def _dispatch_loop():
                             item.pop("_reserved", None)
                             _reserved["gb"] = max(0.0, _reserved["gb"] - reserve)
                             _busy.discard(studio["id"])
+                            if previous_dispatch_trace is None:
+                                b.pop("dispatch_trace", None)
+                            else:
+                                b["dispatch_trace"] = previous_dispatch_trace
                             raise
                     asyncio.create_task(_run_item(client, b, item, studio))
                     assigned = True
+                    batch_assigned = True
+                if not batch_assigned:
+                    previous_dispatch_trace = b.get("dispatch_trace")
+                    if _store_blocked_dispatch_trace(b, queued, trace_candidates):
+                        try:
+                            ledger.save_batch(b)
+                        except Exception:
+                            if previous_dispatch_trace is None:
+                                b.pop("dispatch_trace", None)
+                            else:
+                                b["dispatch_trace"] = previous_dispatch_trace
+                            raise
             _wakeup.clear()
             try:  # idle until new work or a worker frees up (or 3s heartbeat)
                 await asyncio.wait_for(_wakeup.wait(), timeout=3.0 if not assigned else 0.1)
