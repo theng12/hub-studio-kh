@@ -439,6 +439,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # excludes only its 363-byte README.md. Only the 32 GiB qualification metadata
             # changed here; the pinned revision and every publisher file hash stayed fixed.
             "gemma4-26b-a4b-qat-4bit": "962823f4d412465351316da5241c7c11915ff52bae1c3e55c6c94a1a86c94e92",
+            # Qwen Image 2.1 Turbo MLX 4-bit: 19 files / 9,963,443,598 bytes, captured
+            # 2026-10-12 from the pinned public mflux-community checkpoint. The 16 GB tier
+            # is recorded as a target only; the package is unqualified and withheld from production.
+            "qwen-image-2-1-turbo-mflux-q4": "9768fffe2515fb27219b439c370d0f52abf4b0baf6a457d3f48d1e729486e418",
             "omnivoice-bfloat16": "f2e761bd958ca3d84c6e1b8470ce7720a4ce8ded34fb57733b870f8c07d70bb4",
             "qwen3-tts-12hz-0-6b-base-8bit": "4d9e8048e6484e0225c5fb1b5644b8ee57cb969e6a6c10feb05865b330a033eb",
             "qwen3-tts-12hz-1-7b-base-4bit": "4e7c1d4f4dce6d3a65c4787052ee4772468fa23adc53ff5fefc139392a8aacbe",

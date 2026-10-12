@@ -109,8 +109,13 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         """One model's readiness: its own installed files, on this host."""
         files = manager.preflight(model.repo)
         host = model_host_facts(model)
-        ready = files['state'] == 'files_verified' and host['eligible']
-        return {'ready': ready, 'files': files, 'host': host,
+        admission = manager.production_admission(model.repo)
+        ready = (admission['allowed'] and files['state'] == 'files_verified'
+                 and host['eligible'])
+        state = ('ready' if ready else files['state']
+                 if files['state'] != 'files_verified' else 'production_blocked'
+                 if not admission['allowed'] else 'host_ineligible')
+        return {'ready': ready, 'state': state, 'files': files, 'host': host, **admission,
                 'runtime_identity': {'id': manager.runtime_sha256, 'compatible': True}}
 
     def readiness() -> dict:
@@ -164,8 +169,10 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'model_id': model.repo, 'family': model.family, 'modality': 'image',
             'package_id': model.package_id, 'engine': model.engine,
             'capabilities': ['txt2img'], 'hub_operation': 'image.text_to_image',
-            'model_revision': model.revision, 'qualified_revision': model.revision,
-            'qualified_revision_match': True, 'runtime_revision': manager.runtime_sha256,
+            'model_revision': model.revision,
+            'qualified_revision': model.revision if state['production_allowed'] else None,
+            'qualified_revision_match': True if state['production_allowed'] else False,
+            'runtime_revision': manager.runtime_sha256,
             'runtime_compatible': host['eligible'],
             'runtime_ready': files['state'] != 'runtime_unavailable',
             # `min_total_memory_gb` is the tier the model is qualified at. The worker does not
@@ -197,8 +204,15 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             # a `reason` is a model that has one loading mode, not a missing answer.
             'loading_modes': modes,
             'cache': {'state': 'cached' if files['state'] == 'files_verified' else files['state']},
-            'readiness': {'ready': ready, 'files': files, 'host': host,
-                          'reason': None if ready else files.get('reason') or host.get('reason')},
+            'production_allowed': state['production_allowed'],
+            'qualification_allowed': state['qualification_allowed'],
+            'readiness': {'ready': ready, 'state': state['state'], 'files': files, 'host': host,
+                          'production_allowed': state['production_allowed'],
+                          'qualification_allowed': state['qualification_allowed'],
+                          'reason': (None if ready else files.get('reason')
+                                     if files['state'] != 'files_verified' else state['reason']
+                                     if state['state'] == 'production_blocked'
+                                     else host.get('reason'))},
             'execution_ready': ready, 'available': ready,
             # The values in force, with the geometry derived from the aspect ratio in force. The
             # app pre-fills its form from this and sends every field, so this is the number an
@@ -449,6 +463,9 @@ def from_environment() -> FastAPI:
     identity = release['components']['image']['runtime_sha256']
     if not isinstance(identity, str) or len(identity) != 64:
         raise ValueError('Release manifest lacks exact Image runtime identity')
-    return create_app(GenerationManager(data, library, manifest, identity,
-                                        manifests=manifests, manifest_errors=errors),
+    return create_app(GenerationManager(
+                          data, library, manifest, identity,
+                          manifests=manifests, manifest_errors=errors,
+                          qualification_package=os.environ.get(
+                              'STUDIOHUB_IMAGE_QUALIFICATION_PACKAGE')),
                       os.environ['STUDIOHUB_FLEET_TOKEN'])

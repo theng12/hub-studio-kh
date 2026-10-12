@@ -82,7 +82,12 @@ def foreign_model_processes(listing: str | None = None,
         if not match or int(match[1]) == current_pid:
             continue
         command = match[2]
-        if ("hub_worker.py" in command or "image_worker.py" in command
-                or re.search(r"(?:^|/)mlx-serve(?:\s|$)", command)):
+        if (any(worker in command for worker in
+                ("hub_worker.py", "image_worker.py", "voice_worker.py", "chat_worker.py"))
+                or "mlx_lm.generate" in command
+                or re.search(
+                    r"(?:^|/)(?:mlx-serve|mflux-generate(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?)(?:\s|$)",
+                    command,
+                )):
             rows.append(f"pid {match[1]}: {command[:180]}")
     return rows

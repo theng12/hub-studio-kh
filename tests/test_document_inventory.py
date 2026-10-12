@@ -147,18 +147,23 @@ class KitDocumentNumbersTests(unittest.TestCase):
         match = self._match(
             text,
             r"Normal setup copies \*\*(\d+) production-allowed packages\*\*\s+"
-            r"\(about ([\d.]+) GB\); the \*\*(\d+) pending Chat MLX 4-bit packages\*\*",
+            r"\(about ([\d.]+) GB\); the \*\*(\d+) pending packages\*\* \(([^)]+)\)",
             "Normal setup copies **<n> production-allowed packages** (about <gb> GB); "
-            "the **<n> pending Chat MLX 4-bit packages**")
+            "the **<n> pending packages** (<composition>)")
         self.assertEqual(int(match.group(1)), measured_kit_packages())
         self.assertEqual(float(match.group(2)), round(measured_kit_bytes() / 1e9, 1))
         self.assertEqual(int(match.group(3)), measured_packages() - measured_kit_packages())
+        self.assertRegex(match.group(4), r"2 Chat MLX 4-bit.*1 Qwen Image 2\.1 Turbo MLX 4-bit",
+                         "the pending-package breakdown must distinguish Chat candidates from "
+                         "the Qwen Image 2.1 Turbo 4-bit candidate")
 
     def test_the_kit_readme_states_the_measured_package_count_and_size(self) -> None:
         text = self.KIT_README.read_text(encoding="utf-8")
         match = self._match(
-            text, r"The kit carries \*\*(\d+) model packages\*\* \(about ([\d.]+) GB\)",
-            "The kit carries **<n> model packages** (about <gb> GB)")
+            text, r"The source catalog for the next kit build lists \*\*(\d+) model packages\*\* "
+                  r"\(about ([\d.]+) GB\)",
+            "The source catalog for the next kit build lists **<n> model packages** "
+            "(about <gb> GB)")
         self.assertEqual(int(match.group(1)), measured_packages(),
                          "packaging/kit-readmes/Studio Hub KH.md's package count disagrees with "
                          "model-manifests/*.json; update the sentence")
@@ -170,8 +175,10 @@ class KitDocumentNumbersTests(unittest.TestCase):
     def test_the_ssd_readme_states_the_measured_package_count_and_size(self) -> None:
         text = self.SSD_README.read_text(encoding="utf-8")
         match = self._match(
-            text, r"\*\*Models:\*\* `model-library/` — (\d+) verified packages, ~([\d.]+) GB",
-            "**Models:** `model-library/` — <n> verified packages, ~<gb> GB")
+            text, r"\*\*Models:\*\* `model-library/` is described by a (\d+)-package "
+                  r"source catalog \(~([\d.]+) GB\)",
+            "**Models:** `model-library/` is described by a <n>-package source catalog "
+            "(~<gb> GB)")
         self.assertEqual(int(match.group(1)), measured_packages(),
                          "qualification/SSD-KIT-README.md's package count disagrees with "
                          "model-manifests/*.json; update the sentence")

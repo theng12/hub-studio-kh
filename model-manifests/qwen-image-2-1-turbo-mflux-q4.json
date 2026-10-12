@@ -1,0 +1,226 @@
+{
+  "defaults": {
+    "guidance": 1.0,
+    "height": 1024,
+    "parameters_source": ".planning/2026-09-10-standalone-app-feasibility/qwen-image-turbo-20261012.md",
+    "schedule_source": "model/model_index.json sample_sigmas",
+    "seed": -1,
+    "steps": 8,
+    "width": 1024
+  },
+  "display_name": "Qwen Image 2.1 Turbo Low-RAM MLX 4-bit",
+  "engine": "image-mflux",
+  "files": [
+    {
+      "path": "model/manifest.json",
+      "sha256": "fe311e6d3de04f73b411402042f30b32aa865afe35fde97f351c58eaedb913be",
+      "size": 78,
+      "source_path": "manifest.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/manifest.json"
+      ]
+    },
+    {
+      "path": "model/model_index.json",
+      "sha256": "97e2febeb19d93cb41fa44807cde8bd42757950b5dffeacdb0331fb2d390cf20",
+      "size": 578,
+      "source_path": "model_index.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/model_index.json"
+      ]
+    },
+    {
+      "path": "model/processor/chat_template.jinja",
+      "sha256": "3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4",
+      "size": 5292,
+      "source_path": "processor/chat_template.jinja",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/processor/chat_template.jinja"
+      ]
+    },
+    {
+      "path": "model/processor/preprocessor_config.json",
+      "sha256": "f64372eb108d4db5fae4ae87c48ecc16a40410771a1e9e1e1acf2ed91c106383",
+      "size": 478,
+      "source_path": "processor/preprocessor_config.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/processor/preprocessor_config.json"
+      ]
+    },
+    {
+      "path": "model/processor/tokenizer.json",
+      "sha256": "be75606093db2094d7cd20f3c2f385c212750648bd6ea4fb2bf507a6a4c55506",
+      "size": 11422650,
+      "source_path": "processor/tokenizer.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/processor/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/processor/tokenizer_config.json",
+      "sha256": "15d9c5ecb9cfd3c63e5be36629d00b7e21f32ce7c54037fc7fdb02033bca1d13",
+      "size": 733,
+      "source_path": "processor/tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/processor/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/scheduler/scheduler_config.json",
+      "sha256": "16c948c71f9152a34cce6e3a2f309e97ad2dca32beecbe5e2fd3a7925b7eb4bb",
+      "size": 486,
+      "source_path": "scheduler/scheduler_config.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/scheduler/scheduler_config.json"
+      ]
+    },
+    {
+      "path": "model/text_encoder/0.safetensors",
+      "sha256": "97ef0a25d9ae542fc32d2d3251285b4f5f0374b301ecdf7ac1b675607728880a",
+      "size": 2138745710,
+      "source_path": "text_encoder/0.safetensors",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/text_encoder/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/text_encoder/1.safetensors",
+      "sha256": "ff6b788c418f8f66471f79b3517b66cdbcc137420d5f085fe4e212f55487a639",
+      "size": 2145597798,
+      "source_path": "text_encoder/1.safetensors",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/text_encoder/1.safetensors"
+      ]
+    },
+    {
+      "path": "model/text_encoder/2.safetensors",
+      "sha256": "f7d9002be20f55c1d5c04906031ede9bed605cd721ce25ece24fa3eb8b35dd52",
+      "size": 843423318,
+      "source_path": "text_encoder/2.safetensors",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/text_encoder/2.safetensors"
+      ]
+    },
+    {
+      "path": "model/text_encoder/config.json",
+      "sha256": "b45aff957d1f5c51c541950ab9ef59fa733ce39fdc2d8ec3d7353e5691afedab",
+      "size": 1541,
+      "source_path": "text_encoder/config.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/text_encoder/config.json"
+      ]
+    },
+    {
+      "path": "model/text_encoder/model.safetensors.index.json",
+      "sha256": "e47b3798d613f5566822a6b164668fb1b19b3514cc77f838e171fb6885253dbd",
+      "size": 95963,
+      "source_path": "text_encoder/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/text_encoder/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/transformer/0.safetensors",
+      "sha256": "4dd1fd2b62c876296cf402b47f4bfe52082f21a703777cb16136a2a83b2720b4",
+      "size": 2123573901,
+      "source_path": "transformer/0.safetensors",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/transformer/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/transformer/1.safetensors",
+      "sha256": "82c958a3af69913d579980eee98272eaa40b83455d7fcce3706958c5c419769c",
+      "size": 2024999549,
+      "source_path": "transformer/1.safetensors",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/transformer/1.safetensors"
+      ]
+    },
+    {
+      "path": "model/transformer/config.json",
+      "sha256": "da2c2a64d6c1c7655813284363e88e9376808cf7e9bebb115d9121758cc07e07",
+      "size": 369,
+      "source_path": "transformer/config.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/transformer/config.json"
+      ]
+    },
+    {
+      "path": "model/transformer/model.safetensors.index.json",
+      "sha256": "a7bf546a802abc544d6370ae32b668f68938f496e6a7e182a4c8d2ca2cec168e",
+      "size": 48913,
+      "source_path": "transformer/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/transformer/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/vae/0.safetensors",
+      "sha256": "db7af91acdeda71871fac51817f2050a789b41e79eddce95992b06d7eaad9c70",
+      "size": 675508168,
+      "source_path": "vae/0.safetensors",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/vae/0.safetensors"
+      ]
+    },
+    {
+      "path": "model/vae/config.json",
+      "sha256": "c6ca6522d7793032d99b9e40be14823d8c96fb61f1957e04f7bec89737be661c",
+      "size": 2171,
+      "source_path": "vae/config.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/vae/config.json"
+      ]
+    },
+    {
+      "path": "model/vae/model.safetensors.index.json",
+      "sha256": "8fdd2920a81d7951ee99c89de7f8ffc6810f8131053135ea6dfeb25b3a4e96bd",
+      "size": 15902,
+      "source_path": "vae/model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/mflux-community/qwen-image-2-1-turbo-mflux-q4/resolve/bda8951ec6b8cc288a961432fe15c22433521a1d/vae/model.safetensors.index.json"
+      ]
+    }
+  ],
+  "license": {
+    "weights": "qwen-research"
+  },
+  "minimum_macos": "14.0",
+  "model_id": "mflux-community/qwen-image-2-1-turbo-mflux-q4",
+  "package_id": "qwen-image-2-1-turbo-mflux-q4",
+  "production_allowed": false,
+  "qualification": {
+    "memory_evidence": "16 GB is the target tier, not measured; Turbo remains unqualified until physical tier evidence is recorded.",
+    "minimum_unified_memory_gb": null,
+    "reason": "Target tier: 16 GB. This is a compatibility target, not measured physical qualification; no inference or memory proof has been recorded.",
+    "recommended_unified_memory_gb": null,
+    "status": "unqualified",
+    "target_unified_memory_gb": 16,
+    "tested_usable_context_tokens": null
+  },
+  "quantization": "MLX 4-bit",
+  "quantization_source": "the publisher checkpoint is the Qwen Image 2.1 Turbo quantized MLX 4-bit conversion",
+  "revision": "bda8951ec6b8cc288a961432fe15c22433521a1d",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-10-12",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mflux-community/qwen-image-2-1-turbo-mflux-q4",
+        "revision": "bda8951ec6b8cc288a961432fe15c22433521a1d"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "mflux-community/qwen-image-2-1-turbo-mflux-q4",
+        "revision": "bda8951ec6b8cc288a961432fe15c22433521a1d",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/mflux-community/qwen-image-2-1-turbo-mflux-q4/revision/bda8951ec6b8cc288a961432fe15c22433521a1d",
+        "tree_api_url": "https://huggingface.co/api/models/mflux-community/qwen-image-2-1-turbo-mflux-q4/tree/bda8951ec6b8cc288a961432fe15c22433521a1d?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

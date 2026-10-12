@@ -58,6 +58,7 @@ may still run there, and one at or below may still not (see the peak-memory note
 | Whisper Small | MLX (speech-to-text) | 8 GB | yes | yes | yes | yes |
 | Whisper Large v3 Turbo *(supporting files)* | MLX (speech-to-text) | 8 GB | yes | yes | yes | yes |
 | **Image** | | | | | | |
+| Qwen Image 2.1 Turbo Low-RAM MLX 4-bit | mflux (MLX) | not stated | — | — | — | — |
 | FLUX.2 Klein 4B MLX 4-bit | mflux (MLX) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | Z-Image-Turbo 6B MLX 4-bit | mflux (MLX) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
 | Qwen Image 2.1 Low-RAM 4-bit | mflux (MLX) | 16 GB | no | yes | yes | yes |
@@ -127,12 +128,12 @@ One rule for every voice model, so a chapter sounds the same whichever model or 
 
 ## What is NOT measured
 
-30 of 38 packages have no run behind them — their floor is
+31 of 39 packages have no run behind them — their floor is
 catalog metadata, which is a starting point rather than proof. That is not a defect in any
 one of them; it is the honest state of the record, and it is the list of what a test would
 settle:
 
-`bge-small-en-v1-5-bf16`, `breeze-tts-2-mlx-4bit`, `chatterbox-4bit`, `chatterbox-8bit`, `depth-anything-v2-small`, `fish-audio-s2-pro-4bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `florence-2-base-ft`, `florence-2-large-ft`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `nemotron-lightning-4bit`, `omnivoice-bfloat16`, `phonon-2-mlx`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen3-tts-12hz-0-6b-base-4bit`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `qwen36-35b-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
+`bge-small-en-v1-5-bf16`, `breeze-tts-2-mlx-4bit`, `chatterbox-4bit`, `chatterbox-8bit`, `depth-anything-v2-small`, `fish-audio-s2-pro-4bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `florence-2-base-ft`, `florence-2-large-ft`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `nemotron-lightning-4bit`, `omnivoice-bfloat16`, `phonon-2-mlx`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen-image-2-1-turbo-mflux-q4`, `qwen3-tts-12hz-0-6b-base-4bit`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `qwen36-35b-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
 
 ## Two things that surprise people reading this
 
@@ -165,4 +166,4 @@ So that a future test does not become the thing you cannot remember:
 
 ---
 
-Generated from 38 manifests, 11 recorded readings and 5 voice runtime rows.
+Generated from 39 manifests, 11 recorded readings and 5 voice runtime rows.

@@ -127,8 +127,7 @@ you can read rather than guess.
 
 ## The model library
 
-The kit carries **38 model packages** (about 159.0 GB). Normal setup copies **36 production-allowed packages** (about 120.8 GB); the **2 pending Chat MLX 4-bit packages** remain on the SSD and are not copied until
-qualification. `2 - Copy the models.command` copies
+The source catalog for the next kit build lists **39 model packages** (about 169.0 GB). Normal setup copies **36 production-allowed packages** (about 120.8 GB); the **3 pending packages** (2 Chat MLX 4-bit packages and 1 Qwen Image 2.1 Turbo MLX 4-bit candidate) are not copied until qualification. The Turbo manifest is candidate-preparation metadata only: its weights have not been physically installed, and the existing SSD kit has not been refreshed to include it. `2 - Copy the models.command` copies
 only what the Mac's memory can run, so an 8 GB Mac gets the image models and a 16 GB+ Mac
 gets the audio ones too. Voices you have saved are copied at the same time. The library on
 a drive is the library the Mac gets — there is no download step.

@@ -10,8 +10,8 @@ if [ "${1:-}" = "--tier" ] && [ -n "${2:-}" ]; then
     shift 2
 fi
 case "$TIER" in
-    16|24) ;;
-    *) echo "Use --tier 16 or --tier 24. The 8 GB tier remains NOT MEASURED." >&2; exit 4 ;;
+    16|24|32) ;;
+    *) echo "Use --tier 16 or --tier 24 (Turbo also accepts --tier 32). The 8 GB tier is unsupported." >&2; exit 4 ;;
 esac
 
 for file in qwen_image_qualification.py library_guard.py ssd_wear.py; do

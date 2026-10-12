@@ -1,8 +1,11 @@
 """One Image job's time limit scales with its steps and this Mac's speed (owner, 2026-10-08)."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import unittest
 
+from components import model_packages
 from components.image.app.backend import generation as g
 
 QWEN, LOW = g.QWEN_IMAGE_21, g.QWEN_IMAGE_21_LOW_RAM
@@ -53,9 +56,21 @@ class JobDeadlineTests(unittest.TestCase):
             self.assertGreaterEqual(g.job_deadline_s(QWEN, steps, "Apple M4"),
                                     max(900.0, 34.4 * steps))
 
-    def test_every_model_has_a_reading(self) -> None:
+    def test_every_production_model_has_a_reading(self) -> None:
+        root = Path(__file__).resolve().parents[1]
         for model in g.MODELS.values():
-            self.assertTrue(model.seconds_per_step, model.package_id)
+            manifest = json.loads(
+                (root / "model-manifests" / f"{model.package_id}.json").read_text())
+            if model_packages.production_allowed(manifest):
+                self.assertTrue(model.seconds_per_step, model.package_id)
+
+    def test_unqualified_turbo_borrows_no_deadline_measurement(self) -> None:
+        turbo = g.QWEN_IMAGE_21_TURBO
+
+        self.assertIsNone(turbo.seconds_per_step)
+        self.assertIsNone(turbo.measured_runtime)
+        self.assertEqual(g.job_deadline_s(turbo, 8, "Apple M4"),
+                         g.IMAGE_DEADLINE_FLOOR_S)
 
     def test_the_worker_states_the_limit_from_its_own_finished_jobs(self) -> None:
         from pathlib import Path

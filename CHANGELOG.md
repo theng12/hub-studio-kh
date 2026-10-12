@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased candidate — Qwen Image 2.1 Turbo Low-RAM MLX 4-bit
+
+Not installed or published. Preparation on `feature/qwen-image-turbo`, based on 0.6.170; release waits for Claude's current Hub work (now C2b) and This Mac inference waits for C3 in the shared handoff.
+
+- Added a separately identified, revision/checksum-pinned Turbo 4-bit image package with the official eight-step unshifted Euler schedule, guidance 1 and roughly-one-megapixel presets.
+- Reused Qwen's prompt materialization, zero cache, component eviction and tiled decode. A Turbo-only naming adaptation loads the newer export with the existing runtime; ordinary Qwen source is unchanged.
+- The package remains production-disabled and unqualified. Private physical 16/24/32 GB qualification uses copy-on-write data/library isolation, blocks the 8 GB bypass and refuses standalone heavy model processes. No peak, free-memory floor, timing or speedup is inferred.
+- Hardware qualification, version assignment, DMG, main integration and paced rollout remain pending. Source verification is recorded in the active Qwen Turbo planning note.
+
 ## 0.6.170 — 2026-10-12 · A song's own deadline, a bridge that stops when told, and no YuE2 start on an uncleared Mac
 
 - The music lane's flat 900 s cut 3–4 min YuE2 songs on the fleet (7 of 18 at 15:44, "did not finish within 900s … the Mac did not confirm it stopped"). Each YuE2 job now states `deadline_s` = 2 × (7.1 s per song-second × requested length + 120 s), the owner's rule: the slowest measured Mac (M1 16 GB, 1,415.5 s for a 199.5 s song) for everyone, doubled. The Hub copies it onto the batch item; Gateway 0.2.175 polls to the same number.

@@ -40,7 +40,7 @@ other Macs keep their own enablement and priorities.
 ## Files and callers
 
 - [model_packages.py](../components/model_packages.py): standard-library runtime helper.
-- [Model catalog](../model-manifests/): 38 exact packages; no moving model revisions.
+- [Model catalog](../model-manifests/): 39 exact packages; no moving model revisions.
 - [Runtime input records](../research/st01-runtime-contracts.json): engine families,
   lock hashes, source provenance and limits of the import/audit evidence.
 - [Model package tests](../tests/test_model_packages.py): filesystem, download and receipt behavior.
@@ -71,6 +71,10 @@ Weight digests captured from official LFS metadata are **expected** digests, not
 that the model bytes were downloaded or verified locally. Smaller companion files are
 hashed during capture. The capture command is a build-side tool; target nodes use the
 shipped catalog and do not resolve moving upstream revisions.
+
+The source catalog includes Qwen Image 2.1 Turbo MLX 4-bit as an unqualified candidate.
+Its metadata is not evidence that its weights are installed on a node or present on the
+existing SSD kit; that drive has not been refreshed with this candidate.
 
 The content identity hashes schema, package/model/revision/engine/OS requirements,
 required companions, file paths/aliases, sizes and checksums. Download mirrors and

@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## Unreleased candidate — not available in the installed app
+
+Qwen Image 2.1 Turbo 4-bit is being prepared as a faster image option for 16 GB and larger Macs.
+It stays unavailable until real-Mac image quality, memory and speed checks pass. The existing Qwen
+and 8 GB image choices are unchanged. This preparation has not been installed or rolled out.
+
 ## 0.6.170 - 2026-10-12
 
 ### Long songs get the time they need

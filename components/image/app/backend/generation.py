@@ -475,9 +475,40 @@ QWEN_IMAGE_21_LOW_RAM = ImageModel(
         'qualified on 16 GB and above; 8 GB is not qualified.'),
 )
 
+QWEN_IMAGE_21_TURBO = ImageModel(
+    repo='mflux-community/qwen-image-2-1-turbo-mflux-q4',
+    revision='bda8951ec6b8cc288a961432fe15c22433521a1d',
+    package_id='qwen-image-2-1-turbo-mflux-q4',
+    label='Qwen Image 2.1 Turbo Low-RAM MLX 4-bit',
+    family='qwen-image-2.1',
+    model_class='components.image.app.backend.qwen_turbo:QwenTurbo',
+    defaults={'aspect_ratio': '1:1', 'resolution': '1K', 'steps': 8,
+              'guidance': 1.0, 'seed': -1},
+    limits={'min_steps': 8, 'max_steps': 8, 'min_guidance': 1.0, 'max_guidance': 1.0,
+            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
+    memory=MemoryPolicy(single_mode_reason=(
+        'This model always uses prompt materialization, zero cache, tiled VAE decoding and '
+        'encoder/transformer eviction.')),
+    qualification={
+        'status': 'unqualified',
+        'target_tier_gb': 16,
+        'fleet_16gb': 'not measured',
+        'fleet_24gb': 'not measured',
+        'packaged_inference': 'not measured',
+    },
+    size_presets=QWEN_SIZE_PRESETS,
+    qualified_minimum_memory_gb=16.0,
+    resident_allowed=False,
+    guidance_ignored=True,
+    below_tier_warning=(
+        'This Mac has {memory_gb:.0f} GB of unified memory. Qwen Image 2.1 Turbo Low-RAM '
+        'MLX 4-bit targets 16 GB and above but remains unqualified pending a physical run.'),
+)
+
 MODELS: dict[str, ImageModel] = {
     model.repo: model for model in (
         FLUX2_KLEIN, Z_IMAGE_TURBO, QWEN_IMAGE_21, QWEN_IMAGE_21_LOW_RAM,
+        QWEN_IMAGE_21_TURBO,
     )
 }
 
@@ -1267,7 +1298,8 @@ class GenerationManager:
                  runtime_sha256: str, machine: str = 'local',
                  manifests: dict[str, dict] | list[dict] | None = None,
                  manifest_errors: dict[str, str] | None = None,
-                 total_memory_bytes: int | None = None) -> None:
+                 total_memory_bytes: int | None = None,
+                 qualification_package: str | None = None) -> None:
         self.data = data
         self.outputs = data / 'outputs'
         self.outputs.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1278,6 +1310,7 @@ class GenerationManager:
         self.manifest = manifest
         self.manifests = self._manifest_index(manifest, manifests)
         self.manifest_errors = dict(manifest_errors or {})
+        self.qualification_package = qualification_package
         self.runtime_sha256 = runtime_sha256
         self.machine = machine
         self.total_memory_bytes = (host_memory_bytes() if total_memory_bytes is None
@@ -1432,6 +1465,36 @@ class GenerationManager:
         model = MODELS.get(repo)
         return self.manifests.get(model.package_id) if model else None
 
+    def production_admission(self, repo: str) -> dict:
+        """Manifest-owned production policy plus the launcher's isolated qualification grant."""
+        from components import model_packages
+
+        model = MODELS.get(repo)
+        manifest = self.manifest_for(repo)
+        # A missing manifest remains the existing file-availability refusal in ``preflight``.
+        # The production gate governs a manifest that is present: legacy manifests without the
+        # field keep their established admission, while an explicit false fails closed.
+        allowed = manifest is None or model_packages.production_allowed(manifest)
+        declared = (manifest or {}).get('qualification') or {}
+        target_gb = declared.get('target_unified_memory_gb')
+        target_gb = (float(target_gb) if type(target_gb) in (int, float)
+                     and math.isfinite(target_gb) and target_gb > 0 else None)
+        target_met = target_gb is not None and self.total_memory_bytes >= target_gb * 1e9
+        qualification = bool(
+            manifest is not None and model is not None and not allowed
+            and self.qualification_package == model.package_id and target_met)
+        if (manifest is not None and model is not None and not allowed
+                and self.qualification_package == model.package_id and not target_met):
+            need = f'{target_gb:g} GB' if target_gb is not None else 'a declared physical tier'
+            reason = (f'{model.label} qualification requires a physical {need} Mac; '
+                      f'this host reports {self.total_memory_bytes / 1e9:.1f} GB')
+        else:
+            reason = declared.get('reason') or declared.get('memory_evidence') or (
+                f'{model.package_id if model else repo} is not qualified for production inference')
+        return {'production_allowed': allowed, 'qualification_allowed': qualification,
+                'qualification_target_gb': target_gb,
+                'allowed': allowed or qualification, 'reason': reason}
+
     def preflight(self, repo: str) -> dict:
         """Readability of one registered model's installed package.
 
@@ -1565,6 +1628,9 @@ class GenerationManager:
         # The worker's own state directory, so a parameter the request omits takes this Mac's
         # stored default for this model rather than the model's own.
         params = validate_request(raw, data_dir=self.data)
+        admission = self.production_admission(params['repo'])
+        if not admission['allowed']:
+            raise RuntimeError(f'MODEL_UNQUALIFIED: {admission["reason"]}')
         files = self.preflight(params['repo'])
         if files['state'] != 'files_verified':
             raise RuntimeError(f'MODEL_FILES_UNAVAILABLE: {files.get("reason") or files["state"]}')

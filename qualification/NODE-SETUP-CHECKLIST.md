@@ -2,8 +2,8 @@
 
 Version being deployed: the one this kit's own `focused-release-manifest.json` records (its
 `version` and `implementation_commit` — a version pinned in this sentence went stale every
-build), with **38** model packages (Stable Audio 3 Medium and YuE2 3B are the music models).
-Normal setup copies **36 production-allowed packages** (about 120.8 GB); the **2 pending Chat MLX 4-bit packages** remain on the SSD and are not copied until qualification.
+build), with **39** model packages in the source catalog (Stable Audio 3 Medium and YuE2 3B are the music models).
+Normal setup copies **36 production-allowed packages** (about 120.8 GB); the **3 pending packages** (2 Chat MLX 4-bit packages and 1 Qwen Image 2.1 Turbo MLX 4-bit candidate) are not copied until qualification. The Turbo entry is candidate-preparation metadata only: its weights have not been physically installed, and the existing SSD kit has not been refreshed to include it.
 
 ## What I have verified
 

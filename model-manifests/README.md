@@ -1,12 +1,17 @@
 # Studio Hub model manifests
 
-This catalog contains **38** bounded model packages. The files describe
-**158,995,100,320 expected bytes** across the packages; Qwen Base
+This catalog contains **39** bounded model packages. The files describe
+**168,958,543,918 expected bytes** across the packages; Qwen Base
 packages reference the shared `whisper-turbo` package for their internal
 quality check and do not copy its weights again.
 
 Both numbers are measured, not maintained by hand: `tests/test_document_inventory.py` recomputes
 them from the manifests in this directory and fails if this paragraph disagrees with them.
+
+The source catalog includes Qwen Image 2.1 Turbo MLX 4-bit candidate metadata. It is
+unqualified and withheld from production: its weights have not been physically installed,
+and the existing SSD kit has not been refreshed to include this candidate. Updating the
+source catalog does not update a drive.
 
 Each JSON manifest is schema version 1 and records the exact Hugging Face
 commit, package paths, byte counts, SHA-256 values and immutable resolve URLs.

@@ -75,7 +75,19 @@ class Workload:
     process_cold: bool = False
 
 
-def profile_for_tier(tier: int) -> Profile:
+TURBO_PACKAGE_ID = "qwen-image-2-1-turbo-mflux-q4"
+TURBO_REPO = "mflux-community/qwen-image-2-1-turbo-mflux-q4"
+TURBO_REVISION = "bda8951ec6b8cc288a961432fe15c22433521a1d"
+
+
+def profile_for_tier(tier: int, *, turbo: bool = False) -> Profile:
+    if turbo:
+        if tier not in (16, 24, 32):
+            raise SystemExit("Turbo tier must be 16, 24 or 32; 8 GB is unsupported and remains NOT MEASURED")
+        return Profile(
+            tier, TURBO_PACKAGE_ID, TURBO_REPO, TURBO_REVISION,
+            "MLX 4-bit", "image-mflux", (14, 0),
+            "Qwen Image 2.1 Turbo Low-RAM MLX 4-bit")
     profiles = {
         24: Profile(
             24, "qwen-image-2-1-mlx-serve-4bit",
@@ -120,12 +132,15 @@ def host_status(profile: Profile, memory_bytes: int, macos: tuple[int, ...],
     return HostStatus("READY", "host matches the requested physical qualification tier", True)
 
 
-def workloads(stress_40: bool) -> list[Workload]:
+def workloads(stress_40: bool, *, turbo: bool = False) -> list[Workload]:
+    if turbo and stress_40:
+        raise SystemExit("--stress-40 is unavailable for Qwen Image 2.1 Turbo MLX 4-bit")
+    steps = 8 if turbo else 16
     cases = [
-        Workload("cold-square", 1024, 1024, 16, True),
-        Workload("warm-square", 1024, 1024, 16),
-        Workload("warm-landscape", 1280, 720, 16),
-        Workload("warm-portrait", 720, 1280, 16),
+        Workload("cold-square", 1024, 1024, steps, True),
+        Workload("warm-square", 1024, 1024, steps),
+        Workload("warm-landscape", 1280, 720, steps),
+        Workload("warm-portrait", 720, 1280, steps),
     ]
     if stress_40:
         cases.extend([
@@ -379,15 +394,18 @@ def clone_package(source: Path, destination: Path, package_id: str) -> Path:
 
 
 def worker_command(app: Path, data: Path, library: Path, token: Path, ready: Path,
-                   parent_pid: int) -> list[str]:
+                   parent_pid: int, qualification_package: str | None = None) -> list[str]:
     resources = app / "Contents/Resources"
-    return [
+    command = [
         str(resources / "runtimes/image/bin/python3"), "-I", "-B",
         str(resources / "image_worker.py"), "--data-dir", str(data),
         "--models-dir", str(library), "--ready-file", str(ready),
         "--hub-token-file", str(token), "--parent-pid", str(parent_pid),
         "--port", "0", "--offline",
     ]
+    if qualification_package is not None:
+        command.extend(["--qualification-package", qualification_package])
+    return command
 
 
 def owns_process_group(pid: int) -> bool:
@@ -504,6 +522,21 @@ def wait_ready(process: subprocess.Popen, ready: Path, token: str,
             last_error = str(exc)
         time.sleep(0.25)
     raise RuntimeError(f"packaged Image worker did not become ready: {last_error}")
+
+
+def verify_qualification_worker(base: str, token: str, profile: Profile) -> dict:
+    """Confirm the private worker granted only the manifest-blocked candidate trial."""
+    status, payload = request_json(base, token, "GET", "/api/catalog", timeout=30)
+    rows = payload.get("models") if status == 200 and isinstance(payload, dict) else None
+    row = next((item for item in (rows or [])
+                if isinstance(item, dict) and item.get("package_id") == profile.package_id), None)
+    if (row is None or row.get("production_allowed") is not False
+            or row.get("qualification_allowed") is not True
+            or row.get("execution_ready") is not True):
+        raise RuntimeError(
+            f"packaged Image worker did not grant the isolated qualification permission for "
+            f"{profile.package_id}")
+    return row
 
 
 def swap_gb() -> float | None:
@@ -773,7 +806,7 @@ def summary_text(record: dict) -> str:
     verified = (record.get("host_status") or {}).get("target_tier_verified", False)
     purpose = f"{profile['tier_gb']} GB qualification" if verified else "non-target trial (not qualified)"
     lines = [
-        f"Qwen Image 2.1 {profile['quantization']} — {purpose}",
+        f"{profile['label']} — {purpose}",
         f"Outcome: {record['outcome']}", "",
         f"Mac: {host['chip']}, {host['memory_bytes'] / GIB:.1f} GiB, macOS {host['macos']}",
         f"App: {record['bundle']['version']} at {record['bundle']['app']}",
@@ -818,7 +851,9 @@ def write_record(result_dir: Path, record: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tier", type=int, required=True, choices=(16, 24))
+    parser.add_argument("--tier", type=int, required=True)
+    parser.add_argument("--turbo", action="store_true",
+                        help="qualify the pinned Qwen Image 2.1 Turbo MLX 4-bit candidate")
     parser.add_argument("--app", type=Path)
     parser.add_argument("--kit", type=Path)
     parser.add_argument("--models-dir", type=Path)
@@ -830,7 +865,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline-seconds", type=float, default=30)
     args = parser.parse_args(argv)
 
-    profile = profile_for_tier(args.tier)
+    profile = profile_for_tier(args.tier, turbo=args.turbo)
+    cases = workloads(args.stress_40, turbo=args.turbo)
     host = hardware_facts()
     status = host_status(profile, host["memory_bytes"], version_tuple(host["macos"]),
                          allow_non_target=args.allow_non_target)
@@ -891,13 +927,15 @@ def main(argv: list[str] | None = None) -> int:
         "private_library": str(private_library), "private_state": str(data),
         "available_memory_source": "packaged components/host_memory.py + psutil.virtual_memory()",
         "prompt": args.prompt,
-        "workloads": [asdict(case) for case in workloads(args.stress_40)],
+        "workloads": [asdict(case) for case in cases],
         "rows": [], "outcome": "STARTED",
     }
     write_record(result_dir, record)
 
     log = (result_dir / "worker.log").open("ab", buffering=0)
-    command = worker_command(app, data, private_library, token_path, ready, os.getpid())
+    command = worker_command(
+        app, data, private_library, token_path, ready, os.getpid(),
+        qualification_package=profile.package_id if args.turbo else None)
     child_env = {key: value for key, value in os.environ.items()
                  if key in {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR", "TZ"}}
     child_env["TMPDIR"] = str(private_root)
@@ -912,6 +950,8 @@ def main(argv: list[str] | None = None) -> int:
         return 4
     try:
         base, worker_ready = wait_ready(process, ready, token)
+        if args.turbo:
+            verify_qualification_worker(base, token, profile)
         record["worker"] = {"pid": process.pid,
                             "ready": {key: worker_ready.get(key) for key in
                                       ("url", "pid", "version") if key in worker_ready},
@@ -919,7 +959,7 @@ def main(argv: list[str] | None = None) -> int:
         baseline = (ssd_wear.baseline_gb_per_min(args.baseline_seconds)
                     if args.baseline_seconds > 0 else None)
         record["ssd_baseline_gb_per_min"] = baseline
-        for index, case in enumerate(workloads(args.stress_40)):
+        for index, case in enumerate(cases):
             print(f"[{case.name}] {case.width}x{case.height}, {case.steps} steps", flush=True)
             row = run_workload(base, token, profile, case, args.prompt, 42 + index,
                                args.timeout, result_dir, process.pid, baseline, read_available)

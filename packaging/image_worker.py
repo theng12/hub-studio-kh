@@ -5,11 +5,43 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import sys
 
 RESOURCES = Path(__file__).resolve().parent
 sys.path.insert(0, str(RESOURCES))
 from voice_worker import read_private_token, run_server
+
+
+def qualification_package(resources: Path, data: Path, models: Path,
+                          parent_pid: int | None, package_id: str | None) -> str | None:
+    """Validate the launch-only permission for one unqualified package.
+
+    The backend never accepts this permission over HTTP. The packaged launcher grants it only
+    to a parent-owned worker whose private state and copy-on-write library are siblings below the
+    qualification runner's ``_qualification-private`` root.
+    """
+    if package_id is None:
+        return None
+    if parent_pid is None:
+        raise ValueError('Qualification requires an owning parent process')
+    if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', package_id):
+        raise ValueError('Qualification package id is invalid')
+    private = data.parent
+    if models.parent != private or private.parent.name != '_qualification-private':
+        raise ValueError('Qualification state and library must share one private qualification root')
+    if not (models / package_id).is_dir():
+        raise ValueError(f'Qualification package {package_id} is absent from the private library')
+    manifest_path = resources / 'model-manifests' / f'{package_id}.json'
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError(f'Qualification manifest is unavailable: {exc}') from exc
+    if manifest.get('package_id') != package_id:
+        raise ValueError('Qualification manifest package id does not match')
+    if manifest.get('production_allowed') is not False:
+        raise ValueError(f'Qualification package {package_id} is already allowed for production')
+    return package_id
 
 
 def main() -> None:
@@ -21,6 +53,7 @@ def main() -> None:
     parser.add_argument('--parent-pid', type=int)
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--offline', action='store_true')
+    parser.add_argument('--qualification-package')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
@@ -63,6 +96,11 @@ def main() -> None:
             parser.error('Private Image process group must be isolated')
     else:
         pgid = None
+    try:
+        qualification = qualification_package(
+            resources, data, models, args.parent_pid, args.qualification_package)
+    except ValueError as exc:
+        parser.error(str(exc))
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
     image_data = data / 'image'
     if image_data.is_symlink():
@@ -91,6 +129,8 @@ def main() -> None:
         'MPLCONFIGDIR': str(image_data / 'cache' / 'matplotlib'),
         'PATH': str(runtime / 'bin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
     })
+    if qualification is not None:
+        os.environ['STUDIOHUB_IMAGE_QUALIFICATION_PACKAGE'] = qualification
     # Only when the owner asked for it. This used to be forced on, so switching Offline mode off
     # in the app changed nothing here - the setting looked like it worked and did not.
     if args.offline:
@@ -101,7 +141,9 @@ def main() -> None:
         print(json.dumps({'component': 'image', 'version': release['version'],
                           'source': str(source), 'runtime_sha256': identity,
                           'data': str(image_data), 'models': str(models),
-                          'offline': bool(args.offline), 'managed_updates': False}))
+                          'offline': bool(args.offline),
+                          'qualification_package': qualification,
+                          'managed_updates': False}))
         return
     os.chdir(image_data)
     run_server('components.image.app.backend.main:from_environment', args.port,

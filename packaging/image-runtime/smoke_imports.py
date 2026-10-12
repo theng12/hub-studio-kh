@@ -51,11 +51,24 @@ def registry_path(explicit: Path | None) -> Path:
                       for index in (2, 3) if index < len(here.parents)]
     for candidate in candidates:
         if candidate.is_file():
-            return candidate
+            source = candidate.resolve()
+            registry_root(source)
+            return source
     raise SystemExit(
         f"cannot find {COMPONENT_REGISTRY} (looked in "
         f"{', '.join(str(candidate) for candidate in candidates)}); pass --registry <path> so the "
         f"smoke imports the model classes the Image worker actually registers.")
+
+
+def registry_root(source: Path) -> Path:
+    """Repository root implied by the resolved Image registry path."""
+    suffix = COMPONENT_REGISTRY.parts
+    if source.parts[-len(suffix):] != suffix:
+        raise SystemExit(
+            f"registry must end with {COMPONENT_REGISTRY}, got {source}; refusing to add an "
+            f"unrelated directory to the isolated runtime's import path."
+        )
+    return source.parents[len(suffix) - 1]
 
 
 def registry_classes(source: Path) -> list[str]:
@@ -147,6 +160,7 @@ def main() -> int:
     arguments = parser.parse_args()
     source = registry_path(arguments.registry)
     classes = registry_classes(source)
+    sys.path.append(str(registry_root(source)))
     runtime = Path(sys.executable).resolve().parents[1]
     native = native_leaf(runtime)
     for module in BASE_MODULES:

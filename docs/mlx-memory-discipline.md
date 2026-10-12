@@ -111,6 +111,27 @@ Results, before and after, same seeds and prompts, with the table and side-by-si
 `_orchestra/audit-20261001/image-memory/` (`index.html`, `table.md`); the probe and report scripts are
 `qualification/image_memory_probe.py` and `qualification/image_memory_report.py`.
 
+### Qwen Image 2.1 Turbo MLX 4-bit — isolated candidate
+
+**Source preparation on `feature/qwen-image-turbo`, based on 0.6.170; not released, installed or physically qualified.**
+Package `qwen-image-2-1-turbo-mflux-q4` pins the MFlux Community conversion of the official Turbo checkpoint.
+It always uses the Qwen low-RAM recipe: quantized text encoder, materialized prompt embeddings before encoder
+release, transformer eviction before tiled VAE decoding, zero MLX cache while generating, and release after
+every job. This is its documented `MemoryPolicy.single_mode_reason`; no memory-mode switch is offered.
+
+Turbo follows the eight sigma nodes stored in the pinned `model/model_index.json`, with an appended terminal
+zero and first-order Euler updates, without the ordinary model's resolution-dependent sigma shift. It accepts
+exactly eight steps, guidance 1, and the existing roughly-one-megapixel square/landscape/portrait presets; no
+negative prompt, reference image, LoRA or block-streaming support is claimed. The adapter normalizes the new
+saved component names for the existing pinned runtime, rather than upgrading the runtimes of other images.
+
+**16 GB is a qualification target, not a passing result.** `production_allowed: false` keeps this candidate
+out of production; the private qualification runner is the only opt-in. No free-memory start floor, measured
+peak, render time or per-chip `seconds_per_step` is copied from ordinary Qwen. Those require a new physical
+receipt. 8 GB remains unsupported. Claude's current C2b release and C3 song run must complete under the shared handoff
+before integration/rollout and This Mac inference respectively. See the active planning record
+`.planning/2026-09-10-standalone-app-feasibility/qwen-image-turbo-20261012.md`.
+
 ## Voice
 
 
