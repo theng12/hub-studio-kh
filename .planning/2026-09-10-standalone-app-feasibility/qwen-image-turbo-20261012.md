@@ -48,3 +48,9 @@ Latest shared iCloud HANDOFF.md shows C2b Building and C3 71/82 done (C2 progres
 - All initial9failures caused by candidate inventory/docs and absent fixture setup were repaired; focused reruns passed. Voice product child998passed28skipped. Packaged runtime model-free import smoke passes with Turbo in its four Pythonmodelclasses. No modelconstructor/inference/weightpayload download.
 - Final code-only graph refresh:579files,16,651nodes,40,856edges; graph stays ignored. Native parser check passed; no native source change.
 - Candidate scope review and repair-wave review are clean. Source can be committed/pushed as disabled preparation; it is NOT hardware-qualified, installed, released or ready for production. Current C2b/C3 gates remain in force. Keep worktree for continuation.
+
+### Takeover integration — 2026-10-12
+- Owner authorized ChatGPT to take over production and fixes. Hub main `c2c6644` (0.6.171) is rolled out, including This Mac; YuE2 package repair 24/24. Current jobs/ownership are in the shared handoff. Earlier C2b/C3 coordination entries above are historical.
+- Merging latest main into the published feature branch without rewriting history; keep both released YuE2 and unreleased Turbo notes. Merge verification/commit pending.
+- Download remains the single resumable PID35445 process; 13/19 files now verified, 7,262,868,526 of 9,963,443,598 bytes. No final receipt or inference yet.
+- Primary untracked kit helper Breeze omission repaired with a backup under `studio-hub-kh/_trash/build-helpers/`; targeted proof still pending while Story holds the sole test lease.

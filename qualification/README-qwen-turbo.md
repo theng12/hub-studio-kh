@@ -1,6 +1,6 @@
 # Qwen Image 2.1 Turbo Low-RAM MLX 4-bit qualification
 
-Candidate source on `feature/qwen-image-turbo`, based on Hub 0.6.170. Not released or installed.
+Candidate source on `feature/qwen-image-turbo`, integrating released Hub 0.6.171. Not released or installed.
 The pinned package is `mflux-community/qwen-image-2-1-turbo-mflux-q4` at
 `bda8951ec6b8cc288a961432fe15c22433521a1d` (19 required files, 9,963,443,598 bytes).
 Its manifest has `production_allowed: false`. There is no passing hardware result, measured
@@ -8,12 +8,12 @@ free-memory floor or chip timing. The ordinary Qwen packages keep their existing
 
 ## Before running
 
-Read the shared iCloud `Story Studio Agent Automation/HANDOFF.md`. The current Hub task (now C2b) must be Done before
-release publication; leave This Mac's Hub and model work alone until C3 is Done. Never change
+Read the shared iCloud `Story Studio Agent Automation/HANDOFF.md` for current coordinator and active jobs.
+Hub 0.6.171 rollout and package repair are complete. Finish existing song work before using its Mac. Never change
 pauses to make a test run. Finish all model work before qualification; the runner refuses foreign
 model processes and uses private data plus a copy-on-write model library, not the real Hub state.
 Use a separately staged candidate app with the new adapter, manifest and qualification launcher;
-the installed 0.6.170 app cannot run this new package.
+the ordinary installed app cannot run this disabled candidate.
 
 ## Physical runs
 

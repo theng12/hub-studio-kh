@@ -98,6 +98,31 @@ def pressure_level() -> int | None:
         return None
 
 
+PRESSURE_WARNING, PRESSURE_CRITICAL = 2, 4
+
+
+def tolerate_warning_pressure(guard_class) -> None:
+    """Let a song carry on at macOS "warning" pressure (owner 2026-10-12, Hub 0.6.171).
+
+    The port's guard (`lyra.measure.GPUExecution._check_sample`) stops a run the moment pressure is not
+    "normal". On the 16 GB M1/M2 Macs YuE2 alone reaches "warning", and that stopped about half the
+    songs mid-way (SPEED-fleet.md). A warning sample is handed to the port's own check as normal, so
+    every other stop is the port's, unchanged: "critical" pressure, under 2 GiB available, the
+    process over its budget, and any new swapping (> 64 MiB out or > 128 MiB used growth).
+    """
+    original = guard_class._check_sample
+    if getattr(original, "_tolerates_warning", False):
+        return
+
+    def check(self, sample):
+        if sample.get("system_memory_pressure_level") == PRESSURE_WARNING:
+            sample = {**sample, "system_memory_pressure_level": 1}
+        return original(self, sample)
+
+    check._tolerates_warning = True
+    guard_class._check_sample = check
+
+
 def wait_for_normal_pressure(limit_s: float, poll_s: float = 2.0) -> float:
     """Wait (at most `limit_s`) until pressure is normal or unknown; the seconds waited."""
     started = time.time()
@@ -176,16 +201,20 @@ def main(argv: list[str]) -> int:
     waited = wait_for_normal_pressure(float(spec.get("pressure_wait_s") or 120))
     if waited:
         emit({"stage": "pressure", "detail": f"waited {waited:.0f}s for normal memory pressure"})
-    if pressure_level() not in (None, 1):
-        # Never start a song the port's guard will stop half-way (0.6.170): fail now, another Mac tries.
-        return fail(f"memory pressure on this Mac did not return to normal within {waited:.0f}s "
-                    f"(level {pressure_level()}); the song was not started")
+    if pressure_level() == PRESSURE_CRITICAL:
+        # Never start a song into critical pressure (0.6.170; 0.6.171 tolerates "warning"): another Mac tries.
+        return fail(f"memory pressure on this Mac is critical after {waited:.0f}s; the song was not started")
     emit({"stage": "loading", "detail": f"YuE2 {precision} generator + decoder"})
     load_started = time.time()
     try:
         from lyra import YuE2Pipeline  # noqa: PLC0415 - the runtime is the point of the delay
     except Exception as exc:  # noqa: BLE001 - the message is the fix
         return fail(f"the YuE2 runtime cannot import its own pipeline: {exc}")
+    try:
+        from lyra import measure  # noqa: PLC0415
+        tolerate_warning_pressure(measure.GPUExecution)
+    except Exception as exc:  # noqa: BLE001
+        return fail(f"the YuE2 runtime's memory guard could not be set up: {exc}")
 
     try:
         from yue2.protocol import GenerationConfig

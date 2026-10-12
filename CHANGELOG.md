@@ -2,12 +2,18 @@
 
 ## Unreleased candidate — Qwen Image 2.1 Turbo Low-RAM MLX 4-bit
 
-Not installed or published. Preparation on `feature/qwen-image-turbo`, based on 0.6.170; release waits for Claude's current Hub work (now C2b) and This Mac inference waits for C3 in the shared handoff.
+Not installed or published. Preparation on `feature/qwen-image-turbo`, integrating released Hub 0.6.171. The prior Hub rollout and repair are complete; physical qualification, candidate release and paced rollout remain pending under the shared handoff.
 
 - Added a separately identified, revision/checksum-pinned Turbo 4-bit image package with the official eight-step unshifted Euler schedule, guidance 1 and roughly-one-megapixel presets.
 - Reused Qwen's prompt materialization, zero cache, component eviction and tiled decode. A Turbo-only naming adaptation loads the newer export with the existing runtime; ordinary Qwen source is unchanged.
 - The package remains production-disabled and unqualified. Private physical 16/24/32 GB qualification uses copy-on-write data/library isolation, blocks the 8 GB bypass and refuses standalone heavy model processes. No peak, free-memory floor, timing or speedup is inferred.
 - Hardware qualification, version assignment, DMG, main integration and paced rollout remain pending. Source verification is recorded in the active Qwen Turbo planning note.
+
+## 0.6.171 — 2026-10-12 · YuE2 carries on at "warning" memory pressure (owner: "let them continue")
+
+- On the 16 GB M1/M2 Macs YuE2 alone pushes macOS to pressure "warning", and the port's guard (`lyra.measure.GPUExecution._check_sample`) stopped about half the 3.5 min songs mid-way even after the Mac was cleared (M1 1302 at 577 s, M2 1103 at 460 s). Owner decision 2026-10-12: carry on at warning; still stop at critical, under 2 GB free, or when the Mac starts swapping.
+- `yue2_runner.tolerate_warning_pressure` wraps the port's check once per run: a "warning" sample is passed on as normal, so every other stop stays the port's own (critical pressure, < 2 GiB available, the process over its budget, > 64 MiB of new swap-outs or > 128 MiB swap growth). The pre-load gate now refuses only critical pressure. Checked against the installed port: level 2 passes, level 4 still stops.
+- Test: `WarningPressureTests` (fails on the old guard).
 
 ## 0.6.170 — 2026-10-12 · A song's own deadline, a bridge that stops when told, and no YuE2 start on an uncleared Mac
 
