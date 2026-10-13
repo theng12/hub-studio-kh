@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.175 — 2026-10-13
+
+- Renew a valid LAN model share after each successfully sent nonempty file-body chunk, so continuous slow delivery can keep the scoped share available for the next file. Idle, expired and unknown grants retain their existing expiry and refusal rules.
+- Preserve whole/range/multipart/HEAD responses, failed-send cleanup, exact pinned file scope and the two-stream transfer cap. Add actual FileResponse regressions for long delivery and expiry boundaries.
+
 ## 0.6.174 — 2026-10-13
 
 - Add an explicit LAN-only policy to fleet model copies, carried through controller relays, durable downloads and the package CLI. Peer failure preserves verified/staged bytes and cannot silently fetch internet files.

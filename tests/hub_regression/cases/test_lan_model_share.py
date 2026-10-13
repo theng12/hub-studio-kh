@@ -8,6 +8,7 @@ here is a throwaway one (DATA-LOSS hazard): nothing touches a real model library
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import socket
@@ -87,6 +88,30 @@ def _events():
     return [row["event"] for row in startup_control.recent_audit(50)]
 
 
+class _Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+def _share_response(hub, token, name, *, method="GET", range_header=None):
+    from starlette.requests import Request
+
+    route = next(route for route in hub.app.routes
+                 if route.path == "/api/hub/model-share/{token}/files/{path:path}")
+    headers = [] if range_header is None else [(b"range", range_header.encode())]
+    scope = {"type": "http", "http_version": "1.1", "method": method,
+             "scheme": "http", "path": _path(f"http://testserver/api/hub/model-share/{token}/files", name),
+             "raw_path": b"", "query_string": b"", "root_path": "", "headers": headers,
+             "client": ("127.0.0.1", 1234), "server": ("testserver", 80)}
+    return route.endpoint(token, name, Request(scope)), scope
+
+
 def test_a_share_names_one_revision_and_its_files(hub):
     share = _share(hub)
     assert share["revision"] == "a" * 40
@@ -125,6 +150,105 @@ def test_serving_needs_the_token_and_resumes_with_range_uncompressed(hub):
     wrong = path.replace(share["token"], "x" * 43)
     assert hub.client.get(wrong, headers=anonymous).status_code == 404
     assert "model_share_served" in _events()
+
+
+@pytest.mark.parametrize(("range_header", "status"), [
+    (None, 200),
+    ("bytes=0-4999", 206),
+    ("bytes=0-999,2000-2999", 206),
+], ids=("whole", "range", "multipart"))
+def test_continuous_file_responses_keep_the_share_alive(hub, range_header, status):
+    from components.hub import model_share
+
+    clock = _Clock()
+    hub.monkeypatch.setattr(model_share, "time", SimpleNamespace(time=clock))
+    hub.monkeypatch.setattr(model_share, "TTL_S", 5)
+    share = _share(hub)
+    response, scope = _share_response(hub, share["token"], "weights.safetensors",
+                                      range_header=range_header)
+    response.chunk_size = 1000
+    messages = []
+
+    async def send(message):
+        messages.append(message)
+        if message["type"] == "http.response.body" and message.get("body"):
+            clock.advance(4)
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    asyncio.run(response(scope, receive, send))
+
+    assert next(message["status"] for message in messages
+                if message["type"] == "http.response.start") == status
+    assert len([message for message in messages
+                if message["type"] == "http.response.body" and message.get("body")]) > 1
+    assert clock.now > 100 + model_share.TTL_S
+    next_file = hub.client.get(_path(share["url_base"], "tokenizer/config.json"),
+                               headers={"Authorization": ""})
+    assert next_file.status_code == 200
+    assert next_file.content == FILES["tokenizer/config.json"]
+
+
+def test_head_does_not_renew_and_releases_the_transfer(hub):
+    from components.hub import model_share
+
+    clock = _Clock()
+    hub.monkeypatch.setattr(model_share, "time", SimpleNamespace(time=clock))
+    hub.monkeypatch.setattr(model_share, "TTL_S", 5)
+    share = _share(hub)
+    response, scope = _share_response(hub, share["token"], "weights.safetensors",
+                                      method="HEAD")
+
+    async def send(message):
+        if message["type"] == "http.response.body":
+            clock.advance(6)
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    asyncio.run(response(scope, receive, send))
+    assert model_share._active == 0
+    assert model_share.file_for(share["token"], "tokenizer/config.json") is None
+
+
+def test_a_failed_send_does_not_renew_and_releases_the_transfer(hub):
+    from components.hub import model_share
+
+    clock = _Clock()
+    hub.monkeypatch.setattr(model_share, "time", SimpleNamespace(time=clock))
+    hub.monkeypatch.setattr(model_share, "TTL_S", 5)
+    share = _share(hub)
+    response, scope = _share_response(hub, share["token"], "weights.safetensors")
+
+    async def send(message):
+        if message["type"] == "http.response.body":
+            clock.advance(6)
+            raise RuntimeError("client disconnected")
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    with pytest.raises(RuntimeError, match="client disconnected"):
+        asyncio.run(response(scope, receive, send))
+    assert model_share._active == 0
+    assert model_share.file_for(share["token"], "tokenizer/config.json") is None
+
+
+def test_renew_never_revives_expired_or_unknown_grants(hub):
+    from components.hub import model_share
+
+    clock = _Clock()
+    hub.monkeypatch.setattr(model_share, "time", SimpleNamespace(time=clock))
+    hub.monkeypatch.setattr(model_share, "TTL_S", 5)
+    share = _share(hub)
+    clock.advance(6)
+
+    expired_at = model_share._shares[share["token"]]["expires_at"]
+    assert model_share.renew(share["token"]) is False
+    assert model_share._shares[share["token"]]["expires_at"] == expired_at
+    assert model_share.renew("unknown") is False
+    assert "unknown" not in model_share._shares
 
 
 def test_the_share_route_needs_a_fleet_credential(hub):

@@ -48,6 +48,17 @@ def file_for(token: str, path: str) -> tuple[dict, Path] | None:
         return share, target
 
 
+def renew(token: str) -> bool:
+    """Renew an unexpired grant after actual body delivery; never revive one."""
+    now = time.time()
+    with _lock:
+        share = _shares.get(token)
+        if share is None or share["expires_at"] < now:
+            return False
+        share["expires_at"] = now + TTL_S
+        return True
+
+
 def acquire() -> bool:
     global _active
     with _lock:

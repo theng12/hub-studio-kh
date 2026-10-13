@@ -2738,10 +2738,20 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     class _ShareTransfer(FileResponse):
         """A shared model file; frees its transfer slot when the response ends, however it ends."""
 
+        def __init__(self, path, *, token: str, **kwargs) -> None:
+            super().__init__(path, **kwargs)
+            self._share_token = token
+
         async def __call__(self, scope, receive, send) -> None:
             from . import model_share
+
+            async def delivered(message) -> None:
+                await send(message)
+                if message["type"] == "http.response.body" and message.get("body"):
+                    model_share.renew(self._share_token)
+
             try:
-                await super().__call__(scope, receive, send)
+                await super().__call__(scope, receive, delivered)
             finally:
                 model_share.release()
 
@@ -2765,7 +2775,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             startup_control.audit("model_share_served", {
                 "package": share["package_id"], "file": path,
                 "peer": request.client.host if request.client else None})
-        return _ShareTransfer(target, media_type="application/octet-stream")
+        return _ShareTransfer(target, token=token, media_type="application/octet-stream")
 
     @app.get("/api/hub/fleet/nodes/{node_id}/model-downloads/{run_id}")
     async def fleet_node_model_download_status(node_id: str, run_id: str) -> JSONResponse:

@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.175 — 2026-10-13
+
+### Slow model copies can keep going
+
+A model share now stays available while file data is being sent. A large file that takes more than 30 minutes no longer lets an actively used share expire before the next file starts. Unused shares still expire, and LAN-only copies retain their saved files when a transfer fails.
+
 ## 0.6.174 — 2026-10-13
 
 ### Fleet model copies stay on the local network
