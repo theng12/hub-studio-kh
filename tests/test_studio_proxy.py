@@ -15,6 +15,7 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
 TOKEN = "controller-token-0123456789abcdef"
@@ -29,6 +30,7 @@ class FakeWorker:
 
     def __init__(self):
         self.requests: list[dict] = []
+        self.memory_release_busy = False
         # The job-status answer is configurable so a test can drive one job from
         # accepted to terminal without a second stub.
         self.poll_job: dict = {"id": "job-1", "state": "done"}
@@ -69,7 +71,16 @@ class FakeWorker:
             def do_POST(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 self._record(self.rfile.read(length))
-                if self.path.endswith("/boom"):
+                if self.path == "/api/memory/release":
+                    if outer.memory_release_busy:
+                        self._send(409, "application/json",
+                                   b'{"detail":"music generation is active"}')
+                    else:
+                        self._send(200, "application/json", json.dumps({
+                            "mode": "auto", "loaded_models": [], "busy": False,
+                            "released": True, "reason": "manual",
+                        }).encode())
+                elif self.path.endswith("/boom"):
                     self._send(422, "application/json", b'{"detail":"bad request"}')
                 else:
                     self._send(200, "application/json",
@@ -84,6 +95,7 @@ class FakeWorker:
 
     def stop(self) -> None:
         self.server.shutdown()
+        self.server.server_close()
 
 
 class StudioProxyTests(unittest.TestCase):
@@ -105,6 +117,7 @@ class StudioProxyTests(unittest.TestCase):
             os.environ.pop(name, None)
         cls.worker = FakeWorker()
         cls.subtitle = FakeWorker()
+        cls.music = FakeWorker()
         workers = root / "workers.json"
         workers.write_text(json.dumps([
             {
@@ -116,6 +129,12 @@ class StudioProxyTests(unittest.TestCase):
             {
                 "id": "subtitle", "title": "Subtitle Studio", "modality": "transcription",
                 "host": "127.0.0.1", "port": cls.subtitle.port, "machine": "local", "local": True,
+                "runtime_identity": {"id": "r", "compatible": True},
+                "hub_token": "worker-token", "managed_output_roots": [str(root / "out")],
+            },
+            {
+                "id": "music", "title": "Music Studio", "modality": "music",
+                "host": "127.0.0.1", "port": cls.music.port, "machine": "local", "local": True,
                 "runtime_identity": {"id": "r", "compatible": True},
                 "hub_token": "worker-token", "managed_output_roots": [str(root / "out")],
             },
@@ -146,6 +165,8 @@ class StudioProxyTests(unittest.TestCase):
             (auth, "PASSWORD_FILE", data / ".hub_password.json"),
             (auth, "SESSIONS_FILE", data / ".hub_sessions.json"),
             (peers, "FLEET_TOKEN_FILE", data / ".fleet_token"),
+            (peers, "SHARED_STUDIO_TOKEN_FILE", data / ".kh_studio_token"),
+            (peers, "PREVIOUS_TOKENS_FILE", data / ".fleet_token_previous"),
             (ledger, "DB_FILE", data / "hub.db"),
             (ledger, "PINOKIO_HOME", data),
         ):
@@ -157,6 +178,7 @@ class StudioProxyTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.worker.stop()
         cls.subtitle.stop()
+        cls.music.stop()
         cls.stack.close()
         os.environ.clear()
         os.environ.update(cls.old)
@@ -256,6 +278,57 @@ class StudioProxyTests(unittest.TestCase):
             with self.subTest(method=method, path=path):
                 response = client.request(method, path, headers=headers)
                 self.assertEqual(response.status_code, 403, response.text)
+
+    def test_remote_memory_control_releases_idle_music_through_the_node_proxy(self) -> None:
+        """A controller's release uses Fleet auth outside and the worker token inside."""
+        import asyncio
+
+        from components.hub.backend import peers
+        from components.hub.backend.memory_control import FleetMemoryControl
+
+        fleet_token = "fleet-controller-token-0123456789"
+        peers.set_fleet_token(fleet_token)
+        node = self.client()
+
+        class NodeClient:
+            async def request(inner_self, method, url, headers=None, json=None, timeout=None):
+                parsed = urlsplit(url)
+                path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+                return node.request(method, path, headers=headers, json=json)
+
+        remote = {
+            "id": "remote-node:music", "title": "Remote Music Studio", "modality": "music",
+            "host": "192.0.2.10", "port": 47873, "hub_port": 47873,
+            "machine": "remote-node", "local": False, "fleet_node": "remote-node",
+            "base_url": "http://192.0.2.10:47873",
+        }
+
+        class ControllerMonitor:
+            registry = [remote]
+            status = {remote["id"]: {"status": "up"}}
+
+        before = len(self.music.requests)
+        operation = asyncio.run(FleetMemoryControl(
+            ControllerMonitor(), client=NodeClient()).release([remote["id"]]))
+
+        self.assertTrue(operation["ok"], operation)
+        self.assertEqual(operation["succeeded"], 1)
+        self.assertEqual(operation["results"][0]["result"], "released")
+        self.assertEqual(len(self.music.requests), before + 1)
+        sent = self.music.requests[-1]
+        self.assertEqual(sent["method"], "POST")
+        self.assertEqual(sent["path"], "/api/memory/release")
+        self.assertEqual(sent["token"], "worker-token")
+
+        self.music.memory_release_busy = True
+        try:
+            busy = asyncio.run(FleetMemoryControl(
+                ControllerMonitor(), client=NodeClient()).release([remote["id"]]))
+        finally:
+            self.music.memory_release_busy = False
+        self.assertFalse(busy["ok"])
+        self.assertEqual(busy["results"][0]["result"], "busy")
+        self.assertEqual(self.music.requests[-1]["token"], "worker-token")
 
     def test_a_traversal_or_an_absolute_url_is_refused(self) -> None:
         client = self.client()

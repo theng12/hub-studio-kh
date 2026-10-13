@@ -1212,7 +1212,7 @@ class FleetChatAllowlistTests(unittest.TestCase):
         from components.hub.backend.auth import fleet_path_allowed
         return fleet_path_allowed(method, path)
 
-    def test_the_chat_surface_grants_reads_and_exactly_one_write(self) -> None:
+    def test_the_chat_surface_grants_reads_work_and_idle_release(self) -> None:
         routes = _chat_worker_routes()
         self.assertTrue(routes, "the Chat worker's route table could not be read at all")
         granted = [(method, path) for method, path in routes
@@ -1221,8 +1221,8 @@ class FleetChatAllowlistTests(unittest.TestCase):
                         "the scan found no granted chat read at all")
         writes = sorted(row for row in granted if row[0] != "GET")
         self.assertEqual(
-            writes, [("POST", "/v1/chat/completions")],
-            "a fleet credential was granted a write on chat beyond the one declared work route")
+            writes, [("POST", "/api/memory/release"), ("POST", "/v1/chat/completions")],
+            "a fleet credential was granted a write beyond work and idle memory release")
 
     def test_the_write_scan_can_see_a_write(self) -> None:
         """Negative control: the scan above is not vacuously reporting reads only."""
@@ -1359,7 +1359,6 @@ class FleetChatSurfaceTests(_PackagedHub, unittest.TestCase):
                 # Writes anywhere in the studio surface, including the routes the worker really
                 # publishes for them.
                 ("PUT", "/studio/chat/api/memory-policy"),
-                ("POST", "/studio/chat/api/memory/release"),
                 ("PATCH", "/studio/chat/api/chat/models/qwen"),
                 ("DELETE", "/studio/chat/api/chat/models/qwen"),
                 ("PUT", "/studio/chat/api/settings"),

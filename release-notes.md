@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.177 — 2026-10-13
+
+### Remote Macs can prepare memory for music
+
+The controller can now ask a remote Mac's idle workers to release their models before a YuE2 song. An authorization mismatch previously rejected that request and could skip a Mac even when it had enough available memory. Active work remains protected, and your memory-mode choices stay unchanged.
+
 ## 0.6.176 — 2026-10-13
 
 ### Complete activity for picture analysis and embeddings

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.177 — 2026-10-13
+
+- Allow authenticated fleet controllers to release idle models through the exact known-worker proxy endpoint before YuE2 jobs. Remote nodes previously refused this handoff with403, causing `memory_skip` despite sufficient reported RAM.
+- Keep memory presets, busy-worker protection, node credentials, settings/policy writes and bulk release boundaries unchanged. Retired video write routes remain denied. Add real proxy/authentication regressions with isolated fixture credentials.
+
 ## 0.6.176 — 2026-10-13
 
 - Publish authenticated direct activity for Embeddings and Vision through the existing fleet contract. Track accepted preparation and queued calls before their first wait, with actual inference threads owning running and terminal state.

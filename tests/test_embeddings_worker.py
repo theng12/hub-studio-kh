@@ -482,13 +482,15 @@ class EmbeddingsRegistrationTests(unittest.TestCase):
         self.assertEqual(vocabulary.WORKER_FOR_MODALITY["embeddings"], "embeddings")
         self.assertEqual(standalone.modality_for_worker("embeddings"), "embeddings")
 
-    def test_the_fleet_may_post_embeddings_and_nothing_else_there(self) -> None:
+    def test_the_fleet_may_post_embeddings_and_release_idle_memory(self) -> None:
         allowed = lambda method, path: any(
             method == m and __import__("re").match(pattern, path) for m, pattern in auth.FLEET_ALLOWED)
         self.assertTrue(allowed("POST", "/studio/embeddings/v1/embeddings"))
         self.assertTrue(allowed("GET", "/studio/embeddings/api/catalog"))
         self.assertFalse(allowed("PUT", "/studio/embeddings/api/memory-policy"))
-        self.assertFalse(allowed("POST", "/studio/embeddings/api/memory/release"))
+        self.assertTrue(allowed("POST", "/studio/embeddings/api/memory/release"))
+        self.assertFalse(allowed("POST", "/studio/embeddings/api/settings"))
+        self.assertFalse(allowed("POST", "/studio/embeddings/api/memory/release/all"))
 
     def test_embeddings_never_take_the_machine_lease(self) -> None:
         self.assertIsNone(standalone._peer_lease_policy("v1/embeddings"))

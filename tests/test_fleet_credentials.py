@@ -18,7 +18,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from components.hub.backend.auth import FLEET_ALLOWED, fleet_path_allowed
+from components.hub.backend.auth import (
+    FLEET_ALLOWED,
+    fleet_path_allowed,
+    node_origin_allowed,
+    node_path_allowed,
+)
 
 
 class FleetPermissionTests(unittest.TestCase):
@@ -51,6 +56,7 @@ class FleetPermissionTests(unittest.TestCase):
             # Submit, watch, collect, acknowledge, reconcile, cancel.
             ("POST", "/api/hub/jobs"),
             ("POST", "/studio/music/api/generate/txt2music"),
+            ("POST", "/studio/music/api/memory/release"),
             ("DELETE", "/studio/music/api/generate/job-4"),
             ("GET", "/api/hub/jobs"),
             ("GET", "/api/hub/jobs/abc123"),
@@ -150,6 +156,27 @@ class FleetPermissionTests(unittest.TestCase):
         self.assertTrue(fleet_path_allowed("DELETE", "/api/hub/fleet/nodes/other"))
         self.assertFalse(fleet_path_allowed("DELETE", "/api/hub/fleet/nodes/other/readmit"),
                          "re-admitting a removed Mac is the owner's decision and stays out")
+
+    def test_a_controller_can_release_only_known_studio_workers(self) -> None:
+        for modality in ("voice", "subtitle", "image", "transcription", "music", "chat",
+                         "embeddings", "vision"):
+            path = f"/studio/{modality}/api/memory/release"
+            with self.subTest(modality=modality):
+                self.assertTrue(fleet_path_allowed("POST", path))
+                self.assertFalse(node_path_allowed("POST", path))
+                self.assertFalse(node_origin_allowed("POST", path))
+
+        for method, path in (
+            ("PUT", "/studio/music/api/memory/release"),
+            ("POST", "/studio/video/api/memory/release"),
+            ("POST", "/studio/unknown/api/memory/release"),
+            ("POST", "/studio/music/api/memory/release/extra"),
+            ("POST", "/api/hub/memory/release"),
+            ("PUT", "/studio/music/api/memory-policy"),
+            ("POST", "/studio/music/api/settings"),
+        ):
+            with self.subTest(method=method, path=path):
+                self.assertFalse(fleet_path_allowed(method, path))
 
     def test_a_path_that_merely_starts_the_same_is_not_granted(self) -> None:
         # Prefix walking is the classic way an allowlist is defeated.

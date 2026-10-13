@@ -441,6 +441,10 @@ def presented_owner_token(request: Request, hub_token: str) -> bool:
 # worker exists, a controller shown the video catalog must be able to read its health, its
 # memory policy and its activity, or the failure is a 403 against a model the fleet advertises.
 _FLEET_STUDIO = r"(?:voice|subtitle|image|transcription|music|chat|video|embeddings|vision)"
+# Video remains readable for fleet routing, but its retired worker surface grants no writes.
+_FLEET_MEMORY_RELEASE_STUDIO = (
+    r"(?:voice|subtitle|image|transcription|music|chat|embeddings|vision)"
+)
 FLEET_ALLOWED = (
     ("GET", r"^/api/health$"),
     ("GET", r"^/api/version$"),
@@ -462,6 +466,10 @@ FLEET_ALLOWED = (
     ("GET", rf"^/studio/{_FLEET_STUDIO}/api/"
             r"(?:health|catalog|fleet/activity|memory-policy|transcribe/availability|"
             r"generate/availability)$"),
+    # A controller clears idle sibling models before handing the whole Mac to a large job.
+    # The worker still owns the final safety check and returns 409 while work is active. Keep
+    # this to the exact release endpoint: changing the idle policy remains the Mac owner's choice.
+    ("POST", rf"^/studio/{_FLEET_MEMORY_RELEASE_STUDIO}/api/memory/release$"),
     ("GET", rf"^/studio/{_FLEET_STUDIO}/api/generate/jobs/"
             r"[A-Za-z0-9_-]+(?:/(?:audio|image|video))?$"),
     ("GET", r"^/studio/(?:subtitle|transcription)/api/generate/transcribe/jobs"

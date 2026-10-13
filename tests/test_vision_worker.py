@@ -600,14 +600,16 @@ class VisionRegistrationTests(unittest.TestCase):
             self.assertFalse(any(f["path"].endswith((".bin", ".pt", ".pth", ".pkl")) for f in manifest["files"]),
                              "no pickle is ever downloaded")
 
-    def test_the_fleet_may_post_vision_and_nothing_else_there(self) -> None:
+    def test_the_fleet_may_post_vision_and_release_idle_memory(self) -> None:
         allowed = lambda method, path: any(
             method == m and re.match(pattern, path) for m, pattern in auth.FLEET_ALLOWED)
         self.assertTrue(allowed("POST", "/studio/vision/v1/vision/analyze"))
         self.assertTrue(allowed("POST", "/api/hub/fleet/nodes/studio-mac-0106-m2-8-256-hub/vision/analyze"))
         self.assertTrue(allowed("GET", "/studio/vision/api/catalog"))
         self.assertFalse(allowed("PUT", "/studio/vision/api/memory-policy"))
-        self.assertFalse(allowed("POST", "/studio/vision/api/memory/release"))
+        self.assertTrue(allowed("POST", "/studio/vision/api/memory/release"))
+        self.assertFalse(allowed("POST", "/studio/vision/api/settings"))
+        self.assertFalse(allowed("POST", "/studio/vision/api/memory/release/all"))
 
     def test_vision_never_takes_the_machine_lease(self) -> None:
         self.assertIsNone(standalone._peer_lease_policy("v1/vision/analyze"))
