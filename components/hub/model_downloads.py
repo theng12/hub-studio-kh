@@ -177,14 +177,23 @@ def _free_space_check(package_id: str, needed: int, library: Path) -> None:
 
 
 def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
-          sources: dict | None, peer: str | None = None) -> dict:
+          sources: dict | None, peer: str | None = None, peer_only: bool = False) -> dict:
     """Start (or rejoin) the download. ``peer`` is another Mac's LAN share URL
-    (`model_packages.peer_base`), tried before the internet file by file."""
+    (`model_packages.peer_base`), tried before the internet file by file. ``peer_only`` makes
+    failure of that share terminal without changing an already accepted non-strict run."""
     from components import model_packages
+    if not isinstance(peer_only, bool):
+        raise ValueError("peer_only must be true or false")
+    if peer_only and not peer:
+        raise ValueError("LAN-only copy requires a peer source")
     with _lock:
         value = reconcile()
         for existing in value["runs"].values():
             if existing.get("package_id") == package_id and existing.get("state") in {"running", "recovery_pending"}:
+                if peer_only and existing.get("peer_only") is not True:
+                    raise ValueError(
+                        f"{package_id} already has an accepted download without a LAN-only policy; "
+                        "wait for it to finish before requesting a LAN-only copy")
                 return {**_public(existing), "reused": True}
         # Worked out before the child starts: a manifest that cannot be digested must fail here, not
         # after a downloader is already running with no record of it.
@@ -220,6 +229,8 @@ def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
             child_command.extend(("--sources", str(sources_path)))
         if peer:
             child_command.extend(("--peer", str(peer_path)))
+        if peer_only:
+            child_command.append("--peer-only")
         output = root / "output.log"
         stream = output.open("w", encoding="utf-8")
         output.chmod(0o600)
@@ -234,7 +245,7 @@ def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
         run = {"id": run_id, "package_id": package_id, "state": "running",
                "started_at": time.time(), "pid": process.pid,
                "total_bytes": total_bytes, "staging": staging,
-               "source": "lan" if peer else "internet"}
+               "source": "lan" if peer else "internet", "peer_only": peer_only}
         value["runs"][run_id] = run
         _processes[run_id] = process
         _write(value)

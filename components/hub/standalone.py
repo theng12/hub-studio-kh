@@ -2555,9 +2555,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             sources = body.get("sources")
             if sources is not None and not isinstance(sources, dict):
                 raise ValueError("sources must be a map of model paths to HTTPS mirrors")
+            peer_only = body.get("peer_only", False)
+            if not isinstance(peer_only, bool):
+                raise ValueError("peer_only must be true or false")
             return model_downloads.start(package_id=package_id, manifest=manifest,
                                          catalog=catalog, library=_model_library(), sources=sources,
-                                         peer=_peer_source(body.get("source"), manifest))
+                                         peer=_peer_source(body.get("source"), manifest, peer_only),
+                                         peer_only=peer_only)
         except model_downloads.InsufficientDiskSpace as exc:
             # 507, like the output-storage refusal: the disk is the reason, not the request.
             raise HTTPException(507, str(exc)) from exc
@@ -2566,17 +2570,23 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except (OSError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
 
-    def _peer_source(source: Any, manifest: dict[str, Any]) -> str | None:
+    def _peer_source(source: Any, manifest: dict[str, Any], peer_only: bool = False) -> str | None:
         """The LAN share another Mac made of this package (its share route's `share` object), as
         the URL the downloader tries first. A share of a different revision is not used: the
         download then comes from the internet, as it would with no share at all."""
         from components import model_packages
         if source is None:
+            if peer_only:
+                raise ValueError("LAN-only copy requires another Mac's model share")
             return None
         if not isinstance(source, dict) or not isinstance(source.get("url_base"), str):
             raise ValueError("source must be another Mac's model share: {url_base, token, files, revision}")
         if source.get("revision") not in (None, manifest.get("revision")):
+            if peer_only:
+                raise ValueError("LAN-only copy source revision does not match this model package")
             return None
+        if peer_only and source.get("revision") != manifest.get("revision"):
+            raise ValueError("LAN-only copy source must name this model package revision")
         return model_packages.peer_base(source["url_base"])
 
     _downloads_shown: set[str] = set()
@@ -2631,12 +2641,24 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         from .backend import fleet_nodes as fleet
         actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
         wanted = node_id.strip().lower()
-        # Optional `{"source": <a share from another Mac>}` (0.6.146): copy over the LAN first.
+        # Optional source share plus the strict-LAN protocol bit (0.6.174).
+        raw_body = await request.body()
         try:
-            body = await request.json() if await request.body() else {}
+            body = await request.json() if raw_body else {}
         except ValueError:
-            body = {}
-        source = body.get("source") if isinstance(body, dict) else None
+            return JSONResponse({"ok": False, "code": "REFUSED", "detail":
+                                 "The download request body must be a JSON object."}, status_code=409)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "code": "REFUSED", "detail":
+                                 "The download request body must be a JSON object."}, status_code=409)
+        source = body.get("source")
+        peer_only = body.get("peer_only", False)
+        if not isinstance(peer_only, bool):
+            return JSONResponse({"ok": False, "code": "REFUSED", "detail":
+                                 "peer_only must be true or false"}, status_code=409)
+        if peer_only and source is None:
+            return JSONResponse({"ok": False, "code": "REFUSED", "detail":
+                                 "LAN-only copy requires another Mac's model share"}, status_code=409)
         if wanted not in ("local", fleet.this_machine()["id"].lower()):
             if control_plane.load_settings().get("role") != "controller":
                 raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
@@ -2645,7 +2667,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             try:
                 return JSONResponse(await fleet.relay_model(
                     wanted, "POST", f"/model-packages/{package_id}/download",
-                    payload={"source": source} if source is not None else None))
+                    payload={"source": source, "peer_only": peer_only} if source is not None else None))
             except fleet.StartupRelayError as error:
                 return JSONResponse(error.body, status_code=error.status)
         try:
@@ -2654,7 +2676,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 raise HTTPException(404, "unknown model package")
             _shelved_refusal(manifest)
             _memory_refusal(manifest)
-            run = download_model_package(package_id, {"source": source})
+            run = download_model_package(package_id, {"source": source, "peer_only": peer_only})
         except (OSError, ValueError) as exc:
             run, refusal = None, HTTPException(409, str(exc))
         except HTTPException as exc:

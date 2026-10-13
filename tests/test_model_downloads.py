@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 _PROOF = r'''
 import hashlib, json, os, subprocess, sys, tempfile, time
@@ -103,6 +105,28 @@ finally:
 
 
 class ModelDownloadLifecycleTests(unittest.TestCase):
+    def test_peer_only_does_not_relabel_or_duplicate_an_existing_internet_run(self) -> None:
+        from components.hub import model_downloads
+
+        with tempfile.TemporaryDirectory(prefix="hub-download-reuse-") as tmp, \
+                mock.patch.dict(os.environ, {"STUDIOHUB_DATA_DIR": tmp}):
+            existing = {"id": "accepted", "package_id": "fixture", "state": "running",
+                        "source": "internet", "peer_only": False, "staging": str(Path(tmp) / "stage")}
+            model_downloads._write({"runs": {"accepted": existing}})
+            process = mock.Mock()
+            process.poll.return_value = None
+            model_downloads._processes["accepted"] = process
+            self.addCleanup(model_downloads._processes.pop, "accepted", None)
+            with self.assertRaisesRegex(ValueError, "already has an accepted download without a LAN-only policy"):
+                model_downloads.start(
+                    package_id="fixture", manifest={"files": []}, catalog={}, library=Path(tmp) / "models",
+                    sources=None, peer="http://127.0.0.1/share/token/files", peer_only=True)
+            saved = model_downloads._read()["runs"]
+            self.assertEqual(list(saved), ["accepted"])
+            self.assertEqual((saved["accepted"]["id"], saved["accepted"]["peer_only"]),
+                             ("accepted", False))
+            process.poll.assert_called()
+
     def test_crash_recovery_retry_and_owned_shutdown(self) -> None:
         env = dict(os.environ)
         root = str(Path(__file__).resolve().parents[1])

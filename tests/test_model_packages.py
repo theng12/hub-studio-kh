@@ -1245,6 +1245,113 @@ class LanShareDownloadTests(unittest.TestCase):
         self.assertEqual(self.record(self.libraries['lan']), self.record(self.libraries['internet']))
         self.assertEqual(packages.preflight(self.manifest, self.libraries['lan'])['state'], 'files_verified')
 
+    def test_peer_only_copy_never_opens_an_internet_url(self):
+        peer = self.peer(self.files)
+        used = set()
+        packages.download_package(self.manifest, self.libraries['lan'], peer=peer.url_base,
+                                  peer_only=True, used=used)
+        self.assertEqual(used, {'lan'})
+        self.assertEqual(self.internet, [])
+
+    def test_peer_only_copy_needs_no_internet_urls_in_the_manifest(self):
+        strict_manifest = copy.deepcopy(self.manifest)
+        for entry in strict_manifest['files']:
+            entry['urls'] = []
+        peer = self.peer(self.files)
+        used = set()
+        packages.download_package(strict_manifest, self.libraries['lan'], peer=peer.url_base,
+                                  peer_only=True, used=used)
+        self.assertEqual(used, {'lan'})
+        self.assertEqual(self.internet, [])
+        self.assertEqual(packages.preflight(strict_manifest, self.libraries['lan'])['state'],
+                         'files_verified')
+
+    def test_peer_only_failures_keep_partial_bytes_and_never_use_the_internet(self):
+        cases = {
+            'expired': self.peer(self.files, token='other').url_base.replace('/other/', '/tok/'),
+            'corrupt': self.peer({**self.files, 'weights.safetensors': b'actual weightX'}).url_base,
+        }
+        for name, peer_url in cases.items():
+            with self.subTest(name=name):
+                library = Path(self.temp.name) / f'strict-{name}'
+                library.mkdir()
+                staged = packages._stage(self.manifest, library)
+                partial = staged / 'weights.safetensors.part'
+                partial.parent.mkdir(parents=True, exist_ok=True)
+                partial.write_bytes(b'actual')
+                with self.assertRaisesRegex(packages.PackageError, 'LAN-only copy failed'):
+                    packages.download_package(self.manifest, library, peer=peer_url, peer_only=True)
+                self.assertTrue(partial.exists(), 'a later LAN retry can resume or inspect the partial')
+                self.assertEqual(self.internet, [])
+
+        library = Path(self.temp.name) / 'strict-timeout'
+        library.mkdir()
+        staged = packages._stage(self.manifest, library)
+        partial = staged / 'weights.safetensors.part'
+        partial.parent.mkdir(parents=True, exist_ok=True)
+        partial.write_bytes(b'actual')
+        with mock.patch.object(packages, '_open_download', side_effect=TimeoutError('timed out')):
+            with self.assertRaisesRegex(packages.PackageError, r'LAN-only copy failed.*TimeoutError: timed out'):
+                packages.download_package(self.manifest, library, peer='http://127.0.0.1/share/token/files',
+                                          peer_only=True)
+        self.assertEqual(partial.read_bytes(), b'actual')
+        self.assertEqual(self.internet, [])
+
+    def test_peer_only_requires_a_valid_peer_and_an_already_verified_companion(self):
+        with self.assertRaisesRegex(packages.PackageError, 'peer_only must be true or false'):
+            packages.download_package(self.manifest, self.libraries['lan'], peer_only='yes')
+        with self.assertRaisesRegex(packages.PackageError, 'requires a peer'):
+            packages.download_package(self.manifest, self.libraries['lan'], peer_only=True)
+
+        companion_files = {'tokenizer.json': b'companion'}
+        companion = companion_manifest('companion', companion_files)
+        main = manifest(self.files)
+        main['requires_packages'] = ['companion']
+        peer = self.peer(self.files)
+        with self.assertRaisesRegex(packages.PackageError, 'companion.*already installed and verified'):
+            packages.download_package(main, self.libraries['lan'], peer=peer.url_base, peer_only=True,
+                                      catalog={'companion': companion})
+        self.assertEqual(self.internet, [])
+
+        source = Path(self.temp.name) / 'companion-source'
+        source.mkdir()
+        (source / 'tokenizer.json').write_bytes(b'companion')
+        packages.import_folder(companion, source, self.libraries['lan'])
+        packages.download_package(main, self.libraries['lan'], peer=peer.url_base, peer_only=True,
+                                  catalog={'companion': companion})
+        self.assertEqual(packages.preflight(main, self.libraries['lan'],
+                                            catalog={'companion': companion})['state'], 'files_verified')
+
+    def test_peer_only_companion_that_disappears_after_preflight_cannot_use_the_internet(self):
+        companion_files = {'weights.safetensors': self.files['weights.safetensors']}
+        companion = companion_manifest('companion', companion_files)
+        main = manifest(self.files)
+        main['requires_packages'] = ['companion']
+        source = Path(self.temp.name) / 'companion-race-source'
+        source.mkdir()
+        (source / 'model').mkdir()
+        (source / 'model/weights.safetensors').write_bytes(self.files['weights.safetensors'])
+        installed = packages.import_folder(companion, source, self.libraries['lan'])
+        installed_file = installed / 'model/weights.safetensors'
+        held_file = installed / 'model/weights.safetensors.held-for-race'
+        peer = self.peer(self.files)
+        real_download_one = packages._download_one
+
+        def disappear_at_download(current, *args, **kwargs):
+            if current is companion:
+                installed_file.rename(held_file)
+                try:
+                    return real_download_one(current, *args, **kwargs)
+                finally:
+                    held_file.rename(installed_file)
+            return real_download_one(current, *args, **kwargs)
+
+        with mock.patch.object(packages, '_download_one', side_effect=disappear_at_download):
+            with self.assertRaisesRegex(packages.PackageError, 'Download incomplete or invalid'):
+                packages.download_package(main, self.libraries['lan'], peer=peer.url_base,
+                                          peer_only=True, catalog={'companion': companion})
+        self.assertEqual(self.internet, [])
+
     def test_a_corrupted_peer_file_is_fetched_from_the_internet_and_still_verified(self):
         peer = self.peer({**self.files, 'weights.safetensors': b'actual weightX'})
         used = set()

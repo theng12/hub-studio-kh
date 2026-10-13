@@ -195,10 +195,10 @@ def test_share_and_lan_download_are_relayed_to_the_nodes(hub):
 
     node.body = {"ok": True, "node": "local", "run": {"id": "n", "state": "running", "source": "lan"}}
     answer = hub.client.post(f"/api/hub/fleet/nodes/{NODE}/model-packages/{PKG}/download",
-                             json={"source": share})
+                             json={"source": share, "peer_only": True})
     assert answer.status_code == 200, answer.text
     assert node.calls[-1] == ("POST", f"{ADDRESS}/api/hub/fleet/nodes/local/model-packages/{PKG}/download",
-                              {"source": share})
+                              {"source": share, "peer_only": True})
     hub.client.post(f"/api/hub/fleet/nodes/{NODE}/model-packages/{PKG}/download")
     assert node.calls[-1][2] is None, "an internet install relays no body, as before"
 
@@ -206,14 +206,28 @@ def test_share_and_lan_download_are_relayed_to_the_nodes(hub):
 def test_the_download_route_hands_the_share_to_the_downloader(hub):
     from components.hub import model_downloads
     started = []
-    hub.monkeypatch.setattr(model_downloads, "start", lambda **kw: started.append(kw.get("peer")) or {"id": "r"})
+    hub.monkeypatch.setattr(model_downloads, "start", lambda **kw: started.append(
+        (kw.get("peer"), kw.get("peer_only"))) or {"id": "r"})
     hub.monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(hub.libraries["target"]))
     route = f"/api/hub/fleet/nodes/local/model-packages/{PKG}/download"
     base = "http://100.96.171.104:47873/api/hub/model-share/t/files"
-    assert hub.client.post(route, json={"source": {"url_base": base, "revision": "a" * 40}}).status_code == 200
+    assert hub.client.post(route, json={"source": {"url_base": base, "revision": "a" * 40},
+                                        "peer_only": True}).status_code == 200
     assert hub.client.post(route, json={"source": {"url_base": base, "revision": "b" * 40}}).status_code == 200
     assert hub.client.post(route).status_code == 200
-    assert started == [base, None, None], "another revision's share is not used; no share = internet"
+    assert started == [(base, True), (None, False), (None, False)], \
+        "strict LAN is explicit; manual mismatch and no-share downloads keep internet fallback"
+    for content in (b"{", b"[]"):
+        answer = hub.client.post(route, content=content, headers={"Content-Type": "application/json"})
+        assert answer.status_code == 409
+    assert started == [(base, True), (None, False), (None, False)], \
+        "malformed and non-object requests cannot silently become internet downloads"
+    for body in ({"peer_only": True},
+                 {"peer_only": True, "source": {"url_base": base, "revision": "b" * 40}},
+                 {"peer_only": True, "source": {"url_base": base}},
+                 {"peer_only": True, "source": []},
+                 {"peer_only": "true", "source": {"url_base": base, "revision": "a" * 40}}):
+        assert hub.client.post(route, json=body).status_code == 409
     bad = hub.client.post(route, json={"source": {"url_base": "file:///etc/passwd"}})
     assert bad.status_code == 409
 
@@ -252,7 +266,7 @@ def test_a_lan_copy_end_to_end_installs_the_same_record(hub):
         assert share["url_base"].startswith(f"http://127.0.0.1:{port}/")
         hub.monkeypatch.setenv("STUDIOHUB_MODELS_DIR", str(hub.libraries["target"]))
         run = hub.client.post(f"/api/hub/fleet/nodes/local/model-packages/{PKG}/download",
-                              json={"source": share}).json()["run"]
+                              json={"source": share, "peer_only": True}).json()["run"]
         for _ in range(200):
             status = hub.client.get(f"/api/hub/fleet/nodes/local/model-downloads/{run['id']}").json()["run"]
             if status["state"] not in ("running", "recovery_pending"):

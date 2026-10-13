@@ -1486,11 +1486,12 @@ def _open_download(request, **kwargs):
     return urllib.request.build_opener(_SecureRedirect()).open(request, **kwargs)
 
 
-def _download_file(entry, staged, urls, root, peer=None):
+def _download_file(entry, staged, urls, root, peer=None, peer_only=False):
     """Fetch one file into staging; returns where its bytes came from (``lan``/``internet``), or
     None when staging already held it. ``peer`` (``{'url_base': ...}``) is tried before ``urls``: bytes
     that fail verification fall through to the internet for this file only, and a peer that does not
-    answer (unreachable, 404 after expiry, 429 busy) is dropped for the rest of the run."""
+    answer (unreachable, 404 after expiry, 429 busy) is dropped for the rest of the run. With
+    ``peer_only``, any peer failure stops here and keeps partial bytes for a later LAN retry."""
     target = staged / entry['path']
     relative = target.parent.relative_to(root).as_posix()
     with _directory(root, relative, create=True) as parent_fd:
@@ -1506,7 +1507,7 @@ def _download_file(entry, staged, urls, root, peer=None):
         partial = target.name + '.part'
         lan_url = (peer['url_base'] + '/' + urllib.parse.quote(entry['path'])
                    if peer and peer.get('url_base') else None)
-        for url in ([lan_url] if lan_url else []) + list(urls):
+        for url in ([lan_url] if lan_url else []) + ([] if peer_only else list(urls)):
             lan = url is lan_url
             if not lan:
                 _url(url)
@@ -1557,7 +1558,9 @@ def _download_file(entry, staged, urls, root, peer=None):
                 if lan:
                     peer['copied'] = True
                 return 'lan' if lan else 'internet'
-            except PackageError:
+            except PackageError as error:
+                if lan and peer_only:
+                    raise PackageError(f'LAN-only copy failed for {entry["path"]}: {error}') from None
                 try:
                     os.unlink(partial, dir_fd=parent_fd)
                 except FileNotFoundError:
@@ -1568,6 +1571,10 @@ def _download_file(entry, staged, urls, root, peer=None):
                     # The run reads this line while it runs (model_downloads._lan_fallback): why the copy
                     # stopped, in one line, never the token-bearing share URL.
                     reason = ' '.join(str(error).replace(peer['url_base'], '<share>').split())
+                    if peer_only:
+                        raise PackageError(
+                            f'LAN-only copy failed for {entry["path"]}: '
+                            f'{type(error).__name__}: {reason}') from None
                     print(f"LAN copy failed, using the internet ({'mixed' if peer.get('copied') else 'internet'}): "
                           f"{type(error).__name__}: {reason}", flush=True)
                     peer['url_base'] = None
@@ -1609,7 +1616,7 @@ def _seed_from_installed(manifest, root, staged):
             pass
 
 
-def _download_one(manifest, root, sources, peer=None, used=None):
+def _download_one(manifest, root, sources, peer=None, peer_only=False, used=None):
     validate_manifest(manifest)
     with _lock(root):
         current = preflight(manifest, root)
@@ -1620,20 +1627,24 @@ def _download_one(manifest, root, sources, peer=None, used=None):
         _seed_from_installed(manifest, root, staged)
         for entry in manifest['files']:
             urls = (sources or {}).get(entry['path'], entry.get('urls', []))
-            if not isinstance(urls, list) or not urls:
+            if not isinstance(urls, list) or (not urls and not (peer_only and peer)):
                 raise PackageError(f'No download source for {entry["path"]}')
-            got = _download_file(entry, staged, urls, root, peer)
+            got = _download_file(entry, staged, urls, root, peer, peer_only)
             if got and used is not None:
                 used.add(got)
         return _publish(manifest, staged, root)
 
 
-def download_package(manifest, library, *, sources=None, catalog=None, peer=None, used=None):
+def download_package(manifest, library, *, sources=None, catalog=None, peer=None, peer_only=False, used=None):
     """An explicit download includes its catalog-declared companion packages.
 
     ``peer`` is another Mac's share of this package (`peer_base`), tried before the internet for
-    this package's own files (companions always come from their own sources); ``used`` collects
-    ``lan``/``internet`` for every file fetched."""
+    this package's own files. ``peer_only`` forbids that fallback and requires companion packages
+    to be verified already; ``used`` collects ``lan``/``internet`` for every file fetched."""
+    if not isinstance(peer_only, bool):
+        raise PackageError('peer_only must be true or false')
+    if peer_only and not peer:
+        raise PackageError('LAN-only copy requires a peer')
     root = _library(library)
     peer = {'url_base': peer_base(peer)} if peer else None
     ordered = []
@@ -1655,9 +1666,16 @@ def download_package(manifest, library, *, sources=None, catalog=None, peer=None
         ordered.append(current)
 
     collect(manifest, set())
+    if peer_only:
+        for companion in ordered[:-1]:
+            if preflight(companion, root, catalog=catalog)['state'] != 'files_verified':
+                raise PackageError(
+                    f"LAN-only copy requires companion package {companion['package_id']} to be "
+                    "already installed and verified on this Mac")
     for current in ordered:
         mine = current is manifest
-        result = _download_one(current, root, sources if mine else None, peer if mine else None, used)
+        result = _download_one(current, root, sources if mine else None, peer if mine else None,
+                               peer_only, used)
     # Every package this download installed, companions included, is mirrored into the engine
     # cache: a downloaded kit is exactly the case where the network is about to go away.
     for current in ordered:
@@ -1707,6 +1725,8 @@ def main():
     parser.add_argument('--source', type=Path, help='Source folder for import')
     parser.add_argument('--sources', type=Path, help='Optional JSON mapping of file paths to HTTPS mirror URL lists')
     parser.add_argument('--peer', type=Path, help="Optional JSON string: another Mac's share URL, tried first")
+    parser.add_argument('--peer-only', action='store_true',
+                        help="Require every newly fetched file to come from --peer")
     args = parser.parse_args()
     try:
         if args.action == 'scan':
@@ -1731,7 +1751,7 @@ def main():
                 peer = json.loads(args.peer.read_text()) if args.peer else None
                 used = set()
                 folder = download_package(manifest, args.library, sources=sources, catalog=catalog,
-                                          peer=peer, used=used)
+                                          peer=peer, peer_only=args.peer_only, used=used)
                 result = {'folder': str(folder),
                           'companion_cache': companion_cache_status(manifest, args.library,
                                                                     catalog=catalog),
