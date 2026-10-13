@@ -2,6 +2,12 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.176 — 2026-10-13
+
+### Complete activity for picture analysis and embeddings
+
+The fleet can now see when these workers are preparing, waiting or processing a request. Work remains visible until it actually finishes, including when a caller disconnects. This gives the Hub the missing information needed to check whether a Mac is idle.
+
 ## 0.6.175 — 2026-10-13
 
 ### Slow model copies can keep going

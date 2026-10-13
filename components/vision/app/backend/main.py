@@ -31,6 +31,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from components import app_version, model_packages
+from components.synchronous_activity import SynchronousActivity
 
 from .memory_policy import MemoryPolicy
 
@@ -120,6 +121,7 @@ class VisionService:
         self._busy = 0
         self._last_activity: float | None = None
         self.model_id = None  # the model loaded last, as MemoryPolicy publishes it
+        self.activity = SynchronousActivity("vision")
 
     def files(self, manifest: dict) -> dict:
         catalog = {item["package_id"]: item for item in self.manifests.values()}
@@ -258,11 +260,19 @@ class VisionService:
             timings["segments"] = round((clock() - started) * 1000)
         return {**out, "timings_ms": timings}
 
-    def analyze(self, plan: dict, image, text: str, regions: list[str]) -> dict:
+    def analyze(self, plan: dict, image, text: str, regions: list[str], activity_job=None) -> dict:
         with self._lock:
             self._busy += 1
+        model = _activity_model(plan)
+        job = activity_job or self.activity.queue(model)
         try:
-            return self._thread.submit(self._analyze_on_thread, plan, image, text, regions).result()
+            try:
+                future = self._thread.submit(
+                    self.activity.run, job, self._analyze_on_thread, plan, image, text, regions)
+            except Exception:
+                self.activity.submission_failed(job)
+                raise
+            return future.result()
         finally:
             with self._lock:
                 self._busy -= 1
@@ -399,11 +409,18 @@ def plan_request(service: VisionService, body: dict) -> dict:
     return plan
 
 
+def _activity_model(plan: dict) -> str:
+    models = list(dict.fromkeys(manifest["model_id"] for manifest in plan.values()))
+    joined = ", ".join(models)
+    return joined if len(joined) <= 500 else f"{len(models)} vision models"
+
+
 def create_app(service: VisionService, policy: MemoryPolicy, token: str,
                runtime_sha256: str) -> FastAPI:
     if not token:
         raise ValueError("Private Vision worker requires its owning Hub credential")
     app = FastAPI(title="Studio Hub Vision", version="1")
+    build_identity = dict(app_version.version_fields())
 
     @app.middleware("http")
     async def require_owner(request: Request, call_next):
@@ -415,11 +432,15 @@ def create_app(service: VisionService, policy: MemoryPolicy, token: str,
         return await call_next(request)
 
     @app.get("/api/health")
-    def health() -> dict:
+    async def health() -> dict:
         state = service.status()
-        return {"ok": True, **app_version.version_fields(), "vision": {
+        return {"ok": True, **build_identity, "vision": {
             "available": True, "busy": state["busy"], "loaded_model": state["loaded_model"],
             "loaded_models": state["loaded_models"], "runtime_revision": runtime_sha256}}
+
+    @app.get("/api/fleet/activity")
+    async def fleet_activity() -> dict:
+        return service.activity.snapshot()
 
     @app.get("/api/catalog")
     def catalog() -> dict:
@@ -488,11 +509,26 @@ def create_app(service: VisionService, policy: MemoryPolicy, token: str,
             if not service.ready(manifest):
                 raise HTTPException(503, {"code": "MODEL_NOT_READY", "detail": service.files(manifest).get("reason")
                                           or f"{manifest['package_id']} is not installed on this Mac"})
+        model = _activity_model(plan)
+        job = service.activity.queue(model)
         decode_started = time.perf_counter()
-        image, received = await run_in_threadpool(read_image, body.get("image"))
+        try:
+            image, received = await run_in_threadpool(
+                service.activity.prepare, job, read_image, body.get("image"))
+        except Exception:
+            service.activity.discard(job)
+            raise
+        except BaseException:
+            service.activity.cancel_queued(job)
+            raise
         decode_ms = round((time.perf_counter() - decode_started) * 1000)
-        result = await run_in_threadpool(service.analyze, plan, image, text.strip(),
-                                         [r.strip() for r in regions])
+        try:
+            result = await run_in_threadpool(
+                service.activity.prepare, job, service.analyze, plan, image, text.strip(),
+                [r.strip() for r in regions], job)
+        except BaseException:
+            service.activity.cancel_queued(job)
+            raise
         timings = {"read_image": decode_ms, **result.pop("timings_ms"),
                    "total": round((time.perf_counter() - started) * 1000)}
         return {"models": {task: manifest["model_id"] for task, manifest in plan.items()},

@@ -36,6 +36,14 @@ def _jpeg(width=64, height=36) -> str:
     return base64.b64encode(buffer.getvalue()).decode()
 
 
+async def _wait_until(predicate, message: str) -> None:
+    deadline = time.monotonic() + 5
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise AssertionError(message)
+        await asyncio.sleep(0.01)
+
+
 class _FakeDepth:
     def predict(self, image, width, height):
         import numpy as np
@@ -98,7 +106,8 @@ class VisionRouteTests(unittest.TestCase):
             {"state": "files_verified"} if manifest["model_id"] in self.installed
             else {"state": "not_installed", "reason": "not on this Mac"})
         policy = MemoryPolicy(Path(self.temporary.name), self.service)
-        self.client = TestClient(create_app(self.service, policy, self.TOKEN, "a" * 64))
+        self.app = create_app(self.service, policy, self.TOKEN, "a" * 64)
+        self.client = TestClient(self.app)
         self.headers = {"X-Hub-Token": self.TOKEN}
 
     def post(self, body):
@@ -198,6 +207,9 @@ class VisionRouteTests(unittest.TestCase):
         large = self.post({"tasks": ["points"], "model": LARGE["model_id"], "image": {"b64": _jpeg()}})
         self.assertEqual(large.status_code, 503)
         self.assertEqual(self.loads, [])
+        activity = self.client.get("/api/fleet/activity", headers=self.headers).json()
+        self.assertIsNone(activity["active"])
+        self.assertIsNone(activity["latest"])
 
     def test_an_installed_large_model_serves_when_named_and_base_stays_the_default(self) -> None:
         self.installed.add(LARGE["model_id"])
@@ -217,6 +229,197 @@ class VisionRouteTests(unittest.TestCase):
     def test_only_the_hub_token_is_accepted(self) -> None:
         self.assertEqual(self.client.post("/v1/vision/analyze", json={}).status_code, 401)
         self.assertEqual(self.client.get("/api/health", headers={"X-Hub-Token": "x"}).status_code, 401)
+
+    def test_activity_route_is_authenticated_and_reports_no_private_content(self) -> None:
+        from components.hub.backend import activity
+
+        self.assertEqual(self.client.get("/api/fleet/activity").status_code, 401)
+        idle = self.client.get("/api/fleet/activity", headers=self.headers).json()
+        self.assertIsNone(idle["active"])
+        self.assertIsNone(idle["latest"])
+        self.assertIsNotNone(activity.validate_snapshot(idle, expected_studio="vision"))
+
+        secret = "private lighthouse description"
+        request = {"tasks": ["subject", "segments"], "image": {"b64": _jpeg()},
+                   "text": secret, "regions": ["sky", "water"]}
+        response = self.post(request)
+        self.assertEqual(response.status_code, 200, response.text)
+        snapshot = self.client.get("/api/fleet/activity", headers=self.headers).json()
+
+        self.assertIsNone(snapshot["active"])
+        self.assertEqual(snapshot["latest"]["state"], "done")
+        self.assertEqual(snapshot["latest"]["model"], BASE["model_id"])
+        self.assertIsNotNone(activity.validate_snapshot(snapshot, expected_studio="vision"))
+        public = json.dumps(snapshot)
+        for private in (secret, request["image"]["b64"], self.caption,
+                        "png_b64", "segments", "subject"):
+            self.assertNotIn(private, public)
+
+    def test_health_and_activity_bypass_a_saturated_request_pool(self) -> None:
+        import anyio
+
+        from components.chat.app.backend.memory_policy import MemoryPolicy
+        from components.hub.backend import activity
+        from components.vision.app.backend import main
+
+        identity = {"app_version": "9.8.7", "app_commit": "b" * 40,
+                    "development_build": False}
+        with patch.object(main.app_version, "version_fields", return_value=identity) as version_fields:
+            app = main.create_app(
+                self.service, MemoryPolicy(Path(self.temporary.name), self.service),
+                self.TOKEN, "a" * 64)
+
+            async def exercise() -> None:
+                limiter = anyio.to_thread.current_default_thread_limiter()
+                original_tokens = limiter.total_tokens
+                started, release = threading.Event(), threading.Event()
+
+                def hold_pool() -> None:
+                    started.set()
+                    if not release.wait(5):
+                        raise TimeoutError("fixture pool holder was not released")
+
+                limiter.total_tokens = 1
+                holder = asyncio.create_task(anyio.to_thread.run_sync(hold_pool))
+                try:
+                    await _wait_until(started.is_set, "fixture did not occupy the request pool")
+                    self.service._busy = 1
+                    self.service.model_id = DEPTH["model_id"]
+                    self.service._models = {
+                        BASE["model_id"]: object(), DEPTH["model_id"]: object()}
+                    transport = httpx.ASGITransport(app=app)
+                    async with httpx.AsyncClient(
+                            transport=transport, base_url="http://worker") as client:
+                        requests = [asyncio.create_task(client.get(path, headers=headers))
+                                    for path, headers in (
+                                        ("/api/health", self.headers),
+                                        ("/api/fleet/activity", self.headers),
+                                        ("/api/health", {}),
+                                        ("/api/fleet/activity", {}),
+                                    )]
+                        done, pending = await asyncio.wait(requests, timeout=0.5)
+                        self.assertFalse(pending, "health/activity waited for the full thread pool")
+                        health, snapshot, denied_health, denied_activity = [
+                            request.result() for request in requests]
+                        self.assertEqual((health.status_code, snapshot.status_code), (200, 200))
+                        self.assertEqual((denied_health.status_code, denied_activity.status_code),
+                                         (401, 401))
+                        body = health.json()
+                        self.assertEqual({key: body[key] for key in identity}, identity)
+                        self.assertEqual(body["vision"], {
+                            "available": True, "busy": True,
+                            "loaded_model": DEPTH["model_id"],
+                            "loaded_models": sorted((BASE["model_id"], DEPTH["model_id"])),
+                            "runtime_revision": "a" * 64})
+                        self.assertIsNotNone(activity.validate_snapshot(
+                            snapshot.json(), expected_studio="vision"))
+                finally:
+                    release.set()
+                    await holder
+                    limiter.total_tokens = original_tokens
+                    self.service._busy = 0
+                    self.service.model_id = None
+                    self.service._models = {}
+
+            asyncio.run(exercise())
+            version_fields.assert_called_once_with()
+
+    def test_a_multi_model_activity_label_stays_inside_the_hub_contract(self) -> None:
+        from components.hub.backend import activity
+        from components.vision.app.backend.main import _activity_model
+
+        model = _activity_model({
+            "one": {"model_id": "a" * 300},
+            "two": {"model_id": "b" * 300},
+        })
+        job = self.service.activity.queue(model)
+        self.service.activity.submission_failed(job)
+        snapshot = self.service.activity.snapshot()
+
+        self.assertLessEqual(len(snapshot["latest"]["model"]), 500)
+        self.assertIsNotNone(
+            activity.validate_snapshot(snapshot, expected_studio="vision"))
+
+    def test_activity_is_queued_during_accepted_image_preparation(self) -> None:
+        from components.hub.backend import activity
+        from components.vision.app.backend import main
+
+        started, release = threading.Event(), threading.Event()
+        original = main.read_image
+
+        def blocked_read(value):
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError("fixture image preparation was not released")
+            return original(value)
+
+        async def exercise() -> None:
+            transport = httpx.ASGITransport(app=self.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://worker") as client:
+                with patch.object(main, "read_image", blocked_read):
+                    request = asyncio.create_task(client.post(
+                        "/v1/vision/analyze", headers=self.headers,
+                        json={"tasks": ["depth"], "image": {"b64": _jpeg()}}))
+                    await _wait_until(started.is_set, "image preparation never started")
+                    snapshot = (await client.get(
+                        "/api/fleet/activity", headers=self.headers)).json()
+                    self.assertEqual(snapshot["active"]["state"], "queued")
+                    self.assertIsNone(snapshot["latest"])
+                    self.assertIsNotNone(
+                        activity.validate_snapshot(snapshot, expected_studio="vision"))
+                    release.set()
+                    self.assertEqual((await request).status_code, 200)
+
+        asyncio.run(exercise())
+
+    def test_cancellation_during_image_preparation_does_not_leave_stale_activity(self) -> None:
+        from components.hub.backend import activity
+        from components.vision.app.backend import main
+
+        started, release = threading.Event(), threading.Event()
+        original = main.read_image
+
+        def blocked_read(value):
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError("fixture image preparation was not released")
+            return original(value)
+
+        async def exercise() -> None:
+            transport = httpx.ASGITransport(app=self.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://worker") as client:
+                with patch.object(main, "read_image", blocked_read):
+                    request = asyncio.create_task(client.post(
+                        "/v1/vision/analyze", headers=self.headers,
+                        json={"tasks": ["depth"], "image": {"b64": _jpeg()}}))
+                    await _wait_until(started.is_set, "image preparation never started")
+                    request.cancel()
+                    try:
+                        await asyncio.wait_for(asyncio.shield(request), 0.2)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        pass
+                    while_running = (await client.get(
+                        "/api/fleet/activity", headers=self.headers)).json()
+                    self.assertIn(while_running["active"]["state"], {"queued", "cancel_requested"})
+                    self.assertIsNone(while_running["latest"])
+                    release.set()
+                    try:
+                        await request
+                    except asyncio.CancelledError:
+                        pass
+                    await _wait_until(
+                        lambda: self.service.activity.snapshot()["active"] is None,
+                        "cancelled preparation left a queued activity")
+
+                snapshot = (await client.get(
+                    "/api/fleet/activity", headers=self.headers)).json()
+                self.assertIsNone(snapshot["active"])
+                self.assertEqual(snapshot["latest"]["state"], "cancelled")
+                self.assertEqual(self.loads, [], "cancelled preparation must not load a model")
+                self.assertIsNotNone(
+                    activity.validate_snapshot(snapshot, expected_studio="vision"))
+
+        asyncio.run(exercise())
 
     def test_catalog_and_memory_contracts(self) -> None:
         rows = {row["repo"]: row for row in

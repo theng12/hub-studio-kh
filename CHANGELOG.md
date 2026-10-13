@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.176 — 2026-10-13
+
+- Publish authenticated direct activity for Embeddings and Vision through the existing fleet contract. Track accepted preparation and queued calls before their first wait, with actual inference threads owning running and terminal state.
+- Preserve pending work during client cancellation, retain every live request and only the latest terminal row, and publish scalar metadata without input or output content. The Hub continues to require every registered reporter before claiming complete activity.
+
 ## 0.6.175 — 2026-10-13
 
 - Renew a valid LAN model share after each successfully sent nonempty file-body chunk, so continuous slow delivery can keep the scoped share available for the next file. Idle, expired and unknown grants retain their existing expiry and refusal rules.

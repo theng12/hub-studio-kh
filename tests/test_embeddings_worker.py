@@ -8,6 +8,7 @@ import math
 import os
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -33,6 +34,120 @@ class _FakeEncoder:
 
     def encode(self, texts):
         return [[float(len(text)), 1.0] for text in texts], sum(self.token_counts(texts))
+
+
+class _BlockingEncoder:
+    max_tokens = 8
+
+    def __init__(self) -> None:
+        self.started = [threading.Event(), threading.Event()]
+        self.release = [threading.Event(), threading.Event()]
+        self.finished = []
+        self.lock = threading.Lock()
+        self.calls = 0
+
+    def token_counts(self, texts):
+        return [1 for _ in texts]
+
+    def encode(self, texts):
+        with self.lock:
+            index = self.calls
+            self.calls += 1
+        self.started[index].set()
+        if not self.release[index].wait(5):
+            raise TimeoutError(f"fixture call {index} was not released")
+        self.finished.append(index)
+        return [[float(index)] for _ in texts], len(texts)
+
+
+async def _wait_until(predicate, message: str) -> None:
+    deadline = time.monotonic() + 5
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise AssertionError(message)
+        await asyncio.sleep(0.01)
+
+
+class SynchronousActivityTests(unittest.TestCase):
+    def test_every_live_request_remains_visible_past_the_old_queue_cap(self) -> None:
+        from components.synchronous_activity import SynchronousActivity
+
+        activity = SynchronousActivity("embeddings")
+        first = activity.queue("model-0")
+        first_id = activity.snapshot()["active"]["id"]
+        later = [activity.queue(f"model-{index}") for index in range(1, 70)]
+
+        for job in reversed(later):
+            activity.cancel_queued(job)
+
+        self.assertEqual(activity.snapshot()["active"]["id"], first_id)
+        activity.cancel_queued(first)
+
+    def test_preparation_thread_owns_cancellation_until_it_exits(self) -> None:
+        from components.synchronous_activity import SynchronousActivity
+
+        activity = SynchronousActivity("embeddings")
+        job = activity.queue("model")
+        started, release = threading.Event(), threading.Event()
+
+        def prepare() -> None:
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError("fixture preparation was not released")
+
+        thread = threading.Thread(target=activity.prepare, args=(job, prepare))
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.assertTrue(started.wait(1))
+
+        activity.cancel_queued(job)
+        waiting = activity.snapshot()
+        self.assertEqual(waiting["active"]["state"], "cancel_requested")
+        self.assertIsNone(waiting["latest"])
+
+        release.set()
+        thread.join(1)
+        self.assertFalse(thread.is_alive())
+        terminal = activity.snapshot()
+        self.assertIsNone(terminal["active"])
+        self.assertEqual(terminal["latest"]["state"], "cancelled")
+
+    def test_snapshot_observation_is_captured_after_winning_the_state_lock(self) -> None:
+        from components.hub.backend import activity as hub_activity
+        from components.synchronous_activity import SynchronousActivity
+
+        activity = SynchronousActivity("embeddings")
+        job = activity.queue("model")
+        waiting, release = threading.Event(), threading.Event()
+        original_lock = activity._lock
+
+        class PausingLock:
+            def __enter__(self):
+                if threading.current_thread().name == "snapshot-reader":
+                    waiting.set()
+                    if not release.wait(5):
+                        raise TimeoutError("fixture snapshot reader was not released")
+                original_lock.acquire()
+                return self
+
+            def __exit__(self, *_args):
+                original_lock.release()
+
+        activity._lock = PausingLock()
+        result = []
+        reader = threading.Thread(
+            target=lambda: result.append(activity.snapshot()), name="snapshot-reader")
+        reader.start()
+        self.addCleanup(reader.join, 5)
+        self.assertTrue(waiting.wait(1))
+
+        activity.run(job, lambda: None)
+        release.set()
+        reader.join(1)
+
+        self.assertFalse(reader.is_alive())
+        self.assertIsNotNone(
+            hub_activity.validate_snapshot(result[0], expected_studio="embeddings"))
 
 
 @unittest.skipUnless(_HAS["fastapi"], "fastapi is not installed")
@@ -94,10 +209,176 @@ class EmbeddingsRouteTests(unittest.TestCase):
         self.assertEqual(answer.status_code, 503)
         self.assertIn("MODEL_NOT_READY", answer.text)
         self.assertEqual(self.loads, [])
+        activity = self.client.get("/api/fleet/activity", headers=self.headers).json()
+        self.assertIsNone(activity["active"])
+        self.assertIsNone(activity["latest"])
 
     def test_only_the_hub_token_is_accepted(self) -> None:
         self.assertEqual(self.client.post("/v1/embeddings", json={"input": ["ok"]}).status_code, 401)
         self.assertEqual(self.client.get("/api/health", headers={"X-Hub-Token": "x"}).status_code, 401)
+
+    def test_activity_route_is_authenticated_and_idle_is_a_valid_snapshot(self) -> None:
+        from components.hub.backend import activity
+
+        self.assertEqual(self.client.get("/api/fleet/activity").status_code, 401)
+        snapshot = self.client.get("/api/fleet/activity", headers=self.headers).json()
+
+        self.assertEqual(snapshot["studio"], "embeddings")
+        self.assertIsNone(snapshot["active"])
+        self.assertIsNone(snapshot["latest"])
+        self.assertIsNotNone(
+            activity.validate_snapshot(snapshot, expected_studio="embeddings"))
+
+    def test_health_and_activity_bypass_a_saturated_request_pool(self) -> None:
+        import anyio
+
+        from components.chat.app.backend.memory_policy import MemoryPolicy
+        from components.embeddings.app.backend import main
+        from components.hub.backend import activity
+
+        identity = {"app_version": "9.8.7", "app_commit": "b" * 40,
+                    "development_build": False}
+        with patch.object(main.app_version, "version_fields", return_value=identity) as version_fields:
+            app = main.create_app(
+                self.service, MemoryPolicy(Path(self.temporary.name), self.service),
+                self.TOKEN, "a" * 64)
+
+            async def exercise() -> None:
+                limiter = anyio.to_thread.current_default_thread_limiter()
+                original_tokens = limiter.total_tokens
+                started, release = threading.Event(), threading.Event()
+
+                def hold_pool() -> None:
+                    started.set()
+                    if not release.wait(5):
+                        raise TimeoutError("fixture pool holder was not released")
+
+                limiter.total_tokens = 1
+                holder = asyncio.create_task(anyio.to_thread.run_sync(hold_pool))
+                try:
+                    await _wait_until(started.is_set, "fixture did not occupy the request pool")
+                    self.service._busy = 1
+                    self.service._loaded_id = MODEL
+                    transport = httpx.ASGITransport(app=app)
+                    async with httpx.AsyncClient(
+                            transport=transport, base_url="http://worker") as client:
+                        requests = [asyncio.create_task(client.get(path, headers=headers))
+                                    for path, headers in (
+                                        ("/api/health", self.headers),
+                                        ("/api/fleet/activity", self.headers),
+                                        ("/api/health", {}),
+                                        ("/api/fleet/activity", {}),
+                                    )]
+                        done, pending = await asyncio.wait(requests, timeout=0.5)
+                        self.assertFalse(pending, "health/activity waited for the full thread pool")
+                        health, snapshot, denied_health, denied_activity = [
+                            request.result() for request in requests]
+                        self.assertEqual((health.status_code, snapshot.status_code), (200, 200))
+                        self.assertEqual((denied_health.status_code, denied_activity.status_code),
+                                         (401, 401))
+                        body = health.json()
+                        self.assertEqual({key: body[key] for key in identity}, identity)
+                        self.assertEqual(body["embeddings"], {
+                            "available": True, "busy": True, "loaded_model": MODEL,
+                            "runtime_revision": "a" * 64})
+                        self.assertIsNotNone(activity.validate_snapshot(
+                            snapshot.json(), expected_studio="embeddings"))
+                finally:
+                    release.set()
+                    await holder
+                    limiter.total_tokens = original_tokens
+                    self.service._busy = 0
+                    self.service._loaded_id = None
+
+            asyncio.run(exercise())
+            version_fields.assert_called_once_with()
+
+    def test_activity_stays_with_the_executor_after_client_cancellation(self) -> None:
+        from components.chat.app.backend.memory_policy import MemoryPolicy
+        from components.embeddings.app.backend.main import EmbeddingService, create_app
+        from components.hub.backend import activity
+
+        encoder = _BlockingEncoder()
+        service = EmbeddingService(
+            [MANIFEST], Path(self.temporary.name), loader=lambda _manifest: encoder)
+        self.addCleanup(service._thread.shutdown, wait=True)
+        service.files = lambda _manifest: {"state": "files_verified"}
+        app = create_app(
+            service, MemoryPolicy(Path(self.temporary.name), service), self.TOKEN, "a" * 64)
+
+        async def exercise() -> None:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://worker") as client:
+                first = asyncio.create_task(client.post(
+                    "/v1/embeddings", headers=self.headers,
+                    json={"model": MODEL, "input": ["private first text"]}))
+                await _wait_until(encoder.started[0].is_set, "first inference never started")
+                second = asyncio.create_task(client.post(
+                    "/v1/embeddings", headers=self.headers,
+                    json={"model": MODEL, "input": ["private second text"]}))
+                await _wait_until(lambda: service._busy == 2, "second request was not queued")
+
+                queued = (await client.get(
+                    "/api/fleet/activity", headers=self.headers)).json()
+                first_id = queued["active"]["id"]
+                self.assertEqual(queued["active"]["state"], "running")
+                self.assertIsNone(queued["latest"])
+                self.assertIsNotNone(
+                    activity.validate_snapshot(queued, expected_studio="embeddings"))
+
+                first.cancel()
+                try:
+                    await asyncio.wait_for(asyncio.shield(first), 0.2)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                cancelled = (await client.get(
+                    "/api/fleet/activity", headers=self.headers)).json()
+                self.assertEqual(cancelled["active"]["id"], first_id)
+                self.assertEqual(cancelled["active"]["state"], "running")
+                self.assertIsNone(cancelled["latest"])
+
+                encoder.release[0].set()
+                await _wait_until(encoder.started[1].is_set, "queued inference never started")
+                second_running = (await client.get(
+                    "/api/fleet/activity", headers=self.headers)).json()
+                self.assertEqual(second_running["active"]["state"], "running")
+                self.assertNotEqual(second_running["active"]["id"], first_id)
+                self.assertEqual(second_running["latest"]["id"], first_id)
+                self.assertEqual(second_running["latest"]["state"], "done")
+
+                encoder.release[1].set()
+                self.assertEqual((await second).status_code, 200)
+                try:
+                    await first
+                except asyncio.CancelledError:
+                    pass
+                terminal = (await client.get(
+                    "/api/fleet/activity", headers=self.headers)).json()
+                self.assertIsNone(terminal["active"])
+                self.assertEqual(terminal["latest"]["state"], "done")
+                self.assertIsNotNone(
+                    activity.validate_snapshot(terminal, expected_studio="embeddings"))
+                public = json.dumps([queued, cancelled, second_running, terminal])
+                for private in ("private first text", "private second text",
+                                '"input"', '"data"', '"vectors"'):
+                    self.assertNotIn(private, public)
+
+        asyncio.run(exercise())
+
+    def test_failed_executor_submission_does_not_leave_a_queued_activity(self) -> None:
+        from components.hub.backend import activity
+
+        with patch.object(self.service._thread, "submit", side_effect=RuntimeError("closed")):
+            with self.assertRaisesRegex(RuntimeError, "closed"):
+                self.service.encode(MANIFEST, ["private input"])
+
+        snapshot = self.client.get("/api/fleet/activity", headers=self.headers).json()
+        self.assertIsNone(snapshot["active"])
+        self.assertEqual(snapshot["latest"]["state"], "error")
+        self.assertEqual(snapshot["latest"]["error_code"], "EXECUTOR_SUBMISSION_FAILED")
+        self.assertIsNotNone(
+            activity.validate_snapshot(snapshot, expected_studio="embeddings"))
+        self.assertNotIn("private input", json.dumps(snapshot))
 
     def test_catalog_and_memory_contracts(self) -> None:
         row = self.client.get("/api/catalog", headers=self.headers).json()["models"][0]

@@ -21,6 +21,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from components import app_version, model_packages
+from components.synchronous_activity import SynchronousActivity
 
 from .memory_policy import MemoryPolicy
 
@@ -72,6 +73,7 @@ class EmbeddingService:
         self._busy = 0
         self._last_activity: float | None = None
         self.model_id = None  # the resident model, as MemoryPolicy publishes it
+        self.activity = SynchronousActivity("embeddings")
 
     def default_model(self) -> str | None:
         return next(iter(self.manifests), None)
@@ -110,11 +112,18 @@ class EmbeddingService:
                 f"Shorten it ({len(too_long)} input(s) are too long).")
         return self._encoder.encode(texts)
 
-    def encode(self, manifest: dict, texts: list[str]):
+    def encode(self, manifest: dict, texts: list[str], activity_job=None):
         with self._lock:
             self._busy += 1
+        job = activity_job or self.activity.queue(manifest["model_id"])
         try:
-            return self._thread.submit(self._encode_on_thread, manifest, texts).result()
+            try:
+                future = self._thread.submit(
+                    self.activity.run, job, self._encode_on_thread, manifest, texts)
+            except Exception:
+                self.activity.submission_failed(job)
+                raise
+            return future.result()
         finally:
             with self._lock:
                 self._busy -= 1
@@ -169,6 +178,7 @@ def create_app(service: EmbeddingService, policy: MemoryPolicy, token: str,
     if not token:
         raise ValueError("Private Embeddings worker requires its owning Hub credential")
     app = FastAPI(title="Studio Hub Embeddings", version="1")
+    build_identity = dict(app_version.version_fields())
 
     @app.middleware("http")
     async def require_owner(request: Request, call_next):
@@ -180,11 +190,15 @@ def create_app(service: EmbeddingService, policy: MemoryPolicy, token: str,
         return await call_next(request)
 
     @app.get("/api/health")
-    def health() -> dict:
+    async def health() -> dict:
         state = service.status()
-        return {"ok": True, **app_version.version_fields(), "embeddings": {
+        return {"ok": True, **build_identity, "embeddings": {
             "available": True, "busy": state["busy"], "loaded_model": state["loaded_model"],
             "runtime_revision": runtime_sha256}}
+
+    @app.get("/api/fleet/activity")
+    async def fleet_activity() -> dict:
+        return service.activity.snapshot()
 
     @app.get("/api/catalog")
     def catalog() -> dict:
@@ -262,10 +276,15 @@ def create_app(service: EmbeddingService, policy: MemoryPolicy, token: str,
         if files.get("state") != "files_verified" or not model_packages.production_allowed(manifest):
             raise HTTPException(503, {"code": "MODEL_NOT_READY", "detail": files.get("reason") or
                                       f"{manifest['package_id']} is not installed on this Mac"})
+        job = service.activity.queue(manifest["model_id"])
         try:
-            vectors, tokens = await run_in_threadpool(service.encode, manifest, texts)
+            vectors, tokens = await run_in_threadpool(
+                service.activity.prepare, job, service.encode, manifest, texts, job)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        except BaseException:
+            service.activity.cancel_queued(job)
+            raise
         return {"object": "list", "model": manifest["model_id"],
                 "data": [{"object": "embedding", "index": index, "embedding": vector}
                          for index, vector in enumerate(vectors)],
