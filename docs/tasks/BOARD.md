@@ -2,6 +2,11 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-LOGIN-REGISTRATION-20261014 — REVIEWED SOURCE; 178 delivery pending
+
+Astra/root owns integration. Same bounded worker completed frozen four-file candidate on9f06; independent corrected actual-diff review clean (ae25c89d...). Genuine timeout/Settings/signal-reason RED→GREEN retained. Final complete API/full lifecycle/secret/view/optimized compile passed; root missing boundary and affected Python132/3artifact-skips passed. Core changes: actual-lock guard, serialized refresh/owner-toggle ordering, bounded truthful outcomes and process-local quarantine for unknown registration. No source/installer/deployment completion yet. Version178 notes allocated after fresh main9f06/VERSION177 proof. Root owns integration/mainpush/code-onlygraph/primaryDMG/normalpaced deployment after affected accepted transfers/sourceleases settle. Operational four-Mac recovery remains separate. Plan: `.planning/2026-09-10-standalone-app-feasibility/login-agent-registration-refresh-20261014.md`.
+
+
 ### ST-FUNCTION-PRIORITY-20261008 — 0.6.157 SOURCE VERIFIED; delivery receipt owns running status
 
 Owner-approved per-Mac ranked functions or No preference are source-verified, locally in Hub and centrally in Gateway. Base Hub30c6f65/Gatewaye75ce2c. Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/function-priority-20261008.md`. Hub integration267 and backend regressions374 passed; native API/lifecycle/secret/boundary/build and actual-view renders passed. Independent findings resolved. Preserve pause/function/model choices and Qwen qualification worktree. Coordinator's `/build/Developer/_orchestra/function-priority-20261008/DELIVERY.md` owns final commit/push/DMG/install/graph status; source status alone never establishes a live157 installation.

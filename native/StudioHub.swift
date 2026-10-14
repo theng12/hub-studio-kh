@@ -112,6 +112,8 @@ final class StudioController: ObservableObject {
     private let appBundle: URL
     private let agentPlistURL: URL
     private let loginAgentStatus: (URL) -> LoginAgentStatus
+    private let injectedLoginAgentOperations: LoginAgentOperations?
+    private let loginAgentCoordinator: LoginAgentMutationCoordinator
     /// The old `SMAppService` reader/unregister, injected so the migration can be exercised in
     /// tests without touching the real system. The default is the only place that calls it.
     private let legacyLoginItemStatus: () -> LoginMigration.OldStatus
@@ -126,6 +128,8 @@ final class StudioController: ObservableObject {
          appBundle: URL = Bundle.main.bundleURL,
          agentPlistURL: URL = LaunchAgent.defaultPlistURL(),
          loginAgentStatus: ((URL) -> LoginAgentStatus)? = nil,
+         loginAgentOperations: LoginAgentOperations? = nil,
+         loginAgentCoordinator: LoginAgentMutationCoordinator = .shared,
          legacyLoginItemStatus: (() -> LoginMigration.OldStatus)? = nil,
          legacyLoginItemUnregister: (() throws -> Void)? = nil,
          now: @escaping () -> Date = Date.init,
@@ -137,6 +141,8 @@ final class StudioController: ObservableObject {
         self.agentPlistURL = agentPlistURL
         let statusReader = loginAgentStatus ?? { LaunchAgent.status(at: $0) }
         self.loginAgentStatus = statusReader
+        self.injectedLoginAgentOperations = loginAgentOperations
+        self.loginAgentCoordinator = loginAgentCoordinator
         self.legacyLoginItemStatus = legacyLoginItemStatus ?? { LegacyLoginItem.status() }
         self.legacyLoginItemUnregister = legacyLoginItemUnregister ?? { try LegacyLoginItem.unregister() }
         self.now = now
@@ -202,6 +208,7 @@ final class StudioController: ObservableObject {
         }
     }
     var running: Bool { worker?.isRunning == true }
+    var ownsInstanceLock: Bool { instanceLock != nil }
     var canConfigure: Bool { !running && !starting && !stopping && instanceLock != nil }
     var hasLibrary: Bool { configuration.modelsDirectory != nil }
     /// Lets the operator cancel a pending restart or timeout recovery while
@@ -884,12 +891,12 @@ final class StudioController: ObservableObject {
     /// The live login-agent side effects. Enabling writes the plist only: bootstrapping a
     /// `RunAtLoad` job while this app is running would start a second copy of it.
     private func applyLoginAgent(enabled: Bool) throws {
-        let operations = LoginAgentOperations(
+        let operations = injectedLoginAgentOperations ?? LoginAgentOperations(
             write: { try LaunchAgent.write(appBundle: self.appBundle, to: self.agentPlistURL) },
             bootout: { LaunchAgent.bootout(label: LaunchAgent.label) },
             remove: { try LaunchAgent.remove(at: self.agentPlistURL) },
             bootstrap: { LaunchAgent.bootstrap(at: self.agentPlistURL) })
-        try LoginAgent.apply(enabled: enabled, using: operations)
+        try LoginAgent.apply(enabled: enabled, using: operations, coordinator: loginAgentCoordinator)
     }
     /// Remember whether an at-login launch should also bring the Studio services up.
     ///
@@ -1162,13 +1169,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if controller.hasLibrary && controller.canConfigure && (!loginLaunch || controller.configuration.startServicesAtLogin) {
             controller.start()
         }
-        // Opened by hand or by an update's reopen: nothing would bring this copy back after a
-        // crash or a Force Quit, so hand it to the agent's supervision. Only for the default data
-        // folder - the agent never runs with `--data-dir`, so supervising a kit's or a test's
-        // copy would start a second app on the real one.
+        // Opened by hand or by an update's reopen: refresh the existing launchd registration so it
+        // can restore the app after an abnormal exit; a clean Quit remains stopped. Only the
+        // default-data lock owner may replace that registration; an agent copy, a test/kit copy,
+        // or a process that could not take the lock must leave it alone. The plist check and
+        // refresh are serialized with Settings disable.
         let agentPlist = LaunchAgent.defaultPlistURL()
-        if !agentLaunch && !CommandLine.arguments.contains("--data-dir") && LaunchAgent.isInstalled(at: agentPlist) {
-            DispatchQueue.global(qos: .utility).async { LaunchAgent.superviseRunningApp(at: agentPlist) }
+        let ownsInstanceLock = controller.ownsInstanceLock
+        let hasCustomDataDirectory = CommandLine.arguments.contains("--data-dir")
+        DispatchQueue.global(qos: .utility).async {
+            let outcome = LoginAgentSupervision.refreshIfEligible(
+                agentLaunch: agentLaunch, hasCustomDataDirectory: hasCustomDataDirectory,
+                ownsInstanceLock: ownsInstanceLock, plistURL: agentPlist)
+            FileHandle.standardError.write(
+                Data("Studio Hub login supervision: \(outcome.sanitizedDescription)\n".utf8))
         }
     }
     /// The heartbeat that dates a kill nothing can record, and the stamp of critical memory pressure

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.178 — 2026-10-14
+
+- Refresh an installed login-agent registration on normal default-data startup only when this app actually owns the instance lock. Exact-label bootout then unchanged-plist bootstrap repairs loaded initialization failures without kickstart or changes to services, preferences or fleet pauses.
+- Serialize refresh with Start at login changes. Failed unload preserves the plist and reports failure; timeout or signal termination marks the registration outcome uncertain and blocks later conflicting mutations in this app process. Only normal exits 0 or known-absent 3 authorize removal.
+- Add keyless lifecycle, ordering, timeout-settlement and signal-reason regressions; preserve write-only enable, agent/custom-data guards and crash-only supervision.
+
 ## 0.6.177 — 2026-10-13
 
 - Allow authenticated fleet controllers to release idle models through the exact known-worker proxy endpoint before YuE2 jobs. Remote nodes previously refused this handoff with403, causing `memory_skip` despite sufficient reported RAM.

@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.178 — 2026-10-14
+
+### Restore login startup supervision when opening the app
+
+Opening Studio Hub normally now refreshes its enabled login registration. This repairs the loaded registration failure found on four Macs while keeping the running app, services and your choices intact.
+
+If macOS cannot confirm a login-startup change, the app reports that uncertainty and keeps the registration file. It prevents a later change from being reported as successful until the app is opened again. Normal Quit and your fleet pauses keep their existing behavior.
+
 ## 0.6.177 — 2026-10-13
 
 ### Remote Macs can prepare memory for music

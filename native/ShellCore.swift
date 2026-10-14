@@ -817,6 +817,74 @@ enum LoginAgentStatus: Equatable {
     case disabled
 }
 
+enum LaunchctlCommandResult: Equatable {
+    case exited(Int32)
+    case signaled(Int32)
+    case spawnFailed
+    case timedOut(terminationConfirmed: Bool)
+}
+
+typealias LaunchctlRunner = ([String]) -> LaunchctlCommandResult
+
+/// Narrow process lifecycle used by the bounded launchctl runner. Tests drive these actions
+/// directly without launching launchctl or addressing any real service label.
+struct LaunchctlProcessLifecycle {
+    var start: () throws -> Void
+    var wait: (TimeInterval) -> Bool
+    var terminate: () -> Void
+    var forceKill: () -> Bool
+    var status: () -> Int32
+    var terminationReason: () -> Process.TerminationReason
+}
+
+final class LoginAgentMutationCoordinator: @unchecked Sendable {
+    static let shared = LoginAgentMutationCoordinator()
+    private let lock = NSRecursiveLock()
+    private var quarantined = false
+
+    func perform<T>(_ operation: () throws -> T) rethrows -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !quarantined else { return nil }
+        return try operation()
+    }
+
+    func quarantine() {
+        lock.lock()
+        quarantined = true
+        lock.unlock()
+    }
+}
+
+enum LoginAgentRefreshStage: Equatable { case bootout, bootstrap }
+enum LoginAgentBootoutOutcome: Equatable { case unloaded, alreadyAbsent }
+enum LoginAgentRefreshOutcome: Equatable {
+    case skipped
+    case quarantined
+    case spawnFailed(stage: LoginAgentRefreshStage)
+    case signaled(stage: LoginAgentRefreshStage, signal: Int32)
+    case uncertain(stage: LoginAgentRefreshStage, terminationConfirmed: Bool)
+    case bootoutFailed(status: Int32)
+    case bootstrapFailed(status: Int32)
+    case registrationAccepted(bootout: LoginAgentBootoutOutcome)
+
+    var sanitizedDescription: String {
+        switch self {
+        case .skipped: return "skipped: login startup is not eligible"
+        case .quarantined: return "skipped: a prior login-agent command has an uncertain outcome"
+        case .spawnFailed(let stage): return "\(stage) could not start launchctl"
+        case .signaled(let stage, let signal):
+            return "\(stage) launchctl ended from signal \(signal); registration outcome uncertain"
+        case .uncertain(let stage, let confirmed):
+            return "\(stage) timed out; launchctl termination \(confirmed ? "confirmed" : "unconfirmed") and registration outcome uncertain"
+        case .bootoutFailed(let status): return "bootout failed with status \(status)"
+        case .bootstrapFailed(let status): return "bootstrap failed with status \(status)"
+        case .registrationAccepted(let bootout):
+            return "registration accepted after \(bootout == .unloaded ? "bootout" : "absent job")"
+        }
+    }
+}
+
 /// The one-time move off the old `SMAppService` login item.
 ///
 /// A Mac that ran an older build has an `SMAppService` registration; this build writes a launchd
@@ -886,6 +954,7 @@ enum LaunchAgent {
     /// without this the app could not tell a login launch from a person opening it, and would start
     /// the services at login even when "Start services at login" is off.
     static let launchedAtLoginEnvironmentKey = "STUDIOHUB_LAUNCHED_AT_LOGIN"
+    static let jobAbsentExitStatus: Int32 = 3
 
     enum InstallDecision: Equatable {
         case install(executablePath: String)
@@ -984,30 +1053,96 @@ enum LaunchAgent {
     /// enabling must never call it while the app is running, because the plist sets RunAtLoad and
     /// launchd would start a second copy of the app immediately.
     static func bootstrap(at plistURL: URL) {
-        run(["bootstrap", "gui/\(getuid())", plistURL.path])
+        _ = run(["bootstrap", "gui/\(getuid())", plistURL.path])
     }
 
     /// Unload the agent. This is what makes disabling take effect immediately.
-    static func bootout(label: String = LaunchAgent.label) {
+    static func bootout(label: String = LaunchAgent.label) -> LaunchctlCommandResult {
         run(["bootout", "gui/\(getuid())/\(label)"])
     }
 
-    /// Put the running app under the agent's supervision: load the agent if it is not loaded and
-    /// start its job if it is not running. Its copy then stands by (`AgentStandby`) instead of
-    /// starting a second app. Both calls are harmless when already done.
-    static func superviseRunningApp(at plistURL: URL, label: String = LaunchAgent.label) {
-        run(["bootstrap", "gui/\(getuid())", plistURL.path])
-        run(["kickstart", "gui/\(getuid())/\(label)"])
+    static func refreshRegistration(
+        at plistURL: URL, label: String = LaunchAgent.label,
+        installed: (URL) -> Bool = LaunchAgent.isInstalled,
+        coordinator: LoginAgentMutationCoordinator = .shared,
+        runner: LaunchctlRunner = LaunchAgent.run
+    ) -> LoginAgentRefreshOutcome {
+        guard let outcome: LoginAgentRefreshOutcome = coordinator.perform({ () -> LoginAgentRefreshOutcome in
+            // This check belongs inside the same boundary as Settings disable. Otherwise a queued
+            // refresh can observe the plist, wait behind disable, then load the removed job again.
+            guard installed(plistURL) else { return .skipped }
+            let bootout = runner(["bootout", "gui/\(getuid())/\(label)"])
+            let bootoutOutcome: LoginAgentBootoutOutcome
+            switch bootout {
+            case .exited(0): bootoutOutcome = .unloaded
+            // launchctl returns ESRCH (3) when the exact service target is absent. Only that known
+            // absence may proceed; every other non-zero status could be permission or I/O failure.
+            case .exited(jobAbsentExitStatus): bootoutOutcome = .alreadyAbsent
+            case .exited(let status): return .bootoutFailed(status: status)
+            case .spawnFailed: return .spawnFailed(stage: .bootout)
+            case .signaled(let signal):
+                coordinator.quarantine()
+                return .signaled(stage: .bootout, signal: signal)
+            case .timedOut(let confirmed):
+                // A timeout cannot establish whether launchd accepted the request, even when the
+                // client process later exits. Quarantine this in-process coordinator so no later
+                // refresh or Settings toggle can be reported as completing after unknown state.
+                coordinator.quarantine()
+                return .uncertain(stage: .bootout, terminationConfirmed: confirmed)
+            }
+            switch runner(["bootstrap", "gui/\(getuid())", plistURL.path]) {
+            case .exited(0): return .registrationAccepted(bootout: bootoutOutcome)
+            case .exited(let status): return .bootstrapFailed(status: status)
+            case .spawnFailed: return .spawnFailed(stage: .bootstrap)
+            case .signaled(let signal):
+                coordinator.quarantine()
+                return .signaled(stage: .bootstrap, signal: signal)
+            case .timedOut(let confirmed):
+                coordinator.quarantine()
+                return .uncertain(stage: .bootstrap, terminationConfirmed: confirmed)
+            }
+        }) else { return .quarantined }
+        return outcome
     }
 
-    private static func run(_ arguments: [String]) {
+    /// Run one launchctl command with no inherited input/output. It gets five seconds to finish,
+    /// then at most 1.25 seconds to confirm termination. A spawn failure returns immediately;
+    /// waiting for a process that never started would raise an exception and conceal the outcome.
+    static func run(_ arguments: [String]) -> LaunchctlCommandResult {
         let process = Process()
+        let finished = DispatchSemaphore(value: 0)
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        process.terminationHandler = { _ in finished.signal() }
+        return run(process: LaunchctlProcessLifecycle(
+            start: { try process.run() },
+            wait: { finished.wait(timeout: .now() + $0) == .success },
+            terminate: { process.terminate() },
+            forceKill: {
+                let result = kill(process.processIdentifier, SIGKILL)
+                return result == 0 || errno == ESRCH
+            },
+            status: { process.terminationStatus },
+            terminationReason: { process.terminationReason }))
+    }
+
+    static func run(process: LaunchctlProcessLifecycle) -> LaunchctlCommandResult {
+        do { try process.start() }
+        catch { return .spawnFailed }
+        guard !process.wait(5) else {
+            let status = process.status()
+            switch process.terminationReason() {
+            case .exit: return .exited(status)
+            case .uncaughtSignal: return .signaled(status)
+            @unknown default: return .signaled(status)
+            }
+        }
+        process.terminate()
+        if process.wait(0.25) { return .timedOut(terminationConfirmed: true) }
+        guard process.forceKill() else { return .timedOut(terminationConfirmed: false) }
+        return .timedOut(terminationConfirmed: process.wait(1))
     }
 }
 
@@ -1015,7 +1150,7 @@ enum LaunchAgent {
 /// exactly which launchctl calls happen and, just as importantly, which do not.
 struct LoginAgentOperations {
     var write: () throws -> Void
-    var bootout: () -> Void
+    var bootout: () -> LaunchctlCommandResult
     var remove: () throws -> Void
     /// Present only so a test can prove the enabling path never calls it. Enabling must not
     /// bootstrap: the plist sets `RunAtLoad`, so loading the job would start a second copy of the
@@ -1033,14 +1168,50 @@ enum LoginAgent {
     /// no launchctl call that loads a `RunAtLoad` job without starting it, so the next login picks
     /// the new plist up. `operations.bootstrap` is deliberately never called.
     ///
-    /// Disabling takes effect immediately: the loaded job is booted out before the plist is removed.
-    static func apply(enabled: Bool, using operations: LoginAgentOperations) throws {
-        if enabled {
-            try operations.write()
-            return
+    /// Disabling boots the loaded job out before removing the plist. A failed or uncertain unload
+    /// keeps the plist and reports failure instead of claiming the registration is disabled.
+    static func apply(enabled: Bool, using operations: LoginAgentOperations,
+                      coordinator: LoginAgentMutationCoordinator = .shared) throws {
+        let applied: Void? = try coordinator.perform {
+            if enabled {
+                try operations.write()
+                return
+            }
+            switch operations.bootout() {
+            case .exited(0), .exited(LaunchAgent.jobAbsentExitStatus):
+                try operations.remove()
+            case .exited(let status):
+                throw ShellFailure(message: "Could not turn off login startup: bootout failed with status \(status). The login agent was kept.")
+            case .spawnFailed:
+                throw ShellFailure(message: "Could not turn off login startup because launchctl could not start. The login agent was kept.")
+            case .signaled(let signal):
+                coordinator.quarantine()
+                throw ShellFailure(message: "Could not confirm login startup was unloaded because launchctl ended from signal \(signal); its registration outcome is uncertain. The login agent was kept. Reopen Studio Hub before trying again.")
+            case .timedOut(let confirmed):
+                coordinator.quarantine()
+                let settlement = confirmed ? "launchctl ended" : "launchctl did not settle"
+                throw ShellFailure(message: "Could not confirm login startup was unloaded (\(settlement)); its registration outcome is uncertain. The login agent was kept. Reopen Studio Hub before trying again.")
+            }
         }
-        operations.bootout()
-        try operations.remove()
+        // ponytail: quarantine lasts for this app process; a later normal app startup gets a fresh
+        // coordinator after launchd/OS settlement. Add persistent reconciliation only if field
+        // evidence shows uncertainty survives that boundary.
+        guard applied != nil else {
+            throw ShellFailure(message: "Could not safely change login startup because a prior launchctl command has an uncertain outcome. Reopen Studio Hub before trying again.")
+        }
+    }
+}
+
+enum LoginAgentSupervision {
+    static func refreshIfEligible(
+        agentLaunch: Bool, hasCustomDataDirectory: Bool, ownsInstanceLock: Bool,
+        plistURL: URL, label: String = LaunchAgent.label,
+        coordinator: LoginAgentMutationCoordinator = .shared,
+        runner: LaunchctlRunner = LaunchAgent.run
+    ) -> LoginAgentRefreshOutcome {
+        guard !agentLaunch, !hasCustomDataDirectory, ownsInstanceLock else { return .skipped }
+        return LaunchAgent.refreshRegistration(at: plistURL, label: label,
+                                               coordinator: coordinator, runner: runner)
     }
 }
 

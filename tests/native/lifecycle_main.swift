@@ -152,7 +152,10 @@ func waitUntil(timeout: TimeInterval = 8, _ condition: @MainActor () -> Bool) as
 @MainActor
 func makeController(root: URL, server: LocalHubFixture, now: @escaping () -> Date,
                     healthRequest: ((URLRequest, URLSession) async throws -> (Data, URLResponse))? = nil,
-                    maxAttempts: Int = 1) throws -> StudioController {
+                    maxAttempts: Int = 1,
+                    agentPlistURL: URL? = nil,
+                    loginAgentOperations: LoginAgentOperations? = nil,
+                    loginAgentCoordinator: LoginAgentMutationCoordinator = .shared) throws -> StudioController {
     let data = root.appendingPathComponent("state")
     let models = root.appendingPathComponent("models")
     try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
@@ -186,6 +189,9 @@ while :; do sleep 1; done
         bundle: URL(fileURLWithPath: "/Applications/StudioHubFixture.app"))
     try configuration.setRecoveryPolicy(maxAttempts: maxAttempts, backoffSeconds: [0])
     return StudioController(configuration: configuration, serviceExecutable: service,
+                            agentPlistURL: agentPlistURL ?? LaunchAgent.defaultPlistURL(),
+                            loginAgentOperations: loginAgentOperations,
+                            loginAgentCoordinator: loginAgentCoordinator,
                             now: now, healthRequest: healthRequest)
 }
 
@@ -498,6 +504,125 @@ struct NativeLifecycleTests {
             // With no engine running there is nothing to wait for: it quits straight away.
             delegate.relaunchAfterUpdate()
             requireLifecycle(quits == 2 && helpers == 2, "relaunch-update: an idle app must quit at once, got \(quits) quits")
+        }
+
+        // Supervision is allowed only for a normal, default-data launch that actually owns the
+        // instance lock. This drives the same eligibility helper as AppDelegate, with a disposable
+        // label and injected runner; it never invokes launchctl or the production label.
+        if runs("login-agent-refresh-guard") {
+            let root = temporary.appendingPathComponent("login-agent-refresh-guard")
+            let server = try LocalHubFixture(); defer { server.stop() }
+            let owner = try makeController(root: root.appendingPathComponent("owner"),
+                                           server: server, now: Date.init)
+            let plist = root.appendingPathComponent("fixture.plist")
+            try Data("fixture".utf8).write(to: plist)
+            let label = "test.local.studiohub.lifecycle-refresh"
+            var commands: [[String]] = []
+            let runner: LaunchctlRunner = { arguments in
+                commands.append(arguments)
+                return .exited(0)
+            }
+            func refresh(_ controller: StudioController, agent: Bool = false,
+                         customData: Bool = false, installed: Bool = true) -> LoginAgentRefreshOutcome {
+                let effectivePlist = installed ? plist : root.appendingPathComponent("missing.plist")
+                return LoginAgentSupervision.refreshIfEligible(
+                    agentLaunch: agent, hasCustomDataDirectory: customData,
+                    ownsInstanceLock: controller.ownsInstanceLock,
+                    plistURL: effectivePlist, label: label,
+                    coordinator: LoginAgentMutationCoordinator(), runner: runner)
+            }
+            commands.removeAll()
+            requireLifecycle(refresh(owner, agent: true) == .skipped && commands.isEmpty,
+                             "agent launch must not refresh its own registration")
+            requireLifecycle(refresh(owner, customData: true) == .skipped && commands.isEmpty,
+                             "custom-data launch must not refresh the default agent")
+            requireLifecycle(refresh(owner, installed: false) == .skipped && commands.isEmpty,
+                             "disabled login startup must not run launchctl")
+
+            let unavailableRoot = root.appendingPathComponent("unavailable")
+            let unavailableData = unavailableRoot.appendingPathComponent("state")
+            try FileManager.default.createDirectory(at: unavailableData, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(
+                at: unavailableData.appendingPathComponent("app.lock"),
+                withDestinationURL: unavailableRoot.appendingPathComponent("lock-target"))
+            let unavailable = try makeController(root: unavailableRoot, server: server, now: Date.init)
+            commands.removeAll()
+            requireLifecycle(!unavailable.ownsInstanceLock && refresh(unavailable) == .skipped
+                             && commands.isEmpty,
+                             "an unavailable lock must never refresh registration")
+
+            let heldRoot = root.appendingPathComponent("already-held")
+            let first = try makeController(root: heldRoot, server: server, now: Date.init)
+            let alreadyHeld = try makeController(root: heldRoot, server: server, now: Date.init)
+            _ = first
+            commands.removeAll()
+            requireLifecycle(alreadyHeld.existingInstanceDetected && !alreadyHeld.ownsInstanceLock
+                             && refresh(alreadyHeld) == .skipped && commands.isEmpty,
+                             "a lock held by another app must never refresh registration")
+
+            owner.start()
+            requireLifecycle(owner.starting && !owner.canConfigure && owner.ownsInstanceLock,
+                             "fixture must prove services begin before supervision without losing lock ownership")
+            commands.removeAll()
+            requireLifecycle(refresh(owner) == .registrationAccepted(bootout: .unloaded)
+                             && commands.count == 2,
+                             "the actual lock owner must refresh even while services are starting")
+            requireLifecycle(owner.running && owner.starting && owner.ownsInstanceLock,
+                             "registration refresh must leave the actual app and its services running")
+            owner.stop()
+            _ = await waitUntil { !owner.running }
+
+            let settingsRoot = root.appendingPathComponent("settings-failure")
+            let settingsPlist = settingsRoot.appendingPathComponent("fixture.plist")
+            try FileManager.default.createDirectory(at: settingsRoot, withIntermediateDirectories: true)
+            try Data("fixture".utf8).write(to: settingsPlist)
+            var settingsRemoveCount = 0
+            var settingsWriteCount = 0
+            let settingsController = try makeController(
+                root: settingsRoot, server: server, now: Date.init,
+                agentPlistURL: settingsPlist,
+                loginAgentOperations: LoginAgentOperations(
+                    write: { settingsWriteCount += 1 },
+                    bootout: { .timedOut(terminationConfirmed: false) },
+                    remove: { settingsRemoveCount += 1 }, bootstrap: {}),
+                loginAgentCoordinator: LoginAgentMutationCoordinator())
+            let settingsFailure = settingsController.changeLogin(false)
+            requireLifecycle(settingsFailure != nil && settingsRemoveCount == 0
+                             && FileManager.default.fileExists(atPath: settingsPlist.path)
+                             && settingsController.loginStatus == .enabled
+                             && !settingsController.configuration.startAtLogin,
+                             "Settings must remember the requested preference but report uncertain unload and preserve the plist")
+            let quarantinedFailure = settingsController.changeLogin(true)
+            requireLifecycle(quarantinedFailure != nil && settingsWriteCount == 0
+                             && settingsRemoveCount == 0
+                             && FileManager.default.fileExists(atPath: settingsPlist.path),
+                             "Settings must reject later mutations while the prior unload remains uncertain")
+
+            let signalRoot = root.appendingPathComponent("settings-signal")
+            let signalPlist = signalRoot.appendingPathComponent("fixture.plist")
+            try FileManager.default.createDirectory(at: signalRoot, withIntermediateDirectories: true)
+            try Data("fixture".utf8).write(to: signalPlist)
+            var signalRemoveCount = 0
+            var signalWriteCount = 0
+            let signalController = try makeController(
+                root: signalRoot, server: server, now: Date.init,
+                agentPlistURL: signalPlist,
+                loginAgentOperations: LoginAgentOperations(
+                    write: { signalWriteCount += 1 },
+                    bootout: { .signaled(LaunchAgent.jobAbsentExitStatus) },
+                    remove: { signalRemoveCount += 1 }, bootstrap: {}),
+                loginAgentCoordinator: LoginAgentMutationCoordinator())
+            let signalFailure = signalController.changeLogin(false)
+            requireLifecycle(signalFailure != nil && signalRemoveCount == 0
+                             && FileManager.default.fileExists(atPath: signalPlist.path)
+                             && signalController.loginStatus == .enabled
+                             && !signalController.configuration.startAtLogin,
+                             "Settings must not treat a signaled status 3 as a completed disable")
+            let signalQuarantinedFailure = signalController.changeLogin(true)
+            requireLifecycle(signalQuarantinedFailure != nil && signalWriteCount == 0
+                             && signalRemoveCount == 0
+                             && FileManager.default.fileExists(atPath: signalPlist.path),
+                             "Settings must quarantine later mutations after signaled launchctl settlement")
         }
 
 

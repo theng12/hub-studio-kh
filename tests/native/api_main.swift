@@ -6620,7 +6620,7 @@ struct NativeAPITests {
                     _ = try LaunchAgent.write(appBundle: appBundle, to: agentPlist,
                                               applicationsRoot: appRoot, executableExists: { _ in true })
                 },
-                bootout: { bootoutCount += 1 },
+                bootout: { bootoutCount += 1; return .exited(0) },
                 remove: { removedCount += 1; try LaunchAgent.remove(at: agentPlist) },
                 bootstrap: { bootstrapCount += 1 })
         }
@@ -6634,6 +6634,326 @@ struct NativeAPITests {
                 && bootstrapCount == 0,
                 "disabling must boot the job out and remove the plist, still without bootstrapping")
         require(LaunchAgent.status(at: agentPlist) == .disabled, "a removed agent must read as off")
+
+        var absentRemoveCount = 0
+        try LoginAgent.apply(enabled: false, using: LoginAgentOperations(
+            write: {}, bootout: { .exited(LaunchAgent.jobAbsentExitStatus) },
+            remove: { absentRemoveCount += 1 }, bootstrap: {}),
+            coordinator: LoginAgentMutationCoordinator())
+        require(absentRemoveCount == 1,
+                "a positively absent job must allow Settings to remove the saved plist")
+
+        // A normally opened, lock-owning app refreshes the existing registration in one exact
+        // sequence: boot out the label, then bootstrap the unchanged plist. The injected runner
+        // keeps this keyless and cannot address the production launchd label.
+        let refreshLabel = "test.local.studiohub.registration-refresh"
+        try Data("fixture".utf8).write(to: agentPlist)
+        var refreshCommands: [[String]] = []
+        var refreshResults: [LaunchctlCommandResult] = [.exited(0), .exited(0)]
+        let accepted = LoginAgentSupervision.refreshIfEligible(
+            agentLaunch: false, hasCustomDataDirectory: false, ownsInstanceLock: true,
+            plistURL: agentPlist, label: refreshLabel,
+            runner: { arguments in
+                refreshCommands.append(arguments)
+                return refreshResults.removeFirst()
+            })
+        require(accepted == .registrationAccepted(bootout: .unloaded),
+                "a successful refresh must report only accepted registration, got \(accepted)")
+        require(refreshCommands == [
+            ["bootout", "gui/\(getuid())/\(refreshLabel)"],
+            ["bootstrap", "gui/\(getuid())", agentPlist.path],
+        ], "refresh must boot out then bootstrap exactly once, got \(refreshCommands)")
+        require(!refreshCommands.joined().contains("kickstart"),
+                "refresh must not kickstart after RunAtLoad bootstrap")
+
+        func refreshOutcome(_ results: [LaunchctlCommandResult], installed: Bool = true)
+            -> (LoginAgentRefreshOutcome, [[String]]) {
+            var pending = results
+            var commands: [[String]] = []
+            let outcome = LaunchAgent.refreshRegistration(
+                at: agentPlist, label: refreshLabel, installed: { _ in installed },
+                coordinator: LoginAgentMutationCoordinator(), runner: { arguments in
+                    commands.append(arguments)
+                    return pending.removeFirst()
+                })
+            return (outcome, commands)
+        }
+        let absent = refreshOutcome([.exited(LaunchAgent.jobAbsentExitStatus), .exited(0)])
+        require(absent.0 == .registrationAccepted(bootout: .alreadyAbsent)
+                && absent.1.count == 2,
+                "a positively absent job must proceed to bootstrap, got \(absent)")
+        let disabled = refreshOutcome([], installed: false)
+        require(disabled.0 == .skipped && disabled.1.isEmpty,
+                "a removed plist must skip inside the serialized boundary")
+        let spawnBootout = refreshOutcome([.spawnFailed])
+        require(spawnBootout.0 == .spawnFailed(stage: .bootout) && spawnBootout.1.count == 1,
+                "bootout spawn failure must stop and report its stage")
+        let signaledBootout = refreshOutcome([.signaled(LaunchAgent.jobAbsentExitStatus)])
+        require(signaledBootout.0 == .signaled(stage: .bootout,
+                                               signal: LaunchAgent.jobAbsentExitStatus)
+                && signaledBootout.1.count == 1,
+                "a signaled status 3 must not be treated as known absence")
+        let timeoutBootout = refreshOutcome([.timedOut(terminationConfirmed: false)])
+        require(timeoutBootout.0 == .uncertain(stage: .bootout, terminationConfirmed: false)
+                && timeoutBootout.1.count == 1,
+                "bootout timeout must stop and report its stage")
+        let unknownBootout = refreshOutcome([.exited(5)])
+        require(unknownBootout.0 == .bootoutFailed(status: 5) && unknownBootout.1.count == 1,
+                "an unrecognized bootout error must not be treated as absence")
+        let spawnBootstrap = refreshOutcome([.exited(0), .spawnFailed])
+        require(spawnBootstrap.0 == .spawnFailed(stage: .bootstrap) && spawnBootstrap.1.count == 2,
+                "bootstrap spawn failure must stay visible")
+        let signaledBootstrap = refreshOutcome([.exited(0), .signaled(0)])
+        require(signaledBootstrap.0 == .signaled(stage: .bootstrap, signal: 0)
+                && signaledBootstrap.1.count == 2,
+                "a signaled status 0 must not be treated as accepted registration")
+        let timeoutBootstrap = refreshOutcome([.exited(0), .timedOut(terminationConfirmed: true)])
+        require(timeoutBootstrap.0 == .uncertain(stage: .bootstrap, terminationConfirmed: true)
+                && timeoutBootstrap.1.count == 2,
+                "bootstrap timeout must stay visible")
+        let failedBootstrap = refreshOutcome([.exited(0), .exited(78)])
+        require(failedBootstrap.0 == .bootstrapFailed(status: 78) && failedBootstrap.1.count == 2,
+                "bootstrap rejection must stay visible without another command")
+
+        // Refresh and Settings use one serialization boundary. If refresh wins, disable unloads
+        // its accepted registration. If disable wins, refresh sees the removed plist and skips.
+        func wait(_ semaphore: DispatchSemaphore, _ message: String) {
+            require(semaphore.wait(timeout: .now() + 2) == .success, message)
+        }
+        do {
+            let coordinator = LoginAgentMutationCoordinator()
+            let bootoutStarted = DispatchSemaphore(value: 0)
+            let allowRefresh = DispatchSemaphore(value: 0)
+            let disableQueued = DispatchSemaphore(value: 0)
+            let finished = DispatchGroup()
+            var installed = true
+            var loaded = true
+            finished.enter()
+            DispatchQueue.global().async {
+                _ = LaunchAgent.refreshRegistration(
+                    at: agentPlist, label: refreshLabel, installed: { _ in installed },
+                    coordinator: coordinator, runner: { arguments in
+                        if arguments.first == "bootout" {
+                            loaded = false
+                            bootoutStarted.signal()
+                            _ = allowRefresh.wait(timeout: .now() + 2)
+                        } else { loaded = true }
+                        return .exited(0)
+                    })
+                finished.leave()
+            }
+            wait(bootoutStarted, "refresh-first: refresh never entered its bootout")
+            finished.enter()
+            DispatchQueue.global().async {
+                disableQueued.signal()
+                try! LoginAgent.apply(enabled: false, using: LoginAgentOperations(
+                    write: {}, bootout: { loaded = false; return .exited(0) },
+                    remove: { installed = false }, bootstrap: {}), coordinator: coordinator)
+                finished.leave()
+            }
+            wait(disableQueued, "refresh-first: disable was not queued")
+            allowRefresh.signal()
+            require(finished.wait(timeout: .now() + 2) == .success,
+                    "refresh-first: serialized operations did not finish")
+            require(!installed && !loaded,
+                    "refresh-first: completed disable must leave no loaded registration")
+        }
+        do {
+            let coordinator = LoginAgentMutationCoordinator()
+            let disableStarted = DispatchSemaphore(value: 0)
+            let allowDisable = DispatchSemaphore(value: 0)
+            let refreshQueued = DispatchSemaphore(value: 0)
+            let finished = DispatchGroup()
+            var installed = true
+            var loaded = true
+            var refreshCommandCount = 0
+            finished.enter()
+            DispatchQueue.global().async {
+                try! LoginAgent.apply(enabled: false, using: LoginAgentOperations(
+                    write: {}, bootout: {
+                        loaded = false
+                        disableStarted.signal()
+                        _ = allowDisable.wait(timeout: .now() + 2)
+                        return .exited(0)
+                    }, remove: { installed = false }, bootstrap: {}), coordinator: coordinator)
+                finished.leave()
+            }
+            wait(disableStarted, "disable-first: disable never entered its bootout")
+            finished.enter()
+            DispatchQueue.global().async {
+                refreshQueued.signal()
+                let outcome = LaunchAgent.refreshRegistration(
+                    at: agentPlist, label: refreshLabel, installed: { _ in installed },
+                    coordinator: coordinator, runner: { _ in refreshCommandCount += 1; return .exited(0) })
+                require(outcome == .skipped, "disable-first: queued refresh must skip after removal")
+                finished.leave()
+            }
+            wait(refreshQueued, "disable-first: refresh was not queued")
+            allowDisable.signal()
+            require(finished.wait(timeout: .now() + 2) == .success,
+                    "disable-first: serialized operations did not finish")
+            require(!installed && !loaded && refreshCommandCount == 0,
+                    "disable-first: refresh must not reload after completed disable")
+        }
+        do {
+            let coordinator = LoginAgentMutationCoordinator()
+            let bootstrapStarted = DispatchSemaphore(value: 0)
+            let allowTimeout = DispatchSemaphore(value: 0)
+            let disableQueued = DispatchSemaphore(value: 0)
+            let finished = DispatchGroup()
+            var installed = true
+            var loaded = true
+            var refreshOutcome: LoginAgentRefreshOutcome?
+            var disableMessage: String?
+            finished.enter()
+            DispatchQueue.global().async {
+                refreshOutcome = LaunchAgent.refreshRegistration(
+                    at: agentPlist, label: refreshLabel, installed: { _ in installed },
+                    coordinator: coordinator, runner: { arguments in
+                        if arguments.first == "bootout" { loaded = false; return .exited(0) }
+                        bootstrapStarted.signal()
+                        _ = allowTimeout.wait(timeout: .now() + 2)
+                        // Model the command's final known state before the bounded runner returns.
+                        loaded = true
+                        return .timedOut(terminationConfirmed: true)
+                    })
+                finished.leave()
+            }
+            wait(bootstrapStarted, "timeout-order: refresh never reached bootstrap")
+            finished.enter()
+            DispatchQueue.global().async {
+                disableQueued.signal()
+                do {
+                    try LoginAgent.apply(enabled: false, using: LoginAgentOperations(
+                        write: {}, bootout: { loaded = false; return .exited(0) },
+                        remove: { installed = false }, bootstrap: {}), coordinator: coordinator)
+                } catch { disableMessage = error.localizedDescription }
+                finished.leave()
+            }
+            wait(disableQueued, "timeout-order: disable was not queued")
+            allowTimeout.signal()
+            require(finished.wait(timeout: .now() + 2) == .success,
+                    "timeout-order: serialized operations did not finish")
+            require(refreshOutcome == .uncertain(stage: .bootstrap, terminationConfirmed: true)
+                    && disableMessage != nil && installed && loaded,
+                    "timeout-order: uncertain bootstrap must quarantine rather than claim completed disable")
+        }
+
+        // Drive the real bounded runner lifecycle and real mutation coordinator/apply path. These
+        // assertions cover confirmed and unconfirmed termination plus the mutations each result
+        // may authorize.
+        var waits: [TimeInterval] = []
+        var forceKills = 0
+        let settlement = LaunchAgent.run(process: LaunchctlProcessLifecycle(
+            start: {},
+            wait: { interval in
+                waits.append(interval)
+                return waits.count == 3
+            },
+            terminate: {},
+            forceKill: { forceKills += 1; return true },
+            status: { 0 }, terminationReason: { .exit }))
+        let runnerConfirmed = settlement == .timedOut(terminationConfirmed: true)
+            && waits == [5, 0.25, 1] && forceKills == 1
+        var failedKillWaits: [TimeInterval] = []
+        let failedKill = LaunchAgent.run(process: LaunchctlProcessLifecycle(
+            start: {}, wait: { failedKillWaits.append($0); return false },
+            terminate: {}, forceKill: { false }, status: { 0 }, terminationReason: { .exit }))
+        let failedKillUnconfirmed = failedKill == .timedOut(terminationConfirmed: false)
+            && failedKillWaits == [5, 0.25]
+        var finalWaits: [TimeInterval] = []
+        let finalWaitUnconfirmed = LaunchAgent.run(process: LaunchctlProcessLifecycle(
+            start: {}, wait: { finalWaits.append($0); return false },
+            terminate: {}, forceKill: { true }, status: { 0 }, terminationReason: { .exit }))
+        let finalWaitStayedUnconfirmed = finalWaitUnconfirmed == .timedOut(terminationConfirmed: false)
+            && finalWaits == [5, 0.25, 1]
+        var spawnWaitCount = 0
+        let spawnFailed = LaunchAgent.run(process: LaunchctlProcessLifecycle(
+            start: { throw ShellFailure(message: "fixture") },
+            wait: { _ in spawnWaitCount += 1; return true },
+            terminate: {}, forceKill: { true }, status: { 0 }, terminationReason: { .exit }))
+        let spawnFailedWithoutWait = spawnFailed == .spawnFailed && spawnWaitCount == 0
+
+        // A signal's terminationStatus can equal a successful launchctl exit or ESRCH. The real
+        // runner must classify it by terminationReason before either status can authorize mutation.
+        func signaledResult(status: Int32) -> LaunchctlCommandResult {
+            LaunchAgent.run(process: LaunchctlProcessLifecycle(
+                start: {}, wait: { _ in true }, terminate: {}, forceKill: { true },
+                status: { status }, terminationReason: { .uncaughtSignal }))
+        }
+        let signaledZero = signaledResult(status: 0)
+        let signaledThree = signaledResult(status: LaunchAgent.jobAbsentExitStatus)
+        require(signaledZero == .signaled(0)
+                && signaledThree == .signaled(LaunchAgent.jobAbsentExitStatus),
+                "signal reason: status 0/3 must be typed as signal termination, got \(signaledZero), \(signaledThree)")
+
+        let failureCoordinator = LoginAgentMutationCoordinator()
+        var failedRemoveCount = 0
+        var failedApplyMessage: String?
+        do {
+            try LoginAgent.apply(enabled: false, using: LoginAgentOperations(
+                write: {}, bootout: { .exited(5) },
+                remove: { failedRemoveCount += 1 }, bootstrap: {}),
+                coordinator: failureCoordinator)
+        } catch { failedApplyMessage = error.localizedDescription }
+        var spawnRemoveCount = 0
+        var spawnApplyMessage: String?
+        do {
+            try LoginAgent.apply(enabled: false, using: LoginAgentOperations(
+                write: {}, bootout: { .spawnFailed },
+                remove: { spawnRemoveCount += 1 }, bootstrap: {}),
+                coordinator: LoginAgentMutationCoordinator())
+        } catch { spawnApplyMessage = error.localizedDescription }
+
+        let signalCoordinator = LoginAgentMutationCoordinator()
+        var signalRemoveCount = 0
+        var signalApplyMessage: String?
+        var signalRefreshCommands = 0
+        do {
+            try LoginAgent.apply(enabled: false, using: LoginAgentOperations(
+                write: {}, bootout: { .signaled(LaunchAgent.jobAbsentExitStatus) },
+                remove: { signalRemoveCount += 1 }, bootstrap: {}),
+                coordinator: signalCoordinator)
+        } catch { signalApplyMessage = error.localizedDescription }
+        let signalQuarantinedRefresh = LaunchAgent.refreshRegistration(
+            at: agentPlist, label: refreshLabel, installed: { _ in true },
+            coordinator: signalCoordinator,
+            runner: { _ in signalRefreshCommands += 1; return .exited(0) })
+
+        let uncertainCoordinator = LoginAgentMutationCoordinator()
+        var uncertainRemoveCount = 0
+        var laterWriteCount = 0
+        var uncertainApplyMessage: String?
+        var laterMutationMessage: String?
+        var quarantinedRefreshCommands = 0
+        do {
+            try LoginAgent.apply(enabled: false, using: LoginAgentOperations(
+                write: {}, bootout: { .timedOut(terminationConfirmed: false) },
+                remove: { uncertainRemoveCount += 1 }, bootstrap: {}),
+                coordinator: uncertainCoordinator)
+        } catch { uncertainApplyMessage = error.localizedDescription }
+        do {
+            try LoginAgent.apply(enabled: true, using: LoginAgentOperations(
+                write: { laterWriteCount += 1 }, bootout: { .exited(0) },
+                remove: {}, bootstrap: {}), coordinator: uncertainCoordinator)
+        } catch { laterMutationMessage = error.localizedDescription }
+        let quarantinedRefresh = LaunchAgent.refreshRegistration(
+            at: agentPlist, label: refreshLabel, installed: { _ in true },
+            coordinator: uncertainCoordinator,
+            runner: { _ in quarantinedRefreshCommands += 1; return .exited(0) })
+        require(runnerConfirmed && failedKillUnconfirmed && finalWaitStayedUnconfirmed
+                && spawnFailedWithoutWait
+                && failedApplyMessage != nil && failedRemoveCount == 0
+                && spawnApplyMessage != nil && spawnRemoveCount == 0
+                && signalApplyMessage != nil && signalRemoveCount == 0
+                && signalQuarantinedRefresh == .quarantined && signalRefreshCommands == 0
+                && uncertainApplyMessage != nil && uncertainRemoveCount == 0
+                && laterMutationMessage != nil && laterWriteCount == 0
+                && quarantinedRefresh == .quarantined && quarantinedRefreshCommands == 0,
+                "runner/apply failure: settlement=\(settlement), waits=\(waits), "
+                + "failed=\(String(describing: failedApplyMessage))/remove=\(failedRemoveCount), "
+                + "uncertain=\(String(describing: uncertainApplyMessage))/remove=\(uncertainRemoveCount), "
+                + "later=\(String(describing: laterMutationMessage))/write=\(laterWriteCount)")
 
         // A redundant launch presents the running app and leaves with status 0; no alert, and no
         // failure banner. The present/exit actions are injected so the test process does not exit.
