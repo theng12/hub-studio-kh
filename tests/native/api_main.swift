@@ -304,8 +304,48 @@ final class FixtureProtocol: URLProtocol {
     static var chatActivityResponseID: String?
     static var heldCatalogPort: Int?
     static var catalogPorts: [Int] = []
+    enum CatalogMode { case normal, unavailable, malformed }
+    static var catalogMode: CatalogMode = .normal
     static let catalogStarted = DispatchSemaphore(value: 0)
     static let releaseCatalog = DispatchSemaphore(value: 0)
+    static var fleetNodesStatus: Int?
+    static var fleetNodesEmpty = false
+    static var heldFleetRosterPort: Int?
+    static var fleetRosterStarted = DispatchSemaphore(value: 0)
+    static var releaseFleetRoster = DispatchSemaphore(value: 0)
+    static var heldModelHealthPort: Int?
+    static var modelHealthStarted = DispatchSemaphore(value: 0)
+    static var releaseModelHealth = DispatchSemaphore(value: 0)
+    static var heldTranscriptionDetailPort: Int?
+    static var transcriptionDetailStarted = DispatchSemaphore(value: 0)
+    static var releaseTranscriptionDetail = DispatchSemaphore(value: 0)
+    /// One-shot holds for the four general-refresh suspension boundaries reviewed after the
+    /// fleet-controls change. Each records the request port so a stale refresh cannot silently
+    /// continue through the replacement connection.
+    static var includeLateJob = false
+    static var heldLateJobPort: Int?
+    static var lateJobStarted = DispatchSemaphore(value: 0)
+    static var releaseLateJob = DispatchSemaphore(value: 0)
+    static var lateJobPorts: [Int] = []
+    enum HeldFleetRunResult { case done, forgotten }
+    static var heldFleetRunPort: Int?
+    static var heldFleetRunResult: HeldFleetRunResult = .done
+    static var fleetRunStarted = DispatchSemaphore(value: 0)
+    static var releaseFleetRun = DispatchSemaphore(value: 0)
+    static var fleetRunDetailPorts: [Int] = []
+    static var heldModelStoragePort: Int?
+    static var modelStorageStarted = DispatchSemaphore(value: 0)
+    static var releaseModelStorage = DispatchSemaphore(value: 0)
+    static var modelStoragePorts: [Int] = []
+    static var transcriptionDefaultsByPort: [Int: String] = [:]
+    static var heldTranscriptionListingPort: Int?
+    static var heldTranscriptionListingOccurrence = 2
+    static var heldTranscriptionListingAnswer = Data()
+    static var transcriptionListingCounts: [Int: Int] = [:]
+    static var transcriptionListingStarted = DispatchSemaphore(value: 0)
+    static var releaseTranscriptionListing = DispatchSemaphore(value: 0)
+    static var transcriptionListingPorts: [Int] = []
+    static var reviewedTranscriptionDetailRequests: [String] = []
     static var holdNextJoin = false
     static var heldJoinStarted = false
     static let releaseJoin = DispatchSemaphore(value: 0)
@@ -508,9 +548,94 @@ final class FixtureProtocol: URLProtocol {
     static func recordedChatActivityJobIDs() -> [String] { lock.lock(); defer { lock.unlock() }; return chatActivityJobIDs }
     static func setChatFailure(_ status: Int?) { lock.lock(); defer { lock.unlock() }; chatFailureStatus = status }
     static func holdCatalog(on port: Int) { lock.lock(); defer { lock.unlock() }; heldCatalogPort = port }
+    static func setCatalogMode(_ value: CatalogMode) { lock.lock(); defer { lock.unlock() }; catalogMode = value }
     static func waitForCatalogStart() -> Bool { catalogStarted.wait(timeout: .now() + 2) == .success }
     static func catalogCount(on port: Int) -> Int { lock.lock(); defer { lock.unlock() }; return catalogPorts.filter { $0 == port }.count }
     static func catalogCount() -> Int { lock.lock(); defer { lock.unlock() }; return catalogPorts.count }
+    static func setFleetNodes(status: Int? = nil, empty: Bool = false) {
+        lock.lock(); defer { lock.unlock() }; fleetNodesStatus = status; fleetNodesEmpty = empty
+    }
+    static func holdFleetRoster(on port: Int) {
+        lock.lock(); defer { lock.unlock() }
+        heldFleetRosterPort = port
+        fleetRosterStarted = DispatchSemaphore(value: 0)
+        releaseFleetRoster = DispatchSemaphore(value: 0)
+    }
+    static func waitForFleetRosterStart() -> Bool { fleetRosterStarted.wait(timeout: .now() + 2) == .success }
+    static func releaseHeldFleetRoster() { releaseFleetRoster.signal() }
+    static func holdModelHealth(on port: Int) {
+        lock.lock(); defer { lock.unlock() }
+        heldModelHealthPort = port
+        modelHealthStarted = DispatchSemaphore(value: 0)
+        releaseModelHealth = DispatchSemaphore(value: 0)
+    }
+    static func waitForModelHealthStart() -> Bool { modelHealthStarted.wait(timeout: .now() + 2) == .success }
+    static func releaseHeldModelHealth() { releaseModelHealth.signal() }
+    static func holdTranscriptionDetail(on port: Int) {
+        lock.lock(); defer { lock.unlock() }
+        heldTranscriptionDetailPort = port
+        transcriptionDetailStarted = DispatchSemaphore(value: 0)
+        releaseTranscriptionDetail = DispatchSemaphore(value: 0)
+    }
+    static func waitForTranscriptionDetailStart() -> Bool {
+        transcriptionDetailStarted.wait(timeout: .now() + 2) == .success
+    }
+    static func releaseHeldTranscriptionDetail() { releaseTranscriptionDetail.signal() }
+    static func setIncludeLateJob(_ value: Bool) { lock.lock(); defer { lock.unlock() }; includeLateJob = value }
+    static func holdLateJob(on port: Int) {
+        lock.lock(); defer { lock.unlock() }
+        heldLateJobPort = port
+        lateJobStarted = DispatchSemaphore(value: 0)
+        releaseLateJob = DispatchSemaphore(value: 0)
+    }
+    static func waitForLateJobStart() -> Bool { lateJobStarted.wait(timeout: .now() + 2) == .success }
+    static func releaseHeldLateJob() { releaseLateJob.signal() }
+    static func lateJobRequestPorts() -> [Int] { lock.lock(); defer { lock.unlock() }; return lateJobPorts }
+    static func holdFleetRun(on port: Int, result: HeldFleetRunResult) {
+        lock.lock(); defer { lock.unlock() }
+        heldFleetRunPort = port
+        heldFleetRunResult = result
+        fleetRunStarted = DispatchSemaphore(value: 0)
+        releaseFleetRun = DispatchSemaphore(value: 0)
+    }
+    static func waitForFleetRunStart() -> Bool { fleetRunStarted.wait(timeout: .now() + 2) == .success }
+    static func releaseHeldFleetRun() { releaseFleetRun.signal() }
+    static func fleetRunRequestPorts() -> [Int] { lock.lock(); defer { lock.unlock() }; return fleetRunDetailPorts }
+    static func holdModelStorage(on port: Int) {
+        lock.lock(); defer { lock.unlock() }
+        heldModelStoragePort = port
+        modelStorageStarted = DispatchSemaphore(value: 0)
+        releaseModelStorage = DispatchSemaphore(value: 0)
+    }
+    static func waitForModelStorageStart() -> Bool { modelStorageStarted.wait(timeout: .now() + 2) == .success }
+    static func releaseHeldModelStorage() { releaseModelStorage.signal() }
+    static func modelStorageRequestPorts() -> [Int] { lock.lock(); defer { lock.unlock() }; return modelStoragePorts }
+    static func setTranscriptionDefault(_ model: String, on port: Int) {
+        lock.lock(); defer { lock.unlock() }; transcriptionDefaultsByPort[port] = model
+    }
+    static func holdTranscriptionListing(on port: Int, episode: String, occurrence: Int = 2) {
+        lock.lock(); defer { lock.unlock() }
+        heldTranscriptionListingPort = port
+        heldTranscriptionListingOccurrence = occurrence
+        heldTranscriptionListingAnswer = try! JSONSerialization.data(withJSONObject: [
+            "batches": [["id": "stt-old", "project": "native", "episode": episode,
+                         "status": "running", "model": "mlx-community/whisper-large-v3-turbo"]],
+            "stats": [:],
+        ])
+        transcriptionListingCounts[port] = 0
+        transcriptionListingStarted = DispatchSemaphore(value: 0)
+        releaseTranscriptionListing = DispatchSemaphore(value: 0)
+    }
+    static func waitForTranscriptionListingStart() -> Bool {
+        transcriptionListingStarted.wait(timeout: .now() + 2) == .success
+    }
+    static func releaseHeldTranscriptionListing() { releaseTranscriptionListing.signal() }
+    static func transcriptionListRequestPorts() -> [Int] {
+        lock.lock(); defer { lock.unlock() }; return transcriptionListingPorts
+    }
+    static func reviewedTranscriptionDetails() -> [String] {
+        lock.lock(); defer { lock.unlock() }; return reviewedTranscriptionDetailRequests
+    }
     static func holdJoin() { lock.lock(); defer { lock.unlock() }; holdNextJoin = true; heldJoinStarted = false }
     static func joinHasStarted() -> Bool { lock.lock(); defer { lock.unlock() }; return heldJoinStarted }
     static func releaseHeldJoin() { releaseJoin.signal() }
@@ -619,6 +744,7 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock()
             Self.catalogPorts.append(port)
             let shouldHold = Self.heldCatalogPort == port
+            let mode = Self.catalogMode
             Self.lock.unlock()
             if shouldHold {
                 Self.catalogStarted.signal()
@@ -626,6 +752,16 @@ final class FixtureProtocol: URLProtocol {
                     _ = Self.releaseCatalog.wait(timeout: .now() + 5)
                     finish((200, "application/json", Self.catalogFixture))
                 }
+                return
+            }
+            switch mode {
+            case .normal:
+                break
+            case .unavailable:
+                finish((503, "application/json", Data(#"{"detail":"fixture: catalog temporarily unavailable"}"#.utf8)))
+                return
+            case .malformed:
+                finish((200, "application/json", Data(#"{"models":["#.utf8)))
                 return
             }
         }
@@ -706,7 +842,21 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/model-health"):
             // Per (machine, model): this Mac can run two models and needs one download; the joined
             // node answers its Hub but has no model it can run.
-            result = (200, "application/json", Data(#"{"paused":[],"models":[{"model_id":"a","machine":"local","state":"ready"},{"model_id":"b","machine":"local","state":"ready"},{"model_id":"c","machine":"local","state":"download_required"},{"model_id":"a","machine":"studio-3","state":"download_required"},{"model_id":"b","machine":"studio-3","state":"insufficient_memory"},{"model_id":"c","machine":"studio-3","state":"unknown"}]}"#.utf8))
+            let answer = Data(#"{"paused":[],"models":[{"model_id":"a","machine":"local","state":"ready"},{"model_id":"b","machine":"local","state":"ready"},{"model_id":"c","machine":"local","state":"download_required"},{"model_id":"a","machine":"studio-3","state":"download_required"},{"model_id":"b","machine":"studio-3","state":"insufficient_memory"},{"model_id":"c","machine":"studio-3","state":"unknown"}]}"#.utf8)
+            let port = request.url?.port ?? -1
+            Self.lock.lock()
+            let shouldHold = Self.heldModelHealthPort == port
+            if shouldHold { Self.heldModelHealthPort = nil }
+            Self.lock.unlock()
+            if shouldHold {
+                Self.modelHealthStarted.signal()
+                DispatchQueue.global().async { [self] in
+                    _ = Self.releaseModelHealth.wait(timeout: .now() + 5)
+                    finish((503, "application/json", Data(#"{"detail":"fixture: late model health failure"}"#.utf8)))
+                }
+                return
+            }
+            result = (200, "application/json", answer)
         case ("POST", "/api/hub/jobs/old-job/items/0/retry"):
             Self.lock.lock(); Self.retryPaths.append(path); Self.lock.unlock()
             result = (200, "application/json", Data(#"{"ok":true,"batch_id":"old-job","item_index":0,"state":"queued"}"#.utf8))
@@ -919,12 +1069,32 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.unlock()
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: answer))
         case ("GET", "/api/hub/fleet/nodes"):
-            Self.lock.lock(); Self.fleetCalls.append("list"); Self.lock.unlock()
+            Self.lock.lock()
+            Self.fleetCalls.append("list")
+            let rosterStatus = Self.fleetNodesStatus
+            let emptyRoster = Self.fleetNodesEmpty
+            let shouldHold = Self.heldFleetRosterPort == request.url?.port
+            if shouldHold { Self.heldFleetRosterPort = nil }
+            Self.lock.unlock()
             // Every field here is published by the real Hub and was decoded by nothing: `role`,
             // `studios`, `version`, `joined_at`, `last_seen_at`, the credential's own dates, the
             // `unauthorized` count and the evicted machines. A roster of name-and-address was what
             // the page showed while all of it was on the wire.
-            result = (200, "application/json", Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","role":"agent","studios":[{"id":"image","modality":"image"},{"id":"voice","modality":"voice"}],"joined_at":1750000000.0,"last_seen_at":1750003600.0,"credential_issued_at":1750000000.0,"has_credential":true},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"role":"agent","studios":[],"joined_at":1750000100.0,"last_seen_at":null,"credential_issued_at":1750000100.0,"has_credential":true,"never_connected":true},{"id":"studio-4","name":"Studio 4","address":"http://192.168.1.23:8080","state":"unauthorized","detail":"the node answered but rejected this controller's credential (HTTP 401) - re-join it with the current Fleet Token","version":"0.4.1","role":"agent","studios":[{"id":"image","modality":"image"}],"joined_at":1750000200.0,"last_seen_at":null,"credential_issued_at":1750000200.0,"has_credential":true}],"removed":[{"id":"sold-mac","name":"Sold Mac","address":"http://192.168.1.30:8080","removed_at":1790563000.0,"removed_by":"operator","role":"agent","studios":[{"id":"voice","modality":"voice"}],"joined_at":1740000000.0}],"summary":{"total":3,"reachable":1,"unreachable":1,"unauthorized":1,"error":0,"removed":1}}"#.utf8))
+            let answer = emptyRoster
+                ? Data(#"{"role":"controller","nodes":[],"removed":[],"summary":{"total":0,"reachable":0,"unreachable":0,"unauthorized":0,"error":0,"removed":0}}"#.utf8)
+                : Data(#"{"role":"controller","nodes":[{"id":"studio-2","name":"Studio 2","address":"http://192.168.1.21:8080","state":"reachable","detail":null,"version":"0.4.0","role":"agent","studios":[{"id":"image","modality":"image"},{"id":"voice","modality":"voice"}],"joined_at":1750000000.0,"last_seen_at":1750003600.0,"credential_issued_at":1750000000.0,"has_credential":true},{"id":"studio-3","name":"Studio 3","address":"http://192.168.1.22:8080","state":"unreachable","detail":"could not reach the node","version":null,"role":"agent","studios":[],"joined_at":1750000100.0,"last_seen_at":null,"credential_issued_at":1750000100.0,"has_credential":true,"never_connected":true},{"id":"studio-4","name":"Studio 4","address":"http://192.168.1.23:8080","state":"unauthorized","detail":"the node answered but rejected this controller's credential (HTTP 401) - re-join it with the current Fleet Token","version":"0.4.1","role":"agent","studios":[{"id":"image","modality":"image"}],"joined_at":1750000200.0,"last_seen_at":null,"credential_issued_at":1750000200.0,"has_credential":true}],"removed":[{"id":"sold-mac","name":"Sold Mac","address":"http://192.168.1.30:8080","removed_at":1790563000.0,"removed_by":"operator","role":"agent","studios":[{"id":"voice","modality":"voice"}],"joined_at":1740000000.0}],"summary":{"total":3,"reachable":1,"unreachable":1,"unauthorized":1,"error":0,"removed":1}}"#.utf8)
+            let rosterAnswer = rosterStatus.map {
+                ($0, "application/json", Data(#"{"detail":"fixture: roster refused"}"#.utf8))
+            } ?? (200, "application/json", answer)
+            if shouldHold {
+                Self.fleetRosterStarted.signal()
+                DispatchQueue.global().async { [self] in
+                    _ = Self.releaseFleetRoster.wait(timeout: .now() + 5)
+                    finish(rosterAnswer)
+                }
+                return
+            }
+            result = rosterAnswer
         case ("GET", "/studio/voice/api/voices"):
             Self.lock.lock()
             Self.voiceListCalls += 1
@@ -1052,10 +1222,10 @@ final class FixtureProtocol: URLProtocol {
             // One Studio frees its model, one is mid-job and must be left alone.
             result = (200, "application/json", Data(#"{"ok":false,"action":"release","selected":2,"succeeded":1,"failed":1,"mode":null,"results":[{"id":"subtitle","ok":true,"result":"released","detail":null},{"id":"voice","ok":false,"result":"busy","detail":"Voice generation or transcription is active; memory was not released"}]}"#.utf8))
         case ("GET", "/studio/voice/api/transcribe/availability"):
-            result = (200, "application/json", Self.transcriptionFixture)
+            result = (200, "application/json", Self.transcriptionFixture(on: request.url?.port ?? -1))
         case ("GET", "/studio/transcription/api/transcribe/availability"):
             // The Subtitle studio reads its availability from the subtitle worker, not Voice.
-            result = (200, "application/json", Self.transcriptionFixture)
+            result = (200, "application/json", Self.transcriptionFixture(on: request.url?.port ?? -1))
         case ("GET", "/studio/voice/api/generate/availability"):
             result = (200, "application/json", Data(#"{"qwen3_preset_speakers":[{"id":"Ryan","lang":"en","gender":"male","description":"Warm"},{"id":"Aiden","lang":"en","gender":"male","description":"Clear"}],"secondvoice_preset_speakers":[{"id":"Sophea","lang":"km","gender":"female","description":"Clear"},{"id":"Dara","lang":"km","gender":"male","description":"Warm"}]}"#.utf8))
         case ("GET", "/studio/image/api/loading-mode"):
@@ -1099,18 +1269,59 @@ final class FixtureProtocol: URLProtocol {
             case "failed": result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"error","error_tail":"Download incomplete or invalid: model.safetensors"}"#.utf8))
             default: result = (200, "application/json", Data("{\"id\":\"hub-download-1\",\"package_id\":\"whisper-turbo\",\"state\":\"\(cancelled ? "cancelled" : "running")\",\"bytes_done\":3000000000,\"total_bytes\":12000000000}".utf8))
             }
-        case ("GET", "/api/hub/model-downloads"), ("GET", "/api/hub/model-downloads/fleet-run-1"), ("DELETE", "/api/hub/model-downloads/fleet-run-1"):
+        case ("GET", "/api/hub/model-downloads/fleet-run-1"):
+            let port = request.url?.port ?? -1
+            Self.lock.lock()
+            Self.fleetRunDetailPorts.append(port)
+            let state = Self.fleetRunState
+            let shouldHold = Self.heldFleetRunPort == port
+            let heldResult = Self.heldFleetRunResult
+            if shouldHold { Self.heldFleetRunPort = nil }
+            Self.lock.unlock()
+            let row = "{\"id\":\"fleet-run-1\",\"package_id\":\"fixture-flux\",\"state\":\"\(state)\",\"bytes_done\":39,\"total_bytes\":100}"
+            if shouldHold {
+                Self.fleetRunStarted.signal()
+                DispatchQueue.global().async { [self] in
+                    _ = Self.releaseFleetRun.wait(timeout: .now() + 30)
+                    switch heldResult {
+                    case .done:
+                        finish((200, "application/json", Data(#"{"id":"fleet-run-1","package_id":"fixture-flux","state":"done","bytes_done":100,"total_bytes":100}"#.utf8)))
+                    case .forgotten:
+                        finish((404, "application/json", Data(#"{"detail":"unknown model download"}"#.utf8)))
+                    }
+                }
+                return
+            }
+            result = (200, "application/json", Data(row.utf8))
+        case ("GET", "/api/hub/model-downloads"), ("DELETE", "/api/hub/model-downloads/fleet-run-1"):
             Self.lock.lock()
             if method == "DELETE" { Self.fleetRunState = "cancelled"; Self.fleetRunDeletes += 1 }
             let state = Self.fleetRunState
             Self.lock.unlock()
             let row = "{\"id\":\"fleet-run-1\",\"package_id\":\"fixture-flux\",\"state\":\"\(state)\",\"bytes_done\":39,\"total_bytes\":100}"
-            result = (200, "application/json", Data((path.hasSuffix("fleet-run-1") ? row : state.isEmpty ? #"{"runs":[]}"# : "{\"runs\":[\(row)]}").utf8))
+            let answer = method == "DELETE" ? row
+                : state.isEmpty ? #"{"runs":[]}"# : "{\"runs\":[\(row)]}"
+            result = (200, "application/json", Data(answer.utf8))
         case ("DELETE", "/api/hub/model-downloads/hub-download-1"):
             Self.lock.lock(); Self.hubDownloadCancelled = true; Self.lock.unlock()
             result = (200, "application/json", Data(#"{"id":"hub-download-1","package_id":"whisper-turbo","state":"cancelled"}"#.utf8))
         case ("GET", "/studio/voice/api/model-storage"):
-            result = (200, "application/json", Data(#"{"cache_root":"/tmp/hub","groups":[{"id":"voxcpm2","label":"VoxCPM2 (MLX)","bytes_total":5000000000,"memory":{"required_gb":8,"this_mac_gb":16,"runs_here":true}},{"id":"fish-s2-pro","label":"Fish Audio S2 Pro (MLX)","bytes_total":17000000000,"memory":{"required_gb":32,"this_mac_gb":16,"runs_here":false}}]}"#.utf8))
+            let port = request.url?.port ?? -1
+            Self.lock.lock()
+            Self.modelStoragePorts.append(port)
+            let shouldHold = Self.heldModelStoragePort == port
+            if shouldHold { Self.heldModelStoragePort = nil }
+            Self.lock.unlock()
+            let answer = Data(#"{"cache_root":"/tmp/hub","groups":[{"id":"voxcpm2","label":"VoxCPM2 (MLX)","bytes_total":5000000000,"memory":{"required_gb":8,"this_mac_gb":16,"runs_here":true}},{"id":"fish-s2-pro","label":"Fish Audio S2 Pro (MLX)","bytes_total":17000000000,"memory":{"required_gb":32,"this_mac_gb":16,"runs_here":false}}]}"#.utf8)
+            if shouldHold {
+                Self.modelStorageStarted.signal()
+                DispatchQueue.global().async { [self] in
+                    _ = Self.releaseModelStorage.wait(timeout: .now() + 30)
+                    finish((503, "application/json", Data(#"{"detail":"fixture: late storage failure"}"#.utf8)))
+                }
+                return
+            }
+            result = (200, "application/json", answer)
         case ("GET", "/api/hub/jobs"):
             Self.lock.lock()
             let pendingImage = Self.uncertainImage
@@ -1145,11 +1356,30 @@ final class FixtureProtocol: URLProtocol {
             // it is settled (nothing waiting) or was retried (one queued again).
             Self.lock.lock(); let errorBatch = Self.errorBatchMode; Self.lock.unlock()
             var listed = batches as [[String: Any]]
+            Self.lock.lock(); let lateJob = Self.includeLateJob; Self.lock.unlock()
+            if lateJob { listed.append(["id": "late-job", "modality": "voice"]) }
             if errorBatch != "off" {
                 listed.append(["id": "err-job", "modality": "image", "queued": errorBatch == "retried" ? 1 : 0,
                                "retrying": 0, "running": 0, "cancel_requested": 0, "uncertain": 0, "error": 1])
             }
             result = (200, "application/json", try! JSONSerialization.data(withJSONObject: ["batches": listed]))
+        case ("GET", "/api/hub/jobs/late-job"):
+            let port = request.url?.port ?? -1
+            Self.lock.lock()
+            Self.lateJobPorts.append(port)
+            let shouldHold = Self.heldLateJobPort == port
+            if shouldHold { Self.heldLateJobPort = nil }
+            Self.lock.unlock()
+            let answer = Data(#"{"id":"late-job","modality":"voice","model":"fixture/replacement","created_at":99,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"Replacement session job"}]}"#.utf8)
+            if shouldHold {
+                Self.lateJobStarted.signal()
+                DispatchQueue.global().async { [self] in
+                    _ = Self.releaseLateJob.wait(timeout: .now() + 30)
+                    finish((500, "application/json", Data(#"{"detail":"fixture: old job detail failed"}"#.utf8)))
+                }
+                return
+            }
+            result = (200, "application/json", answer)
         case ("GET", "/api/hub/jobs/err-job"):
             Self.lock.lock(); let errorBatch = Self.errorBatchMode; Self.lock.unlock()
             result = (200, "application/json", Data("{\"id\":\"err-job\",\"modality\":\"image\",\"model\":\"fixture/flux\",\"created_at\":1,\"items\":[{\"index\":0,\"state\":\"\(errorBatch == "retried" ? "queued" : "error")\",\"prompt\":\"x\",\"error\":\"worker refused\"}]}".utf8))
@@ -1432,14 +1662,49 @@ final class FixtureProtocol: URLProtocol {
             result = (200, "application/json", Data(#"{"batch_id":"stt-batch","items":1,"queued":1}"#.utf8))
         case ("GET", "/api/hub/transcription/jobs"):
             // Durable Subtitle history list read during refresh.
+            let port = request.url?.port ?? -1
+            Self.lock.lock()
+            Self.transcriptionListingPorts.append(port)
+            let count = (Self.transcriptionListingCounts[port] ?? 0) + 1
+            Self.transcriptionListingCounts[port] = count
+            let shouldHold = Self.heldTranscriptionListingPort == port
+                && count == Self.heldTranscriptionListingOccurrence
+            let heldAnswer = Self.heldTranscriptionListingAnswer
+            if shouldHold { Self.heldTranscriptionListingPort = nil }
+            Self.lock.unlock()
+            if shouldHold {
+                Self.transcriptionListingStarted.signal()
+                DispatchQueue.global().async { [self] in
+                    _ = Self.releaseTranscriptionListing.wait(timeout: .now() + 30)
+                    finish((200, "application/json", heldAnswer))
+                }
+                return
+            }
             result = (200, "application/json", Data(#"{"batches":[{"id":"stt-batch","status":"done","model":"mlx-community/whisper-large-v3-turbo","created_at":40,"label":"Fixture subtitle"}],"stats":{}}"#.utf8))
+        case ("GET", "/api/hub/transcription/jobs/stt-old"):
+            let port = request.url?.port ?? -1
+            Self.lock.lock(); Self.reviewedTranscriptionDetailRequests.append("stt-old@\(port)"); Self.lock.unlock()
+            result = (200, "application/json", Data(#"{"id":"stt-old","status":"running","model":"mlx-community/whisper-large-v3-turbo","items":[{"index":0,"state":"running"}]}"#.utf8))
         case ("GET", "/api/hub/transcription/jobs/stt-batch"):
-            Self.lock.lock(); let uncertain = Self.uncertainTranscription; Self.lock.unlock()
+            Self.lock.lock()
+            let uncertain = Self.uncertainTranscription
+            let shouldHold = Self.heldTranscriptionDetailPort == request.url?.port
+            if shouldHold { Self.heldTranscriptionDetailPort = nil }
+            Self.lock.unlock()
             if uncertain {
                 result = (200, "application/json", Data(#"{"id":"stt-batch","status":"uncertain","model":"mlx-community/whisper-large-v3-turbo","items":[{"index":0,"state":"uncertain"}]}"#.utf8))
                 break
             }
-            result = (200, "application/json", Data(#"{"id":"stt-batch","status":"done","model":"mlx-community/whisper-large-v3-turbo","items":[{"index":0,"state":"done","artifact_url":"/api/hub/transcription/jobs/stt-batch/items/0/artifact","metadata":{"text":"hello world","language":"en","duration":1.25,"model":"mlx-community/whisper-large-v3-turbo","vtt":"WEBVTT\n\n00:00:00.000 --> 00:00:01.250\nhello world\n"}}]}"#.utf8))
+            let answer = (200, "application/json", Data(#"{"id":"stt-batch","status":"done","model":"mlx-community/whisper-large-v3-turbo","items":[{"index":0,"state":"done","artifact_url":"/api/hub/transcription/jobs/stt-batch/items/0/artifact","metadata":{"text":"hello world","language":"en","duration":1.25,"model":"mlx-community/whisper-large-v3-turbo","vtt":"WEBVTT\n\n00:00:00.000 --> 00:00:01.250\nhello world\n"}}]}"#.utf8))
+            if shouldHold {
+                Self.transcriptionDetailStarted.signal()
+                DispatchQueue.global().async { [self] in
+                    _ = Self.releaseTranscriptionDetail.wait(timeout: .now() + 5)
+                    finish(answer)
+                }
+                return
+            }
+            result = answer
         case ("GET", "/api/hub/transcription/jobs/stt-batch/items/0/artifact"):
             result = (200, "application/x-subrip", Data("1\n00:00:00,000 --> 00:00:01,250\nhello world\n".utf8))
         case ("POST", "/api/hub/transcription/jobs/stt-batch/items/0/ack"):
@@ -1545,6 +1810,15 @@ final class FixtureProtocol: URLProtocol {
     /// assumed. A bare row sits both before and after the rich one: neither "first seen" nor "last
     /// seen" may win, because both would lose the engine and cache state the Subtitle form needs.
     private static let transcriptionFixture = Data(#"{"available":true,"default_model":"mlx-community/whisper-large-v3-turbo","models":[{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","engine":"whisper"},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo","size_gb":1.6,"note":"Recommended","engine":"subtitle-mlx","languages":"Multilingual","weight_format":"safetensors","supports_word_timestamps":true,"supports_segment_timestamps":true,"recommended":true,"cached":true,"lane_contract":{"schema":"studiohub.lane-contract.v1","modality":"transcription","operation":"audio.transcription","parameters":[{"name":"file","type":"string","required":true,"max_bytes":2147483648,"enum":[".wav",".mp3",".m4a",".flac",".mp4",".mov"],"note":"multipart upload; the filename extension must be one of the listed values"},{"name":"model","type":"string","required":false,"enum":["whisper-turbo","whisper-base"],"default":"whisper-turbo"},{"name":"word_timestamps","type":"boolean","required":false,"default":false},{"name":"language","type":"string","required":false,"enum":["en","km","zh"]}],"artifact":{"modality":"transcription","media_type":"application/json","extension":"json","per_item":1}}},{"repo":"mlx-community/whisper-large-v3-turbo","label":"Whisper turbo"},{"repo":"moonshine-ai/moonshine-base","label":"Moonshine","size_gb":0.25,"note":"Pilot","engine":"moonshine","languages":"English","supports_word_timestamps":false,"recommended":false,"cached":true},{"repo":"fixture/whisper-unpackaged","label":"Whisper fixture with no Hub package","size_gb":1.0,"engine":"whisper-mlx","languages":"Multilingual","supports_word_timestamps":true,"recommended":false,"cached":true}]}"#.utf8)
+
+    private static func transcriptionFixture(on port: Int) -> Data {
+        lock.lock(); let override = transcriptionDefaultsByPort[port]; lock.unlock()
+        guard let override,
+              var object = (try? JSONSerialization.jsonObject(with: transcriptionFixture)) as? [String: Any]
+        else { return transcriptionFixture }
+        object["default_model"] = override
+        return (try? JSONSerialization.data(withJSONObject: object)) ?? transcriptionFixture
+    }
 
     private static let packagesFixture = Data(#"{"models":[{"package_id":"synthetic-custom-voice","model_id":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-flux","model_id":"fixture/flux","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-narrow-image","model_id":"fixture/narrow-image","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-paused","model_id":"fixture/paused","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running","paused":true,"paused_reason":"RuntimeError: SystemExit: 1","paused_studio":"voice"},{"package_id":"fixture-sung-music","model_id":"fixture/sung-music","state":"files_verified","dispatch_state":"eligible","files_state":"files_verified","runtime_state":"ready","os_state":"ready","chip_state":"ready","worker_state":"running"},{"package_id":"whisper-turbo","model_id":"mlx-community/whisper-large-v3-turbo","state":"files_verified","dispatch_state":"eligible"},{"package_id":"moonshine-base","model_id":"moonshine-ai/moonshine-base","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-zimage","model_id":"fixture/zimage","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-music","model_id":"fixture/second-music","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-second-preset","model_id":"fixture/second-preset","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-ltx-video","model_id":"fixture/ltx-video","state":"files_verified","dispatch_state":"eligible"},{"package_id":"qwen3-5-9b","model_id":"Qwen/Qwen3.5-9B","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-conversational","model_id":"fixture/chat-conversational","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-family","model_id":"fixture/chat-family","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-chat-annotated","model_id":"fixture/chat-annotated","state":"files_verified","dispatch_state":"eligible"},{"package_id":"voxcpm2-4bit","model_id":"mlx-community/VoxCPM2-4bit","state":"files_verified","dispatch_state":"ineligible","files_state":"files_verified","runtime_state":"ready","os_state":"unsupported","chip_state":"ready","worker_state":"running","minimum_macos":"15.0","macos_version":"14.5"},{"package_id":"chatterbox-8bit","model_id":"mlx-community/chatterbox-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fish-audio-s2-pro-8bit","model_id":"mlx-community/fish-audio-s2-pro-8bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-mms","model_id":"khmerttsopensource/khmer-tts","state":"files_verified","dispatch_state":"eligible"},{"package_id":"khmer-tts-onnx","model_id":"sengtha/khmer-tts-female-v2","state":"files_verified","dispatch_state":"eligible"},{"package_id":"pocket-tts-4bit","model_id":"mlx-community/pocket-tts-4bit","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unwired-voice","model_id":"fixture/unwired-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-two-mode-voice","model_id":"fixture/two-mode-voice","state":"files_verified","dispatch_state":"eligible"},{"package_id":"fixture-unreported-modes","model_id":"fixture/unreported-modes","state":"files_verified","dispatch_state":"eligible"}]}"#.utf8)
 
@@ -2662,6 +2936,8 @@ struct NativeAPITests {
                 "the row says why: \(store.fleetReadiness["studio-3"]?.summary ?? "nil")")
         require(store.fleetRefreshedAt != nil && store.fleetReadError == nil && !store.fleetRefreshing,
                 "a clean read is dated and reports no error")
+        require(store.fleetRosterReachable,
+                "a decoded authenticated roster is current management evidence")
         let sorted = NativeWorkspaceStore.unreachableFirst(store.fleetOverview!.machines, reachable: \.reachable)
         require(sorted.map(\.machine) == ["studio-3", "local"], "unreachable machines float to the top")
         require(NativeWorkspaceStore.unreachableFirst([1, 2, 3, 4], reachable: { $0 % 2 == 0 }) == [1, 3, 2, 4],
@@ -2711,9 +2987,46 @@ struct NativeAPITests {
         require(store.fleetOverview?.summary.total == 2, "a failed read must not wipe the last good overview")
         require(store.fleetReadError?.contains("fleet overview") == true,
                 "the error must name what could not be read: \(store.fleetReadError ?? "nil")")
+        require(store.fleetRosterReachable,
+                "an overview failure must not revoke a successful authenticated roster")
         FixtureProtocol.mutate { FixtureProtocol.overviewFails = false }
         await store.refreshFleetNodes()
         require(store.fleetReadError == nil, "the next clean read clears the error")
+
+        // The primary roster is the proof that authorizes management. A refusal keeps last-good
+        // rows readable, but it revokes that proof and an already-open confirmation cannot DELETE.
+        let retainedRoster = store.fleetNodes
+        let guardedNode = store.fleetNodes!.nodes.first!
+        let guardedGeneration = store.connectionGeneration
+        let deletesBeforeRosterFailure = FixtureProtocol.fleetRequests().filter { $0.hasPrefix("leave:") }.count
+        FixtureProtocol.setFleetNodes(status: 503)
+        await store.refreshFleetNodes()
+        require(!store.fleetRosterReachable && store.fleetNodes == retainedRoster,
+                "a refused roster must revoke management proof without erasing last-good rows")
+        require(store.fleetReadError?.contains("joined nodes") == true,
+                "the primary refusal must name the unread roster")
+        await store.leaveNode(guardedNode, expectedConnectionGeneration: guardedGeneration)
+        require(FixtureProtocol.fleetRequests().filter { $0.hasPrefix("leave:") }.count == deletesBeforeRosterFailure,
+                "a confirmation captured before roster refusal dispatched DELETE")
+        FixtureProtocol.setFleetNodes()
+        await store.refreshFleetNodes()
+        require(store.fleetRosterReachable && store.fleetReadError == nil,
+                "a fresh decoded roster must restore management proof")
+
+        // Two callers on the same connection share one fleet read. The second call must not add a
+        // second roster request while the first is awaiting its response.
+        let listsBeforeCoalescing = FixtureProtocol.fleetRequests().filter { $0 == "list" }.count
+        FixtureProtocol.holdFleetRoster(on: 45678)
+        let firstFleetRead = Task { await store.refreshFleetNodes() }
+        let fleetReadStarted = await Task.detached { FixtureProtocol.waitForFleetRosterStart() }.value
+        require(fleetReadStarted && store.fleetRefreshing, "the held roster did not enter its busy state")
+        await store.refreshFleetNodes()
+        require(FixtureProtocol.fleetRequests().filter { $0 == "list" }.count == listsBeforeCoalescing + 1,
+                "overlapping fleet reads were not coalesced")
+        FixtureProtocol.releaseHeldFleetRoster()
+        await firstFleetRead.value
+        require(!store.fleetRefreshing && store.fleetRosterReachable,
+                "the coalesced read did not publish its successful roster")
         // A Mac that joined a group has to be able to see the group. The pool is read back from
         // the controller, so the screen can name the head of the group and say plainly whether
         // what it is showing is all of it.
@@ -2774,7 +3087,8 @@ struct NativeAPITests {
                 "a row that does not carry the flag reads as nil, not false")
 
         // Removing the pinned Mac is the other way a pin loses its machine.
-        await store.leaveNode(store.fleetNodes!.nodes.first { $0.id == "studio-3" }!)
+        await store.leaveNode(store.fleetNodes!.nodes.first { $0.id == "studio-3" }!,
+                              expectedConnectionGeneration: store.connectionGeneration)
         require(FixtureProtocol.fleetRequests().contains("leave:studio-3"),
                 "removing a node must reach the Hub: \(FixtureProtocol.fleetRequests())")
         require(store.routingPin == nil,
@@ -5450,12 +5764,332 @@ struct NativeAPITests {
         let catalogDidStart = await Task.detached { FixtureProtocol.waitForCatalogStart() }.value
         require(catalogDidStart, "catalog fixture did not reach its delayed response")
         await overlappingStore.connect(baseURL: URL(string: "http://127.0.0.1:45682")!, dataDirectory: state, token: "native-test-token")
+        let replacementCatalogReads = FixtureProtocol.catalogCount(on: 45682)
+        require(replacementCatalogReads == 1,
+                "the replacement connection must perform its own immediate refresh")
         try await Task.sleep(for: .milliseconds(600))
         FixtureProtocol.releaseCatalog.signal()
         await oldConnect.value
         try await Task.sleep(for: .milliseconds(2_200))
-        require(FixtureProtocol.catalogCount(on: 45682) == 1, "stale connect installed a duplicate polling task")
+        require(FixtureProtocol.catalogCount(on: 45682) == replacementCatalogReads + 1,
+                "stale connect installed a duplicate polling task")
         overlappingStore.disconnect()
+
+        // A known local-service address with no established SDK session must fail visibly. The
+        // read does not reconnect, guess a token or silently return as though there were no fleet.
+        let disconnectedFleetStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        let fleetCallsBeforeDisconnectedRead = FixtureProtocol.fleetRequests().count
+        await disconnectedFleetStore.refreshFleetNodes()
+        require(!disconnectedFleetStore.fleetRosterReachable
+                && disconnectedFleetStore.fleetReadError?.contains("connection") == true,
+                "a fleet read without an SDK session needs a visible connection error")
+        require(FixtureProtocol.fleetRequests().count == fleetCallsBeforeDisconnectedRead,
+                "a disconnected fleet read must not invent a request or reconnect")
+
+        // Removal eligibility belongs to the exact connection and exact current roster. Reusing a
+        // dialog after reconnect, during refresh, or after the id left the roster sends no DELETE.
+        let removalGuardStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await removalGuardStore.connect(baseURL: URL(string: "http://127.0.0.1:45684")!,
+                                        dataDirectory: temporary.appendingPathComponent("removal-guard"),
+                                        token: "native-test-token")
+        await removalGuardStore.refreshFleetNodes()
+        let capturedRemovalNode = removalGuardStore.fleetNodes!.nodes.first!
+        let capturedRemovalGeneration = removalGuardStore.connectionGeneration
+        removalGuardStore.disconnect()
+        require(!removalGuardStore.fleetRosterReachable && !removalGuardStore.fleetRefreshing
+                && removalGuardStore.fleetReadError == nil,
+                "disconnect must clear fleet proof, busy state and read error")
+        await removalGuardStore.connect(baseURL: URL(string: "http://127.0.0.1:45685")!,
+                                        dataDirectory: temporary.appendingPathComponent("removal-guard"),
+                                        token: "native-test-token")
+        await removalGuardStore.refreshFleetNodes()
+        let deletesBeforeStaleConfirmation = FixtureProtocol.fleetRequests().filter { $0.hasPrefix("leave:") }.count
+        await removalGuardStore.leaveNode(capturedRemovalNode,
+                                          expectedConnectionGeneration: capturedRemovalGeneration)
+        require(FixtureProtocol.fleetRequests().filter { $0.hasPrefix("leave:") }.count == deletesBeforeStaleConfirmation,
+                "a pre-reconnect confirmation deleted from the replacement connection")
+
+        FixtureProtocol.setFleetNodes(empty: true)
+        await removalGuardStore.refreshFleetNodes()
+        require(removalGuardStore.fleetRosterReachable
+                && removalGuardStore.fleetNodes?.nodes.isEmpty == true,
+                "a decoded empty roster is reachable evidence and is distinct from unread")
+        await removalGuardStore.leaveNode(capturedRemovalNode,
+                                          expectedConnectionGeneration: removalGuardStore.connectionGeneration)
+        require(FixtureProtocol.fleetRequests().filter { $0.hasPrefix("leave:") }.count == deletesBeforeStaleConfirmation,
+                "a node absent from the current roster was deleted")
+        FixtureProtocol.setFleetNodes()
+        await removalGuardStore.refreshFleetNodes()
+
+        FixtureProtocol.holdFleetRoster(on: 45685)
+        let inFlightRemovalRefresh = Task { await removalGuardStore.refreshFleetNodes() }
+        let inFlightRemovalStarted = await Task.detached { FixtureProtocol.waitForFleetRosterStart() }.value
+        require(inFlightRemovalStarted && removalGuardStore.fleetRefreshing,
+                "the removal guard fixture did not enter an active roster read")
+        await removalGuardStore.leaveNode(capturedRemovalNode,
+                                          expectedConnectionGeneration: removalGuardStore.connectionGeneration)
+        require(FixtureProtocol.fleetRequests().filter { $0.hasPrefix("leave:") }.count == deletesBeforeStaleConfirmation,
+                "an in-flight roster read allowed DELETE")
+        FixtureProtocol.releaseHeldFleetRoster()
+        await inFlightRemovalRefresh.value
+        removalGuardStore.disconnect()
+
+        // An old optional model-health completion returning nil cannot publish its old timestamp
+        // or clear the busy flag of a new connection's active roster read.
+        let lateFleetStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await lateFleetStore.connect(baseURL: URL(string: "http://127.0.0.1:45686")!,
+                                     dataDirectory: temporary.appendingPathComponent("late-fleet"),
+                                     token: "native-test-token")
+        FixtureProtocol.holdModelHealth(on: 45686)
+        let oldFleetRead = Task { await lateFleetStore.refreshFleetNodes() }
+        let oldHealthStarted = await Task.detached { FixtureProtocol.waitForModelHealthStart() }.value
+        require(oldHealthStarted, "the old fleet read did not reach optional model health")
+        lateFleetStore.disconnect()
+        await lateFleetStore.connect(baseURL: URL(string: "http://127.0.0.1:45687")!,
+                                     dataDirectory: temporary.appendingPathComponent("late-fleet"),
+                                     token: "native-test-token")
+        FixtureProtocol.holdFleetRoster(on: 45687)
+        let newFleetRead = Task { await lateFleetStore.refreshFleetNodes() }
+        let newRosterStarted = await Task.detached { FixtureProtocol.waitForFleetRosterStart() }.value
+        require(newRosterStarted && lateFleetStore.fleetRefreshing,
+                "the replacement connection did not enter its roster read")
+        let replacementRefreshDate = lateFleetStore.fleetRefreshedAt
+        FixtureProtocol.releaseHeldModelHealth()
+        await oldFleetRead.value
+        require(lateFleetStore.fleetRefreshing
+                && lateFleetStore.fleetRefreshedAt == replacementRefreshDate
+                && !lateFleetStore.fleetRosterReachable,
+                "an old optional-health completion published into the replacement connection")
+        FixtureProtocol.releaseHeldFleetRoster()
+        await newFleetRead.value
+        require(!lateFleetStore.fleetRefreshing && lateFleetStore.fleetRosterReachable,
+                "the replacement fleet read did not publish its own result")
+        lateFleetStore.disconnect()
+
+        // A catalog success paused at the final transcription reconciliation cannot clear a newer
+        // connection's catalog failure after reconnect.
+        let lateRefreshState = temporary.appendingPathComponent("late-refresh")
+        try FileManager.default.createDirectory(at: lateRefreshState, withIntermediateDirectories: true)
+        let pendingTranscription = #"{"episode":"fixture-late","itemID":"item-late","filePath":"/tmp/fixture.wav","model":"mlx-community/whisper-large-v3-turbo","language":"en","wordTimestamps":null,"batchID":"stt-batch"}"#
+        try pendingTranscription.write(
+            to: lateRefreshState.appendingPathComponent("native-pending-transcription.json"),
+            atomically: true, encoding: .utf8)
+        let lateRefreshStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        FixtureProtocol.holdTranscriptionDetail(on: 45688)
+        let oldLateConnect = Task {
+            await lateRefreshStore.connect(baseURL: URL(string: "http://127.0.0.1:45688")!,
+                                           dataDirectory: lateRefreshState,
+                                           token: "native-test-token")
+        }
+        let oldTranscriptionDetailStarted = await Task.detached {
+            FixtureProtocol.waitForTranscriptionDetailStart()
+        }.value
+        require(oldTranscriptionDetailStarted, "the old refresh did not reach late transcription reconciliation")
+        FixtureProtocol.setCatalogMode(.unavailable)
+        await lateRefreshStore.connect(baseURL: URL(string: "http://127.0.0.1:45689")!,
+                                       dataDirectory: lateRefreshState,
+                                       token: "native-test-token")
+        let replacementCatalogError = lateRefreshStore.catalogReadError
+        require(!lateRefreshStore.isReachable && replacementCatalogError != nil,
+                "the replacement connection did not record its catalog failure")
+        FixtureProtocol.releaseHeldTranscriptionDetail()
+        await oldLateConnect.value
+        require(!lateRefreshStore.isReachable
+                && lateRefreshStore.catalogReadError == replacementCatalogError,
+                "an old late refresh cleared the replacement connection's catalog failure")
+        FixtureProtocol.setCatalogMode(.normal)
+        lateRefreshStore.disconnect()
+
+        // A refresh that started on an old connection may finish after `connect` has installed a
+        // replacement. These four held replies are the remaining suspension boundaries in the
+        // general refresh: none may mutate replacement state, persist into its profile, or issue
+        // the next request through its base URL. Collect every result before failing so RED proves
+        // all four source-derived races rather than stopping at the first one.
+        var reviewedBoundaryFailures: [String] = []
+        func reviewCheck(_ condition: Bool, _ message: String) {
+            if !condition { reviewedBoundaryFailures.append(message) }
+        }
+        func seedDownloadProfile(_ directory: URL, repo: String) throws {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(["fleet-run-1": repo])
+            try data.write(to: directory.appendingPathComponent("native-model-downloads.json"), options: .atomic)
+        }
+        func savedDownloadRepo(_ directory: URL) -> String? {
+            let file = directory.appendingPathComponent("native-model-downloads.json")
+            guard let data = try? Data(contentsOf: file),
+                  let saved = try? JSONDecoder().decode([String: String].self, from: data)
+            else { return nil }
+            return saved["fleet-run-1"]
+        }
+
+        // 1. An old job-detail HTTP error must return at its catch boundary. It must not replace
+        // the current job rows, continue into download/storage requests on the new port, or let
+        // its defer clear a held replacement refresh's busy flag.
+        FixtureProtocol.mutate { FixtureProtocol.fleetRunState = "running" }
+        let jobOldHome = temporary.appendingPathComponent("review-job-old")
+        let jobNewHome = temporary.appendingPathComponent("review-job-new")
+        try seedDownloadProfile(jobOldHome, repo: "review/job-old")
+        try seedDownloadProfile(jobNewHome, repo: "review/job-new")
+        let jobBoundaryStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await jobBoundaryStore.connect(baseURL: URL(string: "http://127.0.0.1:45710")!,
+                                       dataDirectory: jobOldHome, token: "native-test-token")
+        FixtureProtocol.setIncludeLateJob(true)
+        FixtureProtocol.holdLateJob(on: 45710)
+        let oldJobRefresh = Task { await jobBoundaryStore.refresh() }
+        let oldJobStarted = await Task.detached { FixtureProtocol.waitForLateJobStart() }.value
+        require(oldJobStarted, "the reviewed job-detail reply was not held")
+        await jobBoundaryStore.connect(baseURL: URL(string: "http://127.0.0.1:45711")!,
+                                       dataDirectory: jobNewHome, token: "native-test-token")
+        reviewCheck(jobBoundaryStore.audioJobs.contains { $0.id == "late-job" },
+                    "replacement job fixture did not establish its current row")
+        let replacementDownloadReads = FixtureProtocol.fleetRunRequestPorts().filter { $0 == 45711 }.count
+        FixtureProtocol.holdCatalog(on: 45711)
+        let heldReplacementRefresh = Task { await jobBoundaryStore.refresh() }
+        let replacementRefreshStarted = await Task.detached { FixtureProtocol.waitForCatalogStart() }.value
+        require(replacementRefreshStarted && jobBoundaryStore.refreshing,
+                "the replacement refresh did not enter its held busy state")
+        FixtureProtocol.releaseHeldLateJob()
+        await oldJobRefresh.value
+        reviewCheck(jobBoundaryStore.refreshing,
+                    "an old job-detail failure cleared the replacement refresh's busy flag")
+        reviewCheck(jobBoundaryStore.audioJobs.contains { $0.id == "late-job" },
+                    "an old job-detail failure replaced the current job rows")
+        reviewCheck(FixtureProtocol.fleetRunRequestPorts().filter { $0 == 45711 }.count
+                        == replacementDownloadReads,
+                    "an old job-detail failure continued into a download read on the replacement")
+        FixtureProtocol.releaseCatalog.signal()
+        await heldReplacementRefresh.value
+        jobBoundaryStore.disconnect()
+        FixtureProtocol.setIncludeLateJob(false)
+
+        // 2a. A successful old download detail is just as stale as an error: it cannot finish the
+        // replacement's running row or remove/persist the replacement profile's run mapping.
+        let downloadSuccessOldHome = temporary.appendingPathComponent("review-download-success-old")
+        let downloadSuccessNewHome = temporary.appendingPathComponent("review-download-success-new")
+        try seedDownloadProfile(downloadSuccessOldHome, repo: "review/success-old")
+        try seedDownloadProfile(downloadSuccessNewHome, repo: "review/success-new")
+        let downloadSuccessStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await downloadSuccessStore.connect(baseURL: URL(string: "http://127.0.0.1:45712")!,
+                                           dataDirectory: downloadSuccessOldHome, token: "native-test-token")
+        FixtureProtocol.holdFleetRun(on: 45712, result: .done)
+        let oldDownloadSuccess = Task { await downloadSuccessStore.refresh() }
+        let oldDownloadSuccessStarted = await Task.detached { FixtureProtocol.waitForFleetRunStart() }.value
+        require(oldDownloadSuccessStarted, "the reviewed successful download reply was not held")
+        await downloadSuccessStore.connect(baseURL: URL(string: "http://127.0.0.1:45713")!,
+                                           dataDirectory: downloadSuccessNewHome, token: "native-test-token")
+        let storageReadsBeforeOldDownloadSuccess = FixtureProtocol.modelStorageRequestPorts()
+            .filter { $0 == 45713 }.count
+        FixtureProtocol.releaseHeldFleetRun()
+        await oldDownloadSuccess.value
+        reviewCheck(downloadSuccessStore.downloads.contains {
+                        $0.id == "fleet-run-1" && $0.repo == "review/success-new" && $0.state == "running"
+                    }, "an old successful download reply replaced the current download row")
+        reviewCheck(savedDownloadRepo(downloadSuccessNewHome) == "review/success-new",
+                    "an old successful download reply persisted into the replacement profile")
+        reviewCheck(FixtureProtocol.modelStorageRequestPorts().filter { $0 == 45713 }.count
+                        == storageReadsBeforeOldDownloadSuccess,
+                    "an old successful download reply continued to storage on the replacement")
+        downloadSuccessStore.disconnect()
+
+        // 2b. A late 404 cannot prune the replacement run or persist that stale removal either.
+        let download404OldHome = temporary.appendingPathComponent("review-download-404-old")
+        let download404NewHome = temporary.appendingPathComponent("review-download-404-new")
+        try seedDownloadProfile(download404OldHome, repo: "review/404-old")
+        try seedDownloadProfile(download404NewHome, repo: "review/404-new")
+        let download404Store = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await download404Store.connect(baseURL: URL(string: "http://127.0.0.1:45714")!,
+                                       dataDirectory: download404OldHome, token: "native-test-token")
+        FixtureProtocol.holdFleetRun(on: 45714, result: .forgotten)
+        let oldDownload404 = Task { await download404Store.refresh() }
+        let oldDownload404Started = await Task.detached { FixtureProtocol.waitForFleetRunStart() }.value
+        require(oldDownload404Started, "the reviewed 404 download reply was not held")
+        await download404Store.connect(baseURL: URL(string: "http://127.0.0.1:45715")!,
+                                       dataDirectory: download404NewHome, token: "native-test-token")
+        let storageReadsBeforeOldDownload404 = FixtureProtocol.modelStorageRequestPorts()
+            .filter { $0 == 45715 }.count
+        FixtureProtocol.releaseHeldFleetRun()
+        await oldDownload404.value
+        reviewCheck(download404Store.downloads.contains {
+                        $0.id == "fleet-run-1" && $0.repo == "review/404-new" && $0.state == "running"
+                    }, "an old 404 download reply pruned the current download row")
+        reviewCheck(savedDownloadRepo(download404NewHome) == "review/404-new",
+                    "an old 404 download reply persisted into the replacement profile")
+        reviewCheck(FixtureProtocol.modelStorageRequestPorts().filter { $0 == 45715 }.count
+                        == storageReadsBeforeOldDownload404,
+                    "an old 404 download reply continued to storage on the replacement")
+        download404Store.disconnect()
+
+        // 3. `try?` turns the held storage 503 into nil. The connection guard must still run
+        // before an old transcription default/reconciliation is applied to the replacement.
+        FixtureProtocol.mutate { FixtureProtocol.fleetRunState = "" }
+        FixtureProtocol.setTranscriptionDefault("mlx-community/whisper-large-v3-turbo", on: 45716)
+        FixtureProtocol.setTranscriptionDefault("moonshine-ai/moonshine-base", on: 45717)
+        let storageBoundaryStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await storageBoundaryStore.connect(baseURL: URL(string: "http://127.0.0.1:45716")!,
+                                           dataDirectory: temporary.appendingPathComponent("review-storage-old"),
+                                           token: "native-test-token")
+        FixtureProtocol.holdModelStorage(on: 45716)
+        let oldStorageRefresh = Task { await storageBoundaryStore.refresh() }
+        let oldStorageStarted = await Task.detached { FixtureProtocol.waitForModelStorageStart() }.value
+        require(oldStorageStarted, "the reviewed model-storage reply was not held")
+        await storageBoundaryStore.connect(baseURL: URL(string: "http://127.0.0.1:45717")!,
+                                           dataDirectory: temporary.appendingPathComponent("review-storage-new"),
+                                           token: "native-test-token")
+        reviewCheck(storageBoundaryStore.transcriptionDefaultModel == "moonshine-ai/moonshine-base",
+                    "replacement transcription default fixture was not established")
+        let replacementStorageFamilies = storageBoundaryStore.storageFamilies
+        FixtureProtocol.releaseHeldModelStorage()
+        await oldStorageRefresh.value
+        reviewCheck(storageBoundaryStore.transcriptionDefaultModel == "moonshine-ai/moonshine-base",
+                    "an old nil model-storage completion applied its transcription default")
+        reviewCheck(storageBoundaryStore.storageFamilies == replacementStorageFamilies,
+                    "an old nil model-storage completion changed replacement storage state")
+        storageBoundaryStore.disconnect()
+
+        // 4. A pending transcription with no batch id performs a listing. Its original connection
+        // must be captured before that await; a late match cannot be adopted/saved to the new
+        // profile or start `/stt-old` through the replacement base URL.
+        let transcriptionOldHome = temporary.appendingPathComponent("review-transcription-old")
+        let transcriptionNewHome = temporary.appendingPathComponent("review-transcription-new")
+        try FileManager.default.createDirectory(at: transcriptionOldHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: transcriptionNewHome, withIntermediateDirectories: true)
+        let oldPending = Data(#"{"episode":"review-old-episode","itemID":"review-old-item","filePath":"/tmp/review-old.wav","model":"mlx-community/whisper-large-v3-turbo","language":"en","wordTimestamps":null,"batchID":null}"#.utf8)
+        let replacementPending = Data(#"{"episode":"review-new-episode","itemID":"review-new-item","filePath":"/tmp/review-new.wav","model":"moonshine-ai/moonshine-base","language":"en","wordTimestamps":null,"batchID":null}"#.utf8)
+        let oldPendingURL = transcriptionOldHome.appendingPathComponent("native-pending-transcription.json")
+        let replacementPendingURL = transcriptionNewHome.appendingPathComponent("native-pending-transcription.json")
+        try oldPending.write(to: oldPendingURL, options: .atomic)
+        try replacementPending.write(to: replacementPendingURL, options: .atomic)
+        FixtureProtocol.holdTranscriptionListing(on: 45718, episode: "review-old-episode")
+        let transcriptionBoundaryStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        let oldTranscriptionConnect = Task {
+            await transcriptionBoundaryStore.connect(baseURL: URL(string: "http://127.0.0.1:45718")!,
+                                                     dataDirectory: transcriptionOldHome,
+                                                     token: "native-test-token")
+        }
+        let oldListingStarted = await Task.detached {
+            FixtureProtocol.waitForTranscriptionListingStart()
+        }.value
+        require(oldListingStarted, "the reviewed transcription listing was not held")
+        await transcriptionBoundaryStore.connect(baseURL: URL(string: "http://127.0.0.1:45719")!,
+                                                 dataDirectory: transcriptionNewHome,
+                                                 token: "native-test-token")
+        let replacementPendingBeforeOldReply = try Data(contentsOf: replacementPendingURL)
+        let replacementDetailReadsBeforeOldReply = FixtureProtocol.reviewedTranscriptionDetails()
+            .filter { $0 == "stt-old@45719" }.count
+        FixtureProtocol.releaseHeldTranscriptionListing()
+        await oldTranscriptionConnect.value
+        reviewCheck((try? Data(contentsOf: replacementPendingURL)) == replacementPendingBeforeOldReply,
+                    "an old transcription listing persisted its batch into the replacement profile")
+        reviewCheck(FixtureProtocol.reviewedTranscriptionDetails().filter { $0 == "stt-old@45719" }.count
+                        == replacementDetailReadsBeforeOldReply,
+                    "an old transcription listing polled its batch through the replacement")
+        transcriptionBoundaryStore.disconnect()
+
+        if !reviewedBoundaryFailures.isEmpty {
+            print("Reviewed stale-refresh boundary failures: \(reviewedBoundaryFailures.joined(separator: " | "))")
+        }
+        require(reviewedBoundaryFailures.isEmpty,
+                "old refresh replies crossed into the replacement session: \(reviewedBoundaryFailures.joined(separator: " | "))")
 
         let tokenStore = NativeWorkspaceStore(sessionConfiguration: configuration)
         await tokenStore.connect(baseURL: URL(string: "http://127.0.0.1:45683")!, dataDirectory: state, token: "native-test-token")
@@ -7596,6 +8230,73 @@ struct NativeAPITests {
         store.musicModel = "fixture/second-music"
         require(store.musicSettings?.durationSeconds == 45 && store.musicSettings?.steps == 12,
                 "the Music page must show the catalogue's resolved duration and steps, got: \(String(describing: store.musicSettings))")
+
+        // Connections uses the workspace-wide `isReachable` flag to enable Refresh and Remove.
+        // Characterize the current coupling with the same silent poll the visible app runs: only
+        // the catalog fails, while the independent fleet reads keep returning healthy data.
+        let fleetGateStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await fleetGateStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                     dataDirectory: temporary.appendingPathComponent("fleet-gate"),
+                                     token: "native-test-token")
+        await fleetGateStore.refreshFleetNodes()
+        require(fleetGateStore.isReachable && fleetGateStore.error == nil,
+                "the characterization must begin from a healthy, quiet connection")
+        require(fleetGateStore.fleetNodes?.summary.total == 3
+                && fleetGateStore.fleetOverview?.summary.total == 2,
+                "the fleet control must begin with both healthy fleet reads")
+
+        FixtureProtocol.setCatalogMode(.unavailable)
+        let deletesBeforeCatalogFailure = FixtureProtocol.fleetRequests().filter { $0.hasPrefix("leave:") }.count
+        await fleetGateStore.pollOnce()
+        require(!fleetGateStore.isReachable,
+                "a catalog 503 during a background poll currently marks the whole workspace unreachable")
+        require(fleetGateStore.error == nil,
+                "the background poll currently hides the catalog failure from the shared error banner")
+        require(fleetGateStore.catalogReadError?.contains("catalog") == true,
+                "the background catalog failure needs its own visible, bounded reason")
+        await fleetGateStore.testControllerAddress("127.0.0.1:45678")
+        require(fleetGateStore.fleetNote?.contains("HTTP 200") == true,
+                "the Hub health route must still answer while the catalog failure disables fleet controls")
+        await fleetGateStore.refreshFleetNodes()
+        require(fleetGateStore.fleetReadError == nil
+                && fleetGateStore.fleetRosterReachable
+                && fleetGateStore.fleetNodes?.summary.total == 3
+                && fleetGateStore.fleetOverview?.summary.total == 2,
+                "the fleet routes must remain healthy while the catalog failure disables their UI controls")
+        require(FixtureProtocol.fleetRequests().filter { $0.hasPrefix("leave:") }.count == deletesBeforeCatalogFailure,
+                "catalog recovery proof must not dispatch a removal")
+        print("Native fleet gate reproduction: catalog=503 reachable=\(fleetGateStore.isReachable) error=\(fleetGateStore.error ?? "nil") health=200 fleet=\(fleetGateStore.fleetNodes?.summary.total ?? -1)/\(fleetGateStore.fleetOverview?.summary.total ?? -1)")
+
+        fleetGateStore.error = "Keep this unrelated action error"
+        FixtureProtocol.setCatalogMode(.normal)
+        await fleetGateStore.pollOnce()
+        require(fleetGateStore.isReachable && fleetGateStore.catalogReadError == nil,
+                "a later healthy poll must restore workspace reachability and clear only the catalog error")
+        require(fleetGateStore.error == "Keep this unrelated action error",
+                "background catalog recovery erased an unrelated action error")
+        print("Native fleet gate recovery: catalog=200 reachable=\(fleetGateStore.isReachable) error=\(fleetGateStore.error ?? "nil")")
+
+        FixtureProtocol.setCatalogMode(.malformed)
+        await fleetGateStore.pollOnce()
+        require(!fleetGateStore.isReachable
+                && fleetGateStore.error == "Keep this unrelated action error"
+                && fleetGateStore.catalogReadError != nil,
+                "a malformed catalog 200 must report separately without erasing the action error")
+        require(fleetGateStore.fleetNodes?.summary.total == 3
+                && fleetGateStore.fleetOverview?.summary.total == 2,
+                "a catalog decode failure must not erase the last healthy fleet evidence")
+        print("Native fleet gate reproduction: catalog=malformed-200 reachable=\(fleetGateStore.isReachable) error=\(fleetGateStore.error ?? "nil") fleet=\(fleetGateStore.fleetNodes?.summary.total ?? -1)/\(fleetGateStore.fleetOverview?.summary.total ?? -1)")
+
+        FixtureProtocol.setCatalogMode(.normal)
+        await fleetGateStore.pollOnce()
+        require(fleetGateStore.isReachable && fleetGateStore.catalogReadError == nil
+                && fleetGateStore.error == "Keep this unrelated action error",
+                "the normal poll path must recover after a catalog decode failure")
+        print("Native fleet gate recovery: catalog=200-after-malformed reachable=\(fleetGateStore.isReachable)")
+        fleetGateStore.disconnect()
+        require(fleetGateStore.catalogReadError == nil && !fleetGateStore.fleetRosterReachable
+                && !fleetGateStore.fleetRefreshing && fleetGateStore.fleetReadError == nil,
+                "disconnect must clear catalog and fleet connection evidence")
 
         print("Native API contract checks passed")
     }

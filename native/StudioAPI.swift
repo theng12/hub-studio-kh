@@ -3246,6 +3246,9 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var transcribing = false
     @Published private(set) var submittingAudio = false
     @Published var error: String?
+    /// A failed mandatory catalog read, kept apart from action errors because background polling
+    /// does not own the banner for an unrelated action. Nodes can still read their own routes.
+    @Published private(set) var catalogReadError: String?
     @Published private(set) var refreshing = false
     @Published private(set) var isReachable = false
     /// How many times this store has attached to a Hub.
@@ -3321,6 +3324,9 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var fleetRefreshedAt: Date?
     @Published private(set) var fleetRefreshing = false
     @Published private(set) var fleetReadError: String?
+    /// A decoded authenticated roster from this connection. Cached rows are useful to read after
+    /// a failure, but only this current proof may authorize a roster mutation.
+    @Published private(set) var fleetRosterReachable = false
     /// The controller this Mac was last told to join, so the field is not empty afterwards.
     @Published var controllerAddress = ""
     /// Whether the controller this Mac joined is answering, and a sentence saying so. Kept as
@@ -3666,6 +3672,11 @@ final class NativeWorkspaceStore: ObservableObject {
         hubToken = nil
         connectionID = nil
         isReachable = false
+        refreshing = false
+        catalogReadError = nil
+        fleetRosterReachable = false
+        fleetRefreshing = false
+        fleetReadError = nil
         // The list stays for the operator to read, but it belongs to the connection that ended:
         // the next connection reads its own library rather than trusting this one.
         voicesLoaded = false
@@ -3860,7 +3871,9 @@ final class NativeWorkspaceStore: ObservableObject {
     private func refresh(reportErrors: Bool) async {
         guard baseURL != nil, let requestConnection = connectionID, !refreshing else { return }
         refreshing = true
-        defer { refreshing = false }
+        defer {
+            if connectionID == requestConnection { refreshing = false }
+        }
         do {
             // The catalog is the Hub itself: if it fails, the Hub is not answering. The package
             // list is a second read of the same Hub, and it must not be fatal: the Hub builds it
@@ -3977,7 +3990,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 }
                 do {
                     let detail: HubJobDetail = try await get(["api", "hub", "jobs", batch.id])
-                    guard connectionID == requestConnection else { return }
+                    guard connectionID == requestConnection, !Task.isCancelled else { return }
                     let job = Self.mapHubJob(detail)
                     // A failure used to be re-read every two seconds, for ever. It is remembered
                     // too, but only on the Hub's positive word that nothing in the batch is waiting
@@ -3994,7 +4007,8 @@ final class NativeWorkspaceStore: ObservableObject {
                     // is a convenience over the Hub's history, and losing it should not read as the
                     // Hub being down. A cancelled read is not a row that failed, so it stops the
                     // refresh rather than being counted as unreadable.
-                    guard !Task.isCancelled, !Self.isCancellation(error) else { return }
+                    guard connectionID == requestConnection,
+                          !Task.isCancelled, !Self.isCancellation(error) else { return }
                     unreadable += 1
                 }
             }
@@ -4044,6 +4058,7 @@ final class NativeWorkspaceStore: ObservableObject {
             for (runID, repo) in hubDownloadRuns.sorted(by: { $0.key < $1.key }) {
                 do {
                     let run: HubModelDownload = try await get(["api", "hub", "model-downloads", runID])
+                    guard connectionID == requestConnection, !Task.isCancelled else { return }
                     let download = Self.mapHubDownload(run, repo: repo)
                     if ["done", "cancelled", "error", "interrupted"].contains(run.state) {
                         // Finished: stop asking the Hub about it every two seconds and forget it
@@ -4058,7 +4073,8 @@ final class NativeWorkspaceStore: ObservableObject {
                         hubTransfers.append(download)
                     }
                 } catch {
-                    guard !Task.isCancelled, !Self.isCancellation(error) else { return }
+                    guard connectionID == requestConnection,
+                          !Task.isCancelled, !Self.isCancellation(error) else { return }
                     if Self.isUnknownRun(error) {
                         // Only a 404 says the Hub has forgotten the run. Any other failure is one
                         // missed read, and a still-running download keeps its last known row.
@@ -4074,8 +4090,9 @@ final class NativeWorkspaceStore: ObservableObject {
             hubTransfers += finishedHubDownloads.values.sorted { $0.id < $1.id }
             downloads = hubTransfers + (transfersValue?.jobs ?? []).map(Self.mapDownload)
             tokenStatus = settingsValue?.value ?? NativeTokenStatus(isSet: false, masked: "")
-            if let storage: HubStorageGroups = try? await get(["studio", "voice", "api", "model-storage"]) {
-                guard connectionID == requestConnection else { return }
+            let storage: HubStorageGroups? = try? await get(["studio", "voice", "api", "model-storage"])
+            guard connectionID == requestConnection, !Task.isCancelled else { return }
+            if let storage {
                 storageFamilies = storage.groups.map { group in
                     NativeStorageFamily(id: group.id, label: group.label, bytes: group.bytesTotal,
                                         requiredGB: group.memory?.requiredGb,
@@ -4086,7 +4103,9 @@ final class NativeWorkspaceStore: ObservableObject {
             transcriptionDefaultModel = transcriptionValue?.defaultModel
             reconcileSelections(defaultTranscription: transcriptionValue?.defaultModel)
             await reconcileTranscription()
+            guard connectionID == requestConnection, !Task.isCancelled else { return }
             isReachable = true
+            catalogReadError = nil
             if reportErrors { error = nil }
             await retryStartupMembershipIfNeeded()
         } catch {
@@ -4096,6 +4115,8 @@ final class NativeWorkspaceStore: ObservableObject {
             // app itself cancelled.
             guard !Task.isCancelled, !Self.isCancellation(error) else { return }
             isReachable = false
+            let detail = Self.describe(error).trimmingCharacters(in: .whitespacesAndNewlines)
+            catalogReadError = "Could not read the local model catalog. " + String(detail.prefix(240))
             if reportErrors { self.error = Self.actionable(error, action: "Refresh local studio state") }
         }
     }
@@ -5848,18 +5869,19 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     private func reconcileTranscription() async {
-        guard let pending = pendingTranscription, connectionID != nil else { return }
+        guard let pending = pendingTranscription, let requestConnection = connectionID else { return }
         do {
             var batchID = pending.batchID
             if batchID == nil {
                 let listing: HubTranscriptionList = try await get(["api", "hub", "transcription", "jobs"])
+                guard connectionID == requestConnection, !Task.isCancelled else { return }
                 batchID = listing.batches.first { $0.project == "native" && $0.episode == pending.episode }?.id
                 if let batchID {
                     pendingTranscription = pending.withBatchID(batchID)
                     try savePendingTranscription()
                 }
             }
-            if let batchID, let requestConnection = connectionID {
+            if let batchID {
                 try await pollTranscription(batchID: batchID, requestConnection: requestConnection, wait: false)
             }
         } catch { /* Keep the uncertain identity; a later refresh can reconcile it. */ }
@@ -6487,9 +6509,16 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// Read the nodes that have joined this Mac, and their live state.
     func refreshFleetNodes() async {
-        guard let requestConnection = connectionID else { return }
+        guard let requestConnection = connectionID else {
+            fleetRosterReachable = false
+            fleetReadError = "Could not read the joined nodes because the local workspace connection is not ready."
+            return
+        }
+        guard !fleetRefreshing else { return }
         fleetRefreshing = true
-        defer { fleetRefreshing = false }
+        defer {
+            if connectionID == requestConnection { fleetRefreshing = false }
+        }
         var failures: [String] = []
         var rosterRead = false
         // A failed read keeps the last good value and says what failed: wiping the list and
@@ -6499,9 +6528,11 @@ final class NativeWorkspaceStore: ObservableObject {
             let value: NativeFleetInventory = try await get(["api", "hub", "fleet", "nodes"])
             guard connectionID == requestConnection else { return }
             fleetNodes = value
+            fleetRosterReachable = true
             rosterRead = true
         } catch {
             guard connectionID == requestConnection, !Self.isCancellation(error) else { return }
+            fleetRosterReachable = false
             failures.append("the joined nodes (\(Self.describe(error)))")
         }
         // The overview is a separate read because it can be slower - it waits on remote Macs -
@@ -6518,8 +6549,9 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection, !Self.isCancellation(error) else { return }
             failures.append("the fleet overview (\(Self.describe(error)))")
         }
-        if let health = await healthRead {
-            guard connectionID == requestConnection else { return }
+        let health = await healthRead
+        guard connectionID == requestConnection, !Task.isCancelled else { return }
+        if let health {
             fleetReadiness = Self.readiness(from: health.models)
         }
         if failures.isEmpty {
@@ -7319,8 +7351,16 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Remove a joined Mac from this controller's roster — the operator's own action, with the Hub
     /// token. Removing a machine the operator can see is a decision with a consequence (the Mac may
     /// not re-join until it is re-admitted), which is why the view confirms it first.
-    func leaveNode(_ node: NativeFleetNode) async {
-        guard let requestConnection = connectionID else { return }
+    func leaveNode(_ node: NativeFleetNode, expectedConnectionGeneration: Int) async {
+        guard let requestConnection = connectionID,
+              connectionGeneration == expectedConnectionGeneration,
+              fleetRosterReachable,
+              !fleetRefreshing,
+              fleetNodes?.nodes.contains(where: { $0.id == node.id }) == true
+        else {
+            error = "Remove \(node.name) was not sent. Refresh Nodes and confirm the removal again from the current connection."
+            return
+        }
         do {
             let _: EmptyResponse = try await sendEmpty(
                 ["api", "hub", "fleet", "nodes", node.id], method: "DELETE")

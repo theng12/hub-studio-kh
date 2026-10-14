@@ -71,6 +71,40 @@ class FleetTests(unittest.TestCase):
         self.assertIn("workspace.fleetRefreshing", nodes)
         self.assertIn("workspace.fleetReadError", nodes)
 
+    def test_nodes_reads_follow_local_services_and_each_workspace_connection(self):
+        self.assertIn(
+            "private var localServicesReady: Bool { studio.readyURL != nil && !studio.stopping }",
+            VIEWS,
+        )
+        self.assertIn('.task(id: "\\(localServicesReady)/\\(workspace.connectionGeneration)")', VIEWS)
+        self.assertIn("if localServicesReady {\n                await workspace.refreshFleetNodes()", VIEWS)
+        nodes = body(VIEWS, "@ViewBuilder private var nodesSection", 3400)
+        self.assertIn(".disabled(!localServicesReady || workspace.fleetRefreshing)", nodes)
+        self.assertIn('!localServicesReady ? "Start local services to see the fleet."', nodes)
+        self.assertIn("workspace.catalogReadError", nodes)
+
+    def test_roster_failure_copy_only_claims_stale_data_when_a_snapshot_exists(self):
+        nodes = body(VIEWS, "@ViewBuilder private var nodesSection", 3400)
+        self.assertIn("let hasFleetSnapshot = workspace.fleetOverview != nil || workspace.fleetNodes != nil", nodes)
+        self.assertIn('hasFleetSnapshot ? " Showing what was read last." : ""', nodes)
+
+    def test_remove_uses_current_roster_and_confirmation_generation(self):
+        row = body(VIEWS, "@ViewBuilder private func nodeActions", 1800)
+        self.assertIn("pendingNodeRemoval = PendingNodeRemoval(", row)
+        self.assertIn("node: node, connectionGeneration: workspace.connectionGeneration", row)
+        self.assertIn(
+            ".disabled(!localServicesReady || !workspace.fleetRosterReachable || workspace.fleetRefreshing)",
+            row,
+        )
+        dialog = body(VIEWS, '"Remove \\(pendingNodeRemoval?.node.name', 1300)
+        self.assertIn("Task {\n                        guard localServicesReady", dialog)
+        self.assertIn("expectedConnectionGeneration: intent.connectionGeneration", dialog)
+
+    def test_unread_controller_roster_is_not_presented_as_zero_nodes(self):
+        group = body(VIEWS, "private var groupLine", 800)
+        self.assertIn('guard let nodes = workspace.fleetNodes?.nodes else { return "Controller · fleet not read" }', group)
+        self.assertIn("let count = nodes.count", group)
+
 
 class ConfirmationTests(unittest.TestCase):
     def test_hand_over_is_confirmed_like_the_other_irreversible_fleet_actions(self):

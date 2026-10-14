@@ -835,6 +835,13 @@ private struct PendingDiscard: Identifiable {
     let kind: DiscardKind
 }
 
+/// A removal confirmation belongs to the roster and connection that opened it. Keeping both
+/// prevents a dialog left open across reconnect from acting on the replacement connection.
+private struct PendingNodeRemoval {
+    let node: NativeFleetNode
+    let connectionGeneration: Int
+}
+
 /// The fields one voice editor collects, for a voice that exists or one being added.
 struct VoiceDraft: Identifiable {
     let id = UUID()
@@ -926,7 +933,8 @@ struct StudioContent: View {
     @State private var confirmingRestoreStorage = false
     /// What cleanup would delete under the limits typed in the storage editor; nil while unknown.
     @State private var draftWouldDelete: Int64?
-    @State private var pendingNodeRemoval: NativeFleetNode?
+    @State private var pendingNodeRemoval: PendingNodeRemoval?
+    @State private var nodeRemovalRefusal: String?
     /// The new controller's address and token, typed before the handover runs.
     @State private var handoverAddress = ""
     @State private var handoverToken = ""
@@ -974,6 +982,9 @@ struct StudioContent: View {
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
+    /// Enough to attempt an authenticated Nodes read. Model-catalog reachability remains the gate
+    /// for generation controls; it is not evidence that the fleet roster itself is unavailable.
+    private var localServicesReady: Bool { studio.readyURL != nil && !studio.stopping }
     private var selectedAudioModel: NativeModel? { workspace.models.first { $0.repo == workspace.audioModel && $0.function == .audio } }
     private var selectedTranscriptionModel: NativeModel? { workspace.models.first { $0.repo == workspace.transcriptionModel && $0.function == .transcription } }
     private var selectedImageModel: NativeModel? { workspace.models.first { $0.repo == workspace.imageModel && $0.function == .image } }
@@ -5611,8 +5622,8 @@ struct StudioContent: View {
 
             joinController
         }
-        .task(id: connected) {
-            if connected {
+        .task(id: "\(localServicesReady)/\(workspace.connectionGeneration)") {
+            if localServicesReady {
                 await workspace.refreshFleetNodes()
                 await workspace.refreshControllerHealth()
             }
@@ -5671,18 +5682,26 @@ struct StudioContent: View {
                 Text("Every node this controller can reach is moved to \(handoverAddress) with a new Fleet token, and this controller stops taking work. It keeps its history. A node that is switched off is not moved and needs the manual SSH path. This cannot be undone from here.")
             }
         .confirmationDialog(
-            "Remove \(pendingNodeRemoval?.name ?? "this node") from this controller?",
+            "Remove \(pendingNodeRemoval?.node.name ?? "this node") from this controller?",
             isPresented: Binding(get: { pendingNodeRemoval != nil },
                                  set: { if !$0 { pendingNodeRemoval = nil } }),
             titleVisibility: .visible,
-            presenting: pendingNodeRemoval) { node in
-                Button("Remove \(node.name)", role: .destructive) {
+            presenting: pendingNodeRemoval) { intent in
+                Button("Remove \(intent.node.name)", role: .destructive) {
                     pendingNodeRemoval = nil
-                    Task { await workspace.leaveNode(node) }
+                    Task {
+                        guard localServicesReady else {
+                            nodeRemovalRefusal = "Removal was not sent because local services stopped. Start them, refresh Nodes, and confirm again."
+                            return
+                        }
+                        await workspace.leaveNode(
+                            intent.node,
+                            expectedConnectionGeneration: intent.connectionGeneration)
+                    }
                 }
                 Button("Cancel", role: .cancel) { pendingNodeRemoval = nil }
-            } message: { node in
-                Text("\(node.name) is removed from this controller's roster and its credential is revoked, so it cannot re-join on its own — not even after a restart. It stays removed until it is re-admitted from this page. Jobs it already finished stay in Jobs.")
+            } message: { intent in
+                Text("\(intent.node.name) is removed from this controller's roster and its credential is revoked, so it cannot re-join on its own — not even after a restart. It stays removed until it is re-admitted from this page. Jobs it already finished stay in Jobs.")
             }
     }
 
@@ -5717,12 +5736,23 @@ struct StudioContent: View {
                 fleetRefreshStatus
                 Button("Refresh") { Task { await workspace.refreshFleetNodes() } }
                     .hubRowControl()
-                    .disabled(!connected || workspace.fleetRefreshing)
+                    .disabled(!localServicesReady || workspace.fleetRefreshing)
             }
             let rows = NativeFleetRow.rows(overview: workspace.fleetOverview, nodes: workspace.fleetNodes)
-            if let error = workspace.fleetReadError {
-                Text("\(error) Showing what was read last.")
+            let hasFleetSnapshot = workspace.fleetOverview != nil || workspace.fleetNodes != nil
+            if let catalogError = workspace.catalogReadError {
+                Text(catalogError)
                     .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let error = workspace.fleetReadError {
+                Text(error + (hasFleetSnapshot ? " Showing what was read last." : ""))
+                    .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let nodeRemovalRefusal {
+                Text(nodeRemovalRefusal)
+                    .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if workspace.fleetOverview != nil || workspace.fleetNodes != nil {
@@ -5734,7 +5764,7 @@ struct StudioContent: View {
                     removedNodes(removed)
                 }
             } else {
-                Text(!connected ? "Start local services to see the fleet."
+                Text(!localServicesReady ? "Start local services to see the fleet."
                      : workspace.fleetRefreshing ? "Reading the fleet…"
                      : workspace.fleetReadError ?? "The fleet has not been read yet.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
@@ -5988,8 +6018,12 @@ struct StudioContent: View {
                 .rowAction()
             }
             if let node = row.node {
-                Button("Remove…", role: .destructive) { pendingNodeRemoval = node }
-                    .disabled(!connected)
+                Button("Remove…", role: .destructive) {
+                    nodeRemovalRefusal = nil
+                    pendingNodeRemoval = PendingNodeRemoval(
+                        node: node, connectionGeneration: workspace.connectionGeneration)
+                }
+                    .disabled(!localServicesReady || !workspace.fleetRosterReachable || workspace.fleetRefreshing)
                     .rowAction()
             }
         }
@@ -6333,7 +6367,8 @@ struct StudioContent: View {
     private var groupLine: String {
         switch workspace.controllerIdentity?.settings.role {
         case "controller":
-            let count = workspace.fleetNodes?.nodes.count ?? 0
+            guard let nodes = workspace.fleetNodes?.nodes else { return "Controller · fleet not read" }
+            let count = nodes.count
             return "Controller · \(count) \(count == 1 ? "node" : "nodes")"
         case "agent":
             let address = workspace.controllerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
