@@ -2952,3 +2952,20 @@ of what was found rather than as a statement of what is open. Closed since, each
 
 None in this repo. Controller addresses and Fleet tokens live on the drives (`Token and Stuff.md`
 in each kit) and with the owner. If a task needs them, ask for them.
+## Native fleet controls — 0.6.179 source-only release metadata candidate (2026-10-15)
+
+Status: source-only metadata prepared on feature base `d2235dd54cd94fc55a726c28359c9988fbb417a6` (`fix/native-fleet-refresh-reachability`), based on `c7a7f2bea56096e38fa6bf98af16e7fa5c373826`. This candidate has not been integrated to `main`, released, installed, or activated for fleet rollout. It does not claim fleet rendering shipped.
+
+Behavior recorded from the native feature: a healthy backend keeps fleet controls reachable when the model catalog read fails; the catalog error remains visible; an unknown roster is shown honestly until a fresh authenticated roster read succeeds; stale rows cannot be removed; and a pending removal confirmation refuses after local services stop, the connection generation changes, the roster is stale or refreshing, or the node is no longer in the current roster. Existing authentication, pause, data, model-readiness and fresh-roster requirements remain intact. The underlying remote catalog error cause is not established.
+
+Receipts and exact source pins:
+
+- Feature checkpoint: `/build/Developer/_orchestra/codex-takeover-20261012/native-controls-ui-qa/native-fleet-controls-feature-checkpoint.json`; feature and remote SHA `d2235dd54cd94fc55a726c28359c9988fbb417a6`; independent review `clean323d6fa2`.
+- Native source gate: `/build/Developer/_orchestra/codex-takeover-20261012/native-controls-ui-qa/native-source-gates-root-complete.json`; boundary compile/run exit 0, lifecycle compile/run exit 0, optimized compile exit 0; 3 compiles and 2 runs passed, with no remaining observed owned process.
+- Actual external ConnectionsView proof: `/build/Developer/_orchestra/codex-takeover-20261012/native-controls-ui-qa/actual-external-controls-ui-verified.json`; catalog 503 stayed visible, Refresh recovered the roster, stale Remove stayed disabled, stop-before-confirm refused visibly, DELETE/mutations/foreign requests/missing auth were all 0.
+- Presentation checks: 24, recorded in the feature checkpoint. These are inherited QA receipts; no tests, compiler, lint, build, media or live API work was run for this metadata preparation.
+- Source SHA-256 pins at the feature commit: `native/StudioAPI.swift` `c6eb6193b63e04ee8899aac632c3f9e1bde168276ead1d2c83fc8729e7898417`; `native/StudioViews.swift` `fbb4d880689bcfc3504a53ceff453dcf29edae053ed1af21599b969db15196ed`; `tests/native/api_main.swift` `c0cd9780311cdd5d0495bcf59f09134d18e163f0149a7d51485a0d3ac5df14ff`; `tests/test_native_operator_surfaces.py` `fe5622f959d06c53f9038644bd8b0816a9572b155d7d468fc9defebe346da9c9`.
+
+Release state for the next owner: `main` integration pending; primary DMG pending; normal install pending; rollout pending. The candidate remains source-only and requires the root coordinator's independent actual review and required release checks.
+
+Metadata preparation receipt: originals of `VERSION`, `CHANGELOG.md`, `release-notes.md`, and this handoff were preserved before editing at `_trash/source-history/20261015-0.6.179-native-fleet-controls/`. No existing `_trash/` content was changed. No product source, tests, shared render branch, model JSON, generated graph or settings were edited.

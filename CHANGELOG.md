@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.179 — 2026-10-15
+
+- Keep native fleet controls reachable when the model catalog read fails: Refresh Nodes can still read the authenticated roster, while model-catalog errors remain visible and generation controls retain their existing requirements.
+- Show an honest unknown roster until a fresh roster read succeeds; stale rows cannot be removed. A removal confirmation records its connection generation, refuses after services stop or the roster becomes stale, and sends no DELETE in that state.
+- Preserve existing authentication, fresh-roster, pause, data, and model-catalog requirements. This feature candidate is source-reviewed and QA-verified, but is not yet on `main`, installed, or fleet-rendering shipped.
+
 ## 0.6.178 — 2026-10-14
 
 - Refresh an installed login-agent registration on normal default-data startup only when this app actually owns the instance lock. Exact-label bootout then unchanged-plist bootstrap repairs loaded initialization failures without kickstart or changes to services, preferences or fleet pauses.

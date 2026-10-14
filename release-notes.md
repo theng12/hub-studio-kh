@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.179 — 2026-10-15
+
+### Fleet controls remain available during a catalog error
+
+If the local model catalog cannot be read, the Connections page can still refresh the joined-node roster. The page keeps the catalog error visible, and it does not turn an unread roster into zero nodes.
+
+The page enables Remove only for a current, freshly read roster. If the connection changes, the roster is stale, or local services stop while the confirmation is open, the removal is refused with a visible message and no request is sent. Existing authentication, pauses, model readiness and fresh-roster requirements remain in place.
+
+This is a source-reviewed release candidate. It is awaiting the normal main-branch, DMG, installation and fleet rollout checks.
+
 ## 0.6.178 — 2026-10-14
 
 ### Restore login startup supervision when opening the app
