@@ -2,9 +2,9 @@
 
 ## ▶ TAKE OVER HERE
 
-### ST-LOGIN-REGISTRATION-20261014 — REVIEWED SOURCE; 178 delivery pending
+### ST-LOGIN-REGISTRATION-20261014 — 178 SOURCE + INSTALLER VERIFIED; fleet delivery pending
 
-Astra/root owns integration. Same bounded worker completed frozen four-file candidate on9f06; independent corrected actual-diff review clean (ae25c89d...). Genuine timeout/Settings/signal-reason RED→GREEN retained. Final complete API/full lifecycle/secret/view/optimized compile passed; root missing boundary and affected Python132/3artifact-skips passed. Core changes: actual-lock guard, serialized refresh/owner-toggle ordering, bounded truthful outcomes and process-local quarantine for unknown registration. No source/installer/deployment completion yet. Version178 notes allocated after fresh main9f06/VERSION177 proof. Root owns integration/mainpush/code-onlygraph/primaryDMG/normalpaced deployment after affected accepted transfers/sourceleases settle. Operational four-Mac recovery remains separate. Plan: `.planning/2026-09-10-standalone-app-feasibility/login-agent-registration-refresh-20261014.md`.
+Astra/root owns integration. Same bounded worker completed frozen four-file candidate on9f06; independent corrected actual-diff review clean (ae25c89d...). Genuine timeout/Settings/signal-reason RED→GREEN retained. Final complete API/full lifecycle/secret/view/optimized compile passed; root missing boundary and affected Python132/3artifact-skips passed. Core changes: actual-lock guard, serialized refresh/owner-toggle ordering, bounded truthful outcomes and process-local quarantine for unknown registration. Source/primary installer verified at product0de6178; graph595files/17055nodes/39054links/paid0, sixstagedchecks/fourimports/DMGverify passed. Primary DMG SHAe5a9411a57eed157ea16935d09d230e99558d766379e8a14d0dc43f151ac648e. Fleet deployment remainspending. Version178 notes allocated after fresh main9f06/VERSION177 proof. Root owns integration/mainpush/code-onlygraph/primaryDMG/normalpaced deployment after affected accepted transfers/sourceleases settle. Operational four-Mac recovery remains separate. Plan: `.planning/2026-09-10-standalone-app-feasibility/login-agent-registration-refresh-20261014.md`.
 
 
 ### ST-FUNCTION-PRIORITY-20261008 — 0.6.157 SOURCE VERIFIED; delivery receipt owns running status
