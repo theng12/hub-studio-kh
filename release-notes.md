@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.180 — 2026-10-15
+
+### Read model catalogs that include list defaults
+
+Fix one cause of the “unexpected response for /api/hub/catalog” error: a model's list default can now be read with the rest of the catalog. This restores catalog loading for the reproduced response that could leave local controls unavailable.
+
+Your existing model choices and fleet pauses are preserved. List defaults that have no supported editor remain read-only.
+
 ## 0.6.179 — 2026-10-15
 
 ### Fleet controls remain available during a catalog error

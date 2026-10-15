@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.180 — 2026-10-15
+
+- Decode typed array values in the native model catalog, including the published Vision regions default. The reproduced list default previously rejected the complete catalog and could leave local controls unavailable.
+- Preserve scalar types and object rejection. Array defaults remain display-only and are excluded from editable option controls and submitted model parameters.
+- Add an actual-catalog decoder regression with a portable Vision fixture and retained 43-model structural response. The independent local-read/readiness resilience issue remains separate.
+
 ## 0.6.179 — 2026-10-15
 
 - Keep native fleet controls reachable when the model catalog read fails: Refresh Nodes can still read the authenticated roster, while model-catalog errors remain visible and generation controls retain their existing requirements.
