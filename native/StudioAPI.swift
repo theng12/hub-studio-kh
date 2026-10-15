@@ -339,6 +339,7 @@ enum NativeJSONValue: Codable, Equatable {
     case integer(Int)
     case number(Double)
     case bool(Bool)
+    case array([NativeJSONValue])
     case null
 
     init(from decoder: Decoder) throws {
@@ -350,6 +351,7 @@ enum NativeJSONValue: Codable, Equatable {
         if let value = try? container.decode(Int.self) { self = .integer(value); return }
         if let value = try? container.decode(Double.self) { self = .number(value); return }
         if let value = try? container.decode(String.self) { self = .string(value); return }
+        if let value = try? container.decode([NativeJSONValue].self) { self = .array(value); return }
         throw DecodingError.dataCorruptedError(
             in: container, debugDescription: "a value this app has no rule for")
     }
@@ -361,6 +363,7 @@ enum NativeJSONValue: Codable, Equatable {
         case .integer(let value): try container.encode(value)
         case .number(let value): try container.encode(value)
         case .bool(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
         case .null: try container.encodeNil()
         }
     }
@@ -391,6 +394,7 @@ enum NativeJSONValue: Codable, Equatable {
         case .integer(let value): return String(value)
         case .number(let value): return Self.trimmed(value)
         case .bool(let value): return value ? "on" : "off"
+        case .array(let values): return "[" + values.map(\.fieldText).joined(separator: ", ") + "]"
         case .null: return ""
         }
     }
@@ -529,6 +533,7 @@ struct NativeLaneParameter: Decodable, Equatable, Identifiable {
         case .number(let number):
             return number == number.rounded() ? String(Int(number)) : String(number)
         case .bool(let flag): return flag ? "true" : "false"
+        case .array: return nil
         case .null: return nil
         }
     }
@@ -1097,6 +1102,7 @@ struct NativeModel: Identifiable, Equatable {
             case .number(let number): rendered = NativeJSONValue.trimmed(number)
             case .string(let text): rendered = text
             case .bool(let flag): rendered = flag ? "yes" : "no"
+            case .array: rendered = value.fieldText
             }
             return NativeModelFact(label: name, value: rendered,
                                    source: limit.source ?? "lane_contract.model_limits")
