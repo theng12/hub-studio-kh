@@ -25,7 +25,12 @@ and real-model qualification remain open. Chat and Video are deferred.
 All operating defaults are editable. Generated-output cleanup defaults to **20 GB
 of live output per device across the studios and 3 days after generation**, whichever
 condition is reached first; cleaned-up work moves to a Trash Folder that empties
-itself after 15 days, and a 5 GB free-disk floor applies. Automatic login startup and optional scoped-token
+itself after 15 days, and a 5 GB free-disk floor applies.
+The Trash Folder can also hold old outputs that were never collected (unacknowledged for over
+7 days), so the owner's permanent delete from the Gateway can destroy undelivered work; the
+Gateway marks them as kind "output". That delete is guarded against API-key and browser callers
+(it needs the owner's app window and a confirmed count and size); it does not stop code already
+running as the owner on that Mac, and a fleet-token holder can reach the Hub's trash routes directly. Automatic login startup and optional scoped-token
 connection to GatewayKH are part of the target. The app bundles runtimes; complete
 model packages can accompany it in an offline install kit.
 

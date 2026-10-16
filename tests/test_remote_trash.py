@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import ExitStack
@@ -166,15 +167,14 @@ class Confirmation(Fixture):
 
 
 class PartialFailure(Fixture):
-    def test_one_failing_item_is_reported_and_stays_listed_the_rest_go(self) -> None:
+    def test_one_failing_item_is_reported_the_rest_go_and_leftovers_are_swept_next_time(self) -> None:
         self.put(f"{TODAY}/a-0123abcd")
-        stuck = self.put(f"{TODAY}/b-0123abcd")
+        self.put(f"{TODAY}/b-0123abcd")
         self.put(f"{TODAY}/c-0123abcd")
         real = output_storage.shutil.rmtree
 
         def rmtree(path, *args, **kwargs):
-            if Path(path) == stuck:
-                (Path(path) / "payload.bin").unlink()                  # half-way, then a failure
+            if str(path) == "1":                                       # entries are staged as 0, 1, 2
                 raise PermissionError(13, "Operation not permitted", str(path))
             return real(path, *args, **kwargs)
 
@@ -183,11 +183,81 @@ class PartialFailure(Fixture):
         self.assertFalse(result["ok"])
         self.assertEqual(sorted(result["deleted"]), [f"{TODAY}/a-0123abcd", f"{TODAY}/c-0123abcd"])
         self.assertEqual([f["id"] for f in result["failed"]], [f"{TODAY}/b-0123abcd"])
-        after = self.listing()
-        self.assertEqual([i["id"] for i in after["items"]], [f"{TODAY}/b-0123abcd"],
-                         "what is left is listed, so the next confirmation measures it")
-        self.delete()                                                  # and can be deleted afterwards
+        self.assertEqual(self.listing()["count"], 0, "what could not be removed is no longer listed")
+        self.assertEqual(len(list(self.trash.glob(".deleting-*/*"))), 1, "its leftover waits in the staging folder")
+        self.put(f"{TODAY}/d-0123abcd")
+        self.delete()                                                  # the next delete sweeps it
+        self.assertEqual(list(self.trash.glob(".deleting-*")), [])
+
+    def test_item_that_cannot_be_renamed_stays_listed(self) -> None:
+        self.put(f"{TODAY}/a-0123abcd")
+        self.put(f"{TODAY}/b-0123abcd")
+        real = os.rename
+
+        def rename(src, dst, *args, **kwargs):
+            if src == "b-0123abcd":
+                raise PermissionError(13, "Operation not permitted", src)
+            return real(src, dst, *args, **kwargs)
+
+        with mock.patch.object(output_storage.os, "rename", rename):
+            result = self.delete()
+        self.assertEqual(result["deleted"], [f"{TODAY}/a-0123abcd"])
+        self.assertEqual([f["id"] for f in result["failed"]], [f"{TODAY}/b-0123abcd"])
+        self.assertEqual([i["id"] for i in self.listing()["items"]], [f"{TODAY}/b-0123abcd"])
+
+
+class DeleteDoesNotBlockTheHub(Fixture):
+    def _holds_lock_free(self, patch_target, patch_name, action) -> None:
+        started, release, got = threading.Event(), threading.Event(), threading.Event()
+        real = getattr(patch_target, patch_name)
+
+        def slow(*args, **kwargs):
+            started.set()
+            release.wait(10)
+            return real(*args, **kwargs)
+
+        def acquire():
+            with output_storage._LOCK:
+                got.set()
+
+        with mock.patch.object(patch_target, patch_name, slow):
+            worker = threading.Thread(target=action)
+            worker.start()
+            self.assertTrue(started.wait(5), "the action reached its slow step")
+            threading.Thread(target=acquire).start()
+            self.assertTrue(got.wait(2), "the lock is free while the slow step runs")
+            release.set()
+            worker.join(10)
+
+    def test_a_slow_delete_does_not_hold_the_lock(self) -> None:
+        self.put(f"{TODAY}/a-0123abcd")
+        self._holds_lock_free(output_storage.shutil, "rmtree", self.delete)
         self.assertEqual(self.listing()["count"], 0)
+
+    def test_a_slow_move_to_macos_trash_does_not_hold_the_lock(self) -> None:
+        self.put(f"{TODAY}/a-0123abcd")
+        self._holds_lock_free(output_storage, "_macos_trash", lambda: output_storage.trash_to_macos("all"))
+
+    def test_a_date_folder_swapped_for_a_link_is_not_followed(self) -> None:
+        self.put(f"{TODAY}/a-0123abcd")
+        day, moved = self.trash / TODAY, self.root / "elsewhere"
+        listed = self.listing()
+        real, armed = output_storage._real_day, []
+
+        def swap(path, real_root):
+            ok = real(path, real_root)
+            armed.append(path == day)
+            if ok and path == day and sum(armed) == 2:                 # swap right after the delete's own check
+                os.rename(day, moved)
+                os.symlink(self.outside, day)
+            return ok
+
+        with mock.patch.object(output_storage, "_real_day", swap):
+            result = output_storage.trash_delete(items="all", confirm=True, expected_count=listed["count"],
+                                                 expected_bytes=listed["bytes"])
+        self.assertFalse(result["ok"])
+        self.assertTrue((self.outside / "precious.txt").exists())
+        self.assertTrue((moved / "a-0123abcd" / "payload.bin").exists())
 
 
 class MoveToMacosTrash(Fixture):

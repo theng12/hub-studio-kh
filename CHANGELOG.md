@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A permanent delete from the Trash Folder no longer stalls the Hub: under the lock it only lists, measures (cached physical bytes, same as the listing) and renames the items into a `.deleting-*` folder; the removal runs after the lock is released, through directory descriptors so a swapped folder is never followed. Leftovers are swept by the next delete. Moving to macOS Trash also runs outside the lock.
+
 ## 0.6.181 — 2026-10-16
 
 - Keep a Voice section's final rejected take as an inactive, review-only candidate when it fails the quality gate on its last try, with its exact text, measured rejection reason, settings and quality evidence.

@@ -151,7 +151,9 @@ def retire(path: Path, label: str, now: float | None = None) -> bool:
 
     The one way the Hub retires anything that is not an indexed output. A same-volume rename only:
     False, with `path` left where it is and a log line, when it fails (another volume, a permission).
-    It never copies and never deletes."""
+    It never copies and never deletes. Takes no `_LOCK` (callers include async request paths that must not
+    wait behind a Trash Folder action); `trash_delete` re-measures and stages its items in one short
+    step, so an entry that appears in the middle of a delete is simply left for the next look."""
     day = time.strftime("%Y-%m-%d", time.gmtime(time.time() if now is None else float(now)))
     target = None
     try:
@@ -256,7 +258,7 @@ def trash_listing(now: float | None = None) -> dict:
     now = time.time() if now is None else float(now)
     items, kinds, ages = [], {}, {}
     for item, path in _trash_items():
-        size = disk_governor.physical_bytes(path)
+        size = disk_governor.cached_physical(path, now)
         label = _RETIRED.fullmatch(path.name)
         kind = label[1] if label else "output"
         age = max(0.0, (now - calendar.timegm(time.strptime(item[:10], "%Y-%m-%d"))) / 86400)
@@ -289,37 +291,98 @@ def _macos_trash(paths: list[str]) -> list[str]:
 
 def trash_to_macos(items: object) -> dict:
     """Move the chosen items (`"all"` or ids) to macOS Trash. Each move is atomic; whether an item moved
-    is read back from the disk, so a partial failure reports exactly what is still in the Trash Folder."""
+    is read back from the disk, so a partial failure reports exactly what is still in the Trash Folder.
+    `_LOCK` is held only to choose the items: osascript can run for minutes and a move to macOS Trash can
+    be undone, so the Hub's other requests are never made to wait for it."""
     global _TRASH_SIZE
     with _LOCK:
         found = _trash_items(items)
-        reasons = _macos_trash([str(path) for _item, path in found]) if found else []
-        moved = [item for item, path in found if not os.path.lexists(path)]
-        failed = [{"id": item, "error": reason if reason != "ok" else "still in the Trash Folder"}
-                  for (item, path), reason in zip(found, reasons) if os.path.lexists(path)]
-        _TRASH_SIZE = (0.0, 0)
+    reasons = _macos_trash([str(path) for _item, path in found]) if found else []
+    moved = [item for item, path in found if not os.path.lexists(path)]
+    failed = [{"id": item, "error": reason if reason != "ok" else "still in the Trash Folder"}
+              for (item, path), reason in zip(found, reasons) if os.path.lexists(path)]
+    _TRASH_SIZE = (0.0, 0)
     for item in failed:
         log.warning("could not move %s from the Trash Folder to macOS Trash: %s", item["id"], item["error"])
     return {"ok": not failed, "moved": moved, "moved_count": len(moved), "failed": failed}
 
 
-def _delete_entry(path: Path, real_root: Path) -> None:
-    """Permanently delete one Trash Folder entry, re-checking its folder at the moment of deletion.
-    A link is removed itself; `rmtree` never follows a link inside a folder (`avoids_symlink_attacks`)."""
-    if not _real_day(path.parent, real_root):
+_OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_STAGING = ".deleting-"
+_PURGE = threading.Lock()                           # one rmtree pass at a time; never held with _LOCK
+
+
+def _open_day(day: Path, real_root: Path) -> int:
+    """An fd on a date folder that `_real_day` accepted, checked again on the fd itself, so a swap for a
+    link between the check and the open cannot redirect what is done through the fd."""
+    if not _real_day(day, real_root):
         raise OSError("its folder is no longer inside the Trash Folder")
-    if stat.S_ISDIR(path.lstat().st_mode):
-        shutil.rmtree(path)
+    before = day.lstat()
+    fd = os.open(day, _OPEN_DIR)                    # O_NOFOLLOW: a link here fails
+    after = os.fstat(fd)
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        os.close(fd)
+        raise OSError("its folder changed while it was being opened")
+    return fd
+
+
+def _purge_entry(name: str, dir_fd: int) -> None:
+    """Delete `name` inside `dir_fd`: a link is removed itself; `rmtree` never follows one."""
+    try:
+        is_dir = stat.S_ISDIR(os.lstat(name, dir_fd=dir_fd).st_mode)
+    except FileNotFoundError:
+        return                                      # a concurrent sweep already removed it
+    if is_dir:
+        shutil.rmtree(name, dir_fd=dir_fd)
     else:
-        os.unlink(path)
+        os.unlink(name, dir_fd=dir_fd)
+
+
+def _purge_staging(root: Path, mine: dict[str, str] | None = None, staged: str = "") -> list[dict]:
+    """Delete every `.deleting-*` folder in the Trash Folder (this delete's `staged`, and any a crash left
+    behind). `mine` maps entry name -> item id for `staged`; those that fail are returned as failed."""
+    failed: list[dict] = []
+    with _PURGE:
+        try:
+            root_fd = os.open(root, _OPEN_DIR)
+        except OSError:
+            return failed
+        try:
+            for leftover in sorted(n for n in os.listdir(root_fd) if n.startswith(_STAGING)):
+                try:
+                    stage_fd = os.open(leftover, _OPEN_DIR, dir_fd=root_fd)
+                except OSError:
+                    continue
+                try:
+                    for name in os.listdir(stage_fd):
+                        try:
+                            _purge_entry(name, stage_fd)
+                        except OSError as error:
+                            if leftover == staged and name in (mine or {}):
+                                failed.append({"id": mine[name], "error": str(error)[:300]})
+                            else:
+                                log.warning("Trash Folder: could not finish deleting %s/%s (%s)", leftover, name, error)
+                finally:
+                    os.close(stage_fd)
+                try:
+                    os.rmdir(leftover, dir_fd=root_fd)      # only once it is empty; otherwise the next delete retries
+                except OSError:
+                    pass
+        finally:
+            os.close(root_fd)
+    return failed
 
 
 def trash_delete(*, items: object, confirm: object, expected_count: object, expected_bytes: object) -> dict:
     """Permanently delete the chosen items (`"all"` or ids) - only ever on the owner's explicit request.
 
-    `confirm` must be true and `expected_count` / `expected_bytes` must equal what is measured here, under
-    the lock that every move into the Trash Folder takes; otherwise 409 and nothing is deleted. Items are
-    deleted one by one: a failure leaves that item (or what is left of it) listed and is reported."""
+    `confirm` must be true and `expected_count` / `expected_bytes` must equal what is measured here;
+    otherwise 409 and nothing is deleted. Under `_LOCK` only the fast steps run: list, measure (cached
+    physical bytes, the same figure the listing showed), compare, and rename each item into a
+    `.deleting-<id>` folder beside the date folders (same volume, atomic). The lock is then released and
+    the staging folder is removed, so a long delete never stalls the Hub. An item that cannot be renamed
+    stays listed; one that cannot be removed afterwards is reported, is no longer listed, and its
+    leftovers are removed by the next delete."""
     if confirm is not True:
         raise TrashRefused(400, "CONFIRM_REQUIRED", "Permanent delete needs confirm: true.")
     if any(type(value) is not int or value < 0 for value in (expected_count, expected_bytes)):
@@ -327,26 +390,42 @@ def trash_delete(*, items: object, confirm: object, expected_count: object, expe
                            "expected_count and expected_bytes must be the count and bytes that were confirmed.")
     from . import disk_governor
     global _TRASH_SIZE
+    now = time.time()
+    root = trash_root()
+    staged, mine, sizes, failed = "", {}, {}, []
     with _LOCK:
         found = _trash_items(items)
-        sizes = [disk_governor.physical_bytes(path) for _item, path in found]
-        count, total = len(found), sum(sizes)
+        measured = [disk_governor.cached_physical(path, now) for _item, path in found]
+        count, total = len(found), sum(measured)
         if (count, total) != (expected_count, expected_bytes):
             raise TrashRefused(409, "TRASH_CHANGED",
                                f"The Trash Folder now holds {count} items ({total} bytes) of those chosen, not the "
                                f"{expected_count} items ({expected_bytes} bytes) confirmed. Nothing was deleted.",
                                count=count, bytes=total)
-        real_root = Path(os.path.realpath(trash_root()))
-        deleted, failed, freed = [], [], 0
-        for (item, path), size in zip(found, sizes):
+        real_root = Path(os.path.realpath(root))
+        if found:
+            staged = f"{_STAGING}{os.urandom(6).hex()}"
+            os.mkdir(root / staged, 0o700)
+            stage_fd = os.open(root / staged, _OPEN_DIR)
             try:
-                _delete_entry(path, real_root)
-            except OSError as error:
-                failed.append({"id": item, "error": str(error)[:300]})
-            else:
-                deleted.append(item)
-                freed += size
+                for n, ((item, path), size) in enumerate(zip(found, measured)):
+                    try:
+                        day_fd = _open_day(path.parent, real_root)
+                        try:
+                            os.rename(path.name, str(n), src_dir_fd=day_fd, dst_dir_fd=stage_fd)
+                        finally:
+                            os.close(day_fd)
+                    except OSError as error:
+                        failed.append({"id": item, "error": str(error)[:300]})
+                    else:
+                        mine[str(n)], sizes[item] = item, size
+            finally:
+                os.close(stage_fd)
         _TRASH_SIZE = (0.0, 0)
+    failed += _purge_staging(root, mine, staged)
+    gone = {f["id"] for f in failed}
+    deleted = [item for item in mine.values() if item not in gone]
+    freed = sum(sizes[item] for item in deleted)
     log.warning("Trash Folder: permanently deleted %d items (%d bytes) on the owner's request; %d failed",
                 len(deleted), freed, len(failed))
     return {"ok": not failed, "deleted": deleted, "deleted_count": len(deleted), "freed_bytes": freed,

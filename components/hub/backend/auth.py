@@ -424,8 +424,9 @@ def presented_owner_token(request: Request, hub_token: str) -> bool:
 # keeps unrestricted access and is never checked against this.
 #
 # In short: send work, watch it, collect it, cancel it - and read what is needed to decide
-# where work should go. Never change this Mac's settings, never delete its output, never
-# manage its models (beyond starting a checked download, see below) or its membership of the fleet.
+# where work should go. Never change this Mac's settings, never delete its output (the one exception is
+# the owner's Trash Folder routes further down: listing, move to macOS Trash, and a confirmed
+# permanent delete), never manage its models (beyond starting a checked download, see below) or its membership of the fleet.
 #
 # `chat` was missing from this regex until 2026-09-25, and the gap was a lie rather than a
 # precaution: `GET /api/hub/catalog` is fleet-allowed and aggregates every worker's catalog,
