@@ -3931,8 +3931,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         Chat studio, memory readiness, ranked arbitration and the controller's lease on that Mac,
         then the node's peer route, whose own door admits, leases and records it. One node, one
         POST: a named refusal is returned as it is and a lost answer is a bare 502 (it may have
-        run), never a second submission. ponytail: no bounded wait here (the queue-wait opt-in
-        stays local); a busy node answers MACHINE_BUSY and the Gateway defers.
+        run), never a second submission. Readiness is re-read live immediately before the lease
+        with no await between, so the queued lane's snapshot-generation fence has nothing to add.
+        ponytail: no bounded wait here (the queue-wait opt-in stays local); a busy node answers
+        MACHINE_BUSY and the Gateway defers.
         """
         from .backend import registry
         body = await request.body()
@@ -3961,8 +3963,17 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 continue
             machine = studio["machine"]
             owner = f"relay:chat:{uuid.uuid4().hex}"
+            # Re-read this candidate's own row here rather than reuse the holder pass: the memory
+            # gate and the priority check below await (a sibling handoff is a peer request), and a
+            # catalog observation that goes stale or fails in that window answers `None`. An
+            # unprovable candidate is skipped, never dispatched with an assumed entry - `{}` would
+            # make `_admission_requirements` skip the model's memory floor and send work to a Mac
+            # nobody has checked.
+            row = entry(await monitor.scheduling_catalog(studio))
+            if row is None:
+                continue
             decision, _note = await broker.prepare_machine_memory(
-                monitor._client, studio, model, entry(await monitor.scheduling_catalog(studio)))
+                monitor._client, studio, model, row)
             if (decision != "run" or await broker.higher_priority_work_waiting(
                     machine, "chat", time.time(), owner)):
                 continue
