@@ -7,8 +7,9 @@ arbitrary local pathname into a deletion candidate.
 Cleanup never deletes an output.  It **moves** acknowledged, unleased output into the Trash Folder
 (`<data dir>/trash/<UTC date>/<batch>/`), a same-volume rename; a move that fails is skipped, never
 retried as a delete.  An output nobody acknowledged is moved the same way once it is `UNACKED_DAYS`
-old (the Gateway never collected it; leased ones are never moved).  Nothing here deletes, and the
-Hub never empties the Trash Folder: the owner does, through macOS Trash (owner request 2026-10-15).
+old (the Gateway never collected it; leased ones are never moved).  Nothing here deletes on its own, and
+the Hub never empties the Trash Folder: the owner does, through macOS Trash (owner request 2026-10-15)
+or from the Gateway (`trash_to_macos`, and `trash_delete` on an explicit, count-and-bytes confirmation).
 `max_bytes` counts live outputs only.
 """
 from __future__ import annotations
@@ -19,6 +20,7 @@ import re
 import copy
 import hashlib
 import stat
+import subprocess
 import threading
 import time
 import shutil
@@ -174,6 +176,181 @@ def retire(path: Path, label: str, now: float | None = None) -> bool:
                 pass
         log.warning("could not move %s to the Trash Folder (%s); it is left where it is", path, error)
         return False
+
+
+# ── The owner's Trash Folder, from the Gateway (owner decision 4g, 2026-10-16) ─────────────────────
+# Listed, moved to macOS Trash, or permanently deleted remotely so nobody has to visit a Mac. Only the
+# entries `<trash_root>/<date>/<name>` are ever touched: never a managed root's own `.studiohub-trash`,
+# never the user's own macOS Trash, never anything a link points at. Nothing here runs on its own.
+
+_ITEM = re.compile(r"(\d{4}-\d{2}-\d{2})/([^/\x00]+)")
+_RETIRED = re.compile(r"(.+)-[0-9a-f]{8}")          # `retire()`'s `<label>-<id>` leaf; anything else is output
+_AGES = ((1, "today"), (7, "1-7 days"), (30, "7-30 days"), (None, "over 30 days"))
+_JXA_TRASH = """function run(argv) {
+  ObjC.import("Foundation");
+  var fm = $.NSFileManager.defaultManager, out = [];
+  for (var i = 0; i < argv.length; i++) {
+    var error = $();
+    var ok = fm.trashItemAtURLResultingItemURLError($.NSURL.fileURLWithPath(argv[i]), $(), error);
+    out.push(ok ? "ok" : (error.isNil() ? "refused" : ObjC.unwrap(error.localizedDescription)));
+  }
+  return out.join("\\n");
+}"""
+
+
+class TrashRefused(Exception):
+    def __init__(self, status: int, code: str, detail: str, **extra) -> None:
+        super().__init__(detail)
+        self.status, self.body = status, {"ok": False, "code": code, "detail": detail, **extra}
+
+
+def _real_day(day: Path, real_root: Path) -> bool:
+    """A date folder that is a real folder (not a link) whose real path is directly in the Trash Folder."""
+    try:
+        return stat.S_ISDIR(day.lstat().st_mode) and Path(os.path.realpath(day)) == real_root / day.name
+    except OSError:
+        return False
+
+
+def _trash_items(wanted: object = "all") -> list[tuple[str, Path]]:
+    """`(id, path)` for every `<date>/<name>` in the Hub's Trash Folder, or for the `wanted` ids.
+
+    An id is exactly two levels (`<date>/<name>`, never `.` or `..`) under a date folder that passes
+    `_real_day`. One id that is malformed or unsafe refuses the whole request (400); one that is no longer
+    there refuses it as a changed Trash Folder (409). Links are listed as themselves, never followed."""
+    root = trash_root()
+    real_root = Path(os.path.realpath(root))
+    root_ok = root.is_dir() and not root.is_symlink()
+    if wanted == "all":
+        found: list[tuple[str, Path]] = []
+        try:
+            days = sorted(p for p in root.iterdir() if _DAY.fullmatch(p.name)) if root_ok else []
+        except OSError:
+            days = []
+        for day in days:
+            if _real_day(day, real_root):
+                try:
+                    found += [(f"{day.name}/{entry.name}", entry) for entry in sorted(day.iterdir())]
+                except OSError:
+                    continue
+        return found
+    if not isinstance(wanted, list) or not wanted or not all(isinstance(item, str) for item in wanted):
+        raise TrashRefused(400, "BAD_ITEMS", 'items must be "all" or a non-empty list of item ids')
+    found = []
+    for item in dict.fromkeys(wanted):
+        match = _ITEM.fullmatch(item)
+        if not root_ok or not match or match[2] in (".", "..") or not _real_day(root / match[1], real_root):
+            raise TrashRefused(400, "BAD_ITEM", f"{item!r} is not an item in this Mac's Trash Folder")
+        entry = root / match[1] / match[2]
+        if not os.path.lexists(entry):
+            raise TrashRefused(409, "TRASH_CHANGED", f"{item!r} is no longer in the Trash Folder; look again")
+        found.append((item, entry))
+    return found
+
+
+def trash_listing(now: float | None = None) -> dict:
+    """What the Hub's Trash Folder holds - every item with its physical bytes, kind and age - with
+    totals by kind and age, and this disk's free space, so the Gateway can show who is filling up."""
+    import calendar
+    from . import disk_governor
+    now = time.time() if now is None else float(now)
+    items, kinds, ages = [], {}, {}
+    for item, path in _trash_items():
+        size = disk_governor.physical_bytes(path)
+        label = _RETIRED.fullmatch(path.name)
+        kind = label[1] if label else "output"
+        age = max(0.0, (now - calendar.timegm(time.strptime(item[:10], "%Y-%m-%d"))) / 86400)
+        bucket = next(word for days, word in _AGES if days is None or age < days)
+        for table, key in ((kinds, kind), (ages, bucket)):
+            row = table.setdefault(key, {"count": 0, "bytes": 0})
+            row["count"] += 1
+            row["bytes"] += size
+        items.append({"id": item, "kind": kind, "bytes": size, "age_days": round(age, 1)})
+    try:
+        usage = shutil.disk_usage(ledger.DATA_DIR)
+        disk = {"free_bytes": usage.free, "total_bytes": usage.total}
+    except OSError:
+        disk = {"free_bytes": None, "total_bytes": None}
+    return {"trash_folder": str(trash_root()), "count": len(items), "bytes": sum(i["bytes"] for i in items),
+            "by_kind": kinds, "by_age": ages, "items": items, "disk": disk, "measured_at": now}
+
+
+def _macos_trash(paths: list[str]) -> list[str]:
+    """Move each path to the user's macOS Trash with NSFileManager.trashItem (Finder's Move to Trash),
+    from a JavaScript-for-Automation child: no Finder automation prompt. One line per path: "ok" or why."""
+    try:
+        done = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-e", _JXA_TRASH, *paths],
+                              capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError) as error:
+        return [str(error)] * len(paths)
+    lines = done.stdout.splitlines()
+    return lines if len(lines) == len(paths) else [(done.stderr or "osascript failed").strip()[:300]] * len(paths)
+
+
+def trash_to_macos(items: object) -> dict:
+    """Move the chosen items (`"all"` or ids) to macOS Trash. Each move is atomic; whether an item moved
+    is read back from the disk, so a partial failure reports exactly what is still in the Trash Folder."""
+    global _TRASH_SIZE
+    with _LOCK:
+        found = _trash_items(items)
+        reasons = _macos_trash([str(path) for _item, path in found]) if found else []
+        moved = [item for item, path in found if not os.path.lexists(path)]
+        failed = [{"id": item, "error": reason if reason != "ok" else "still in the Trash Folder"}
+                  for (item, path), reason in zip(found, reasons) if os.path.lexists(path)]
+        _TRASH_SIZE = (0.0, 0)
+    for item in failed:
+        log.warning("could not move %s from the Trash Folder to macOS Trash: %s", item["id"], item["error"])
+    return {"ok": not failed, "moved": moved, "moved_count": len(moved), "failed": failed}
+
+
+def _delete_entry(path: Path, real_root: Path) -> None:
+    """Permanently delete one Trash Folder entry, re-checking its folder at the moment of deletion.
+    A link is removed itself; `rmtree` never follows a link inside a folder (`avoids_symlink_attacks`)."""
+    if not _real_day(path.parent, real_root):
+        raise OSError("its folder is no longer inside the Trash Folder")
+    if stat.S_ISDIR(path.lstat().st_mode):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+
+
+def trash_delete(*, items: object, confirm: object, expected_count: object, expected_bytes: object) -> dict:
+    """Permanently delete the chosen items (`"all"` or ids) - only ever on the owner's explicit request.
+
+    `confirm` must be true and `expected_count` / `expected_bytes` must equal what is measured here, under
+    the lock that every move into the Trash Folder takes; otherwise 409 and nothing is deleted. Items are
+    deleted one by one: a failure leaves that item (or what is left of it) listed and is reported."""
+    if confirm is not True:
+        raise TrashRefused(400, "CONFIRM_REQUIRED", "Permanent delete needs confirm: true.")
+    if any(type(value) is not int or value < 0 for value in (expected_count, expected_bytes)):
+        raise TrashRefused(400, "EXPECTED_REQUIRED",
+                           "expected_count and expected_bytes must be the count and bytes that were confirmed.")
+    from . import disk_governor
+    global _TRASH_SIZE
+    with _LOCK:
+        found = _trash_items(items)
+        sizes = [disk_governor.physical_bytes(path) for _item, path in found]
+        count, total = len(found), sum(sizes)
+        if (count, total) != (expected_count, expected_bytes):
+            raise TrashRefused(409, "TRASH_CHANGED",
+                               f"The Trash Folder now holds {count} items ({total} bytes) of those chosen, not the "
+                               f"{expected_count} items ({expected_bytes} bytes) confirmed. Nothing was deleted.",
+                               count=count, bytes=total)
+        real_root = Path(os.path.realpath(trash_root()))
+        deleted, failed, freed = [], [], 0
+        for (item, path), size in zip(found, sizes):
+            try:
+                _delete_entry(path, real_root)
+            except OSError as error:
+                failed.append({"id": item, "error": str(error)[:300]})
+            else:
+                deleted.append(item)
+                freed += size
+        _TRASH_SIZE = (0.0, 0)
+    log.warning("Trash Folder: permanently deleted %d items (%d bytes) on the owner's request; %d failed",
+                len(deleted), freed, len(failed))
+    return {"ok": not failed, "deleted": deleted, "deleted_count": len(deleted), "freed_bytes": freed,
+            "failed": failed}
 
 
 def _to_trash(path: Path, group, file_id: int, now: float, managed_root: object = None) -> bool:

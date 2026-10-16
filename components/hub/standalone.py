@@ -2689,6 +2689,73 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                                  "detail": refusal.detail}, status_code=refusal.status_code)
         return JSONResponse({"ok": True, "node": wanted, "run": run})
 
+    # **The Trash Folder from the Gateway (owner decision 4g, 2026-10-16).** List it, move items to macOS
+    # Trash, or delete them permanently - on a joined node (relayed to its own `local` copy of the route)
+    # or on this Mac (its id or `local`). `output_storage` holds the path-safety and confirmation rules.
+    TRASH_HUB = "0.6.182"
+
+    async def _fleet_trash(node_id: str, request: Request, tail: str, run) -> JSONResponse:
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        body: Any = {}
+        if request.method == "POST":
+            try:
+                body = await request.json()
+            except ValueError:
+                body = None
+            if not isinstance(body, dict):
+                return JSONResponse({"ok": False, "code": "BAD_BODY",
+                                     "detail": "The request body must be a JSON object."}, status_code=400)
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            if request.method == "POST":
+                startup_control.audit("trash_relay", {"node": wanted, "action": tail, "actor": actor})
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, request.method, f"/trash{tail}", payload=body if request.method == "POST" else None,
+                    timeout=httpx.Timeout(900.0, connect=4.0),
+                    feature=f"managing its Trash Folder from the Gateway (Studio Hub {TRASH_HUB})"))
+            except fleet.StartupRelayError as error:
+                if error.body.get("code") == "NODE_REFUSED" or error.status in (404, 405):
+                    return JSONResponse({"ok": False, "code": "HUB_TOO_OLD", "needs_hub": TRASH_HUB,
+                                         "detail": f"That Mac needs Studio Hub {TRASH_HUB} to manage its Trash "
+                                                   "Folder from the Gateway (or it holds a different Fleet token)."},
+                                        status_code=409)
+                return JSONResponse(error.body, status_code=error.status)
+        try:
+            result = await run_in_threadpool(run, body)
+        except output_storage.TrashRefused as refusal:
+            if request.method == "POST":
+                startup_control.audit("trash", {"action": tail, "actor": actor, "refused": refusal.body["code"]})
+            return JSONResponse(refusal.body, status_code=refusal.status)
+        if request.method == "POST":
+            startup_control.audit("trash", {"action": tail, "actor": actor, "ok": result.get("ok"),
+                                            "done": result.get("moved_count", result.get("deleted_count")),
+                                            "freed": result.get("freed_bytes"), "failed": len(result["failed"])})
+        return JSONResponse({"ok": True, **result, "node": wanted, "hub_version": _app_version()})
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/trash")
+    async def fleet_node_trash(node_id: str, request: Request) -> JSONResponse:
+        """This Mac's Trash Folder: items with physical bytes, kind and age; totals; disk free."""
+        return await _fleet_trash(node_id, request, "", lambda _body: output_storage.trash_listing())
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/trash/move-to-macos-trash")
+    async def fleet_node_trash_to_macos(node_id: str, request: Request) -> JSONResponse:
+        """Body `{"items": "all" | [ids]}`: move them to macOS Trash (the owner empties that)."""
+        return await _fleet_trash(node_id, request, "/move-to-macos-trash",
+                                  lambda body: output_storage.trash_to_macos(body.get("items")))
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/trash/delete")
+    async def fleet_node_trash_delete(node_id: str, request: Request) -> JSONResponse:
+        """Body `{"items": "all" | [ids], "confirm": true, "expected_count", "expected_bytes"}`: delete permanently.
+        Re-measured here; a mismatch is 409 with nothing deleted. Never called by the Hub itself."""
+        return await _fleet_trash(node_id, request, "/delete", lambda body: output_storage.trash_delete(
+            items=body.get("items"), confirm=body.get("confirm"),
+            expected_count=body.get("expected_count"), expected_bytes=body.get("expected_bytes")))
+
     @app.post("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}/share")
     async def fleet_node_model_share(node_id: str, package_id: str, request: Request) -> JSONResponse:
         """Let another Mac copy this package from a Mac in this group over the LAN (0.6.146).

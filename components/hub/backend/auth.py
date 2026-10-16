@@ -628,6 +628,12 @@ FLEET_ALLOWED = (
     # `POST /studio/vision/v1/vision/analyze` lets the fleet send, pinned to the Mac the Gateway
     # picked (the one that made the picture, owner rule 2026-10-11). Not in `NODE_ALLOWED`.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/vision/analyze$"),
+    # **A Mac's Trash Folder from the Gateway (owner decision 4g, 2026-10-16, Studio Hub 0.6.182).** List
+    # it, move items to macOS Trash, or delete them permanently - only `<trash>/<date>/<name>` entries,
+    # and a permanent delete only with `confirm` and the count and bytes re-measured here (409 otherwise).
+    # The Gateway allows the delete only from the owner's own app window. Not in `NODE_ALLOWED`.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/trash$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/trash/(move-to-macos-trash|delete)$"),
     ("GET", r"^/api/hub/workstation$"),
     ("POST", r"^/api/hub/workstation$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same
