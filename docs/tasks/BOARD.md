@@ -2,7 +2,7 @@
 
 ## ▶ TAKE OVER HERE
 
-### ST-REJECTED-NARRATION-20261016 — 0.6.181 RELEASE
+### ST-REJECTED-NARRATION-20261016 — 0.6.181 SHIPPED; This Mac + 1100 verified, paced fleet delivery running
 
 Reviewed fix `5970ea0` (fix/rejected-narration-review-candidates; independent Opus review ACCEPT) integrated over main `a655fe1`: a Voice section's final rejected take is kept as an inactive review-only candidate bound to the failed Hub item and served through authenticated byte-verified GETs. Python-only; native source unchanged from 0.6.180. Receipts: orchestra `hub-0181-release/`.
 
