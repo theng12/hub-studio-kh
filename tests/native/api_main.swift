@@ -34,6 +34,26 @@ func clockSeconds(_ rendered: String) -> Double? {
     return total
 }
 
+/// Stands in for macOS Trash so no fixture ever lands in the real one: `trashItem` moves the item into
+/// `bin` and records its name, or refuses (as a volume with no Trash does) when `refuses` is set.
+final class FixtureTrashFileManager: FileManager {
+    let bin: URL
+    var refuses = false
+    private(set) var trashed: [String] = []
+
+    init(bin: URL) {
+        self.bin = bin
+        super.init()
+    }
+
+    override func trashItem(at url: URL, resultingItemURL outResultingURL: AutoreleasingUnsafeMutablePointer<NSURL?>?) throws {
+        if refuses { throw CocoaError(.featureUnsupported) }
+        try createDirectory(at: bin, withIntermediateDirectories: true)
+        try moveItem(at: url, to: bin.appendingPathComponent(UUID().uuidString))
+        trashed.append(url.lastPathComponent)
+    }
+}
+
 final class FixtureProtocol: URLProtocol {
     static let lock = NSLock()
     static var lastGenerateBody: [String: Any]?
@@ -6309,15 +6329,16 @@ struct NativeAPITests {
                 "the installed build must become the current one so the banner clears")
         require(updateStore.currentAppVersion == "0.6.50",
                 "the installed version must become the current one too")
-        // Everything under Updates/ - the installed download and the older one - is deleted at once
-        // (0.6.127 disk governor: a 1.9 GB copy of an app that is already installed is not worth the
-        // Trash Folder's 15 days), so nothing is left and nothing goes to the Trash Folder.
+        // Everything under Updates/ - the installed download and the older one - goes to the Trash
+        // Folder at once and is never deleted: the owner empties it (owner request 2026-10-15).
         require(((try? FileManager.default.contentsOfDirectory(atPath: updatesFolder.path)) ?? []).isEmpty,
                 "nothing may be left under Updates/ after a completed install")
-        require(!FileManager.default.fileExists(atPath: olderDownload.path),
-                "the older download an earlier attempt left must be deleted too")
-        require(!FileManager.default.fileExists(atPath: hubTrash.path),
-                "a completed install deletes the stored downloads; it no longer files them in the Trash Folder")
+        let retired = (FileManager.default.enumerator(at: hubTrash, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }) ?? []
+        require(retired.filter { $0.lastPathComponent.hasPrefix("release-download-") }.count == 2,
+                "both stored downloads must be filed in the Trash Folder, not deleted: \(retired.map(\.lastPathComponent))")
+        require(retired.contains { $0.lastPathComponent == "older.dmg" },
+                "the older download an earlier attempt left must be in the Trash Folder, not deleted")
 
         // A kept partial file is found again and resumed with a Range request, completing to the
         // exact signed artifact. The Range header sent is asserted, and the bytes the swap sees.
@@ -6839,6 +6860,11 @@ struct NativeAPITests {
         await updateStore.installOfferedRelease()
         require(updateStore.connectionNotice?.kind == .failure, "a failed staged swap must be reported")
         require(!FileManager.default.fileExists(atPath: deltaStagedHolder.path), "a failed staged bundle must be removed")
+        // Both staging folders above (a swapped one and a failed one) still held a bundle, so they went
+        // to the Trash Folder rather than being deleted.
+        let retiredStaging = (FileManager.default.enumerator(at: hubTrash, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { $0.lastPathComponent == deltaStagedHolder.lastPathComponent }) ?? []
+        require(retiredStaging.count == 2, "a non-empty staging folder must be filed in the Trash Folder: \(retiredStaging)")
 
         // 6. A controller still receiving the release answers `not_ready`: no disk image is fetched,
         //    nothing is reported as failed, and the next automatic check simply asks again.
@@ -7007,10 +7033,14 @@ struct NativeAPITests {
         }
         try makeFakeApp(at: targetApp, build: "currentbuild")
         try makeFakeApp(at: stagedApp, build: "newbuild")
-        let installer = ReleaseInstaller(targetApp: targetApp, attach: { _, _ in }, detach: { _ in })
+        // Every installer here gets a stand-in for macOS Trash, so no fixture reaches the real one.
+        let macTrash = FixtureTrashFileManager(bin: installParent.appendingPathComponent("macos-trash"))
+        let installer = ReleaseInstaller(targetApp: targetApp, fileManager: macTrash, attach: { _, _ in }, detach: { _ in })
         let swapDescriptor = ReleaseDescriptor(json: descriptor)!
         let landed = try installer.swapStagedApp(staged: stagedApp, descriptor: swapDescriptor)
         require(landed == "newbuild", "the swap must report the build that actually landed")
+        require(macTrash.trashed.count == 1 && macTrash.trashed[0].hasPrefix(".studiohub-old-"),
+                "with no Trash Folder the replaced app goes to macOS Trash, never deleted: \(macTrash.trashed)")
         require(!FileManager.default.fileExists(atPath: stagedApp.path),
                 "the staged app must be moved into place, not left behind")
         let landedPlist = try PropertyListSerialization.propertyList(
@@ -7019,12 +7049,12 @@ struct NativeAPITests {
         require(landedPlist?["StudioHubBuild"] as? String == "newbuild",
                 "the target must hold the new build after the swap")
 
-        // The replaced app goes to the Trash Folder (so an update can be rolled back for 15 days);
-        // it is not deleted. Where there is no usable Trash Folder it is removed, as before.
+        // The replaced app goes to the Trash Folder (so an update can be rolled back until the owner
+        // empties it); it is never deleted. Where there is no usable Trash Folder it goes to macOS Trash.
         let trashRoot = installParent.appendingPathComponent("hub/trash")
         try Data("previous app".utf8).write(to: targetApp.appendingPathComponent("Contents/previous-app-marker"))
         try makeFakeApp(at: stagedApp, build: "newbuild")
-        let keepingInstaller = ReleaseInstaller(targetApp: targetApp, trashFolder: trashRoot,
+        let keepingInstaller = ReleaseInstaller(targetApp: targetApp, trashFolder: trashRoot, fileManager: macTrash,
                                                 attach: { _, _ in }, detach: { _ in })
         _ = try keepingInstaller.swapStagedApp(staged: stagedApp, descriptor: swapDescriptor)
         let keptApps = (FileManager.default.enumerator(at: trashRoot, includingPropertiesForKeys: nil)?
@@ -7035,12 +7065,24 @@ struct NativeAPITests {
         let blockedTrash = installParent.appendingPathComponent("trash-is-a-file")
         try Data("x".utf8).write(to: blockedTrash)
         try makeFakeApp(at: stagedApp, build: "newbuild")
-        let fallbackInstaller = ReleaseInstaller(targetApp: targetApp, trashFolder: blockedTrash,
+        let fallbackInstaller = ReleaseInstaller(targetApp: targetApp, trashFolder: blockedTrash, fileManager: macTrash,
                                                  attach: { _, _ in }, detach: { _ in })
+        let trashedBefore = macTrash.trashed.count
         _ = try fallbackInstaller.swapStagedApp(staged: stagedApp, descriptor: swapDescriptor)
-        require(((try? FileManager.default.contentsOfDirectory(atPath: installParent.path)) ?? [])
-                    .filter { $0.hasPrefix(".studiohub-old-") }.isEmpty,
-                "with no usable Trash Folder the replaced app is removed, as before")
+        func asideCopies() -> [String] {
+            ((try? FileManager.default.contentsOfDirectory(atPath: installParent.path)) ?? [])
+                .filter { $0.hasPrefix(".studiohub-old-") }
+        }
+        require(asideCopies().isEmpty && macTrash.trashed.count == trashedBefore + 1,
+                "with no usable Trash Folder the replaced app goes to macOS Trash: \(asideCopies()), \(macTrash.trashed)")
+        // When macOS Trash refuses too, the replaced app stays beside the new one: never deleted.
+        macTrash.refuses = true
+        try makeFakeApp(at: stagedApp, build: "newbuild")
+        _ = try fallbackInstaller.swapStagedApp(staged: stagedApp, descriptor: swapDescriptor)
+        macTrash.refuses = false
+        require(asideCopies().count == 1 && FileManager.default.fileExists(
+                    atPath: installParent.appendingPathComponent(asideCopies()[0]).appendingPathComponent("Contents/Info.plist").path),
+                "a replaced app that cannot be moved anywhere must stay where it is, whole: \(asideCopies())")
 
         // The full-image install refuses up front when the volume cannot hold the new app beside the
         // old one, names the numbers, and leaves nothing staged and the installed app untouched.
@@ -7050,11 +7092,13 @@ struct NativeAPITests {
         var spaceCheckInstalled = false
         let tightInstaller = ReleaseInstaller(
             targetApp: roomyTarget,
+            fileManager: macTrash,
             attach: { _, mount in try makeFakeApp(at: mount.appendingPathComponent("Studio Hub.app"), build: "newbuild") },
             detach: { _ in },
             availableCapacity: { _ in 1024 })
         let roomyInstaller = ReleaseInstaller(
             targetApp: roomyTarget,
+            fileManager: macTrash,
             attach: { _, mount in try makeFakeApp(at: mount.appendingPathComponent("Studio Hub.app"), build: "newbuild") },
             detach: { _ in },
             availableCapacity: { _ in Int64.max / 2 })

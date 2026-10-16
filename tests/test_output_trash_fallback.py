@@ -52,10 +52,11 @@ assert result['freed_bytes'] == 5 and result['used_bytes'] == 0, result
 assert result['trash_fallback_moves'] == 1 and result['trash_move_failures'] == 0, result
 assert output_storage.trash_bytes() == 5, 'the fallback Trash Folder is not counted'
 
-# 2. The fallback Trash Folder is purged like the other (and only dated folders in it).
+# 2. The fallback Trash Folder is kept like the other: never purged by age.
 stale = out / '.studiohub-trash' / '2000-01-01'; stale.mkdir()
 (stale / 'f').write_bytes(b'x')
-assert output_storage.purge_trash() == 1 and not stale.exists() and moved[0].exists()
+output_storage.enforce(machine='m', max_bytes=99, retention_days=1)
+assert (stale / 'f').exists() and moved[0].exists()
 
 # 3. A move that fails both ways is counted, logged and retried - never silent.
 stuck = add('stuck.png', b'abc', 'b2')

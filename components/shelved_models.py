@@ -6,7 +6,7 @@ not carry it by default:
 * the kit's copy step (``qualification/copy_models_for_this_mac.py``) skips it, so it stays on the
   SSD (in the kit's model library, which that step reads) and is never copied to a fleet Mac;
 * at start-up the Hub moves an installed one into its Trash Folder (``trash/<UTC date>/shelved-models/``,
-  purged after 15 days), so a fleet Mac sheds it;
+  kept until the owner empties it), so a fleet Mac sheds it;
 * the Hub refuses to download or import one onto such a Mac, so nothing brings it back by itself.
 
 A Mac marked **keep all models** (``"keep_all_models": true`` in the Hub's ``device_settings.json``,

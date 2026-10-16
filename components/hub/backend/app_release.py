@@ -562,7 +562,8 @@ class BlobUpload:
 
 
 def collect_garbage() -> None:
-    """Keep the newest ``KEEP_RELEASES`` manifests and the blobs they name; drop the rest."""
+    """Keep the newest ``KEEP_RELEASES`` manifests and the blobs they name; move the rest to the Trash Folder."""
+    from .. import output_storage
     root = RELEASE_DIR / "manifests"
     try:
         directories = sorted((entry for entry in root.iterdir()
@@ -572,7 +573,7 @@ def collect_garbage() -> None:
         return
     referenced: set[str] = set()
     for old in directories[KEEP_RELEASES:]:
-        shutil.rmtree(old, ignore_errors=True)
+        output_storage.retire(old, "release-manifest")
     for kept in directories[:KEEP_RELEASES]:
         try:
             _index, groups = fm.load_dir(kept)
@@ -582,11 +583,11 @@ def collect_garbage() -> None:
     try:
         for blob in blob_dir().iterdir():
             if blob.name.startswith("."):
-                # An upload in flight: left alone unless it was abandoned hours ago.
+                # An upload in flight: left alone unless it was abandoned hours ago (a partial file is scratch).
                 if time.time() - blob.stat().st_mtime > 3600:
                     blob.unlink(missing_ok=True)
             elif blob.name not in referenced:
-                blob.unlink(missing_ok=True)
+                output_storage.retire(blob, "release-blob")
     except OSError:
         pass
 

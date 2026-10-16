@@ -214,7 +214,7 @@ class StandaloneHubConfigTests(unittest.TestCase):
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(accepted.json()["effective"]["max_bytes"], 20_000_000_000)
-        self.assertEqual(preview.json()["trash"]["days"], 15)
+        self.assertNotIn("days", preview.json()["trash"])   # never emptied automatically: no age to report
         self.assertEqual(preview.status_code, 200)
         self.assertEqual([row["machine"] for row in preview.json()["machines"]], ["node-a"])
         self.assertEqual(len(preview_calls), 1)

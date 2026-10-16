@@ -1,4 +1,4 @@
-"""Output cleanup moves work into a self-cleaning Trash Folder; it never deletes an output."""
+"""Output cleanup moves work into the Trash Folder, which only the owner empties; nothing is deleted."""
 import os
 from pathlib import Path
 import subprocess
@@ -57,39 +57,34 @@ assert result['used_bytes'] == 3, result
 result = output_storage.enforce(machine='m', max_bytes=99, retention_days=1)   # and is retried later
 assert not stuck.exists() and result['deleted'] == 1, result
 
-# 3. The purge removes only dated folders older than 15 days, and only dated folders.
-for offset in (40, 16, 15, 1):
+# 3. The Trash Folder is never purged by age: only the owner empties it (owner request 2026-10-15).
+import shutil
+def no_rmtree(*_a, **_k): raise AssertionError('the Trash Folder was purged')
+for offset in (400, 40, 16, 15, 1):
     (trash / day(offset)).mkdir(parents=True, exist_ok=True)
     (trash / day(offset) / 'f').write_bytes(b'x')
-(trash / 'not-a-date').mkdir(); (trash / 'not-a-date' / 'f').write_bytes(b'x')
-output_storage.enforce(machine='m', max_bytes=99, retention_days=99)
+with patch.object(shutil, 'rmtree', no_rmtree), patch.object(os, 'unlink', no_unlink), \
+        patch.object(Path, 'unlink', no_unlink):
+    output_storage.enforce(machine='m', max_bytes=99, retention_days=99)
 names = {p.name for p in trash.iterdir()}
-assert day(40) not in names and day(16) not in names, names
-assert day(15) in names and day(1) in names and day(0) in names and 'not-a-date' in names, names
-assert output_storage.TRASH_DAYS == 15
+assert {day(400), day(40), day(16), day(15), day(1), day(0)} <= names, names
+assert not hasattr(output_storage, 'purge_trash') and not hasattr(output_storage, 'TRASH_DAYS')
 
-# 4. A full Trash Folder cannot wedge admission: with the floor missed, the oldest day goes first.
+# 4. A full Trash Folder is never emptied to admit work: the floor is missed, so work is refused and
+#    every day stays for the owner.
 disk = 1000
 def usage(_root): return SimpleNamespace(free=disk - output_storage.trash_bytes())
-for stale in list(trash.iterdir()): 
-    import shutil; shutil.rmtree(stale)
+for stale in list(trash.iterdir()):
+    shutil.rmtree(stale)
 for offset, size in ((3, 300), (2, 300), (1, 100)):
     (trash / day(offset)).mkdir(); (trash / day(offset) / 'f').write_bytes(b'x' * size)
 roots = [str(out)]
-with patch.object(output_storage.shutil, 'disk_usage', usage):
+with patch.object(output_storage.shutil, 'disk_usage', usage), patch.object(shutil, 'rmtree', no_rmtree):
     assert output_storage.trash_bytes() == 700
     verdict = output_storage.admission(machine='wedge', max_bytes=99, retention_days=99, enabled=True,
                                        managed_output_roots=roots, minimum_free_bytes=500)
-assert verdict is None, verdict                    # 300 free -> purge oldest (day 3) -> 600 >= 500
-names = {p.name for p in trash.iterdir()}
-assert day(3) not in names and day(2) in names and day(1) in names, ('oldest-first, and no more than needed', names)
-# ...and a disk that is full of something else is still refused, with the Trash Folder emptied for it.
-disk = 400
-with patch.object(output_storage.shutil, 'disk_usage', usage):
-    verdict = output_storage.admission(machine='wedge2', max_bytes=99, retention_days=99, enabled=True,
-                                       managed_output_roots=roots, minimum_free_bytes=500)
 assert verdict and verdict['code'] == 'OUTPUT_STORAGE_BLOCKED', verdict
-assert not list(trash.iterdir()), 'refused before emptying the copies already scheduled for deletion'
+assert {p.name for p in trash.iterdir()} == {day(3), day(2), day(1)}, 'admission emptied the Trash Folder'
 
 # 6. A Mac that already saved the OLD defaults gets the new ones; a value the operator chose is kept.
 import json

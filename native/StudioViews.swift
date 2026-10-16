@@ -6563,7 +6563,8 @@ struct StudioContent: View {
             ValueRow("Keep finished work for", value: "\(settings.effective.retentionDays) days")
             ValueRow("Automatic cleanup", value: settings.effective.cleanupEnabled ? "On" : "Off")
             if let trash = workspace.storageTrash {
-                ValueRow("Trash Folder", value: "\(NativeWorkspaceStore.gigabytes(trash.bytes)), emptied automatically after \(trash.days) days")
+                ValueRow("Trash Folder", value: "\(NativeWorkspaceStore.gigabytes(trash.bytes)), kept until you empty it")
+                Button("Show Trash Folder in Finder") { NSWorkspace.shared.activateFileViewerSelecting([HubTrash.live]) }
             }
             ForEach(workspace.storageUsage) { usage in
                 VStack(alignment: .leading, spacing: HubSpace.xs) {

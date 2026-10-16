@@ -1476,7 +1476,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 minimum_free_bytes=value["minimum_free_bytes"],
                 managed_output_roots=sorted(roots))
                 for machine, roots in roots_by_machine.items()],
-                "trash": {"bytes": output_storage.trash_bytes(max_age=10), "days": output_storage.TRASH_DAYS}}
+                "trash": {"bytes": output_storage.trash_bytes(max_age=10)}}
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 

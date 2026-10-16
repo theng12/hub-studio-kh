@@ -7,10 +7,9 @@ arbitrary local pathname into a deletion candidate.
 Cleanup never deletes an output.  It **moves** acknowledged, unleased output into the Trash Folder
 (`<data dir>/trash/<UTC date>/<batch>/`), a same-volume rename; a move that fails is skipped, never
 retried as a delete.  An output nobody acknowledged is moved the same way once it is `UNACKED_DAYS`
-old (the Gateway never collected it; leased ones are never moved).  The Trash Folder empties itself:
-a dated folder older than `TRASH_DAYS` is removed, and the disk governor (`disk_governor.py`) also
-holds it to a size cap in physical bytes.  The hard deletes are that purge and, only when the disk is
-nearly full, `reclaim_acked`.  `max_bytes` counts live outputs only.
+old (the Gateway never collected it; leased ones are never moved).  Nothing here deletes, and the
+Hub never empties the Trash Folder: the owner does, through macOS Trash (owner request 2026-10-15).
+`max_bytes` counts live outputs only.
 """
 from __future__ import annotations
 
@@ -28,7 +27,6 @@ from pathlib import Path
 
 from .backend import ledger
 
-TRASH_DAYS = 15
 # An output the Gateway never acknowledged is not kept for ever: after this long it moves to the Trash Folder.
 UNACKED_DAYS = 7
 # Where a managed output root that is on another volume than the Hub's data folder keeps its own
@@ -146,16 +144,36 @@ def trash_bytes(max_age: float = 0.0) -> int:
     return total
 
 
-def purge_trash(now: float | None = None) -> int:
-    """Remove dated Trash Folders older than TRASH_DAYS.  The only hard delete in this module."""
-    now = time.time() if now is None else float(now)
-    oldest_kept = time.strftime("%Y-%m-%d", time.gmtime(now - TRASH_DAYS * 86400))
-    purged = 0
-    for day in _trash_days():
-        if day.name < oldest_kept:              # ISO dates sort as text
-            shutil.rmtree(day, ignore_errors=True)
-            purged += 1
-    return purged
+def retire(path: Path, label: str, now: float | None = None) -> bool:
+    """Move a retired file or folder into `<trash>/<UTC date>/<label>-<id>/<name>`.
+
+    The one way the Hub retires anything that is not an indexed output. A same-volume rename only:
+    False, with `path` left where it is and a log line, when it fails (another volume, a permission).
+    It never copies and never deletes."""
+    day = time.strftime("%Y-%m-%d", time.gmtime(time.time() if now is None else float(now)))
+    target = None
+    try:
+        (trash_root() / day).mkdir(parents=True, exist_ok=True)
+        for _ in range(8):
+            leaf = trash_root() / day / f"{label}-{os.urandom(4).hex()}"
+            try:
+                leaf.mkdir()                    # plain mkdir: a name that is taken is never reused
+            except FileExistsError:
+                continue
+            target = leaf / Path(path).name
+            break
+        else:
+            raise OSError("no free folder name in the Trash Folder")
+        os.rename(path, target)
+        return True
+    except OSError as error:
+        if target is not None:
+            try:
+                target.parent.rmdir()           # only the empty folder made above
+            except OSError:
+                pass
+        log.warning("could not move %s to the Trash Folder (%s); it is left where it is", path, error)
+        return False
 
 
 def _to_trash(path: Path, group, file_id: int, now: float, managed_root: object = None) -> bool:
@@ -163,7 +181,7 @@ def _to_trash(path: Path, group, file_id: int, now: float, managed_root: object 
 
     The Hub's Trash Folder is tried first (a same-volume rename). When that fails - a managed output
     root on another volume is the usual reason - the file goes to a Trash Folder inside its own root,
-    which is the same volume by construction and is purged like the other. A move that fails both
+    which is the same volume by construction and is kept like the other. A move that fails both
     ways is counted and logged, never silent.
     """
     batch = re.sub(r"[^A-Za-z0-9._-]", "_", str(group["batch_id"] or group["job_id"]))
@@ -509,7 +527,6 @@ def enforce(*, machine: str, max_bytes: int, retention_days: int,
     with _LOCK:
         _schema()
         now = time.time() if now is None else float(now)
-        purge_trash(now)                        # self-cleaning, even with cleanup switched off
         with ledger._conn() as conn:
             _reconcile(conn, machine)
         result = preview(machine=machine, max_bytes=max_bytes, retention_days=retention_days,
@@ -611,13 +628,13 @@ def trash_unregistered(roots: object, *, min_age_seconds: float,
 
 
 def reclaim_acked(*, machine: str, min_age_seconds: float, done, now: float | None = None) -> tuple[int, int]:
-    """Give disk space back by DELETING acknowledged outputs, oldest first, until `done()` says enough.
+    """Move acknowledged outputs into the Trash Folder ahead of retention, oldest first, until `done()`.
 
-    Only the disk governor calls this, in amber and red: the Gateway already holds the delivered copy,
-    and a move into the Trash Folder would free nothing.  Never an unacknowledged, leased or
-    uncertain output, and never one younger than `min_age_seconds`; every file is re-checked against
-    its recorded identity and checksum first, exactly as `enforce` does before it moves one.
-    Returns (bytes freed, files deleted).
+    Only the disk governor calls this, in amber and red. A same-volume move frees no disk space by
+    itself: it gathers the delivered copies where the owner empties them (macOS Trash), and nothing
+    is deleted.  Never an unacknowledged, leased or uncertain output, and never one younger than
+    `min_age_seconds`; every file is re-checked against its recorded identity and checksum first,
+    exactly as `enforce` does before it moves one.  Returns (bytes taken out of live output, files moved).
     """
     freed = files = 0
     with _LOCK:
@@ -649,9 +666,7 @@ def reclaim_acked(*, machine: str, min_age_seconds: float, done, now: float | No
                     if not sound:
                         conn.execute("UPDATE output_groups SET state='uncertain' WHERE id=?", (group["id"],))
                         continue
-                    try:
-                        os.unlink(file["path"])
-                    except OSError:
+                    if not _to_trash(Path(file["path"]), group, file["id"], now, file["managed_root"]):
                         continue
                     conn.execute("UPDATE output_files SET present=0 WHERE id=?", (file["id"],))
                     files += 1
@@ -668,7 +683,7 @@ def reclaim_acked(*, machine: str, min_age_seconds: float, done, now: float | No
 # on every pass - several times a second while work is waiting - and `enforce` walks and hashes the
 # managed output roots to answer it, synchronously, on the event loop. The answer is therefore
 # remembered for a few seconds per policy. Enforcement itself is unchanged: it still runs on the
-# background timer (which is what deletes files) and on every operator action; this only stops the
+# background timer (which moves files to the Trash Folder) and on every operator action; this only stops the
 # scheduler re-sweeping the same roots in a tight loop, which is where a Mac with a full library
 # stalled its own Hub.
 _ADMISSION_TTL_SECONDS = 10.0
@@ -695,22 +710,11 @@ def admission(*, machine: str, max_bytes: int, retention_days: int, enabled: boo
     if result["used_bytes"] > max_bytes:
         return {"code": "OUTPUT_STORAGE_BLOCKED", "detail": "generated output cannot meet this device policy", "storage": result}
     has_managed_root = isinstance(managed_output_roots, list) and bool(managed_output_roots)
-    def short() -> bool:
-        return result["free_bytes"] is None or result["free_bytes"] < minimum_free_bytes
-    if minimum_free_bytes and has_managed_root and short() and result["free_bytes"] is not None:
-        # The Trash Folder shares this disk, so it must never be why work is refused: copies already
-        # scheduled for deletion go first, oldest day first, until the floor is met or none are left.
-        with _LOCK:
-            for day in _trash_days():
-                shutil.rmtree(day, ignore_errors=True)
-                result = preview(machine=machine, max_bytes=max_bytes, retention_days=retention_days,
-                                 enabled=enabled, managed_output_roots=managed_output_roots,
-                                 minimum_free_bytes=minimum_free_bytes)
-                if not short():
-                    break
-        _ADMISSION_SNAPSHOT[key] = (now, copy.deepcopy(result))
-    if minimum_free_bytes and has_managed_root and short():
-        return {"code": "OUTPUT_STORAGE_BLOCKED", "detail": "managed output storage has insufficient free space", "storage": result}
+    # ponytail: the Trash Folder shares this disk and is never emptied here (the owner empties it), so
+    # a full Trash Folder can be why work is refused; the disk warnings (`disk_governor`) name its size.
+    if minimum_free_bytes and has_managed_root and (
+            result["free_bytes"] is None or result["free_bytes"] < minimum_free_bytes):
+        return {"code": "OUTPUT_STORAGE_BLOCKED", "detail": f"managed output storage has insufficient free space; empty the Trash Folder ({trash_root()}) to free space", "storage": result}
     return None
 
 

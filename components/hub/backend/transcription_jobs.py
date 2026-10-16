@@ -1400,8 +1400,12 @@ def cleanup(batch_id: str | None = None, expired_only: bool = True) -> dict:
             continue
         batch_dir = ROOT / batch["id"]
         if batch_dir.exists():
-            reclaimed += sum(p.stat().st_size for p in batch_dir.rglob("*") if p.is_file())
-            shutil.rmtree(batch_dir)
+            # To the Hub's Trash Folder, never a delete; a move that fails keeps the batch for the next pass.
+            from .. import output_storage
+            size = sum(p.stat().st_size for p in batch_dir.rglob("*") if p.is_file())
+            if not output_storage.retire(batch_dir, "transcription"):
+                continue
+            reclaimed += size
         batch["storage_cleaned_at"] = now
         for item in batch["items"]:
             item["input_path"] = None

@@ -9,18 +9,23 @@ tier:
     red     free <   6%
     stop    free <   5 GB      (new work is refused; the existing admission floor does the refusing)
 
-Housekeeping with no value (temp and partial files, leftover release downloads, orphaned app
-copies, all but one previous app, the Trash Folder's age and size cap) runs in every tier. In amber
-and red the governor goes on, in this order, and stops the moment free space is back to green:
+Housekeeping (temp and partial files, leftover release downloads, orphaned app copies) runs in every
+tier. In amber and red the governor goes on, in this order, and stops the moment free space is back
+to green:
 
-    1 temp / partial files      4 Trash Folder, oldest first
-    2 logs                      5 orphans: snapshot views of absent models, partial model staging,
-    3 extra previous apps,        Hugging Face mirror entries of packages that are not installed
-      stale Updates, orphan     6 acked outputs, oldest first (red may take ones younger than the
+    1 temp / partial files      4 orphans: snapshot views of absent models, partial model staging,
+    2 logs                        Hugging Face mirror entries of packages that are not installed
+    3 stale Updates, orphan     5 acked outputs, oldest first (red may take ones younger than the
       .studiohub-old/-staged      retention window), then the finished transcription spool
 
-It NEVER touches an installed model, an output that is unacked or leased, or any `_trash` folder
-(those are the owner's to empty).
+Only scratch is deleted: temp and partial files, rotated logs, snapshot views (links into the
+library) and partial model staging. Everything else it retires - downloads, app copies, model
+mirrors, outputs, the spool - is MOVED into the Hub's Trash Folder (`output_storage.retire`), which
+frees no space on the same volume; a move that fails leaves the item where it is. The owner empties
+the Trash Folder through macOS Trash; the governor only reports its size against a cap.
+
+It NEVER touches an installed model, an output that is unacked or leased, or anything in the Hub's
+Trash Folder or any `_trash` folder (those are the owner's to empty).
 
 Sizes are PHYSICAL. An APFS clone shares blocks with the file it was cloned from (a previous app
 copy is usually a clone of the live app), so a logical size says nothing about what deleting it
@@ -58,7 +63,6 @@ STOP_BYTES = 5 * GB              # free below this: stop new work
 TRASH_CAP_BYTES = 15 * GB        # Trash Folder cap = min(this, TRASH_CAP_FRACTION of the disk), physical
 TRASH_CAP_FRACTION = 0.06
 HISTORY_DAYS = 90                # hub.db batch history
-PREVIOUS_APPS_KEPT = 1
 TEMP_IDLE_S = 6 * 3600           # a partial file untouched this long belongs to no running job
 ORPHAN_APP_IDLE_S = 3600         # .studiohub-old-* / .studiohub-staged-* / .studiohub-tmp-*
 STAGING_IDLE_S = 24 * 3600       # partial model download nobody has touched (green)
@@ -282,10 +286,19 @@ def _tree_mtime(path: Path) -> float:
 
 
 def _remove(run: _Run, step: str, path: Path, *, size: int | None = None) -> bool:
+    """Delete scratch only (temp and partial files, logs, snapshot views). Anything else: `_retire`."""
     size = cached_physical(path, time.time()) if size is None else size
     if _rmtree(path):
         run.note(step, size)
         _SIZE_CACHE.pop(str(path), None)
+        return True
+    return False
+
+
+def _retire(run: _Run, step: str, path: Path) -> bool:
+    """Move to the Trash Folder, never a delete. Counted, but 0 bytes: a same-volume move frees nothing."""
+    if output_storage.retire(path, step.replace(" ", "-")):
+        run.note(step, 0)
         return True
     return False
 
@@ -321,10 +334,10 @@ def _temp_files(ctx: Context, now: float, run: _Run, done: Callable[[], bool] | 
     except OSError:
         pass
     if ctx.app_root is not None:
-        _app_leftovers(ctx.app_root.parent, now, run, TMP_PREFIX, "temp files")
+        _app_leftovers(ctx.app_root.parent, now, run, TMP_PREFIX, "temp files", _remove)
 
 
-def _app_leftovers(parent: Path, now: float, run: _Run, prefix: str, step: str) -> None:
+def _app_leftovers(parent: Path, now: float, run: _Run, prefix: str, step: str, handle) -> None:
     try:
         names = [name for name in os.listdir(parent) if name.startswith(prefix)]
     except OSError:
@@ -332,7 +345,7 @@ def _app_leftovers(parent: Path, now: float, run: _Run, prefix: str, step: str) 
     for name in names:
         path = parent / name
         if not path.is_symlink() and now - _mtime(path) > ORPHAN_APP_IDLE_S:
-            _remove(run, step, path)
+            handle(run, step, path)
 
 
 def _logs(ctx: Context, run: _Run, severe: bool) -> None:
@@ -373,24 +386,14 @@ def _drop_empty_days() -> None:
             pass
 
 
-def _app_copies(run: _Run) -> None:
-    """Keep exactly one previous app; a release download left in the Trash Folder goes at once."""
-    entries = _trash_entries()
-    for _day, entry in entries:
-        if entry.name.startswith("release-download-"):
-            _remove(run, "release downloads", entry)
-    previous = [entry for _day, entry in entries if entry.name.startswith("previous-app-")]
-    for entry in previous[:max(0, len(previous) - PREVIOUS_APPS_KEPT)]:
-        _remove(run, "previous apps", entry)
-
-
 def _installed_app_present(app_root: Path | None) -> bool:
     return bool(app_root and (app_root / "Contents").is_dir())
 
 
 def _updates(ctx: Context, now: float, run: _Run, severe: bool) -> None:
     """`Updates/<key>/` holds a downloaded release. Only the newest can be a download in progress,
-    so older ones go; under space pressure the newest goes too once nothing has touched it for an hour."""
+    so older ones go to the Trash Folder; under space pressure the newest goes too once nothing has
+    touched it for an hour."""
     if ctx.base_dir is None:
         return
     updates = ctx.base_dir / "Updates"
@@ -401,39 +404,25 @@ def _updates(ctx: Context, now: float, run: _Run, severe: bool) -> None:
     for position, entry in enumerate(entries):
         newest = position == len(entries) - 1
         if not newest or (severe and now - _tree_mtime(entry) > ORPHAN_APP_IDLE_S):
-            _remove(run, "stale updates", entry)
+            _retire(run, "stale updates", entry)
 
 
 def _orphan_apps(ctx: Context, now: float, run: _Run) -> None:
     """An update that crashed between steps leaves a staged or moved-aside copy beside the app. They are
-    only removed while the installed app is whole: `.studiohub-old-*` can be the only copy of it."""
+    moved to the Trash Folder only while the installed app is whole: `.studiohub-old-*` can be the only copy of it."""
     if not _installed_app_present(ctx.app_root):
         return
     parent = ctx.app_root.parent
-    _app_leftovers(parent, now, run, OLD_PREFIX, "orphan app copies")
-    _app_leftovers(parent, now, run, STAGED_PREFIX, "orphan app copies")
+    _app_leftovers(parent, now, run, OLD_PREFIX, "orphan app copies", _retire)
+    _app_leftovers(parent, now, run, STAGED_PREFIX, "orphan app copies", _retire)
 
 
-def _trash(ctx: Context, now: float, run: _Run, total: int, done: Callable[[], bool] | None) -> None:
-    """The Trash Folder: age (15 days), then its size cap, then - when space is short - oldest first
-    until the disk is back to green. Sizes are physical, so a cloned previous app costs what it holds."""
-    output_storage.purge_trash(now)
-    entries = [(entry, cached_physical(entry, now)) for _day, entry in _trash_entries()]
-    for key in set(_SIZE_CACHE) - {str(entry) for entry, _size in entries}:
-        _SIZE_CACHE.pop(key, None)                        # gone from the Trash Folder: forget it
-    held = sum(size for _entry, size in entries)
-    cap = trash_cap_bytes(total)
-    for entry, size in entries:
-        over = held > cap
-        pressed = done is not None and not done()
-        if not (over or pressed):
-            break
-        if size <= 0:
-            continue                                      # frees nothing; the age rule will take it
-        if _rmtree(entry):
-            run.note("trash", size)
-            _SIZE_CACHE.pop(str(entry), None)
-            held -= size
+def _trash() -> None:
+    """The Trash Folder is the owner's to empty (macOS Trash): nothing in it is deleted. This only
+    forgets the sizes of entries that left it and drops dated folders that are already empty."""
+    entries = {str(entry) for _day, entry in _trash_entries()}
+    for key in set(_SIZE_CACHE) - entries:
+        _SIZE_CACHE.pop(key, None)
     _drop_empty_days()
 
 
@@ -499,13 +488,16 @@ def _orphans(ctx: Context, now: float, run: _Run, severe: bool, done: Callable[[
         mirrors = list((library / "hub").glob("models--*"))
     except OSError:
         mirrors = []
+    from components import library_ownership
+    if library_ownership.moving_into_temp(library, output_storage.trash_root()):
+        return                                            # never carry real weights into a throwaway folder
     for mirror in mirrors:
         repo = mirror.name.removeprefix("models--").replace("--", "/", 1)
         known = wanted.get(repo)
         if (known and mirror.is_dir() and not mirror.is_symlink()
                 and not _package_present(library, receipts, known[0], known[1])
                 and not _linked_into_library(mirror)):
-            _remove(run, "orphan model mirror", mirror)
+            _retire(run, "orphan model mirror", mirror)
 
 
 def _linked_into_library(mirror: Path) -> bool:
@@ -521,8 +513,9 @@ def _linked_into_library(mirror: Path) -> bool:
 
 
 def _acked_outputs(ctx: Context, now: float, run: _Run, severe: bool, done: Callable[[], bool]) -> None:
-    """Outputs the Gateway already holds, oldest first. Amber takes those past the retention window
-    (cleanup switched off by the operator stops that); red goes younger. Never unacked or leased."""
+    """Outputs the Gateway already holds, oldest first, to the Trash Folder. Amber takes those past the
+    retention window (cleanup switched off by the operator stops that); red goes younger. Never unacked
+    or leased. Counted with 0 bytes: the move frees nothing until the owner empties the Trash Folder."""
     settings = ctx.settings or {}
     if not severe and not settings.get("cleanup_enabled", True):
         return
@@ -530,10 +523,10 @@ def _acked_outputs(ctx: Context, now: float, run: _Run, severe: bool, done: Call
     for machine in ctx.machines:
         if done():
             return
-        freed, files = output_storage.reclaim_acked(machine=machine, min_age_seconds=min_age,
-                                                    done=done, now=now)
+        _moved, files = output_storage.reclaim_acked(machine=machine, min_age_seconds=min_age,
+                                                     done=done, now=now)
         if files:
-            run.note("acked outputs", freed, files)
+            run.note("acked outputs", 0, files)
 
 
 def _unregistered_outputs(ctx: Context, now: float, run: _Run, severe: bool) -> None:
@@ -554,13 +547,14 @@ def _unregistered_outputs(ctx: Context, now: float, run: _Run, severe: bool) -> 
 
 
 def _spool(ctx: Context, run: _Run, severe: bool, done: Callable[[], bool]) -> None:
-    """Finished transcription jobs' files, oldest first: amber halves the spool's own limit, red empties
-    what is finished. A job still queued or running is never eligible (`job_storage` guarantees it)."""
+    """Finished transcription jobs' files, oldest first, to the Trash Folder: amber halves the spool's own
+    limit, red empties what is finished. A job still queued or running is never eligible (`job_storage`
+    guarantees it). Counted with 0 bytes: the move frees nothing until the owner empties the Trash Folder."""
     if ctx.spool_limit is None or ctx.spool_enforce is None or done():
         return
     target = 0 if severe else int(ctx.spool_limit()) // 2
     result = ctx.spool_enforce(target)
-    run.note("transcription spool", result.get("reclaimed_bytes", 0), result.get("cleared", 0))
+    run.note("transcription spool", 0, result.get("cleared", 0))
 
 
 def _history(now: float, run: _Run) -> None:
@@ -595,13 +589,12 @@ def sweep(ctx: Context, *, now: float | None = None, startup: bool = False) -> d
             except Exception:
                 log.exception("disk governor step failed (continuing)")
 
-        # Every tier: things that have no value and cost real bytes.
+        # Every tier: scratch goes, retired copies move to the Trash Folder.
         guarded(lambda: _temp_files(ctx, now, run, None))
-        guarded(lambda: _app_copies(run))
         guarded(lambda: _updates(ctx, now, run, False))
         guarded(lambda: _orphan_apps(ctx, now, run))
         guarded(lambda: _unregistered_outputs(ctx, now, run, False))
-        guarded(lambda: _trash(ctx, now, run, usage.total, None))
+        guarded(_trash)
         if startup:
             guarded(lambda: _orphans(ctx, now, run, False, None))
         if now - _STATE["history_at"] >= HISTORY_EVERY_S or startup:
@@ -610,11 +603,12 @@ def sweep(ctx: Context, *, now: float | None = None, startup: bool = False) -> d
         # Amber and red: keep going, in order, until the disk is green again.
         severe = begin in ("red", "stop")
         if begin != "green" and not done():
+            # ponytail: the moves below free 0 bytes on one volume but are one-shot (a moved item is gone),
+            # so a repeated red sweep only re-scans; add a "nothing left to move" memo if the scan cost shows.
             ordered = [
                 lambda: _logs(ctx, run, severe),
                 lambda: _updates(ctx, now, run, True),
                 lambda: _unregistered_outputs(ctx, now, run, severe),
-                lambda: _trash(ctx, now, run, usage.total, done),
                 lambda: _orphans(ctx, now, run, severe, done),
                 lambda: _acked_outputs(ctx, now, run, severe, done),
                 lambda: _spool(ctx, run, severe, done),
@@ -713,18 +707,21 @@ def _swap_used_gb() -> float | None:
 def _warnings(state: str, free: int, total: int, last: dict | None, trash: int) -> list[str]:
     out = []
     percent = (100 * free / total) if total else 0
+    folder = output_storage.trash_root()
     if state == "stop":
-        out.append(f"Only {free / GB:.1f} GB is free ({percent:.1f}%). This Mac refuses new work until space is freed.")
+        out.append(f"Only {free / GB:.1f} GB is free ({percent:.1f}%). This Mac refuses new work until space is freed; "
+                   f"empty the Trash Folder ({folder}) to free space.")
     elif state == "red":
         out.append(f"Disk space is critically low: {free / GB:.1f} GB free ({percent:.1f}%). "
-                   f"Old files are being removed automatically.")
+                   f"Old files are being moved to the Trash Folder ({folder}); empty it to free space.")
     elif state == "amber":
         out.append(f"Disk space is getting low: {free / GB:.1f} GB free ({percent:.1f}%).")
     if state != "green" and last and last.get("tier") != "green":
         out.append("The last cleanup could not bring free space back to normal; what remains is "
                    "models, unacknowledged outputs or other files that are not removed automatically.")
     if trash > trash_cap_bytes(total) * 1.1:
-        out.append(f"The Trash Folder holds {trash / GB:.1f} GB, over its limit of {trash_cap_bytes(total) / GB:.1f} GB.")
+        out.append(f"The Trash Folder holds {trash / GB:.1f} GB, over its limit of {trash_cap_bytes(total) / GB:.1f} GB. "
+                   f"Nothing in it is deleted automatically; empty it to free space ({folder}).")
     return out
 
 

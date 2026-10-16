@@ -41,8 +41,8 @@ def retire_installed(library: str | os.PathLike[str], trash_root: str | os.PathL
                      now: float | None = None) -> list[str]:
     """Move each installed retired package's folder into the Trash Folder; return the package ids moved.
 
-    The Trash Folder is the Hub's self-cleaning one (``<data dir>/trash/<UTC date>/``, purged after 15
-    days). Nothing is deleted: a same-volume rename, and one that fails is skipped (tried again at the
+    The Trash Folder is the Hub's (``<data dir>/trash/<UTC date>/``, kept until the owner empties
+    it). Nothing is deleted: a same-volume rename, and one that fails is skipped (tried again at the
     next start). Only entries that are a plain package id (no ``/``) name a folder in the library; a
     repo id is skipped. Called at Hub start-up, so a Mac sheds a model the day the app that retires it
     is installed instead of carrying 17 GB of weights nothing offers.

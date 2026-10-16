@@ -256,9 +256,8 @@ for package_id in SHELVED:
     assert len(found) == 1 and (found[0] / 'rev' / 'weights.bin').read_text() == package_id, (package_id, found)
 assert standalone.shelve_installed_models() == [], 'a second start has nothing left to move'
 
-# ...it is the Hub's self-cleaning Trash Folder: the dated folder is purged after 15 days, not before.
-assert output_storage.purge_trash(time.time() + 14 * 86400) == 0 and (trash / today).is_dir()
-assert output_storage.purge_trash(time.time() + 16 * 86400) == 1 and not (trash / today).exists()
+# ...it is the Hub's Trash Folder, which the Hub never purges: only the owner empties it.
+assert not hasattr(output_storage, 'purge_trash') and (trash / today).is_dir()
 
 # Once moved, the catalog says "not on this Mac" - a state the app already reads as not installed, never invalid.
 for package_id in SHELVED:

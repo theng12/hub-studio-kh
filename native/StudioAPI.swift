@@ -1590,7 +1590,8 @@ struct NativeStoragePreview: Decodable, Equatable {
 
 struct NativeTrash: Decodable, Equatable {
     let bytes: Int64
-    let days: Int
+    /// Sent only by a Hub that still emptied its Trash Folder by age; a current Hub never does.
+    let days: Int?
 }
 
 struct NativeMachineUsage: Decodable, Equatable, Identifiable {
@@ -7980,10 +7981,10 @@ final class NativeWorkspaceStore: ObservableObject {
                     landed = try await Task.detached(priority: .userInitiated) { try swap(staged, descriptor) }.value
                 } catch {
                     // A staged app that would not verify or swap is not offered again as it is.
-                    Self.removeStagingFolder(of: staged)
+                    retireStagingFolder(of: staged)
                     throw error
                 }
-                Self.removeStagingFolder(of: staged)
+                retireStagingFolder(of: staged)
             } else if let artifact {
                 releaseProgress = "Installing \(descriptor.version) (\(descriptor.build)) — copying the app, which takes a minute or two…"
                 // Mounting the image and copying a multi-gigabyte bundle is blocking work; on the main
@@ -8031,24 +8032,26 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     /// After a completed install, everything under `Updates/` - the download just installed and any
-    /// older one an earlier attempt left - is deleted at once. It is a 1.9 GB copy of an app that is
-    /// already installed, so nothing is gained by keeping it for the Trash Folder's 15 days (nothing
-    /// pruned these before, and each full download built up for good). A delete that fails leaves the
-    /// download where it is; the Hub's disk governor removes any left over (`disk_governor.py`).
+    /// older one an earlier attempt left - goes to the Hub's Trash Folder at once (`HubTrash.retire`:
+    /// macOS Trash if that move fails, never a delete). The owner empties it (owner request 2026-10-15).
+    /// One that cannot move stays where it is; the Hub's disk governor moves any left over.
     func retireReleaseArtifacts() {
         guard let base = dataDirectory else { return }
         let updates = base.appendingPathComponent("Updates", isDirectory: true)
         let entries = (try? FileManager.default.contentsOfDirectory(at: updates, includingPropertiesForKeys: nil)) ?? []
-        for entry in entries { try? FileManager.default.removeItem(at: entry) }
+        for entry in entries { HubTrash.retire(entry, into: hubTrash, label: "release-download") }
     }
 
+    private var hubTrash: URL? { dataDirectory?.appendingPathComponent("hub/trash", isDirectory: true) }
+
     /// The folder the Hub staged an update in (`.studiohub-staged-<id>`, beside the installed app),
-    /// removed once the app inside has been swapped in or has failed to be. Only a folder with that
+    /// retired once the app inside has been swapped in or has failed to be: removed only when it is
+    /// empty, otherwise moved like any retired file (`HubTrash.retire`). Only a folder with that
     /// name is touched, whatever path a Hub answers with.
-    private static func removeStagingFolder(of staged: URL) {
+    private func retireStagingFolder(of staged: URL) {
         let folder = staged.deletingLastPathComponent()
         guard folder.lastPathComponent.hasPrefix(".studiohub-staged-") else { return }
-        try? FileManager.default.removeItem(at: folder)
+        if rmdir(folder.path) != 0 { HubTrash.retire(folder, into: hubTrash, label: "update-staging") }
     }
 
     /// Ask this Mac's own Hub to build the offered release from the installed app plus the files

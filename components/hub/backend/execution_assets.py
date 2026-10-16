@@ -302,6 +302,7 @@ def delete(asset_id: str) -> bool:
 
 
 def cleanup_expired(now: float | None = None) -> int:
+    from .. import output_storage
     with _MUTATION_LOCK:
         current = time.time() if now is None else now
         removed = 0
@@ -315,7 +316,6 @@ def cleanup_expired(now: float | None = None) -> int:
                 expires_at = _expires_at(metadata)
             except ExecutionAssetError:
                 continue  # An unreadable deadline cannot establish expiry.
-            if expires_at <= current:
-                shutil.rmtree(child, ignore_errors=True)
+            if expires_at <= current and output_storage.retire(child, "staged-voice-copy"):
                 removed += 1
         return removed

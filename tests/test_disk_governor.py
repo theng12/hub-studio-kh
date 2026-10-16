@@ -151,18 +151,22 @@ class TierTests(unittest.TestCase):
 
 
 class TrashTests(Fixture):
-    def test_the_cap_counts_physical_bytes_so_a_clone_is_not_a_reason_to_delete(self):
-        old = self.trash(5, "batch-old", 40)
-        self.trash(4, f"{CLONE}aaaa", 400)                          # 400 logical bytes, all shared with the app
-        self.trash(1, "batch-new", 30)
-        self.set_free(500)                                          # green
-        # logical total 470 > cap 60, physical total 70 > 60: only the oldest real file has to go
-        result = dg.sweep(self.ctx())
-        self.assertFalse(old.exists(), "the oldest real entry should go first")
-        self.assertTrue((self.hub / "trash" / day_name(4) / f"{CLONE}aaaa").exists(),
-                        "a clone with no private bytes was deleted for a size it does not cost")
-        self.assertTrue((self.hub / "trash" / day_name(1) / "batch-new").exists())
-        self.assertEqual([a["step"] for a in result["actions"]], ["trash"])
+    def trash_files(self) -> list:
+        return sorted(p.relative_to(self.hub / "trash") for p in (self.hub / "trash").rglob("*") if p.is_file())
+
+    def test_nothing_in_the_trash_folder_is_ever_removed(self):
+        """Not by age, the size cap, disk pressure, or as an extra previous app or a release download:
+        the owner empties the Trash Folder through macOS Trash (owner request 2026-10-15)."""
+        for offset, name in ((400, "ancient"), (16, "old"), (6, "previous-app-1"), (4, "previous-app-2"),
+                             (2, "previous-app-3"), (0, "release-download-9")):
+            self.trash(offset, name, 30)
+        before = self.trash_files()
+        for free in (500, 100, 55, 30):                             # green, amber, red, stop; 90 physical > cap 60
+            self.set_free(free)
+            result = dg.sweep(self.ctx())
+            self.assertEqual(self.trash_files(), before, free)
+            self.assertEqual(result["actions"], [], free)
+        self.assertTrue(any("over its limit" in w and "empty it" in w for w in dg.snapshot(self.hub)["warnings"]))
 
     def test_trash_bytes_reports_physical_not_logical_size(self):
         self.trash(1, f"{CLONE}bbbb", 400)
@@ -171,36 +175,6 @@ class TrashTests(Fixture):
         dg._SIZE_CACHE.clear()
         with mock.patch.object(ledger, "DATA_DIR", self.hub):
             self.assertEqual(output_storage.trash_bytes(), 25)
-
-    def test_oldest_first_down_to_the_cap(self):
-        a = self.trash(6, "a", 30)
-        b = self.trash(5, "b", 30)
-        c = self.trash(4, "c", 30)                                  # 90 > 60: only the oldest goes
-        self.set_free(500)
-        dg.sweep(self.ctx())
-        self.assertFalse(a.exists())
-        self.assertTrue(b.exists() and c.exists())
-
-    def test_exactly_one_previous_app_is_kept_and_release_downloads_go_at_once(self):
-        self.set_free(500)
-        for offset, name in ((6, "previous-app-1"), (4, "previous-app-2"), (2, "previous-app-3")):
-            self.trash(offset, name, 5)
-        download = self.trash(0, "release-download-9", 5)           # today's: no waiting for 15 days
-        result = dg.sweep(self.ctx())
-        left = sorted(p.name for p in (self.hub / "trash").rglob("previous-app-*"))
-        self.assertEqual(left, ["previous-app-3"])
-        self.assertFalse(download.exists())
-        steps = {a["step"]: a["count"] for a in result["actions"]}
-        self.assertEqual(steps["previous apps"], 2)
-        self.assertEqual(steps["release downloads"], 1)
-
-    def test_a_trash_day_older_than_15_days_is_purged(self):
-        self.set_free(500)
-        old = self.trash(16, "x", 1)
-        keep = self.trash(14, "y", 1)
-        dg.sweep(self.ctx())
-        self.assertFalse(old.exists())
-        self.assertTrue(keep.exists())
 
 
 class AppLeftoverTests(Fixture):
@@ -213,6 +187,11 @@ class AppLeftoverTests(Fixture):
         fresh = self.put(self.apps / ".studiohub-staged-3333" / "f", 9)            # an update in progress
         dg.sweep(self.ctx())
         self.assertFalse(stale_old.exists() or stale_staged.exists())
+        trash = self.hub / "trash" / day_name(0)
+        for name in (".studiohub-old-1111", ".studiohub-staged-2222"):
+            moved = list(trash.glob(f"orphan-app-copies-*/{name}"))
+            self.assertEqual(len(moved), 1, f"{name} was deleted, not moved to the Trash Folder")
+            self.assertTrue((moved[0] / "Studio Hub.app" / "f").is_file())
         self.assertTrue(fresh.exists(), "an update that is running right now was deleted")
 
     def test_an_old_copy_is_kept_when_the_installed_app_is_not_there(self):
@@ -235,6 +214,29 @@ class AppLeftoverTests(Fixture):
         self.set_free(45)                                            # stop tier
         dg.sweep(self.ctx())
         self.assertFalse(newest.exists())
+        moved = sorted(p.parent.name for p in (self.hub / "trash").rglob("a.dmg"))
+        self.assertEqual(moved, ["k1", "k2"], "a stale download was deleted, not moved to the Trash Folder")
+
+    def test_a_retirement_that_cannot_move_never_deletes(self):
+        """Another volume (EXDEV) or any failed rename: the item stays where it is. Nothing falls back
+        to a delete - not app copies, downloads, model mirrors, acked outputs."""
+        import errno
+        old_copy = self.put(self.apps / ".studiohub-old-5555" / "f", 9).parent
+        self.age_tree(old_copy, 2 * 3600)
+        download = self.age_tree(self.put(self.base / "Updates" / "k1" / "a.dmg", 5).parent, 5 * DAY)
+        self.age_tree(self.put(self.base / "Updates" / "k2" / "a.dmg", 5).parent, 3 * 3600)
+        mirror = self.put(self.library / "hub" / "models--org--gone" / "blobs" / "b", 10).parent.parent
+        acked = self.add_output("acked.png", 10, age_days=5, acked=True)
+        self.set_free(30)                                            # stop: every step runs
+        refused = OSError(errno.EXDEV, "Cross-device link")
+        deletes = []                                                 # recorded, not raised: a step's error is swallowed
+        with mock.patch.object(os, "rename", side_effect=refused), \
+                mock.patch.object(dg.shutil, "rmtree", side_effect=lambda *a, **k: deletes.append(a[0])), \
+                mock.patch.object(os, "unlink", side_effect=lambda *a, **k: deletes.append(a[0])):
+            dg.sweep(self.ctx(manifests=[{"package_id": "gone", "model_id": "org/gone", "revision": "b" * 40}]))
+        self.assertEqual(deletes, [], "a retirement whose move failed fell back to a delete")
+        for path in (old_copy / "f", download / "a.dmg", mirror / "blobs" / "b", acked):
+            self.assertTrue(path.is_file(), f"{path} was deleted when its move failed")
 
 
 class TempFileTests(Fixture):
@@ -285,23 +287,28 @@ class OrderTests(Fixture):
         leased = self.add_output("leased.png", 10, age_days=1, acked=True, batch="leased-batch")
         release = output_storage.acquire_reader(batch_id="leased-batch", item_index=0)
         self.addCleanup(release)
-        # Everything removable is 110 bytes. Start at 5 free (stop tier); after the last step free is 115,
-        # still amber (< 120), so the disk never turns green early and no step is skipped.
-        removable = 10 + 10 + 10 + 20 + 20 + 10 + 10 + 10 + 10
+        # Only scratch is deleted (logs 10 + 10 truncated, snapshot view 10, partial staging 10 = 40 bytes);
+        # the rest moves to the Trash Folder on the same disk and frees nothing. Start at 5 free (stop).
         self.set_free(5)
-        self.assertLess(5 + removable, 120, "fixture error: the disk would go green before the last step")
+        trash_before = sorted(p for p in (self.hub / "trash").rglob("*") if p.is_file())
         result = dg.sweep(self.ctx(manifests=manifests))
 
         order = [a["step"] for a in result["actions"]]
-        self.assertEqual(order, ["logs", "stale updates", "trash", "orphan snapshot views",
+        self.assertEqual(order, ["logs", "stale updates", "orphan snapshot views",
                                  "partial model downloads", "orphan model mirror", "acked outputs"])
         self.assertTrue(live_view.exists(), "a snapshot view of an installed model was removed")
         self.assertFalse(orphan_view.exists() or staging.exists() or mirror.exists() or acked.exists())
+        trash = self.hub / "trash"
+        for pattern in ("stale-updates-*/k1/a.dmg", "orphan-model-mirror-*/models--org--gone/blobs/b"):
+            self.assertEqual(len(list((trash / day_name(0)).glob(pattern))), 1, f"{pattern} was deleted, not moved")
+        self.assertEqual(len(list(trash.rglob("*-acked.png"))), 1, "an acked output was deleted, not moved")
+        self.assertTrue(set(trash_before) <= set(trash.rglob("*")), "something already in the Trash Folder was removed")
         self.assertTrue((self.library / "pkg-a" / ("a" * 40) / "model" / "w.bin").exists(), "an installed model was touched")
         self.assertTrue((self.library / "_trash" / "x" / "f").exists(), "a _trash folder was touched")
         self.assertTrue(unacked.exists(), "an unacknowledged output was reclaimed")
         self.assertTrue(leased.exists(), "a leased output was reclaimed")
-        self.assertEqual(result["tier"], "amber")
+        self.assertEqual(result["tier"], "stop")                    # moves free nothing until the owner empties it
+        self.assertEqual(result["reclaimed_bytes"], 40)
         self.assertTrue(any("could not bring" in w for w in dg.snapshot(self.hub)["warnings"]))
 
     def test_acked_outputs_younger_than_the_retention_window_only_at_red(self):
@@ -404,7 +411,7 @@ class SnapshotTests(Fixture):
         with mock.patch.object(dg, "_swap_used_gb", return_value=3.5):
             dg.sweep(self.ctx(), startup=True)
             disk = dg.snapshot(self.hub)
-        self.assertEqual(disk["state"], "green")                    # the sweep gave the Trash Folder back
+        self.assertEqual(disk["state"], "amber")                    # the Trash Folder is the owner's to empty
         for key in ("state", "free_gb", "total_gb", "trash_gb", "consumers", "top", "swap_used_gb",
                     "last_sweep", "warnings"):
             self.assertIn(key, disk)
