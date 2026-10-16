@@ -1,11 +1,19 @@
 import base64
+import hashlib
+import io
 import json
 import logging
+import os
+import shutil
+import threading
+import time
+import wave
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import fleet_auth, job_details, main
+from backend import fleet_auth, generation, job_details, main, tts_quality
 from backend.generation import GenerationJob, GenerationManager
 from backend.job_details import JobMediaError, build_job_details, resolve_job_media
 
@@ -406,3 +414,354 @@ def test_fleet_detail_and_media_errors_always_set_private_no_store_headers(
         assert response.headers["cache-control"] == "no-store, private, max-age=0"
         assert response.headers["pragma"] == "no-cache"
         assert response.headers["x-content-type-options"] == "nosniff"
+
+
+# ── Rejected-section review candidates ────────────────────────────────────────────────────────
+
+# Pronom PR0010 Mark, Chapter 05 part 1, internal Section 6 of 7 (203 code points, 80 marks).
+KHMER_SECTION = (
+    "វិបុលបានស្តាប់ឮការពិតដ៏រន្ធត់នេះ ប៉ុន្តែគាត់មិនអាចនិយាយតបតអ្វីបានទៀតទេ។ "
+    "បំពង់ករបស់គាត់ប្រែជាតូច ហើយគាត់អាចបញ្ចេញបានត្រឹមតែសំឡេងយំខ្សាវៗតែប៉ុណ្ណោះ។ "
+    "សម្លៀកបំពាក់មនុស្សចាស់បានគ្របដណ្តប់លើខ្លួនគាត់ទាំងស្រុង។"
+)
+REVIEW_JOB = "c85e8c5d0a1b"
+SILENT = {"voiced_s": 2.54, "min_voiced_s": 4.06, "characters": 203,
+          "accepted": False, "rejection_code": "TTS_SECTION_SILENT"}
+
+
+def wav_bytes(frames: int = 2400, rate: int = 24000) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(b"\x01\x02" * frames)
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def review(tmp_path, monkeypatch):
+    """A manager whose final Section 6 render is refused, run through the real outer runner."""
+    monkeypatch.setattr(generation, "REVIEW_ROOT", tmp_path / "private-jobs" / "rejected-sections")
+    monkeypatch.setattr(generation, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(generation, "HISTORY_FILE", tmp_path / "output" / ".history.json")
+    monkeypatch.setattr(generation, "TTS_AVAILABLE", True)
+    monkeypatch.setattr(fleet_auth, "load_token", lambda: "fleet-secret")
+    manager = GenerationManager.__new__(GenerationManager)
+    manager._lock = threading.RLock()
+    manager._jobs = {}
+    manager._restart_scheduled = False
+    manager._consecutive_memory_failures = 0
+    manager._last_model_activity_at = None
+    for name in ("_validate_qwen_reference_locked", "_evict_loaded_models",
+                 "_finish_native_resource_usage"):
+        monkeypatch.setattr(manager, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(manager, "has_loaded_model", lambda: False)
+    monkeypatch.setattr(manager, "_section_transcript_locked",
+                        lambda *args, **kwargs: (None, "script", None))
+    monkeypatch.setattr(tts_quality, "audio_metrics", lambda path: {})
+
+    def refuse(*args, **kwargs):
+        raise tts_quality.SectionQualityError("TTS_SECTION_SILENT", "came out silent", dict(SILENT))
+
+    monkeypatch.setattr(tts_quality, "check_section", refuse)
+    model = SimpleNamespace(family="voxcpm-mlx", repo="mlx-community/VoxCPM2-4bit")
+    pcm = wav_bytes()
+    state = {"pcm": pcm, "barrier": None, "manager": manager, "tmp": tmp_path}
+
+    def dispatch(job, output_path, *, attempt=tts_quality.SECTION_RETRIES, at_barrier=None,
+                 symlink=False):
+        workspace = tmp_path / f"voice_sections_{job.job_id}"
+        workspace.mkdir()
+        segment = workspace / "section_006.wav"
+        (workspace / "real.wav" if symlink else segment).write_bytes(pcm)
+        if symlink:
+            segment.symlink_to(workspace / "real.wav")
+        job.section_quality = {"revision": tts_quality.REVISION, "sections": [
+            {"section": 6, "attempt": n, **SILENT} for n in range(1, attempt + 1)]}
+        try:
+            manager._section_accepted_locked(job, model, KHMER_SECTION, segment, 6, 7, attempt)
+        except tts_quality.SectionQualityError:
+            if at_barrier:
+                state["barrier"] = at_barrier(job)
+            raise
+        finally:
+            shutil.rmtree(workspace)   # the worker's own workspace cleanup
+
+    def run(job_id=REVIEW_JOB, **kwargs):
+        job = GenerationJob(job_id, "txt2speech", {
+            "repo": model.repo, "text": KHMER_SECTION, "voice_library_id": "voice-af496dcef199",
+            "speed": 1.0, "client_request_id": "studiohub:batch-1:0", "token": "private",
+            "_reference_audio_sha256": "e" * 64,
+        })
+        manager._jobs[job.job_id] = job
+        monkeypatch.setattr(manager, "_dispatch_txt2speech",
+                            lambda job, output_path: dispatch(job, output_path, **kwargs))
+        manager._run_txt2speech(job)
+        return job
+
+    state["run"] = run
+    return state
+
+
+def review_folder(state, job_id=REVIEW_JOB):
+    return generation.REVIEW_ROOT / job_id
+
+
+def test_review_candidate_is_published_only_after_the_terminal_error_is_durable(review):
+    def barrier(job):
+        folder = review_folder(review)
+        with pytest.raises(JobMediaError, match="review_candidate_not_found"):
+            job_details.review_candidate_details(REVIEW_JOB, "fleet-secret")
+        return {"state": job.state, "pcm": (folder / "section.wav").read_bytes(),
+                "receipt": (folder / "receipt.json").exists(), "pending": job.review_pending is not None}
+
+    job = review["run"](at_barrier=barrier)
+
+    assert review["barrier"] == {"state": "running", "pcm": review["pcm"],
+                                 "receipt": False, "pending": True}
+    assert job.state == "error" and job.error_code == "TTS_SECTION_SILENT"
+    assert job.error.startswith("SectionQualityError: Section 6 of 7 came out silent on all 4 attempts")
+    assert job.output_path is None and job.review_pending is None
+    details = job_details.review_candidate_details(REVIEW_JOB, "fleet-secret", now=100)
+    receipt = details["receipt"]
+    assert receipt["active"] is False and receipt["disposition"] == "review_only"
+    assert receipt["worker_job_id"] == REVIEW_JOB
+    assert receipt["client_request_id"] == "studiohub:batch-1:0"
+    assert receipt["section"] == {
+        "index": 6, "total": 7, "attempt": 4, "text": KHMER_SECTION, "codepoints": 203,
+        "utf8_bytes": 601,
+        "text_sha256": "711790fe1d97d3597641a0244f84d25b0c9aaf5db11afa6d7b44c210c44cc607",
+    }
+    final = job.section_quality["sections"][-1]
+    assert "check_seconds" in final and receipt["quality"]["final"] == final
+    assert receipt["quality"]["rejection_code"] == "TTS_SECTION_SILENT"
+    assert receipt["settings"]["voice_library_id"] == "voice-af496dcef199"
+    assert receipt["revisions"] == {"reference_audio_sha256": "e" * 64}
+    assert receipt["audio"] == {
+        "media_type": "audio/wav", "bytes": len(review["pcm"]),
+        "sha256": hashlib.sha256(review["pcm"]).hexdigest(),
+        "sample_rate_hz": 24000, "channels": 1, "duration_s": 0.1,
+    }
+    terminal = receipt["terminal"]
+    assert terminal["state"] == "error" and terminal["finished_at"] == job.finished_at
+    assert terminal["error_sha256"] == hashlib.sha256(job.error.encode()).hexdigest()
+    assert terminal["final_quality_sha256"] == generation.review_sha256(final)
+    history = json.loads(generation.HISTORY_FILE.read_text())["jobs"][0]
+    assert history["state"] == "error" and history["section_quality"]["sections"][-1] == final
+    serialized = json.dumps(details)
+    for private in ("private", str(review["tmp"]), "fleet-secret"):
+        assert private not in serialized
+    folder = review_folder(review)
+    assert sorted(os.listdir(folder)) == ["receipt.json", "section.wav"]
+    assert oct(os.stat(folder).st_mode & 0o777) == "0o700"
+    for name in ("receipt.json", "section.wav"):
+        assert oct(os.stat(folder / name).st_mode & 0o777) == "0o600"
+
+
+def test_between_the_visible_error_and_the_receipt_the_worker_says_pending(review, monkeypatch):
+    """The Hub sees `error` first; until the receipt is durable it must hear "ask again", not 404."""
+    monkeypatch.setattr(main, "gen_manager", review["manager"])
+    client = TestClient(main.app, headers={"X-Studio-Token": "fleet-secret", "host": "worker.example"})
+    route = f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate"
+    seen = []
+
+    def ask(stage):
+        response = client.get(route)
+        seen.append((stage, review["manager"]._jobs[REVIEW_JOB].state, response.status_code,
+                     response.json().get("detail")))
+
+    monkeypatch.setattr(review["manager"], "_evict_loaded_models", lambda *args, **kwargs: ask("evicting"))
+    readback = generation._durable_history_row
+    monkeypatch.setattr(generation, "_durable_history_row",
+                        lambda job_id: (ask("history readback"), readback(job_id))[1])
+
+    review["run"]()
+
+    pending = {"code": "review_candidate_pending"}
+    assert seen == [("evicting", "error", 409, pending), ("history readback", "error", 409, pending)]
+    assert client.get(route).status_code == 200
+    assert client.get("/api/fleet/jobs/ffffffffffff/review-candidate").status_code == 404
+
+
+def test_a_refused_publication_stops_saying_pending(review, monkeypatch):
+    monkeypatch.setattr(main, "gen_manager", review["manager"])
+    client = TestClient(main.app, headers={"X-Studio-Token": "fleet-secret", "host": "worker.example"})
+
+    def mutate(job):
+        with open(review_folder(review) / "section.wav", "ab") as handle:
+            handle.write(b"x")
+
+    review["run"](at_barrier=mutate)
+
+    assert review["manager"]._jobs[REVIEW_JOB].review_pending is None
+    assert client.get(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate").json() == {
+        "detail": {"code": "review_candidate_not_found"}}
+
+
+@pytest.mark.parametrize("crash", ("staged", "receipt_tmp", "partial_receipt"))
+def test_a_crash_before_the_receipt_never_makes_a_candidate_readable(review, crash, monkeypatch):
+    monkeypatch.setattr(GenerationManager, "_publish_review_candidate",
+                        staticmethod(lambda job, persisted: None))   # the process died here
+    review["run"]()
+    folder = review_folder(review)
+    if crash == "receipt_tmp":
+        (folder / "receipt.json.tmp").write_text("{}")
+    if crash == "partial_receipt":
+        (folder / "receipt.json").write_text('{"schema": "studiohub.rejected-voice-review')
+
+    restarted = GenerationManager.__new__(GenerationManager)
+    restarted._lock = threading.RLock()
+    restarted._jobs = {}
+    restarted._load_history()   # a new process: nothing infers, promotes or repairs the folder
+
+    assert restarted._jobs[REVIEW_JOB].state == "error"
+    with pytest.raises(JobMediaError, match="review_candidate_not_found"):
+        job_details.review_candidate_details(REVIEW_JOB, "fleet-secret")
+    assert (folder / "section.wav").read_bytes() == review["pcm"]
+
+
+@pytest.mark.parametrize("attempt", (0, 1, 2))
+def test_earlier_attempts_capture_nothing(review, attempt, tmp_path, monkeypatch):
+    segment = tmp_path / "section_006.wav"
+    segment.write_bytes(review["pcm"])
+    job = GenerationJob(REVIEW_JOB, "txt2speech", {"text": KHMER_SECTION}, state="running")
+    job.section_quality = {"revision": tts_quality.REVISION, "sections": []}
+    review["manager"]._jobs[REVIEW_JOB] = job
+    model = SimpleNamespace(family="voxcpm-mlx", repo="mlx-community/VoxCPM2-4bit")
+
+    accepted = review["manager"]._section_accepted_locked(
+        job, model, KHMER_SECTION, segment, 6, 7, attempt)
+
+    assert accepted is False and job.review_pending is None
+    assert not generation.REVIEW_ROOT.exists()
+
+
+def test_a_cancelled_job_never_publishes_its_staged_candidate(review):
+    def cancel(job):
+        job.cancel_event.set()
+
+    job = review["run"](at_barrier=cancel)
+
+    assert job.state == "cancelled"
+    assert not (review_folder(review) / "receipt.json").exists()
+    with pytest.raises(JobMediaError):
+        job_details.review_candidate_details(REVIEW_JOB, "fleet-secret")
+
+
+def test_capture_refusals_keep_the_original_quality_error(review, monkeypatch):
+    job = review["run"](job_id="not-hex-job")
+    assert job.error_code == "TTS_SECTION_SILENT" and not generation.REVIEW_ROOT.exists()
+
+    generation.REVIEW_ROOT.mkdir(parents=True)
+    for n in range(generation.REVIEW_MAX_ENTRIES):
+        (generation.REVIEW_ROOT / f"{n:012x}").mkdir()
+    job = review["run"](job_id="aaaaaaaaaaaa")
+    assert job.error_code == "TTS_SECTION_SILENT"
+    assert not (generation.REVIEW_ROOT / "aaaaaaaaaaaa").exists()
+
+    shutil.rmtree(generation.REVIEW_ROOT)
+    monkeypatch.setattr(generation, "REVIEW_MAX_PCM_BYTES", len(review["pcm"]) - 1)
+    job = review["run"](job_id="bbbbbbbbbbbb")
+    assert job.error_code == "TTS_SECTION_SILENT"
+    assert not (generation.REVIEW_ROOT / "bbbbbbbbbbbb").exists()
+
+
+def test_an_existing_folder_is_never_replaced(review):
+    existing = review_folder(review)
+    existing.mkdir(parents=True)
+    (existing / "section.wav").write_bytes(b"owner kept this")
+
+    job = review["run"]()
+
+    assert job.error_code == "TTS_SECTION_SILENT"
+    assert sorted(os.listdir(existing)) == ["section.wav"]
+    assert (existing / "section.wav").read_bytes() == b"owner kept this"
+
+
+def test_a_symlinked_root_or_source_is_refused(review, tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    generation.REVIEW_ROOT.parent.mkdir(parents=True)
+    generation.REVIEW_ROOT.symlink_to(outside, target_is_directory=True)
+    review["run"]()
+    assert os.listdir(outside) == []
+
+    generation.REVIEW_ROOT.unlink()
+    job = review["run"](job_id="cccccccccccc", symlink=True)
+    assert job.error_code == "TTS_SECTION_SILENT"
+    assert not (generation.REVIEW_ROOT / "cccccccccccc").exists()
+
+
+def test_a_mutated_or_moved_staged_pcm_is_never_published(review):
+    def mutate(job):
+        with open(review_folder(review) / "section.wav", "ab") as handle:
+            handle.write(b"x")
+
+    review["run"](at_barrier=mutate)
+    assert not (review_folder(review) / "receipt.json").exists()
+
+    def move(job):
+        shutil.move(review_folder(review, "dddddddddddd"), review["tmp"] / "_trash-moved")
+        review_folder(review, "dddddddddddd").mkdir()
+
+    review["run"](job_id="dddddddddddd", at_barrier=move)
+    assert not (review_folder(review, "dddddddddddd") / "receipt.json").exists()
+
+
+def test_review_candidate_http_contract(review, monkeypatch):
+    review["run"]()
+    review["manager"]._jobs.clear()   # cleared Voice history is not the authority
+    monkeypatch.setattr(main, "gen_manager", review["manager"])
+    assert TestClient(main.app).get(
+        f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate", headers={"host": "worker.example"},
+    ).status_code == 401
+    client = TestClient(main.app, headers={"X-Studio-Token": "fleet-secret", "host": "worker.example"})
+
+    details = client.get(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate")
+    assert details.status_code == 200
+    handle = details.json()["media"]["handle"]
+    media = client.get(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate/media/{handle}")
+    assert media.status_code == 200 and media.content == review["pcm"]
+    assert media.headers["content-type"] == "audio/wav"
+    assert media.headers["content-length"] == str(len(review["pcm"]))
+    assert media.headers["x-content-sha256"] == hashlib.sha256(review["pcm"]).hexdigest()
+    assert media.headers["content-disposition"].startswith("inline;")
+
+    expired = job_details._make_handle(REVIEW_JOB, job_details.REVIEW_KIND, 0, time.time() - 1, "fleet-secret")
+    other = job_details._make_handle("eeeeeeeeeeee", job_details.REVIEW_KIND, 0, time.time() + 60, "fleet-secret")
+    output_kind = job_details._make_handle(REVIEW_JOB, "output", 0, time.time() + 60, "fleet-secret")
+    answers = {
+        "tampered": client.get(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate/media/{handle}x"),
+        "expired": client.get(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate/media/{expired}"),
+        "cross_job": client.get(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate/media/{other}"),
+        "output_kind": client.get(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate/media/{output_kind}"),
+        "missing": client.get("/api/fleet/jobs/ffffffffffff/review-candidate"),
+        "traversal": client.get("/api/fleet/jobs/..%2F..%2Foutput/review-candidate"),
+        "post": client.post(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate"),
+        "delete": client.delete(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate"),
+    }
+    assert {name: response.status_code for name, response in answers.items()} == {
+        "tampered": 403, "expired": 410, "cross_job": 403, "output_kind": 403,
+        "missing": 404, "traversal": 404, "post": 405, "delete": 405,
+    }
+    for response in (details, media, *answers.values()):
+        assert response.headers["cache-control"] == "no-store, private, max-age=0"
+    # A review handle never opens the ordinary media route either.
+    review["manager"]._jobs[REVIEW_JOB] = GenerationJob(REVIEW_JOB, "txt2speech", {}, state="error")
+    assert client.get(f"/api/fleet/jobs/{REVIEW_JOB}/media/{handle}").status_code == 403
+
+    (review_folder(review) / "section.wav").write_bytes(b"RIFF" + b"\0" * (len(review["pcm"]) - 4))
+    assert client.get(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate").status_code == 404
+    assert client.get(f"/api/fleet/jobs/{REVIEW_JOB}/review-candidate/media/{handle}").status_code == 404
+
+
+def test_owner_move_to_trash_ends_access_without_deleting_bytes(review, tmp_path):
+    review["run"]()
+    trash = tmp_path / "_trash" / "rejected-sections"
+    trash.mkdir(parents=True)
+    shutil.move(review_folder(review), trash / REVIEW_JOB)
+
+    with pytest.raises(JobMediaError, match="review_candidate_not_found"):
+        job_details.review_candidate_details(REVIEW_JOB, "fleet-secret")
+    assert (trash / REVIEW_JOB / "section.wav").read_bytes() == review["pcm"]

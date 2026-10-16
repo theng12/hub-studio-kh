@@ -3280,6 +3280,108 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return StreamingResponse(response.aiter_bytes(1024 * 1024), media_type=media_type,
                                  headers=headers, background=BackgroundTask(close_stream))
 
+    review_no_store = {"Cache-Control": "no-store, private, max-age=0", "Pragma": "no-cache",
+                       "X-Content-Type-Options": "nosniff"}
+
+    async def review_candidate_source(batch_id: str, item_index: int):
+        """The protected locator, its worker now, and that worker's freshly re-proved answer.
+
+        Never the ordinary batch: a cleared or compacted batch keeps its candidate reachable, and
+        nothing a caller sends (worker, URL, handle, credential) is used to find it.
+        """
+        from .backend.peers import studio_request
+        locator = ledger.review_locator(batch_id, item_index)
+        if locator is None:
+            raise HTTPException(404, "this item has no review candidate")
+        worker = next((row for row in monitor.registry if row["id"] == locator["studio"]), None)
+        if worker is None:
+            raise HTTPException(503, "the Voice Studio holding this review candidate is not connected")
+        url, headers = studio_request(
+            worker, f"/api/fleet/jobs/{locator['worker_job_id']}/review-candidate")
+        try:
+            async with httpx.AsyncClient(follow_redirects=False) as client:
+                response = await client.get(url, headers=headers, timeout=15.0)
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "the Voice Studio holding this review candidate is not answering") from exc
+        if response.status_code == 404:
+            raise HTTPException(404, "the review candidate is no longer available")
+        try:
+            answer = response.json()
+            facts = broker.checked_review_receipt(
+                answer["receipt"], worker_job_id=locator["worker_job_id"],
+                client_request_id=locator["client_request_id"])
+            if (response.status_code != 200 or any(facts[key] != locator[key] for key in facts)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", answer["media"]["handle"])):
+                raise ValueError("mismatch")
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(502, "the review candidate did not match its record") from exc
+        return locator, worker, answer
+
+    @app.get("/api/hub/jobs/{batch_id}/items/{item_index}/review-candidate")
+    async def job_review_candidate(batch_id: str, item_index: int):
+        """A refused narration section kept for listening. Inactive: never an artifact or result."""
+        _locator, _worker, answer = await review_candidate_source(batch_id, item_index)
+        return JSONResponse({
+            "batch_id": batch_id, "item_index": item_index, "active": False,
+            "disposition": "review_only", "deliverable": False, "imported": False,
+            "receipt": answer["receipt"],
+            "audio_url": f"/api/hub/jobs/{batch_id}/items/{item_index}/review-candidate/audio",
+        }, headers=review_no_store)
+
+    @app.get("/api/hub/jobs/{batch_id}/items/{item_index}/review-candidate/audio")
+    async def job_review_candidate_audio(batch_id: str, item_index: int):
+        """The candidate's WAV, counted and hashed against its receipt as it streams.
+
+        The last chunk is held until the whole body is proved, so a body that is short, long or
+        differs anywhere never reaches the caller complete.
+        """
+        locator, worker, answer = await review_candidate_source(batch_id, item_index)
+        expected, digest = locator["pcm_bytes"], locator["pcm_sha256"]
+        try:
+            client, response = await open_worker_artifact(
+                worker, f"/api/fleet/jobs/{locator['worker_job_id']}/review-candidate/media/"
+                        f"{answer['media']['handle']}")
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "the Voice Studio holding this review candidate is not answering") from exc
+        closed = False
+
+        async def close_once() -> None:
+            nonlocal closed
+            if not closed:
+                closed = True
+                await response.aclose()
+                await client.aclose()
+
+        claimed = {name: response.headers.get_list(name)
+                   for name in ("content-type", "content-length", "x-content-sha256")}
+        if claimed != {"content-type": ["audio/wav"], "content-length": [str(expected)],
+                       "x-content-sha256": [digest]}:
+            await close_once()
+            raise HTTPException(502, "the review candidate's audio did not match its record")
+
+        async def verified():
+            sha, count, held = hashlib.sha256(), 0, b""
+            try:
+                async for chunk in response.aiter_raw():
+                    count += len(chunk)
+                    if count > expected:
+                        raise ValueError("review candidate body is longer than its receipt")
+                    sha.update(chunk)
+                    if held:
+                        yield held
+                    held = chunk
+                if count != expected or sha.hexdigest() != digest:
+                    raise ValueError("review candidate body does not match its receipt")
+                yield held
+            finally:
+                await close_once()
+
+        return StreamingResponse(
+            verified(), media_type="audio/wav", background=BackgroundTask(close_once),
+            headers={**review_no_store, "Content-Length": str(expected), "X-Content-SHA256": digest,
+                     "Content-Disposition": f'inline; filename="{batch_id}-{item_index}-rejected-section.wav"'},
+        )
+
     @app.delete("/api/hub/jobs/{batch_id}")
     async def cancel_job(batch_id: str) -> dict[str, Any]:
         result = await broker.cancel_batch(batch_id)

@@ -8,11 +8,12 @@ import hmac
 import json
 import math
 import os
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import reference_audio, voices
+from . import generation, reference_audio, voices
 from .generation import OUTPUT_DIR
 
 
@@ -235,7 +236,8 @@ def build_job_details(job, token: str, now: float | None = None) -> dict:
     }
 
 
-def _decode_handle(handle: str, token: str) -> dict:
+def _decode_handle(handle: str, token: str,
+                   kinds: frozenset[str] = frozenset({"reference", "output"})) -> dict:
     try:
         payload, signature = handle.split(".")
         if not hmac.compare_digest(signature, _sign(payload, token)):
@@ -246,7 +248,7 @@ def _decode_handle(handle: str, token: str) -> dict:
         data = json.loads(raw)
         if set(data) != {"j", "k", "i", "e"}:
             raise JobMediaError("permission_denied")
-        if data["k"] not in {"reference", "output"} or type(data["i"]) is not int:
+        if data["k"] not in kinds or type(data["i"]) is not int:
             raise JobMediaError("permission_denied")
         expiry = float(data["e"])
         if not math.isfinite(expiry):
@@ -274,3 +276,82 @@ def resolve_job_media(
     except IndexError as exc:
         raise JobMediaError("media_removed") from exc
     return _resolve_target(path, root, media_type)
+
+
+# ── Rejected-section review candidates (inactive, review only) ─────────────────────────────────
+# Resolved only from the private receipt, never from ordinary history: a job cleared from history
+# keeps its candidate, and a staged folder without a receipt is never readable.
+REVIEW_KIND = "rejected_section"
+
+
+def _read_all(fd: int, limit: int) -> bytes:
+    data = b""
+    while len(data) <= limit and (chunk := os.read(fd, limit + 1 - len(data))):
+        data += chunk
+    return data
+
+
+def _open_review_candidate(job_id: str) -> tuple[dict, int]:
+    """The complete receipt and its PCM, open and verified through that same FD."""
+    if not isinstance(job_id, str) or not generation.REVIEW_JOB_ID.fullmatch(job_id):
+        raise JobMediaError("review_candidate_not_found")
+    opened: list[int] = []
+    pcm = None
+    try:
+        root = os.open(generation.REVIEW_ROOT, generation.REVIEW_DIR_FLAGS)
+        opened.append(root)
+        folder = os.open(job_id, generation.REVIEW_DIR_FLAGS, dir_fd=root)
+        opened.append(folder)
+        fd = os.open(generation.REVIEW_RECEIPT_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
+        opened.append(fd)
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > generation.REVIEW_MAX_RECEIPT_BYTES:
+            raise ValueError("receipt")
+        receipt = json.loads(_read_all(fd, generation.REVIEW_MAX_RECEIPT_BYTES))
+        body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        audio = receipt["audio"]
+        if (receipt.get("schema") != generation.REVIEW_SCHEMA
+                or receipt.get("active") is not False
+                or receipt.get("disposition") != "review_only"
+                or receipt.get("worker_job_id") != job_id
+                or receipt.get("receipt_sha256") != generation.review_sha256(body)
+                or audio.get("media_type") != "audio/wav"
+                or type(audio.get("bytes")) is not int
+                or not 0 < audio["bytes"] <= generation.REVIEW_MAX_PCM_BYTES):
+            raise ValueError("receipt")
+        pcm = os.open(generation.REVIEW_PCM_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
+        st = os.fstat(pcm)
+        if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_size != audio["bytes"]
+                or generation.review_fd_sha256(pcm) != audio["sha256"]):
+            raise ValueError("pcm")
+        os.lseek(pcm, 0, os.SEEK_SET)
+        return receipt, pcm
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        if pcm is not None:
+            os.close(pcm)
+        raise JobMediaError("review_candidate_not_found") from exc
+    finally:
+        for fd in opened:
+            os.close(fd)
+
+
+def review_candidate_details(job_id: str, token: str, now: float | None = None) -> dict:
+    receipt, pcm = _open_review_candidate(job_id)
+    os.close(pcm)
+    expiry = (time.time() if now is None else float(now)) + HANDLE_TTL_S
+    return {
+        "receipt": receipt,
+        "media": {"handle": _make_handle(job_id, REVIEW_KIND, 0, expiry, token),
+                  "expires_at": expiry},
+    }
+
+
+def open_review_candidate_media(
+    job_id: str, handle: str, token: str, now: float | None = None,
+) -> tuple[dict, int]:
+    data = _decode_handle(handle, token, frozenset({REVIEW_KIND}))
+    if data["j"] != job_id or data["i"] != 0:
+        raise JobMediaError("permission_denied")
+    if (time.time() if now is None else float(now)) >= data["e"]:
+        raise JobMediaError("handle_expired")
+    return _open_review_candidate(job_id)

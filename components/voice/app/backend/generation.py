@@ -79,6 +79,8 @@ so they survive server restarts without mutating the app bundle.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import importlib.util
 from importlib import metadata
@@ -89,6 +91,7 @@ import platform
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -219,6 +222,158 @@ class NativeExecutionUncertain(RuntimeError):
 
 class PersistenceError(RuntimeError):
     """A required job-history write did not complete."""
+
+
+# ── Rejected-section review candidates ────────────────────────────────────────────────────────
+# The last render of a section the quality gate refused on every attempt is kept, private and
+# inactive, so a person can listen to what was refused (owner, 2026-10-16: is the Khmer silence
+# floor too strict?). Never an output, an artifact or anything a caller can collect; it changes no
+# gate, retry or error. The PCM is staged while the section workspace exists; `receipt.json` - the
+# only completeness marker the read routes accept - is written last, after the job's terminal
+# error is durable. Nothing here removes a candidate: the owner moves a folder to `_trash/`.
+REVIEW_ROOT = paths.data_path("private-jobs", "rejected-sections")
+REVIEW_SCHEMA = "studiohub.rejected-voice-review-candidate.v1"
+REVIEW_MAX_ENTRIES = 32
+REVIEW_MAX_PCM_BYTES = 64 * 1024 * 1024
+REVIEW_MAX_RECEIPT_BYTES = 64 * 1024
+REVIEW_PCM_NAME = "section.wav"
+REVIEW_RECEIPT_NAME = "receipt.json"
+REVIEW_JOB_ID = re.compile(r"[0-9a-f]{12}")
+REVIEW_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_REVIEW_SETTING_KEYS = (
+    "repo", "voice_library_id", "voice", "preset_speaker", "speaker", "language", "speed",
+    "temperature", "top_p", "top_k", "repetition_penalty", "instruct", "voice_design_prompt",
+    "emotion", "seed", "paragraph_pause_sec", "sentence_pause_sec", "section_max_characters",
+)
+
+
+def review_sha256(value) -> str:
+    """SHA-256 of the one canonical JSON spelling every hop recomputes."""
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+    ).encode()).hexdigest()
+
+
+def _file_ident(st: os.stat_result) -> tuple:
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_nlink)
+
+
+def review_fd_sha256(fd: int) -> str:
+    digest, offset = hashlib.sha256(), 0
+    while chunk := os.pread(fd, 1024 * 1024, offset):
+        digest.update(chunk)
+        offset += len(chunk)
+    return digest.hexdigest()
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
+def _wav_facts(head: bytes, size: int) -> Optional[dict]:
+    """Sample rate, channels and duration from a RIFF/WAVE header; None when it is not one."""
+    if head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+        return None
+    pos, fmt = 12, None
+    while pos + 8 <= len(head):
+        name, length = head[pos:pos + 4], int.from_bytes(head[pos + 4:pos + 8], "little")
+        if name == b"fmt " and length >= 16 and pos + 24 <= len(head):
+            fmt = tuple(int.from_bytes(head[pos + a:pos + b], "little")
+                        for a, b in ((10, 12), (12, 16), (20, 22)))   # channels, rate, block
+        elif name == b"data" and fmt and all(fmt):
+            frames = min(length, size - pos - 8) // fmt[2]
+            return {"sample_rate_hz": fmt[1], "channels": fmt[0],
+                    "duration_s": round(frames / fmt[1], 3)}
+        pos += 8 + length + (length & 1)
+    return None
+
+
+@contextlib.contextmanager
+def _review_lock():
+    """One flock serializes root checks, admission and publication across processes."""
+    REVIEW_ROOT.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(REVIEW_ROOT.parent / f"{REVIEW_ROOT.name}.lock",
+                 os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _open_review_root(*, create: bool) -> int:
+    if create:
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(REVIEW_ROOT, 0o700)
+    fd = os.open(REVIEW_ROOT, REVIEW_DIR_FLAGS)
+    if not stat.S_ISDIR(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError("review root is not a directory")
+    return fd
+
+
+def _durable_history_row(job_id: str) -> dict:
+    """Fsync the history file and its folder, then read this job back through that same FD."""
+    folder = os.open(HISTORY_FILE.parent, REVIEW_DIR_FLAGS)
+    try:
+        fd = os.open(HISTORY_FILE.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError("history is not a regular file")
+            os.fsync(fd)
+            with os.fdopen(os.dup(fd), "rb") as handle:
+                payload = json.loads(handle.read())
+        finally:
+            os.close(fd)
+        os.fsync(folder)
+    finally:
+        os.close(folder)
+    return next(row for row in payload["jobs"] if row.get("job_id") == job_id)
+
+
+def _review_receipt(job, pending: dict, final: dict, persisted: dict) -> dict:
+    params = job.params if isinstance(job.params, dict) else {}
+    text = pending["text"]
+    levers = {name for family in catalog.SAMPLING_LEVERS.values() for name in family}
+    settings = {key: params[key] for key in (*_REVIEW_SETTING_KEYS, *sorted(levers))
+                if params.get(key) is not None}
+    settings["resolved_seed"] = job.resolved_seed
+    revisions = {
+        "model_revision": job.model_revision,
+        "voice_revision": job.voice_revision,
+        "reference_audio_sha256": params.get("_reference_audio_sha256"),
+        "reference_source_sha256": params.get("_reference_source_sha256"),
+        "reference_preparation_revision": params.get("_reference_preparation_revision"),
+    }
+    body = {
+        "schema": REVIEW_SCHEMA,
+        "active": False,
+        "disposition": "review_only",
+        "captured_at": pending["captured_at"],
+        "published_at": time.time(),
+        "worker_job_id": job.job_id,
+        "client_request_id": params.get("client_request_id"),
+        "section": {
+            "index": pending["section"], "total": pending["total"], "attempt": pending["attempt"],
+            "text": text, "codepoints": len(text), "utf8_bytes": len(text.encode()),
+            "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        },
+        "settings": settings,
+        "revisions": {key: value for key, value in revisions.items() if value is not None},
+        "quality": {"revision": (job.section_quality or {}).get("revision"),
+                    "rejection_code": pending["code"], "final": final},
+        "audio": {"media_type": "audio/wav", "bytes": pending["bytes"],
+                  "sha256": pending["sha256"], **pending["wav"]},
+        "terminal": {
+            "state": "error", "rejection_code": pending["code"], "finished_at": job.finished_at,
+            "error_sha256": hashlib.sha256(str(job.error).encode()).hexdigest(),
+            "final_quality_sha256": review_sha256(final),
+            "persisted_sha256": review_sha256(persisted),
+        },
+    }
+    return {**body, "receipt_sha256": review_sha256(body)}
 
 
 def _memory_snapshot() -> Optional[dict]:
@@ -1977,6 +2132,9 @@ class GenerationJob:
     execution_run_id: Optional[str] = None  # opaque active child execution identity
     executor_generation: Optional[int] = None
     receipt_acked_at: Optional[float] = None
+    # A staged, not yet published rejected-section candidate (open FDs and fixed PCM facts). In
+    # memory only, never persisted: a restart leaves the staged folder without a receipt for good.
+    review_pending: Optional[dict] = field(default=None, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event)
     thread: Optional[threading.Thread] = None
     created_at: float = field(default_factory=time.time)
@@ -3094,7 +3252,7 @@ class GenerationManager:
                     outcome_state == "done" and self.has_loaded_model()
                 ),
             )
-            self._persist()
+            self._publish_review_candidate(job, persisted=self._persist())
         if held_master is not None:
             self._deliver_m4a(job, held_master)
 
@@ -3562,6 +3720,8 @@ class GenerationManager:
         except tts_quality.SectionQualityError as exc:
             record.update(exc.evidence)
             if attempt >= tts_quality.SECTION_RETRIES:
+                self._stage_review_candidate(job, segment_path, text, index, total,
+                                             attempt + 1, exc.code)
                 # The measured values ride in the message: it is the one field a failed job carries
                 # all the way to the Gateway and Story, so a threshold can be set from real numbers.
                 attempts = [r for r in job.section_quality["sections"] if r.get("section") == index]
@@ -3581,6 +3741,133 @@ class GenerationManager:
             record["check_seconds"] = round(time.perf_counter() - started, 3)
             job.section_quality["sections"].append(record)
             self._persist()
+
+    @staticmethod
+    def _stage_review_candidate(job: GenerationJob, segment_path: Path, text: str, index: int,
+                                total: int, attempt: int, code: str) -> None:
+        """Copy the final refused render aside, unpublished, before its workspace is removed.
+
+        Best effort: any refusal keeps nothing readable and never touches the quality error.
+        """
+        fds: list[int] = []
+        try:
+            if not REVIEW_JOB_ID.fullmatch(job.job_id):
+                raise ValueError("job id")
+            source = os.open(segment_path, os.O_RDONLY | os.O_NOFOLLOW)
+            fds.append(source)
+            before = os.fstat(source)
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                    or not 0 < before.st_size <= REVIEW_MAX_PCM_BYTES):
+                raise ValueError("source")
+            with _review_lock():
+                root = _open_review_root(create=True)
+                fds.append(root)
+                if len(os.listdir(root)) >= REVIEW_MAX_ENTRIES:
+                    raise ValueError("full")
+                os.mkdir(job.job_id, 0o700, dir_fd=root)   # exclusive: never replaces a folder
+                folder = os.open(job.job_id, REVIEW_DIR_FLAGS, dir_fd=root)
+                fds.append(folder)
+                pcm = os.open(REVIEW_PCM_NAME, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                              0o600, dir_fd=folder)
+                fds.append(pcm)
+                digest, head, copied = hashlib.sha256(), b"", 0
+                while chunk := os.read(source, 1024 * 1024):
+                    copied += len(chunk)
+                    if copied > REVIEW_MAX_PCM_BYTES:
+                        raise ValueError("size")
+                    head += chunk[:max(0, 65536 - len(head))]
+                    digest.update(chunk)
+                    _write_all(pcm, chunk)
+                os.fsync(pcm)
+                staged = os.fstat(pcm)
+                if (_file_ident(os.fstat(source)) != _file_ident(before) or copied != before.st_size
+                        or staged.st_size != copied or staged.st_nlink != 1):
+                    raise ValueError("changed while copied")
+                wav = _wav_facts(head, copied)
+                if wav is None:
+                    raise ValueError("not a WAV")
+                os.fsync(folder)
+                os.fsync(root)
+            job.review_pending = {
+                "folder": folder, "pcm": pcm,
+                "folder_ident": (os.fstat(folder).st_dev, os.fstat(folder).st_ino),
+                "pcm_ident": _file_ident(staged), "bytes": copied, "sha256": digest.hexdigest(),
+                "wav": wav, "text": text, "section": index, "total": total, "attempt": attempt,
+                "code": code, "captured_at": time.time(),
+            }
+            fds = [source, root]   # the staged folder and PCM stay open until publication
+        except Exception as exc:  # noqa: BLE001 - a lost candidate is never a different error
+            print(f"[gen] rejected section not kept for review ({type(exc).__name__})",
+                  file=sys.stderr, flush=True)
+        finally:
+            for fd in fds:
+                os.close(fd)
+
+    @staticmethod
+    def _publish_review_candidate(job: GenerationJob, *, persisted: bool) -> None:
+        """Publish the staged candidate's receipt, only once its terminal error is durable.
+
+        `review_pending` stays set until this has finished either way, so a reader that sees the
+        job's `error` before the receipt is told to wait (409) rather than that there is none.
+        """
+        pending = job.review_pending
+        if pending is None:
+            return
+        folder, pcm = pending["folder"], pending["pcm"]
+        try:
+            if not persisted or job.state != "error" or job.error_code != pending["code"]:
+                raise ValueError("not a durable quality failure")
+            final = (job.section_quality or {}).get("sections", [])[-1]
+            if (final.get("section"), final.get("attempt")) != (pending["section"], pending["attempt"]):
+                raise ValueError("final quality row")
+            expected = {"job_id": job.job_id, "state": "error", "error_code": pending["code"],
+                        "error": job.error, "finished_at": job.finished_at, "final_quality": final}
+            row = _durable_history_row(job.job_id)
+            persisted_subset = {
+                "job_id": row.get("job_id"), "state": row.get("state"),
+                "error_code": row.get("error_code"), "error": row.get("error"),
+                "finished_at": row.get("finished_at"),
+                "final_quality": ((row.get("section_quality") or {}).get("sections") or [None])[-1],
+            }
+            if persisted_subset != expected:
+                raise ValueError("history readback")
+            staged = os.fstat(pcm)
+            named = os.stat(REVIEW_PCM_NAME, dir_fd=folder, follow_symlinks=False)
+            if (_file_ident(staged) != pending["pcm_ident"]
+                    or (named.st_dev, named.st_ino) != (staged.st_dev, staged.st_ino)
+                    or review_fd_sha256(pcm) != pending["sha256"]):
+                raise ValueError("staged PCM changed")
+            receipt = _review_receipt(job, pending, final, persisted_subset)
+            data = json.dumps(receipt, sort_keys=True, ensure_ascii=False).encode()
+            if len(data) > REVIEW_MAX_RECEIPT_BYTES:
+                raise ValueError("receipt too large")
+            with _review_lock():
+                root = _open_review_root(create=False)
+                try:
+                    here = os.stat(job.job_id, dir_fd=root, follow_symlinks=False)
+                finally:
+                    os.close(root)
+                if (here.st_dev, here.st_ino) != pending["folder_ident"]:
+                    raise ValueError("staged folder moved")
+                tmp = f"{REVIEW_RECEIPT_NAME}.tmp"
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                             dir_fd=folder)
+                try:
+                    _write_all(fd, data)
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                # link() never replaces: an existing receipt is refused, not overwritten.
+                os.link(tmp, REVIEW_RECEIPT_NAME, src_dir_fd=folder, dst_dir_fd=folder)
+                os.unlink(tmp, dir_fd=folder)
+                os.fsync(folder)
+        except Exception as exc:  # noqa: BLE001 - publication never changes the job's own error
+            print(f"[gen] rejected section review receipt not published ({type(exc).__name__})",
+                  file=sys.stderr, flush=True)
+        finally:
+            os.close(folder)
+            os.close(pcm)
+            job.review_pending = None
 
     @staticmethod
     def _release_section_validator() -> None:

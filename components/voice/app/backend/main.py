@@ -32,7 +32,8 @@ from typing import Literal, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1655,6 +1656,45 @@ def fleet_job_media(job_id: str, handle: str, download: bool = False):
     return FileResponse(
         target.path, media_type=target.media_type, filename=target.name,
         content_disposition_type=disposition, headers=job_details.SAFE_HEADERS,
+    )
+
+
+@app.get("/api/fleet/jobs/{job_id}/review-candidate")
+def fleet_review_candidate(job_id: str, response: Response) -> dict:
+    """A rejected section kept for listening: inactive, review only, never an output."""
+    job = gen_manager.get(job_id)
+    if job is not None and getattr(job, "review_pending", None) is not None:
+        # Staged, and its receipt is still being made durable: ask again shortly.
+        raise HTTPException(409, detail={"code": "review_candidate_pending"})
+    try:
+        details = job_details.review_candidate_details(job_id, fleet_auth.load_token())
+    except job_details.JobMediaError as exc:
+        raise HTTPException(404, detail={"code": exc.code}) from exc
+    response.headers.update(job_details.SAFE_HEADERS)
+    return details
+
+
+@app.get("/api/fleet/jobs/{job_id}/review-candidate/media/{handle}")
+def fleet_review_candidate_media(job_id: str, handle: str):
+    try:
+        receipt, fd = job_details.open_review_candidate_media(
+            job_id, handle, fleet_auth.load_token())
+    except job_details.JobMediaError as exc:
+        status = {"review_candidate_not_found": 404, "handle_expired": 410}.get(exc.code, 403)
+        raise HTTPException(status, detail={"code": exc.code}) from exc
+    handle_file = os.fdopen(fd, "rb")   # close() is idempotent, so body and task may both call it
+
+    def body():
+        with handle_file:
+            while chunk := handle_file.read(1024 * 1024):
+                yield chunk
+
+    audio = receipt["audio"]
+    return StreamingResponse(
+        body(), media_type="audio/wav", background=BackgroundTask(handle_file.close),
+        headers={**job_details.SAFE_HEADERS, "Content-Length": str(audio["bytes"]),
+                 "X-Content-SHA256": audio["sha256"],
+                 "Content-Disposition": f'inline; filename="{job_id}-rejected-section.wav"'},
     )
 
 

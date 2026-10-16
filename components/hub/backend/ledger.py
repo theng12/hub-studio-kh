@@ -127,7 +127,27 @@ CREATE TABLE IF NOT EXISTS machine_registration_reconciliation (
   controller_id TEXT,
   site_id TEXT
 );
+-- Where a terminal Voice item's rejected-section review candidate lives. Immutable and outside
+-- every clear/compaction query: a cleared or 90-day-old batch keeps its candidate reachable.
+CREATE TABLE IF NOT EXISTS review_candidate_locators (
+  batch_id TEXT NOT NULL,
+  item_index INTEGER NOT NULL,
+  studio TEXT NOT NULL,
+  worker_job_id TEXT NOT NULL,
+  client_request_id TEXT NOT NULL,
+  final_quality_sha256 TEXT NOT NULL,
+  receipt_sha256 TEXT NOT NULL,
+  pcm_bytes INTEGER NOT NULL,
+  pcm_sha256 TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  schema_version INTEGER NOT NULL,
+  PRIMARY KEY (batch_id, item_index),
+  UNIQUE (studio, worker_job_id)
+);
 """
+REVIEW_LOCATOR_FIELDS = ("studio", "worker_job_id", "client_request_id", "final_quality_sha256",
+                         "receipt_sha256", "pcm_bytes", "pcm_sha256")
+REVIEW_LOCATORS_PER_STUDIO = 32
 
 
 def _conn() -> sqlite3.Connection:
@@ -653,11 +673,47 @@ def prepare_database() -> Path | None:
         return recovery
 
 
+def _admit_review_locator(conn: sqlite3.Connection, batch_id: str, item_index: int,
+                          locator: dict) -> bool:
+    """Insert once; an identical replay is a no-op, anything else (conflict, full) is refused."""
+    row = conn.execute("SELECT * FROM review_candidate_locators WHERE batch_id = ? AND item_index = ?",
+                       (batch_id, item_index)).fetchone()
+    if row is not None:
+        return all(row[key] == locator[key] for key in REVIEW_LOCATOR_FIELDS)
+    used = conn.execute("SELECT COUNT(*) FROM review_candidate_locators WHERE studio = ?",
+                        (locator["studio"],)).fetchone()[0]
+    if used >= REVIEW_LOCATORS_PER_STUDIO:
+        return False
+    try:
+        conn.execute(
+            "INSERT INTO review_candidate_locators (batch_id, item_index, "
+            + ", ".join(REVIEW_LOCATOR_FIELDS) + ", created_at, schema_version) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,1)",
+            (batch_id, item_index, *(locator[key] for key in REVIEW_LOCATOR_FIELDS), time.time()))
+    except sqlite3.Error:   # e.g. the same worker job already bound to another item
+        return False
+    return True
+
+
+def review_locator(batch_id: str, item_index: int) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM review_candidate_locators WHERE batch_id = ? AND item_index = ?",
+                           (batch_id, item_index)).fetchone()
+    return dict(row) if row else None
+
+
 def save_batch(batch: dict):
     """Write-through persistence for the restart-safe broker queue."""
     states = {i["state"] for i in batch["items"]}
     finished = int(not (states & {"queued", "running", "cancel_requested", "uncertain"}))
     with _conn() as conn:
+        # A terminal item's review-candidate locator commits with that item, or not at all; a
+        # refusal never changes the item (the candidate is only an optional way to listen).
+        for item in batch["items"]:
+            locator = item.pop("_review_candidate", None)
+            if locator and not _admit_review_locator(conn, batch["id"], item["index"], locator):
+                print(f"[hub] review candidate locator refused for {batch['id']}:{item['index']}",
+                      flush=True)
         conn.execute(
             "INSERT OR REPLACE INTO batches (id, created_at, finished, payload) "
             "VALUES (?,?,?,?)",

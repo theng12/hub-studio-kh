@@ -187,6 +187,36 @@ class FleetPermissionTests(unittest.TestCase):
                 self.assertFalse(fleet_path_allowed("GET", path))
                 self.assertFalse(fleet_path_allowed("POST", path))
 
+    def test_a_rejected_section_review_candidate_is_four_exact_reads(self) -> None:
+        handle = "eyJqIjoiYWJjIn0.c2lnbmF0dXJl-_"
+        allowed = (
+            "/api/hub/jobs/batch-1/items/0/review-candidate",
+            "/api/hub/jobs/batch-1/items/0/review-candidate/audio",
+            "/studio/voice/api/fleet/jobs/c85e8c5d0a1b/review-candidate",
+            f"/studio/voice/api/fleet/jobs/c85e8c5d0a1b/review-candidate/media/{handle}",
+        )
+        for path in allowed:
+            with self.subTest(path=path):
+                self.assertTrue(fleet_path_allowed("GET", path))
+                for method in ("POST", "PUT", "PATCH", "DELETE"):
+                    self.assertFalse(fleet_path_allowed(method, path))
+                self.assertFalse(fleet_path_allowed("GET", path + "/extra"))
+                self.assertFalse(node_path_allowed("GET", path))
+        for path in (
+            "/api/hub/jobs/batch-1/items/0/review-candidate/audio/../../artifact",
+            "/api/hub/jobs/batch-1/items/x/review-candidate",
+            "/studio/voice/api/fleet/jobs/C85E8C5D0A1B/review-candidate",
+            "/studio/voice/api/fleet/jobs/c85e8c5d0a1b/details",
+            f"/studio/voice/api/fleet/jobs/c85e8c5d0a1b/media/{handle}",
+            "/studio/voice/api/fleet/jobs/c85e8c5d0a1b/review-candidate/media/no-dot",
+            "/studio/voice/api/fleet/jobs/c85e8c5d0a1b/review-candidate/media/a.b/c",
+            "/studio/image/api/fleet/jobs/c85e8c5d0a1b/review-candidate",
+            "/studio/voice/api/fleet/jobs",
+            "/studio/voice/api/generate/jobs",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(fleet_path_allowed("GET", path))
+
     def test_every_entry_is_a_method_and_an_anchored_pattern(self) -> None:
         # A pattern that is not anchored would match anywhere in the path.
         for method, pattern in FLEET_ALLOWED:

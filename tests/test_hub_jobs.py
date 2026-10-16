@@ -88,6 +88,29 @@ def _wav() -> bytes:
 
 _AUDIO = _wav()
 _AUDIO_SHA = hashlib.sha256(_AUDIO).hexdigest()
+_REFUSAL = ("SectionQualityError: Section 6 of 7 came out silent on all 4 attempts, so the audio "
+            "was not delivered (attempt 4: voiced 2.54 s < 4.06 s). Try again, or reword that part "
+            "of the text.")
+_FINAL_ROW = {"section": 6, "attempt": 4, "transcribe_back": "script", "voiced_s": 2.54,
+              "min_voiced_s": 4.06, "characters": 203, "accepted": False,
+              "rejection_code": "TTS_SECTION_SILENT", "check_seconds": 0.012}
+
+
+def _review_receipt(job_id: str, request_id: str, final: dict | None = None, **changes) -> dict:
+    """A Voice worker's review receipt (`generation._review_receipt`), as the Hub receives it."""
+    final = dict(_FINAL_ROW if final is None else final)
+    body = {
+        "schema": "studiohub.rejected-voice-review-candidate.v1", "active": False,
+        "disposition": "review_only", "worker_job_id": job_id, "client_request_id": request_id,
+        "section": {"index": 6, "total": 7, "attempt": 4, "text": "fixture section"},
+        "quality": {"revision": "voicestudio.tts-section-quality.v3",
+                    "rejection_code": "TTS_SECTION_SILENT", "final": final},
+        "audio": {"media_type": "audio/wav", "bytes": len(_AUDIO), "sha256": _AUDIO_SHA},
+        "terminal": {"state": "error", "rejection_code": "TTS_SECTION_SILENT",
+                     "final_quality_sha256": broker.review_sha256(final)},
+        **changes,
+    }
+    return {**body, "receipt_sha256": broker.review_sha256(body)}
 
 
 
@@ -102,6 +125,11 @@ class FixtureWorker:
         self.transcription_completed = 0
         self.transcription_refusal = None
         self.transcription_started = threading.Event()
+        self.review: dict[str, dict] = {}   # worker job id -> its published review receipt
+        # Like the real worker, a refused job shows `error` before its receipt is durable: these
+        # many reads answer 409 `review_candidate_pending` first.
+        self.review_pending: dict[str, int] = {}
+        self.review_reads: dict[str, int] = {}
         self.app = FastAPI()
         self._routes()
         probe = socket.socket()
@@ -141,11 +169,15 @@ class FixtureWorker:
             self._check(request)
             body = await request.json()
             with self.lock:
-                job_id = f"voice-{len(self.jobs) + 1}"
+                refused = body.get("text") == "refuse"
+                job_id = f"{len(self.jobs) + 1:012x}" if refused else f"voice-{len(self.jobs) + 1}"
                 self.jobs[job_id] = {
-                    "state": "running" if body.get("text") == "hold" else "done",
+                    "state": "error" if refused else "running" if body.get("text") == "hold" else "done",
                     "params": body,
                 }
+                if refused:   # the real worker publishes this after its terminal error is durable
+                    self.review[job_id] = _review_receipt(job_id, body["client_request_id"])
+                    self.review_pending[job_id] = 2
             # Match GenerationJob.serialize() at acceptance: the worker has
             # accepted the params, but a terminal artifact is not available yet.
             return {"job": {"id": job_id, "mode": "txt2speech", "state": "queued",
@@ -167,6 +199,13 @@ class FixtureWorker:
                 return {"job": {"id": job_id, "mode": "txt2speech", "state": "cancelled",
                                  "params": record["params"], "output_path": None,
                                  "output_url": None, "error": "cancelled"}}
+            if state == "error":
+                return {"job": {"id": job_id, "mode": "txt2speech", "state": "error",
+                                 "params": record["params"], "output_path": None,
+                                 "output_url": None, "error": _REFUSAL,
+                                 "error_code": "TTS_SECTION_SILENT",
+                                 "section_quality": {"revision": "voicestudio.tts-section-quality.v3",
+                                                     "sections": [dict(_FINAL_ROW)]}}}
             return {"job": {"id": job_id, "mode": "txt2speech", "state": "done",
                              "params": record["params"],
                              "output_path": str(_ROOT / f"{job_id}.wav"),
@@ -188,6 +227,30 @@ class FixtureWorker:
             if job_id not in self.jobs:
                 raise HTTPException(404)
             return Response(_AUDIO, media_type="audio/wav")
+
+        @self.app.get("/api/fleet/jobs/{job_id}/review-candidate")
+        async def review_candidate(job_id: str, request: Request):
+            self._check(request)
+            with self.lock:
+                self.review_reads[job_id] = self.review_reads.get(job_id, 0) + 1
+                waiting = self.review_pending.get(job_id, 0)
+                if waiting:
+                    self.review_pending[job_id] = waiting - 1 if waiting > 0 else waiting
+                receipt = self.review.get(job_id)
+            if waiting:
+                raise HTTPException(409, {"code": "review_candidate_pending"})
+            if receipt is None:
+                raise HTTPException(404, {"code": "review_candidate_not_found"})
+            return {"receipt": receipt,
+                    "media": {"handle": f"{job_id}handle.sig", "expires_at": time.time() + 300}}
+
+        @self.app.get("/api/fleet/jobs/{job_id}/review-candidate/media/{handle}")
+        async def review_media(job_id: str, handle: str, request: Request):
+            self._check(request)
+            if job_id not in self.review or handle != f"{job_id}handle.sig":
+                raise HTTPException(404)
+            return Response(_AUDIO, media_type="audio/wav",
+                            headers={"X-Content-SHA256": _AUDIO_SHA})
 
         @self.app.post("/api/transcribe")
         async def transcribe(request: Request):
@@ -734,6 +797,266 @@ class HubJobProofTests(unittest.TestCase):
             with self.worker.lock:
                 self.worker.transcription_refusal = None
             transcription_jobs.batches.clear()
+
+    # ── Rejected-section review candidates ────────────────────────────────────────────────────
+
+    def _review_routes(self, batch_id: str) -> tuple[str, str]:
+        base = f"/api/hub/jobs/{batch_id}/items/0/review-candidate"
+        return base, base + "/audio"
+
+    def test_a_refused_section_is_bound_on_its_final_attempt_and_outlives_its_batch(self) -> None:
+        headers = {"Authorization": f"Bearer {_TOKEN}"}
+        old_tries, old_delays = broker.MAX_TRIES, broker.RETRY_DELAYS_S
+        broker.MAX_TRIES, broker.RETRY_DELAYS_S = 2, (.05,)
+        try:
+            app = standalone.create_app(start_background=True)
+            with TestClient(app) as client:
+                self._admit_fixture_catalog(app)
+                batch_id = client.post("/api/hub/jobs", json={
+                    "modality": "voice", "model": "fixture/voice", "clientRequestId": "refused-0001",
+                    "items": [{"text": "refuse"}]}, headers=headers).json()["batch_id"]
+                failed = self._wait_for(client, batch_id, "error", timeout=10)["items"][0]
+                self.assertEqual(failed["error_code"], "TTS_SECTION_SILENT")
+                self.assertTrue(failed["error"].startswith("SectionQualityError: Section 6 of 7"))
+                self.assertEqual(client.get(f"/api/hub/jobs/{batch_id}/items/0/artifact",
+                                            headers=headers).status_code, 404)
+                attempts = [job_id for job_id, job in self.worker.jobs.items()
+                            if job["params"].get("text") == "refuse"]
+                self.assertEqual(len(attempts), 2)
+                # It saw `error` while the receipt was still pending and asked again until it was.
+                self.assertEqual(self.worker.review_reads.get(attempts[-1]), 3)
+                self.assertNotIn(attempts[0], self.worker.review_reads)   # a retried try is never asked
+                locator = ledger.review_locator(batch_id, 0)
+                self.assertEqual(locator["worker_job_id"], attempts[-1])   # never the retried one
+                self.assertEqual(locator["studio"], "voice")
+                self.assertEqual((locator["pcm_bytes"], locator["pcm_sha256"]), (len(_AUDIO), _AUDIO_SHA))
+                meta_route, audio_route = self._review_routes(batch_id)
+                anonymous = TestClient(app)   # no session cookie from the calls above
+                self.assertEqual(anonymous.get(meta_route).status_code, 401)
+                self.assertEqual(anonymous.get(audio_route).status_code, 401)
+                meta = client.get(meta_route, headers=headers)
+                self.assertEqual(meta.status_code, 200, meta.text)
+                body = meta.json()
+                self.assertEqual({key: body[key] for key in ("active", "disposition", "deliverable", "imported")},
+                                 {"active": False, "disposition": "review_only",
+                                  "deliverable": False, "imported": False})
+                self.assertEqual(body["receipt"], self.worker.review[attempts[-1]])
+                self.assertEqual(body["audio_url"], audio_route)
+                for private in ("handle.sig", _TOKEN, "127.0.0.1"):
+                    self.assertNotIn(private, meta.text)
+                self.assertEqual(meta.headers["cache-control"], "no-store, private, max-age=0")
+                audio = client.get(audio_route, headers=headers)
+                self.assertEqual((audio.status_code, audio.content), (200, _AUDIO))
+                self.assertEqual(audio.headers["x-content-sha256"], _AUDIO_SHA)
+                self.assertEqual(audio.headers["content-type"], "audio/wav")
+                for method in ("post", "put", "patch", "delete"):
+                    self.assertEqual(getattr(client, method)(audio_route, headers=headers).status_code, 405)
+
+                broker.clear_finished_batches(batch_id=batch_id)                     # "Clear finished"
+                ledger.compact_history(now=time.time() + 100 * 86400)                 # the 90-day trim
+                self.assertEqual(client.get(f"/api/hub/jobs/{batch_id}", headers=headers).status_code, 404)
+
+            app = standalone.create_app(start_background=False)                      # a restarted Hub
+            with TestClient(app) as client:
+                self.assertEqual(client.get(meta_route, headers=headers).status_code, 200)
+                self.assertEqual(client.get(audio_route, headers=headers).content, _AUDIO)
+                with self.worker.lock:
+                    moved = self.worker.review.pop(attempts[-1])   # the owner moved it to _trash
+                self.assertEqual(client.get(meta_route, headers=headers).status_code, 404)
+                self.assertEqual(client.get(audio_route, headers=headers).status_code, 404)
+                with self.worker.lock:
+                    self.worker.review[attempts[-1]] = dict(moved, receipt_sha256="0" * 64)
+                self.assertEqual(client.get(meta_route, headers=headers).status_code, 502)
+                self.assertIsNotNone(ledger.review_locator(batch_id, 0))   # a GET never retires it
+                self.assertEqual(client.get(self._review_routes("no-such-batch")[0],
+                                            headers=headers).status_code, 404)
+        finally:
+            broker.MAX_TRIES, broker.RETRY_DELAYS_S = old_tries, old_delays
+            # Each queue's wake event binds to the first loop that waits on it; the next test that
+            # starts the dispatcher runs in a new TestClient loop, as a restarted Hub would.
+            from components.hub.backend import chat_jobs
+            for module in (broker, chat_jobs, transcription_jobs):
+                module._wakeup = asyncio.Event()
+
+    def test_a_node_held_candidate_is_read_only_through_the_nodes_granted_peer_routes(self) -> None:
+        from urllib.parse import urlsplit
+        from components.hub.backend import auth
+        node = {"id": "voice@node-a", "modality": "voice", "host": "10.0.0.5", "hub_port": 8765,
+                "machine": "node-a", "hub_token": "node-credential"}
+        for path in ("/api/fleet/jobs/c85e8c5d0a1b/review-candidate",
+                     "/api/fleet/jobs/c85e8c5d0a1b/review-candidate/media/eyJqIjoiYyJ9.c2ln"):
+            url, sent = peers.studio_request(node, path)
+            self.assertEqual(urlsplit(url).netloc, "10.0.0.5:8765")
+            self.assertTrue(auth.fleet_path_allowed("GET", urlsplit(url).path), url)
+            self.assertEqual(sent, {"X-Hub-Token": "node-credential"})
+
+    def test_only_a_proven_terminal_voice_quality_failure_binds_a_candidate(self) -> None:
+        studio = {"id": "voice", "modality": "voice", "host": "127.0.0.1", "port": self.worker.port,
+                  "machine": "local", "local": True, "studio_token": _TOKEN, "hub_token": _TOKEN}
+
+        held: dict = {}
+
+        def attempt(job_id: str, receipt: dict | None, *, modality: str = "voice",
+                    code: str = "TTS_SECTION_SILENT", final: dict | None = None,
+                    pending: int = 0) -> dict:
+            with self.worker.lock:
+                self.worker.review.pop(job_id, None)
+                if receipt is not None:
+                    self.worker.review[job_id] = receipt
+                self.worker.review_pending[job_id] = pending
+                self.worker.review_reads[job_id] = 0
+            batch = {"id": f"bind-{job_id}", "modality": modality, "model": "fixture/voice",
+                     "cancelled": False, "shared_params": {}, "created_at": time.time(), "items": []}
+            item = {"index": 0, "state": "running", "studio": "voice", "studio_job_id": job_id,
+                    "client_request_id": f"studiohub:bind-{job_id}:0", "error_code": code,
+                    "error": _REFUSAL,
+                    "section_quality": {"revision": "voicestudio.tts-section-quality.v3",
+                                        "sections": [dict(final or _FINAL_ROW)]}}
+            batch["items"].append(item)
+
+            async def run() -> None:
+                async with httpx.AsyncClient() as client:
+                    await broker._attach_review_candidate(client, batch, item, studio, code)
+
+            asyncio.run(run())
+            self.assertEqual((item["error_code"], item["error"]), (code, _REFUSAL))   # untouched
+            item["state"] = "error"
+            held.update(batch=batch, item=item)
+            # The locator waits on the item for its terminal save: never in any public view.
+            self.assertNotIn("_review_candidate", broker.public_item(batch, item))
+            broker.batches[batch["id"]] = batch
+            with TestClient(app) as client:
+                view = client.get(f"/api/hub/jobs/{batch['id']}", headers={"Authorization": f"Bearer {_TOKEN}"})
+            self.assertEqual(view.status_code, 200, view.text)
+            self.assertNotIn("_review_candidate", view.text)
+            self.assertNotIn(_AUDIO_SHA, view.text)
+            ledger.save_batch(batch)
+            broker.batches.pop(batch["id"], None)
+            return ledger.review_locator(batch["id"], 0)
+
+        app = standalone.create_app(start_background=False)
+        good = "b00000000001"
+        self.assertIsNotNone(attempt(good, _review_receipt(good, f"studiohub:bind-{good}:0")))
+        late = "b0000000000c"   # error first, receipt two polls later: the real worker's order
+        self.assertIsNotNone(attempt(late, _review_receipt(late, f"studiohub:bind-{late}:0"), pending=2))
+        self.assertEqual(self.worker.review_reads[late], 3)
+        old_wait, old_poll = broker.REVIEW_PENDING_WAIT_S, broker.REVIEW_PENDING_POLL_S
+        broker.REVIEW_PENDING_WAIT_S, broker.REVIEW_PENDING_POLL_S = .3, .05
+        try:
+            never = "b0000000000d"   # a receipt that never becomes durable: bounded, then nothing
+            started = time.monotonic()
+            self.assertIsNone(attempt(never, _review_receipt(never, f"studiohub:bind-{never}:0"), pending=-1))
+            self.assertLess(time.monotonic() - started, 5)
+            self.assertGreater(self.worker.review_reads[never], 1)
+        finally:
+            broker.REVIEW_PENDING_WAIT_S, broker.REVIEW_PENDING_POLL_S = old_wait, old_poll
+        self.assertIsNone(attempt("b0000000000e", None))   # 404: no candidate, asked once
+        self.assertEqual(self.worker.review_reads["b0000000000e"], 1)
+        for name, job_id, receipt, kwargs in (
+            ("missing", "b00000000002", None, {}),
+            ("other worker job", "b00000000003", _review_receipt("b0000000000f", "studiohub:bind-b00000000003:0"), {}),
+            ("other request", "b00000000004", _review_receipt("b00000000004", "studiohub:other:0"), {}),
+            ("tampered", "b00000000005", dict(_review_receipt("b00000000005", "studiohub:bind-b00000000005:0"), active=True), {}),
+            ("active", "b00000000006", _review_receipt("b00000000006", "studiohub:bind-b00000000006:0", active=True), {}),
+            ("other final row", "b00000000007", _review_receipt("b00000000007", "studiohub:bind-b00000000007:0"),
+             {"final": dict(_FINAL_ROW, voiced_s=2.6)}),
+            ("not voice", "b00000000008", _review_receipt("b00000000008", "studiohub:bind-b00000000008:0"), {"modality": "image"}),
+            ("not a quality failure", "b00000000009", _review_receipt("b00000000009", "studiohub:bind-b00000000009:0"),
+             {"code": "WORKER_TERMINAL_ERROR"}),
+            ("other rejection", "b0000000000a", _review_receipt("b0000000000a", "studiohub:bind-b0000000000a:0"),
+             {"code": "TTS_SECTION_TOO_LONG"}),
+            ("oversized pcm", "b0000000000b", _review_receipt("b0000000000b", "studiohub:bind-b0000000000b:0",
+             audio={"media_type": "audio/wav", "bytes": broker.REVIEW_MAX_PCM_BYTES + 1, "sha256": _AUDIO_SHA}), {}),
+        ):
+            with self.subTest(name):
+                self.assertIsNone(attempt(job_id, receipt, **kwargs))
+
+    def test_the_hub_proves_every_byte_of_the_candidate_before_the_caller_has_it(self) -> None:
+        from unittest.mock import patch
+        headers = {"Authorization": f"Bearer {_TOKEN}"}
+        job_id = "c00000000001"
+        with self.worker.lock:
+            self.worker.review[job_id] = _review_receipt(job_id, "studiohub:body-proof:0")
+        ledger.save_batch({"id": "body-proof", "created_at": time.time(), "items": [{
+            "index": 0, "state": "error", "_review_candidate": {
+                "studio": "voice", "worker_job_id": job_id, "client_request_id": "studiohub:body-proof:0",
+                "final_quality_sha256": broker.review_sha256(_FINAL_ROW),
+                "receipt_sha256": self.worker.review[job_id]["receipt_sha256"],
+                "pcm_bytes": len(_AUDIO), "pcm_sha256": _AUDIO_SHA}}]})
+        _meta, audio_route = self._review_routes("body-proof")
+        real_send = httpx.AsyncClient.send
+        streams: list = []
+        plan: dict = {}
+
+        class Stream(httpx.AsyncByteStream):
+            def __init__(self, chunks, fail):
+                self.chunks, self.fail, self.closed = chunks, fail, 0
+
+            async def __aiter__(self):
+                for chunk in self.chunks:
+                    yield chunk
+                if self.fail:
+                    raise httpx.ReadError("the worker dropped the connection")
+
+            async def aclose(self):
+                self.closed += 1
+
+        async def send(client, request, **kwargs):
+            if "/review-candidate/media/" not in request.url.path or not plan:
+                return await real_send(client, request, **kwargs)
+            stream = Stream(plan["chunks"], plan.get("fail", False))
+            streams.append(stream)
+            raw = [(b"content-type", b"audio/wav"), (b"content-length", str(len(_AUDIO)).encode()),
+                   (b"x-content-sha256", _AUDIO_SHA.encode())]
+            raw = [row for row in raw if row[0] not in plan.get("drop", ())] + plan.get("add", [])
+            raw = [(name, plan.get("set", {}).get(name, value)) for name, value in raw]
+            return httpx.Response(200, headers=raw, stream=stream, request=request)
+
+        exact = [_AUDIO[:10], _AUDIO[10:]]
+        flipped = _AUDIO[:-1] + bytes([_AUDIO[-1] ^ 1])
+        cases = {
+            "exact": {"chunks": exact},
+            "one byte over": {"chunks": [_AUDIO, b"x"]},
+            "chunk crosses the end": {"chunks": [_AUDIO[:10], _AUDIO[10:] + b"x"]},
+            "early end": {"chunks": [_AUDIO[:-1]]},
+            "same length, other bytes": {"chunks": [flipped[:10], flipped[10:]]},
+            "worker drops mid-body": {"chunks": [_AUDIO[:10]], "fail": True},
+            "no length": {"chunks": exact, "drop": (b"content-length",)},
+            "two digests": {"chunks": exact, "add": [(b"x-content-sha256", _AUDIO_SHA.encode())]},
+            "malformed length": {"chunks": exact, "set": {b"content-length": b"+%d" % len(_AUDIO)}},
+            "other length": {"chunks": exact, "set": {b"content-length": b"%d" % (len(_AUDIO) + 1)}},
+            "other type": {"chunks": exact, "set": {b"content-type": b"audio/mpeg"}},
+            "other digest": {"chunks": exact, "set": {b"x-content-sha256": b"0" * 64}},
+            "uppercase digest": {"chunks": exact, "set": {b"x-content-sha256": _AUDIO_SHA.upper().encode()}},
+        }
+        app = standalone.create_app(start_background=False)
+        with patch.object(httpx.AsyncClient, "send", send), TestClient(app) as client:
+            for name, case in cases.items():
+                with self.subTest(name):
+                    plan.clear()
+                    plan.update(case)
+                    try:
+                        response = client.get(audio_route, headers=headers)
+                        received = (response.status_code, response.content)
+                    except Exception:   # the Hub aborted the body part-way
+                        received = None
+                    self.assertEqual(received == (200, _AUDIO), name == "exact", received and received[0])
+                    self.assertGreaterEqual(streams[-1].closed, 1)
+
+            # A caller that goes away after the first bytes still releases the worker stream.
+            plan.clear()
+            plan.update(chunks=[_AUDIO[:10], _AUDIO[10:20], _AUDIO[20:]])
+            endpoint = next(route.endpoint for route in app.routes
+                            if getattr(route, "path", "") == "/api/hub/jobs/{batch_id}/items/{item_index}/review-candidate/audio")
+
+            async def walk_away() -> bytes:
+                response = await endpoint("body-proof", 0)
+                first = await response.body_iterator.__anext__()
+                await response.body_iterator.aclose()
+                return first
+
+            self.assertEqual(asyncio.run(walk_away()), _AUDIO[:10])
+            self.assertEqual(streams[-1].closed, 1)
 
 
 import unittest

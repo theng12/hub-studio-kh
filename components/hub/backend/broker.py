@@ -2750,9 +2750,11 @@ def public_item(b: dict, item: dict) -> dict:
     published only through `local_artifact_path`, so it appears only when the
     file it names is on this Mac.
     """
+    # `_review_candidate` is the locator waiting for its terminal save (`ledger.save_batch`); the
+    # review routes, never the job view, are how a candidate is reached.
     result = {k: v for k, v in item.items()
               if k not in {"artifact_path", "worker_artifact_url",
-                           "worker_accepted_params"}}
+                           "worker_accepted_params", "_review_candidate"}}
     local_path = local_artifact_path(item)
     if local_path is not None:
         result["artifact_path"] = local_path
@@ -3695,6 +3697,9 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
                 item, studio, job,
                 float(item.get("run_started") or batch["created_at"]),
             )
+            if state == "error":
+                await _attach_review_candidate(client, batch, item, studio,
+                                               str(job.get("error_code") or ""))
             item.update(
                 state=state,
                 error=str(job.get("error") or state)[:500],
@@ -4829,6 +4834,105 @@ def _record_worker_section_quality(item: dict, job: dict) -> None:
         item["section_quality"]["timeline"] = timeline
 
 
+REVIEW_RECEIPT_SCHEMA = "studiohub.rejected-voice-review-candidate.v1"
+REVIEW_MAX_PCM_BYTES = 64 * 1024 * 1024
+# The worker shows `error` a moment before its receipt is durable (it answers 409
+# `review_candidate_pending` until then), so the Hub asks again for this long before giving up.
+REVIEW_PENDING_WAIT_S = 15.0
+REVIEW_PENDING_POLL_S = 0.5
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+
+
+def _review_pending(response: httpx.Response) -> bool:
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        return False
+    return response.status_code == 409 and isinstance(detail, dict) and \
+        detail.get("code") == "review_candidate_pending"
+
+
+def review_sha256(value) -> str:
+    """The Voice worker's canonical receipt digest (`generation.review_sha256`), recomputed here."""
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+    ).encode()).hexdigest()
+
+
+def checked_review_receipt(receipt: object, *, worker_job_id: str, client_request_id: str) -> dict:
+    """Re-prove a worker's rejected-section receipt; the locator facts it binds, or ValueError."""
+    if not isinstance(receipt, dict):
+        raise ValueError("receipt")
+    body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    audio, terminal, quality = (receipt.get(key) for key in ("audio", "terminal", "quality"))
+    if not all(isinstance(part, dict) for part in (audio, terminal, quality)):
+        raise ValueError("receipt")
+    final = quality.get("final")
+    if (receipt.get("schema") != REVIEW_RECEIPT_SCHEMA or receipt.get("active") is not False
+            or receipt.get("disposition") != "review_only"
+            or receipt.get("worker_job_id") != worker_job_id
+            or receipt.get("client_request_id") != client_request_id
+            or receipt.get("receipt_sha256") != review_sha256(body)
+            or terminal.get("state") != "error"
+            or not isinstance(final, dict)
+            or terminal.get("final_quality_sha256") != review_sha256(final)
+            or audio.get("media_type") != "audio/wav"
+            or type(audio.get("bytes")) is not int
+            or not 0 < audio["bytes"] <= REVIEW_MAX_PCM_BYTES
+            or not isinstance(audio.get("sha256"), str)
+            or not _SHA256_HEX.fullmatch(audio["sha256"])):
+        raise ValueError("receipt")
+    return {"worker_job_id": worker_job_id, "client_request_id": client_request_id,
+            "final_quality_sha256": terminal["final_quality_sha256"],
+            "receipt_sha256": receipt["receipt_sha256"],
+            "pcm_bytes": audio["bytes"], "pcm_sha256": audio["sha256"]}
+
+
+async def _attach_review_candidate(client: httpx.AsyncClient, b: dict, item: dict,
+                                   studio: dict, code: str) -> None:
+    """Bind a Voice quality failure that is about to settle the item to its worker's candidate.
+
+    Called just before the item turns terminal `error`, so the locator commits with that terminal
+    item (`ledger.save_batch`). Optional and read-only: anything missing or mismatched binds
+    nothing, and the item's own error is never changed.
+    """
+    job_id = str(item.get("studio_job_id") or "")
+    if (b.get("modality") != "voice" or not code.startswith("TTS_SECTION_")
+            or not job_id or not item.get("studio")):
+        return
+    expected_request_id = item.get("client_request_id") or f"studiohub:{b['id']}:{item['index']}"
+    try:
+        url, headers = studio_request(studio, f"/api/fleet/jobs/{job_id}/review-candidate")
+        deadline = time.monotonic() + REVIEW_PENDING_WAIT_S
+        while True:
+            # Each read shares the one deadline, so a hung read can't stretch the Mac's hold.
+            response = await client.get(url, headers=headers,
+                                        timeout=max(0.5, deadline - time.monotonic()))
+            if not _review_pending(response) or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(REVIEW_PENDING_POLL_S)
+        if response.status_code != 200:
+            return
+        receipt = response.json().get("receipt")
+        facts = checked_review_receipt(receipt, worker_job_id=job_id,
+                                       client_request_id=expected_request_id)
+        if receipt["terminal"].get("rejection_code") != code:
+            raise ValueError("rejection code")
+        # The receipt's final row, cleaned exactly as this item's own copy was, must be that copy.
+        scratch: dict = {}
+        _record_worker_section_quality(scratch, {"section_quality": {
+            "revision": receipt["quality"].get("revision"), "sections": [receipt["quality"]["final"]]}})
+        recorded = (item.get("section_quality") or {}).get("sections") or [None]
+        if scratch["section_quality"]["sections"][0] != recorded[-1]:
+            raise ValueError("final quality row")
+    except Exception as exc:  # noqa: BLE001 - an unavailable candidate is never a different error
+        logging.getLogger("studiohub.broker").info(
+            "review candidate not bound for %s:%s (%s)", b.get("id"), item.get("index"),
+            type(exc).__name__)
+        return
+    item["_review_candidate"] = {"studio": str(item["studio"]), **facts}
+
+
 async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict):
     endpoint, prompt_field, artifact_kind = MODALITY[b["modality"]]
     t_start = time.time()  # wall-clock fallback for generation duration
@@ -5465,6 +5569,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             delay_index = min(item["tries"] - 1, len(RETRY_DELAYS_S) - 1)
             item["retry_at"] = time.time() + RETRY_DELAYS_S[delay_index]
         else:
+            await _attach_review_candidate(client, b, item, studio, code)
             item["state"] = "error"
             item["error"] = message
             item["retry_at"] = None

@@ -99,5 +99,66 @@ class JobHistoryTests(unittest.TestCase):
         self.assertIn("_history_expired(job)", source[source.index("def _load_history"):])
 
 
+class ReviewCandidateLocatorRetentionTests(unittest.TestCase):
+    """A refused narration section's Hub locator outlives the batch it came from."""
+
+    LOCATOR = {"studio": "voice", "worker_job_id": "c85e8c5d0a1b",
+               "client_request_id": "studiohub:old-batch:0", "final_quality_sha256": "a" * 64,
+               "receipt_sha256": "b" * 64, "pcm_bytes": 4844, "pcm_sha256": "c" * 64}
+
+    def test_clear_compaction_and_restart_keep_the_protected_locator(self):
+        import json
+        import tempfile
+        from unittest.mock import patch
+        from components.hub.backend import control_plane, ledger
+
+        old = time.time() - 120 * DAY
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(ledger, "DB_FILE", Path(folder) / "hub.db"), \
+                patch.object(control_plane, "queue_shadow_job", lambda *args, **kwargs: None):
+            ledger.save_batch({"id": "old-batch", "created_at": old, "modality": "voice", "items": [
+                {"index": 0, "state": "error", "error_code": "TTS_SECTION_SILENT",
+                 "_review_candidate": dict(self.LOCATOR)}]})
+            self.assertNotIn("_review_candidate", json.dumps(ledger.load_batch("old-batch")))
+            ledger.save_batch({"id": "other-old", "created_at": old, "modality": "voice",
+                               "items": [{"index": 0, "state": "error"}]})
+
+            self.assertEqual(ledger.delete_batches(["old-batch"]), 1)   # "Clear finished"
+            self.assertEqual(ledger.compact_history()["batches"], 1)    # the daily 90-day trim
+
+            self.assertIsNone(ledger.load_batch("old-batch"))
+            self.assertIsNone(ledger.load_batch("other-old"))
+            kept = ledger.review_locator("old-batch", 0)   # a fresh connection: a restarted Hub
+            self.assertEqual({key: kept[key] for key in self.LOCATOR}, self.LOCATOR)
+            self.assertEqual(kept["schema_version"], 1)
+
+    def test_an_identical_replay_is_kept_and_a_conflict_or_full_studio_is_refused(self):
+        import tempfile
+        from unittest.mock import patch
+        from components.hub.backend import control_plane, ledger
+
+        def save(batch_id, locator, index=0):
+            item = {"index": index, "state": "error", "_review_candidate": dict(locator)}
+            ledger.save_batch({"id": batch_id, "created_at": time.time(), "items": [item]})
+            return item
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(ledger, "DB_FILE", Path(folder) / "hub.db"), \
+                patch.object(control_plane, "queue_shadow_job", lambda *args, **kwargs: None):
+            save("b", self.LOCATOR)
+            save("b", self.LOCATOR)                                      # replay: unchanged
+            item = save("b", dict(self.LOCATOR, receipt_sha256="d" * 64))  # conflict: refused
+            self.assertEqual(item["state"], "error")                     # the item still settles
+            self.assertEqual(ledger.review_locator("b", 0)["receipt_sha256"], "b" * 64)
+            save("b2", self.LOCATOR)                                     # same worker job elsewhere
+            self.assertIsNone(ledger.review_locator("b2", 0))
+            for n in range(1, ledger.REVIEW_LOCATORS_PER_STUDIO):
+                save(f"fill-{n}", dict(self.LOCATOR, worker_job_id=f"{n:012x}"))
+            save("one-too-many", dict(self.LOCATOR, worker_job_id="f" * 12))
+            self.assertIsNone(ledger.review_locator("one-too-many", 0))
+            save("other-studio", dict(self.LOCATOR, studio="voice@node-a", worker_job_id="e" * 12))
+            self.assertIsNotNone(ledger.review_locator("other-studio", 0))
+
+
 if __name__ == "__main__":
     unittest.main()

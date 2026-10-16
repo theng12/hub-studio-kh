@@ -516,6 +516,14 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/jobs/[^/]+$"),
     ("DELETE", r"^/api/hub/jobs/[^/]+$"),
     ("GET", r"^/api/hub/jobs/[^/]+/items/[0-9]+/artifact$"),
+    # A refused narration section kept for listening (inactive, review only): read-only, and only
+    # these four shapes - the item routes the Gateway reads, and the two worker routes a controller
+    # reads through a node's peer surface. Nothing here deletes, retries or activates anything.
+    ("GET", r"^/api/hub/jobs/[^/]+/items/[0-9]+/review-candidate$"),
+    ("GET", r"^/api/hub/jobs/[^/]+/items/[0-9]+/review-candidate/audio$"),
+    ("GET", r"^/studio/voice/api/fleet/jobs/[0-9a-f]{12}/review-candidate$"),
+    ("GET", r"^/studio/voice/api/fleet/jobs/[0-9a-f]{12}/review-candidate/media/"
+            r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$"),
     ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/ack$"),
     ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/reconcile$"),
     # Owner decision 2026-09-22: the controller may release a node's machine by discarding an
