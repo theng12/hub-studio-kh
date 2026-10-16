@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.181 — 2026-10-16
+
+### Rejected narration takes are kept for listening review
+
+When a narration section still fails its quality check on the last try, Studio Hub now keeps that final take instead of discarding it. You can listen to it together with the reason it was rejected and the settings that produced it.
+
+The section still counts as failed, and nothing is used automatically. Kept takes are never deleted on their own.
+
 ## 0.6.180 — 2026-10-15
 
 ### Read model catalogs that include list defaults

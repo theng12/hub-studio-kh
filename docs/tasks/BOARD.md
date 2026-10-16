@@ -2,6 +2,10 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-REJECTED-NARRATION-20261016 — 0.6.181 RELEASE
+
+Reviewed fix `5970ea0` (fix/rejected-narration-review-candidates; independent Opus review ACCEPT) integrated over main `a655fe1`: a Voice section's final rejected take is kept as an inactive review-only candidate bound to the failed Hub item and served through authenticated byte-verified GETs. Python-only; native source unchanged from 0.6.180. Receipts: orchestra `hub-0181-release/`.
+
 ### ST-NATIVE-CATALOG-ARRAY-20261015 — 180 RELEASE PREPARATION; installed fleet remains179
 
 Root owns independent native-catalog release integration in native-fleet-management/release/native-catalog-array-180. Reviewed two-file feature478ec03 was integrated over actual main47c97aed at1845d2f. Array-decoder RED/GREEN and independent exact-source review are complete. Notes and VERSION180 are prepared; remaining appropriate native/metadata source gates, main push, primary DMG, installed proof and paced fleet delivery are not complete. No unfinished renderer source is included. Refer to orchestra hub-0180-release/ and current living handoff before any execution; sole cross-project test/compiler lease must be reconciled.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.181 — 2026-10-16
+
+- Keep a Voice section's final rejected take as an inactive, review-only candidate when it fails the quality gate on its last try, with its exact text, measured rejection reason, settings and quality evidence.
+- Bind the candidate to the failed Hub item in the same transaction (waiting briefly while Voice finishes saving) and serve it only through authenticated, byte-verified reads. The failed job's outcome is unchanged and nothing deletes candidates automatically.
+
 ## 0.6.180 — 2026-10-15
 
 - Decode typed array values in the native model catalog, including the published Vision regions default. The reproduced list default previously rejected the complete catalog and could leave local controls unavailable.
