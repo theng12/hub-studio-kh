@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.6.182 — 2026-10-16
 
+- Nothing the Hub retires is permanently deleted automatically any more: trash purges, acknowledged reclaims, admission clean-up, the disk governor's trash cap and age purge, old app copies, release artifacts, staging folders, update fallbacks, release manifests/blobs and expired staged voice copies all move into the Hub Trash Folder (same-volume rename) or, in the native app, macOS Trash. A failed move leaves the item where it is. Retirement leaf folders are created with plain `mkdir` and retried, so two retirements never share a folder.
+- The Trash Folder row gets "Show Trash Folder in Finder"; the red, stop, over-cap and admission-refused messages name the folder and say to empty it.
+- Fleet routes on the controller-to-node path: `GET /api/hub/fleet/nodes/{id}/trash` (items, physical bytes, kind, age, totals, disk free), `POST .../trash/move-to-macos-trash` and `POST .../trash/delete` (confirmed, re-measured; a changed count or size is 409 `TRASH_CHANGED` with nothing deleted). Only `<trash_root>/<date>/<name>` is touched; links are never followed. An older node answers `HUB_TOO_OLD` (needs 0.6.182).
 - A permanent delete from the Trash Folder no longer stalls the Hub: under the lock it only lists, measures (cached physical bytes, same as the listing) and renames the items into a `.deleting-*` folder; the removal runs after the lock is released, through directory descriptors so a swapped folder is never followed. Leftovers are swept by the next delete. Moving to macOS Trash also runs outside the lock.
 
 ## 0.6.181 — 2026-10-16

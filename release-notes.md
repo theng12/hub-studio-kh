@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.182 — 2026-10-16
+
+### Nothing is deleted without you
+
+Studio Hub no longer permanently deletes anything on its own. Old outputs, app copies and other things it retires now go to its Trash Folder, so you can still get them back. The Trash Folder row has a new "Show Trash Folder in Finder" button, and when the disk gets full the message tells you to empty the Trash Folder to free space.
+
+You can also see and empty each Mac's Trash Folder from the Gateway app (Fleet > Machines > … > Trash…). Permanent delete always asks you to confirm first.
+
 ## 0.6.181 — 2026-10-16
 
 ### Rejected narration takes are kept for listening review

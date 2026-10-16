@@ -2,6 +2,10 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-TRASH-NO-HARD-DELETE-20261016 — 0.6.182 RELEASE
+
+Reviewed fix/hub-trash-no-hard-delete (`ae28ffc`, accepted) fast-forwarded over main `efb04dc`: no automatic hard deletes (moves to the Trash Folder / macOS Trash), fleet Trash Folder list/move/delete routes for Gateway 0.2.181, Show Trash Folder in Finder. Native source changed (StudioAPI/StudioViews/UpdateClient): fresh native source gate. Receipts: orchestra `hub-0182-release/`.
+
 ### ST-REJECTED-NARRATION-20261016 — 0.6.181 SHIPPED; This Mac + 1100 verified, paced fleet delivery running
 
 Reviewed fix `5970ea0` (fix/rejected-narration-review-candidates; independent Opus review ACCEPT) integrated over main `a655fe1`: a Voice section's final rejected take is kept as an inactive review-only candidate bound to the failed Hub item and served through authenticated byte-verified GETs. Python-only; native source unchanged from 0.6.180. Receipts: orchestra `hub-0181-release/`.
