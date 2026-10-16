@@ -3915,10 +3915,108 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 worker_id=worker_id, machine=machine, status_code=upstream.status_code,
                 content_type=upstream.headers.get("content-type") or "",
                 content=upstream.content)
-        passthrough = {}
+        passthrough = {"X-StudioHub-Machine": machine}
         for name in ("content-type", "content-disposition", "x-content-sha256"):
             if name in upstream.headers:
                 passthrough[name] = upstream.headers[name]
+        return Response(content=upstream.content, status_code=upstream.status_code,
+                        headers=passthrough)
+
+    async def _relay_chat_to_node(request: Request, record) -> Response | None:
+        """Send a completion for a model only a node has to exactly one such node, or return None.
+
+        The Gateway asks a site's controller; a model on a node and not on the controller's own
+        Chat used to be refused here although the site published it. The relay is the pack
+        dispatcher's own step (`chat_jobs.dispatch_once`) for one synchronous request: an eligible
+        Chat studio, memory readiness, ranked arbitration and the controller's lease on that Mac,
+        then the node's peer route, whose own door admits, leases and records it. One node, one
+        POST: a named refusal is returned as it is and a lost answer is a bare 502 (it may have
+        run), never a second submission. ponytail: no bounded wait here (the queue-wait opt-in
+        stays local); a busy node answers MACHINE_BUSY and the Gateway defers.
+        """
+        from .backend import registry
+        body = await request.body()
+        model = await _request_model(request, body, request.headers.get("content-type") or "")
+        chat_studios = [row for row in monitor.registry if row.get("modality") == "chat"]
+        if not model or all(peers.is_local_studio(row) for row in chat_studios):
+            return None
+
+        def entry(catalog):
+            return next((row for row in (catalog or {}).get("models", [])
+                         if (row.get("repo") == model or model in (row.get("aliases") or []))
+                         and broker.is_cached(row)), None)
+
+        holders = []
+        for studio in chat_studios:
+            if entry(await monitor.scheduling_catalog(studio)) is None:
+                continue
+            if peers.is_local_studio(studio):
+                return None   # this Mac's own Chat has it: the ordinary peer route serves it
+            holders.append(studio)
+        if not holders:
+            return None
+        held = {studio["id"] for studio in holders}
+        for studio in await chat_jobs._eligible_studios(monitor, model):
+            if studio["id"] not in held:
+                continue
+            machine = studio["machine"]
+            owner = f"relay:chat:{uuid.uuid4().hex}"
+            decision, _note = await broker.prepare_machine_memory(
+                monitor._client, studio, model, entry(await monitor.scheduling_catalog(studio)))
+            if (decision != "run" or await broker.higher_priority_work_waiting(
+                    machine, "chat", time.time(), owner)):
+                continue
+            # No await between this recheck and the lease.
+            if (registry.machine_enabled(machine) and registry.studio_enabled(machine, studio["id"])
+                    and not broker.in_maintenance(studio["id"]) and peers.dispatch_ready(studio)
+                    and broker.acquire_external_machine(machine, owner)):
+                break
+        else:
+            paused = all(not registry.machine_enabled(row["machine"])
+                         or not registry.studio_enabled(row["machine"], row["id"]) for row in holders)
+            return _peer_refusal_response(
+                {"code": "NO_AVAILABLE_MACHINE", "detail": "every Mac with this Chat model is paused"}
+                if paused else
+                {"code": "MACHINE_BUSY", "detail": "every Mac with this Chat model is busy"})
+
+        def settled(**facts) -> None:
+            if record is not None:
+                try:
+                    record(request_body=body, started_at=started_at,
+                           runtime_s=time.time() - started_at, worker_id=studio["id"],
+                           machine=machine, **facts)
+                except Exception:
+                    logging.getLogger("studiohub.chat").exception(
+                        "the relayed Chat request could not be recorded as a job")
+
+        url, headers = peers.studio_request(studio, "/v1/chat/completions")
+        headers["Content-Type"] = request.headers.get("content-type") or "application/json"
+        started_at = time.time()
+        try:
+            upstream = await monitor._client.post(
+                url, headers=headers, content=body,
+                timeout=httpx.Timeout(deadline_floor_seconds("chat"), connect=5.0))
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            settled(failure="worker_unreachable", failure_detail=str(exc) or type(exc).__name__)
+            return _peer_refusal_response({"code": "STUDIO_NOT_RUNNING",
+                                           "detail": f"{machine} could not be reached; no work was accepted"})
+        except (httpx.HTTPError, OSError) as exc:
+            settled(failure="worker_unreachable", failure_detail=str(exc) or type(exc).__name__)
+            raise HTTPException(502, f"the Chat relay to {machine} lost its answer; it may have run") from exc
+        except BaseException:
+            settled(failure="request_cancelled")
+            raise
+        finally:
+            broker.release_external_machine(machine, owner)
+        if upstream.status_code in (401, 403):
+            peers.invalidate(machine, rejected=True, modality="chat")
+            return _peer_refusal_response({"code": "STUDIO_NOT_RUNNING",
+                                           "detail": f"{machine} refused this controller's credential"})
+        settled(status_code=upstream.status_code,
+                content_type=upstream.headers.get("content-type") or "", content=upstream.content)
+        passthrough = {"X-StudioHub-Machine": machine}
+        if "content-type" in upstream.headers:
+            passthrough["content-type"] = upstream.headers["content-type"]
         return Response(content=upstream.content, status_code=upstream.status_code,
                         headers=passthrough)
 
@@ -3936,8 +4034,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                    methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def studio_proxy(modality: str, path: str, request: Request) -> Response:
         """Serve the fleet peer surface over ``_proxy_to_worker``."""
-        return await _proxy_to_worker(modality, path, request,
-                                      record=_peer_job_recorder(modality, path))
+        record = _peer_job_recorder(modality, path)
+        if (request.method == "POST" and f"{modality}/{path.strip('/')}" == "chat/v1/chat/completions"
+                and "X-StudioHub-Queue-Wait-Seconds" not in request.headers
+                and (relayed := await _relay_chat_to_node(request, record)) is not None):
+            return relayed
+        return await _proxy_to_worker(modality, path, request, record=record)
 
     @app.post("/api/hub/fleet/nodes/{node_id}/transcribe")
     async def fleet_node_transcribe(node_id: str, request: Request) -> Response:
