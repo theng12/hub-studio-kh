@@ -2962,6 +2962,24 @@ final class NativeWorkspaceStore: ObservableObject {
     /// offers for it — the same rule Image and Music already used. A repo constant here is what
     /// opened the Audio page on a model that was not in its own picker.
 
+    /// How long a Chat send waits for a busy Mac before the Hub refuses it.
+    ///
+    /// A completion that names a model is eligible for the Hub's bounded Chat queue: it waits for
+    /// the Mac's current job to finish and then runs, instead of answering at once with "local is
+    /// reserved for other work on this Mac". That wait is an opt-in on the wire
+    /// (`X-StudioHub-Queue-Wait-Seconds`, 0.6.157), and the app sent no such header, so every send
+    /// took the immediate path and a Mac with any other job on it refused Chat outright. This is
+    /// the app's own bound on how long the pane waits - one Chat generation's own ceiling, not the
+    /// three hours the Hub allows a background caller, because an operator is watching the answer.
+    static let chatQueueWaitSeconds: TimeInterval = 1800
+    /// The margin over that wait for the generation itself, once the Mac is free.
+    ///
+    /// The Hub holds one Chat worker call to `deadline_floor_seconds("chat")` (1,800 s,
+    /// `components/hub/standalone.py`), so the request must outlive the wait plus a full
+    /// generation. A shorter timeout would abandon - and, through the disconnect the Hub watches
+    /// for, cancel - a request the Hub is still honouring.
+    static let chatGenerationSeconds: TimeInterval = 1800
+
     @Published private(set) var models: [NativeModel] = []
     @Published private(set) var audioJobs: [NativeJob] = []
     @Published private(set) var imageJobs: [NativeJob] = []
@@ -4346,7 +4364,16 @@ final class NativeWorkspaceStore: ObservableObject {
         chatPrompt = ""
         submittingChat = true
         let requestToken = UUID()
-        startChatActivityPolling(jobID: turn.id, connection: requestConnection,
+        // The id one send is tracked under on the wire. The Hub's bounded queue keys a request by
+        // 32 lowercase hexadecimal characters (`chat_priority._identifier`) and the Chat worker
+        // echoes whatever id it is given as its own activity id (`_JOB_ID`), so one value names the
+        // request in the header, the body and the activity poll. The turn's own id is a dashed
+        // UUID and cannot be that value; a send with no model named keeps the immediate path and
+        // its existing turn id.
+        let model = chatModel.isEmpty ? nil : chatModel
+        let wireID = model == nil ? turn.id
+            : UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        startChatActivityPolling(jobID: wireID, connection: requestConnection,
                                  requestToken: requestToken)
         defer {
             cancelChatActivity(requestToken: requestToken)
@@ -4364,8 +4391,18 @@ final class NativeWorkspaceStore: ObservableObject {
                 // picker above Send chose nothing and the Hub had no model to gate or dispatch by.
                 // With nothing selected the field is left out entirely, which is the same request
                 // this page has always made - never a name the worker would refuse.
-                body: HubChatRequest(model: chatModel.isEmpty ? nil : chatModel,
-                                     messages: messages, stream: false, jobID: turn.id))
+                body: HubChatRequest(model: model, messages: messages, stream: false, jobID: wireID),
+                // A named model is what makes this send eligible for the Hub's bounded queue; the
+                // queue refuses a request that names none, so no header is sent without one and the
+                // immediate path is unchanged.
+                headers: model == nil ? [:] : [
+                    "X-StudioHub-Request-ID": wireID,
+                    "X-StudioHub-Queue-Wait-Seconds": String(Int(Self.chatQueueWaitSeconds)),
+                ],
+                // The Hub holds the response for the whole wait and then the generation, so the
+                // request must outlive both. The immediate path keeps the app's 30-second default.
+                timeout: model == nil ? nil
+                    : Self.chatQueueWaitSeconds + Self.chatGenerationSeconds + 10)
             guard connectionID == requestConnection else {
                 // The transcript outlived the connection it was sent on, so this reply may be an
                 // answer from a Hub the app is no longer talking to. Say so rather than dropping
@@ -9448,15 +9485,21 @@ final class NativeWorkspaceStore: ObservableObject {
         return URL(string: "http://\(allowedHost):\(port)")!
     }
 
-    private func makeRequest(_ components: [String], method: String = "GET") throws -> URLRequest {
+    /// Build one request. `headers` adds to the credential and Accept this app always sends, and
+    /// `timeout` replaces the 30-second default only for the calls whose answer the Hub holds
+    /// open (a bounded Chat queue wait plus the generation behind it).
+    private func makeRequest(_ components: [String], method: String = "GET",
+                             headers: [String: String] = [:],
+                             timeout: TimeInterval? = nil) throws -> URLRequest {
         guard let baseURL else { throw NativeAPIError.message("Start the local services before using this action.") }
         var url = baseURL
         for component in components { url.appendPathComponent(component) }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = 30
+        request.timeoutInterval = timeout ?? 30
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let hubToken { request.setValue(hubToken, forHTTPHeaderField: "X-Hub-Token") }
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         return request
     }
 
@@ -9482,8 +9525,10 @@ final class NativeWorkspaceStore: ObservableObject {
         request.httpBody = try encoder.encode(body)
         return try await perform(request)
     }
-    private func sendHubJSON<T: Decodable, Body: Encodable>(_ components: [String], body: Body) async throws -> T {
-        var request = try makeRequest(components, method: "POST")
+    private func sendHubJSON<T: Decodable, Body: Encodable>(_ components: [String], body: Body,
+                                                            headers: [String: String] = [:],
+                                                            timeout: TimeInterval? = nil) async throws -> T {
+        var request = try makeRequest(components, method: "POST", headers: headers, timeout: timeout)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // Same encoding as every other JSON request in this app. This call used a bare
         // `JSONEncoder()` while `sendJSON` converted keys to snake_case, so a job envelope left

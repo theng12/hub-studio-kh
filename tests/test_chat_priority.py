@@ -438,9 +438,126 @@ asyncio.run(routed_proof())
 print('local policy persists; one pending slot; cancellation fences late submits')
 '''
 
+# The owner's own Chat page: a busy, chat-first Mac must queue the send, not refuse it.
+#
+# This is the local route (`POST /api/hub/chat/completions`), and it is the one route the peer
+# suites above cannot cover: `auth.FLEET_ALLOWED` deliberately excludes it, so it is reachable
+# only with this Mac's own Hub token - which is exactly the credential the app holds. The send
+# carries the same two headers the native client now sends, and without them the same POST is
+# the owner's original 409.
+LOCAL_OPTIN_PROOF = r'''
+import asyncio
+import hashlib
+import json
+import os
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+import httpx
+from components import model_packages
+from components.hub.backend import broker, registry
+
+workers = [
+ {"id":"chat", "title":"Chat", "modality":"chat", "machine":"local", "local":True},
+]
+monitor = SimpleNamespace(registry=workers, status={s['id']:{'status':'up'} for s in workers})
+broker.configure_monitor(monitor)
+
+state=Path(os.environ['STUDIOHUB_DATA_DIR'])
+source=state/'fixture-source'
+source.mkdir()
+model_bytes=b'local-optin-model\n'
+(source/'model.bin').write_bytes(model_bytes)
+manifest={'schema_version':1,'package_id':'local-optin','model_id':'model',
+          'revision':'b'*40,'engine':'chat-mlx','minimum_macos':'0.0','production_allowed':True,
+          'files':[{'path':'model.bin','size':len(model_bytes),
+                    'sha256':hashlib.sha256(model_bytes).hexdigest(),'urls':[]}]}
+manifests=Path(os.environ['STUDIOHUB_MODEL_MANIFESTS'])
+manifests.mkdir()
+(manifests/'local-optin.json').write_text(json.dumps(manifest))
+library=Path(os.environ['STUDIOHUB_MODELS_DIR'])
+library.mkdir()
+model_packages.import_folder(manifest,source,library)
+for index,worker in enumerate(workers):
+ worker.update(host='127.0.0.1',port=51061+index,base_url='http://fixture-worker',
+               hub_token='worker-secret',
+               runtime_identity={'id':'fixture-runtime','compatible':True})
+workers_file=Path(os.environ['STUDIOHUB_WORKERS_FILE'])
+workers_file.write_text(json.dumps(workers))
+workers_file.chmod(0o600)
+
+from components.hub.backend import monitor as monitor_module
+with patch.object(monitor_module,'StudioMonitor',return_value=monitor):
+ from components.hub import standalone
+from components.hub.backend import auth, chat_priority, ledger
+chat_priority.requests.clear()
+broker._external_machine_leases.clear()
+ledger.prepare_database()
+
+wire=[]
+async def worker_request(request):
+ wire.append((request.url.path,json.loads(request.content)))
+ return httpx.Response(200,json={'choices':[{'message':{'content':'answer'},'finish_reason':'length'}],
+                                 'usage':{'prompt_tokens':2,'completion_tokens':3,'total_tokens':5}})
+monitor._client=httpx.AsyncClient(transport=httpx.MockTransport(worker_request))
+async def catalog(_studio):
+ return {'models':[{'repo':'model','cache':{'state':'cached'},'runtime_ready':True,'available':True}]}
+monitor.scheduling_catalog=catalog
+
+# The app's own credential, exactly as `makeRequest` sends it. The local Chat route is
+# owner-only: a fleet credential is refused there, so the peer suites above never reach this
+# route, and the route the app actually uses had no test either.
+owner={'X-Hub-Token':auth.load_token()}
+request_id='a'*32
+body={'model':'model','messages':[{'role':'user','content':'hi'}],'stream':False}
+optin={**owner,'X-StudioHub-Request-ID':request_id,'X-StudioHub-Queue-Wait-Seconds':'5'}
+path='/api/hub/chat/completions'
+
+async def proof():
+ with patch.object(standalone,'StudioMonitor',return_value=monitor), \
+      patch.object(standalone.output_storage,'admission',return_value=None), \
+      patch.object(broker,'_host_for_studio',return_value=None), \
+      patch.object(broker,'prepare_machine_memory',new=AsyncMock(return_value=('run',None))):
+  hub=standalone.create_app(start_background=False)
+  async with httpx.AsyncClient(transport=httpx.ASGITransport(app=hub),base_url='http://fixture-hub') as client:
+   # The owner's own setting on this Mac, and another job holding its only machine's lease.
+   registry.set_priority_order('local',['chat'])
+   assert broker.acquire_external_machine('local','image:other')
+   assert 'local' in broker.busy_machines()
+   # The app sent no queue header, so a busy Mac refused Chat at once - the reported bug.
+   refused=await client.post(path,headers=owner,json=body)
+   assert refused.status_code==409,(refused.status_code,refused.text)
+   assert refused.json()['code']=='MACHINE_BUSY',refused.text
+   assert refused.json()['detail']=='local is reserved for other work on this Mac',refused.text
+   assert not wire,'a send that did not opt in must not reach the worker'
+   # With the header the same send waits for the Mac instead of being refused...
+   queued=asyncio.create_task(client.post(path,headers=optin,json=body))
+   for _ in range(4000):
+    if chat_priority.requests.get(request_id,{}).get('state')=='queued': break
+    await asyncio.sleep(.001)
+   assert chat_priority.snapshot(request_id)['state']=='queued',chat_priority.snapshot(request_id)
+   assert not wire,'a queued send must not reach the worker while the Mac is busy'
+   assert not queued.done()
+   # ...and runs the moment the Mac is free: chat is ranked first, and the one POST that waited
+   # is the only one that reaches the worker.
+   broker.release_external_machine('local','image:other')
+   answer=await queued
+   assert answer.status_code==200,(answer.status_code,answer.text)
+   assert answer.json()['choices'][0]['message']['content']=='answer',answer.text
+   assert answer.headers.get('x-studiohub-machine')=='local',answer.headers
+   assert len(wire)==1,wire
+   sent_path,payload=wire[0]
+   assert sent_path=='/v1/chat/completions',sent_path
+   assert payload['job_id']==request_id,payload
+   assert chat_priority.snapshot(request_id)['state']=='done'
+ await monitor._client.aclose()
+asyncio.run(proof())
+print('a busy chat-first Mac queues the app\'s own opted-in Chat send instead of refusing it')
+'''
+
 
 class ChatPriorityTests(unittest.TestCase):
-    def test_policy_queue_and_cancel_before_submit(self):
+    def _run(self, proof):
         state=tempfile.mkdtemp(prefix='hub-chat-priority-')
         # Full-suite collectors configure their own libraries before this test runs. The child
         # owns all Hub paths and exercises admission against a real tiny synthetic package.
@@ -448,9 +565,18 @@ class ChatPriorityTests(unittest.TestCase):
         env.update(STUDIOHUB_DATA_DIR=state, STUDIOHUB_MODELS_DIR=state+'/models',
                    STUDIOHUB_MODEL_MANIFESTS=state+'/manifests', STUDIOHUB_WORKERS_FILE=state+'/workers.json',
                    STUDIOHUB_PACKAGED='1', STUDIOHUB_REQUIRE_AUTH='1', PYTHONPATH=str(ROOT))
-        result=subprocess.run([os.environ.get('STUDIOHUB_TEST_RUNTIME',sys.executable), '-c',PROOF],
+        result=subprocess.run([os.environ.get('STUDIOHUB_TEST_RUNTIME',sys.executable), '-c',proof],
                               env=env,cwd=ROOT,capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+    def test_policy_queue_and_cancel_before_submit(self):
+        self._run(PROOF)
+
+    def test_the_app_own_busy_chat_first_mac_queues_instead_of_refusing(self):
+        # The regression for the owner's 409: the same POST that is refused when it does not opt
+        # in must wait, and then run, when it does - on the route and credential the app uses.
+        self._run(LOCAL_OPTIN_PROOF)
+
 
 if __name__=='__main__':
     unittest.main()

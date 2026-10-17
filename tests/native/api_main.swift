@@ -312,6 +312,10 @@ final class FixtureProtocol: URLProtocol {
     /// failed attempt can be told from a silent one.
     static var chatCalls = 0
     static var lastChatBody: [String: Any]?
+    /// The queue opt-in headers the app sent on its last Chat completion. Optional so an absent
+    /// header stays absent and is distinguishable from empty: the immediate path must send neither.
+    static var lastChatRequestIDHeader: String?
+    static var lastChatQueueWaitHeader: String?
     static var holdNextChat = false
     static var heldChatStarted = false
     static var chatFailureStatus: Int?
@@ -563,6 +567,8 @@ final class FixtureProtocol: URLProtocol {
     static func releaseHeldChat() { releaseChat.signal() }
     static func chatCallCount() -> Int { lock.lock(); defer { lock.unlock() }; return chatCalls }
     static func recordedChatBody() -> [String: Any]? { lock.lock(); defer { lock.unlock() }; return lastChatBody }
+    static func recordedChatRequestIDHeader() -> String? { lock.lock(); defer { lock.unlock() }; return lastChatRequestIDHeader }
+    static func recordedChatQueueWaitHeader() -> String? { lock.lock(); defer { lock.unlock() }; return lastChatQueueWaitHeader }
     static func setChatActivityPhase(_ value: String) { lock.lock(); defer { lock.unlock() }; chatActivityPhase = value }
     static func setChatActivityResponseID(_ value: String?) { lock.lock(); defer { lock.unlock() }; chatActivityResponseID = value }
     static func recordedChatActivityJobIDs() -> [String] { lock.lock(); defer { lock.unlock() }; return chatActivityJobIDs }
@@ -1623,6 +1629,8 @@ final class FixtureProtocol: URLProtocol {
             Self.lock.lock()
             Self.chatCalls += 1
             Self.lastChatBody = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            Self.lastChatRequestIDHeader = request.value(forHTTPHeaderField: "X-StudioHub-Request-ID")
+            Self.lastChatQueueWaitHeader = request.value(forHTTPHeaderField: "X-StudioHub-Queue-Wait-Seconds")
             let hold = Self.holdNextChat
             if hold { Self.holdNextChat = false; Self.heldChatStarted = true }
             let failure = Self.chatFailureStatus
@@ -4854,8 +4862,20 @@ struct NativeAPITests {
         for _ in 0..<200 where store.chatActivity?.progressStage != "processing" {
             try? await Task.sleep(for: .milliseconds(10))
         }
-        require(store.chatActivity?.id == store.chatTurns.first?.id,
-                "the visible activity must belong to the turn being sent")
+        // The named-model send identifies itself on the wire by a fresh 32-lowercase-hex id (the
+        // Hub's queue contract, `chat_priority._identifier`), not by the transcript turn's dashed
+        // UUID. The visible activity must belong to that same wire id — actual poll observations,
+        // so an empty observation list cannot vacuously agree here.
+        let heldJobID = FixtureProtocol.recordedChatBody()?["job_id"] as? String
+        require(heldJobID?.count == 32
+                    && heldJobID?.allSatisfy({ "0123456789abcdef".contains($0) }) == true,
+                "the held completion must carry its 32-lowercase-hex wire id, got: \(heldJobID ?? "nil")")
+        require(FixtureProtocol.recordedChatRequestIDHeader() == heldJobID,
+                "the queue request-id header must be the id the held completion body carries, got: "
+                    + "\(FixtureProtocol.recordedChatRequestIDHeader() ?? "nil") vs \(heldJobID ?? "nil")")
+        require(store.chatActivity?.id == heldJobID,
+                "the visible activity must belong to the send's own wire id, got: "
+                    + "\(store.chatActivity?.id ?? "nil") vs \(heldJobID ?? "nil")")
         require(store.chatActivity?.statusText == "Processing prompt 3 of 12 · 120.0 prompt tok/s",
                 "processing must show the worker's prompt numerator, denominator and stated rate, got: \(store.chatActivity?.statusText ?? "nil")")
         require(store.chatActivity?.progress == 0.25,
@@ -4906,8 +4926,13 @@ struct NativeAPITests {
         require(chatBody?["model"] as? String == "Qwen/Qwen3.5-9B",
                 "the request must name the model the operator chose, got: \(chatBody?["model"] ?? "nil")")
         let sentJobID = chatBody?["job_id"] as? String
-        require(sentJobID == store.chatTurns.first?.id,
-                "the completion job_id must be the turn UUID shown in the transcript")
+        require(sentJobID?.count == 32
+                    && sentJobID?.allSatisfy({ "0123456789abcdef".contains($0) }) == true,
+                "the completion must be identified by 32 lowercase hexadecimal characters, got: \(sentJobID ?? "nil")")
+        require(FixtureProtocol.recordedChatRequestIDHeader() == sentJobID,
+                "the queue request-id header must be the id the completion body carries")
+        require(FixtureProtocol.recordedChatQueueWaitHeader() == String(Int(NativeWorkspaceStore.chatQueueWaitSeconds)),
+                "the queue wait must be the app's own bound, got: \(FixtureProtocol.recordedChatQueueWaitHeader() ?? "nil")")
         require(FixtureProtocol.recordedChatActivityJobIDs().allSatisfy { $0 == sentJobID },
                 "every activity poll must be scoped to the completion's own job_id")
         let sentMessages = chatBody?["messages"] as? [[String: Any]]
@@ -4947,6 +4972,13 @@ struct NativeAPITests {
         require(unnamedBody?["model"] == nil,
                 "an unselected model must be left out, not sent as an empty string, got: "
                     + "\(unnamedBody?["model"] ?? "nil")")
+        // With no model named the send keeps the immediate path: the transcript turn's own UUID is
+        // the job id on the wire, and neither queue header is sent at all.
+        require(unnamedBody?["job_id"] as? String == store.chatTurns.first?.id,
+                "a send with no model must keep the immediate path's turn UUID as its job id")
+        require(FixtureProtocol.recordedChatRequestIDHeader() == nil
+                    && FixtureProtocol.recordedChatQueueWaitHeader() == nil,
+                "no queue headers may be sent when no model is named")
         store.chatModel = "Qwen/Qwen3.5-9B"
 
         // A failure stays in the transcript, marked, with no invented reply.
