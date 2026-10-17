@@ -2,6 +2,10 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-FLEET-CHAT-RELAY-20261017 — 0.6.183 RELEASE
+
+Reviewed `98d4fa3` + blocker fix `12db653` (independent re-review ACCEPT, `agent-reports-20261016/fleet-chat-relay-re-review.md`) fast-forwarded over main `5b60256`: a controller relays a node-only Chat model to one node, and a candidate whose catalog went stale is skipped rather than dispatched (fail-closed). Python only; `native/` unchanged, so the 0.6.182 native binary is reused byte-for-byte. Pairs with Gateway 0.2.183 (chat lane records the Mac that answered). Known limitations recorded in the release report: paused local-holder short circuit, buffered SSE with no bounded relay wait, absent node job id / caller disconnect can orphan, imprecise all-unprovable busy message. Receipts: orchestra `hub-0183-release/`.
+
 ### ST-TRASH-NO-HARD-DELETE-20261016 — 0.6.182 RELEASE
 
 Reviewed fix/hub-trash-no-hard-delete (`ae28ffc`, accepted) fast-forwarded over main `efb04dc`: no automatic hard deletes (moves to the Trash Folder / macOS Trash), fleet Trash Folder list/move/delete routes for Gateway 0.2.181, Show Trash Folder in Finder. Native source changed (StudioAPI/StudioViews/UpdateClient): fresh native source gate. Receipts: orchestra `hub-0182-release/`.

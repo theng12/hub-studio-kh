@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.183 — 2026-10-17
+
+- A controller now relays a Chat completion for a model only its nodes carry: `studio_proxy` calls `_relay_chat_to_node` for a POST completion that does not use the bounded queue opt-in, reusing the pack dispatcher's own step (a node whose catalog has the exact model cached, memory readiness, ranked arbitration, the controller's lease on that Mac), and posts to the node's own Chat worker. It returns to the ordinary local path when this Mac's own Chat has the model, when only local studios exist, or when no catalog holds it.
+- A relay candidate whose catalog read goes stale or fails in the eligibility window is skipped, not dispatched: the loop's `entry()` result is `None`-checked before `broker.prepare_machine_memory`, so an unprovable Mac is passed over for the next eligible holder and a bare 500 can no longer be produced before anything is sent. Only when every holder is unprovable does the existing named `MACHINE_BUSY` refusal stand. An assumed empty entry would have dropped the model's memory floor to 0 and dispatched to a Mac nobody checked, so the skip is deliberate.
+- The relay's refusal is a location refusal the Gateway already defers or re-routes on; a completed relay names the Mac that answered in the Gateway's chat lane (`X-StudioHub-Machine`, needs Gateway 0.2.183).
+
 ## 0.6.182 — 2026-10-16
 
 - Nothing the Hub retires is permanently deleted automatically any more: trash purges, acknowledged reclaims, admission clean-up, the disk governor's trash cap and age purge, old app copies, release artifacts, staging folders, update fallbacks, release manifests/blobs and expired staged voice copies all move into the Hub Trash Folder (same-volume rename) or, in the native app, macOS Trash. A failed move leaves the item where it is. Retirement leaf folders are created with plain `mkdir` and retried, so two retirements never share a folder.

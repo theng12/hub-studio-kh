@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.183 — 2026-10-17
+
+### Chat can use a model only your other Macs have
+
+Until now, Chat on a site's controller only looked at that Mac. If a Chat model was installed on the site's other Macs but not on the controller itself, the request was refused even though the site had the model. The controller now relays that request to a Mac that has it, picks the best one that is free, and answers as usual. Nothing changes when the controller's own Mac has the model.
+
+A Mac that cannot be checked at that moment is passed over in favour of another that can, and the request is only refused when no Mac can be verified — never sent to a Mac nobody checked.
+
 ## 0.6.182 — 2026-10-16
 
 ### Nothing is deleted without you
