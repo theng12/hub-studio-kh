@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.184 — 2026-10-18
+
+### Chat no longer refuses when this Mac is busy
+
+If Studio Hub was already working on something else, Chat used to answer at once with "local is reserved for other work on this Mac" — even though this Mac was set to prefer Chat. Now a Chat send with a model chosen waits its turn instead: when the current job finishes, the message goes through on its own.
+
+A send waits at most 30 minutes for the Mac, plus half an hour for the answer itself. Nothing is sent twice: if the send is accepted, it is never repeated. If you start Chat without picking a model, nothing changes — the send behaves exactly as before.
+
 ## 0.6.183 — 2026-10-17
 
 ### Chat can use a model only your other Macs have

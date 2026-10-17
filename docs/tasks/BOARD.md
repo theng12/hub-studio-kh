@@ -2,6 +2,10 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-NATIVE-CHAT-QUEUE-20261018 — 0.6.184 CANDIDATE INTEGRATED; gates and release pending
+
+Accepted native Chat queue opt-in (`8db7c88`, independent fixture review CLEAN ACCEPT) cherry-picked onto `release/hub-0.6.184` from verified main `33f64f0` as `f51e446` (identical tree `aec1aa26`); CHANGELOG/release-notes/VERSION 0.6.184/HANDOFF metadata prepared. Native gate exit 0 on the exact candidate (hub-chat-queue-gate/09-12; release binary `d8b69cde…` retained); Python focused 71 passed on the same bytes. REMAINING: independent final delta review → explicit execution grant → full Python gates (0.6.183's two environment-only errors are known and must reproduce, never waved green) → native gate decision per the builder's provenance checks → packaging/DMG → main integration → paced rollout This Mac→1100→controllers. Plan: `agent-reports-20261016/hub-0184-release.md`.
+
 ### ST-FLEET-CHAT-RELAY-20261017 — 0.6.183 RELEASE
 
 Reviewed `98d4fa3` + blocker fix `12db653` (independent re-review ACCEPT, `agent-reports-20261016/fleet-chat-relay-re-review.md`) fast-forwarded over main `5b60256`: a controller relays a node-only Chat model to one node, and a candidate whose catalog went stale is skipped rather than dispatched (fail-closed). Python only; `native/` unchanged, so the 0.6.182 native binary is reused byte-for-byte. Pairs with Gateway 0.2.183 (chat lane records the Mac that answered). Known limitations recorded in the release report: paused local-holder short circuit, buffered SSE with no bounded relay wait, absent node job id / caller disconnect can orphan, imprecise all-unprovable busy message. Receipts: orchestra `hub-0183-release/`.
