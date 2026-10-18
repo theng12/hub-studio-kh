@@ -4209,6 +4209,14 @@ struct StudioContent: View {
                                     Text("Downloading is off because Offline mode is on (Settings → Model library → \"Use imported models offline\"). Turn that off to download from Hugging Face, or use Import Folder… to add a copy you already have — that works offline.")
                                         .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
                                         .fixedSize(horizontal: false, vertical: true)
+                                } else if !model.supported && workspace.modelPackagesUnread {
+                                    // No package row exists at all, so "unsupported" here is the
+                                    // missing read, not this build's form: the catalog sentence
+                                    // below would send the operator to look for a fault that is
+                                    // not there.
+                                    Text("Couldn't read the Hub's model list — retrying. Download stays unavailable until it answers.")
+                                        .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 } else if !model.supported {
                                     Text("This model's runtime entry in the catalog does not match what this form can drive, so it cannot be downloaded here yet.")
                                         .font(HubType.caption).foregroundStyle(.secondary)
