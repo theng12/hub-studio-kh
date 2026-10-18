@@ -44,7 +44,18 @@ class NativeChatMetricsWiringTests(unittest.TestCase):
         request = body(API, "private struct HubChatRequest: Encodable")
         self.assertIn("let jobID: String", request)
         send = body(API, "func sendChat() async {")
-        self.assertIn("jobID: turn.id", send)
+        # Unnamed sends keep the immediate path's turn id; a named model sends under a fresh
+        # 32-lowercase-hex wire id (the Hub queue contract, chat_priority._identifier), and that
+        # same value must name the request in the body, the request-id header and the poll.
+        self.assertIn("let wireID = model == nil ? turn.id", send)
+        self.assertIn('UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()', send)
+        self.assertIn("jobID: wireID", send)
+        self.assertIn('"X-StudioHub-Request-ID": wireID', send)
+        self.assertIn("startChatActivityPolling(jobID: wireID", send)
+        # The transcript and the reply stay keyed to the turn's own id, never the wire id.
+        self.assertIn("chatTurns.append(turn)", send)
+        self.assertIn("chatTurns.firstIndex(where: { $0.id == turn.id })", send)
+        self.assertIn("markChatTurnFailed(turn.id", send)
         poll = body(API, "private func pollChatActivity(")
         self.assertIn("activity.id == jobID", poll)
         request = body(API, "private func getChatActivity(")
