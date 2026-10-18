@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.185 — 2026-10-18
+
+- The SSD installer and the app now agree on where a Mac's models live. One resolver (`components/model_library.py`) answers a single folder for both the kit's copy step and the app: a folder the operator saved in the app, then a non-empty `<data>/models`, then a library recorded at the canonical folder, then one recorded at the earlier kit's folder, then the canonical default. The native setup card, the Models page location row and the Settings row read the same order, so the copy step fills the folder the app actually offers instead of a second one.
+- A "Show in Finder" control on the model-location row reveals the folder the app is currently using, so the folder no longer has to be found by hand.
+- A library the earlier kit left inside `~/Downloads/model-library` is moved out of that protected folder to the folder the app offers — the same single move the pre-resolver helper made — and the app then reports the same folder, so app and copy agree again.
+- Reading the app's own settings file no longer crashes the copy step when the file is not valid text: it becomes the same plain "this file is unusable" problem every other unreadable-settings case produces, never a traceback. A settings file the app itself would refuse (a symlink, a wrong owner, or a group/world-readable file) is treated by the resolver as "no saved choice" too, mirroring the app's own reader guards, so the two never name different folders.
+- Tests: `tests/test_model_library_root.py` covers resolver precedence and the fail-closed settings cases; `tests/test_copy_models_for_this_mac.py` adds functional helper-to-resolver tests (a saved choice fills the chosen folder, a missing chosen folder stops the copy, the Downloads library is moved out, and the old-app fallback still fills the canonical folder).
+
 ## 0.6.184 — 2026-10-18
 
 - The app's own Chat page waits out a busy Mac instead of refusing it. `sendChat()` now opts a named-model completion into the Hub's bounded Chat queue (`X-StudioHub-Queue-Wait-Seconds: 1800`, the 0.6.157 opt-in): it waits for the Mac's current job to finish and then runs, instead of answering at once with 409 `MACHINE_BUSY` "local is reserved for other work on this Mac". The immediate path never read `priority_order`, so chat-first alone never removed the refusal.

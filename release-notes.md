@@ -2,6 +2,23 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.185 — 2026-10-18
+
+### The app and the installer now use the same model folder
+
+On a new Mac, the SSD installer used to save the models in a different place from the one the app
+looked in, so the folder had to be re-pointed by hand afterwards. The installer and the app now use
+the same folder. When you copy models from the drive, they land in the folder the app is actually
+using, and the app shows that same folder.
+
+The model-location row has a new "Show in Finder" button, so you can open the current model folder
+straight from the app instead of hunting for it.
+
+If an earlier setup left a model library inside your Downloads folder, the installer now moves it out
+to the app's folder for you — the same one-time move it always made — and the app then reports that
+folder too. And a settings file the app would ignore is ignored by the copy step as well, so the two
+never disagree about where the models are.
+
 ## 0.6.184 — 2026-10-18
 
 ### Chat no longer refuses when this Mac is busy
