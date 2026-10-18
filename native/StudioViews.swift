@@ -4069,7 +4069,7 @@ struct StudioContent: View {
                     .font(HubType.caption).foregroundStyle(.secondary)
                     .textSelection(.enabled).lineLimit(1).truncationMode(.middle)
                 if studio.hasLibrary {
-                    Button("Show in Finder") { _ = studio.revealLibrary() }.disabled(!studio.libraryFolderExists)
+                    Button("Show in Finder") { _ = studio.revealLibrary() }
                     if !studio.libraryFolderExists {
                         Text("Not on this Mac right now").font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
                     }
@@ -4888,9 +4888,10 @@ struct StudioContent: View {
                 HStack {
                     Button("Choose Folder…") { studio.chooseLibrary() }.disabled(!studio.canConfigure)
                     if studio.configuration.modelsDirectory != nil {
-                        // Reveals the folder the Hub is actually using, selected in Finder; disabled
-                        // while it is missing, because Finder on an absent path opens on nothing.
-                        Button("Show in Finder") { _ = studio.revealLibrary() }.disabled(!studio.libraryFolderExists)
+                        // Reveals the folder the Hub is actually using, selected in Finder. It
+                        // creates a folder that is not there yet, so a fresh Mac can be filled by
+                        // hand - a disconnected drive still reports its own failure.
+                        Button("Show in Finder") { _ = studio.revealLibrary() }
                     }
                 }
                 if !studio.canConfigure { Text("Stop services before changing the model folder or offline mode.").font(HubType.secondary).foregroundStyle(.secondary) }
