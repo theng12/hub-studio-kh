@@ -659,7 +659,7 @@ private struct WorkPolicySettings: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if policy.supportsPreferredWork {
                     Divider()
-                    PreferredWorkSection(policy: policy)
+                    PreferredWorkSection(workspace: workspace, policy: policy)
                 }
             } else {
                 Text(connected ? "Reading work choices…" : "Start local services to read and change this Mac's work choices.")

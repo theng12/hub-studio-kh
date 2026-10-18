@@ -575,6 +575,7 @@ with tempfile.TemporaryDirectory(prefix="studiohub-preferred-hold-") as state:
     with standalone._PEER_LEASE_LOCK:
         standalone._PEER_LEASES["peer:chat:batch-9"] = ("local", time.monotonic() + 60.0)
         standalone._PEER_JOBS[("chat", "job-9")] = "peer:chat:batch-9"
+    registry.set_preferred_hold("local", None, 0.0)
     standalone._observe_peer_response("chat", "/api/generate/jobs/job-9",
                                       terminal_json("job-9", "running"))
     assert registry.preferred_hold("local") is None, "running poll is not terminal"
@@ -950,6 +951,7 @@ with tempfile.TemporaryDirectory(prefix="studiohub-preferred-hold-") as state:
 
         async def post(self, *args, **kwargs):
             self.calls.append("post")
+            order.append("post")   # the shared dispatch order, beside the write spy
             raise httpx.ConnectError("refused in this source-level proof")
 
     real_reservation = registry.set_preferred_reservation
@@ -964,7 +966,7 @@ with tempfile.TemporaryDirectory(prefix="studiohub-preferred-hold-") as state:
         broker_item = asyncio.run(drive_broker_item(
             "running", client=recording, params={}))
     assert order[:2] == ["reserve", "post"], \
-        "the reservation must be written immediately before the POST"
+        ("the reservation must be written immediately before the POST", order)
     assert recording.calls == ["post"], broker_item
     assert broker_item["state"] in ("queued", "error"), broker_item
     order.clear()
@@ -979,6 +981,7 @@ with tempfile.TemporaryDirectory(prefix="studiohub-preferred-hold-") as state:
 
         async def post(self, *args, **kwargs):
             self.calls.append("post")
+            order.append("post")   # the shared dispatch order, beside the write spy
             raise RuntimeError("stopped after the POST for ordering")
 
     chat_recording = RecordingChatClient()
