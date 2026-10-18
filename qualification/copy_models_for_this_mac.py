@@ -36,8 +36,27 @@ from pathlib import Path
 # protection covers Downloads, and a service the app starts can be blocked from reading a
 # library inside it - the worker then waits inside open() forever and the app never becomes
 # ready. Kept here as one name so the app, the kit and this script cannot drift apart.
+#
+# **The authoritative answer comes from the app now** (owner report, 2026-10-18: the kit filled
+# `~/StudioHubModels` while the Hub on that Mac was using a different folder, so it had to be
+# repointed by hand). `components/model_library.py`, which ships inside the app, resolves the folder
+# the Hub is actually using from its own preferences; these two names are the fallback for an older
+# app that does not carry it, and must stay equal to the resolver's.
 LIBRARY_FOLDER = "StudioHubModels"
 LEGACY_LIBRARY_FOLDER = Path("Downloads") / "model-library"
+
+
+def shared_resolver():
+    """The app's own library resolver, or None on an app that predates it.
+
+    Imported lazily: the app's `components/` folder is only on `sys.path` once the bundle has been
+    found in `main()`, exactly as `retired_models` and `shelved_models` are.
+    """
+    try:
+        from model_library import resolve_library  # type: ignore
+    except ImportError:
+        return None
+    return resolve_library
 
 # Some models are shipped with a conservative figure in their manifest, and the owner has run
 # them on smaller Macs many times. Raising a model's floor here is a deliberate, reviewable act;
@@ -637,17 +656,50 @@ def main() -> int:
                 carried.append(dependency)
     chosen.sort(key=lambda row: row[0])
 
-    destination = Path.home() / LIBRARY_FOLDER
+    # **The folder the Hub is actually using** (owner report, 2026-10-18). The app writes the library
+    # the operator chose to `app-preferences.json`, and that is where the models must arrive; filling
+    # `~/StudioHubModels` regardless left such a Mac needing a manual repoint. A Mac that has never
+    # chosen one resolves to the same canonical home-folder library the app offers, so a new Mac and
+    # the kit agree by construction.
+    resolver = shared_resolver()
+    resolution = resolver() if resolver is not None else None
+    if resolution is not None and resolution.problem:
+        print(f"  {resolution.problem}.")
+        print("  Nothing was copied: filling a different folder would leave the Hub reading an empty")
+        if resolution.source == "unusable":
+            print("  one. Open Studio Hub and choose the folder there (which writes the settings file")
+            print("  again), then run this file again.")
+        else:
+            print("  one. Connect the drive, or choose the folder in Studio Hub, then run this again.")
+        return 2
+    destination = resolution.library if resolution is not None else Path.home() / LIBRARY_FOLDER
+    # A Mac whose **only** library is the earlier kit's `~/Downloads/model-library` resolves to that
+    # folder (`source == "legacy"`), but the app offers the canonical home folder first and the
+    # folder itself sits inside `Downloads`, which macOS protects from a service the app starts. So
+    # this step keeps the behaviour it always had for exactly that case: the tree is renamed out to
+    # the canonical folder and filled there, and the app then recognises `~/StudioHubModels` as the
+    # prepared library, so the two halves still name one folder. A folder the operator chose in the
+    # app (`configured`/`app-data`) is never re-pointed: `destination` stays what the Hub reads.
+    if resolution is not None and resolution.source == "legacy":
+        from model_library import default_library  # type: ignore
+        destination = default_library(Path.home())
+    if resolution is not None and resolution.source in ("configured", "app-data"):
+        print(f"  This Mac's Hub keeps its models in: {destination}")
+
     # An earlier kit copied into ~/Downloads/model-library. Move that tree once rather than copy
-    # 34 GB again, and move it out of the protected folder while we are here.
+    # 34 GB again, and move it out of the protected folder while we are here. **This is the only
+    # move this step makes**, it is the same one it always made (the old destination was always the
+    # canonical folder), and it is never made into a folder the operator chose in the app - that
+    # folder is not this step's to reorganise.
     legacy = Path.home() / LEGACY_LIBRARY_FOLDER
-    if not destination.exists() and legacy.is_dir():
+    canonical = resolution is None or resolution.source in ("library", "legacy", "default")
+    if canonical and not destination.exists() and legacy.is_dir():
         try:
             legacy.rename(destination)
             print(f"  Moved the model library out of Downloads to {destination}")
         except OSError as exc:
             print(f"  Could not move {legacy} to {destination}: {exc}")
-    elif legacy.is_dir():
+    elif legacy.is_dir() and legacy != destination:
         print(f"  A second library is still at {legacy}. This Mac uses {destination}; "
               "the Downloads copy can be deleted once you are happy with it.")
     destination.mkdir(parents=True, exist_ok=True)

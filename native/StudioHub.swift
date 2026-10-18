@@ -237,7 +237,12 @@ final class StudioController: ObservableObject {
         }
     }
     /// The library the one-click setup left behind, if there is one.
-    var preparedLibrary: URL? { ShellConfiguration.preparedLibrary() }
+    ///
+    /// The running app's own data directory is passed in so the folder this offers is the same one
+    /// the kit's copy step fills (`<data>/models` when it holds anything), `--data-dir` included.
+    var preparedLibrary: URL? {
+        ShellConfiguration.preparedLibrary(dataDirectory: configuration.dataDirectory)
+    }
 
     /// Why the selected library is a folder macOS protects, or nil when it is safe to use.
     var libraryPrivacyWarning: String? {
@@ -259,9 +264,19 @@ final class StudioController: ObservableObject {
             start()
         } catch { failure = error.localizedDescription }
     }
+    /// Select this Mac's default model library and start.
+    ///
+    /// **This used to be `<app data>/models` unconditionally**, the folder inside the app's own data
+    /// directory. The kit's copy step fills `~/StudioHubModels`, so a Mac that pressed this button
+    /// and a Mac the drive was copied onto ended up using two different folders for the same models:
+    /// the app read an empty one and the models had to be repointed by hand (owner report,
+    /// 2026-10-18). `ShellConfiguration.defaultLibraryFolder` keeps an install that already holds
+    /// models in the app's data folder where it is, and answers with the canonical home-folder
+    /// library everywhere else - the folder the kit fills and the app offers as "Use the Models
+    /// Already on This Mac", so the two halves cannot land on different folders again.
     func useDefaultLibrary() {
         guard canConfigure else { return }
-        let url = configuration.dataDirectory.appendingPathComponent("models")
+        let url = ShellConfiguration.defaultLibraryFolder(dataDirectory: configuration.dataDirectory)
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             configuration.modelsDirectory = url
@@ -269,6 +284,30 @@ final class StudioController: ObservableObject {
             enableLoginByDefault()
             start()
         } catch { failure = error.localizedDescription }
+    }
+    /// Whether the selected library is on this Mac right now.
+    ///
+    /// A library on a drive that is not connected stays selected, so it can be recovered; this is
+    /// what lets the window say so plainly instead of offering a reveal Finder cannot perform.
+    var libraryFolderExists: Bool {
+        guard let url = configuration.modelsDirectory else { return false }
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+    }
+    /// Show the model library where it is, selected in its folder.
+    ///
+    /// **A folder that is not here is not revealed.** Finder on a missing path opens on nothing, so
+    /// the existence is checked first - the same discipline `revealArtifact` uses for a finished
+    /// job's file - and the caller can say why instead of doing nothing.
+    @discardableResult
+    func revealLibrary() -> Bool {
+        guard let url = configuration.modelsDirectory else { return false }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return false }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+        return true
     }
     func start() {
         restartTask?.cancel()

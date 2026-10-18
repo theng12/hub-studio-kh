@@ -4036,6 +4036,23 @@ struct StudioContent: View {
                 Button { Task { await workspace.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh model library").accessibilityLabel("Refresh model library").disabled(!connected || workspace.refreshing)
             }
 
+            // Where the models listed below actually live, with the same reveal the Settings row
+            // offers: "where did my model folder go" is asked here, on the page that lists them, and
+            // the path shown is the one the Hub is using rather than one this view assumed.
+            HStack(spacing: HubSpace.s) {
+                Image(systemName: "folder").foregroundStyle(.secondary)
+                Text(studio.configuration.modelsDirectory?.path ?? "No model folder is selected yet.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                if studio.hasLibrary {
+                    Button("Show in Finder") { _ = studio.revealLibrary() }.disabled(!studio.libraryFolderExists)
+                    if !studio.libraryFolderExists {
+                        Text("Not on this Mac right now").font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                    }
+                }
+                Spacer()
+            }
+
             // What is actually on disk, per family, with the memory the model declares. This matters
             // most for models copied in from another install: they are present and would otherwise
             // look runnable on a Mac that cannot hold them.
@@ -4815,11 +4832,25 @@ struct StudioContent: View {
             }
             HubSection("Model library") {
                 ValueRow("Location") { Text(studio.configuration.modelsDirectory?.path ?? "Not selected").font(HubType.mono).textSelection(.enabled).multilineTextAlignment(.trailing) }
+                if studio.hasLibrary && !studio.libraryFolderExists {
+                    // A library on a drive that is not connected stays selected and is recoverable, so
+                    // this names which way it failed instead of leaving a grey button with no reason.
+                    Text("That folder is not on this Mac right now. Connect its drive, or choose the folder again.")
+                        .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let warning = studio.libraryPrivacyWarning {
                     Text(warning).font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                HStack { Button("Choose Folder…") { studio.chooseLibrary() }.disabled(!studio.canConfigure); if let url = studio.configuration.modelsDirectory { Button("Show in Finder") { NSWorkspace.shared.open(url) } } }
+                HStack {
+                    Button("Choose Folder…") { studio.chooseLibrary() }.disabled(!studio.canConfigure)
+                    if studio.configuration.modelsDirectory != nil {
+                        // Reveals the folder the Hub is actually using, selected in Finder; disabled
+                        // while it is missing, because Finder on an absent path opens on nothing.
+                        Button("Show in Finder") { _ = studio.revealLibrary() }.disabled(!studio.libraryFolderExists)
+                    }
+                }
                 if !studio.canConfigure { Text("Stop services before changing the model folder or offline mode.").font(HubType.secondary).foregroundStyle(.secondary) }
                 Toggle("Use imported models offline", isOn: Binding(get: { studio.configuration.offline }, set: { studio.setOffline($0) })).toggleStyle(.checkbox).disabled(!studio.canConfigure)
             }

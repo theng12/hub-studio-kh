@@ -28,6 +28,7 @@ import io
 import json
 import os
 import re
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -140,6 +141,45 @@ class Harness:
         return sorted((self.home / COPY.TRASH_FOLDER).glob("*")) if (
             self.home / COPY.TRASH_FOLDER).is_dir() else []
 
+    # ---- the app the copy step asks ------------------------------------------
+    def stage_resolver(self) -> None:
+        """Stage the app's own resolver, as the shipped bundle carries it.
+
+        Without this `shared_resolver()` raises `ImportError` and the step falls back to
+        `~/StudioHubModels` - which is what the older tests here exercise. Staging
+        `components/model_library.py` into the bundle's `Resources/components` is what makes the step
+        ask the app which folder the Hub is using, the integration the source-level tests cannot run.
+        """
+        write(self.kit / self.APP / "Contents/Resources/components/model_library.py",
+              (ROOT / "components" / "model_library.py").read_text())
+
+    def save_choice(self, models_path: Path) -> None:
+        """The choice the app saves for this Mac: `modelsPath`, in a file written the app's way.
+
+        The app writes `app-preferences.json` `0600`, and the resolver refuses to read one that is
+        group/other readable, so a fixture that did not say so would be testing that guard.
+        """
+        prefs = self.root / "Library/Application Support/StudioHub Standalone/app-preferences.json"
+        write(prefs, json.dumps({"modelsPath": str(models_path)}))
+        prefs.chmod(0o600)
+
+    def resolved_source(self) -> str:
+        """What the app's resolver answers for this fixture's home - the step's own question."""
+        spec = importlib.util.spec_from_file_location(
+            "model_library_for_harness", ROOT / "components" / "model_library.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        previous = sys.modules.get(spec.name)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+            return module.resolve_library(self.root).source
+        finally:
+            if previous is None:
+                sys.modules.pop(spec.name, None)
+            else:
+                sys.modules[spec.name] = previous
+
     # ---- running the real thing ---------------------------------------------
     def run(self, answer: str = "\n", memory_gb: int = 8):
         """Run the script from inside the kit, as the launcher does.
@@ -163,6 +203,10 @@ class Harness:
         # the one it built — which is what happened the moment the search order changed to prefer an
         # installed app, and why these six tests went red.
         os.environ["STUDIOHUB_APP_ROOT"] = str(self.kit / self.APP)
+        # The step imports the resolver as a **top-level** module (`from model_library import …`), so
+        # a copy another test imported would otherwise be reused here. Dropping it makes each run
+        # import from this fixture's own bundle - or find none, which is an app that predates it.
+        sys.modules.pop("model_library", None)
         try:
             with mock.patch.object(module, "machine_memory_gb", return_value=memory_gb):
                 with mock.patch("builtins.input", prompt):
@@ -658,6 +702,93 @@ class TheCopyUsesTheAppYouInstalledTest(unittest.TestCase):
                     os.environ["STUDIOHUB_APP_ROOT"] = previous
             self.assertIn(str(chosen), out.getvalue() + str(chosen))
 
+
+
+class TheCopyAsksTheAppWhereModelsGoTests(unittest.TestCase):
+    """The step fills the folder the Hub is actually using, not one it picked for itself.
+
+    The resolver the app ships (`components/model_library.py`) is staged into the fixture's bundle,
+    so these tests run the real integration - the copy step asking the app where this Mac's models
+    belong. The older tests in this file never stage it and so take the `ImportError` fallback, which
+    is covered on its own below.
+    """
+
+    def test_a_saved_choice_is_the_folder_that_gets_the_models(self):
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.stage_resolver()
+            kit.ship("kept-model", floor=1)
+            chosen = kit.root / "Models on the drive"
+            chosen.mkdir()
+            kit.save_choice(chosen)
+
+            code, output, _prompt = kit.run()
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue((chosen / "kept-model").is_dir(),
+                            "the models must arrive in the folder the Hub reads")
+            self.assertFalse((kit.home / "kept-model").exists(),
+                             "nothing may be copied into a folder the Hub is not using")
+            self.assertIn(f"This Mac's Hub keeps its models in: {chosen}", output)
+
+    def test_a_saved_choice_that_is_not_there_stops_the_copy(self):
+        """An unplugged drive is not a reason to fill another folder: that is the reported repoint."""
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.stage_resolver()
+            kit.ship("kept-model", floor=1)
+            missing = kit.root / "Drive-that-is-not-connected" / "models"
+            kit.save_choice(missing)
+
+            code, output, prompt = kit.run()
+
+            self.assertEqual(code, 2, output)
+            self.assertIn(str(missing), output, "the operator has to be told which folder is missing")
+            self.assertIn("Nothing was copied", output)
+            self.assertFalse(prompt.called, "the step stops before it has anything to confirm")
+            self.assertFalse(kit.home.exists(),
+                             "no folder may be created for models the step refused to place")
+
+    def test_a_library_left_in_downloads_is_moved_to_the_folder_the_app_offers(self):
+        """The one case the earlier kit handled: its `~/Downloads/model-library` moves out.
+
+        The app's first offer for such a Mac is the canonical home folder, and the folder sits inside
+        `Downloads`, which macOS protects from a service the app starts. So the step keeps the
+        behaviour it always had: the tree is renamed out to the canonical folder and filled there.
+        Afterwards the app's own resolver answers `library` for this Mac, so the two halves agree.
+        """
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.stage_resolver()
+            kit.ship("kept-model", floor=1)
+            legacy = kit.root / COPY.LEGACY_LIBRARY_FOLDER
+            legacy_state = legacy / ".studiohub"
+            legacy_state.mkdir(mode=0o700, parents=True)
+            write(legacy_state / "installed.json", "{}")
+            kit.put(legacy, "old-model", {"model/old-model.bin": "the earlier kit's model"})
+
+            code, output, _prompt = kit.run()
+
+            self.assertEqual(code, 0, output)
+            self.assertFalse(legacy.exists(), "the tree must leave the folder macOS protects")
+            self.assertTrue((kit.home / "old-model" / Harness.REVISION / "model/old-model.bin").is_file(),
+                            "the earlier kit's tree has to move, not be downloaded again")
+            self.assertTrue((kit.home / "kept-model").is_dir())
+            self.assertIn("Moved the model library out of Downloads", output)
+            self.assertEqual(kit.resolved_source(), "library",
+                             "the app must recognise the moved folder as this Mac's library")
+
+    def test_an_older_app_without_the_resolver_still_fills_the_canonical_folder(self):
+        """The kit has to keep working against an app that predates the resolver (the fallback)."""
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))          # no stage_resolver(): the app carries no resolver
+            kit.ship("kept-model", floor=1)
+
+            code, output, _prompt = kit.run()
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue((kit.home / "kept-model").is_dir(),
+                            "an older app's copy step still fills ~/StudioHubModels")
 
 
 class QwenStockingTests(unittest.TestCase):

@@ -559,16 +559,65 @@ struct ShellConfiguration {
     /// never offered first, because a library inside `~/Downloads` can stop the app from starting.
     static let legacyLibraryFolder = "Downloads/model-library"
 
+    /// The canonical home-folder library: the folder the kit's copy step fills, and the folder a Mac
+    /// that has never chosen one uses. `components/model_library.py` carries the same two names for
+    /// the kit's Python, so the app, the kit and its copy helper cannot drift apart again (owner
+    /// report, 2026-10-18: the drive filled one folder while the app was using another).
+    static func defaultLibrary(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL {
+        home.appendingPathComponent(libraryFolderName).standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    /// The folder the "Use Default Folder" button selects.
+    ///
+    /// **An install that already keeps its models in the app's own data folder keeps them there.**
+    /// `<data>/models` was this button's answer for a long time, so a Mac set up then may hold its
+    /// whole library in it; selecting another folder would leave those models behind. Only a folder
+    /// with something in it counts - the button creates the empty one, so emptiness proves nothing.
+    /// Everywhere else the answer is the canonical home-folder library, which is the folder the kit's
+    /// copy step fills and what `components/model_library.py` resolves for that step, so a new Mac
+    /// cannot end up with two model folders again.
+    static func defaultLibraryFolder(dataDirectory: URL,
+                                     home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL {
+        let appOwned = dataDirectory.appendingPathComponent("models")
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: appOwned.path)) ?? []
+        if !entries.isEmpty { return appOwned.standardizedFileURL.resolvingSymlinksInPath() }
+        return defaultLibrary(home: home)
+    }
+
+    /// The app's own data folder under a home folder - the default `dataDirectory` in `init`.
+    ///
+    /// Named here so `preparedLibrary` can look inside it with no data directory to hand (the
+    /// native test calls it with a fake home), and so the folder it looks in is the same one the
+    /// kit's `components/model_library.py` reads as `<data>/models`.
+    static func defaultDataDirectory(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL {
+        home.appendingPathComponent("Library/Application Support/StudioHub Standalone")
+    }
+
     /// A model library the one-click setup has already filled in.
     ///
-    /// Without this the operator had to find the folder in a file panel, and the button offered on
-    /// a fresh Mac ("Use Default Folder") points at an empty folder inside the app's own data
-    /// directory - inviting a second, 29 GB download of models that are already on the disk.
+    /// Without this the operator had to find the folder in a file panel. A library recognised here
+    /// is offered as **Use the Models Already on This Mac**, and it is the same folder
+    /// `defaultLibrary(home:)` names, so the app's default and the kit's copy step cannot land on
+    /// two different folders (they did: the default used to be an empty folder inside the app's own
+    /// data directory, which invited a second, 29 GB download of models already on the disk).
+    ///
+    /// **The app's own data folder is offered first when it holds anything.** `<data>/models` was
+    /// the "Use Default Folder" answer for a long time, and `components/model_library.py` resolves a
+    /// non-empty one for the kit's copy step (its step 2) - so this has to prefer it too, or the
+    /// screen would offer the canonical folder while the copy step filled the data folder. Only a
+    /// folder with something in it counts: the button creates the empty one. The `dataDirectory` is
+    /// the running app's own (a `--data-dir` override included); with none to hand the default under
+    /// `home` is used.
     ///
     /// Recognised by its install record, not by its name: any folder holding
     /// `.studiohub/installed.json` is a library the app wrote, so this can never offer a random
     /// folder that merely happens to be called `model-library`.
-    static func preparedLibrary(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL? {
+    static func preparedLibrary(dataDirectory: URL? = nil,
+                                home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL? {
+        let appOwned = (dataDirectory ?? defaultDataDirectory(home: home))
+            .appendingPathComponent("models")
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: appOwned.path)) ?? []
+        if !entries.isEmpty { return appOwned.standardizedFileURL.resolvingSymlinksInPath() }
         for relative in [libraryFolderName, legacyLibraryFolder] {
             let candidate = home.appendingPathComponent(relative)
                 .standardizedFileURL.resolvingSymlinksInPath()
