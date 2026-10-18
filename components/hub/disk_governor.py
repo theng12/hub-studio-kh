@@ -349,13 +349,13 @@ def _app_leftovers(parent: Path, now: float, run: _Run, prefix: str, step: str, 
 
 
 def _logs(ctx: Context, run: _Run, severe: bool) -> None:
-    """Logs have no function. Amber drops the rotated copy; red empties the live one too (the
-    workers append, so a truncate is safe)."""
+    """Logs have no function. The rotated copy goes to the Trash Folder (never a delete); under red
+    the live one is truncated too, which is the only way left to give the disk its bytes back."""
     if ctx.base_dir is None:
         return
     rotated = ctx.base_dir / "hub-worker.log.1"
     if rotated.is_file() and not rotated.is_symlink():
-        _remove(run, "logs", rotated)
+        _retire(run, "logs", rotated)
     live = ctx.base_dir / "hub-worker.log"
     if severe and live.is_file() and not live.is_symlink():
         size = physical_bytes(live)
@@ -364,6 +364,20 @@ def _logs(ctx: Context, run: _Run, severe: bool) -> None:
             run.note("logs", size)
         except OSError:
             pass
+
+
+def _download_runs(ctx: Context, now: float, run: _Run) -> None:
+    """A finished model-download run's folder (its manifest, source map and output.log) is kept for the
+    shared retention window, then retired to the Trash Folder - never a delete. A run still downloading
+    keeps touching its files, so a folder untouched for the whole window belongs to no live download."""
+    window = float((ctx.settings or {}).get("retention_days", 3)) * 86400
+    try:
+        entries = list((ctx.data_dir / "model-download-runs").iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.is_dir() and not entry.is_symlink() and now - _tree_mtime(entry) > window:
+            _retire(run, "model download logs", entry)
 
 
 def _trash_entries() -> list[tuple[Path, Path]]:
@@ -591,6 +605,7 @@ def sweep(ctx: Context, *, now: float | None = None, startup: bool = False) -> d
 
         # Every tier: scratch goes, retired copies move to the Trash Folder.
         guarded(lambda: _temp_files(ctx, now, run, None))
+        guarded(lambda: _download_runs(ctx, now, run))
         guarded(lambda: _updates(ctx, now, run, False))
         guarded(lambda: _orphan_apps(ctx, now, run))
         guarded(lambda: _unregistered_outputs(ctx, now, run, False))

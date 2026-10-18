@@ -497,4 +497,20 @@ rotatePrivateLogIfNeeded(rotationLog)
 require(FileManager.default.fileExists(atPath: rotationLog.path),
         "a small service log must not rotate")
 
+// A rotated log is retired, never deleted: the next rotation moves the previous `.1` into the Hub's
+// Trash Folder (`<data>/hub/trash/<date>/service-log-*`), where the owner can still see it.
+let secondRotationFD = open(rotationLog.path, O_WRONLY | O_TRUNC, 0o600)
+require(secondRotationFD >= 0, "the second rotation fixture must open")
+require(ftruncate(secondRotationFD, privateLogRotationBytes + 1) == 0, "the fixture must be oversized again")
+close(secondRotationFD)
+rotatePrivateLogIfNeeded(rotationLog)
+var retiredNames: [String] = []
+if let walker = FileManager.default.enumerator(at: temporary.appendingPathComponent("hub/trash"),
+                                               includingPropertiesForKeys: nil) {
+    for case let url as URL in walker { retiredNames.append(url.lastPathComponent) }
+}
+require(retiredNames.contains("hub-worker.log.1"),
+        "the previous rotated log must be retired into the Hub's Trash Folder, not deleted")
+require(FileManager.default.fileExists(atPath: rotatedLog.path), "the new rotated log must be in place")
+
 print("Native boundary checks passed")

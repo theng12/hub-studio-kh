@@ -1361,6 +1361,17 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     print(f"[hub] moved retired models to the Trash Folder: {', '.join(retired)}", flush=True)
             except (OSError, ValueError):
                 pass
+            # One unified Trash Folder: adopt what earlier installs left in their own Trash roots.
+            # Idempotent, same-volume only, and never a live app or model (output_storage.adopt_legacy).
+            try:
+                adopted = output_storage.adopt_legacy()
+                if adopted["moved_count"]:
+                    print(f"[hub] adopted {adopted['moved_count']} retired entries from old Trash roots "
+                          f"into {adopted['manifest']}", flush=True)
+                for problem in adopted["failed"]:
+                    print(f"[hub] Trash Folder adoption left {problem['source']}: {problem['error']}", flush=True)
+            except OSError:
+                pass
             output_storage.start_background(
                 lambda: {worker.get("machine", "local") for worker in monitor.registry},
                 standalone_config.load_device_settings,
@@ -2755,6 +2766,30 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return await _fleet_trash(node_id, request, "/delete", lambda body: output_storage.trash_delete(
             items=body.get("items"), confirm=body.get("confirm"),
             expected_count=body.get("expected_count"), expected_bytes=body.get("expected_bytes")))
+
+    # **This Mac's Trash Folder in the app (owner request 2026-10-15).** The same unified root the
+    # Gateway manages: list it (with its per-root detail) and move its contents to macOS Trash. The
+    # app never deletes permanently; the owner empties macOS Trash himself.
+    @app.get("/api/hub/trash")
+    async def hub_trash(request: Request) -> JSONResponse:
+        """The unified Trash Folder: item count, physical bytes, and every root that holds retired files."""
+        return JSONResponse(await run_in_threadpool(output_storage.trash_overview))
+
+    @app.post("/api/hub/trash/move-to-macos-trash")
+    async def hub_trash_to_macos(request: Request) -> JSONResponse:
+        """Body `{"items": "all" | [ids]}` (default all): move them to macOS Trash, which the owner empties."""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "code": "BAD_BODY",
+                                 "detail": "The request body must be a JSON object."}, status_code=400)
+        try:
+            result = await run_in_threadpool(output_storage.trash_to_macos, body.get("items", "all"))
+        except output_storage.TrashRefused as refusal:
+            return JSONResponse(refusal.body, status_code=refusal.status)
+        return JSONResponse({"ok": True, **result})
 
     @app.post("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}/share")
     async def fleet_node_model_share(node_id: str, package_id: str, request: Request) -> JSONResponse:

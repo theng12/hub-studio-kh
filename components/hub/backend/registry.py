@@ -116,14 +116,11 @@ def set_priority_order(machine: str, order: list[str]) -> None:
         temporary.replace(FLAGS_FILE)
     except BaseException:
         # A failed policy write is evidence worth retaining, and project removals
-        # are recoverable. Move the orphan beside mutable state instead of deleting it.
+        # are recoverable. Move the orphan into the Hub's one Trash Folder instead
+        # of a second `_trash` root (owner request 2026-10-15).
         if temporary.exists():
-            trash = DATA_DIR / "_trash" / "failed-writes"
-            try:
-                trash.mkdir(parents=True, exist_ok=True)
-                temporary.replace(trash / temporary.name)
-            except OSError:
-                pass  # Leave it in place if even the recovery move is unavailable.
+            from .. import output_storage
+            output_storage.retire(temporary, "failed-write")
         raise
     _flags_cache = flags
 
