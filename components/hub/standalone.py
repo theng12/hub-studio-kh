@@ -822,6 +822,31 @@ def _release_peer_lease(owner: str) -> None:
                         expires=time.monotonic() + chat_priority.MAX_WAIT_SECONDS)
 
 
+def _open_preferred_hold_on_release(owner: str, worker_id: str | None = None) -> None:
+    """A peer job on this Mac was observed terminal: open the hold if it was preferred work.
+
+    Called only from the release paths that carry real terminal evidence — a synchronous
+    completion response, a status poll that saw the job terminal, or this Mac's own worker
+    confirming the job over. TTL expiry, disconnect releases and refusals never call this: an
+    unknown outcome never pretends to be a completion.
+    """
+    with _PEER_LEASE_LOCK:
+        row = _PEER_LEASES.get(owner)
+    if row is None:
+        return
+    if worker_id is None:
+        worker_id = owner.split(":", 2)[1] if owner.startswith("peer:") else ""
+    modality = next((name for name, worker in vocabulary.WORKER_FOR_MODALITY.items()
+                     if worker == worker_id), None)
+    if modality is None:
+        return
+    # Share the broker helper so the optional hold write is best-effort in one place:
+    # a failed write must never keep this peer lease from being released. The lease owner is
+    # also this attempt's reservation token, so the same atomic write conditionally clears it.
+    broker._note_preferred_completion({"machine": str(row[0])}, modality,
+                                      reservation_owner=owner)
+
+
 def _retain_uncertain_chat(owner: str, row: dict) -> None:
     """A lost synchronous response never proves the worker stopped generating."""
     row.update(state="unknown", ready=False, lease_held=True,
@@ -874,6 +899,7 @@ async def _release_finished_peer_leases(monitor: StudioMonitor) -> None:
             chat = chat_priority.requests.get(request_id)
             if chat is not None:
                 chat_priority.finish(chat)
+            _open_preferred_hold_on_release(owner)
             _release_peer_lease(owner)
     for worker_id, job_id in held:
         worker = next((row for row in monitor.registry if row["id"] == worker_id), None)
@@ -926,6 +952,15 @@ def _reserve_peer_machine(worker_id: str, machine: str) -> str | None:
         return None
     with _PEER_LEASE_LOCK:
         _PEER_LEASES[owner] = (machine, time.monotonic() + _PEER_LEASE_TTL_S)
+    # Immediately after the lease is recorded and before the caller sends the proxied POST:
+    # reserve the preferred model against this Mac's own worker idle-release timer. The lease
+    # owner is the reservation token, so only this attempt can clear it at a true terminal.
+    modality = next((name for name, worker in vocabulary.WORKER_FOR_MODALITY.items()
+                     if worker == worker_id), None)
+    if modality is not None:
+        local = machine == "local" or os.environ.get("STUDIOHUB_PACKAGED") == "1"
+        broker._begin_preferred_reservation({"machine": machine, "local": local},
+                                            modality, owner=owner)
     return owner
 
 
@@ -955,6 +990,8 @@ def _settle_peer_lease(owner: str, worker_id: str, response: Response) -> None:
             payload = None
     job = _worker_job(payload)
     if job is None or job[1] in _PEER_TERMINAL_STATES:
+        # A synchronous completion the worker answered is terminal evidence, not a drop.
+        _open_preferred_hold_on_release(owner, worker_id)
         _release_peer_lease(owner)
         return
     with _PEER_LEASE_LOCK:
@@ -962,6 +999,15 @@ def _settle_peer_lease(owner: str, worker_id: str, response: Response) -> None:
         if row is not None:
             _PEER_LEASES[owner] = (row[0], time.monotonic() + _PEER_LEASE_TTL_S)
         _PEER_JOBS[(worker_id, job[0])] = owner
+    # Adopt the worker's own stated lane limit once, if it is larger than the floor the
+    # reservation started from. Same lease owner; never a fresh start stamp.
+    modality = next((name for name, worker in vocabulary.WORKER_FOR_MODALITY.items()
+                     if worker == worker_id), None)
+    receipt = payload.get("job") if isinstance(payload, dict) else None
+    deadline = receipt.get("deadline_s") if isinstance(receipt, dict) else None
+    if row is not None and modality is not None:
+        broker._extend_preferred_reservation({"machine": str(row[0])}, modality,
+                                             owner, deadline)
 
 
 def _observe_peer_response(worker_id: str, tail: str, response: Response) -> None:
@@ -984,6 +1030,7 @@ def _observe_peer_response(worker_id: str, tail: str, response: Response) -> Non
         # A raw artifact is served only for a job that has finished.
         terminal = True
     if terminal:
+        _open_preferred_hold_on_release(owner, worker_id)
         _release_peer_lease(owner)
 
 
@@ -1544,7 +1591,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # follows a rename instead of keeping the name it joined with.
         from .backend import fleet_nodes as fleet_view
         from .backend import registry as registry_view
-        return {"host": host, "studios": studios, "proxy": proxy, "version": _app_version(),
+        from .backend import preferred_hold as preferred_view
+        _saved_pref = registry_view.preferred_work("local")
+        _policy_pref = preferred_view.normalized(_saved_pref)
+        answer = {"host": host, "studios": studios, "proxy": proxy, "version": _app_version(),
                 "disk": host.get("disk"), "startup": _startup_snapshot(),
                 "current_job": local_job, "machine": fleet_view.this_machine(),
                 # Why this Mac's Hub last stopped (quit, crash, Force Quit...), as the app recorded it.
@@ -1553,6 +1603,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "workstation": workstation.status(),
                 "priority_order": registry_view.priority_order("local"),
                 "chat_priority": registry_view.chat_priority("local")}
+        # The Mac's own idle-hold truth, read by its controller for group arbitration: the saved
+        # preference and the bounded remaining window. An older reader ignores both fields.
+        if _policy_pref:
+            answer.update(preferred_view.snapshot_fields(
+                _policy_pref, registry_view.preferred_hold("local")))
+        else:
+            answer["preferred_work"] = None
+            answer["preferred_hold_remaining_s"] = 0.0
+        return answer
 
     @app.get("/api/hub/workers")
     def workers() -> dict[str, Any]:

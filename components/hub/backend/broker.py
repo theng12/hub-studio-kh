@@ -43,6 +43,7 @@ from .resources import host_stats
 from . import stall
 from . import update_drain
 from . import memory_admission
+from . import preferred_hold
 from .. import workstation
 
 _MIME_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
@@ -903,6 +904,180 @@ def priority_order(machine: str) -> list[str]:
     return ["chat"] if snapshot.get("chat_priority") is True else []
 
 
+def preferred_policy(machine: str) -> dict | None:
+    """One Mac's idle-hold preference in force, local from flags, peers from their snapshot.
+
+    A peer that has not published the field (an older build) reads as OFF, exactly like the
+    legacy priority-order fallback: no policy is invented for a Mac that did not say so.
+    """
+    from . import registry
+    local = any(s.get("machine", "local") == machine and peers.is_local_studio(s)
+                for s in _monitor().registry)
+    if local:
+        return preferred_hold.active(registry.preferred_work("local"))
+    snapshot = peers.cached(machine) or {}
+    policy = snapshot.get("preferred_work") if isinstance(snapshot, dict) else None
+    return preferred_hold.active(policy)
+
+
+def hold_remaining(machine: str, policy: dict | None = None) -> float:
+    """Seconds of idle hold left on ``machine`` (0.0 when none)."""
+    if policy is None:
+        policy = preferred_policy(machine)
+    if not policy:
+        return 0.0
+    return preferred_hold.hold_remaining_s(
+        policy, registry_preferred_hold(machine, float(policy["idle_seconds"])))
+
+
+def registry_preferred_hold(machine: str, window_s: float | None = None) -> dict | None:
+    """The persisted hold for one Mac — local from this Hub's flags, a peer from its cache.
+
+    A peer publishes only the *remaining seconds*, never its raw stamp: the node is the
+    clock authority and its boot-scoped monotonic stamps are meaningless cross-machine.
+    The peer answer is therefore rebuilt as a back-dated window whose arithmetic yields
+    exactly the published remaining (itself already clamped by the node to its window);
+    the next poll refreshes it from the node's own clock, so nothing here counts down.
+    """
+    from . import registry
+    local = any(s.get("machine", "local") == machine and peers.is_local_studio(s)
+                for s in _monitor().registry)
+    if local:
+        return registry.preferred_hold("local")
+    snapshot = peers.cached(machine) or {}
+    if not isinstance(snapshot, dict):
+        return None
+    remaining = snapshot.get("preferred_hold_remaining_s")
+    if not isinstance(remaining, (int, float)) or isinstance(remaining, bool) \
+            or remaining <= 0.0:
+        return None
+    elapsed = max(0.0, float(window_s or registry.PREFERRED_WORK_DEFAULT_S)
+                  - min(float(remaining), float(window_s or registry.PREFERRED_WORK_DEFAULT_S)))
+    return {"ended_wall": time.time() - elapsed,
+            "boot_steady": time.monotonic() - elapsed}
+
+
+def _note_preferred_completion(studio: dict, modality: str | None, *,
+                               reservation_owner: str | None = None) -> None:
+    """Open this Mac's hold window when one of its own preferred jobs just finished.
+
+    Called exactly once per terminal transition of this Hub's own lanes. Off or malformed
+    policy, a non-preferred modality and remote studios (their own Hub notes their
+    completion) are all no-ops.
+
+    ``reservation_owner`` names the dispatch attempt whose in-flight reservation belongs to
+    this completion. The same atomic row write removes that reservation only while it still
+    carries this exact owner, so a delayed older attempt can never clear a newer attempt's
+    reservation. A late terminal may still open the scheduling hold under the frozen
+    completion semantics; that hold is scheduling-only and never promises a warm model.
+
+    The write is optional bookkeeping, so a persistence I/O failure is logged and
+    swallowed: this helper runs inside lane finally blocks and peer release paths, and a
+    full or unwritable data dir must never skip their own cleanup (busy/reserved/wakeup,
+    pack save, peer lease release). Only ``OSError`` is treated this way — unrelated
+    failures still propagate, and primary job persistence is untouched.
+    """
+    if not modality:
+        return
+    from . import registry
+    machine = str(studio.get("machine") or "local")
+    if not any(s.get("machine", "local") == machine and peers.is_local_studio(s)
+               for s in _monitor().registry):
+        return
+    policy = preferred_hold.active(registry.preferred_work("local"))
+    if policy and preferred_hold.demand_wins(policy, modality):
+        try:
+            registry.set_preferred_hold(
+                machine, time.time(), time.monotonic(),
+                clear_reservation_owner=reservation_owner)
+        except OSError as exc:
+            logging.getLogger("studiohub.broker").warning(
+                "preferred-work hold write failed for %s/%s: %s", machine, modality, exc)
+
+
+# Grace added to a lane's own deadline for the reservation budget. Inference, not a measured
+# model limit: it covers the Hub<->worker round trip and the tiny delay between the Hub's
+# completion observation and the worker's own release decision. The lane deadline itself is
+# the authority (it already includes the lane's measured overhead and ceiling).
+PREFERRED_RESERVATION_GRACE_S = 120.0
+
+
+def _preferred_reservation_budget(modality: str, stated_deadline_s: object = None) -> float:
+    """The bounded reservation budget for one lane: its own deadline plus grace.
+
+    The floor comes from the Hub's one published per-generator deadline table
+    (``standalone.deadline_floor_seconds``); Image's own stated deadline can raise the budget
+    up to its worker-side ceiling (7,200 s), so the reservation tracks the actual lane bound
+    instead of inventing a global job cap.
+    """
+    from .. import standalone   # lazy: one deadline table, and standalone imports this module
+    floor = float(standalone.deadline_floor_seconds(modality))
+    stated = 0.0
+    if isinstance(stated_deadline_s, (int, float)) and not isinstance(stated_deadline_s, bool):
+        value = float(stated_deadline_s)
+        if math.isfinite(value) and value > 0.0:
+            stated = value
+    return round(max(floor, stated) + PREFERRED_RESERVATION_GRACE_S, 1)
+
+
+def _begin_preferred_reservation(studio: dict, modality: str | None, *,
+                                 owner: str | None = None) -> str | None:
+    """Write a dispatch attempt's bounded reservation immediately before the worker POST.
+
+    Returns the attempt token to pass to the terminal hook, or ``None`` when the lane is not
+    preferred work on this Mac or the optional write failed (fail-safe: no exemption is
+    recorded and the job runs under the worker's normal memory mode). Only ``OSError`` is
+    swallowed; an unrelated failure still propagates. ``owner`` lets the peer door reuse its
+    own per-lease token; the Hub lanes leave it unset and get a fresh local-only UUID.
+    """
+    if modality not in ("chat", "image", "voice"):
+        return None   # Music has no warm model to hold; Video drops its pipeline per job
+    from . import registry
+    machine = str(studio.get("machine") or "local")
+    if not peers.is_local_studio(studio):
+        return None
+    policy = preferred_hold.active(registry.preferred_work("local"))
+    if not policy or not preferred_hold.demand_wins(policy, modality):
+        return None
+    token = owner or uuid.uuid4().hex
+    try:
+        registry.set_preferred_reservation(
+            machine, modality, token, time.time(), time.monotonic(),
+            _preferred_reservation_budget(modality))
+    except OSError as exc:
+        logging.getLogger("studiohub.broker").warning(
+            "preferred-work reservation write failed for %s/%s: %s", machine, modality, exc)
+        return None
+    return token
+
+
+def _extend_preferred_reservation(studio: dict, modality: str, owner: str | None,
+                                  stated_deadline_s: object = None) -> None:
+    """Adopt a larger worker-stated deadline once, keeping the dispatch-time start stamps.
+
+    Only the attempt that still owns the reservation may extend it; the write is the same
+    optional best-effort kind as the initial one.
+    """
+    if not owner:
+        return
+    from . import registry
+    machine = str(studio.get("machine") or "local")
+    current = registry.preferred_reservation(machine)
+    if not current or current["owner"] != owner or current["modality"] != modality:
+        return
+    budget = _preferred_reservation_budget(modality, stated_deadline_s)
+    if budget <= current["budget_s"]:
+        return
+    try:
+        registry.set_preferred_reservation(
+            machine, modality, owner, current["started_wall"],
+            current["started_steady"], budget)
+    except OSError as exc:
+        logging.getLogger("studiohub.broker").warning(
+            "preferred-work reservation adoption failed for %s/%s: %s",
+            machine, modality, exc)
+
+
 def chat_priority_enabled(machine: str) -> bool:
     order = priority_order(machine)
     return bool(order and order[0] == "chat")
@@ -925,7 +1100,13 @@ def _priority_key(machine: str, modality: str, created_at: float,
 
 
 async def next_work(machine: str) -> tuple[int, float, str, str] | None:
-    """Best actually dispatchable queued function for one physical Mac."""
+    """Best actually dispatchable queued function for one physical Mac.
+
+    While a preference is enabled, eligible preferred demand wins over the other
+    generation functions regardless of the ranked order (whose winner may name a
+    third function and would otherwise starve the preference); non-generation lanes
+    and OFF keep the exact ranked behaviour.
+    """
     from . import chat_jobs, chat_priority, transcription_jobs
     candidates = [
         (*_priority_key(machine, modality, created_at, identity), modality)
@@ -947,14 +1128,46 @@ async def next_work(machine: str) -> tuple[int, float, str, str] | None:
         candidates.append((*_priority_key(
             machine, "transcription", transcription[0],
             f"transcription:{transcription[1]}"), "transcription"))
+    policy = preferred_policy(machine)
+    if policy:
+        preferred = [c for c in candidates if c[3] == policy["modality"]]
+        others = [c for c in candidates if c[3] in preferred_hold.GENERATION_CHOICES
+                  and c[3] != policy["modality"]]
+        if preferred and others:
+            return min(preferred)
     return min(candidates, default=None)
 
 
 async def higher_priority_work_waiting(machine: str, modality: str,
                                        created_at: float, identity: str) -> bool:
     winner = await next_work(machine)
-    return winner is not None and winner[:3] < _priority_key(
-        machine, modality, created_at, identity)
+    if winner is None:
+        return False
+    if winner[:3] < _priority_key(machine, modality, created_at, identity):
+        return True
+    # The idle hold: a different generation function may not take this Mac while the preferred
+    # function wins. Render never reaches this gate (its dispatch skips it), and a preferred
+    # candidate itself is never gated — it is the winner being reserved for.
+    if modality in preferred_hold.GENERATION_CHOICES \
+            and candidate_loses_hold(machine, modality, winner[3]):
+        return True
+    return False
+
+
+def candidate_loses_hold(machine: str, candidate: str, winner: str | None = None) -> bool:
+    """Whether the idle hold blocks ``candidate`` on ``machine`` while ``winner`` runs next."""
+    policy = preferred_policy(machine)
+    if not policy or candidate == policy["modality"]:
+        return False
+    if candidate not in preferred_hold.GENERATION_CHOICES:
+        return False
+    if winner is None:
+        return hold_remaining(machine, policy) > 0.0
+    if winner == policy["modality"]:
+        return True  # eligible preferred demand: the ranked winner says so
+    # The ranked winner is some third function: the hold still refuses the candidate unless
+    # the hold window has expired (then ranked order applies unchanged).
+    return hold_remaining(machine, policy) > 0.0
 
 
 async def scarcer_work_waiting(machine: str, pool: float, own_lane: str) -> bool:
@@ -4972,6 +5185,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
     generation = item.get("_dispatch_generation")
     durable_post_attempted = False
     durable_post_rejected = False
+    reservation_owner: str | None = None
 
     def requeue_if_peer_changed() -> bool:
         if generation is None or peers.dispatch_ready(studio, generation):
@@ -5020,6 +5234,9 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             url, headers = studio_request(
                 studio, "/api/generate/txt2speech/reference"
             )
+            # Immediately before the actual POST: the reservation covers the worker's own
+            # generation window, not the Hub's asset preparation before dispatch.
+            reservation_owner = _begin_preferred_reservation(studio, b["modality"])
             r = await client.post(
                 url,
                 data={
@@ -5088,6 +5305,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 if requeue_if_peer_changed():
                     return
                 url, headers = studio_request(studio, "/api/generate/video2video")
+                reservation_owner = _begin_preferred_reservation(studio, b["modality"])
                 r = await client.post(
                     url,
                     data=_video_multipart_fields(body),
@@ -5097,6 +5315,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 if requeue_if_peer_changed():
                     return
                 url, headers = studio_request(studio, f"/api/generate/{mode}")
+                reservation_owner = _begin_preferred_reservation(studio, b["modality"])
                 durable_post_attempted = True
                 r = await client.post(
                     url,
@@ -5107,6 +5326,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             if requeue_if_peer_changed():
                 return
             url, headers = studio_request(studio, endpoint)
+            reservation_owner = _begin_preferred_reservation(studio, b["modality"])
             durable_post_attempted = b["modality"] in DURABLE_ASYNC_MODALITIES
             r = await client.post(url, json=body, headers=headers)
         if r.status_code == 401 and not peers.is_local_studio(studio):
@@ -5171,6 +5391,9 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         if (isinstance(deadline, (int, float)) and not isinstance(deadline, bool)
                 and math.isfinite(deadline) and deadline > 0):
             item["deadline_s"] = float(deadline)
+        # Adopt the worker's own stated lane limit once, if it is larger than the floor the
+        # reservation started from. Same attempt token; never a fresh start stamp.
+        _extend_preferred_reservation(studio, b["modality"], reservation_owner, deadline)
         if b["modality"] == "music" and isinstance(job.get("params"), dict):
             # Music normalizes aliases, defaults and prompt whitespace inside
             # its validator. Retain that worker-owned canonical request in the
@@ -5588,6 +5811,10 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             item.setdefault("duration_s", item["runtime_s"])
             item.setdefault("finished_at", time.time())
             item["last_progress_at"] = item["finished_at"]
+            # A real terminal transition (done, failed or cancelled) of preferred work opens
+            # the hold. A queued retry or an uncertain attempt proves nothing and writes none.
+            _note_preferred_completion(studio, b.get("modality"),
+                                       reservation_owner=reservation_owner)
         _busy.discard(studio["id"])
         _reserved["gb"] = max(0.0, _reserved["gb"] - item.get("_reserved", 0.0))
         item["_reserved"] = 0.0

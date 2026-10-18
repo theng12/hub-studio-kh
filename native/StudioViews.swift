@@ -657,6 +657,10 @@ private struct WorkPolicySettings: View {
                      : "The current job finishes. Higher-ranked eligible queued work runs first, oldest first at the same rank. Other enabled work runs when higher-ranked work is not waiting.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if policy.supportsPreferredWork {
+                    Divider()
+                    PreferredWorkSection(policy: policy)
+                }
             } else {
                 Text(connected ? "Reading work choices…" : "Start local services to read and change this Mac's work choices.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
@@ -677,6 +681,105 @@ private struct WorkPolicySettings: View {
                 try? await Task.sleep(for: .seconds(5))
             }
         }
+    }
+}
+
+/// The preferred-generation idle hold (`components/hub/backend/preferred_hold.py`): pick one
+/// generation function this Mac serves and how long it stays reserved for it after its last
+/// preferred job finishes. OFF by default; episode renders are never held.
+private struct PreferredWorkSection: View {
+    @ObservedObject var workspace: NativeWorkspaceStore
+    let policy: NativeWorkPolicy
+
+    var body: some View {
+        Toggle("Keep this Mac ready for", isOn: Binding(
+            get: { policy.preferredWork.enabled },
+            set: { on in Task {
+                _ = await workspace.savePreferredWork(
+                    enabled: on,
+                    modality: on ? (policy.preferredWork.modality ?? policy.preferredChoices.first) : nil,
+                    idleSeconds: policy.preferredWork.idleSeconds)
+            } }))
+            .toggleStyle(.checkbox)
+            .disabled(policy.preferredChoices.isEmpty)
+            .accessibilityHint("Reserve this Mac for one function between jobs")
+        if !policy.preferredChoices.isEmpty {
+            HStack(spacing: HubSpace.s) {
+                Picker("Function", selection: Binding(
+                    get: { policy.preferredWork.modality ?? policy.preferredChoices.first },
+                    set: { modality in Task {
+                        _ = await workspace.savePreferredWork(
+                            enabled: policy.preferredWork.enabled,
+                            modality: modality,
+                            idleSeconds: policy.preferredWork.idleSeconds)
+                    } })) {
+                    ForEach(policy.preferredChoices, id: \.self) { choice in
+                        Text(title(for: choice)).tag(choice as String?)
+                    }
+                }
+                .pickerStyle(.menu).fixedSize()
+                .disabled(!policy.preferredWork.enabled)
+                .frame(maxWidth: 220, alignment: .leading)
+                // Any whole number of seconds 1-3600 (the API's own bounds), typed or stepped;
+                // a value saved elsewhere (a custom N from the Gateway) is shown and re-saved
+                // exactly, never rounded to a preset.
+                HStack(spacing: HubSpace.xs) {
+                    TextField("Hold seconds", value: Binding(
+                        get: { policy.preferredWork.idleSeconds },
+                        set: { seconds in Task {
+                            _ = await workspace.savePreferredWork(
+                                enabled: policy.preferredWork.enabled,
+                                modality: policy.preferredWork.modality
+                                    ?? policy.preferredChoices.first,
+                                idleSeconds: seconds)
+                        } }), format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing)
+                        .frame(width: 56)
+                        .disabled(!policy.preferredWork.enabled)
+                        .accessibilityLabel("Hold seconds after the last job")
+                    Stepper("", value: Binding(
+                        get: { policy.preferredWork.idleSeconds },
+                        set: { seconds in Task {
+                            _ = await workspace.savePreferredWork(
+                                enabled: policy.preferredWork.enabled,
+                                modality: policy.preferredWork.modality
+                                    ?? policy.preferredChoices.first,
+                                idleSeconds: seconds)
+                        } }), in: 1...3600).labelsHidden()
+                        .disabled(!policy.preferredWork.enabled)
+                }
+                Text("s")
+                    .font(HubType.secondary).foregroundStyle(.secondary)
+            }
+        }
+        Text(stateText)
+            .font(HubType.secondary).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        Text("Episode renders are never held or delayed by this choice. A running job of any kind always finishes first, and the Mac's model memory still follows its own model-memory setting.")
+            .font(HubType.secondary).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var stateText: String {
+        let name = policy.preferredWork.modality.flatMap { title(for: $0) } ?? "the chosen function"
+        switch policy.preferredState?.phase {
+        case "working":
+            return "\(name) work is on this Mac now; it stays reserved while that continues."
+        case "holding":
+            let seconds = Int((policy.preferredState?.remainingS ?? 0).rounded())
+            return seconds >= 60
+                ? "Holding this Mac for \(name): about \(seconds / 60) min remaining."
+                : "Holding this Mac for \(name): under a minute remaining."
+        case "lending":
+            return "Available for other work until the next \(name) job."
+        default:
+            return "Off: all enabled functions have equal priority, as job priority above decides."
+        }
+    }
+
+    private func title(for modality: String) -> String {
+        policy.priorityFunctions.first { $0.id == modality }?.title
+            ?? modality.capitalized
     }
 }
 

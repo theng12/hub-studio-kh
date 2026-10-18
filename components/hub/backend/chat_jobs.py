@@ -701,6 +701,7 @@ async def dispatch_once(monitor) -> int:
 async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
                     generation=None) -> None:
     started = time.time()
+    reservation_owner: str | None = None
     try:
         if _expire_genstudio_batch(batch):
             return
@@ -723,6 +724,10 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
                         error="worker authentication changed before dispatch")
             return
         url, headers = studio_request(studio, "/v1/chat/completions")
+        # Immediately before the actual POST: a dispatch-time reservation covers the worker's
+        # own generation window. Optional bookkeeping; a failed write is logged and the pack
+        # runs under the worker's normal memory mode.
+        reservation_owner = broker._begin_preferred_reservation(studio, "chat")
         response = await monitor._client.post(
             url, json=body, headers=headers,
             timeout=httpx.Timeout(connect=5, read=600, write=30, pool=5),
@@ -822,6 +827,11 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
     finally:
         busy_studios.discard(studio["id"])
         broker.release_external_machine(studio.get("machine", "local"), owner)
+        # A real terminal transition of this Mac's preferred Chat work opens the hold. A retry
+        # or an unknown lease proves nothing: only done/error/cancelled/partial-final counts.
+        if pack.get("state") in ("done", "error", "cancelled", "partial"):
+            broker._note_preferred_completion(studio, "chat",
+                                              reservation_owner=reservation_owner)
         _pack_tasks.pop((batch["id"], pack["index"]), None)
         _save(batch)
         _wakeup.set()

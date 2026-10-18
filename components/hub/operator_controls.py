@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
-from .backend import broker, chat_jobs, peers, registry, transcription_jobs, vocabulary
+from .backend import broker, chat_jobs, peers, preferred_hold, registry, transcription_jobs, vocabulary
 
 
 def _enabled(body: dict) -> bool:
@@ -31,10 +31,35 @@ def work_policy(monitor) -> dict:
         functions.append({"id": modality,
                           "title": worker.get("title") or worker["id"]})
     order = registry.priority_order("local")
+    saved = registry.preferred_work("local")
+    hold = registry.preferred_hold("local")
+    policy = preferred_hold.normalized(saved)
+    # The simple actual state, from this Mac's own running-job evidence: which function is on
+    # the Mac right now (any lane), and the bounded remaining hold. Never a guessed warm model.
+    running = None
+    try:
+        from .backend import activity as activity_view
+        jobs = activity_view.current_jobs(local, monitor.status,
+                                          activity_view.live_batches())
+        job = next(iter(jobs.values()), None)
+        running = str((job or {}).get("modality") or "") or None
+    except Exception:
+        running = None
+    state = preferred_hold.state(policy, hold, running,
+                                 machine_prefers=bool(policy and running == policy["modality"]))
     return {"machine_enabled": registry.machine_enabled("local"),
             "priority_order": order,
             "priority_functions": functions,
             "chat_priority": bool(order and order[0] == "chat"),
+            "preferred_choices": preferred_hold.choices_for(seen),
+            "preferred_work": ({"enabled": bool(saved and saved.get("enabled")),
+                                "modality": (saved or {}).get("modality"),
+                                "idle_seconds": (policy or (saved or {})).get(
+                                    "idle_seconds",
+                                    registry.PREFERRED_WORK_DEFAULT_S)}
+                               if saved else {"enabled": False, "modality": None,
+                                              "idle_seconds": registry.PREFERRED_WORK_DEFAULT_S}),
+            "preferred_state": state,
             "studios": [{"id": row["id"], "title": row.get("title") or row["id"],
                          "modality": row.get("modality"),
                          "enabled": registry.studio_enabled(
@@ -42,20 +67,78 @@ def work_policy(monitor) -> dict:
                         for row in local]}
 
 
+def _validate_priority_order(monitor, order: object) -> list[str]:
+    """The validated order, or HTTP 400 — shared by the order-only and combined saves."""
+    if not isinstance(order, list) \
+            or any(not isinstance(item, str) or not item for item in order) \
+            or len(order) != len(set(order)):
+        raise HTTPException(400, "priority_order must contain unique registered modalities")
+    allowed = {row["id"] for row in work_policy(monitor)["priority_functions"]}
+    if any(item not in allowed for item in order):
+        raise HTTPException(400, "priority_order must contain unique registered modalities")
+    return order
+
+
 def save_work_policy(monitor, body: dict) -> dict:
     if set(body) == {"chat_priority"} and isinstance(body.get("chat_priority"), bool):
         order = ["chat"] if body["chat_priority"] else []
+        registry.set_priority_order("local", order)
     elif set(body) == {"priority_order"} and isinstance(body.get("priority_order"), list):
-        order = body["priority_order"]
-        allowed = {row["id"] for row in work_policy(monitor)["priority_functions"]}
-        if (any(not isinstance(item, str) or not item or item not in allowed
-                for item in order) or len(order) != len(set(order))):
-            raise HTTPException(400, "priority_order must contain unique registered modalities")
+        registry.set_priority_order("local", _validate_priority_order(
+            monitor, body["priority_order"]))
+    elif set(body) == {"preferred_work"}:
+        _save_preferred_work(body["preferred_work"])
+    elif set(body) == {"priority_order", "preferred_work"}:
+        # Request-atomic: both halves validate (and the preference resolves) before either
+        # write, so an invalid order can never leave a half-applied combined save. The two
+        # rows are written by the registry's existing atomic per-key writes; a crash between
+        # them leaves the first key saved, and a retry is idempotent.
+        payload = body["preferred_work"]
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "preferred_work must be an object")
+        order = _validate_priority_order(monitor, body["priority_order"])
+        _save_preferred_work(payload)
+        registry.set_priority_order("local", order)
     else:
-        raise HTTPException(400, "provide only priority_order, or the legacy chat_priority boolean")
-    registry.set_priority_order("local", order)
+        raise HTTPException(400, "provide only priority_order, preferred_work, both, "
+                                 "or the legacy chat_priority boolean")
     _wake_dispatchers()
     return work_policy(monitor)
+
+
+def _save_preferred_work(payload: object) -> None:
+    """Validate and persist one idle-hold preference; rejects anything partial."""
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "preferred_work must be an object")
+    unknown = set(payload) - {"enabled", "modality", "idle_seconds"}
+    if unknown:
+        raise HTTPException(400, f"unknown preferred_work field(s): {', '.join(sorted(unknown))}")
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(400, "preferred_work.enabled must be true or false")
+    modality = payload.get("modality")
+    if enabled:
+        if modality not in preferred_hold.choices_for(_local_modalities()):
+            raise HTTPException(400, "preferred_work.modality must be a generation function "
+                                     "this Mac serves (render is never a preference)")
+    elif modality is not None:
+        raise HTTPException(400, "disabled preferred_work must not name a modality")
+    seconds = payload.get("idle_seconds", registry.PREFERRED_WORK_DEFAULT_S)
+    if not isinstance(seconds, int) or isinstance(seconds, bool):
+        raise HTTPException(400, "preferred_work.idle_seconds must be a whole number of seconds")
+    try:
+        registry.set_preferred_work("local",
+                                    modality if enabled else None,
+                                    seconds if enabled else registry.PREFERRED_WORK_DEFAULT_S,
+                                    enabled=enabled)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def _local_modalities() -> list[str]:
+    from .backend import vocabulary as vocab
+    return [worker.get("modality") for worker in broker._monitor().registry
+            if peers.is_local_studio(worker) and worker.get("modality") in vocab.NODE_MODALITIES]
 
 
 def register_routes(app, monitor) -> None:

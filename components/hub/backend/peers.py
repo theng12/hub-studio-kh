@@ -401,6 +401,15 @@ async def _refresh_stale(machines, stale, client, now):
                 "workstation": data.get("workstation") if isinstance(data.get("workstation"), dict) else None,
                 "priority_order": order,
                 "chat_priority": bool(order and order[0] == "chat"),
+                # The Mac's own idle-hold preference and its bounded remaining window
+                # (the node owns the clock; only the remaining seconds cross the wire).
+                # Absent (or None) from an older Hub, which then reads as OFF.
+                "preferred_work": data.get("preferred_work") if isinstance(data.get("preferred_work"), dict) else None,
+                "preferred_hold_remaining_s": (
+                    float(data["preferred_hold_remaining_s"])
+                    if isinstance(data.get("preferred_hold_remaining_s"), (int, float))
+                    and not isinstance(data.get("preferred_hold_remaining_s"), bool)
+                    else 0.0),
                 "reachable": True, "auth": True, "status": "connected",
             }
             clears_rejection = False

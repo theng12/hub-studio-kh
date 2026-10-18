@@ -100,10 +100,17 @@ def keep_resident(manager) -> bool:
 
     Reads *this* manager's own data directory and memory, not the module's: the module serves the
     one manager the worker runs, but a job must never be decided by another manager's setting.
+    A mode whose resolved idle window is zero (an explicit ``immediate``, or ``auto`` on a small
+    Mac) normally drops the model in the job's own finally. The sibling Hub's opt-in
+    preferred-work hold keeps it for that bounded window instead; an explicitly stored
+    ``immediate`` mode stays authoritative (``hold_exempt`` returns False for it).
     """
-    mode = _stored_mode(Path(manager.data) / 'memory_policy.json')
+    data = Path(manager.data)
+    mode = _stored_mode(data / 'memory_policy.json')
     machine = memory_modes.machine_mode(manager.total_memory_bytes)
-    return memory_modes.idle_seconds(mode, machine) != 0
+    if memory_modes.idle_seconds(mode, machine) != 0:
+        return True
+    return memory_modes.hold_exempt(data, 'image', mode)
 
 
 def _jobs() -> list[dict]:
@@ -214,18 +221,35 @@ def _pressure_is_high() -> bool:
     return _under_memory_pressure()
 
 
+def _data_dir() -> Path | None:
+    """This manager's data directory, beside which the Hub's own flags row lives."""
+    data = getattr(_MANAGER, 'data', None) or os.environ.get('STUDIOHUB_IMAGE_DATA_DIR')
+    return Path(data) if data else None
+
+
+def _tick() -> None:
+    """One idle/pressure decision, so the loop and the tests drive the same code."""
+    idle = _MANAGER.resident_idle_seconds() if _MANAGER is not None else None
+    if idle is None or _busy():
+        return
+    mode = _mode()
+    threshold = MODES[resolved_mode(mode)]['idle_seconds']
+    data = _data_dir()
+    # The sibling Hub's opt-in preferred-work hold declines only this worker's own idle
+    # release. The exemption must never short-circuit the pressure branch below: when the
+    # idle condition is false because of the exemption, the elif is still evaluated.
+    exempt = data is not None and memory_modes.hold_exempt(data, 'image', mode)
+    if threshold is not None and idle >= threshold and not exempt:
+        release_now('idle', raise_if_busy=False)
+    elif _pressure_is_high():
+        release_now('memory-pressure', raise_if_busy=False)
+
+
 def _loop() -> None:
     while True:
         time.sleep(CHECK_INTERVAL_SECONDS)
         try:
-            idle = _MANAGER.resident_idle_seconds() if _MANAGER is not None else None
-            if idle is None or _busy():
-                continue
-            threshold = MODES[resolved_mode(_mode())]['idle_seconds']
-            if threshold is not None and idle >= threshold:
-                release_now('idle', raise_if_busy=False)
-            elif _pressure_is_high():
-                release_now('memory-pressure', raise_if_busy=False)
+            _tick()
         except Exception:  # noqa: BLE001 - a policy failure must never take down the worker
             continue
 

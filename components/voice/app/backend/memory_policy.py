@@ -195,6 +195,11 @@ def run_due_release(now: float | None = None) -> dict | None:
         idle = max(0.0, current - activity)
         if idle < threshold:
             return None
+        # The sibling Hub's opt-in preferred-work hold: skip only this timer's own release
+        # while the preferred model is meant to stay. Manual release, a stored explicit
+        # `immediate` mode and every Hub-coordinated release are unaffected.
+        if memory_modes.hold_exempt(paths.data_dir(), "voice", mode):
+            return None
         if _LAST_RELEASE_AT is not None and _LAST_RELEASE_AT >= activity:
             return None
     return _release(f"automatic:{mode}")

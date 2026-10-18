@@ -1170,6 +1170,8 @@ async def _run_item(monitor, batch: dict, item: dict, studio: dict, owner: str,
         _record_terminal_activity(item, batch, studio)
         _save(batch)
         _wakeup.set()
+        # Transcription is deliberately not a preferred-generation choice
+        # (`preferred_hold.GENERATION_CHOICES`), so a completed subtitle never opens a hold.
 
 
 async def _dispatch_loop(monitor) -> None:
