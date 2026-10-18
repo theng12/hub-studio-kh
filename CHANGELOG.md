@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- A Mac running as a Node now lists the work it ran for its controller in its own Jobs page. A controller's Image, Music, Voice and Video work reaches the node through the fleet proxy, and its batch lives on the controller, so the node's history had nothing to show even though it held the files. The node now files the worker's terminal `done` report (its model, prompt, output path and receipt) as a finished local row when the controller polls it; nothing is filed before terminal, so the broker can never recover and re-run it. `tests/test_studio_proxy.py::test_a_controller_job_that_finishes_is_listed_in_this_nodes_history` proves a running job is not listed and a finished one is, with its artifact path.
+- On a controller, the Jobs page splits results by the Mac that made them: a "Made on" segmented control offers All / This Mac / Nodes. It reads the `machine` every job row already carries, so no new metadata was added, and it is offered only where a role of controller means more than one Mac's work can land. This is not the 0.6.185 release; VERSION is unchanged.
+
 ## 0.6.185 — 2026-10-18
 
 - The SSD installer and the app now agree on where a Mac's models live. One resolver (`components/model_library.py`) answers a single folder for both the kit's copy step and the app: a folder the operator saved in the app, then a non-empty `<data>/models`, then a library recorded at the canonical folder, then one recorded at the earlier kit's folder, then the canonical default. The native setup card, the Models page location row and the Settings row read the same order, so the copy step fills the folder the app actually offers instead of a second one.

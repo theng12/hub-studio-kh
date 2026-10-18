@@ -50,6 +50,28 @@ enum HistoryTab: Hashable, Identifiable {
     var id: String { title }
 }
 
+/// Which Macs the Jobs page lists.
+///
+/// A node runs work its controller owns, so the two histories meet on the controller and only
+/// there: a job's own `machine` (already on every row) says which Mac made it. That is the one
+/// fact the operator needs to sort finished assets before previewing them.
+private enum JobMachineFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case thisMac = "This Mac"
+    case nodes = "Nodes"
+
+    var id: String { rawValue }
+
+    func includes(_ job: NativeJob) -> Bool {
+        switch self {
+        case .all: return true
+        // A row with no machine yet has not been dispatched, so it is this Mac's queue.
+        case .thisMac: return job.machine == nil || job.machine == "local"
+        case .nodes: return job.machine != nil && job.machine != "local"
+        }
+    }
+}
+
 /// A slowly turning rainbow ring, drawn only while `active`.
 ///
 /// The owner's feedback was that a long generation "shows almost nothing", so a running job is now
@@ -915,6 +937,8 @@ struct StudioContent: View {
     /// list controls the clip that is actually loaded rather than whichever row was last drawn.
     @State private var loadedAudioJobID: String?
     @State private var historyTab = HistoryTab.all
+    /// Which Macs the Jobs page lists. Offered only where more than one Mac's work can land.
+    @State private var jobMachineFilter = JobMachineFilter.all
     @State private var loadingImage = false
     @State private var connectionNote: String?
     @State private var controllerDraft = ""
@@ -4231,6 +4255,21 @@ struct StudioContent: View {
                 .labelsHidden()
                 .frame(maxWidth: 520, alignment: .leading)
                 .accessibilityLabel("History filter")
+                // The controller is the only Mac whose Jobs page holds work that ran somewhere
+                // else. A node's list is its own machine throughout, so a split there would be
+                // three names for one list.
+                if workspace.controllerIdentity?.settings.role == "controller" {
+                    Picker("Made on", selection: $jobMachineFilter) {
+                        ForEach(JobMachineFilter.allCases) { filter in
+                            Text(filter.rawValue).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 260, alignment: .leading)
+                    .accessibilityLabel("Show jobs made on")
+                    .accessibilityHint("Separate this Mac's own results from work its nodes made")
+                }
                 if workspace.transcribing { transcriptionActivity }
                 // A tab for a Studio the Hub files nothing for is not nothing to show: it is the
                 // one place the owner asked to be reminded from. It says exactly that - no rows, no
@@ -4255,16 +4294,19 @@ struct StudioContent: View {
                 // absent from Jobs with nothing saying so.
                 ForEach(workspace.jobHistories, id: \.function) { history in
                     if historyTab == .all || historyTab.studio == history.function {
+                      let jobs = history.jobs.filter(jobMachineFilter.includes)
                       VStack(alignment: .leading, spacing: HubSpace.m) {
                         sectionTitle(StudioPage.page(for: history.function)?.title ?? history.function.rawValue)
-                        if history.jobs.isEmpty {
-                            Text("No \((StudioPage.page(for: history.function)?.title ?? history.function.rawValue).lowercased()) jobs yet.")
+                        if jobs.isEmpty {
+                            let source = jobMachineFilter == .thisMac ? "this Mac"
+                                : (jobMachineFilter == .nodes ? "the nodes" : "this Mac or its nodes")
+                            Text("No \((StudioPage.page(for: history.function)?.title ?? history.function.rawValue).lowercased()) jobs from \(source) yet.")
                                 .font(HubType.secondary).foregroundStyle(.secondary)
                         }
                         // Lazy so a row's artifact (an image thumbnail above all) is only fetched
                         // for a row that is actually on screen.
                         LazyVStack(alignment: .leading, spacing: HubSpace.m) {
-                            ForEach(history.jobs) { job in
+                            ForEach(jobs) { job in
                                 jobRow(job, for: history.function)
                                 Divider()
                             }
