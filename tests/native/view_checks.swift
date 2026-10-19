@@ -58,6 +58,25 @@ enum ViewChecks {
         }
         check(all != nil && downloads != nil, "the Jobs page draws offscreen")
         check(all != downloads, "choosing the Downloads tab changes the page")
+
+        // The Models page's function tabs (owner, 2026-10-19: "it has no tab or proper spacing. it's
+        // squished"). One segmented control, one segment per function the library holds a model for
+        // and none for a function it does not - the empty "Video — 0 models" group the owner asked
+        // to be rid of was the same row of nothing. This gate has no Hub, so the library is empty:
+        // that is exactly the case pinned here. `native/render-page.sh` shows the populated page.
+        studio.selection = .models
+        let models = draw()
+        let tabs = segmented(hosting)
+        check(tabs != nil, "the Models page draws its function tabs as a segmented control")
+        check(tabs?.segmentCount == 1,
+              "a function the library holds no model for gets no tab, only All")
+        check(tabs?.label(forSegment: 0)?.hasPrefix("All ") == true,
+              "the Models page's first tab is All, carrying the count it would show")
+        check(models != nil, "the Models page draws offscreen")
+        if let path = ProcessInfo.processInfo.environment["STUDIOHUB_VIEW_CHECKS_MODELS_PNG"],
+           let models {
+            try? models.write(to: URL(fileURLWithPath: path))
+        }
         window.orderOut(nil)
 
         if failures > 0 { exit(1) }

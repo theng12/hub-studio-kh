@@ -58,11 +58,11 @@ class SectionDerivationTests(unittest.TestCase):
 
     def test_the_view_renders_the_derived_sections_and_collapses_them(self) -> None:
         listing = body(VIEWS, "private var modelsWorkspace: some View")
-        self.assertIn("modelSections", listing, "the view must render the derived sections")
+        self.assertIn("modelSectionsToShow", listing, "the view must render the derived sections")
         derived = body(VIEWS, "private var modelSections: [NativeModelSection]")
         self.assertIn("workspace.modelSections(search: modelSearch, installedOnly: installedOnly)",
                       derived, "the view's sections must come from the store's derivation")
-        self.assertIn("ForEach(modelSections)", listing, "one section per Studio")
+        self.assertIn("ForEach(modelSectionsToShow)", listing, "one section per Studio")
         self.assertIn("modelSectionHeader(section)", listing, "each section carries its own header")
         self.assertIn("section.header", VIEWS,
                       "the header must be the Studio's own name and count")
@@ -74,17 +74,78 @@ class SectionDerivationTests(unittest.TestCase):
         self.assertIn("collapsedModelSections", expanded, "a section is collapsible")
         self.assertIn("collapsedModelSections", VIEWS, "the fold state must exist")
 
-    def test_the_function_picker_jumps_rather_than_hides(self) -> None:
+    def test_the_function_tabs_replace_the_jump_picker(self) -> None:
+        """The one long stack of sections is tabs now.
+
+        The owner's report, over the 0.6.186 Models page: *"it has no tab or proper spacing. it's
+        squished and also ugly."* The "Jump to" picker did not hide anything - it only scrolled -
+        so every Studio's models were in one column with a heading between them. The tabs are the
+        function filter, and what each one shows is the store's own derivation, never a list here.
+        """
         listing = body(VIEWS, "private var modelsWorkspace: some View")
-        self.assertIn('Picker("Jump to", selection: $modelFilter)', listing,
-                      "the Function picker is a jump control now")
-        self.assertNotIn("modelFilter ==", listing,
-                         "the picker must not filter the list it sits above")
-        jump = body(VIEWS, "private func jumpToModelSection(")
-        self.assertIn("StudioFunction(rawValue: value)", jump,
-                      "the jump target is a Studio the enum knows")
-        self.assertIn("scrollTo", jump, "jumping must move the list to the section")
-        self.assertIn("collapsedModelSections.remove", jump, "jumping must unfold the target")
+        self.assertIn("modelTabs", listing, "the Models page draws the tab bar")
+        tabs = body(VIEWS, "private var modelTabs: some View")
+        self.assertIn('Picker("Function", selection: $modelFilter)', tabs,
+                      "the tab bar is the app's segmented picker, as the Jobs page's history is")
+        self.assertIn(".pickerStyle(.segmented)", tabs, "the tabs are a segmented control")
+        self.assertIn('Text("All \\(total)").tag("All functions")', tabs,
+                      "the first tab is All and it carries a count like every other tab")
+        # A function's tab filters: that is the whole point of a tab, and it is the opposite of the
+        # picker it replaced, which was pinned as "must not filter" because it sat above one list.
+        shown = body(VIEWS, "private var modelSectionsToShow: [NativeModelSection]")
+        self.assertIn("modelFilter ==", shown, "a function's tab shows that Studio's section only")
+        self.assertIn("!section.models.isEmpty", shown,
+                      "under All, a Studio with nothing in it is not a heading either")
+        # Which tabs exist is read from the library, in the app's own Studio order.
+        functions = body(VIEWS, "private var modelTabFunctions: [StudioFunction]")
+        self.assertIn("StudioFunction.allCases", functions,
+                      "the tabs are the app's own Studio list")
+        self.assertIn("modelLibraryHolds", functions,
+                      "which tabs exist is read from the library, not written down here")
+        self.assertIn("StudioPage.createOrder", functions,
+                      "the tabs keep the app's own Studio order")
+        self.assertIn("StudioFunction(rawValue: modelFilter)", functions,
+                      "a Studio reached from its own page keeps its tab even with nothing in it")
+        holds = body(VIEWS, "private func modelLibraryHolds(")
+        self.assertIn('workspace.modelSections(search: "", installedOnly: false)', holds,
+                      "a tab's existence is the library's answer, not the search's")
+        self.assertNotIn("jumpToModelSection", VIEWS, "the jump picker is gone, not left behind")
+        # Two different nothings, said differently: a Studio whose catalogue lists no model at all
+        # is a fact about the Hub, and "clear the search" would point at a control that changes
+        # nothing.
+        listing = body(VIEWS, "private var modelsWorkspace: some View")
+        self.assertIn("has no model in this library yet", listing,
+                      "a Studio with nothing in its catalogue says so, by its own name")
+        self.assertIn("No models match this view", listing,
+                      "a search that matched nothing still says to clear the search")
+
+    def test_the_details_pane_is_a_two_way_split_that_remembers_its_width(self) -> None:
+        """The owner: *"it should work both ways because more often than not, I want to see details
+        more than the model name."*
+
+        An `HSplitView` capped the details at 380 pt and floored the list at 380 pt, so the divider
+        would only move one way. The list now has a floor of its own and no ceiling but the window's,
+        the width is dragged either way, and it is remembered across launches.
+        """
+        listing = body(VIEWS, "private var modelsWorkspace: some View")
+        self.assertNotIn("HSplitView", listing,
+                         "the capped split is gone: it could not be dragged both ways")
+        self.assertIn("modelSplitDivider", listing, "the divider is the view's own, so it drags")
+        self.assertIn('@AppStorage("studioHub.modelsListWidth")', VIEWS,
+                      "the chosen width must be remembered across launches")
+        divider = body(VIEWS, "private var modelSplitDivider: some View")
+        self.assertIn("DragGesture", divider, "the divider is dragged")
+        self.assertIn("modelsSplitDragStart", divider, "a drag starts from where the divider is now")
+        self.assertIn("modelsListMinWidth", divider, "the list has a floor of its own")
+        self.assertIn("modelsListMaxWidth", divider, "and the details side keeps the rest")
+        self.assertIn("static let modelsListMinWidth: Double = 360", VIEWS,
+                      "the list's floor is the model name plus its status badge")
+        # Nothing selected, nothing to inspect: the list takes the whole width instead of leaving a
+        # panel that says only "select a model" across a third of the page.
+        self.assertIn('if let model = workspace.models.first(where: { $0.repo == selectedModel })',
+                      listing, "the details pane is drawn only for a selected model")
+        self.assertNotIn('"Select a model to inspect its status and available actions."', listing,
+                         "the empty details panel is gone, not just narrowed")
 
     def test_the_manage_buttons_still_name_their_own_studio(self) -> None:
         """Every generator page hands the Models tab a Studio to jump to; Video joined them."""
