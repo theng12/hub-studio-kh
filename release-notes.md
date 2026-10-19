@@ -2,6 +2,46 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.188 — 2026-10-19
+
+### Chat answers can be much longer
+
+The chat lane has a last-resort output allowance for when neither you nor the model states a number
+of its own. It was **16,384 tokens**; it is now **128,000**. A number the model states still wins,
+and a number you ask for still wins over both — this only moves the figure the lane falls back to
+when nobody names one.
+
+It is a maximum, not a target: an answer still stops when it is finished, so nothing generates more
+work than before. One thing to know: the lane's own time limit has **not** changed, so a reply that
+would genuinely run to hundreds of thousands of tokens can still be cut by that limit before it
+finishes.
+
+### A model with a smaller window still answers you
+
+If you send a chat message without asking for a particular reply length, and the model's own window
+is smaller than the lane's default, the app used to refuse the request — the default looked like a
+number you had chosen, and it did not fit. It now gives you the longest reply that model can hold
+instead. If you *do* ask for a specific length that does not fit, that is still refused, with the
+prompt size, your number and the model's window spelled out.
+
+### A stuck chat job now tells you why
+
+A chat job whose requested reply length is larger than any Studio offering that model can produce
+used to sit in the queue saying "Waiting for a free online Chat Studio with this model cached" —
+which was never going to happen. It now names the largest ceiling actually on offer and says the
+request itself is the reason it is not moving.
+
+### Captions are no longer cut short, so region detection keeps all regions
+
+Before outlining the regions you ask for, the app asks the model for a detailed caption and then
+looks for each region's words in it. That one call was asking for **256 tokens** — a quarter of what
+the model itself states (1,024) — so on a busy image the caption stopped part-way through. A region
+whose words would have appeared further down was then reported as not named at all, which looks like
+a detection miss rather than a caption that ran out of room.
+
+The caption now runs with the model's own stated budget, the same as every other call in that worker.
+Region detection sees the whole caption again.
+
 ## 0.6.187 — 2026-10-19
 
 ### Your Mac's Trash can now empty itself — and you can turn it on from here
