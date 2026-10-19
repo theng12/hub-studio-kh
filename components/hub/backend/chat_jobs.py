@@ -443,8 +443,21 @@ def clear_terminal() -> int:
 
 async def _eligible_studios(
         monitor, model: str, execution: dict | None = None,
-        required_output_tokens: int = 0) -> list[dict]:
+        required_output_tokens: int = 0) -> tuple[list[dict], int | None]:
+    """The Studios that can take this work now, and the largest output ceiling any **ready**
+    Studio serving this model publishes (`None` when nothing states one).
+
+    The second value exists so a caller that finds no eligible Studio can say **whether the
+    request itself is the reason**. A pack asking for more output tokens than every Studio
+    serving its model publishes is not waiting for a free Mac — it can never be dispatched on
+    that model — and a note that blames availability leaves it queued for ever with nothing to
+    read. The scan covers every Studio that got as far as its catalog: online, ready, with the
+    model cached, including ones skipped later for the ceiling itself or for a revision
+    mismatch. A Studio that is offline contributes nothing, because its catalog is not read
+    here — so the sentence names what is on offer *now*, not what a sleeping Mac might offer.
+    """
     eligible = []
+    largest_limit: int | None = None
     for studio in monitor.registry:
         if (studio.get("modality") != "chat" or studio["id"] in busy_studios
                 or broker.in_maintenance(studio["id"])):
@@ -462,6 +475,11 @@ async def _eligible_studios(
                       if item.get("repo") == model or model in (item.get("aliases") or [])), None)
         if not entry or not broker.is_cached(entry):
             continue
+        published_limit = entry.get("max_output_tokens", entry.get("max_tokens"))
+        if (isinstance(published_limit, int) and not isinstance(published_limit, bool)
+                and published_limit > 0):
+            largest_limit = (published_limit if largest_limit is None
+                             else max(largest_limit, published_limit))
         if execution:
             expected_revision = str(execution.get("model_revision") or "").strip().lower()
             reported_revision = str(
@@ -485,7 +503,7 @@ async def _eligible_studios(
     eligible.sort(key=lambda studio: (
         broker._studio_total_memory_gb(studio), studio["id"],
     ))
-    return eligible
+    return eligible, largest_limit
 
 
 def has_queued_work() -> bool:
@@ -526,7 +544,7 @@ async def dispatchable_candidate(monitor, machine: str) -> tuple[float, str] | N
                 pack.get("params", {}).get("max_tokens")
                 or pack.get("params", {}).get("max_completion_tokens"),)
             if isinstance(value, int) and not isinstance(value, bool) and value > 0]
-        eligible = await _eligible_studios(
+        eligible, _largest_limit = await _eligible_studios(
             monitor, batch["model"], batch.get("genstudio_execution"),
             max(output_limits, default=0))
         for studio in eligible:
@@ -565,7 +583,7 @@ async def dispatchable_pool(monitor, machine: str) -> float | None:
             )
             if isinstance(value, int) and not isinstance(value, bool) and value > 0
         ]
-        eligible = await _eligible_studios(
+        eligible, _largest_limit = await _eligible_studios(
             monitor,
             batch["model"],
             batch.get("genstudio_execution"),
@@ -626,14 +644,25 @@ async def dispatch_once(monitor) -> int:
                 and value > 0
             ]
             required_output_tokens = max(output_limits, default=0)
-            eligible = await _eligible_studios(
+            eligible, largest_limit = await _eligible_studios(
                 monitor,
                 batch["model"],
                 batch.get("genstudio_execution"),
                 required_output_tokens,
             )
             if not eligible:
+                # **Say which of the two it is.** A request above every ceiling on offer is not
+                # waiting for a free Mac: no ready Studio serving this model can take it, and the
+                # note below used to promise the opposite while the batch sat queued for ever.
+                too_large = (
+                    largest_limit is not None and largest_limit < required_output_tokens
+                )
                 batch["queue_note"] = (
+                    f"This request asks for {required_output_tokens:,} output tokens, above the "
+                    f"{largest_limit:,} the largest ready Chat Studio serving {batch['model']} "
+                    f"publishes. It is not waiting for a free Mac and will not dispatch until a "
+                    f"Studio with a larger ceiling has this model cached."
+                    if too_large else
                     "Waiting for a free online Chat Studio with this model cached"
                 )
                 continue

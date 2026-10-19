@@ -258,14 +258,15 @@ publish nothing where nothing states one:
 ```json
 "model_limits": {
   "context_window_tokens": {"value": 262144, "source": "model/config.json text_config.max_position_embeddings"},
-  "max_output_tokens": {"value": 4096, "source": "worker default: the checkpoint ships no generation_config.json"}
+  "max_output_tokens": {"value": 128000, "source": "worker default: the checkpoint ships no generation_config.json"}
 }
 ```
 
 - `value` is `null` when no source states the limit. `source` is then the reason, so a reader can
   label its own fallback honestly rather than inheriting ours as a fact.
 - A worker default must say it is a worker default. `max_output_tokens` for Qwen3.5-9B 4-bit is
-  **4096**, which is `llm_engine.FALLBACK_MAX_OUTPUT_TOKENS`, not a number the checkpoint states.
+  **128000** (raised from 16384 by the owner on 2026-10-19, and from 4096 before that), which is
+  `llm_engine.FALLBACK_MAX_OUTPUT_TOKENS`, not a number the checkpoint states.
 - Measured for the shipped chat model: `mlx-community/Qwen3.5-9B-4bit` publishes
   `text_config.max_position_embeddings = 262144` in its own `config.json`, so the context window is
   **262144** [M] — two orders of magnitude away from the flat `1,000,000` a reader currently sees.

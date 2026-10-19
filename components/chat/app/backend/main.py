@@ -354,9 +354,11 @@ def _parameter_surface(engine) -> list[dict]:
     prompt_note = "OpenAI-shaped messages, each with a string content field"
     if isinstance(context_value, int) and not isinstance(context_value, bool) and context_value > 0:
         prompt_note += (
-            f"; the rendered prompt is measured and the request is refused by name when prompt "
-            f"tokens + max_tokens exceed the {context_value} tokens this model states "
-            f"({context_source})")
+            f"; the rendered prompt is measured before anything is streamed. A figure the request "
+            f"names itself that does not fit is refused by name — prompt tokens + max_tokens "
+            f"exceeding the {context_value} tokens this model states ({context_source}) — while "
+            f"this lane's own default is instead shrunk to the room left, so a model with a "
+            f"smaller window still answers a caller that named nothing")
     else:
         prompt_note += (
             "; nothing states a context window for this model, so no prompt length is refused")
@@ -1111,7 +1113,8 @@ def create_app(engine: ChatEngine | ChatModelManager, policy: memory_policy_modu
     # ── per-model operator defaults ────────────────────────────────────────
     # The owner's rule: a default belongs to one model, because each model is weighted
     # differently and a blanket default meant for one model applied to all of them is how a
-    # 4096-token chat budget ends up standing in for a model that states 262144.
+    # 128000-token chat budget (the worker fallback since 2026-10-19) ends up standing in for a
+    # model that states 32768.
     @app.get("/api/model-defaults")
     def model_defaults_status() -> dict:
         """What this model accepts, what the lane itself states, and what the operator chose.

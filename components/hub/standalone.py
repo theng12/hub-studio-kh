@@ -4155,7 +4155,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if not holders:
             return None
         held = {studio["id"] for studio in holders}
-        for studio in await chat_jobs._eligible_studios(monitor, model):
+        # The second value is the output ceiling on offer, which this relay does not need: it is
+        # read only to tell a stuck batch whose request is too large why it is not moving.
+        eligible, _largest_output_ceiling = await chat_jobs._eligible_studios(monitor, model)
+        for studio in eligible:
             if studio["id"] not in held:
                 continue
             machine = studio["machine"]
