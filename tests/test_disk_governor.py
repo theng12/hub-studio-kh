@@ -254,17 +254,19 @@ class TempFileTests(Fixture):
 
 
 class OrderTests(Fixture):
-    def test_amber_stops_as_soon_as_free_space_is_back_to_green(self):
+    def test_amber_retires_the_rotated_log_and_keeps_going_while_the_disk_is_amber(self):
         log1 = self.put(self.base / "hub-worker.log.1", 30)
         live = self.put(self.base / "hub-worker.log", 30)
         trash = self.trash(2, "t", 20)
         self.set_free(100)                                          # amber (< 120)
         result = dg.sweep(self.ctx())
         self.assertFalse(log1.exists(), "step 2 (logs) did not run first")
+        self.assertEqual(len(list((self.hub / "trash").rglob("hub-worker.log.1"))), 1,
+                         "the rotated log was deleted instead of moved to the Trash Folder")
         self.assertTrue(live.exists() and live.stat().st_size == 30, "amber emptied the live log")
-        self.assertTrue(trash.exists(), "the sweep went on after the disk was green again")
+        self.assertTrue(trash.exists(), "the owner's Trash Folder entry was touched")
         self.assertEqual(result["tier_before"], "amber")
-        self.assertEqual(result["tier"], "green")
+        self.assertEqual(result["tier"], "amber")                   # a same-volume move frees nothing
         self.assertEqual([a["step"] for a in result["actions"]], ["logs"])
 
     def test_the_whole_order_and_what_is_never_touched(self):
@@ -287,8 +289,9 @@ class OrderTests(Fixture):
         leased = self.add_output("leased.png", 10, age_days=1, acked=True, batch="leased-batch")
         release = output_storage.acquire_reader(batch_id="leased-batch", item_index=0)
         self.addCleanup(release)
-        # Only scratch is deleted (logs 10 + 10 truncated, snapshot view 10, partial staging 10 = 40 bytes);
-        # the rest moves to the Trash Folder on the same disk and frees nothing. Start at 5 free (stop).
+        # Only scratch is deleted (the live log truncated 10, snapshot view 10, partial staging 10 = 30
+        # bytes); the rotated log and everything else move to the Trash Folder on the same disk and free
+        # nothing. Start at 5 free (stop).
         self.set_free(5)
         trash_before = sorted(p for p in (self.hub / "trash").rglob("*") if p.is_file())
         result = dg.sweep(self.ctx(manifests=manifests))
@@ -299,7 +302,8 @@ class OrderTests(Fixture):
         self.assertTrue(live_view.exists(), "a snapshot view of an installed model was removed")
         self.assertFalse(orphan_view.exists() or staging.exists() or mirror.exists() or acked.exists())
         trash = self.hub / "trash"
-        for pattern in ("stale-updates-*/k1/a.dmg", "orphan-model-mirror-*/models--org--gone/blobs/b"):
+        for pattern in ("stale-updates-*/k1/a.dmg", "orphan-model-mirror-*/models--org--gone/blobs/b",
+                        "logs-*/hub-worker.log.1"):
             self.assertEqual(len(list((trash / day_name(0)).glob(pattern))), 1, f"{pattern} was deleted, not moved")
         self.assertEqual(len(list(trash.rglob("*-acked.png"))), 1, "an acked output was deleted, not moved")
         self.assertTrue(set(trash_before) <= set(trash.rglob("*")), "something already in the Trash Folder was removed")
@@ -308,7 +312,7 @@ class OrderTests(Fixture):
         self.assertTrue(unacked.exists(), "an unacknowledged output was reclaimed")
         self.assertTrue(leased.exists(), "a leased output was reclaimed")
         self.assertEqual(result["tier"], "stop")                    # moves free nothing until the owner empties it
-        self.assertEqual(result["reclaimed_bytes"], 40)
+        self.assertEqual(result["reclaimed_bytes"], 30)
         self.assertTrue(any("could not bring" in w for w in dg.snapshot(self.hub)["warnings"]))
 
     def test_acked_outputs_younger_than_the_retention_window_only_at_red(self):

@@ -45,6 +45,13 @@ class SharedVoiceTests(unittest.TestCase):
         self.module = importlib.import_module("components.hub.backend.shared_voices")
         self._old_root = self.module.ROOT
         self.module.ROOT = self.root / "shared_voices"
+        # A removal now moves the voice's folder to the Hub's Trash Folder (`output_storage.retire`),
+        # so this test binds that root to its own temp directory instead of the checkout.
+        from unittest import mock
+        from components.hub.backend import ledger
+        self._data_dir = mock.patch.object(ledger, "DATA_DIR", self.root / "hub")
+        self._data_dir.start()
+        self.addCleanup(self._data_dir.stop)
 
     def tearDown(self):
         self.module.ROOT = self._old_root

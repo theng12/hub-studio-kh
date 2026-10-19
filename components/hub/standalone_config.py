@@ -21,6 +21,7 @@ DEFAULT_RETENTION_DAYS = 3
 DEFAULT_CLEANUP_ENABLED = True
 DEFAULT_CLEANUP_INTERVAL_SECONDS = 300
 DEFAULT_MINIMUM_FREE_BYTES = 5_000_000_000
+DEFAULT_TRASH_HANDOFF_DAYS = 7                # items older than this in the Trash Folder go to macOS Trash
 DEFAULT_KEEP_ALL_MODELS = False             # True: this Mac keeps shelved models (components/shelved_models.py)
 # `_REQUIRED_WORKERS` (worker id -> modality) is the inverse of the Hub's modality vocabulary,
 # derived in `backend/vocabulary.py` rather than restated here. It is kept as a module attribute
@@ -232,6 +233,7 @@ def _settings() -> dict[str, int | bool]:
     enabled = value.get("cleanup_enabled", DEFAULT_CLEANUP_ENABLED) if isinstance(value, dict) else DEFAULT_CLEANUP_ENABLED
     interval = value.get("cleanup_interval_seconds", DEFAULT_CLEANUP_INTERVAL_SECONDS) if isinstance(value, dict) else DEFAULT_CLEANUP_INTERVAL_SECONDS
     minimum_free = value.get("minimum_free_bytes", DEFAULT_MINIMUM_FREE_BYTES) if isinstance(value, dict) else DEFAULT_MINIMUM_FREE_BYTES
+    trash_handoff = value.get("trash_handoff_days", DEFAULT_TRASH_HANDOFF_DAYS) if isinstance(value, dict) else DEFAULT_TRASH_HANDOFF_DAYS
     # Damage never reads as "not keep-all": that would move a keep-all Mac's shelved models away.
     keep_all = True if problem else value.get("keep_all_models", DEFAULT_KEEP_ALL_MODELS)
     return {
@@ -240,6 +242,7 @@ def _settings() -> dict[str, int | bool]:
         "cleanup_enabled": enabled if isinstance(enabled, bool) else DEFAULT_CLEANUP_ENABLED,
         "cleanup_interval_seconds": interval if isinstance(interval, int) and interval >= 60 else DEFAULT_CLEANUP_INTERVAL_SECONDS,
         "minimum_free_bytes": minimum_free if isinstance(minimum_free, int) and minimum_free >= 0 else DEFAULT_MINIMUM_FREE_BYTES,
+        "trash_handoff_days": trash_handoff if isinstance(trash_handoff, int) and trash_handoff > 0 else DEFAULT_TRASH_HANDOFF_DAYS,
         "keep_all_models": keep_all,
     }
 
@@ -250,6 +253,7 @@ def load_device_settings() -> dict[str, dict[str, int | bool]]:
                      "cleanup_enabled": DEFAULT_CLEANUP_ENABLED,
                      "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
                      "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
+                     "trash_handoff_days": DEFAULT_TRASH_HANDOFF_DAYS,
                      "keep_all_models": DEFAULT_KEEP_ALL_MODELS},
         "effective": _settings(),
     }
@@ -270,6 +274,9 @@ def preview_device_settings(**changes: object) -> dict[str, int | bool]:
         raise ValueError("cleanup_interval_seconds must be at least 60")
     if isinstance(minimum_free, bool) or not isinstance(minimum_free, int) or minimum_free < 0:
         raise ValueError("minimum_free_bytes must be a non-negative integer")
+    handoff = value["trash_handoff_days"]
+    if isinstance(handoff, bool) or not isinstance(handoff, int) or handoff <= 0:
+        raise ValueError("trash_handoff_days must be a positive integer")
     if not isinstance(value["keep_all_models"], bool):
         raise ValueError("keep_all_models must be a boolean")
     return value
@@ -290,10 +297,12 @@ def update_device_settings(**changes: object) -> dict[str, dict[str, int | bool]
 def save_device_settings(*, max_bytes: int, retention_days: int, cleanup_enabled: bool = DEFAULT_CLEANUP_ENABLED,
                          cleanup_interval_seconds: int = DEFAULT_CLEANUP_INTERVAL_SECONDS,
                          minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES,
+                         trash_handoff_days: int | None = None,
                          keep_all_models: bool | None = None) -> dict[str, dict[str, int | bool]]:
     return update_device_settings(
         max_bytes=max_bytes, retention_days=retention_days, cleanup_enabled=cleanup_enabled,
         cleanup_interval_seconds=cleanup_interval_seconds, minimum_free_bytes=minimum_free_bytes,
+        **({} if trash_handoff_days is None else {"trash_handoff_days": trash_handoff_days}),
         **({} if keep_all_models is None else {"keep_all_models": keep_all_models}))
 
 
@@ -305,6 +314,7 @@ def restore_device_defaults() -> dict[str, dict[str, int]]:
             "cleanup_enabled": DEFAULT_CLEANUP_ENABLED,
             "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
             "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
+            "trash_handoff_days": DEFAULT_TRASH_HANDOFF_DAYS,
             "keep_all_models": _settings()["keep_all_models"],   # about models, not output limits: not reset here
             "defaults_version": _DEFAULTS_VERSION,
         })

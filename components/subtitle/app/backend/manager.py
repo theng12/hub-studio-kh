@@ -36,6 +36,22 @@ ALLOWED_EXTENSIONS = {
 _LANGUAGE = re.compile(r'^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$')
 
 
+def retire_input(directory: Path) -> bool:
+    """Move one expired input folder into the Hub's unified Trash Folder (owner request 2026-10-15).
+
+    The Subtitle worker is its own process with the Hub's data directory in its environment, so it
+    uses the Hub's one `output_storage.retire`. Never a delete: a build without that module, a run
+    with no Hub data directory, or a move that fails leaves the folder where it is for the next pass.
+    """
+    if not os.environ.get('STUDIOHUB_DATA_DIR'):
+        return False
+    try:
+        from components.hub import output_storage
+    except Exception:
+        return False
+    return output_storage.retire(directory, 'subtitle-input')
+
+
 def _atomic_json(path: Path, value) -> None:
     temporary = path.with_name(f'.{path.name}.{uuid4().hex}.tmp')
     try:
@@ -175,12 +191,57 @@ class SubtitleManager:
     def _persist(self) -> None:
         from components import job_history
         job_history.prune_daily(self, self.jobs)
+        self._retire_expired_inputs_daily()
         try:
             _atomic_json(self.state_file, self.jobs)
         except FileNotFoundError:
             # The owning state directory disappeared underneath this process.
             # Never raise from a durability write on a worker thread.
             return
+
+    def _retire_expired_inputs_daily(self, now: float | None = None) -> int:
+        """The input sweep runs at most once a day, from the same persistence hook that prunes history."""
+        from components import job_history
+        now = time.time() if now is None else now
+        if now - getattr(self, '_inputs_retired_at', 0.0) < job_history.PRUNE_EVERY_S:
+            return 0
+        self._inputs_retired_at = now
+        return self._retire_expired_inputs(now)
+
+    def _retire_expired_inputs(self, now: float | None = None) -> int:
+        """Move input folders whose job has expired to the Hub's Trash Folder.
+
+        One stored input belongs to one job (`input.original_path`). While that record exists the
+        folder is kept, whatever the job's state; once `job_history` drops the record (90 days) the
+        recording is finished business. A folder left by a crash that never recorded a job follows
+        the same age rule. Nothing here deletes, and a folder that cannot be moved stays.
+        """
+        from components import job_history
+        now = time.time() if now is None else now
+        with self.lock:
+            kept = set()
+            for job in self.jobs.values():
+                source = job.get('input')
+                original = source.get('original_path') if isinstance(source, dict) else None
+                if isinstance(original, str):
+                    kept.add(Path(original).parent)
+            try:
+                entries = list(self.inputs.iterdir())
+            except OSError:
+                return 0
+            window = job_history.RETENTION_DAYS * 86400
+            retired = 0
+            for directory in entries:
+                if directory in kept or directory.is_symlink() or not directory.is_dir():
+                    continue
+                try:
+                    if now - directory.stat().st_mtime < window:
+                        continue
+                except OSError:
+                    continue
+                if retire_input(directory):
+                    retired += 1
+            return retired
 
     def _restore(self) -> None:
         from components import job_history

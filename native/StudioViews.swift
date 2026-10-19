@@ -931,8 +931,12 @@ struct StudioContent: View {
     @State private var confirmingHandover = false
     @State private var confirmingInstall = false
     @State private var confirmingRestoreStorage = false
+    /// The Trash Folder's contents are moved to macOS Trash only after this confirmation names the
+    /// item count and bytes; macOS Trash still holds them, so it is recoverable, not a delete.
+    @State private var confirmingTrashMove = false
     /// What cleanup would delete under the limits typed in the storage editor; nil while unknown.
     @State private var draftWouldDelete: Int64?
+    @State private var draftTrashHandoffDays = 7
     @State private var pendingNodeRemoval: PendingNodeRemoval?
     @State private var nodeRemovalRefusal: String?
     /// The new controller's address and token, typed before the handover runs.
@@ -4898,7 +4902,7 @@ struct StudioContent: View {
                 ValueRow("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
             }
         }
-        .task { if connected { await workspace.refreshMemoryPolicy(); await workspace.refreshStorage() } }
+        .task { if connected { await workspace.refreshMemoryPolicy(); await workspace.refreshStorage(); await workspace.refreshTrash() } }
         .sheet(isPresented: $showingStorageEditor) { storageEditor }
     }
 
@@ -4907,13 +4911,14 @@ struct StudioContent: View {
     private var storageEditor: some View {
         VStack(alignment: .leading, spacing: HubSpace.l) {
             Text("Local storage limits").font(HubType.section)
-            Text("These apply to this Mac only. Cleaned-up work moves to the Trash Folder, which empties itself automatically. Protected work is never touched, so lowering the limit can leave this Mac above it.")
+            Text("These apply to this Mac only. Cleaned-up work moves to the Trash Folder; items that stay there longer than the handoff below are sent to macOS Trash automatically, where you can still restore them. Protected work is never touched, so lowering the limit can leave this Mac above it.")
                 .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Form {
                 DoubleField(title: "Keep at most (GB)", value: $draftGigabytes, range: 1...2000, step: 1)
                 NumberField(title: "Keep finished work (days)", value: $draftRetentionDays, range: 1...365)
+                NumberField(title: "Send Trash to macOS Trash after (days)", value: $draftTrashHandoffDays, range: 1...365)
                 Toggle("Clean up automatically", isOn: $draftCleanup)
-            }.formStyle(.grouped).frame(height: 190)
+            }.formStyle(.grouped).frame(height: 230)
             // The Hub's own dry run under these limits: saving applies them straight away and the
             // background cleanup then moves finished, acknowledged output to the Trash Folder.
             if let bytes = draftWouldDelete {
@@ -4930,7 +4935,8 @@ struct StudioContent: View {
                         await workspace.saveStorageLimits(
                             maxBytes: Int64(draftGigabytes * 1_000_000_000),
                             retentionDays: draftRetentionDays,
-                            cleanupEnabled: draftCleanup)
+                            cleanupEnabled: draftCleanup,
+                            trashHandoffDays: draftTrashHandoffDays)
                     }
                 }.buttonStyle(.borderedProminent).disabled(workspace.savingStorage)
             }
@@ -6592,9 +6598,41 @@ struct StudioContent: View {
         if let settings = workspace.deviceSettings {
             ValueRow("Size limit", value: NativeWorkspaceStore.gigabytes(settings.effective.maxBytes))
             ValueRow("Keep finished work for", value: "\(settings.effective.retentionDays) days")
+            ValueRow("Send Trash to macOS Trash after", value: "\(settings.effective.trashHandoffDays ?? 7) days")
             ValueRow("Automatic cleanup", value: settings.effective.cleanupEnabled ? "On" : "Off")
-            if let trash = workspace.storageTrash {
-                ValueRow("Trash Folder", value: "\(NativeWorkspaceStore.gigabytes(trash.bytes)), kept until you empty it")
+            if let folder = workspace.trashFolder {
+                ValueRow("Trash Folder", value: "\(folder.count) item\(folder.count == 1 ? "" : "s") · \(NativeWorkspaceStore.gigabytes(folder.bytes))")
+                ValueRow("Location") {
+                    Text(folder.trashFolder).font(HubType.mono).textSelection(.enabled).multilineTextAlignment(.trailing)
+                }
+                HStack {
+                    Button("Open Trash Folder") {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: folder.trashFolder))
+                    }
+                    Button("Move Contents to macOS Trash…") { confirmingTrashMove = true }
+                        .disabled(!connected || workspace.movingTrash || folder.count == 0)
+                    if workspace.movingTrash { ProgressView().controlSize(.small) }
+                }
+                .confirmationDialog(
+                    "Move the Trash Folder contents to macOS Trash?",
+                    isPresented: $confirmingTrashMove, titleVisibility: .visible) {
+                        Button("Move \(folder.count) item\(folder.count == 1 ? "" : "s") (\(NativeWorkspaceStore.gigabytes(folder.bytes))) to macOS Trash") {
+                            Task { await workspace.moveTrashToMacOS() }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This uses macOS Trash, so anything moved can still be put back. The Trash Folder itself stays; empty macOS Trash when you want the space back.")
+                    }
+                ForEach(folder.roots.filter { !($0.primary ?? false) && $0.count > 0 }) { root in
+                    Text("\(root.path): \(root.count) item\(root.count == 1 ? "" : "s"), \(NativeWorkspaceStore.gigabytes(root.bytes))"
+                         + (root.crossVolume == true ? " (on another volume; move these from Finder)" : ""))
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                }
+                if let note = workspace.trashNote {
+                    Text(note).font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } else if let trash = workspace.storageTrash {
+                ValueRow("Trash Folder", value: "\(NativeWorkspaceStore.gigabytes(trash.bytes)), items older than \(settings.effective.trashHandoffDays ?? 7) days go to macOS Trash")
                 Button("Show Trash Folder in Finder") { NSWorkspace.shared.activateFileViewerSelecting([HubTrash.live]) }
             }
             ForEach(workspace.storageUsage) { usage in
@@ -6618,6 +6656,7 @@ struct StudioContent: View {
                     draftGigabytes = Double(settings.effective.maxBytes) / 1_000_000_000
                     draftRetentionDays = settings.effective.retentionDays
                     draftCleanup = settings.effective.cleanupEnabled
+                    draftTrashHandoffDays = settings.effective.trashHandoffDays ?? 7
                     showingStorageEditor = true
                 }
                 .disabled(!connected || workspace.savingStorage)

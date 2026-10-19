@@ -6,7 +6,6 @@ import json
 import os
 import logging
 import re
-import shutil
 import sqlite3
 import time
 import uuid
@@ -267,14 +266,17 @@ def recover_stale_uncertain(now: float | None = None) -> list[str]:
                      or batch.get("created_at") or 0)
             if now - float(since) < UNCERTAIN_RECOVERY_SECONDS:
                 continue
-            # Redo it. The previous attempt left no trustworthy output, so anything it wrote goes.
+            # Redo it. The previous attempt left no trustworthy output, so anything it wrote goes to
+            # the Trash Folder (never a delete); a move that fails keeps the item pointed at it and
+            # the next recovery pass tries again.
+            from .. import output_storage
             for key in ("output_path", "partial_output_path"):
-                if item.get(key):
-                    try:
-                        Path(item[key]).unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                    item[key] = None
+                if not item.get(key):
+                    continue
+                path = Path(item[key])
+                if os.path.lexists(path) and not output_storage.retire(path, "transcription-uncertain"):
+                    continue
+                item[key] = None
             item.update(state="queued", manual_action_required=False, interrupted=False,
                         studio_job_id=None, error=None, retry_at=0,
                         recovered_from_uncertain=True)
@@ -427,7 +429,11 @@ async def create_batch(files: list[UploadFile], item_ids: list[str], model: str,
                 "avoid_machines": {}, "attempt_history": [],
             })
     except Exception:
-        shutil.rmtree(batch_dir, ignore_errors=True)
+        # A half-written upload is retired, not deleted: the owner can still look at it in the
+        # Trash Folder, and a move that fails leaves it for the governor.
+        from .. import output_storage
+        if batch_dir.exists():
+            output_storage.retire(batch_dir, "transcription-upload")
         raise
     finally:
         for upload in files:
@@ -1416,8 +1422,10 @@ def cleanup(batch_id: str | None = None, expired_only: bool = True) -> dict:
     return {"cleaned": cleaned, "reclaimed_bytes": reclaimed}
 
 
-def _remove_terminal_batch(batch: dict) -> int:
-    """Delete one terminal batch and its Hub-local input/output directory."""
+def _remove_terminal_batch(batch: dict) -> int | None:
+    """Clear one terminal batch: its Hub-local input/output directory goes to the Trash Folder (never
+    a delete), then the record goes. None when the files could not be moved - the batch is kept, so
+    the next clear can try again instead of leaving files with no record pointing at them."""
     batch_dir = ROOT / batch["id"]
     reclaimed = 0
     if batch_dir.exists():
@@ -1425,7 +1433,9 @@ def _remove_terminal_batch(batch: dict) -> int:
             reclaimed = sum(p.stat().st_size for p in batch_dir.rglob("*") if p.is_file())
         except OSError:
             reclaimed = 0
-        shutil.rmtree(batch_dir, ignore_errors=True)
+        from .. import output_storage
+        if not output_storage.retire(batch_dir, "transcription-batch"):
+            return None
     batches.pop(batch["id"], None)
     for item in batch.get("items", []):
         _item_tasks.pop((batch["id"], item.get("index")), None)
@@ -1435,24 +1445,31 @@ def _remove_terminal_batch(batch: dict) -> int:
 
 
 def remove_batch(batch_id: str) -> dict | None:
-    """Permanently clear one completed/cancelled batch and its local files.
+    """Clear one completed/cancelled batch and its local files.
 
     Active work is intentionally not clearable: cancel it first, then clear
-    it once every chapter has reached a terminal state.
+    it once every chapter has reached a terminal state. The files are moved to the Trash Folder,
+    never deleted; if that move fails nothing is cleared and the caller is told.
     """
     batch = get_batch(batch_id)
     if not batch or any(item["state"] not in TERMINAL_STATES for item in batch["items"]):
         return None
-    return {"removed": batch_id, "reclaimed_bytes": _remove_terminal_batch(batch)}
+    reclaimed = _remove_terminal_batch(batch)
+    if reclaimed is None:
+        raise HTTPException(409, "The batch files could not be moved to the Trash Folder; nothing was cleared.")
+    return {"removed": batch_id, "reclaimed_bytes": reclaimed}
 
 
 def clear_terminal() -> dict:
-    """Permanently clear all terminal transcription history and local files."""
+    """Clear all terminal transcription history and local files (moved to the Trash Folder, never deleted)."""
     cleared = reclaimed = 0
     for batch in _load_rows():
         if any(item["state"] not in TERMINAL_STATES for item in batch["items"]):
             continue
-        reclaimed += _remove_terminal_batch(batch)
+        size = _remove_terminal_batch(batch)
+        if size is None:
+            continue                    # its files could not be moved: kept for the next clear
+        reclaimed += size
         cleared += 1
     return {"cleared": cleared, "reclaimed_bytes": reclaimed}
 

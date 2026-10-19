@@ -405,6 +405,16 @@ def _save_tombstone(tombstone: dict) -> None:
     _atomic_json(_tombstone_path(tombstone["id"]), tombstone)
 
 
+def _retire_voice_dir(directory: Path) -> bool:
+    """Move a removed shared voice's folder to the Hub's one Trash Folder (owner request 2026-10-15).
+
+    Never a delete: a move that fails leaves the folder where it is (the tombstone still tells the
+    fleet the voice is gone).
+    """
+    from .. import output_storage
+    return output_storage.retire(directory, "shared-voice")
+
+
 def prepare_delete(voice_id: str) -> dict:
     """Remove canonical media and retain a tiny durable fleet tombstone."""
     existing = _load_tombstone(voice_id)
@@ -413,7 +423,7 @@ def prepare_delete(voice_id: str) -> dict:
         if directory.is_symlink():
             raise SharedVoiceConflict("shared voice path is unsafe")
         if directory.exists():
-            shutil.rmtree(directory)
+            _retire_voice_dir(directory)
         return existing
     voice = _load(voice_id)
     if not voice:
@@ -441,7 +451,7 @@ def prepare_delete(voice_id: str) -> dict:
     if directory.is_symlink():
         raise SharedVoiceConflict("shared voice path is unsafe")
     if directory.exists():
-        shutil.rmtree(directory)
+        _retire_voice_dir(directory)
     return tombstone
 
 

@@ -635,6 +635,11 @@ FLEET_ALLOWED = (
     # The Gateway allows the delete only from the owner's own app window. Not in `NODE_ALLOWED`.
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/trash$"),
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/trash/(move-to-macos-trash|delete)$"),
+    # **This Mac's unified Trash Folder in the app (owner request 2026-10-15).** Listing and the
+    # recoverable macOS Trash handoff only; there is no permanent-delete route here, so a fleet
+    # credential can gather the retired files but not destroy them.
+    ("GET", r"^/api/hub/trash$"),
+    ("POST", r"^/api/hub/trash/move-to-macos-trash$"),
     ("GET", r"^/api/hub/workstation$"),
     ("POST", r"^/api/hub/workstation$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same

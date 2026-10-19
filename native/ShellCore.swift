@@ -830,8 +830,35 @@ func rotatePrivateLogIfNeeded(_ url: URL) {
           size.int64Value >= privateLogRotationBytes else { return }
     let previous = url.deletingLastPathComponent()
         .appendingPathComponent(url.lastPathComponent + ".1")
-    try? FileManager.default.removeItem(at: previous)
+    if FileManager.default.fileExists(atPath: previous.path) { retireRotatedLog(previous) }
     try? FileManager.default.moveItem(at: url, to: previous)
+}
+
+/// A rotated log is retired, never deleted: into the Hub's Trash Folder (`<data>/hub/trash`, the one
+/// the app's storage screen shows), else macOS Trash, else it stays where it is. This mirrors
+/// `HubTrash.move` locally because ShellCore is compiled into the boundary tests without
+/// `UpdateClient.swift`. The live log is truncated only by the Hub's disk governor, under red.
+func retireRotatedLog(_ url: URL) {
+    let format = DateFormatter()
+    format.locale = Locale(identifier: "en_US_POSIX")
+    format.timeZone = TimeZone(identifier: "UTC")
+    format.dateFormat = "yyyy-MM-dd"
+    let folder = url.deletingLastPathComponent()
+        .appendingPathComponent("hub/trash", isDirectory: true)
+        .appendingPathComponent(format.string(from: Date()), isDirectory: true)
+        .appendingPathComponent("service-log-\(UUID().uuidString.prefix(8))", isDirectory: true)
+    do {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let here = try url.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
+        let there = try folder.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
+        if let here, let there, here.isEqual(there) {
+            try FileManager.default.moveItem(at: url, to: folder.appendingPathComponent(url.lastPathComponent))
+            return
+        }
+    } catch {}
+    rmdir(folder.path)   // the folder made above, only if it is still empty
+    _ = try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
 }
 
 func openPrivateLog(_ url: URL) throws -> FileHandle {

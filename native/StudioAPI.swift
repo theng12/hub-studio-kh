@@ -1579,6 +1579,9 @@ struct NativeStorageLimits: Decodable, Equatable {
     let cleanupEnabled: Bool
     let cleanupIntervalSeconds: Int
     let minimumFreeBytes: Int64?
+    /// Items older than this in the Trash Folder are handed to macOS Trash. Nil from a Hub that
+    /// predates the automatic handoff; the shipped default is 7 days.
+    let trashHandoffDays: Int?
 }
 
 struct NativeStoragePreview: Decodable, Equatable {
@@ -1592,6 +1595,39 @@ struct NativeTrash: Decodable, Equatable {
     let bytes: Int64
     /// Sent only by a Hub that still emptied its Trash Folder by age; a current Hub never does.
     let days: Int?
+}
+
+/// The unified Trash Folder as the app reads it (`GET /api/hub/trash`): where it is, how much it
+/// holds, and every root that holds retired files. `roots` includes a managed output root's own
+/// `.studiohub-trash` when that root is on another volume - listed so the app is honest about what
+/// the unified Move action does not reach.
+struct NativeTrashFolder: Decodable, Equatable {
+    let trashFolder: String
+    let count: Int
+    let bytes: Int64
+    let roots: [NativeTrashRoot]
+}
+
+struct NativeTrashRoot: Decodable, Equatable, Identifiable {
+    let path: String
+    let count: Int
+    let bytes: Int64
+    let crossVolume: Bool?
+    let primary: Bool?
+    var id: String { path }
+}
+
+/// The answer to `POST /api/hub/trash/move-to-macos-trash`: what moved, and what stayed behind.
+struct NativeTrashMove: Decodable, Equatable {
+    let ok: Bool
+    let moved: [String]?
+    let movedCount: Int
+    let failed: [NativeTrashFailure]?
+}
+
+struct NativeTrashFailure: Decodable, Equatable {
+    let id: String
+    let error: String
 }
 
 struct NativeMachineUsage: Decodable, Equatable, Identifiable {
@@ -3289,6 +3325,10 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var deviceSettings: NativeDeviceSettings?
     @Published private(set) var storageUsage: [NativeMachineUsage] = []
     @Published private(set) var storageTrash: NativeTrash?
+    /// The unified Trash Folder as listed by `GET /api/hub/trash`; nil on a Hub that predates it.
+    @Published private(set) var trashFolder: NativeTrashFolder?
+    @Published private(set) var trashNote: String?
+    @Published private(set) var movingTrash = false
     @Published private(set) var storageNote: String?
     @Published private(set) var savingStorage = false
     /// Measured generation history from the Hub, refreshed on demand.
@@ -3737,6 +3777,9 @@ final class NativeWorkspaceStore: ObservableObject {
         deviceSettings = nil
         storageUsage = []
         storageTrash = nil
+        trashFolder = nil
+        trashNote = nil
+        movingTrash = false
         storageNote = nil
         savingStorage = false
         modelNote = nil
@@ -6304,6 +6347,46 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    /// The unified Trash Folder (`GET /api/hub/trash`): path, item count, physical bytes and every
+    /// root holding retired files. Nil on a Hub that predates the route; the storage screen then
+    /// falls back to the bytes figure the settings preview already carries.
+    func refreshTrash() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let folder: NativeTrashFolder = try await get(["api", "hub", "trash"])
+            guard connectionID == requestConnection else { return }
+            trashFolder = folder
+        } catch {
+            guard connectionID == requestConnection else { return }
+            trashFolder = nil
+        }
+    }
+
+    /// Move the Trash Folder's contents to macOS Trash (`POST /api/hub/trash/move-to-macos-trash`).
+    /// Recoverable: macOS Trash holds them until the owner empties it, and the Trash Folder stays.
+    func moveTrashToMacOS() async {
+        guard let requestConnection = connectionID else { return }
+        movingTrash = true
+        trashNote = nil
+        defer { if connectionID == requestConnection { movingTrash = false } }
+        do {
+            let answer: NativeTrashMove = try await sendJSON(
+                ["api", "hub", "trash", "move-to-macos-trash"], method: "POST",
+                body: TrashMoveBody(items: "all"))
+            guard connectionID == requestConnection else { return }
+            await refreshTrash()
+            if let failed = answer.failed, !failed.isEmpty {
+                trashNote = "Moved \(answer.movedCount) to macOS Trash; \(failed.count) stayed in the Trash Folder. \(failed[0].error)"
+            } else {
+                trashNote = "Moved \(answer.movedCount) item\(answer.movedCount == 1 ? "" : "s") to macOS Trash. The Trash Folder is ready to use again."
+            }
+        } catch {
+            if connectionID == requestConnection {
+                trashNote = Self.actionable(error, action: "Move the Trash Folder to macOS Trash")
+            }
+        }
+    }
+
     /// What cleanup would delete right now if these limits were applied: the Hub's own dry run over
     /// its index, summed over this Mac's machines. Nil when the Hub cannot say.
     func storageWouldDelete(maxBytes: Int64, retentionDays: Int, cleanupEnabled: Bool) async -> Int64? {
@@ -6319,7 +6402,8 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     /// Apply new limits. The Hub validates them before anything is written.
-    func saveStorageLimits(maxBytes: Int64, retentionDays: Int, cleanupEnabled: Bool) async {
+    func saveStorageLimits(maxBytes: Int64, retentionDays: Int, cleanupEnabled: Bool,
+                           trashHandoffDays: Int? = nil) async {
         guard let requestConnection = connectionID else { return }
         savingStorage = true
         storageNote = nil
@@ -6328,12 +6412,14 @@ final class NativeWorkspaceStore: ObservableObject {
             let settings: NativeDeviceSettings = try await sendJSON(
                 ["api", "hub", "settings"], method: "PUT",
                 body: StorageLimitsBody(maxBytes: maxBytes, retentionDays: retentionDays,
-                                        cleanupEnabled: cleanupEnabled))
+                                        cleanupEnabled: cleanupEnabled,
+                                        trashHandoffDays: trashHandoffDays))
             guard connectionID == requestConnection else { return }
             deviceSettings = settings
             storageNote = "Saved. Cleanup keeps at most \(Self.gigabytes(settings.effective.maxBytes)) and keeps finished work for \(settings.effective.retentionDays) days."
             error = nil
             await refreshStorage()
+            await refreshTrash()
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Save local storage settings") } }
     }
 
@@ -10022,6 +10108,10 @@ private struct StorageLimitsBody: Encodable {
     let maxBytes: Int64
     let retentionDays: Int
     let cleanupEnabled: Bool
+    let trashHandoffDays: Int?
+}
+private struct TrashMoveBody: Encodable {
+    let items: String
 }
 private struct StoragePreviewBody: Encodable {
     let maxBytes: Int64

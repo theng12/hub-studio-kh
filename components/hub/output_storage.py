@@ -19,6 +19,7 @@ import os
 import re
 import copy
 import hashlib
+import json
 import stat
 import subprocess
 import threading
@@ -180,6 +181,125 @@ def retire(path: Path, label: str, now: float | None = None) -> bool:
         return False
 
 
+# Old per-install Trash roots still holding retired files (owner request 2026-10-15: one unified
+# Trash Folder on every Mac). Adoption moves their *contents* into the unified root, never a live
+# app, a model in use, or a leased output; nothing is deleted. Same-volume renames only.
+LEGACY_APP_TRASH = Path("/Applications/_trash")
+_ADOPTED_MANIFEST = "adopted-legacy.json"
+
+
+def _legacy_sources() -> tuple[list[tuple[Path, str]], list[dict]]:
+    """The roots adoption may touch, and the ones it must leave alone with the reason.
+
+    A model library this Hub does not own is read-only (`components/library_ownership`), so a Hub
+    started with a throwaway data directory never adopts the real `~/StudioHubModels/_trash` into a
+    temp Trash Folder.
+    """
+    sources = [(LEGACY_APP_TRASH, "legacy-app"),
+               (ledger.DATA_DIR / "_trash" / "failed-writes", "legacy-failed-write")]
+    skipped: list[dict] = []
+    library = Path.home() / "StudioHubModels"
+    model_trash = library / "_trash"
+    if model_trash.is_dir():
+        try:
+            from components import library_ownership
+            reason = library_ownership.refusal(library, ledger.DATA_DIR, "adopting retired models")
+        except (OSError, ValueError) as error:
+            reason = str(error)
+        if reason:
+            skipped.append({"source": str(model_trash), "reason": reason})
+        else:
+            sources.append((model_trash, "legacy-model"))
+    sources += [(base, "legacy-output-trash") for base in _trash_bases()[1:]]
+    return sources, skipped
+
+
+def _same_volume(path: Path) -> bool:
+    try:
+        return os.stat(path).st_dev == os.stat(trash_root()).st_dev
+    except OSError:
+        return False
+
+
+def _read_manifest(path: Path) -> dict[str, dict]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        rows = value.get("adopted") if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return {}
+    return {row["source"]: row for row in rows or []
+            if isinstance(row, dict) and isinstance(row.get("source"), str)}
+
+
+def _write_manifest(path: Path, rows: dict[str, dict], now: float) -> None:
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    temporary = path.with_name(f".{path.name}-{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps({"updated_at": stamp,
+                                         "adopted": sorted(rows.values(), key=lambda row: row["source"])},
+                                        indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    except OSError as error:
+        log.warning("Trash Folder: could not write the adoption record %s (%s)", path, error)
+
+
+def adopt_legacy(now: float | None = None,
+                 sources: list[tuple[Path, str]] | None = None) -> dict:
+    """Adopt already-retired files from the old per-install Trash roots into the unified one.
+
+    Runs at every start-up and is idempotent: a moved entry is gone from its source, so a restart
+    neither duplicates nor loses it. Each entry keeps its own name inside a new
+    `<date>/<label>-<id>/` folder (the same collision-safe leaf `retire()` uses), and every move is
+    recorded in `<trash>/adopted-legacy.json` with its source path and UTC adoption date. A root on
+    another volume is left in place and reported (a rename could not be safe); a missing root is
+    reported. Nothing here deletes, and nothing outside a Trash root is read or moved.
+    """
+    now = time.time() if now is None else float(now)
+    trash_root().mkdir(parents=True, exist_ok=True)
+    manifest = trash_root() / _ADOPTED_MANIFEST
+    rows = _read_manifest(manifest)
+    if sources is None:
+        pairs, skipped = _legacy_sources()
+    else:
+        pairs, skipped = list(sources), []
+    moved, failed, missing, cross_volume = [], [], [], []
+    for base, label in pairs:
+        base = Path(base)
+        try:
+            info = base.lstat()
+        except FileNotFoundError:
+            missing.append(str(base))
+            continue
+        except OSError as error:
+            failed.append({"source": str(base), "error": str(error)[:300]})
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            continue                              # not a Trash folder: never a candidate
+        if not _same_volume(base):
+            cross_volume.append(str(base))        # another volume: leave it, list it
+            continue
+        try:
+            entries = sorted(base.iterdir(), key=lambda entry: entry.name)
+        except OSError as error:
+            failed.append({"source": str(base), "error": str(error)[:300]})
+            continue
+        for entry in entries:
+            if retire(entry, label, now):
+                moved.append(str(entry))
+                rows[str(entry)] = {"source": str(entry), "label": label,
+                                    "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))}
+                _write_manifest(manifest, rows, now)
+            else:
+                failed.append({"source": str(entry),
+                               "error": "could not move it into the Trash Folder; it is left where it is"})
+    if moved:
+        log.warning("Trash Folder: adopted %d retired entries from legacy Trash roots", len(moved))
+    return {"ok": not failed, "moved": moved, "moved_count": len(moved), "failed": failed,
+            "missing": missing, "cross_volume": cross_volume, "skipped": skipped,
+            "manifest": str(manifest)}
+
+
 # ── The owner's Trash Folder, from the Gateway (owner decision 4g, 2026-10-16) ─────────────────────
 # Listed, moved to macOS Trash, or permanently deleted remotely so nobody has to visit a Mac. Only the
 # entries `<trash_root>/<date>/<name>` are ever touched: never a managed root's own `.studiohub-trash`,
@@ -277,6 +397,53 @@ def trash_listing(now: float | None = None) -> dict:
             "by_kind": kinds, "by_age": ages, "items": items, "disk": disk, "measured_at": now}
 
 
+def _root_usage(base: Path, now: float) -> dict:
+    """Items and physical bytes in one Trash Folder's dated subfolders."""
+    from . import disk_governor
+    count = total = 0
+    try:
+        days = sorted(p for p in base.iterdir() if _DAY.fullmatch(p.name) and p.is_dir() and not p.is_symlink())
+    except OSError:
+        days = []
+    for day in days:
+        try:
+            for entry in day.iterdir():
+                count += 1
+                total += disk_governor.cached_physical(entry, now)
+        except OSError:
+            continue
+    return {"path": str(base), "count": count, "bytes": total}
+
+
+def trash_overview(now: float | None = None) -> dict:
+    """The unified Trash Folder for the app: the same listing the Gateway reads, plus every root.
+
+    `roots` names the Hub's own Trash Folder and each managed output root's `.studiohub-trash`
+    (created when that root is on another volume), so the app can be honest about files the
+    unified action cannot reach. A cross-volume root is left in place and only listed.
+    """
+    now = time.time() if now is None else float(now)
+    result = trash_listing(now)
+    primary = trash_root()
+    try:
+        primary_device = os.stat(primary).st_dev
+    except OSError:
+        primary_device = None
+    roots = []
+    for base in _trash_bases():
+        row = _root_usage(base, now)
+        try:
+            device = os.stat(base).st_dev
+        except OSError:
+            device = None
+        row["cross_volume"] = (primary_device is not None and device is not None
+                               and device != primary_device)
+        row["primary"] = base == primary
+        roots.append(row)
+    result["roots"] = roots
+    return result
+
+
 def _macos_trash(paths: list[str]) -> list[str]:
     """Move each path to the user's macOS Trash with NSFileManager.trashItem (Finder's Move to Trash),
     from a JavaScript-for-Automation child: no Finder automation prompt. One line per path: "ok" or why."""
@@ -305,6 +472,43 @@ def trash_to_macos(items: object) -> dict:
     for item in failed:
         log.warning("could not move %s from the Trash Folder to macOS Trash: %s", item["id"], item["error"])
     return {"ok": not failed, "moved": moved, "moved_count": len(moved), "failed": failed}
+
+
+def trash_handoff(days: int, now: float | None = None) -> dict:
+    """Move items that have sat in the Trash Folder longer than `days` to macOS Trash.
+
+    The owner's second half of the 2026-10-15 request: the app's Move button is joined by an
+    automatic handoff on the existing cleanup timer. Age is the dated folder an item lives in
+    (`<trash>/<UTC date>/...`, the same figure `trash_listing` shows). It uses the one
+    `trash_to_macos` path, so every move is the normal recoverable macOS Trash one; the reusable
+    Trash Folder stays, an item that fails stays listed, and nothing is ever permanently deleted here.
+    """
+    import calendar
+    now = time.time() if now is None else float(now)
+    if isinstance(days, bool) or not isinstance(days, int) or days <= 0:
+        return {"ok": True, "moved_count": 0, "failed": [], "eligible_count": 0}
+    cutoff = days * 86400
+    eligible: list[str] = []
+    for item, _path in _trash_items():
+        try:
+            stamp = calendar.timegm(time.strptime(item[:10], "%Y-%m-%d"))
+        except ValueError:
+            continue
+        if now - stamp >= cutoff:
+            eligible.append(item)
+    if not eligible:
+        return {"ok": True, "moved_count": 0, "failed": [], "eligible_count": 0}
+    try:
+        result = trash_to_macos(eligible)
+    except TrashRefused as refusal:
+        return {"ok": False, "moved_count": 0, "failed": [{"id": item, "error": refusal.body["detail"]}
+                                                         for item in eligible],
+                "eligible_count": len(eligible)}
+    if result["failed"]:
+        log.warning("Trash Folder: automatic handoff to macOS Trash left %d of %d items (%s)",
+                    len(result["failed"]), len(eligible), result["failed"][0]["error"])
+    return {"ok": result["ok"], "moved_count": result["moved_count"], "failed": result["failed"],
+            "eligible_count": len(eligible)}
 
 
 _OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -1024,6 +1228,14 @@ def start_background(machine_provider, settings_provider, after_sweep=None) -> N
                             enabled=settings["cleanup_enabled"])
                 except Exception:
                     pass
+            # The same timer hands old Trash Folder items to macOS Trash (owner request 2026-10-15):
+            # no second service, and a failure leaves the item in the Trash Folder for the next pass.
+            days = settings.get("trash_handoff_days")
+            if isinstance(days, int) and not isinstance(days, bool) and days > 0:
+                try:
+                    trash_handoff(days)
+                except Exception:
+                    log.exception("automatic Trash Folder handoff failed (continuing)")
             if after_sweep is not None:
                 try:
                     after_sweep(first)
