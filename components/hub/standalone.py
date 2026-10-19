@@ -32,7 +32,7 @@ from starlette.concurrency import run_in_threadpool
 from components import shelved_models
 from . import disk_governor, output_storage, standalone_config, workstation
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
-from .backend import app_release, chat_jobs, peers, release_sync, shared_voices, startup_control, transcription_jobs, update_drain, vocabulary
+from .backend import app_release, chat_deadline, chat_jobs, peers, release_sync, shared_voices, startup_control, transcription_jobs, update_drain, vocabulary
 from .backend.monitor import StudioMonitor
 
 # The key one unusable manifest carries into the catalog so its row can say what is wrong
@@ -128,6 +128,13 @@ def deadline_floor_seconds(modality: str | None) -> float:
     A per-model refinement built on the worker's own measured `runtime_seconds` is the right next
     step and is *not* done here, because it would need the model plumbed to the enforcement site
     first. When it lands it must move this function, so both sides move together.
+
+    **Chat is the one lane where this is a floor rather than the enforced number**, since the owner
+    decision of 2026-10-19: a Chat job's deadline is computed from the job itself
+    (`backend/chat_deadline.py`) and published on the job row as `deadline_s`/`deadline_note`,
+    because a 100-prompt scene pack and a one-line question cannot share one number. What this
+    function still answers for chat is the *minimum* — the number no Chat job is given less than —
+    which is what a scheduler reads a contract for, and what the Gateway now treats it as.
     """
     return MODALITY_DEADLINE_FLOOR_S.get(str(modality or ""), PEER_PROXY_TIMEOUT_FLOOR_S)
 
@@ -1268,6 +1275,11 @@ def _peer_refusal_response(refusal: dict[str, Any]) -> JSONResponse:
         status = 507
     elif code in {"MODEL_NOT_READY", "STUDIO_NOT_RUNNING", "MODEL_CATALOG_UNAVAILABLE"}:
         status = 503
+    elif code in {"CHAT_STALLED", "CHAT_DEADLINE_REACHED"}:
+        # A job that was accepted, ran and was then stopped by its own limit or by its own
+        # silence. Not a refusal (409 says the work never started) and not a 503 (the studio is
+        # up): 504 is the one that says the attempt ended with no answer.
+        status = 504
     body: dict[str, Any] = {
         "detail": str(refusal.get("detail") or "this Mac refused the work"),
         "code": code,
@@ -4058,12 +4070,73 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         headers = {"X-Hub-Token": worker["hub_token"]}
         if content_type:
             headers["Content-Type"] = content_type
+
+        # **How long this job may take, computed from the job** (`chat_deadline`). The lane's flat
+        # 1,800 s was derived from a real measurement — 30 scenes at ~403 tokens each on an M1 —
+        # and then applied to every job, so it cut the longest one the fleet plans (a 100-prompt
+        # pack) roughly in half while a one-line question held the same Mac for the same thirty
+        # minutes. The caller's own `expected_output_tokens` is what makes the number exact: the
+        # Hub cannot tell a 100-prompt pack from a question by reading the request, and Story
+        # Studio already computes that length. No hint still sizes the job from the fleet's own
+        # measured answers rather than from `max_tokens`, which is a ceiling and not an
+        # expectation. Other lanes keep the published floor, unchanged.
+        chat = None
+        if modality == "chat" and request.method == "POST":
+            chat = chat_deadline.chat_deadline(
+                monitor, worker, request_body=body,
+                hint=request.headers.get(chat_deadline.HINT_HEADER),
+                floor_s=deadline_floor_seconds("chat"))
+
+        def gave_up(failure: str, detail: str, code: str) -> Response:
+            """This attempt ended with no answer: release the Mac, record why, tell the caller.
+
+            Shared by the stall stop and the deadline stop, because they differ only in the words
+            and the code. Both leave the worker possibly still generating — its own lane contract
+            states it has no cancel endpoint — so for a queued Chat request both are *uncertain*
+            exactly as a read timeout already was: the answer may exist and must not be filed as
+            a refusal.
+            """
+            if owner is not None:
+                if queued_chat is not None:
+                    _retain_uncertain_chat(owner, queued_chat)
+                else:
+                    _release_peer_lease(owner)
+            elif queued_chat is not None:
+                queued_chat.update(state="refused", ready=False)
+            if (handed_back := yielded_answer(502, "", b"")) is not None:
+                return handed_back   # its worker was stopped to free the memory
+            settled(request_body=body, started_at=started_at,
+                    runtime_s=time.time() - started_at, worker_id=worker_id, machine=machine,
+                    failure=failure, failure_detail=detail,
+                    deadline_s=chat.seconds if chat is not None else None,
+                    deadline_note=chat.note if chat is not None else "")
+            return _peer_refusal_response({"code": code, "detail": detail})
+
+        attempt = monitor._client.request(
+            request.method, url, headers=headers, content=body or None,
+            timeout=httpx.Timeout(
+                chat.seconds if chat is not None
+                else deadline_floor_seconds(modality_for_worker(worker_id)), connect=5.0),
+        )
         try:
-            upstream = await monitor._client.request(
-                request.method, url, headers=headers, content=body or None,
-                timeout=httpx.Timeout(
-                    deadline_floor_seconds(modality_for_worker(worker_id)), connect=5.0),
-            )
+            upstream = (await chat_deadline.await_with_progress(monitor, worker_id, attempt)
+                        if chat is not None else await attempt)
+        except chat_deadline.ChatStalled as exc:
+            # The job wrote no new token for the whole window. Distinct from the deadline stop
+            # below in both the words and the code, because the two mean different things: one is
+            # a job that went quiet, the other is a job that ran out of its own allowance.
+            return gave_up("stalled", chat_deadline.stall_reason(exc.silent_for), "CHAT_STALLED")
+        except httpx.ReadTimeout as exc:
+            if chat is None:
+                raise
+            # **A read timeout on this lane is the deadline, precisely.** The chat lane is one
+            # request for one answer (`stream: false`), so the worker sends nothing at all until
+            # it is finished; the only thing that can make the read expire is the job's own
+            # allowance running out. `TimeoutException` is deliberately *not* caught here: its
+            # `ConnectTimeout` half means the worker was never reached, which is the existing
+            # unreachable branch below and not a deadline at all.
+            return gave_up("deadline", chat_deadline.deadline_reason(chat),
+                           "CHAT_DEADLINE_REACHED")
         except (httpx.HTTPError, OSError) as exc:
             safe_connect = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
             uncertain_chat = (queued_chat is not None and owner is not None

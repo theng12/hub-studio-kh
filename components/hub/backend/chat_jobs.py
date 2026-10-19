@@ -21,7 +21,7 @@ import uuid
 import httpx
 from fastapi import HTTPException
 
-from . import broker, cloud_guard, execution_identity, ledger, peers
+from . import broker, chat_deadline, cloud_guard, execution_identity, ledger, peers
 from . import routing as routing_rule
 from .peers import studio_request
 from .registry import machine_enabled, studio_enabled
@@ -235,6 +235,7 @@ def create_batch(payload: dict) -> tuple[dict, bool]:
             "state": "queued", "tries": 0, "studio": None,
             "duration_seconds": None, "error": None, "results": {},
             "usage": None, "model_revision": None, "chat_telemetry": None,
+            "deadline_s": None, "deadline_note": None,
             "raw_responses": [], "started_at": None, "finished_at": None,
             "retry_at": None,
         })
@@ -371,6 +372,8 @@ def summary(batch: dict, include_raw: bool = False, include_results: bool = True
             # The worker's own stated generation time, under the name the page path uses for the
             # same fact, so a reader never has to guess which of the two numbers is the model's.
             "generation_s": pack.get("generation_s"),
+            # The limit this pack was held to, and how it was worked out, in plain words.
+            "deadline_s": pack.get("deadline_s"), "deadline_note": pack.get("deadline_note"),
             "usage": pack.get("usage"), "model_revision": pack.get("model_revision"),
             "chat_telemetry": pack.get("chat_telemetry"),
             "missing_scene_ids": [scene_id for scene_id in pack["scene_ids"]
@@ -753,14 +756,28 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
                         error="worker authentication changed before dispatch")
             return
         url, headers = studio_request(studio, "/v1/chat/completions")
+        # **This pack's own limit, computed from the pack** (`chat_deadline`). The POST used to be
+        # bounded by a flat 600 s read timeout — a third of the 1,800 s floor the Hub itself
+        # publishes for this lane — so a slow Mac could have a ten-scene pack cut off before the
+        # lane's own allowance had elapsed. The scene count is the expectation here, and the Hub
+        # knows it without being told: it is what the pack carries.
+        from .. import standalone
+        limit = chat_deadline.chat_deadline(
+            monitor, studio, request_body=json.dumps(body).encode(),
+            scene_count=len(pack["scene_ids"]),
+            floor_s=standalone.deadline_floor_seconds("chat"))
+        pack["deadline_s"] = round(limit.seconds, 1)
+        pack["deadline_note"] = limit.note
         # Immediately before the actual POST: a dispatch-time reservation covers the worker's
         # own generation window. Optional bookkeeping; a failed write is logged and the pack
         # runs under the worker's normal memory mode.
         reservation_owner = broker._begin_preferred_reservation(studio, "chat")
-        response = await monitor._client.post(
-            url, json=body, headers=headers,
-            timeout=httpx.Timeout(connect=5, read=600, write=30, pool=5),
-        )
+        response = await chat_deadline.await_with_progress(
+            monitor, str(studio["id"]),
+            monitor._client.post(
+                url, json=body, headers=headers,
+                timeout=httpx.Timeout(connect=5, read=limit.seconds, write=30, pool=5),
+            ))
         if response.status_code >= 400:
             if response.status_code == 401 and studio.get("machine", "local") != "local":
                 peers.invalidate(studio["machine"], rejected=True,
@@ -829,6 +846,13 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
             pack.update(state="queued", studio=None, error="interrupted by Hub shutdown")
         else:
             pack.update(state="cancelled", error="cancelled", finished_at=time.time())
+    except chat_deadline.ChatStalled as exc:
+        # A pack that wrote no new token for the whole stall window. Terminal, not a retry: the
+        # worker was reached and answered nothing for minutes, which a second try on the same Mac
+        # would repeat. The reason is the proxy lane's own sentence, so the two lanes say the same
+        # words about the same event.
+        pack.update(state="partial" if pack["results"] else "error",
+                    error=chat_deadline.stall_reason(exc.silent_for), finished_at=time.time())
     except Exception as exc:
         if broker._is_machine_reservation_refusal(exc) and not batch.get("cancelled"):
             # A node already running other work answered at its door: nothing ran and the Mac is
@@ -964,6 +988,12 @@ PAGE_MEDIA_TYPE = "text/plain; charset=utf-8"
 PAGE_FAILURE_CODES = {
     "worker_unreachable": "CHAT_WORKER_UNREACHABLE",
     "request_cancelled": "CHAT_REQUEST_CANCELLED",
+    # Two ways an accepted Chat job ends with no answer, kept apart because they mean different
+    # things to whoever reads the history: a job that went quiet, and a job that ran out of its
+    # own computed allowance. `deadline_s`/`deadline_note` on the same item state the limit and
+    # the arithmetic behind it.
+    "stalled": "CHAT_STALLED",
+    "deadline": "CHAT_DEADLINE_REACHED",
 }
 
 
@@ -1228,7 +1258,9 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
                            worker_id: str = "", machine: str = "local",
                            status_code: int | None = None, content_type: str = "",
                            content: bytes = b"", failure: str | None = None,
-                           failure_detail: str = "") -> dict:
+                           failure_detail: str = "",
+                           deadline_s: float | None = None,
+                           deadline_note: str = "") -> dict:
     """Persist one Chat-page completion as a finished, one-item Chat job.
 
     Called by the Hub's own completion route once the proxied attempt has settled, including when
@@ -1240,6 +1272,11 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
     spent generating (or ``None`` when it stated none). No rate is computed here -
     ``usage.completion_tokens`` over ``generation_s`` is a display concern, and a second
     definition of it in the backend is a second thing that can disagree with the app's.
+
+    ``deadline_s`` and ``deadline_note`` are the limit this job was held to and how it was worked
+    out (`chat_deadline`). They are recorded rather than derived on read, because the note is the
+    arithmetic of *this* job — its own prompt size, its own expected answer, this Mac's rate — and
+    nothing reading the row later could reconstruct it.
     """
     model, prompt = _request_facts(request_body)
     usage = None
@@ -1257,6 +1294,10 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
             # so the reason says only what is true: the attempt ended with no result.
             error = ("The request was cancelled before the Chat worker's answer arrived; "
                      "this attempt has no recorded result.")
+        elif failure in {"stalled", "deadline"}:
+            # The proxy's own sentence, which already names the limit or the silence. Prefixing
+            # it with "could not be reached" would say the worker was gone when it was there.
+            error = failure_detail
         else:
             error = f"Chat worker could not be reached: {failure_detail}".strip()
     else:
@@ -1288,6 +1329,12 @@ def record_page_completion(*, request_body: bytes = b"", started_at: float, runt
         "duration_s": runtime_s,
         # The worker's own stated generation time, beside - never derived from - the round trip.
         "generation_s": generation_s,
+        # The limit this job was held to, and how it was worked out, in the words the operator
+        # reads on the job row. `None` only for a row written before the limit was computed.
+        "deadline_s": (round(float(deadline_s), 1)
+                       if isinstance(deadline_s, (int, float))
+                       and not isinstance(deadline_s, bool) else None),
+        "deadline_note": deadline_note or None,
         "chat_telemetry": chat_telemetry,
         "finished_at": finished_at,
         "progress": 1.0,

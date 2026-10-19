@@ -18,6 +18,11 @@ property of the modality, and `video` is the only lane that differs today.
 ("the deadline a scheduler reads is the one the Hub will actually hold it to"), and it is easy to
 break by deriving the published value per *model* while the proxy — which knows the worker but not
 the model — derives its own. These tests assert both call sites resolve through one function.
+
+**Chat is the exception, and it is the owner's decision of 2026-10-19** (see
+`tests/test_chat_job_deadline.py`): a Chat job's deadline is computed from the job itself, so what
+this table publishes for `chat` is the lane's *minimum* and the enforced number is recorded on the
+job row. Every other lane still publishes and enforces one number.
 """
 
 from __future__ import annotations

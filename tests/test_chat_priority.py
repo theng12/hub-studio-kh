@@ -267,7 +267,7 @@ async def routed_proof():
  broker._external_machine_leases.clear()
  ledger.prepare_database()
  wire=[]
- fault={'enabled':False,'state':'running','connect':False}
+ fault={'enabled':False,'state':'running','connect':False,'deadline':False}
  async def worker_request(request):
   if request.url.path=='/api/fleet/activity':
    return httpx.Response(200,json={'active':({'id':'d'*32,'state':'running'} if fault['state']=='running' else None),
@@ -276,7 +276,13 @@ async def routed_proof():
   if fault['connect']:
    raise httpx.ConnectError('worker never accepted a connection')
   if fault['enabled']:
-   raise httpx.ReadTimeout('worker response disappeared after acceptance')
+   # The answer vanished mid-flight. **Not a `ReadTimeout`**: that is what the Hub's own read
+   # expiry raises, and on this lane it means the job ran out of its computed allowance
+   # (`chat_deadline`), which is a different outcome with its own words and code. A dropped
+   # response is a transport error.
+   raise httpx.RemoteProtocolError('worker response disappeared after acceptance')
+  if fault['deadline']:
+   raise httpx.ReadTimeout('the job ran out of its own allowance')
   return httpx.Response(200,json={'choices':[{'message':{'content':'answer'},'finish_reason':'length'}],
                                   'usage':{'prompt_tokens':2,'completion_tokens':3,'total_tokens':5}})
  monitor._client=httpx.AsyncClient(transport=httpx.MockTransport(worker_request))
@@ -434,6 +440,18 @@ async def routed_proof():
    assert resources.status_code==200,resources.text
    assert resources.json()['chat_priority'] is True
    assert resources.json()['priority_order'][0]=='chat'
+   # **The deadline stop, distinct from a lost answer.** A read timeout on this lane is the job's
+   # own computed allowance expiring, so it reads as a deadline with the arithmetic behind it on
+   # the row - never as an unreachable worker, which is what a 502 for it used to claim. The lease
+   # is kept: the model may have run, so the answer may exist.
+   fault['deadline']=True
+   expired=await client.post(path,headers=headers('f'*32),json=body)
+   assert expired.status_code==504,expired.text
+   assert expired.json()['code']=='CHAT_DEADLINE_REACHED',expired.text
+   assert 'no answer within' in expired.json()['detail'],expired.text
+   assert chat_priority.snapshot('f'*32)['state']=='unknown'
+   assert 'local' in broker.busy_machines()
+   fault['deadline']=False
  await monitor._client.aclose()
 asyncio.run(routed_proof())
 print('local policy persists; one pending slot; cancellation fences late submits')
