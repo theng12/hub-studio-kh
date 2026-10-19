@@ -23,9 +23,9 @@ Music is an accepted extension with its backend/runtime integrated; its native w
 and real-model qualification remain open. Chat and Video are deferred.
 
 All operating defaults are editable. Generated-output cleanup defaults to **20 GB
-of live output per device across the studios and 3 days after generation**, whichever
-condition is reached first; cleaned-up work moves to a Trash Folder that empties
-itself after 15 days, and a 5 GB free-disk floor applies.
+of live output per device across the studios and 7 days after generation**, whichever
+condition is reached first; cleaned-up work moves to a Trash Folder that hands itself
+to macOS Trash after **7 days or 20 GB**, and a 5 GB free-disk floor applies.
 The Trash Folder can also hold old outputs that were never collected (unacknowledged for over
 7 days), so the owner's permanent delete from the Gateway can destroy undelivered work; the
 Gateway marks them as kind "output". That delete is guarded against API-key and browser callers

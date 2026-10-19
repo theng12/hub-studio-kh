@@ -17,11 +17,12 @@ from .backend.vocabulary import WORKER_FOR_MODALITY as _WORKER_FOR_MODALITY
 
 
 DEFAULT_MAX_BYTES = 20_000_000_000          # live outputs only; the Trash Folder is not counted
-DEFAULT_RETENTION_DAYS = 3
+DEFAULT_RETENTION_DAYS = 7                  # generated output -> Trash Folder (owner rule 2026-10-19; was 3)
 DEFAULT_CLEANUP_ENABLED = True
 DEFAULT_CLEANUP_INTERVAL_SECONDS = 300
 DEFAULT_MINIMUM_FREE_BYTES = 5_000_000_000
-DEFAULT_TRASH_HANDOFF_DAYS = 7                # items older than this in the Trash Folder go to macOS Trash
+DEFAULT_TRASH_HANDOFF_DAYS = 7              # items older than this in the Trash Folder go to macOS Trash
+DEFAULT_TRASH_HANDOFF_GB = 20               # ...or the Trash Folder holds more than this (every root)
 DEFAULT_KEEP_ALL_MODELS = False             # True: this Mac keeps shelved models (components/shelved_models.py)
 # `_REQUIRED_WORKERS` (worker id -> modality) is the inverse of the Hub's modality vocabulary,
 # derived in `backend/vocabulary.py` rather than restated here. It is kept as a module attribute
@@ -29,13 +30,20 @@ DEFAULT_KEEP_ALL_MODELS = False             # True: this Mac keeps shelved model
 # the descriptor declares its own modality and the vocabulary validates that, so a worker id the
 # Hub does not route fails with the modality named and the file to edit (see `_worker`).
 _SETTINGS_FILE = "device_settings.json"
-# The defaults before 0.6.117 (30 days / 50 GB / 1 GB), which every Mac that ever saved or restored
-# its settings still has on disk. A file with no `defaults_version` was written before the new
-# defaults existed, so a value equal to the old default is read as "never chosen" and gets the new
-# one; a value that differs was chosen by the operator and is kept. Every write stamps the version,
-# so an operator who saves exactly 30 days afterwards is not migrated again.
-_DEFAULTS_VERSION = 2
-_LEGACY_DEFAULTS = {"max_bytes": 50_000_000_000, "retention_days": 30, "minimum_free_bytes": 1_000_000_000}
+# Every default this file has ever shipped, keyed by the `defaults_version` that carried it. A file
+# stamped with an older version whose value equals that version's own default was never chosen by the
+# operator, so it takes the current default; a value that differs was chosen and is kept. Every write
+# stamps the current version, so an operator who saves exactly an old default afterwards is not
+# migrated again. Version 0 is a file written before the version stamp existed.
+#
+#   0  pre-0.6.117:  50 GB / 30 days / 1 GB free
+#   2  0.6.117+:     20 GB /  3 days / 5 GB free
+#   3  2026-10-19:   20 GB /  7 days / 5 GB free, Trash handoff 7 days or 20 GB
+_DEFAULTS_VERSION = 3
+_LEGACY_DEFAULTS: dict[int, dict[str, int]] = {
+    0: {"max_bytes": 50_000_000_000, "retention_days": 30, "minimum_free_bytes": 1_000_000_000},
+    2: {"retention_days": 3},
+}
 
 
 def data_dir() -> Path:
@@ -226,14 +234,25 @@ def settings_warnings() -> list[str]:
 
 def _settings() -> dict[str, int | bool]:
     value, problem = _read_settings()
-    if isinstance(value, dict) and "defaults_version" not in value:
-        value = {key: item for key, item in value.items() if _LEGACY_DEFAULTS.get(key) != item}
+    if isinstance(value, dict):
+        try:
+            version = int(value.get("defaults_version", 0))
+        except (TypeError, ValueError):
+            version = 0
+        if version < _DEFAULTS_VERSION:
+            never_chosen: dict[str, set[int]] = {}
+            for older in range(version, _DEFAULTS_VERSION):
+                for key, item in _LEGACY_DEFAULTS.get(older, {}).items():
+                    never_chosen.setdefault(key, set()).add(item)
+            value = {key: item for key, item in value.items()
+                     if item not in never_chosen.get(key, ())}
     max_bytes = value.get("max_bytes", DEFAULT_MAX_BYTES) if isinstance(value, dict) else DEFAULT_MAX_BYTES
     retention_days = value.get("retention_days", DEFAULT_RETENTION_DAYS) if isinstance(value, dict) else DEFAULT_RETENTION_DAYS
     enabled = value.get("cleanup_enabled", DEFAULT_CLEANUP_ENABLED) if isinstance(value, dict) else DEFAULT_CLEANUP_ENABLED
     interval = value.get("cleanup_interval_seconds", DEFAULT_CLEANUP_INTERVAL_SECONDS) if isinstance(value, dict) else DEFAULT_CLEANUP_INTERVAL_SECONDS
     minimum_free = value.get("minimum_free_bytes", DEFAULT_MINIMUM_FREE_BYTES) if isinstance(value, dict) else DEFAULT_MINIMUM_FREE_BYTES
     trash_handoff = value.get("trash_handoff_days", DEFAULT_TRASH_HANDOFF_DAYS) if isinstance(value, dict) else DEFAULT_TRASH_HANDOFF_DAYS
+    trash_gb = value.get("trash_handoff_gb", DEFAULT_TRASH_HANDOFF_GB) if isinstance(value, dict) else DEFAULT_TRASH_HANDOFF_GB
     # Damage never reads as "not keep-all": that would move a keep-all Mac's shelved models away.
     keep_all = True if problem else value.get("keep_all_models", DEFAULT_KEEP_ALL_MODELS)
     return {
@@ -243,6 +262,7 @@ def _settings() -> dict[str, int | bool]:
         "cleanup_interval_seconds": interval if isinstance(interval, int) and interval >= 60 else DEFAULT_CLEANUP_INTERVAL_SECONDS,
         "minimum_free_bytes": minimum_free if isinstance(minimum_free, int) and minimum_free >= 0 else DEFAULT_MINIMUM_FREE_BYTES,
         "trash_handoff_days": trash_handoff if isinstance(trash_handoff, int) and trash_handoff > 0 else DEFAULT_TRASH_HANDOFF_DAYS,
+        "trash_handoff_gb": trash_gb if isinstance(trash_gb, int) and trash_gb > 0 else DEFAULT_TRASH_HANDOFF_GB,
         "keep_all_models": keep_all,
     }
 
@@ -254,6 +274,7 @@ def load_device_settings() -> dict[str, dict[str, int | bool]]:
                      "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
                      "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
                      "trash_handoff_days": DEFAULT_TRASH_HANDOFF_DAYS,
+                     "trash_handoff_gb": DEFAULT_TRASH_HANDOFF_GB,
                      "keep_all_models": DEFAULT_KEEP_ALL_MODELS},
         "effective": _settings(),
     }
@@ -277,6 +298,9 @@ def preview_device_settings(**changes: object) -> dict[str, int | bool]:
     handoff = value["trash_handoff_days"]
     if isinstance(handoff, bool) or not isinstance(handoff, int) or handoff <= 0:
         raise ValueError("trash_handoff_days must be a positive integer")
+    handoff_gb = value["trash_handoff_gb"]
+    if isinstance(handoff_gb, bool) or not isinstance(handoff_gb, int) or handoff_gb <= 0:
+        raise ValueError("trash_handoff_gb must be a positive integer")
     if not isinstance(value["keep_all_models"], bool):
         raise ValueError("keep_all_models must be a boolean")
     return value
@@ -298,11 +322,13 @@ def save_device_settings(*, max_bytes: int, retention_days: int, cleanup_enabled
                          cleanup_interval_seconds: int = DEFAULT_CLEANUP_INTERVAL_SECONDS,
                          minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES,
                          trash_handoff_days: int | None = None,
+                         trash_handoff_gb: int | None = None,
                          keep_all_models: bool | None = None) -> dict[str, dict[str, int | bool]]:
     return update_device_settings(
         max_bytes=max_bytes, retention_days=retention_days, cleanup_enabled=cleanup_enabled,
         cleanup_interval_seconds=cleanup_interval_seconds, minimum_free_bytes=minimum_free_bytes,
         **({} if trash_handoff_days is None else {"trash_handoff_days": trash_handoff_days}),
+        **({} if trash_handoff_gb is None else {"trash_handoff_gb": trash_handoff_gb}),
         **({} if keep_all_models is None else {"keep_all_models": keep_all_models}))
 
 
@@ -315,6 +341,7 @@ def restore_device_defaults() -> dict[str, dict[str, int]]:
             "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
             "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
             "trash_handoff_days": DEFAULT_TRASH_HANDOFF_DAYS,
+            "trash_handoff_gb": DEFAULT_TRASH_HANDOFF_GB,
             "keep_all_models": _settings()["keep_all_models"],   # about models, not output limits: not reset here
             "defaults_version": _DEFAULTS_VERSION,
         })
