@@ -3985,6 +3985,34 @@ struct StudioContent: View {
         }
     }
 
+    /// The free memory a job must find before this model starts, and whose number it is.
+    ///
+    /// This is the Hub's own floor (`memory_admission.describe`), not the RAM tier above it: it is
+    /// the number dispatch waits on, and the only admission number an operator may replace — the
+    /// override is site-local, so it lives on this Hub and not on the model's row. It is shown here
+    /// because an override left behind by a measurement run is otherwise invisible: the row is the
+    /// model's, and the operator's number is nowhere on the model. The way back to the model's own
+    /// figure sits beside it while there is something to go back from.
+    @ViewBuilder private func modelFreeMemoryBlock(_ model: NativeModel) -> some View {
+        if let gb = model.freeFloorGB {
+            Divider()
+            HStack(alignment: .firstTextBaseline) {
+                Text("Memory to start a job").font(HubType.section)
+                Spacer(minLength: HubSpace.s)
+                if model.freeFloorIsOperatorSet {
+                    Button("Reset to default") {
+                        Task { await workspace.resetFreeMemoryFloor(for: model) }
+                    }
+                    .help("Use the free-memory floor this model's own row publishes")
+                    .disabled(!connected)
+                }
+            }
+            factRows([NativeModelFact(label: "Free before start",
+                                      value: "\(NativeJSONValue.trimmed(gb)) GB",
+                                      source: model.freeFloorSourceText)])
+        }
+    }
+
     /// One row per fact, with the artefact that stated it where there is one.
     private func factRows(_ facts: [NativeModelFact]) -> some View {
         VStack(alignment: .leading, spacing: HubSpace.tight) {
@@ -4380,6 +4408,10 @@ struct StudioContent: View {
                             // model limits — whatever the producers state, and nothing they do not.
                             modelFactsBlock(model)
                             modelLongFormBlock(model)
+                            // The one admission number the operator may change: the free memory a
+                            // job must find before this model starts, whose number it is, and the
+                            // way back to the model's own figure.
+                            modelFreeMemoryBlock(model)
                             // And, under it, the controls the operator may set a default for, built
                             // from the same lane contract.
                             modelDefaultsEditor(model)

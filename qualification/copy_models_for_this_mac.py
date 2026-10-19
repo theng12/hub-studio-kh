@@ -81,7 +81,8 @@ PROVEN_SMALLER = {
     "z-image-turbo-mflux-4bit": 8,
     # Breeze TTS 2 4-bit: the manifest says 16 GB. **Measured** on an 8 GB M1 (Hub 0.6.143) on 2026-10-04:
     # 2/2 clips completed from 3.31-3.46 GB free, worker peak 4.69 GB, never critical memory pressure
-    # (owner decision 2026-10-04; the Hub's own floor is `memory_admission._FLEET_DEFAULTS`, 8 GB / 3.2 GB free).
+    # (owner decision 2026-10-04; the Hub reads the same 8 GB total from `memory_admission._FLEET_DEFAULTS` and the 3.2 GB free floor from this
+    # model's own catalog row, which is where that number lives).
     "breeze-tts-2-mlx-4bit": 8,
 }
 

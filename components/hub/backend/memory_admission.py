@@ -17,7 +17,11 @@ the worker's own MemoryGuard stays the final authority.
 Separately, the *live* free-memory requirement is a hard gate too. "This Mac has 8 GB of RAM" is
 a fact that does not change, but "this Mac has 0.4 GB free right now because three Studios are
 holding models" is a fact about this moment, and starting a generation into it is what turns a
-slow job into a killed worker. The free floor is what the Models screen tunes.
+slow job into a killed worker. The free floor has exactly one home: the model's own published row
+(``min_free_memory_gb`` / ``required_free_memory_gb``, which ``workload_policy`` reads). The
+operator's override on the Models screen is the only other number, and it wins. Nothing in the Hub
+keeps a third copy - a Hub-side table that outranks the row is how an edit to the row became
+invisible.
 
 The effective policy is site-local; it never changes a worker catalog or
 GenStudio's global ownership decisions.
@@ -38,31 +42,33 @@ from .registry import DATA_DIR
 SETTINGS_FILE = DATA_DIR / "memory_admission_overrides.json"
 DEFAULT_MIN_FREE_MEMORY_GB = 2.0
 
-# These are measured fleet defaults, intentionally allowed to be less
-# conservative than a worker catalog. FLUX.2 Klein 4B MLX 4-bit has completed
-# thousands of generations on the owner's 8 GB Apple-silicon nodes, so 8 GB is its
-# requirement (the first rung of `requirement_gb`); the free-memory floor stays the
-# live safety guard.
+# These are measured fleet defaults for the *total* memory tier, intentionally allowed to be less
+# conservative than a worker catalog. FLUX.2 Klein 4B MLX 4-bit has completed thousands of
+# generations on the owner's 8 GB Apple-silicon nodes, so 8 GB is its requirement (the first rung
+# of `requirement_gb`) whatever its row and manifest say (both say 16).
+#
+# The live-free floor is deliberately NOT in this table any more. It had a copy here as well as on
+# each model's own row, and `describe` gave this table precedence, so an edit to the row was
+# silently ignored - two copies of one measurement, and only one of them enforced. The row is the
+# one home (`components/image/app/backend/generation.py` carries 2.8 for FLUX.2 Klein 4-bit,
+# `components/voice/app/backend/catalog.py` carries 3.2 for Breeze TTS 2 4-bit), the operator's
+# override is the only other number, and `min_free_source` says which of the two is in force.
 _FLEET_DEFAULTS = {
     "aitrader/flux2-klein-4b-mlx-4bit": {
         "min_total_memory_gb": 8.0,
-        # Free memory needed before start, from the real 8 GB M1+M2 runs 2026-10-02 (started cleanly from 3.76-4.14 GB
-        # free, peak 2.16-2.68 GB, ~0 swap): the free memory a job needs to begin, NOT its peak. This table outranks the
-        # worker's catalog row for the free floor (`describe`), so 2.8 (owner's choice 2026-10-02, for headroom) is set here as well as in the catalog. Z-Image-Turbo
-        # 4-bit has no entry on purpose: it would also override its manifest's total tier; its catalog row carries 3.0.
-        "min_free_memory_gb": 2.8,
         "reason": "Fleet-qualified on 8 GB Apple-silicon Macs",
     },
-    # Breeze TTS 2 4-bit (owner decision 2026-10-04): manifest and catalog said 16 GB / 5.6 GB free, which 0 of the 33
-    # 8 GB Macs ever have. Measured 2026-10-04 on an 8 GB M1 (Hub 0.6.143, `_orchestra/audit-20261001/breeze-8gb/results/
-    # TTS 8GB Run 20261004-230549`): 2/2 S2 clips completed, every section accepted, each clip STARTED with 3.31-3.46 GB
-    # free, worker peak 4.69 GB, Mac max used 5.2-5.3 GB, min free 1.19-1.32 GB, pressure warning (never critical), swap
-    # <= +0.54 GB, RTF 4.1 (a 16 GB M1 runs 4.9-5.1), max stall 0.6 s. 3.2 GB free to start is just under the measured
-    # 3.31 GB. The Voice worker's own preflight takes this same floor (`worker_free_floor_gb`), not its size estimate.
+    # Breeze TTS 2 4-bit (owner decision 2026-10-04): its manifest still said 16 GB, which 0 of the
+    # 33 8 GB Macs ever have. Measured 2026-10-04 on an 8 GB M1 (Hub 0.6.143,
+    # `_orchestra/audit-20261001/breeze-8gb/results/TTS 8GB Run 20261004-230549`): 2/2 S2 clips
+    # completed, every section accepted, worker peak 4.69 GB, Mac max used 5.2-5.3 GB, min free
+    # 1.19-1.32 GB, pressure warning (never critical), swap <= +0.54 GB, RTF 4.1 (a 16 GB M1 runs
+    # 4.9-5.1), max stall 0.6 s. The row and the manifest disagree, and the manifest is read before
+    # the row, so the 8 GB total stays here; the 3.2 GB free-before-start figure is the row's own
+    # (`min_free_memory_gb`), measured on the same run: each clip started with 3.31-3.46 GB free.
     "mlx-community/breeze-tts-2-mlx-4bit": {
         "min_total_memory_gb": 8.0,
-        "min_free_memory_gb": 3.2,
-        "reason": "Measured on an 8 GB M1 (2026-10-04): started from 3.31 GB free, peak 4.69 GB, never critical",
+        "reason": "Measured on an 8 GB M1 (2026-10-04): peak 4.69 GB, never critical",
     },
 }
 
@@ -244,20 +250,26 @@ def _write(values: dict[str, dict]) -> None:
 
 
 def describe(model: str, catalog_entry: dict) -> dict:
-    """Return catalog, fleet-default, and effective site-local RAM floors.
+    """Return catalog, model-default, and effective site-local RAM floors.
 
     ``effective_min_total_memory_gb`` is the model's requirement (`requirement_gb`) and is
     enforced: dispatch refuses a Mac below it, the scheduler leaves that Mac out of the model's
     pool, and the published capacity counts only Macs that meet it. It is 0 for a model that
     publishes no floor at all. ``min_total_source`` names where the number came from.
 
-    ``_FLEET_DEFAULTS`` is a per-model *measurement* — the models the owner has proven below
-    their published tier — so it cannot be derived from anything, and a model nobody has
-    measured gets the generic free floor instead. That absence used to be invisible: the row
-    said ``source: "catalog"`` and nothing said whether a measurement existed. Every row now
-    carries ``fleet_default_measured`` plus a ``default_reason`` that names the absence, so the
-    Models screen can show "nobody has measured this one yet" instead of implying the generic
-    floor is a measurement.
+    ``effective_min_free_memory_gb`` is the live-free floor and ``min_free_source`` says whose
+    number it is: ``operator_override`` (the Models screen's own setting), ``model_default`` (the
+    floor the model's row publishes), or ``default`` (the model publishes none, so the generic
+    ``DEFAULT_MIN_FREE_MEMORY_GB`` applies). Two states, never one sentence for both: a model
+    enforcing the generic floor must not read as though its own row had stated it.
+
+    ``_FLEET_DEFAULTS`` is a per-model *measurement* of the **total** tier — the models the owner
+    has proven below their published tier — so it cannot be derived from anything, and a model
+    nobody has measured keeps what its row, manifest or catalog states. That absence used to be
+    invisible: the row said ``source: "catalog"`` and nothing said whether a measurement existed.
+    Every row carries ``fleet_default_measured`` plus a ``default_reason`` that names the absence,
+    so the Models screen can show "nobody has measured this one yet". It deliberately does not
+    carry the live-free floor: that number has one home, the model's own row.
     """
     key = _normalized(model or catalog_entry.get("repo"))
     catalog_total = _published_total_memory_gb(catalog_entry)
@@ -271,15 +283,19 @@ def describe(model: str, catalog_entry: dict) -> dict:
     )
 
     default_total = requirement_gb(model, catalog_entry, use_override=False)[0]
-    default_free = (
-        fleet_default["min_free_memory_gb"] if fleet_default
-        else max(DEFAULT_MIN_FREE_MEMORY_GB, qualified_free or 0.0)
-    )
+    # The row's own published floor, and nothing else: a Hub-side copy of it would outrank the row
+    # and make an edit to the row invisible.
+    default_free = max(DEFAULT_MIN_FREE_MEMORY_GB, qualified_free or 0.0)
     override = _read().get(key)
     required_total, total_source = requirement_gb(model, catalog_entry)
     effective_total = required_total or 0.0
     effective_free = (
         override["min_free_memory_gb"] if override else default_free
+    )
+    min_free_source = (
+        "operator_override" if override
+        else "model_default" if qualified_free is not None
+        else "default"
     )
     source = "operator_override" if override else (
         # Compatibility with the published contract: a Hub production floor reports as
@@ -316,6 +332,9 @@ def describe(model: str, catalog_entry: dict) -> dict:
         "effective_min_total_memory_gb": effective_total,
         "min_total_source": total_source,
         "effective_min_free_memory_gb": effective_free,
+        # Whose live-free number this is: the operator's setting, the model's own row, or the
+        # generic floor because the model publishes none. The Models screen shows this verbatim.
+        "min_free_source": min_free_source,
         "source": source,
         # Whether a per-model fleet measurement exists for this model. False is not an error:
         # it is the honest state of a model nobody has measured yet.
@@ -345,16 +364,19 @@ def set_override(model: str, *, min_total_memory_gb: float,
 
 
 def worker_free_floor_gb(model: str) -> float | None:
-    """The live-free floor the Voice worker's own preflight must use in place of its size estimate:
-    the operator's override, else this model's fleet measurement, else ``None`` (the worker keeps its
-    estimate). Without the measurement here, Breeze's worker asked 2.9 + 1.25 = 4.15 GB free while the
-    Hub admitted it at 3.2, so an 8 GB Mac (3.3-3.5 GB free) would refuse every job it was sent."""
+    """The live-free floor the Voice worker's own preflight must use in place of its own row: the
+    operator's override, else ``None`` (the worker reads the model's row itself).
+
+    Only an override is forwarded, and that is the whole point of this function. It used to carry
+    the fleet measurement too, because the worker's preflight computed a *formula* (``size_gb +
+    1.25``): Breeze's worker asked 2.9 + 1.25 = 4.15 GB free while the Hub admitted it at 3.2, so an
+    8 GB Mac (3.3-3.5 GB free) would refuse every job it was sent. The worker now reads the same
+    row the Hub does (``components/voice/app/backend/generation.py``, ``_required_free_memory_gb``),
+    so the row needs no forwarding and the two guards agree by construction. An override is
+    site-local and is on no row, so it is the one number that still has to travel."""
     key = _normalized(model)
     override = _read().get(key)
-    if override:
-        return override["min_free_memory_gb"]
-    measured = _FLEET_DEFAULTS.get(key)
-    return measured["min_free_memory_gb"] if measured else None
+    return override["min_free_memory_gb"] if override else None
 
 
 def reset_override(model: str, catalog_entry: dict) -> dict:

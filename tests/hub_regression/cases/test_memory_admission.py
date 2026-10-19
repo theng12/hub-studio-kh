@@ -15,10 +15,16 @@ FLUX_REPO = "AITRADER/FLUX2-klein-4B-mlx-4bit"
 
 
 def _flux_entry():
+    """The shipped Image worker's own row for FLUX.2 Klein 4-bit, as that worker publishes it.
+
+    ``min_free_memory_gb`` is on the row because the worker publishes it there
+    (``components/image/app/backend/generation.py``, ``FLUX2_KLEIN``); the Hub keeps no copy.
+    """
     return {
         "repo": FLUX_REPO,
         "label": "FLUX.2 klein 4B — MLX 4-bit",
         "min_unified_memory_gb": 16,
+        "min_free_memory_gb": 2.8,
         "cache": {"state": "cached"},
     }
 
@@ -38,10 +44,11 @@ def test_flux_4bit_uses_measured_8gb_fleet_default(reset):
     assert policy["effective_min_total_memory_gb"] == 8.0
     assert policy["min_total_source"] == "measured"
     # 2.8 GB of FREE memory before a job starts (not its peak): the owner's choice 2026-10-02, for headroom over the
-    # real 8 GB M1+M2 runs, which started cleanly from 3.09 GB free. The fleet default outranks the catalog for this,
-    # so it must carry the 2.8 itself.
+    # real 8 GB M1+M2 runs, which started cleanly from 3.09 GB free. It is the Image worker's own published floor
+    # (`min_free_memory_gb` on its row); the Hub keeps no copy of it any more.
     assert policy["effective_min_free_memory_gb"] == 2.8
     assert policy["default_min_free_memory_gb"] == 2.8
+    assert policy["min_free_source"] == "model_default"
     assert policy["source"] == "fleet_default"
     assert policy["overridden"] is False
     requirements = broker._admission_requirements(FLUX_REPO, _flux_entry())
@@ -68,25 +75,103 @@ def test_flux_4bit_uses_measured_8gb_fleet_default(reset):
     )[0] == "skip"
 
 
+def test_the_free_floor_has_one_home_and_it_is_the_models_own_row(reset):
+    """The Hub keeps no live-free number of its own; the row is the one place, the override the only other.
+
+    `_FLEET_DEFAULTS` carried 2.8 for FLUX.2 Klein 4-bit and 3.2 for Breeze TTS 2 4-bit *as well
+    as* each model's own catalog row, and `describe` gave the table precedence — so an edit to the
+    row was silently ignored, and two copies of one measurement could disagree with only one of
+    them enforced. The owner's rule (2026-09-24, "nothing about models is hardcoded") is one home
+    per number, and for the free floor that home is the model's own published row.
+    """
+    for repo in ("aitrader/flux2-klein-4b-mlx-4bit", "mlx-community/breeze-tts-2-mlx-4bit"):
+        entry = memory_admission._FLEET_DEFAULTS.get(repo)
+        assert entry is not None, f"{repo} left the fleet table entirely; the total measurement is a different fact"
+        assert "min_free_memory_gb" not in entry, (
+            f"{repo} carries a live-free number in the Hub's own table again. The model's own row "
+            "(`components/image/app/backend/generation.py`, `components/voice/app/backend/catalog.py`) "
+            "is the one home for it, with the operator's override on top.")
+
+    # An edit to the row IS the edit: nothing in the Hub overrides it back.
+    edited = dict(_flux_entry(), min_free_memory_gb=3.4)
+    policy = memory_admission.describe(FLUX_REPO, edited)
+    assert policy["effective_min_free_memory_gb"] == 3.4
+    assert policy["default_min_free_memory_gb"] == 3.4
+    assert policy["min_free_source"] == "model_default"
+    assert broker._admission_requirements(FLUX_REPO, edited) == {"min_total": 8.0, "min_free": 3.4}
+
+    # A row that publishes none gets the generic floor, and says so instead of claiming the model.
+    quiet = memory_admission.describe(FLUX_REPO, {"repo": FLUX_REPO, "min_unified_memory_gb": 16})
+    assert quiet["effective_min_free_memory_gb"] == memory_admission.DEFAULT_MIN_FREE_MEMORY_GB
+    assert quiet["min_free_source"] == "default"
+
+
+def test_the_shipped_flux_and_breeze_rows_publish_the_floors_the_fleet_measured(reset):
+    """2.8 GB (FLUX.2 Klein 4-bit) and 3.2 GB (Breeze TTS 2 4-bit) still resolve — from the rows now.
+
+    These are the two numbers the Hub used to keep its own copy of. The jobs that ran on 8 GB Macs
+    must stay admitted, so the numbers are pinned where they now live.
+    """
+    from components.image.app.backend import generation as image_generation
+    from components.voice.app.backend import catalog as voice_catalog
+
+    klein = image_generation.FLUX2_KLEIN
+    assert klein.min_free_memory_gb == 2.8, (
+        "FLUX.2 Klein 4-bit no longer publishes the 2.8 GB live-free floor (owner's choice "
+        "2026-10-02), so the Hub would fall back to its generic 2.0 GB default")
+    klein_row = {"repo": klein.repo,
+                 "min_unified_memory_gb": klein.qualified_minimum_memory_gb,
+                 "min_free_memory_gb": klein.min_free_memory_gb}
+    klein_policy = memory_admission.describe(klein.repo, klein_row)
+    assert klein_policy["effective_min_free_memory_gb"] == 2.8
+    assert klein_policy["min_free_source"] == "model_default"
+
+    breeze = next(m for m in voice_catalog.CATALOG if m.repo == "mlx-community/Breeze-TTS-2-mlx-4bit")
+    published = voice_catalog.serialize_model(breeze)
+    assert published["min_free_memory_gb"] == 3.2, (
+        "Breeze TTS 2 4-bit no longer publishes the 3.2 GB live-free floor (measured on an 8 GB M1, "
+        "2026-10-04), so the Hub would fall back to its generic 2.0 GB default")
+    breeze_policy = memory_admission.describe(breeze.repo, published)
+    assert breeze_policy["effective_min_free_memory_gb"] == 3.2
+    assert breeze_policy["min_free_source"] == "model_default"
+    # The 8 GB *total* is a different fact and stays a Hub-side measurement: the manifest still
+    # says 16 GB for Breeze, and the manifest is read before the catalog row.
+    assert published["min_unified_memory_gb"] == 8
+    assert breeze_policy["effective_min_total_memory_gb"] == 8.0
+
+
 def test_breeze_4bit_runs_on_8gb_macs_from_its_measurement(reset):
     """Owner decision 2026-10-04 from the 8 GB M1 run (each clip started with 3.31-3.46 GB free, peak
-    4.69 GB, never critical): 8 GB total and 3.2 GB free to start, where the catalog/manifest said 16 / 5.6.
-    The Voice worker's own preflight gets the same 3.2 (it estimated 4.15 cold), so an 8 GB Mac the Hub
-    admits does not refuse the job."""
+    4.69 GB, never critical): 8 GB total and 3.2 GB free to start, where the manifest said 16.
+
+    The 3.2 GB is the row's own published floor and reaches the Hub through the row
+    (`workload_policy.required_free_memory_gb`); the Hub keeps no copy of it. The Voice worker's own
+    preflight reads the same row, so the two guards cannot disagree about the same job and the Hub
+    forwards an operator override only.
+    """
+    from components.voice.app.backend import catalog as voice_catalog
+    from components.voice.app.backend import generation as voice_generation
+
     repo = "mlx-community/Breeze-TTS-2-mlx-4bit"
-    policy = memory_admission.describe(repo, {"repo": repo, "min_unified_memory_gb": 16,
-                                              "min_free_memory_gb": 5.6, "required_free_memory_gb": 4.15})
+    row = {"repo": repo, "min_unified_memory_gb": 8, "min_free_memory_gb": 3.2}
+    policy = memory_admission.describe(repo, row)
     assert (policy["effective_min_total_memory_gb"], policy["min_total_source"]) == (8.0, "measured")
     assert policy["effective_min_free_memory_gb"] == 3.2
+    assert policy["min_free_source"] == "model_default"
     assert policy["fleet_default_measured"] is True
-    requirements = broker._admission_requirements(repo, {"repo": repo})
+    requirements = broker._admission_requirements(repo, row)
     assert requirements == {"min_total": 8.0, "min_free": 3.2}
     assert broker._memory_gate(requirements, {"total_gb": 8.59, "available_gb": 3.31})[0] == "run"
     assert broker._memory_gate(requirements, {"total_gb": 8.59, "available_gb": 3.1})[0] == "wait"
     assert broker._memory_gate(requirements, {"total_gb": 4.0, "available_gb": 3.5})[0] == "skip"
-    assert memory_admission.worker_free_floor_gb(repo) == 3.2
+    # One floor, two readers, one row: the worker's own preflight asks its row for the same 3.2 the
+    # Hub enforces (it used to ask 2.9 + 1.25 = 4.15, which no 8 GB Mac ever had).
+    shipped = next(m for m in voice_catalog.CATALOG if m.repo == repo)
+    assert voice_generation._required_free_memory_gb(shipped, loaded=False) == 3.2
+    # Only an override is forwarded now; the row needs no forwarding.
+    assert memory_admission.worker_free_floor_gb(repo) is None
     assert memory_admission.worker_free_floor_gb("mlx-community/VoxCPM2-4bit") is None, \
-        "a model with no measurement keeps the worker's own estimate"
+        "a model with no override keeps the worker's own published floor"
 
 
 def test_a_model_is_refused_a_mac_below_its_requirement(reset):
@@ -137,6 +222,69 @@ def test_operator_override_persists_and_reset_restores_default(reset):
     # override is only the operator's way to change the number.
     assert reset_policy["effective_min_total_memory_gb"] == 8.0
     assert not memory_admission.SETTINGS_FILE.exists()
+
+
+def test_the_operator_override_wins_over_the_row_and_reset_returns_to_it(reset):
+    """The Models screen's own pair of numbers: what is in force, and whose it is.
+
+    The row is the default (`min_free_source` "model_default"); the operator's override replaces it
+    ("operator_override"), and clearing the override returns to the row — never to a Hub-side copy
+    of the number, which is what made a row edit invisible.
+    """
+    entry = dict(_flux_entry(), min_free_memory_gb=3.4)
+
+    changed = memory_admission.set_override(
+        FLUX_REPO, min_total_memory_gb=8.0, min_free_memory_gb=1.5, catalog_entry=entry)
+
+    assert changed["effective_min_free_memory_gb"] == 1.5
+    assert changed["min_free_source"] == "operator_override"
+    assert changed["overridden"] is True
+    assert changed["default_min_free_memory_gb"] == 3.4, "the row's number stays visible beside it"
+    assert broker._admission_requirements(FLUX_REPO, entry) == {"min_total": 8.0, "min_free": 1.5}
+    # The override is also what the Voice worker's own preflight is given; the row's number needs no
+    # forwarding, because the worker reads that same row itself.
+    assert memory_admission.worker_free_floor_gb(FLUX_REPO) == 1.5
+
+    restored = memory_admission.reset_override(FLUX_REPO, entry)
+    assert restored["overridden"] is False
+    assert restored["min_free_source"] == "model_default"
+    assert restored["effective_min_free_memory_gb"] == 3.4
+    assert broker._admission_requirements(FLUX_REPO, entry)["min_free"] == 3.4
+    assert memory_admission.worker_free_floor_gb(FLUX_REPO) is None
+
+
+def test_the_catalog_row_carries_the_free_floor_and_whose_number_it_is(reset, fixture_monitor):
+    """What the Models screen reads: the enforced floor and its owner, on the row the app already has.
+
+    The app reads `/api/hub/catalog` once per poll and builds the Models screen from it, so the
+    number in force and whose it is travel with that row rather than in a request per model. The
+    keys are `hub_*` on purpose: `workload_policy` reads `min_free_memory_gb` back, so the enforced
+    number must never be written into the worker's own key.
+    """
+    repo = "mlx-community/Breeze-TTS-2-mlx-4bit"
+    voice = next(s for s in fixture_monitor.registry if s["id"] == "voice")
+    catalogs = [None] * len(fixture_monitor.registry)
+    catalogs[fixture_monitor.registry.index(voice)] = {"models": [
+        {"repo": repo, "min_unified_memory_gb": 8, "min_free_memory_gb": 3.2}]}
+
+    def row():
+        return {r["repo"]: r for r in
+                fixture_monitor._assemble_aggregate_catalog(catalogs, [])["models"]}[repo]
+
+    assert row()["hub_free_memory_gb"] == 3.2
+    assert row()["hub_free_memory_source"] == "model_default"
+    assert row()["min_free_memory_gb"] == 3.2, "the worker's own key is left exactly as it published it"
+
+    memory_admission.set_override(repo, min_total_memory_gb=8.0, min_free_memory_gb=1.5,
+                                  catalog_entry={"repo": repo, "min_unified_memory_gb": 8,
+                                                 "min_free_memory_gb": 3.2})
+    assert row()["hub_free_memory_gb"] == 1.5
+    assert row()["hub_free_memory_source"] == "operator_override"
+    assert row()["min_free_memory_gb"] == 3.2, "the site-local override is never written into the row"
+
+    memory_admission.reset_override(repo, {})
+    assert row()["hub_free_memory_gb"] == 3.2
+    assert row()["hub_free_memory_source"] == "model_default"
 
 
 def test_qwen_base_uses_owner_approved_8gb_floor_with_live_headroom_guard(reset):

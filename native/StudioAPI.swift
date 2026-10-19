@@ -800,6 +800,33 @@ struct NativeModelDefaultsPayload: Decodable, Equatable {
     let settingsFile: String?
 }
 
+/// The Hub's own answer to `GET`/`PUT /api/hub/memory/admission` for one model
+/// (`memory_admission.describe`): the live-free floor in force, the number the model's own row
+/// publishes, whose number is in force, and whether the operator set it.
+///
+/// The reset does not read any of it — the status is the result and the catalogue is re-read for
+/// the new number — but the fields are named so the shape is checkable against the route.
+/// `minFreeSource` is optional because it is the one key the Hub added for the Models screen: a
+/// Hub older than this app leaves it out, and a successful reset must not read as a failure for a
+/// field nothing here consumes.
+struct NativeMemoryAdmission: Decodable, Equatable {
+    let model: String
+    let effectiveMinFreeMemoryGb: Double
+    let defaultMinFreeMemoryGb: Double
+    let minFreeSource: String?
+    let overridden: Bool
+}
+
+/// The `PUT /api/hub/memory/admission` body that clears one model's free-memory override.
+///
+/// It deliberately carries no `min_free_memory_gb`: the Hub's route reads a missing (or null)
+/// value as "clear the override and go back to the model's own floor"
+/// (`standalone.set_memory_admission`), and Swift's encoder omits a nil Optional rather than
+/// sending one, so the absence is the instruction.
+private struct MemoryAdmissionResetBody: Encodable {
+    let model: String
+}
+
 struct NativeModel: Identifiable, Equatable {
     let id: String
     let repo: String
@@ -887,6 +914,28 @@ struct NativeModel: Identifiable, Equatable {
     /// be shown with its provenance instead of a re-derived threshold.
     var minimumMemoryGB: Double? = nil
     var minimumMemorySource: String? = nil
+    /// The live-free floor the Hub enforces for this model — the free memory a job must find before
+    /// it starts — and whose number it is (`hub_free_memory_source`: the model's own row, or the
+    /// operator's override). It is the one admission number the operator may change, so the Models
+    /// pane shows it with a way back to the model's own figure. Nil only when the Hub published no
+    /// admission row for this model at all, and then nothing is shown rather than a guessed number.
+    var freeFloorGB: Double? = nil
+    var freeFloorSource: String? = nil
+    /// Whether the free floor in force is the operator's own number rather than the model's, which
+    /// is what makes a way back to the model's figure worth showing.
+    var freeFloorIsOperatorSet: Bool { freeFloorSource == "operator_override" }
+    /// Whose free-memory number is in force, in the app's words. The Hub names the owner of the
+    /// number (`operator_override`, `model_default`, `default`) and never a label, so the wording
+    /// lives here and an unknown future value is shown verbatim rather than hidden.
+    var freeFloorSourceText: String? {
+        guard let source = freeFloorSource else { return nil }
+        switch source {
+        case "operator_override": return "your setting"
+        case "model_default": return "model default"
+        case "default": return "the Hub's own default"
+        default: return source
+        }
+    }
     /// Subtitle: whether this model's manifest declares segment timestamps, and word-level ones.
     /// Both are optional claims: a Studio that publishes neither renders nothing for them, and a
     /// model that publishes `false` says "not supported" rather than staying silent.
@@ -4854,6 +4903,29 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch {
             guard connectionID == requestConnection, !Self.isCancellation(error) else { return }
             self.error = Self.actionable(error, action: "Restore defaults for \(model.label)")
+        }
+    }
+
+    /// Put this model's free-memory floor back to the number its own row publishes.
+    ///
+    /// The floor is the Hub's (`memory_admission.describe`), site-local, and the operator's
+    /// override replaces the model's own figure for this Hub only. `PUT /api/hub/memory/admission`
+    /// reads a body with no `min_free_memory_gb` as "clear it", so the reset sends the model alone —
+    /// `MemoryAdmissionResetBody` has no such field and Swift's encoder never invents one. The
+    /// answer is the describe that follows the reset, and the catalogue is read again so the number
+    /// on the pane is the one now in force rather than the one that was just cleared.
+    func resetFreeMemoryFloor(for model: NativeModel) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let _: NativeMemoryAdmission = try await sendJSON(
+                ["api", "hub", "memory", "admission"], method: "PUT",
+                body: MemoryAdmissionResetBody(model: model.repo))
+            guard connectionID == requestConnection else { return }
+            error = nil
+            await refresh()
+        } catch {
+            guard connectionID == requestConnection, !Self.isCancellation(error) else { return }
+            self.error = Self.actionable(error, action: "Reset the free-memory floor for \(model.label)")
         }
     }
 
@@ -9272,6 +9344,14 @@ final class NativeWorkspaceStore: ObservableObject {
         let catalogTiers = catalog.reduce(into: [String: (value: Double, source: String)]()) { result, item in
             if let tier = item.memoryTier { result[item.repo] = tier }
         }
+        // The live-free floor the Hub enforces per model, and whose number it is. It travels on the
+        // aggregate row (`hub_free_memory_gb` / `hub_free_memory_source`), so the Models pane reads
+        // the number dispatch actually waits on without a request per model.
+        let catalogFloors = catalog.reduce(into: [String: (value: Double, source: String)]()) { result, item in
+            if let gb = item.hubFreeMemoryGb {
+                result[item.repo] = (gb, item.hubFreeMemorySource ?? "")
+            }
+        }
         let audioModels = catalog.filter { $0.capabilities?.contains("tts") == true }.map { item in
             // What a model can do is published by the catalog, and this app reads it instead of
             // keeping its own list of families. `modes` is the runtime's own answer to "how can
@@ -9347,7 +9427,12 @@ final class NativeWorkspaceStore: ObservableObject {
                 longForm: NativeLongFormDelivery(item.longFormDelivery),
                 pausedStudio: package?.pausedStudio,
                 laneContract: item.laneContract,
-                modelLimits: item.modelLimits
+                modelLimits: item.modelLimits,
+                // The Audio models are where the live-free floor matters most — Breeze TTS 2 4-bit
+                // and VoxCPM2 4-bit are the two the 8 GB tier runs on — so the number in force and
+                // its owner are read here too.
+                freeFloorGB: catalogFloors[item.repo]?.value,
+                freeFloorSource: catalogFloors[item.repo]?.source
             )
         }
         let transcriptionModels = transcriptionRows.map { item in
@@ -9388,6 +9473,8 @@ final class NativeWorkspaceStore: ObservableObject {
                 modelLimits: item.modelLimits,
                 minimumMemoryGB: catalogTiers[item.repo]?.value,
                 minimumMemorySource: catalogTiers[item.repo]?.source,
+                freeFloorGB: catalogFloors[item.repo]?.value,
+                freeFloorSource: catalogFloors[item.repo]?.source,
                 supportsSegmentTimestamps: item.supportsSegmentTimestamps,
                 wordTimestampsClaim: item.supportsWordTimestamps,
                 weightFiles: catalogWeightFiles[item.repo] ?? [],
@@ -9430,7 +9517,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 },
                 guidanceIgnored: item.guidanceIgnored ?? false,
                 minimumMemoryGB: catalogTiers[item.repo]?.value,
-                minimumMemorySource: catalogTiers[item.repo]?.source)
+                minimumMemorySource: catalogTiers[item.repo]?.source,
+                freeFloorGB: catalogFloors[item.repo]?.value,
+                freeFloorSource: catalogFloors[item.repo]?.source)
         }
         // A chat form is whatever the catalogue publishes as one. The capability is spelled
         // several ways across workers (`chat.completion`, `chat`, `text-generation`,
@@ -9457,7 +9546,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 laneContract: item.laneContract,
                 modelLimits: item.modelLimits,
                 minimumMemoryGB: catalogTiers[item.repo]?.value,
-                minimumMemorySource: catalogTiers[item.repo]?.source)
+                minimumMemorySource: catalogTiers[item.repo]?.source,
+                freeFloorGB: catalogFloors[item.repo]?.value,
+                freeFloorSource: catalogFloors[item.repo]?.source)
         }
         // A video model is whatever the catalogue publishes as one: the Hub's own modality
         // annotation first, then the broker's capability tokens (`img2video` is the one its
@@ -9487,7 +9578,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 laneContract: item.laneContract,
                 modelLimits: item.modelLimits,
                 minimumMemoryGB: catalogTiers[item.repo]?.value,
-                minimumMemorySource: catalogTiers[item.repo]?.source)
+                minimumMemorySource: catalogTiers[item.repo]?.source,
+                freeFloorGB: catalogFloors[item.repo]?.value,
+                freeFloorSource: catalogFloors[item.repo]?.source)
         }
         return audioModels + transcriptionModels + imageModels + chatModels + videoModels
             + Self.musicModels(catalog, packages: packages)
@@ -9567,6 +9660,11 @@ final class NativeWorkspaceStore: ObservableObject {
         let catalogTiers = catalog.reduce(into: [String: (value: Double, source: String)]()) { result, item in
             if let tier = item.memoryTier { result[item.repo] = tier }
         }
+        let catalogFloors = catalog.reduce(into: [String: (value: Double, source: String)]()) { result, item in
+            if let gb = item.hubFreeMemoryGb {
+                result[item.repo] = (gb, item.hubFreeMemorySource ?? "")
+            }
+        }
         return catalog.filter { $0.capabilities?.contains("music") == true }.map { item in
             let package = packages[item.repo]
             let drivable = item.musicConfiguration != nil
@@ -9595,7 +9693,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 laneContract: item.laneContract,
                 modelLimits: item.modelLimits,
                 minimumMemoryGB: catalogTiers[item.repo]?.value,
-                minimumMemorySource: catalogTiers[item.repo]?.source)
+                minimumMemorySource: catalogTiers[item.repo]?.source,
+                freeFloorGB: catalogFloors[item.repo]?.value,
+                freeFloorSource: catalogFloors[item.repo]?.source)
         }
     }
 
@@ -10366,6 +10466,14 @@ private struct CatalogModel: Decodable {
     /// key it came from so the fact can name its source.
     let minTotalMemoryGb: Double?
     let qualifiedMinimumMemoryGb: Double?
+    /// The live-free floor the Hub enforces for this model and whose number it is, added to every
+    /// aggregate row by `monitor._assemble_aggregate_catalog`. `hub_*` keys on purpose: the row's
+    /// own `min_free_memory_gb` is what the worker published, and the Hub's `workload_policy` reads
+    /// it back, so the enforced number (which may be the operator's override) is kept apart from
+    /// it. The source is `"operator_override"`, `"model_default"` or `"default"` — the last is a
+    /// model that publishes no floor at all and gets the Hub's generic one.
+    let hubFreeMemoryGb: Double?
+    let hubFreeMemorySource: String?
     /// The package's file receipt, which is where the Subtitle worker names the weight files it
     /// found. Read one level down, because that is where the producer publishes them.
     let readiness: CatalogReadiness?
