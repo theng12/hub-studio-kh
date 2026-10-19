@@ -2,6 +2,75 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.186 — 2026-10-19
+
+### The Trash Folder is now yours to see and control
+
+Every Mac keeps a Trash Folder where things it retires go — cleanup, model swaps, old releases. The
+storage screen now shows it: where it is, how many items are in it and how much space they take, with
+a button to open it in Finder and a button to move its contents to your Mac's Trash. The move tells
+you how many bytes it is about to move before you confirm, and if anything cannot be moved it stays
+where it is.
+
+The Trash Folder no longer grows forever on its own: folders older than the handoff age (7 days by
+default, adjustable in the app) are moved to your Mac's Trash on the cleanup timer.
+
+Nothing the app retires is permanently deleted any more — the rotated service log, finished model
+downloads, expired subtitle inputs, removed shared voices, cleared transcriptions and failed policy
+writes all go to the Trash Folder first. A Trash Folder an earlier build left somewhere else is
+adopted at start-up, so nothing is stranded.
+
+### A node can show the work it did for its controller
+
+If this Mac runs as a Node, its own Jobs page now lists the Image, Music, Voice and Video work its
+controller sent it. Before, those finished files were on this Mac but its history was empty, because
+the job record lives on the controller. The row appears when the job actually finishes.
+
+### The Jobs page can split results by Mac
+
+On a controller, a new "Made on" control filters the Jobs page to All, This Mac, or Nodes, so you can
+see what each Mac in the group produced.
+
+### "Show in Finder" always works
+
+The model library's "Show in Finder" buttons now create the folder if it is not there yet and then
+open it, so you can copy models into a brand-new Mac by hand. A folder on a drive that is not
+connected still tells you why it cannot be opened instead of the button looking dead.
+
+### A failed model-list read no longer blanks the page
+
+If the app cannot read the Hub's model list for a moment, it keeps the last good list instead of
+marking every model as unsupported and greying out its Download button. When there has never been a
+successful read, the page says it could not read the list and is retrying, rather than blaming the
+model.
+
+### Keep this Mac ready for one kind of work
+
+Settings now offer "Keep this Mac ready for" a function of your choice, with a hold of 1 to 3600
+seconds after its last job of that function finishes. It is **off by default** and set per Mac. A
+running job of any kind always finishes first, a new job of the chosen function starts immediately,
+and episode renders are never held or delayed. This schedules work — it does not promise a model stays
+in memory, and memory pressure still releases as it always did.
+
+### The App Update Key screen says what it stored, and why an update was refused
+
+If the key you paste is actually the key's **fingerprint** — which is the same 64 characters long, so
+nothing could tell them apart — the app used to accept it and then quietly refuse every update. It is
+now refused outright, and the message says to paste the Public key from Gateway → Settings → App
+Update Key instead of the fingerprint printed beside it. The stored key is shown by its own first
+characters, not by its fingerprint, so you can see at a glance which one is installed.
+
+A Mac that is being refused an update now says so on that same screen ("Updates refused: …") with the
+reason, instead of looking merely out of date.
+
+### An 8 GB Mac no longer offers Chat it cannot run
+
+The Chat models state the memory they need (16 GB for the shipped one), and an 8 GB Mac was still
+advertising Chat as runnable, so the Gateway kept offering that model for install on Macs that
+cannot run it. An 8 GB Mac now reports Chat as not runnable, with the same sentence it already
+showed as a warning: "This Mac has 8 GB of unified memory… Run it on a 16 GB or larger Mac." Nothing
+is downloaded or attempted there.
+
 ## 0.6.185 — 2026-10-18
 
 ### The app and the installer now use the same model folder
