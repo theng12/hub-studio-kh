@@ -810,7 +810,14 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
                "last_stop": last_stop_of(snapshot.get("last_stop")) or _last_known_stop(row),
                "workstation": _workstation_of(snapshot.get("workstation")),
                "priority_order": order,
-               "chat_priority": bool(order and order[0] == "chat")}
+               "chat_priority": bool(order and order[0] == "chat"),
+               "preferred_work": (snapshot.get("preferred_work")
+                                  if isinstance(snapshot.get("preferred_work"), dict) else None),
+               "preferred_hold_remaining_s": (
+                   float(snapshot["preferred_hold_remaining_s"])
+                   if isinstance(snapshot.get("preferred_hold_remaining_s"), (int, float))
+                   and not isinstance(snapshot.get("preferred_hold_remaining_s"), bool)
+                   else 0.0)}
     if snapshot.get("auth") is False:
         return {**row, **carried, "state": "unauthorized",
                 "detail": _CREDENTIAL_DETAIL.format(
@@ -1114,6 +1121,14 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
         "workstation": row.get("workstation") if isinstance(row.get("workstation"), dict) else None,
         "priority_order": order,
         "chat_priority": bool(order and order[0] == "chat"),
+        # The Mac's own idle-hold preference and remaining window, carried from its snapshot.
+        # None/0.0 from an older Hub, which then arbitrates exactly as before.
+        "preferred_work": row.get("preferred_work") if isinstance(row.get("preferred_work"), dict) else None,
+        "preferred_hold_remaining_s": (
+            float(row["preferred_hold_remaining_s"])
+            if isinstance(row.get("preferred_hold_remaining_s"), (int, float))
+            and not isinstance(row.get("preferred_hold_remaining_s"), bool)
+            else 0.0),
     }
 
 

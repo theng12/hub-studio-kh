@@ -1424,15 +1424,44 @@ struct NativeWorkPolicy: Decodable, Equatable {
         let modality: String?
         let enabled: Bool
     }
+    /// The optional preferred-generation idle hold (`components/hub/backend/preferred_hold.py`).
+    struct Preferred: Decodable, Equatable {
+        var enabled: Bool
+        var modality: String?
+        var idleSeconds: Int
+    }
+    /// What the Mac is actually doing for the hold: `off`, `working`, `holding`, `lending`.
+    struct PreferredState: Decodable, Equatable {
+        var phase: String
+        var remainingS: Double?
+        var expiresAt: Double?
+    }
     let machineEnabled: Bool
     var chatPriority: Bool { priorityOrder.first == "chat" }
     let studios: [Studio]
     let priorityOrder: [String]
     let priorityFunctions: [Function]
     let supportsFunctionPriority: Bool
+    let preferredChoices: [String]
+    let preferredWork: Preferred
+    let preferredState: PreferredState?
+    let supportsPreferredWork: Bool
 
     private enum CodingKeys: String, CodingKey {
         case machineEnabled, chatPriority, studios, priorityOrder, priorityFunctions
+        case preferredChoices, preferredWork, preferredState
+    }
+
+    private struct PreferredFields: Decodable {
+        var enabled: Bool
+        var modality: String?
+        var idle_seconds: Int?
+    }
+
+    private struct StateFields: Decodable {
+        var phase: String
+        var remaining_s: Double?
+        var expires_at: Double?
     }
 
     init(from decoder: Decoder) throws {
@@ -1444,6 +1473,21 @@ struct NativeWorkPolicy: Decodable, Equatable {
             ?? (legacyChatPriority ? ["chat"] : [])
         priorityFunctions = try fields.decodeIfPresent([Function].self, forKey: .priorityFunctions) ?? []
         supportsFunctionPriority = fields.contains(.priorityOrder) && fields.contains(.priorityFunctions)
+        // An older Hub publishes neither field: the control is hidden rather than simulated.
+        supportsPreferredWork = fields.contains(.preferredChoices) && fields.contains(.preferredWork)
+        preferredChoices = try fields.decodeIfPresent([String].self, forKey: .preferredChoices) ?? []
+        if let saved = try? fields.decodeIfPresent(PreferredFields.self, forKey: .preferredWork) {
+            preferredWork = Preferred(enabled: saved.enabled, modality: saved.modality,
+                                      idleSeconds: saved.idle_seconds ?? 300)
+        } else {
+            preferredWork = Preferred(enabled: false, modality: nil, idleSeconds: 300)
+        }
+        if let state = try? fields.decodeIfPresent(StateFields.self, forKey: .preferredState) {
+            preferredState = PreferredState(phase: state.phase, remainingS: state.remaining_s,
+                                            expiresAt: state.expires_at)
+        } else {
+            preferredState = nil
+        }
     }
 
     /// The producer owns function vocabulary; unknown Studio checkboxes remain independent.
@@ -6289,6 +6333,40 @@ final class NativeWorkspaceStore: ObservableObject {
                     ? "The function choice was saved. " + Self.actionable(error, action: "Refresh this Mac's work choices")
                     : Self.actionable(error, action: "Save this Mac's function choice")
                 workPolicyReadFailed = saved
+            }
+            return false
+        }
+    }
+
+    /// Save this Mac's preferred-generation idle hold. `modality` nil with enabled=false turns
+    /// the hold off; the save response is authoritative, exactly like the priority save.
+    func savePreferredWork(enabled: Bool, modality: String?, idleSeconds: Int) async -> Bool {
+        guard let requestConnection = connectionID, isReachable,
+              workPolicy?.supportsPreferredWork == true,
+              !savingWorkPolicy else { return false }
+        savingWorkPolicy = true
+        workPolicyRevision += 1
+        workPolicyNote = nil
+        workPolicyReadFailed = false
+        defer { if connectionID == requestConnection { savingWorkPolicy = false } }
+        do {
+            let body: [String: Any] = ["preferred_work": [
+                "enabled": enabled,
+                "modality": enabled ? modality : nil,
+                "idle_seconds": idleSeconds,
+            ]]
+            guard JSONSerialization.isValidJSONObject(body) else { return false }
+            let encoded = try JSONSerialization.data(withJSONObject: body)
+            var request = try makeRequest(["api", "hub", "work-policy"], method: "POST")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = encoded
+            let answer: NativeWorkPolicy = try await perform(request)
+            guard connectionID == requestConnection else { return false }
+            workPolicy = answer
+            return true
+        } catch {
+            if connectionID == requestConnection {
+                workPolicyNote = Self.actionable(error, action: "Save the preferred-work hold")
             }
             return false
         }

@@ -175,6 +175,11 @@ class MemoryPolicy:
             return
         if self._engine.status()["busy"]:
             return
+        # The sibling Hub's opt-in preferred-work hold: skip only this worker's own idle
+        # release while the preferred model is meant to stay. Manual release, the saved
+        # explicit `immediate` mode and every Hub-coordinated release are unaffected.
+        if memory_modes.hold_exempt(self.data_dir, "chat", mode):
+            return
         last = self._engine.last_activity_at()
         if last is not None and (time.time() - last) >= idle_seconds:
             try:

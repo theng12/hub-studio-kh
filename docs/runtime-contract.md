@@ -37,6 +37,87 @@ Resources and fleet rows publish `priority_order`. The authenticated controller
 including the controller itself. Gateway's per-Mac editor uses this same policy;
 other Macs keep their own enablement and priorities.
 
+## Per-Mac preferred-work idle hold
+
+`GET /api/hub/work-policy` additionally returns `preferred_choices` (the generation
+functions this Mac actually serves: Chat, Voice/TTS, Image, Music, Video — never
+`render`, which is the Hub's own FFmpeg assembly step and is never held or delayed),
+`preferred_work` (`{enabled, modality, idle_seconds}`), and `preferred_state`
+(`{phase, remaining_s, expires_at}` with phase `off`/`working`/`holding`/`lending`,
+from the Mac's own running-job evidence).
+
+`POST /api/hub/work-policy` accepts `{"preferred_work": {...}}` alone or together with
+`priority_order`. `idle_seconds` is a whole number of 1–3600 seconds (default 300) —
+any N the operator types, not a preset list. `enabled: false` must not name a modality.
+Unknown fields, a modality the Mac does not
+serve, and non-integer seconds are rejected with HTTP 400 without partial mutation; in a
+combined body both halves are validated before either write, so an invalid
+`priority_order` never persists the preference half (the preference row is written through
+the preferred-work path's own atomic tempfile + fsync + replace; the priority-order row
+keeps its existing registry write; a crash between them leaves the first key saved, and a
+retry is idempotent). Disabling or switching the preferred function clears
+the stored hold window and any in-flight reservation; re-saving the same function
+(including a duration edit) leaves a running hold or reservation alone — both belong to
+the function and dispatch that opened them, and only a real completion or the
+disable/switch starts or retires them. A persisted row that does not
+parse as a preference reads as off, and the next save over it starts without a hold: a
+malformed row can never own or inherit a window.
+
+While enabled, an *eligible* preferred candidate dispatches ahead of the ranked
+priority order; a running non-preferred job always finishes first and is never
+preempted. After the last preferred job on that Mac actually finishes (its own lane's
+terminal transition, or its peer door observing a proxied job terminal — never a
+disconnect, a refusal or a lease TTL), the Mac refuses other generation work for
+`idle_seconds`; render stays exempt, non-generation lanes (subtitle, embeddings,
+vision) are never gated, and unknown/uncertain leases keep the machine fenced as
+before. New preferred arrival ends the hold immediately. With no completion recorded
+(such as right after a restart) the Mac lends until the first preferred job runs; the
+stored window survives a restart only for its bounded remaining time, computed from a
+monotonic stamp on the same boot or the wall clock across one, clamped to the window in
+both directions so a clock jump can never extend the hold. The window is written once
+per completion, never per poll.
+
+One bounded *dispatch reservation* closes the race where a worker's own idle timer fires
+at the finish instant. It is written in the same `machine_flags.json` row immediately
+before each worker POST (Chat pack, broker Image/Voice item, and the peer door's own
+machine reservation after the lease is acquired), stamped with an owner token unique to
+that dispatch attempt, and bounded by the lane's own deadline plus a small grace: the Hub's
+published per-generator deadline floor, raised once to a larger finite deadline the worker
+states at acceptance (Image's own worker caps that stated deadline at 7,200 s; the Hub does
+not keep a second copy of that worker-side ceiling). A non-finite or non-positive budget is
+refused before anything is written. It is optionally adopted once at worker acceptance if the
+worker states a larger deadline, and cleared in the same atomic row write as the
+completion hold only while it still carries the completing attempt's exact token — a
+delayed older attempt can never clear a newer attempt's reservation. Queued/uncertain
+exits, lease TTLs, disconnects and refusals never treat themselves as completion: the
+reservation simply expires at its bound. It is never written per poll, never gates
+scheduling, never opens a hold and is never published to peers.
+
+With the preference enabled, each worker reads that same row through
+`components/memory_modes.py` (the sibling `hub/machine_flags.json` in the packaged
+layout; any missing or malformed row falls open to the saved memory mode) and declines
+only its OWN idle release while a bounded hold or dispatch reservation for its modality
+is alive: Chat and Voice in their idle timers, Image in both its idle loop and its
+finish-time keep decision. The shared clock math never raises on stored data: a non-dict
+row, a non-numeric/missing stamp, an over-range integer, a NaN/infinite stamp or a
+non-finite budget all read as no hold/reservation, so a corrupt row falls back to the
+worker's normal idle behaviour and can never masquerade as a fresh window. This is coordinated scheduling, not a warm-model promise:
+memory pressure always releases, `POST /api/memory/release` stays unconditional, a saved
+explicit `Immediate` mode stays authoritative, worker/Hub crashes or restarts still
+release, and the model may already be unloaded when a job or hold ends. Music is a
+scheduling preference only (its worker holds no warm model between jobs) and Video drops
+its pipeline per job, so neither gets a worker-side exemption.
+
+The preference persists per Mac in `machine_flags.json` beside `priority_order` and is
+published on `/api/hub/resources` (`preferred_work`,
+`preferred_hold_remaining_s`) so a controller arbitrates its group with each Mac's own
+truth; the node owns the hold clock, so only the remaining seconds cross the wire and a
+controller never rebuilds or counts down a peer's window itself. An older Hub publishes
+neither field and reads as OFF everywhere. Apart from the bounded idle-release
+exemption described above, model memory still follows each Studio's own model-memory
+setting, and no warm model is promised (Video releases its pipeline per job by
+construction). Older clients that do not read the new fields are unaffected.
+
 ## Files and callers
 
 - [model_packages.py](../components/model_packages.py): standard-library runtime helper.

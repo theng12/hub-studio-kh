@@ -28,7 +28,11 @@ question first.  ``auto`` only chooses a threshold; it cannot override a refusal
 """
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
+
+from components import preferred_hold_clock
 
 # The mode an operator selects when they have not chosen one. It is a real entry in the
 # table below, not a sentinel: status() publishes it as `mode` and publishes the machine's
@@ -150,3 +154,66 @@ def options(machine: str | None = None) -> list[dict]:
         }
         for mode, value in MODES.items()
     ]
+
+
+def _preferred_flags_row(worker_data_dir) -> dict:
+    """The Hub's ``"local"`` machine_flags row beside this worker, or ``{}``.
+
+    Packaged layout only: the Hub runs with ``STUDIOHUB_DATA_DIR=<root>/hub`` and every worker
+    gets ``--data-dir <root>`` and keeps its own state in ``<root>/<studio>``, so the row this
+    Mac's scheduler owns is the sibling ``hub/machine_flags.json``. A missing file, malformed
+    JSON, a non-dict document or a non-dict row all read as ``{}``: the worker falls back to
+    its saved memory mode exactly as before. Dev/qualification layouts without that sibling
+    simply fail open.
+    """
+    try:
+        path = Path(worker_data_dir).resolve().parent / "hub" / "machine_flags.json"
+        flags = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    row = flags.get("local") if isinstance(flags, dict) else None
+    return row if isinstance(row, dict) else {}
+
+
+def _preferred_policy(row: dict, modality: str) -> dict | None:
+    """The enabled preference for this worker's own modality, bounds-clamped, or ``None``.
+
+    Only a real boolean ``true`` counts as enabled — the Hub writes exactly that, and a
+    hand-edited truthy value (``1``, ``"yes"``) reads as off rather than enabling a hold the
+    operator never chose. A legacy row with no ``enabled`` key reads off, as before.
+    """
+    policy = row.get("preferred_work") if isinstance(row, dict) else None
+    if not isinstance(policy, dict) or policy.get("enabled") is not True:
+        return None
+    if policy.get("modality") != modality:
+        return None
+    low, high = preferred_hold_clock.PREFERRED_WORK_BOUNDS
+    seconds = policy.get("idle_seconds")
+    if not isinstance(seconds, int) or isinstance(seconds, bool) \
+            or not low <= seconds <= high:
+        seconds = preferred_hold_clock.PREFERRED_WORK_DEFAULT_S
+    return {"modality": modality, "idle_seconds": int(seconds)}
+
+
+def hold_exempt(worker_data_dir, modality: str, stored_mode: str) -> bool:
+    """Whether this worker's own idle release should wait for the preferred-work hold.
+
+    True only while the sibling Hub row says this worker's modality is the enabled preference
+    AND a bounded hold or dispatch reservation for it is still alive. An explicitly stored
+    ``immediate`` mode is authoritative and always returns False, as does any missing or
+    malformed row. This never overrides manual release or memory pressure; callers keep those
+    branches unconditional. It declines only the idle timer, and never promises a warm model.
+    """
+    if stored_mode == "immediate":
+        return False
+    row = _preferred_flags_row(worker_data_dir)
+    policy = _preferred_policy(row, modality)
+    if policy is None:
+        return False
+    if preferred_hold_clock.hold_remaining_s(policy, row.get("preferred_hold")) > 0.0:
+        return True
+    reservation = row.get("preferred_reservation")
+    if not isinstance(reservation, dict) or reservation.get("modality") != modality:
+        return False
+    return preferred_hold_clock.reservation_remaining_s(reservation) > 0.0
+

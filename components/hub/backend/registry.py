@@ -14,11 +14,14 @@ studios.json format (all fields optional except id for overrides):
 """
 
 import json
+import math
 import socket
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
+
+from components import preferred_hold_clock
 
 from .vocabulary import NODE_MODALITIES
 
@@ -128,6 +131,227 @@ def set_priority_order(machine: str, order: list[str]) -> None:
 def set_chat_priority(machine: str, enabled: bool) -> None:
     """Legacy bool-only write adapter."""
     set_priority_order(machine, ["chat"] if enabled else [])
+
+
+# Preferred-work idle hold (owner request, 2026-10-17): one optional per-Mac choice of a
+# preferred generation function that wins over ranked priority while demand lasts, then holds the
+# Mac for `idle_seconds` after its last preferred job actually finishes before lending the Mac to
+# other work. OFF by default; every field is optional so older machine_flags.json rows read as
+# the previous behaviour with no migration. The bounds are defined once in the shared clock leaf
+# (`components/preferred_hold_clock.py`) and aliased here for the scheduler and API.
+PREFERRED_WORK_BOUNDS = preferred_hold_clock.PREFERRED_WORK_BOUNDS
+PREFERRED_WORK_DEFAULT_S = preferred_hold_clock.PREFERRED_WORK_DEFAULT_S
+
+
+def _validate_preferred(value: object) -> dict | None:
+    """A saved preference, or ``None`` when absent/malformed (malformed reads as off).
+
+    Only a real boolean ``true`` enables the preference. A truthy non-boolean in a
+    hand-edited/malformed row (``1``, ``"yes"``) reads as off, consistent with the worker
+    reader and with the API's own bool-only write validation. A legacy row with no
+    ``enabled`` key also reads off, exactly as it did before the field existed.
+    """
+    if not isinstance(value, dict):
+        return None
+    modality = value.get("modality")
+    if not isinstance(modality, str) or modality not in NODE_MODALITIES:
+        return None
+    seconds = value.get("idle_seconds")
+    if not isinstance(seconds, int) or isinstance(seconds, bool):
+        seconds = PREFERRED_WORK_DEFAULT_S
+    low, high = PREFERRED_WORK_BOUNDS
+    seconds = max(low, min(high, int(seconds)))
+    return {"enabled": value.get("enabled") is True, "modality": modality,
+            "idle_seconds": seconds}
+
+
+def preferred_work(machine: str) -> dict | None:
+    """This Mac's saved idle-hold preference, or ``None`` when off/malformed."""
+    row = load_flags().get(machine, {})
+    return _validate_preferred(row.get("preferred_work")) if isinstance(row, dict) else None
+
+
+def _write_flags(flags: dict) -> None:
+    """Persist the whole flags map atomically; the cache changes only after the replace."""
+    global _flags_cache
+    descriptor, name = tempfile.mkstemp(prefix=f".{FLAGS_FILE.name}-", dir=FLAGS_FILE.parent)
+    temporary = Path(name)
+    try:
+        with _os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(flags, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            _os.fsync(handle.fileno())
+        temporary.replace(FLAGS_FILE)
+    except BaseException:
+        if temporary.exists():
+            trash = DATA_DIR / "_trash" / "failed-writes"
+            try:
+                trash.mkdir(parents=True, exist_ok=True)
+                temporary.replace(trash / temporary.name)
+            except OSError:
+                pass
+        raise
+    _flags_cache = flags
+
+
+def set_preferred_work(machine: str, modality: str | None, idle_seconds: int,
+                       *, enabled: bool) -> None:
+    """Persist one Mac's preference atomically beside its priority flags.
+
+    ``modality=None`` clears the preference (the caller disables it); a preference is only
+    written when the modality is a canonical one. No scheduler state is touched here.
+    """
+    from .vocabulary import NODE_MODALITIES
+    if modality is None:
+        payload = None
+    else:
+        if modality not in NODE_MODALITIES:
+            raise ValueError(f"preferred modality {modality!r} is not a registered function")
+        low, high = PREFERRED_WORK_BOUNDS
+        if not isinstance(idle_seconds, int) or isinstance(idle_seconds, bool) \
+                or not low <= idle_seconds <= high:
+            raise ValueError(f"idle_seconds must be a whole number of {low}-{high} seconds")
+        payload = {"enabled": bool(enabled), "modality": modality,
+                   "idle_seconds": int(idle_seconds)}
+    flags = dict(load_flags())
+    saved = flags.get(machine, {})
+    row = dict(saved) if isinstance(saved, dict) else {}
+    if payload is None:
+        row.pop("preferred_work", None)
+        row.pop("preferred_hold", None)
+        row.pop("preferred_reservation", None)
+    else:
+        previous = (saved or {}).get("preferred_work") \
+            if isinstance(saved, dict) else None
+        # The hold and the in-flight reservation belong to the preference that opened them:
+        # clearing or changing the preferred function retires both. Re-saving the same policy
+        # (including a duration edit) must not reset a hold or reservation that a real dispatch
+        # or completion just wrote, so only a disable or an actual modality change clears them.
+        # A malformed persisted value reads as OFF (see _validate_preferred) and cannot own
+        # either, so a save over it starts clean instead of inheriting unattributable state;
+        # this is also the isinstance guard that keeps the write path from raising on such a row.
+        switched = not isinstance(previous, dict) \
+            or previous.get("modality") != payload["modality"]
+        if not payload["enabled"] or switched:
+            row.pop("preferred_hold", None)
+            row.pop("preferred_reservation", None)
+        row["preferred_work"] = payload
+    flags[machine] = row
+    _write_flags(flags)
+
+
+def preferred_hold(machine: str) -> dict | None:
+    """The persisted hold window for one Mac, or ``None`` when none is running.
+
+    Written exactly once per preferred-job completion (see
+    ``components/hub/backend/preferred_hold.py``): ``ended_wall`` is the wall clock of the last
+    preferred finish and ``boot_steady`` is that process's ``time.monotonic()`` at the same
+    moment, so the runtime can answer "how much hold is left" without rewriting the file on
+    every poll and can bound a clock jump or a restart instead of holding for ever.
+    """
+    row = load_flags().get(machine, {})
+    if not isinstance(row, dict) or not isinstance(row.get("preferred_hold"), dict):
+        return None
+    hold = row["preferred_hold"]
+    try:
+        ended_wall = float(hold["ended_wall"])
+        boot_steady = float(hold["boot_steady"])
+    except (KeyError, OverflowError, TypeError, ValueError):
+        return None
+    if not (math.isfinite(ended_wall) and math.isfinite(boot_steady)):
+        return None
+    return {"ended_wall": ended_wall, "boot_steady": boot_steady}
+
+
+def set_preferred_hold(machine: str, ended_wall: float, boot_steady: float,
+                       *, clear_reservation_owner: str | None = None) -> None:
+    """Record one hold window's start, or clear it with ``ended_wall=None``.
+
+    When ``clear_reservation_owner`` names a dispatch attempt, the same atomic row write also
+    removes that attempt's in-flight reservation — but only while the stored reservation still
+    carries that exact owner. A delayed completion from an older attempt therefore cannot
+    clear a newer attempt's reservation, while the hold itself keeps the frozen completion
+    semantics (a late terminal may still open a scheduling hold). One write, never split.
+    """
+    flags = dict(load_flags())
+    saved = flags.get(machine, {})
+    row = dict(saved) if isinstance(saved, dict) else {}
+    if clear_reservation_owner:
+        reservation = row.get("preferred_reservation")
+        if isinstance(reservation, dict) \
+                and reservation.get("owner") == clear_reservation_owner:
+            row.pop("preferred_reservation", None)
+    if ended_wall is None:
+        row.pop("preferred_hold", None)
+    else:
+        row["preferred_hold"] = {"ended_wall": float(ended_wall),
+                                 "boot_steady": float(boot_steady)}
+    flags[machine] = row
+    _write_flags(flags)
+
+
+def preferred_reservation(machine: str) -> dict | None:
+    """The bounded in-flight reservation for one Mac, or ``None`` when absent/malformed.
+
+    The row is worker input, so every numeric field is validated here rather than trusted:
+    non-numeric, missing, NaN or infinite stamps/budget read as no reservation (the same
+    answer as a missing row), and an expired budget is left to the shared clock math.
+    """
+    row = load_flags().get(machine, {})
+    if not isinstance(row, dict) or not isinstance(row.get("preferred_reservation"), dict):
+        return None
+    reservation = row["preferred_reservation"]
+    modality = reservation.get("modality")
+    owner = reservation.get("owner")
+    if not isinstance(modality, str) or not modality \
+            or not isinstance(owner, str) or not owner:
+        return None
+    try:
+        started_wall = float(reservation["started_wall"])
+        started_steady = float(reservation["started_steady"])
+        budget = float(reservation["budget_s"])
+    except (KeyError, OverflowError, TypeError, ValueError):
+        return None
+    if not (math.isfinite(started_wall) and math.isfinite(started_steady)
+            and math.isfinite(budget) and budget > 0.0):
+        return None
+    return {"modality": modality, "owner": owner,
+            "started_wall": started_wall, "started_steady": started_steady,
+            "budget_s": budget}
+
+
+def set_preferred_reservation(machine: str, modality: str, owner: str,
+                              started_wall: float, started_steady: float,
+                              budget_s: float) -> None:
+    """Write one dispatch attempt's bounded reservation (or replace it on adoption).
+
+    Validation happens before the flags map is read or replaced: a non-finite stamp or a
+    non-positive/non-finite budget raises ``ValueError`` with no disk or cache mutation, so
+    a corrupt caller can never publish an unbounded exemption.
+    """
+    modality = str(modality)
+    owner = str(owner)
+    if not modality or not owner:
+        raise ValueError("a preferred reservation needs a modality and an owner")
+    try:
+        wall = float(started_wall)
+        steady = float(started_steady)
+        budget = float(budget_s)
+    except (OverflowError, TypeError, ValueError):
+        raise ValueError("a preferred reservation needs numeric finite stamps and budget") \
+            from None
+    if not (math.isfinite(wall) and math.isfinite(steady)
+            and math.isfinite(budget) and budget > 0.0):
+        raise ValueError("a preferred reservation needs finite stamps and a positive budget")
+    flags = dict(load_flags())
+    saved = flags.get(machine, {})
+    row = dict(saved) if isinstance(saved, dict) else {}
+    row["preferred_reservation"] = {"modality": modality, "owner": owner,
+                                    "started_wall": wall, "started_steady": steady,
+                                    "budget_s": budget}
+    flags[machine] = row
+    _write_flags(flags)
 
 
 def set_machine_enabled(machine: str, enabled: bool):
