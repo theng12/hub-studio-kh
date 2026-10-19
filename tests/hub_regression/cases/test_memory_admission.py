@@ -278,3 +278,76 @@ def test_qwen_image_tiers_and_gemma_admit_only_their_qualified_macs(reset):
             assert published["memory_eligible"] is eligible, (repo, total)
             assert broker._memory_gate({"min_total": floor}, {
                 "total_gb": total, "available_gb": total})[0] == ("run" if eligible else "skip")
+
+
+def test_a_floor_this_mac_can_never_reach_is_skipped_not_waited_on(reset):
+    """A Mac whose whole RAM is below the free floor is not a candidate; a short Mac still waits.
+
+    Free memory is always strictly less than the machine's own RAM — macOS and the workers are
+    resident — so a floor at or above this Mac's shipped memory can never be met, and `wait` there
+    parks the item behind a machine that will never clear it.
+
+    The shape is real and measured: the fleet is ~35 8 GB M1/M2 Macs (`research/owner-hardware.md`)
+    and Fish Audio S2 Pro 4-bit publishes an 8.4 GB free-before-start floor
+    (`components/voice/app/backend/catalog.py`, measured 2026-10-02 on the 32 GB M2 Max). Job
+    `97bdce60-90f4-4f47-b789-073744e87ea7` is the same defect one class up: the Hub answered
+    `wait` on `studio-mac-0107-m2-8-256-hub` ("needs about 3.5 GB free and has about 3.4 GB free")
+    and `studio-mac-1401-m2-8-256-hub` (3.3 GB) — 126 attempts, 3,068 `INSUFFICIENT_MEMORY`
+    hand-backs in `gateway-kh.log.1`, against a Gateway whose only mitigation is a 15-minute
+    in-memory cooldown (`fleet.MEMORY_COOLDOWN_S`).
+
+    Totals are what the fleet's Macs report: GiB as decimal GB (8.59 / 17.18).
+    """
+    fish_floor = 8.4
+    requirements = {"min_total": 8.0, "min_free": fish_floor}
+
+    # An 8 GB Mac: the floor is above its whole memory, so it is not a candidate at all.
+    decision, note = broker._memory_gate(requirements, {"total_gb": 8.59, "available_gb": 3.4})
+    assert decision == "skip", note
+    assert "8.4" in note and "8GB" in note
+
+    # A 16 GB Mac can hold the floor; being short right now is a wait, not a skip.
+    assert broker._memory_gate(requirements, {"total_gb": 17.18, "available_gb": 3.4})[0] == "wait"
+    assert broker._memory_gate(requirements, {"total_gb": 17.18, "available_gb": 9.0})[0] == "run"
+
+    # The floor that actually refused in production is below an 8 GB Mac's memory, so it is a
+    # wait there — which is what makes the class check a guard and not a substitute for the floor
+    # being the right number (`_required_free_memory_gb` in the Voice worker, VoxCPM2 4-bit).
+    voxcpm = {"min_total": 8.0, "min_free": 3.55}
+    assert broker._memory_gate(voxcpm, {"total_gb": 8.59, "available_gb": 3.4})[0] == "wait"
+
+
+def test_memory_class_is_the_shipped_size_not_the_reported_total(reset):
+    """The number a floor is judged against is the Mac's shipped memory, not its byte total."""
+    assert broker.memory_class_gb(8.59) == 8.0
+    assert broker.memory_class_gb(17.18) == 16.0
+    assert broker.memory_class_gb(25.77) == 24.0
+    assert broker.memory_class_gb(34.36) == 32.0
+    assert broker.memory_class_gb(None) is None
+    assert broker.mac_class("Apple M1", 8.59) == "M1 · 8 GB"
+
+
+def test_the_voice_worker_and_the_hub_enforce_one_free_floor(reset):
+    """One model, one admission floor — the invariant the VoxCPM2 4-bit split broke.
+
+    The Voice worker publishes its row's measured floor under BOTH names the Hub reads:
+    `min_free_memory_gb` from the catalog row (`catalog.serialize_model`) and
+    `required_free_memory_gb` from `model_runtime_status`. `workload_policy` takes `max` over the
+    two, so a *formula* published beside the measured number is a second, stricter gate — the Hub
+    admitted 8 GB Macs the worker then refused ("needs about 3.5 GB free and has about 3.4 GB
+    free", job `97bdce60`, 3,068 INSUFFICIENT_MEMORY hand-backs).
+
+    The row's own measurement, for the record: an 8 GB M1+M2 started cleanly from 3.25 GB free,
+    peak 4.30-4.41 GB, ~0 swap (owner's choice 2026-10-02, `min_free_memory_note`).
+    """
+    row = {"repo": "mlx-community/VoxCPM2-4bit", "min_unified_memory_gb": 16,
+           "min_free_memory_gb": 2.8, "required_free_memory_gb": 2.8}
+    policy = memory_admission.describe("mlx-community/VoxCPM2-4bit", row)
+    assert policy["effective_min_free_memory_gb"] == 2.8
+    assert broker._admission_requirements("mlx-community/VoxCPM2-4bit", row)["min_free"] == 2.8
+    # An 8 GB Mac sitting at the free memory the measurement recorded is admitted, not refused.
+    assert broker._memory_gate({"min_total": 8.0, "min_free": 2.8},
+                               {"total_gb": 8.59, "available_gb": 3.4})[0] == "run"
+    # The size formula's 3.55 (2.3 GB of weights + 1.25 GB headroom) is not a floor any more.
+    assert broker._memory_gate({"min_total": 8.0, "min_free": 3.55},
+                               {"total_gb": 8.59, "available_gb": 3.4})[0] == "wait"

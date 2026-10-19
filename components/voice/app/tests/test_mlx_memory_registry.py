@@ -41,3 +41,41 @@ def test_every_catalog_floor_names_the_measurement_it_came_from() -> None:
 def test_every_mlx_audio_catalog_family_is_in_the_worker_registry() -> None:
     families = {row.family for row in catalog.CATALOG if catalog.FAMILIES[row.family].engine == catalog.ENGINE_MLX_AUDIO}
     assert families <= set(mlx_memory.PROFILES), sorted(families - set(mlx_memory.PROFILES))
+
+
+def test_a_published_floor_is_the_only_floor_this_worker_enforces() -> None:
+    """One model, one admission floor: the row's own `min_free_memory_gb`.
+
+    The Hub reads the strictest of `min_free_memory_gb` and the `required_free_memory_gb` this
+    worker publishes (`workload_policy.required_free_memory_gb`), so a floor computed beside a
+    measured one is a second, stricter gate — and it is the one that wins. VoxCPM2 4-bit was 2.8
+    (its row, owner's choice 2026-10-02 from 8 GB runs that started cleanly at 3.25 GB free)
+    against 3.55 (size 2.3 + 1.25), and the 3.55 refused 8 GB Macs the measurement qualifies:
+    live 2026-10-19 as "needs about 3.5 GB free and has about 3.4 GB free" on
+    studio-mac-0107-m2-8-256-hub, job 97bdce60, 3,068 INSUFFICIENT_MEMORY hand-backs.
+    """
+    for row in catalog.CATALOG:
+        if row.min_free_memory_gb is None:
+            continue
+        published = round(float(row.min_free_memory_gb), 2)
+        assert generation._required_free_memory_gb(row, loaded=False) == published, (
+            f"{row.repo} publishes a {published} GB free-before-start floor and the worker "
+            f"enforces {generation._required_free_memory_gb(row, loaded=False)}. A floor must "
+            "never be a formula (AGENTS.md, MLX memory discipline)."
+        )
+        assert generation._required_free_memory_gb(row, loaded=True) == published, row.repo
+
+
+def test_a_row_with_no_floor_keeps_the_size_estimate() -> None:
+    """The estimate survives only where nobody has measured a floor yet."""
+    measured = 0
+    for row in catalog.CATALOG:
+        if row.min_free_memory_gb is not None:
+            measured += 1
+            continue
+        model_gb = max(0.5, float(row.size_gb or 0.5))
+        assert generation._required_free_memory_gb(row, loaded=False) == round(
+            model_gb + generation.MEMORY_HEADROOM_GB, 2), row.repo
+        assert generation._required_free_memory_gb(row, loaded=True) == round(
+            max(1.5, model_gb * 0.45) + generation.MEMORY_HEADROOM_GB, 2), row.repo
+    assert measured, "every row publishing no floor would make this test vacuous"
