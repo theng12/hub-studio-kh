@@ -1051,6 +1051,15 @@ class StudioMonitor:
             health_memory = ((getattr(self, "status", {}).get(sid) or {}).get("health") or {})
             health_memory = health_memory.get("memory") if isinstance(health_memory, dict) else None
             total_gb = health_memory.get("total_gb") if isinstance(health_memory, dict) else None
+            if not isinstance(total_gb, (int, float)) or isinstance(total_gb, bool):
+                # A worker that states no memory total - the Chat worker publishes none - must not
+                # lose its floor: without a total `publish_floor` can enforce nothing, so the
+                # Gateway went on offering a 16 GB chat model to 8 GB Macs and labelled it runnable.
+                # The machine's own profile answers, exactly as the per-model eligibility path
+                # below already falls back.
+                from . import hardware_profiles
+                profile = hardware_profiles.machine_hardware_profile(studio.get("machine", "local"))
+                total_gb = (profile or {}).get("memory_gb")
             for m in entries:
                 # The tier and verdict published are the floor dispatch enforces, not the worker's
                 # own literal (VoxCPM2 4-bit read 16 GB here while the Hub ran it on 8 GB).

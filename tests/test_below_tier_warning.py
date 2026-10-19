@@ -1,11 +1,13 @@
-"""A published RAM tier must reach the screen; the *worker* never refuses on it.
+"""A published RAM tier must reach the screen, and a host below it must not advertise the model.
 
-Premise changed, owner decision 2026-09-30: the Hub now treats a model's RAM requirement as a hard
-eligibility floor (`memory_admission.requirement_gb`; the scheduler counts a Mac below it out of the
-model's pool and never dispatches to it). What this file pins is unchanged and is the worker's half:
-the Chat worker still publishes the warning and still answers a request made straight to it - it does
-not become a second, disagreeing gate. The Hub is the one wall; the worker informs.
-
+Premise changed twice. Owner decision 2026-09-30 made the Hub treat a model's RAM requirement as a
+hard eligibility floor (`memory_admission.requirement_gb`; the scheduler counts a Mac below it out of
+the model's pool and never dispatches to it) while the *worker* kept publishing the warning and
+still answering a request made straight to it. Owner decision 2026-10-19 (8 GB Mac 1605) closed that
+last gap: an 8 GB Mac was still advertising Chat as runnable for a 16 GB model, so the Gateway went
+on offering it for install there. The Chat worker now reports the host **not eligible** below its
+model's own tier, which makes readiness not ready, `memory_eligible` false, and a request refused
+with the same plain sentence the warning carries.
 
 The owner, 2026-09-25, on Chat: *"8 GB behaviour. Today nothing refuses and nothing warns on Chat;
 Image warns and lets you try. I recommend making Chat warn the same way, and only adding a refusal
@@ -19,14 +21,17 @@ warning" — which is exactly why this is a test now: an unproven claim about a 
 refactor away from being true, and nobody would notice, because the machine that would show it is
 the one machine nobody develops on.
 
-Two things are pinned here:
+Three things are pinned here:
 
-1. The Chat worker publishes the warning where the app reads it, it says both numbers, and it stays
-   **advice** *at the worker*: the row is still eligible and still offered on the small host when
-   asked directly. The Hub, not the worker, decides whether to route to that host
-   (``memory_admission``'s requirement floor, owner decision 2026-09-30).
-2. The invariant behind it, so the next studio cannot publish a warning into the void: every worker
+1. The Chat worker publishes the warning where the app reads it, and it says both numbers.
+2. A host below the tier is **not eligible**: readiness and `available` are false, `memory_eligible`
+   is false, and a request straight to the worker is refused with the warning's own sentence.
+3. The invariant behind it, so the next studio cannot publish a warning into the void: every worker
    that puts a ``memory_warning`` on a catalog row must have a page that renders it.
+
+The Hub's own aggregate is pinned here too: a worker that states no memory total (the Chat worker
+publishes none) must still have its floor enforced from the machine's own profile, or the published
+row is offered as runnable on a Mac the scheduler has already counted out.
 """
 from __future__ import annotations
 
@@ -88,13 +93,30 @@ class ChatBelowTierWarningTests(unittest.TestCase):
         # noise the operator learns to ignore, and then the real one is ignored too.
         self.assertIsNone(self._row(32).get("memory_warning"))
 
-    def test_the_warning_is_advice_and_the_model_is_still_offered(self) -> None:
+    def test_a_host_below_the_tier_is_not_eligible_and_is_refused_in_that_sentence(self) -> None:
+        """8 GB Mac 1605 advertised Chat as runnable for a 16 GB model, so the Gateway offered it
+        for install there. The worker's own tier is an exclusion, and the worker now says so."""
         row = self._row(8)
-        self.assertIsNotNone(row.get("memory_warning"))
-        self.assertTrue(row.get("memory_eligible"),
-                        "the worker publishes a RAM tier as advice; the Hub's scheduler is the gate")
-        self.assertTrue(row.get("available"), "an 8 GB Mac must still be able to try")
-        self.assertTrue(row.get("execution_ready"))
+        warning = row.get("memory_warning")
+        self.assertIsNotNone(warning)
+        self.assertFalse(row.get("memory_eligible"),
+                         "a host below the model's own tier must not publish itself as eligible")
+        self.assertFalse(row.get("available"), "an 8 GB Mac must not be offered a 16 GB model")
+        self.assertFalse(row.get("execution_ready"))
+
+        # The refusal is the warning's own sentence, not a second, differently-worded gate.
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = _FakeEngine(verified=True)
+            engine.minimum_unified_memory_gb = _manifest_tier_gb()
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
+            client = TestClient(create_app(engine, policy, TOKEN, "a" * 64))
+            with mock.patch("subprocess.check_output",
+                            return_value=str(8 * 1024 ** 3)):
+                refused = client.post("/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                                      json={"model": engine.model_id,
+                                            "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertIn("Run it on a 16 GB or larger Mac", refused.json()["detail"])
 
 
 class EveryPublishedWarningHasAPageTests(unittest.TestCase):
@@ -170,6 +192,67 @@ class EveryPublishedWarningHasAPageTests(unittest.TestCase):
         self.assertTrue({"Chat", "Image", "Music", "Transcription", "Video", "Audio"} <= set(
             re.findall(r"selected(\w+)Model\?\.memoryWarning", VIEWS)),
             "the render sites this invariant is measured against have been renamed or removed")
+
+
+class _StandInMonitor:
+    """Only what `_assemble_aggregate_catalog` reads, so the Hub's own floor can be driven directly.
+
+    The assembler's docstring says as much: a minimal stand-in is not required to implement the
+    registry query. Nothing here is a Hub, a worker or a request.
+    """
+
+    def __init__(self, machine: str, health: dict) -> None:
+        self.registry = [{"id": "chat", "modality": "chat", "machine": machine, "title": "Chat"}]
+        self.status = {"chat": {"status": "up", "health": health}}
+
+    def catalog_observation(self, sid: str) -> dict:
+        return {"observed_at": 0.0, "age_seconds": 0.0, "stale": False, "last_error": None}
+
+
+class HubAggregateEnforcesTheFloorTests(unittest.TestCase):
+    """A worker that states no RAM total must still have its floor enforced in the Hub's aggregate.
+
+    8 GB Mac 1605 was offered the 16 GB chat model for install because the Chat worker publishes no
+    ``memory.total_gb``, and ``publish_floor`` can enforce nothing without a total: the row went out
+    as runnable while the scheduler had already counted that Mac out of the model's pool.
+    """
+
+    REPO = "mlx-community/Qwen3.5-9B-4bit"
+
+    def _row(self) -> dict:
+        return {"repo": self.REPO, "model_id": self.REPO, "name": "Qwen3.5-9B 4-bit",
+                "memory_eligible": True, "min_unified_memory_gb": _manifest_tier_gb()}
+
+    def _published(self, health: dict, profile_gb: float | None) -> dict:
+        from components.hub.backend import hardware_profiles, monitor as monitor_module
+
+        with mock.patch.object(hardware_profiles, "machine_hardware_profile",
+                               return_value=None if profile_gb is None
+                               else {"memory_gb": profile_gb}):
+            catalog = monitor_module.StudioMonitor._assemble_aggregate_catalog(
+                _StandInMonitor("1101", health), [{"models": [self._row()]}], [])
+        rows = [row for row in catalog["models"] if row.get("repo") == self.REPO]
+        self.assertEqual(len(rows), 1, catalog["models"])
+        return rows[0]
+
+    def test_a_worker_that_states_no_memory_total_falls_back_to_the_machines_own_profile(self) -> None:
+        row = self._published({}, 8)
+        self.assertIs(False, row.get("memory_eligible"),
+                      "an 8 GB Mac must not publish a 16 GB model as eligible just because its "
+                      "worker omitted the RAM total")
+        self.assertEqual(_manifest_tier_gb(), row.get("min_unified_memory_gb"))
+
+    def test_the_machines_profile_at_the_tier_keeps_the_model_eligible(self) -> None:
+        self.assertIs(True, self._published({}, 32).get("memory_eligible"))
+
+    def test_a_reported_total_still_wins_over_the_profile(self) -> None:
+        self.assertIs(True, self._published({"memory": {"total_gb": 32}}, 8).get("memory_eligible"))
+        self.assertIs(False, self._published({"memory": {"total_gb": 8}}, 32).get("memory_eligible"))
+
+    def test_with_no_evidence_at_all_the_row_is_left_as_the_worker_published_it(self) -> None:
+        # Neither the worker nor the profile says how much memory the Mac has: nothing is invented,
+        # so nothing is enforced. An assumed 0 would exclude every model on an unassigned machine.
+        self.assertIs(True, self._published({}, None).get("memory_eligible"))
 
 
 if __name__ == "__main__":

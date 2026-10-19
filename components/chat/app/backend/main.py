@@ -210,6 +210,12 @@ def _host_eligibility(engine) -> dict:
             f"here. It is qualified at {qualified_bytes / 1e9:g} GB and excluded below it: the "
             "weights need working room on top that this Mac does not have. Run it on a 16 GB or "
             "larger Mac. This is a decision from a measured tier, not a caution.")
+        # The tier is an exclusion, so the host is not eligible: readiness reports not ready,
+        # `memory_eligible` publishes false, and a chat request is refused with this same sentence
+        # instead of the worker offering a model it cannot run. An 8 GB Mac used to advertise Chat
+        # as runnable for a 16 GB model, and the Gateway offered it for install there.
+        state["eligible"] = False
+        state["reason"] = state["memory_warning"]
     return state
 
 
