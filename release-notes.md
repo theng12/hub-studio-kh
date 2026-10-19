@@ -2,6 +2,48 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.187 — 2026-10-19
+
+### Your Mac's Trash can now empty itself — and you can turn it on from here
+
+Everything the app retires ends up in your Mac's Trash, so a Mac whose Finder never empties that
+Trash slowly fills its disk until somebody does it by hand. macOS already has the setting for this
+(Finder → Settings → Advanced → "Remove items from the Trash after 30 days"), but there was no way
+to tell which Macs had it on.
+
+The app now reads it and shows it, on the storage screen and in the fleet's node list: on, off, or
+unknown when the setting could not be read at all. A Mac that has never touched the setting reads as
+**off**, which is what macOS itself does.
+
+A button turns it **on** — for this Mac, or for a node from the Gateway. It only ever turns it on;
+there is no button anywhere that turns it off. After the write the app reads the setting back, so if
+it did not stick you are told it did not apply rather than being shown a success. Finder is not
+restarted, and nothing needs it to be.
+
+### Output is kept 7 days, and the Trash Folder has a size limit too
+
+Generated output now waits **7 days** (was 3) before it moves to the Hub's Trash Folder, and the 20 GB
+of live output is unchanged — whichever comes first. The Trash Folder itself also gets a limit now:
+**20 GB**, adjustable, and anything older than 7 days or over that limit is moved on to your Mac's
+Trash, oldest first. The same 7-day rule now covers transcriptions, finished download folders and
+subtitle inputs that outlived their job record.
+
+Nothing is permanently deleted at either stage, and models are never expired. A Mac that never
+changed these numbers picks up the new defaults by itself; a number you chose stays exactly as you
+set it.
+
+### The Models page has tabs, and the details pane is yours to size
+
+The Models page is now split by what a model does — All, Image, Audio, Subtitle, Music, Chat — with
+the count each tab holds, instead of one long scroll with a "Jump to" picker that only moved the page
+up and down. A function your library has no model for simply gets no tab, and the empty "Video — 0
+models" heading is gone with it.
+
+The details pane can now be dragged **both** ways. It used to be capped so the divider would only
+move in one direction; now the list has its own floor and no ceiling but the window, and the width
+you choose is remembered the next time you open the app. With nothing selected there is no details
+pane at all — the list takes the whole page instead of leaving an empty panel down one side.
+
 ## 0.6.186 — 2026-10-19
 
 ### The Trash Folder is now yours to see and control
