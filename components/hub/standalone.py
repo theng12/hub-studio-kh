@@ -1048,27 +1048,76 @@ def _peer_work_request(method: str, path: str) -> bool:
     return method == "POST" and _peer_lease_policy(path) is not None
 
 
-# Which proxied work leaves a job in *this* node's history, keyed by the peer path that creates
-# it. This is the one place the choice is made, for both surfaces that reach `_proxy_to_worker`.
+# Which proxied work leaves a job in *this* node's history. This is the one place the choice is
+# made, for both surfaces that reach `_proxy_to_worker`.
 #
-# The old rule was "a controller's jobs are not this node's", and it does not survive contact
-# with the other modalities: a controller submitting Image or Voice work POSTs `/api/hub/jobs`
-# *on this node*, which creates the batch here, so that work is listed here. Chat has no broker
-# lane - `broker.MODALITY` has no `chat`, deliberately: a completion is synchronous and owns its
-# own job module - so this proxy is the only point at which its work could be filed at all.
-# Whose history a job is in follows the Mac that ran it, not the credential that asked.
-#
-# Nothing is recorded for work this node merely forwards to an asynchronous worker: those
-# batches are created by the submit route itself, and recording them here as well would file
-# every accepted job twice.
+# A controller's Image, Music, Voice and Video work reaches this node through this proxy, not
+# through `POST /api/hub/jobs`: in agent mode that route refuses a customer's submission, so the
+# batch is created on the controller. The controller then polls the worker's own
+# `GET /api/generate/jobs/<id>` through the same proxy, and that terminal answer is the only
+# point where this node learns the job finished. Chat is synchronous and owns its own recorder.
+# Whose history a job is in follows the Mac that ran it, not the credential that asked - without
+# this, a node ran work and kept the file but its own Jobs page could not show either.
 _PEER_JOB_RECORDERS = {
     "chat/v1/chat/completions": chat_jobs.record_page_completion,
 }
 
+_PEER_JOB_STATUS_PATH = re.compile(r"api/generate/jobs/[^/]+")
+
 
 def _peer_job_recorder(modality: str, path: str):
     """The recorder for one proxied work path, or ``None`` when this node keeps no job for it."""
-    return _PEER_JOB_RECORDERS.get(f"{modality}/{path.strip('/')}")
+    cleaned = path.strip("/")
+    recorder = _PEER_JOB_RECORDERS.get(f"{modality}/{cleaned}")
+    if recorder is not None:
+        return recorder
+    if modality in broker.MODALITY and _PEER_JOB_STATUS_PATH.fullmatch(cleaned):
+        return lambda **facts: _file_peer_finished_job(modality, **facts)
+    return None
+
+
+def _file_peer_finished_job(modality: str, *, content: bytes = b"", worker_id: str = "",
+                            status_code: int = 0, **_: object) -> None:
+    """File a controller's finished async job in this Mac's own history.
+
+    Only a terminal ``done`` report is written. A queued or running row would be loaded by
+    ``ledger.load_unfinished_batches()`` after a restart and re-run by this node's broker - as a
+    batch it does not own. The finished row is the asset the operator opens, and the worker keeps
+    the file, so the artifact route serves it from this Mac.
+    """
+    if status_code >= 400 or not content:
+        return
+    try:
+        job = json.loads(content).get("job")
+    except (ValueError, AttributeError):
+        return
+    if not isinstance(job, dict) or job.get("state") != "done" or not job.get("id"):
+        return
+    params = job.get("params") if isinstance(job.get("params"), dict) else {}
+    job_id = str(job["id"])
+    now = time.time()
+    created_at = job.get("created_at") if isinstance(job.get("created_at"), (int, float)) else now
+    runtime = job.get("duration_seconds")
+    suffix = broker.MODALITY[modality][2]
+    item = {
+        "index": 0, "state": "done", "progress": 1.0,
+        "prompt": str(params.get("prompt") or params.get("text") or params.get("label") or ""),
+        "studio": worker_id, "studio_job_id": job_id, "machine": "local",
+        "artifact_path": job.get("output_path"),
+        "worker_artifact_url": str(job.get("output_url") or f"/api/generate/jobs/{job_id}/{suffix}"),
+        "sha256": job.get("sha256"), "bytes": job.get("bytes"),
+        "media_type": job.get("media_type"),
+        "created_at": created_at, "run_started": job.get("started_at"),
+        "finished_at": job.get("finished_at") or now, "runtime_s": runtime,
+        "duration_s": job.get("audio_duration_s", runtime), "error": None,
+    }
+    ledger.save_batch({
+        "id": f"peer-{worker_id}-{job_id}",
+        "modality": modality,
+        "model": str(params.get("repo") or job.get("model") or ""),
+        "created_at": created_at, "finished_at": item["finished_at"],
+        "cancelled": False, "routing": "pool", "items": [item],
+    })
 
 
 async def _request_model(request: Request, body: bytes, content_type: str) -> str:

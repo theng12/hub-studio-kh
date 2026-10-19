@@ -3644,6 +3644,11 @@ final class NativeWorkspaceStore: ObservableObject {
     private var pendingMusic: HubMusicRequest?
     private var pendingTranscription: PendingTranscription?
     private var modelPackages: [String: HubModelPackage] = [:]
+    /// Whether the package list has never been read: the read is failing and no earlier answer is
+    /// held. Without a package row every model reads as unsupported, and that is otherwise
+    /// indistinguishable from a model this build's form cannot drive, so the Models page says which
+    /// of the two it is.
+    @Published private(set) var modelPackagesUnread = false
     private var hubDownloadRuns: [String: String] = [:]
     /// The last row read for each running Hub download, kept through a failed read; and the runs
     /// that ended this session, which are no longer polled but stay listed with their reason.
@@ -3980,9 +3985,11 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             // Built by merging, not uniqueKeysWithValues: a repeated id in a Hub payload would
             // trap the app on every refresh and on the two-second poll. Last one wins instead.
-            // An unreadable list is no rows, which the model builders already treat as "nothing
-            // can be installed or dispatched" rather than as a reason to give up on the page.
-            modelPackages = packagesValue?.models.reduce(into: [:]) { $0[$1.modelId] = $1 } ?? [:]
+            // A failed read keeps the last good rows rather than blanking them: a blip used to
+            // make every model read as unsupported and disable its Download button until the next
+            // poll, with the install state already known a moment earlier.
+            modelPackages = packagesValue?.models.reduce(into: [:]) { $0[$1.modelId] = $1 } ?? modelPackages
+            modelPackagesUnread = packagesValue == nil && modelPackages.isEmpty
             // Every preset roster the Voice runtime publishes, under the key the runtime itself
             // names it (`qwen3_preset_speakers` today, `<family>_preset_speakers` for the next
             // family). Decoding one fixed key was what left a second preset family with an empty

@@ -234,6 +234,42 @@ class StudioProxyTests(unittest.TestCase):
         self.assertIn("a quiet harbour", sent["body"])
         self.assertTrue(sent["content_type"].startswith("application/json"))
 
+    def test_a_controller_job_that_finishes_is_listed_in_this_nodes_history(self) -> None:
+        """The Mac that ran the work keeps the asset; its Jobs page must list it.
+
+        A node cannot own a controller's batch (`POST /api/hub/jobs` refuses in agent mode), so
+        the controller's own poll of the worker is the only place this node sees the job finish.
+        """
+        client = self.client()
+        headers = {"X-Hub-Token": TOKEN}
+        self.addCleanup(setattr, self.worker, "poll_job", {"id": "job-1", "state": "done"})
+        self.worker.poll_job = {"id": "peer-job-1", "state": "running"}
+        response = client.get("/studio/image/api/generate/jobs/peer-job-1", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        ids = [b["id"] for b in client.get("/api/hub/jobs", headers=headers).json()["batches"]]
+        self.assertNotIn("peer-image-peer-job-1", ids)
+
+        self.worker.poll_job = {
+            "id": "peer-job-1", "state": "done",
+            "params": {"repo": "owner/image-4bit", "prompt": "a quiet harbour"},
+            "created_at": 1000.0, "started_at": 1001.0, "finished_at": 1005.0,
+            "duration_seconds": 4.0, "output_path": "/tmp/out/peer-job-1.png",
+            "output_url": "/api/generate/jobs/peer-job-1/image",
+            "sha256": "abc123", "bytes": 3, "media_type": "image/png",
+        }
+        response = client.get("/studio/image/api/generate/jobs/peer-job-1", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        listed = client.get("/api/hub/jobs", headers=headers).json()["batches"]
+        row = next((b for b in listed if b["id"] == "peer-image-peer-job-1"), None)
+        self.assertIsNotNone(row, listed)
+        self.assertEqual(row["modality"], "image")
+        self.assertEqual(row["model"], "owner/image-4bit")
+        detail = client.get("/api/hub/jobs/peer-image-peer-job-1", headers=headers).json()
+        self.assertEqual(detail["items"][0]["state"], "done")
+        self.assertEqual(detail["items"][0]["machine"], "local")
+        self.assertEqual(detail["items"][0]["prompt"], "a quiet harbour")
+        self.assertEqual(detail["items"][0]["artifact_path"], "/tmp/out/peer-job-1.png")
+
     def test_an_artifact_comes_back_byte_for_byte_with_its_receipt(self) -> None:
         client = self.client()
         headers = {"X-Hub-Token": TOKEN}

@@ -297,15 +297,21 @@ final class StudioController: ObservableObject {
     }
     /// Show the model library where it is, selected in its folder.
     ///
-    /// **A folder that is not here is not revealed.** Finder on a missing path opens on nothing, so
-    /// the existence is checked first - the same discipline `revealArtifact` uses for a finished
-    /// job's file - and the caller can say why instead of doing nothing.
+    /// **A missing folder is created, not refused.** The operator needs this to reach a fresh
+    /// Mac's library before it holds anything, so models can be copied in by hand. The resolved
+    /// folder - the selected one, else the default resolver's answer (`~/StudioHubModels`) - is
+    /// created with its parents first. A folder on a disconnected drive still fails, and the
+    /// failure is reported rather than leaving the button looking dead.
     @discardableResult
     func revealLibrary() -> Bool {
-        guard let url = configuration.modelsDirectory else { return false }
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else { return false }
+        let url = configuration.modelsDirectory
+            ?? ShellConfiguration.defaultLibraryFolder(dataDirectory: configuration.dataDirectory)
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        } catch {
+            failure = error.localizedDescription
+            return false
+        }
         NSWorkspace.shared.activateFileViewerSelecting([url])
         return true
     }
