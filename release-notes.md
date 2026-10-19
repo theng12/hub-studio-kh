@@ -2,6 +2,39 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.189 — 2026-10-19
+
+### A Mac is no longer asked for memory it can never have
+
+The app decides whether a Mac has enough free memory to start a model, and asks it to wait if it
+does not. It was also asking that of Macs whose whole installed memory could never clear the
+number — a floor of more than 8 GB on an 8 GB Mac, say — so the job sat waiting behind a Mac that
+was never going to take it. Those Macs are now skipped, and a Mac that is merely busy or short of
+free memory right now still waits exactly as before.
+
+### The memory a voice model asks for is the number its own row publishes
+
+Two numbers were in play for the same model: the memory measured and published on the model's own
+row, and a formula worked out from the model's size. The larger of the two won, so VoxCPM2 4-bit
+asked for **3.55 GB** when its own row says **2.8 GB** — and the app would send a job to an 8 GB Mac
+that the voice worker then refused, saying it needed about 3.5 GB free and had about 3.4. The row's
+own number is now the one used. The formula survives only where nobody has measured the model yet.
+
+### One number, one home
+
+The same free-memory figure also had a second copy in a table inside the Hub, and that copy was the
+one actually enforced — so editing the model's own row quietly did nothing. The table now holds only
+the different fact it is qualified for (a model's *total* memory need), and the live-free figure
+comes from the model's row alone.
+
+### The Models pane tells you whose number is in force
+
+Under "Memory to start a job" each model now shows **Free before start** and its **Source** — "model
+default" when it is the model's own figure, or "your setting" when you have overridden it. While
+your setting is in force there is a **Reset to default** button, which puts the model's own number
+back. That override belongs to this Mac and is stored nowhere else, so this screen is the only place
+it can be seen and the only way back.
+
 ## 0.6.188 — 2026-10-19
 
 ### Chat answers can be much longer
