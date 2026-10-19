@@ -326,6 +326,75 @@ class TrashRefused(Exception):
         self.status, self.body = status, {"ok": False, "code": code, "detail": detail, **extra}
 
 
+# ── macOS's own Trash preference (owner request 2026-10-19) ─────────────────────────────────────────
+# Finder > Settings > Advanced > "Remove items from the Trash after 30 days" is the preference
+# `com.apple.finder FXRemoveOldTrashItems`. Every retirement in this module ends in macOS Trash, so a
+# Mac without it fills its disk until someone empties the Trash by hand - and the owner could not tell
+# which of ~53 Macs had it. It is read here, published in the `startup` report the Gateway already
+# reads, and turned **on** - never off - on request. Nothing here runs on its own.
+
+FINDER_DOMAIN = "com.apple.finder"
+FINDER_TRASH_KEY = "FXRemoveOldTrashItems"
+#: `defaults` is a process, and this is read on every health, resource and roster poll.
+FINDER_READ_TTL_S = 60.0
+_finder_read: tuple[float, bool | None] = (0.0, None)
+
+
+def _defaults(*arguments: str) -> subprocess.CompletedProcess | None:
+    """`defaults` with a timeout, or `None` when it could not be run at all."""
+    try:
+        return subprocess.run(["/usr/bin/defaults", *arguments], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def finder_trash_auto_empty(*, now: float | None = None, fresh: bool = False) -> bool | None:
+    """Whether this Mac's Finder removes Trash items after 30 days: `True`, `False`, or `None` unknown.
+
+    The key is written only when the box is ticked, so **absent is off** - that is macOS's own default
+    and a real answer, not a failed read. `None` is reserved for a `defaults` that could not be run or
+    answered something unusable, and the Fleet page shows it as unknown rather than as off. Cached for
+    `FINDER_READ_TTL_S`; `fresh=True` re-reads, which is what verifies a write.
+    """
+    global _finder_read
+    moment = time.time() if now is None else float(now)
+    stamped, value = _finder_read
+    if not fresh and stamped and moment - stamped < FINDER_READ_TTL_S:
+        return value
+    read = _defaults("read", FINDER_DOMAIN, FINDER_TRASH_KEY)
+    if read is None:
+        value = None
+    elif read.returncode == 0:
+        value = read.stdout.strip().lower() in ("1", "true", "yes")
+    elif read.returncode == 1:
+        value = False                    # "does not exist": macOS's default, which is off
+    else:
+        value = None
+    _finder_read = (moment, value)
+    return value
+
+
+def enable_finder_trash_auto_empty() -> dict:
+    """Turn it on for the user this Hub runs as, then read it back. There is no way to turn it off.
+
+    `defaults write` goes through cfprefsd in the same user session Finder reads its preferences from,
+    so Finder sees the change without being restarted - its own Settings pane writes this same key the
+    same way. **Nothing here kills Finder.** The answer is the value **read back**, not the write's exit
+    code: a write that did not stick is a refusal, not a success.
+    """
+    written = _defaults("write", FINDER_DOMAIN, FINDER_TRASH_KEY, "-bool", "true")
+    if written is None:
+        raise TrashRefused(503, "DEFAULTS_UNAVAILABLE", "`defaults` could not be run on this Mac.")
+    if written.returncode != 0:
+        raise TrashRefused(500, "WRITE_FAILED",
+                           (written.stderr or "`defaults write` failed").strip()[:300])
+    state = finder_trash_auto_empty(fresh=True)
+    if state is not True:
+        raise TrashRefused(500, "NOT_APPLIED",
+                           "The preference was written but does not read back as on.")
+    return {"macos_trash_auto_empty": True, "finder_restart_required": False}
+
+
 def _real_day(day: Path, real_root: Path) -> bool:
     """A date folder that is a real folder (not a link) whose real path is directly in the Trash Folder."""
     try:
@@ -441,6 +510,8 @@ def trash_overview(now: float | None = None) -> dict:
         row["primary"] = base == primary
         roots.append(row)
     result["roots"] = roots
+    # macOS's own Trash setting, beside the folder it feeds: the app shows it and offers to turn it on.
+    result["macos_trash_auto_empty"] = finder_trash_auto_empty()
     return result
 
 

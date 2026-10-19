@@ -1650,6 +1650,20 @@ struct NativeTrashFolder: Decodable, Equatable {
     let count: Int
     let bytes: Int64
     let roots: [NativeTrashRoot]
+    /// macOS's own "Remove items from the Trash after 30 days" (`com.apple.finder
+    /// FXRemoveOldTrashItems`). Everything moved here lands in macOS Trash, so without it the Trash
+    /// fills until the owner empties it by hand. `nil` is a Hub that predates the field - unknown,
+    /// never off. The Hub can turn it on and has no route that turns it off.
+    let macosTrashAutoEmpty: Bool?
+}
+
+/// The answer to `POST /api/hub/macos-trash-auto-empty/enable`: the value **read back** after the write.
+struct NativeTrashEnable: Decodable, Equatable {
+    let ok: Bool
+    let macosTrashAutoEmpty: Bool?
+    /// False: the Hub writes the preference through cfprefsd, the same path Finder's own Settings pane
+    /// uses, so Finder is not restarted. Stated rather than assumed.
+    let finderRestartRequired: Bool?
 }
 
 struct NativeTrashRoot: Decodable, Equatable, Identifiable {
@@ -3373,6 +3387,8 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var trashFolder: NativeTrashFolder?
     @Published private(set) var trashNote: String?
     @Published private(set) var movingTrash = false
+    /// True while the Hub is writing macOS's Trash preference; the button shows a spinner.
+    @Published private(set) var turningOnTrashAutoEmpty = false
     @Published private(set) var storageNote: String?
     @Published private(set) var savingStorage = false
     /// Measured generation history from the Hub, refreshed on demand.
@@ -3832,6 +3848,7 @@ final class NativeWorkspaceStore: ObservableObject {
         trashFolder = nil
         trashNote = nil
         movingTrash = false
+        turningOnTrashAutoEmpty = false
         storageNote = nil
         savingStorage = false
         modelNote = nil
@@ -6472,6 +6489,31 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch {
             if connectionID == requestConnection {
                 trashNote = Self.actionable(error, action: "Move the Trash Folder to macOS Trash")
+            }
+        }
+    }
+
+    /// Turn on macOS's "Remove items from the Trash after 30 days" for this Mac's user
+    /// (`POST /api/hub/macos-trash-auto-empty/enable`). **One way only** - the Hub has no route that
+    /// turns it off - and the answer is the value the Hub read back, not the write's exit code. The
+    /// Hub writes it through cfprefsd, the same path Finder's own Settings pane uses, and does not
+    /// restart Finder.
+    func enableMacosTrashAutoEmpty() async {
+        guard let requestConnection = connectionID else { return }
+        turningOnTrashAutoEmpty = true
+        trashNote = nil
+        defer { if connectionID == requestConnection { turningOnTrashAutoEmpty = false } }
+        do {
+            let answer: NativeTrashEnable = try await sendJSON(
+                ["api", "hub", "macos-trash-auto-empty", "enable"], method: "POST", body: EmptyBody())
+            guard connectionID == requestConnection else { return }
+            await refreshTrash()
+            trashNote = answer.macosTrashAutoEmpty == true
+                ? "macOS will now remove items from the Trash after 30 days."
+                : "The Hub wrote the setting but did not read it back as on."
+        } catch {
+            if connectionID == requestConnection {
+                trashNote = Self.actionable(error, action: "Turn on macOS's Trash setting")
             }
         }
     }

@@ -165,7 +165,13 @@ def snapshot(studios: dict[str, str] | None = None, *, app_version: str | None =
 
     ``open_at_login`` / ``start_services_on_launch`` are ``None`` when the app has not reported -
     unknown is a different fact from off, and the Fleet page shows it as such.
+
+    ``macos_trash_auto_empty`` is this Mac's Finder "Remove items from the Trash after 30 days"
+    (``com.apple.finder FXRemoveOldTrashItems``, owner request 2026-10-19). It belongs to macOS, not
+    to the app, so this process reads it itself - it runs as the logged-in user. Every retirement
+    this Hub makes ends in macOS Trash, so a Mac without it fills its disk. ``None`` is unknown.
     """
+    from .. import output_storage
     moment = time.time() if now is None else now
     with _lock:
         app = dict(_app)
@@ -186,6 +192,7 @@ def snapshot(studios: dict[str, str] | None = None, *, app_version: str | None =
         "last_start_at": round(_started_at, 3),
         "app_reporting": fresh,
         "reported_at": round(reported, 3) if reported else None,
+        "macos_trash_auto_empty": output_storage.finder_trash_auto_empty(now=moment),
     }
 
 

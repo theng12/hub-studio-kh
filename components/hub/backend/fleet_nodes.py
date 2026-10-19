@@ -222,6 +222,7 @@ def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = 
             row["last_startup"] = {
                 "open_at_login": known.get("open_at_login"),
                 "start_services_on_launch": known.get("start_services_on_launch"),
+                "macos_trash_auto_empty": known.get("macos_trash_auto_empty"),
                 "observed_at": now,
             }
         stop = last_stop_of((last_stops or {}).get(node_id))
@@ -724,6 +725,7 @@ def _last_known_startup(row: dict[str, Any]) -> dict[str, Any] | None:
         return None
     return {"open_at_login": known.get("open_at_login"),
             "start_services_on_launch": known.get("start_services_on_launch"),
+            "macos_trash_auto_empty": known.get("macos_trash_auto_empty"),
             "stale": True, "observed_at": known.get("observed_at"),
             "services_running": None, "app_reporting": False}
 
