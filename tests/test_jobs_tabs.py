@@ -155,8 +155,11 @@ class JobsTabTests(unittest.TestCase):
         """The honest empty state, for a build running before the Hub records any."""
         jobs = VIEWS[VIEWS.index("private var jobsWorkspace"):]
         jobs = jobs[:jobs.index("\n    private func")]
-        # Named by the sidebar's own word ("No subtitle jobs yet", not "No transcription jobs yet").
-        self.assertIn('jobs yet.', jobs)
+        # Named by the sidebar's own word ("No subtitle jobs from this Mac or its nodes yet", not
+        # "No transcription jobs..."), and it names the Macs the "Made on" filter is showing.
+        self.assertIn("jobs from \\(source) yet.", jobs)
+        self.assertIn('jobMachineFilter == .thisMac ? "this Mac"', jobs,
+                      "an empty section must name which Macs it is empty of")
         self.assertIn("StudioPage.page(for: history.function)?.title", jobs,
                       "an empty section must still say so per Studio, in the sidebar's name for it")
 

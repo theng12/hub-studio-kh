@@ -66,7 +66,8 @@ with TestClient(app) as client:
   except OSError: pass
  assert registry.FLAGS_FILE.read_bytes()==before_file
  assert registry.load_flags()==before_cache
- assert list(registry.DATA_DIR.glob('.machine_flags.json-*')), 'failed write was deleted'
+ # Retained, never deleted: the orphan is retired into the Hub's one Trash Folder.
+ assert list(registry.DATA_DIR.rglob('.machine_flags.json-*')), 'failed write was deleted'
  registry._flags_cache={'legacy':{'enabled':False,'chat_priority':True,
                                   'studios':{'voice':{'enabled':False}}}}
  assert registry.priority_order('legacy')==['chat']

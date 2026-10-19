@@ -333,21 +333,25 @@ class TheAppOffersOneDefaultTests(unittest.TestCase):
         self.assertIn("defaultDataDirectory(home: home)", prepared,
                       "with no data directory to hand it must look under the same home folder")
 
-    def test_the_reveal_checks_the_folder_exists_first(self):
-        """A reveal Finder cannot perform is disabled and explained rather than silently doing nothing."""
+    def test_the_reveal_creates_a_missing_folder_then_reveals_it(self):
+        """A missing folder is created rather than refused, so a fresh Mac's library is reachable."""
         app = _text(SWIFT_APP)
         self.assertIn("func revealLibrary() -> Bool", app)
         body = app.split("func revealLibrary() -> Bool", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("createDirectory", body)
+        self.assertIn("withIntermediateDirectories: true", body)
         self.assertIn("activateFileViewerSelecting", body)
-        self.assertIn("fileExists", body)
-        self.assertIn("isDirectory.boolValue", body)
+        self.assertIn("ShellConfiguration.defaultLibraryFolder", body,
+                      "with no folder selected the reveal creates the resolver's own answer")
+        self.assertIn("failure = error.localizedDescription", body,
+                      "a reveal that cannot create the folder reports why")
 
     def test_both_views_show_the_location_and_the_reveal(self):
         views = _text(SWIFT_VIEWS)
         self.assertGreaterEqual(views.count("studio.revealLibrary()"), 2,
                                 "the Settings row and the Models page must both reveal the library")
-        self.assertGreaterEqual(views.count("studio.libraryFolderExists"), 4,
-                                "each reveal is disabled and explained when the folder is missing")
+        self.assertNotIn(".disabled(!studio.libraryFolderExists)", views,
+                         "a missing folder is created by the reveal, never a dead button")
         self.assertIn("HubSection(\"Model library\")", views)
 
 
