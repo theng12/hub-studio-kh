@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.190 — 2026-10-20
+
+One tested feature branch was merged over verified main `5aab40e` (0.6.189) in worktree
+`_worktrees/studio-hub-kh/release-190`: `feat/dynamic-chat-deadline` (`3968341`). No native source
+moves, so the app binary is unchanged.
+
+- **A chat job's time limit is now sized to the job instead of being one flat number for everybody.** The lane's flat 1,800 s came from one real measurement — 30 scenes at ~403 tokens each on an M1 — and was then applied to every job. It cut the longest job the fleet plans, a 100-prompt scene pack (~4,072 s on an M1), roughly in half, while holding the same Mac for the same thirty minutes for a one-line question. `components/hub/backend/chat_deadline.py` now computes the limit from the job itself: model load, plus the prompt at this Mac's prefill rate, plus the expected answer at this Mac's **measured** decode rate — the worker's own stated `generation_tps`, which the Hub already polls every five seconds — times 1.5, clamped to **1,800 s floor and 14,400 s ceiling**. Where a Mac has never run a Chat job the stated per-chip figure is used, and the job's note says which of the two it was.
+- **The expected answer is a real expectation, never the ceiling.** It is the caller's `expected_output_tokens` when sent, else a pack's own scene count, else the p90 of the fleet's own 1,122 measured answers. `max_tokens` is deliberately not used: it is a ceiling, and sizing from it would make every job three hours long.
+- **A job that stops writing is stopped, and says so.** A chat job that produces no new token for **five minutes** is stopped with "stopped: no new text for 5 minutes", distinct from the deadline stop in both words and code. The signal already existed — the chat worker publishes `generation_tokens` on every token. Where a worker publishes no activity at all the stall never fires, because an unseeing Hub is not a quiet worker.
+- **The pack lane's flat 600 s read timeout was the same defect one lane over** and is now the pack's own computed limit. `deadline_s` and `deadline_note` are recorded on the job row and the pack row, so the limit and the arithmetic behind it are readable where the job is — which is what the job detail shows.
+- Tests: `tests/test_chat_job_deadline.py` (new) pins the sizing arithmetic, the floor and ceiling, the per-chip fallback and its note, the stall stop and the unseeing-worker case; `tests/test_chat_priority.py` and `tests/test_hub_job_deadline.py` follow the new limit.
+
 ## 0.6.189 — 2026-10-19
 
 Two tested fix commits were merged over verified main `7c4b233` (0.6.188) in worktree

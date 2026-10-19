@@ -2,6 +2,35 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.190 — 2026-10-20
+
+### Chat work gets the time it actually needs — and no more
+
+Every chat job used to get the same time limit: thirty minutes, whatever it was. That was one
+measurement applied to everything. A one-line question held the Mac for the full thirty minutes, and
+the biggest job the app plans — a hundred-prompt scene pack — was cut off roughly half way through
+because it genuinely needs about an hour.
+
+The limit is now worked out from the job itself: how long that Mac takes to load the model, to read
+the prompt, and to write the answer it is actually expecting — times one and a half, with a floor of
+thirty minutes and a ceiling of four hours. The expected answer comes from what the caller asked for,
+or from a pack's own number of scenes, or from the ninety-percent figure across the answers this
+fleet has already produced — never from the maximum the model could emit, which would make every job
+three hours long. Where a Mac has never run a chat job, the published figure for that Mac's chip is
+used, and the job says which of the two it was.
+
+### A chat job that goes quiet is stopped, and told you why
+
+If a chat job writes nothing at all for five minutes it is stopped, with a reason that says so —
+"stopped: no new text for 5 minutes" — which is a different outcome from running out of time. A
+worker that reports nothing about its activity is left alone: not hearing from it is not the same as
+knowing it is stuck.
+
+### You can see the limit and where it came from
+
+A chat job (and a pack) now carries the limit it was given and the working behind it, so the job
+detail shows both the number and how it was reached, instead of an unexplained thirty minutes.
+
 ## 0.6.189 — 2026-10-19
 
 ### A Mac is no longer asked for memory it can never have
