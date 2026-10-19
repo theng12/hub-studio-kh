@@ -635,11 +635,18 @@ FLEET_ALLOWED = (
     # The Gateway allows the delete only from the owner's own app window. Not in `NODE_ALLOWED`.
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/trash$"),
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/trash/(move-to-macos-trash|delete)$"),
+    # **macOS's own Trash setting, turned on from the Gateway (owner request 2026-10-19, Studio Hub
+    # 0.6.187).** Finder > Settings > Advanced > "Remove items from the Trash after 30 days". Every
+    # retirement the Hub makes ends in macOS Trash, so a Mac without it fills its disk. One way only:
+    # there is no route here that turns it off. Not in `NODE_ALLOWED` - a leaf Mac cannot change
+    # another Mac's setting.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/macos-trash-auto-empty/enable$"),
     # **This Mac's unified Trash Folder in the app (owner request 2026-10-15).** Listing and the
     # recoverable macOS Trash handoff only; there is no permanent-delete route here, so a fleet
     # credential can gather the retired files but not destroy them.
     ("GET", r"^/api/hub/trash$"),
     ("POST", r"^/api/hub/trash/move-to-macos-trash$"),
+    ("POST", r"^/api/hub/macos-trash-auto-empty/enable$"),
     ("GET", r"^/api/hub/workstation$"),
     ("POST", r"^/api/hub/workstation$"),
     # **"Set this Mac's group membership."** A4's rotation and A3's handover are the same

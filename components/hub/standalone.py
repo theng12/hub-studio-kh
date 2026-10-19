@@ -2878,6 +2878,57 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             items=body.get("items"), confirm=body.get("confirm"),
             expected_count=body.get("expected_count"), expected_bytes=body.get("expected_bytes")))
 
+    # **macOS's own Trash setting (owner request 2026-10-19).** Finder > Settings > Advanced >
+    # "Remove items from the Trash after 30 days" is `com.apple.finder FXRemoveOldTrashItems`. Every
+    # retirement this Hub makes ends in macOS Trash, so a Mac without it fills its disk until someone
+    # empties it by hand - and the owner could not tell which of ~53 Macs had it. **One way only**:
+    # nothing here turns it off, and no route reads a body. A node is reached the same way the Trash
+    # Folder routes reach it (its controller, on the fleet credential, with an audit line), and the
+    # app's own button calls the same code with `local`, so there is one implementation.
+    MACOS_TRASH_HUB = "0.6.187"
+    MACOS_TRASH_TOO_OLD = (f"That Mac needs Studio Hub {MACOS_TRASH_HUB} to turn on macOS's Trash "
+                           "setting from the Gateway.")
+
+    async def _enable_macos_trash(node_id: str, request: Request) -> JSONResponse:
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            startup_control.audit("macos_trash_relay", {"node": wanted, "actor": actor})
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "POST", "/macos-trash-auto-empty/enable", payload={},
+                    timeout=httpx.Timeout(60.0, connect=4.0),
+                    feature=f"turning on macOS's Trash setting from the Gateway (Studio Hub {MACOS_TRASH_HUB})"))
+            except fleet.StartupRelayError as error:
+                if error.body.get("code") == "NODE_REFUSED" or error.status in (404, 405):
+                    return JSONResponse({"ok": False, "code": "HUB_TOO_OLD", "needs_hub": MACOS_TRASH_HUB,
+                                         "detail": MACOS_TRASH_TOO_OLD}, status_code=409)
+                return JSONResponse(error.body, status_code=error.status)
+        try:
+            result = await run_in_threadpool(output_storage.enable_finder_trash_auto_empty)
+        except output_storage.TrashRefused as refusal:
+            startup_control.audit("macos_trash", {"actor": actor, "refused": refusal.body["code"]})
+            return JSONResponse(refusal.body, status_code=refusal.status)
+        startup_control.audit("macos_trash", {"actor": actor, "ok": result.get("ok")})
+        # `state: applied` is the vocabulary the startup requests already use, and it is true here: the
+        # value was read back. The bulk run on the Gateway reads it, so one Mac's answer and all Macs'
+        # answers are the same shape.
+        return JSONResponse({**result, "state": "applied", "node": wanted, "hub_version": _app_version()})
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/macos-trash-auto-empty/enable")
+    async def fleet_node_enable_macos_trash(node_id: str, request: Request) -> JSONResponse:
+        """Turn on this Mac's Finder Trash preference (or, relayed, a node's). Never turns it off."""
+        return await _enable_macos_trash(node_id, request)
+
+    @app.post("/api/hub/macos-trash-auto-empty/enable")
+    async def hub_enable_macos_trash(request: Request) -> JSONResponse:
+        """The same for this Mac, called by its own app with the Hub token. Never turns it off."""
+        return await _enable_macos_trash("local", request)
+
     # **This Mac's Trash Folder in the app (owner request 2026-10-15).** The same unified root the
     # Gateway manages: list it (with its per-root detail) and move its contents to macOS Trash. The
     # app never deletes permanently; the owner empties macOS Trash himself.

@@ -6749,6 +6749,34 @@ struct StudioContent: View {
         }.padding(.vertical, 2)
     }
 
+    /// macOS's own Trash setting, beside the folder that feeds it (owner request 2026-10-19).
+    ///
+    /// Finder > Settings > Advanced > "Remove items from the Trash after 30 days". Everything the Hub
+    /// retires ends in macOS Trash, so without this the disk fills until the owner empties it by hand -
+    /// and across the fleet nobody could tell which Mac had it. **One way only**: the Hub can turn it on
+    /// and has no route that turns it off, so this is a button, never a switch to flick back. `nil` is a
+    /// Hub too old to report it, said as such rather than drawn as off.
+    @ViewBuilder private var macosTrashSetting: some View {
+        if let folder = workspace.trashFolder {
+            let state = folder.macosTrashAutoEmpty
+            ValueRow("Remove Trash items after 30 days") {
+                HStack(spacing: HubSpace.s) {
+                    Text(state == true ? "On" : state == false ? "Off" : "Not reported")
+                        .foregroundStyle(state == false ? HubStatus.warn.textColor : .secondary)
+                    if state == false {
+                        Button("Turn on") { Task { await workspace.enableMacosTrashAutoEmpty() } }
+                            .disabled(!connected || workspace.turningOnTrashAutoEmpty)
+                        if workspace.turningOnTrashAutoEmpty { ProgressView().controlSize(.small) }
+                    }
+                }
+            }
+            Text("A macOS setting, not Studio Hub's. Files moved to macOS Trash are removed by Finder "
+                 + "after 30 days, which is what stops that Trash from filling the disk.")
+                .font(HubType.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func memoryStateLabel(_ state: String) -> String {
         switch state {
         case "offline": return "Not running"
@@ -6810,6 +6838,7 @@ struct StudioContent: View {
                 ValueRow("Trash Folder", value: "\(NativeWorkspaceStore.gigabytes(trash.bytes)), items older than \(settings.effective.trashHandoffDays ?? 7) days or beyond \(settings.effective.trashHandoffGb ?? 20) GB go to macOS Trash")
                 Button("Show Trash Folder in Finder") { NSWorkspace.shared.activateFileViewerSelecting([HubTrash.live]) }
             }
+            macosTrashSetting
             ForEach(workspace.storageUsage) { usage in
                 VStack(alignment: .leading, spacing: HubSpace.xs) {
                     HStack {
