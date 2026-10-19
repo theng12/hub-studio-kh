@@ -17,10 +17,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from components.hub import output_storage, standalone_config  # noqa: E402
+from components.hub import disk_governor, output_storage, standalone_config  # noqa: E402
 from components.hub.backend import auth, ledger  # noqa: E402
 
 DAY = 86400.0
+GB = 1_000_000_000
 
 
 def day_stamp(now: float, days_ago: float) -> str:
@@ -109,6 +110,81 @@ class HandoffTests(Fixture):
             self.assertTrue(edge.exists())
             self.assertEqual(output_storage.trash_handoff(7, now=now)["moved_count"], 1)
 
+    def test_an_invalid_age_with_no_cap_moves_nothing(self) -> None:
+        now = time.time()
+        old = self.put(self.trash, f"{day_stamp(now, 90)}/old_1")
+        with mock.patch.object(output_storage, "_macos_trash", self.move_to_macos):
+            result = output_storage.trash_handoff(0, now=now)
+        self.assertEqual(result["moved_count"], 0)
+        self.assertTrue(old.exists())
+
+
+class SizeCapTests(Fixture):
+    """The Trash Folder's own size cap (owner rule 2026-10-19): the OLDEST items go to macOS Trash
+    until the unified Trash Folder is under the cap. Nothing is ever permanently deleted."""
+
+    def sizes(self, mapping: dict[str, int]):
+        return mock.patch.object(disk_governor, "cached_physical",
+                                 lambda path, _now: mapping[Path(path).name])
+
+    def move_to_macos(self, paths: list[str]) -> list[str]:
+        destination = self.root / "macOS Trash"
+        destination.mkdir(exist_ok=True)
+        for path in paths:
+            os.rename(path, destination / Path(path).name)
+        return ["ok"] * len(paths)
+
+    def test_the_oldest_items_go_first_until_the_trash_folder_is_under_the_cap(self) -> None:
+        now = time.time()
+        oldest = self.put(self.trash, f"{day_stamp(now, 9)}/old_1")
+        middle = self.put(self.trash, f"{day_stamp(now, 5)}/mid_1")
+        newest = self.put(self.trash, f"{day_stamp(now, 1)}/new_1")
+        with self.sizes({"old_1": 12 * GB, "mid_1": 12 * GB, "new_1": 12 * GB}), \
+                mock.patch.object(output_storage, "_macos_trash", self.move_to_macos):
+            result = output_storage.trash_handoff(365, 20 * GB, now=now)   # no item is a year old
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["trash_bytes"], 36 * GB)
+        self.assertEqual(result["moved_count"], 2)          # 36 GB -> 12 GB, under the 20 GB cap
+        self.assertFalse(result["over_cap"])
+        self.assertFalse(oldest.exists())
+        self.assertFalse(middle.exists())
+        self.assertTrue(newest.exists(), "the newest item must not go once the cap is met")
+
+    def test_the_cap_counts_every_root_but_only_the_hubs_own_items_move(self) -> None:
+        now = time.time()
+        mine = self.put(self.trash, f"{day_stamp(now, 1)}/mine")
+        fallback = self.root / "external" / output_storage.FALLBACK_TRASH_NAME
+        self.put(fallback, f"{day_stamp(now, 1)}/theirs")
+        with mock.patch.object(output_storage, "_trash_bases", lambda: [self.trash, fallback]), \
+                self.sizes({"mine": 5 * GB, "theirs": 30 * GB}), \
+                mock.patch.object(output_storage, "_macos_trash", self.move_to_macos):
+            result = output_storage.trash_handoff(365, 20 * GB, now=now)
+        self.assertEqual(result["trash_bytes"], 35 * GB)     # counted honestly, every root
+        self.assertEqual(result["moved_count"], 1)           # the Hub's own item, young as it is
+        self.assertFalse(mine.exists())
+        self.assertTrue(result["over_cap"], "another root still holds it over the cap")
+
+    def test_a_failed_move_leaves_the_item_in_the_trash_folder(self) -> None:
+        now = time.time()
+        item = self.put(self.trash, f"{day_stamp(now, 1)}/mine")
+        with self.sizes({"mine": 30 * GB}), \
+                mock.patch.object(output_storage, "_macos_trash", lambda paths: ["refused"] * len(paths)):
+            result = output_storage.trash_handoff(365, 20 * GB, now=now)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["moved_count"], 0)
+        self.assertEqual(len(result["failed"]), 1)
+        self.assertTrue(item.exists())
+        self.assertTrue(result["over_cap"])
+
+    def test_neither_rule_eligible_moves_nothing(self) -> None:
+        now = time.time()
+        young = self.put(self.trash, f"{day_stamp(now, 1)}/young_1")
+        with self.sizes({"young_1": 5 * GB}), \
+                mock.patch.object(output_storage, "_macos_trash", self.move_to_macos):
+            result = output_storage.trash_handoff(365, 20 * GB, now=now)
+        self.assertEqual((result["moved_count"], result["over_cap"]), (0, False))
+        self.assertTrue(young.exists())
+
 
 class AdoptLegacyTests(Fixture):
     def sources(self) -> list[tuple[Path, str]]:
@@ -183,15 +259,75 @@ class HandoffSettingTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_the_default_is_seven_days_and_the_owner_can_change_it(self) -> None:
-        self.assertEqual(standalone_config.load_device_settings()["defaults"]["trash_handoff_days"], 7)
+    def test_the_default_is_seven_days_and_twenty_gb_and_the_owner_can_change_both(self) -> None:
+        defaults = standalone_config.load_device_settings()["defaults"]
+        self.assertEqual((defaults["retention_days"], defaults["trash_handoff_days"],
+                          defaults["trash_handoff_gb"]), (7, 7, 20))
         saved = standalone_config.save_device_settings(
-            max_bytes=20_000_000_000, retention_days=3, trash_handoff_days=14)
-        self.assertEqual(saved["effective"]["trash_handoff_days"], 14)
+            max_bytes=20_000_000_000, retention_days=3, trash_handoff_days=14, trash_handoff_gb=50)
+        self.assertEqual((saved["effective"]["trash_handoff_days"], saved["effective"]["trash_handoff_gb"]),
+                         (14, 50))
         restored = standalone_config.restore_device_defaults()
-        self.assertEqual(restored["effective"]["trash_handoff_days"], 7)
+        self.assertEqual((restored["effective"]["retention_days"], restored["effective"]["trash_handoff_days"],
+                          restored["effective"]["trash_handoff_gb"]), (7, 7, 20))
         with self.assertRaises(ValueError):
             standalone_config.update_device_settings(trash_handoff_days=0)
+        with self.assertRaises(ValueError):
+            standalone_config.update_device_settings(trash_handoff_gb=0)
+        with self.assertRaises(ValueError):
+            standalone_config.update_device_settings(trash_handoff_gb=True)
+
+
+class DefaultsMigrationTests(unittest.TestCase):
+    """The 7-day rule reaches a Mac that never changed the setting, and never overrides one that did."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(os.path.realpath(temporary.name))
+        patcher = mock.patch.dict(os.environ, {"STUDIOHUB_DATA_DIR": str(self.root)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write(self, value: dict) -> None:
+        (self.root / "device_settings.json").write_text(json.dumps(value))
+
+    def test_an_untouched_3_day_default_of_version_2_becomes_7(self) -> None:
+        self.write({"max_bytes": 20_000_000_000, "retention_days": 3, "minimum_free_bytes": 5_000_000_000,
+                    "cleanup_enabled": True, "cleanup_interval_seconds": 300, "trash_handoff_days": 7,
+                    "defaults_version": 2})
+        effective = standalone_config.load_device_settings()["effective"]
+        self.assertEqual((effective["retention_days"], effective["trash_handoff_days"],
+                          effective["trash_handoff_gb"]), (7, 7, 20))
+
+    def test_a_chosen_value_survives_a_file_with_or_without_a_version(self) -> None:
+        for version in (None, 2, 3):
+            with self.subTest(version=version):
+                value = {"max_bytes": 60_000_000_000, "retention_days": 14, "trash_handoff_days": 30,
+                         "trash_handoff_gb": 5, "minimum_free_bytes": 2_000_000_000}
+                if version is not None:
+                    value["defaults_version"] = version
+                self.write(value)
+                effective = standalone_config.load_device_settings()["effective"]
+                self.assertEqual((effective["max_bytes"], effective["retention_days"],
+                                  effective["trash_handoff_days"], effective["trash_handoff_gb"]),
+                                 (60_000_000_000, 14, 30, 5))
+
+    def test_a_file_already_at_the_current_version_is_not_migrated(self) -> None:
+        self.write({"max_bytes": 20_000_000_000, "retention_days": 3, "defaults_version": 3})
+        self.assertEqual(standalone_config.load_device_settings()["effective"]["retention_days"], 3)
+
+    def test_the_pre_06117_defaults_still_migrate(self) -> None:
+        self.write({"max_bytes": 50_000_000_000, "retention_days": 30, "minimum_free_bytes": 1_000_000_000})
+        effective = standalone_config.load_device_settings()["effective"]
+        self.assertEqual((effective["max_bytes"], effective["retention_days"],
+                          effective["minimum_free_bytes"]), (20_000_000_000, 7, 5_000_000_000))
+
+    def test_saving_a_value_stamps_the_version_so_it_is_never_migrated_again(self) -> None:
+        standalone_config.save_device_settings(max_bytes=20_000_000_000, retention_days=3)
+        self.assertEqual(json.loads((self.root / "device_settings.json").read_text())["defaults_version"],
+                         standalone_config._DEFAULTS_VERSION)
+        self.assertEqual(standalone_config.load_device_settings()["effective"]["retention_days"], 3)
 
 
 class RouteTests(unittest.TestCase):
@@ -330,10 +466,11 @@ class SubtitleInputRetirementTests(unittest.TestCase):
         return folder
 
     def test_an_expired_recording_is_retired_and_a_record_keeps_its_input(self) -> None:
-        from components import job_history
-        expired = self.put("upload-expired", job_history.RETENTION_DAYS + 1)
-        kept_by_record = self.put("upload-record", job_history.RETENTION_DAYS + 1)
-        young = self.put("upload-young", 1)
+        window = self.manager.INPUT_RETENTION_DAYS
+        self.assertEqual(window, 7, "a subtitle input follows the shared 7-day output retention")
+        expired = self.put("upload-expired", window + 1)
+        kept_by_record = self.put("upload-record", window + 1)
+        young = self.put("upload-young", window - 1)
         self.subject.jobs["j1"] = {"id": "j1", "state": "done",
                                    "input": {"original_path": str(kept_by_record / "original.wav")}}
         retired = []

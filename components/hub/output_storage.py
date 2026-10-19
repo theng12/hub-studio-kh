@@ -474,41 +474,61 @@ def trash_to_macos(items: object) -> dict:
     return {"ok": not failed, "moved": moved, "moved_count": len(moved), "failed": failed}
 
 
-def trash_handoff(days: int, now: float | None = None) -> dict:
-    """Move items that have sat in the Trash Folder longer than `days` to macOS Trash.
+def trash_handoff(days: int, max_bytes: int | None = None, now: float | None = None) -> dict:
+    """Move Trash Folder items to macOS Trash: those older than `days`, and the oldest until the
+    whole Trash Folder is under `max_bytes`.
 
-    The owner's second half of the 2026-10-15 request: the app's Move button is joined by an
-    automatic handoff on the existing cleanup timer. Age is the dated folder an item lives in
-    (`<trash>/<UTC date>/...`, the same figure `trash_listing` shows). It uses the one
-    `trash_to_macos` path, so every move is the normal recoverable macOS Trash one; the reusable
-    Trash Folder stays, an item that fails stays listed, and nothing is ever permanently deleted here.
+    The owner's second half of the 2026-10-15 request, extended 2026-10-19 with the size cap. Age is
+    the dated folder an item lives in (`<trash>/<UTC date>/...`, the same figure `trash_listing`
+    shows). `max_bytes` is measured over the *unified* Trash Folder - every root `_trash_bases()`
+    names, so a managed output root's own `.studiohub-trash` counts too - while only the Hub's own
+    items can be handed over, so a Trash Folder left over the cap by another root reports
+    `over_cap`. Items go oldest first. It uses the one `trash_to_macos` path, so every move is the
+    normal recoverable macOS Trash one; the reusable Trash Folder stays, an item that fails stays
+    listed, and nothing is ever permanently deleted here.
     """
     import calendar
+    from . import disk_governor
     now = time.time() if now is None else float(now)
-    if isinstance(days, bool) or not isinstance(days, int) or days <= 0:
-        return {"ok": True, "moved_count": 0, "failed": [], "eligible_count": 0}
-    cutoff = days * 86400
+    cutoff = days * 86400 if isinstance(days, int) and not isinstance(days, bool) and days > 0 else None
+    if cutoff is None and max_bytes is None:
+        return {"ok": True, "moved_count": 0, "failed": [], "eligible_count": 0,
+                "trash_bytes": 0, "over_cap": False}
+    items = _trash_items()
+    sizes = {item: disk_governor.cached_physical(path, now) for item, path in items}
+    total = trash_bytes()                 # the unified Trash Folder, every root counted
     eligible: list[str] = []
-    for item, _path in _trash_items():
-        try:
-            stamp = calendar.timegm(time.strptime(item[:10], "%Y-%m-%d"))
-        except ValueError:
-            continue
-        if now - stamp >= cutoff:
+    remaining = total
+    for item, _path in items:             # `_trash_items()` is oldest date first, then by name
+        old = False
+        if cutoff is not None:
+            try:
+                old = now - calendar.timegm(time.strptime(item[:10], "%Y-%m-%d")) >= cutoff
+            except ValueError:
+                old = False
+        if old or (max_bytes is not None and remaining > max_bytes):
             eligible.append(item)
+            remaining -= sizes[item]
+    answer = {"eligible_count": len(eligible), "trash_bytes": total}
+
+    def over_cap(left: float) -> bool:
+        return max_bytes is not None and left > max_bytes
+
     if not eligible:
-        return {"ok": True, "moved_count": 0, "failed": [], "eligible_count": 0}
+        return {"ok": True, "moved_count": 0, "failed": []} | answer | {"over_cap": over_cap(total)}
     try:
         result = trash_to_macos(eligible)
     except TrashRefused as refusal:
         return {"ok": False, "moved_count": 0, "failed": [{"id": item, "error": refusal.body["detail"]}
-                                                         for item in eligible],
-                "eligible_count": len(eligible)}
+                                                         for item in eligible]} | answer | {"over_cap": over_cap(total)}
     if result["failed"]:
         log.warning("Trash Folder: automatic handoff to macOS Trash left %d of %d items (%s)",
                     len(result["failed"]), len(eligible), result["failed"][0]["error"])
-    return {"ok": result["ok"], "moved_count": result["moved_count"], "failed": result["failed"],
-            "eligible_count": len(eligible)}
+    # `over_cap` is measured after the moves, from what actually left: a move that failed leaves its
+    # bytes in the Trash Folder, so the report cannot be the plan.
+    left = total - sum(sizes[item] for item in result["moved"])
+    return {"ok": result["ok"], "moved_count": result["moved_count"], "failed": result["failed"]} | answer | {
+        "over_cap": over_cap(left)}
 
 
 _OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -1228,12 +1248,16 @@ def start_background(machine_provider, settings_provider, after_sweep=None) -> N
                             enabled=settings["cleanup_enabled"])
                 except Exception:
                     pass
-            # The same timer hands old Trash Folder items to macOS Trash (owner request 2026-10-15):
-            # no second service, and a failure leaves the item in the Trash Folder for the next pass.
+            # The same timer hands Trash Folder items to macOS Trash (owner request 2026-10-15):
+            # those older than `trash_handoff_days`, and the oldest until the unified Trash Folder is
+            # back under `trash_handoff_gb` (owner rule 2026-10-19). No second service, and a failure
+            # leaves the item in the Trash Folder for the next pass.
             days = settings.get("trash_handoff_days")
-            if isinstance(days, int) and not isinstance(days, bool) and days > 0:
+            gb = settings.get("trash_handoff_gb")
+            cap = gb * 1_000_000_000 if isinstance(gb, int) and not isinstance(gb, bool) and gb > 0 else None
+            if cap is not None or (isinstance(days, int) and not isinstance(days, bool) and days > 0):
                 try:
-                    trash_handoff(days)
+                    trash_handoff(days, cap)
                 except Exception:
                     log.exception("automatic Trash Folder handoff failed (continuing)")
             if after_sweep is not None:

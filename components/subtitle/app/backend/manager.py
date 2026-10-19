@@ -24,6 +24,10 @@ from .engine import ModelPackageError, SubtitleEngine, _Cancelled
 TERMINAL = {'done', 'error', 'cancelled'}
 MAX_INPUT_BYTES = 2 * 1024 * 1024 * 1024
 CHUNK_BYTES = 1024 * 1024
+# A stored input whose job record is gone (or that a crash left with no record) is finished business
+# after the shared 7-day output retention (owner rule 2026-10-19; it was `job_history.RETENTION_DAYS`,
+# 90 days). A job record that still exists keeps its input, whatever its age.
+INPUT_RETENTION_DAYS = 7
 ARTIFACT_FORMATS = {
     'srt': ('application/x-subrip', 'srt'),
     'vtt': ('text/vtt', 'vtt'),
@@ -212,11 +216,11 @@ class SubtitleManager:
         """Move input folders whose job has expired to the Hub's Trash Folder.
 
         One stored input belongs to one job (`input.original_path`). While that record exists the
-        folder is kept, whatever the job's state; once `job_history` drops the record (90 days) the
-        recording is finished business. A folder left by a crash that never recorded a job follows
-        the same age rule. Nothing here deletes, and a folder that cannot be moved stays.
+        folder is kept, whatever the job's state; once the record is gone the recording is finished
+        business and the folder follows the shared `INPUT_RETENTION_DAYS` window. A folder left by a
+        crash that never recorded a job follows the same age rule. Nothing here deletes, and a folder
+        that cannot be moved stays.
         """
-        from components import job_history
         now = time.time() if now is None else now
         with self.lock:
             kept = set()
@@ -229,7 +233,7 @@ class SubtitleManager:
                 entries = list(self.inputs.iterdir())
             except OSError:
                 return 0
-            window = job_history.RETENTION_DAYS * 86400
+            window = INPUT_RETENTION_DAYS * 86400
             retired = 0
             for directory in entries:
                 if directory in kept or directory.is_symlink() or not directory.is_dir():

@@ -1626,6 +1626,10 @@ struct NativeStorageLimits: Decodable, Equatable {
     /// Items older than this in the Trash Folder are handed to macOS Trash. Nil from a Hub that
     /// predates the automatic handoff; the shipped default is 7 days.
     let trashHandoffDays: Int?
+    /// ...or once the Trash Folder holds more than this many GB (every root counted), the oldest
+    /// items are handed over until it is back under. Nil from a Hub that predates the size cap; the
+    /// shipped default is 20 GB.
+    let trashHandoffGb: Int?
 }
 
 struct NativeStoragePreview: Decodable, Equatable {
@@ -6492,7 +6496,7 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// Apply new limits. The Hub validates them before anything is written.
     func saveStorageLimits(maxBytes: Int64, retentionDays: Int, cleanupEnabled: Bool,
-                           trashHandoffDays: Int? = nil) async {
+                           trashHandoffDays: Int? = nil, trashHandoffGb: Int? = nil) async {
         guard let requestConnection = connectionID else { return }
         savingStorage = true
         storageNote = nil
@@ -6502,7 +6506,8 @@ final class NativeWorkspaceStore: ObservableObject {
                 ["api", "hub", "settings"], method: "PUT",
                 body: StorageLimitsBody(maxBytes: maxBytes, retentionDays: retentionDays,
                                         cleanupEnabled: cleanupEnabled,
-                                        trashHandoffDays: trashHandoffDays))
+                                        trashHandoffDays: trashHandoffDays,
+                                        trashHandoffGb: trashHandoffGb))
             guard connectionID == requestConnection else { return }
             deviceSettings = settings
             storageNote = "Saved. Cleanup keeps at most \(Self.gigabytes(settings.effective.maxBytes)) and keeps finished work for \(settings.effective.retentionDays) days."
@@ -10216,6 +10221,7 @@ private struct StorageLimitsBody: Encodable {
     let retentionDays: Int
     let cleanupEnabled: Bool
     let trashHandoffDays: Int?
+    let trashHandoffGb: Int?
 }
 private struct TrashMoveBody: Encodable {
     let items: String

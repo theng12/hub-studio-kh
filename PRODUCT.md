@@ -17,8 +17,9 @@ task, not implied by replacing the inherited GenStudio name (owner correction,
 The owner values editable defaults. Device mode, studio enablement, model choices,
 generation parameters, startup, storage paths and limits, labels and connections are
 configurable through shared settings flows. Generated-output cleanup defaults to
-20 GB across all studios on each device and 3 days after generation, whichever
-limit is reached first; cleaned-up work goes to a self-emptying Trash Folder (15 days). Models, user originals and protected work are excluded.
+20 GB across all studios on each device and 7 days after generation, whichever
+limit is reached first; cleaned-up work goes to a Trash Folder that hands itself to
+macOS Trash after 7 days or 20 GB. Models, user originals and protected work are excluded.
 
 Distribute tested immutable runtimes with the app and complete model packages
 separately, optionally in one offline SSD kit. No target-device dependency resolution

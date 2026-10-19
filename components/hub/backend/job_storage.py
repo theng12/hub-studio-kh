@@ -25,12 +25,13 @@ from .registry import DATA_DIR
 _MUTATION_LOCK = threading.RLock()
 
 SETTINGS_FILE = DATA_DIR / "job_storage_settings.json"
-POLICY_VERSION = 3
-# The same output policy as everything else (3 days / 20 GB), and a share of the disk where that is
-# smaller: 80 GB was a third of a 256 GB node. `LEGACY_*` are the values before version 3.
+POLICY_VERSION = 4
+# The same output policy as everything else (7 days / 20 GB, owner rule 2026-10-19), and a share of
+# the disk where that is smaller: 80 GB was a third of a 256 GB node. `LEGACY_*` are the values
+# before version 3.
 DEFAULT_MAX_BYTES = 20 * 1000 ** 3
 DEFAULT_MAX_FRACTION = 0.08
-DEFAULT_RETENTION_DAYS = 3
+DEFAULT_RETENTION_DAYS = 7
 LEGACY_MAX_BYTES = 80 * 1024 ** 3
 LEGACY_RETENTION_DAYS = 30
 MIN_MAX_BYTES = 1 * 1024 ** 3
@@ -63,9 +64,14 @@ def _read() -> dict:
         policy_version = int(saved.get("policy_version", 1))
     except (TypeError, ValueError, AttributeError):
         policy_version = 1
-    migrate = (policy_version < POLICY_VERSION and bool(saved)
-               and saved.get("retention_days", LEGACY_RETENTION_DAYS) == LEGACY_RETENTION_DAYS
-               and saved.get("max_bytes", LEGACY_MAX_BYTES) == LEGACY_MAX_BYTES)
+    # A file that still holds the defaults of the version that wrote it was never chosen by an
+    # operator, so it reads as the new ones: 30 days / 80 GiB was version 1-2 (80 GiB was a third of
+    # a 256 GB node, so both had to be untouched), 3 days was version 3.
+    migrate = bool(saved) and (
+        (policy_version == 3 and saved.get("retention_days", DEFAULT_RETENTION_DAYS) == 3)
+        or (policy_version < 3
+            and saved.get("retention_days", LEGACY_RETENTION_DAYS) == LEGACY_RETENTION_DAYS
+            and saved.get("max_bytes", LEGACY_MAX_BYTES) == LEGACY_MAX_BYTES))
     if migrate:                     # the old defaults, never chosen: read as the new ones
         saved = {"enabled": saved.get("enabled", True)}
     maximum = saved.get("max_bytes", default_max_bytes())

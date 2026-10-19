@@ -1359,8 +1359,12 @@ def retry_failed_item(batch_id: str, item_index: int) -> dict:
     }
 
 
-# The output policy of every Hub-side store: 3 days.
-DEFAULT_RETENTION_DAYS = 3
+# The output policy of every Hub-side store: 7 days (owner rule 2026-10-19; 3 before that, 30 before that).
+DEFAULT_RETENTION_DAYS = 7
+POLICY_VERSION = 4
+# An older file's value equal to that version's own default was never chosen, so it takes the new
+# default. `(default, the policy_version that replaced it)`.
+_LEGACY_DEFAULTS = ((30, 3), (3, 4))
 
 
 def settings() -> dict:
@@ -1374,11 +1378,12 @@ def settings() -> dict:
         policy_version = int(saved.get("policy_version", 1))
     except (TypeError, ValueError):
         policy_version = 1
-    if policy_version < 3 and value == 30 and saved:
-        # 30 days was the old default, so a file that still holds it was never chosen: the output
-        # policy is 3 days now (a 256 GB Mac cannot hold a month of recordings).
-        value = DEFAULT_RETENTION_DAYS
-        set_retention(value)
+    if saved:
+        for old, replaced_in in _LEGACY_DEFAULTS:
+            if policy_version < replaced_in and value == old:
+                value = DEFAULT_RETENTION_DAYS
+                set_retention(value)
+                break
     return {"retention_days": value}
 
 
@@ -1387,7 +1392,7 @@ def set_retention(days: int) -> dict:
         raise HTTPException(400, f"retention_days must be one of {sorted(RETENTION_CHOICES)}")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(
-        json.dumps({"retention_days": days, "policy_version": 3}),
+        json.dumps({"retention_days": days, "policy_version": POLICY_VERSION}),
         encoding="utf-8",
     )
     return {"retention_days": days}

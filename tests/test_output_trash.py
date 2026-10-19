@@ -92,7 +92,7 @@ settings_file = ledger.DATA_DIR / 'device_settings.json'
 settings_file.write_text(json.dumps({'max_bytes': 50_000_000_000, 'retention_days': 30,
     'minimum_free_bytes': 1_000_000_000, 'cleanup_enabled': True, 'cleanup_interval_seconds': 300}))
 eff = standalone_config.load_device_settings()['effective']
-assert (eff['max_bytes'], eff['retention_days'], eff['minimum_free_bytes']) == (20_000_000_000, 3, 5_000_000_000), eff
+assert (eff['max_bytes'], eff['retention_days'], eff['minimum_free_bytes']) == (20_000_000_000, 7, 5_000_000_000), eff
 settings_file.write_text(json.dumps({'max_bytes': 60_000_000_000, 'retention_days': 14,
     'minimum_free_bytes': 2_000_000_000, 'cleanup_enabled': False, 'cleanup_interval_seconds': 600}))
 eff = standalone_config.load_device_settings()['effective']
@@ -105,7 +105,7 @@ assert (eff['max_bytes'], eff['retention_days'], eff['minimum_free_bytes']) == (
 
 # 5. Defaults.
 assert (standalone_config.DEFAULT_MAX_BYTES, standalone_config.DEFAULT_RETENTION_DAYS,
-        standalone_config.DEFAULT_MINIMUM_FREE_BYTES) == (20_000_000_000, 3, 5_000_000_000)
+        standalone_config.DEFAULT_MINIMUM_FREE_BYTES) == (20_000_000_000, 7, 5_000_000_000)
 '''
 
 

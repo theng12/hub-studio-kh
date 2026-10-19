@@ -123,18 +123,18 @@ class StandaloneHubConfigTests(unittest.TestCase):
         restored = config.restore_device_defaults()
 
         self.assertEqual(defaults["effective"]["max_bytes"], 20_000_000_000)
-        self.assertEqual(defaults["effective"]["retention_days"], 3)
+        self.assertEqual(defaults["effective"]["retention_days"], 7)
         self.assertEqual(defaults["effective"]["minimum_free_bytes"], 5_000_000_000)
         self.assertEqual(changed["effective"], {
             "max_bytes": 60_000_000_000, "retention_days": 14,
             "cleanup_enabled": True, "cleanup_interval_seconds": 300,
-            "minimum_free_bytes": 5_000_000_000, "trash_handoff_days": 7,
+            "minimum_free_bytes": 5_000_000_000, "trash_handoff_days": 7, "trash_handoff_gb": 20,
             "keep_all_models": False,
         })
         self.assertEqual(restored["effective"], {
-            "max_bytes": 20_000_000_000, "retention_days": 3,
+            "max_bytes": 20_000_000_000, "retention_days": 7,
             "cleanup_enabled": True, "cleanup_interval_seconds": 300,
-            "minimum_free_bytes": 5_000_000_000, "trash_handoff_days": 7,
+            "minimum_free_bytes": 5_000_000_000, "trash_handoff_days": 7, "trash_handoff_gb": 20,
             "keep_all_models": False,
         })
         self.assertEqual(stat.S_IMODE((self.data_dir / "device_settings.json").stat().st_mode), 0o600)

@@ -117,7 +117,9 @@ class ConfirmationTests(unittest.TestCase):
     def test_restore_defaults_asks_first_and_the_editor_shows_the_dry_run(self):
         self.assertNotIn('Button("Restore Defaults") { Task', VIEWS)
         self.assertIn("confirmingRestoreStorage = true", VIEWS)
-        self.assertIn("storageWouldDelete(", body(VIEWS, "private var storageEditor", 3000))
+        # The window is only a slice bound, not the assertion: it has to reach the `.task` that runs
+        # the dry run, and the editor's own copy has grown twice (both stages now name days and GB).
+        self.assertIn("storageWouldDelete(", body(VIEWS, "private var storageEditor", 4200))
 
     def test_installing_asks_when_work_is_active(self):
         install = body(VIEWS, 'Button(workspace.installingRelease ? "Installing…" : "Install")', 700)
