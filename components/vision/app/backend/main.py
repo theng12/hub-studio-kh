@@ -233,7 +233,11 @@ class VisionService:
         if "segments" in plan:
             started = clock()
             model, feats = model_and_features(plan["segments"])
-            caption = model.run(feats, "<DETAILED_CAPTION>", max_new_tokens=256)["text"].strip()
+            # The model's own stated budget (`limit`, from the manifest's `defaults.max_new_tokens`),
+            # exactly as every sibling call in this function uses. This one was pinned to a
+            # hardcoded 256 — a quarter of what the manifest states — so the caption, and the
+            # region matching that reads it below, were cut short for no stated reason.
+            caption = model.run(feats, "<DETAILED_CAPTION>", max_new_tokens=limit)["text"].strip()
             out["caption"] = caption
             segments = {}
             for region in regions:

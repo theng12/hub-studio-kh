@@ -66,6 +66,9 @@ class _FakeFlorence:
         with self.owner.lock:
             self.owner.active -= 1
         self.owner.runs.append((task, text))
+        # The budget each task was actually run with, so a task carrying a number of its own
+        # instead of the model's stated one is visible rather than inferred.
+        self.owner.budgets.append((task, max_new_tokens))
         if task == "<DETAILED_CAPTION>":
             return {"text": self.owner.caption, "score": 0.9, "tokens": 9, "instances": []}
         if task == "<OD>":
@@ -93,6 +96,7 @@ class VisionRouteTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.loads, self.runs, self.features = [], [], 0
+        self.budgets = []
         self.caption = "A house under a cloudy sky, by the water."
         self.lock, self.active, self.peak = threading.Lock(), 0, 0
 
@@ -152,6 +156,22 @@ class VisionRouteTests(unittest.TestCase):
         self.assertEqual([task for task, _ in self.runs], ["<OD>"])
         missing = self.post({"tasks": ["subject"], "image": {"b64": _jpeg()}, "text": "a dragon"}).json()
         self.assertEqual(missing["subject"]["source"], "detect")
+
+    def test_every_task_runs_with_the_models_own_stated_budget(self) -> None:
+        """No task may carry an output budget of its own.
+
+        The detailed caption was pinned to a hardcoded `256` while every sibling call in the same
+        function used the manifest's stated `defaults.max_new_tokens` — so on Florence-2 base
+        (1,024) the caption this worker returns, and the region matching that reads it, were cut
+        to a quarter of what the model states. Read as a mechanism rather than a value: whatever
+        the manifest states is what every task runs with.
+        """
+        self.post({"tasks": ["segments"], "image": {"b64": _jpeg()}, "regions": ["sky"]})
+        stated = BASE["defaults"]["max_new_tokens"]
+        captions = [budget for task, budget in self.budgets if task == "<DETAILED_CAPTION>"]
+        self.assertEqual(captions, [stated], "the caption is asked for the model's stated budget")
+        self.assertEqual({budget for _, budget in self.budgets}, {stated},
+                         f"a task ran with a budget of its own: {sorted(self.budgets)}")
 
     def test_a_region_the_caption_does_not_name_is_never_outlined(self) -> None:
         self.caption = "A woman at a wooden table with bowls, a candle flame and a window."
