@@ -293,11 +293,13 @@ class MemoryCatalogTests(unittest.TestCase):
 
         flux_admission = memory_admission.describe(MODEL_ID, entries[MODEL_ID])
         # Free memory needed before start (not the peak), from the real 8 GB M1+M2 runs 2026-10-02 (owner chose 2.8 for
-        # headroom; the runs started cleanly from 3.09 GB): 2.8 for both image models, in the worker's row AND in the
-        # Hub's fleet default, which outranks the row for Klein.
+        # headroom; the runs started cleanly from 3.09 GB): 2.8 for both image models, read from the worker's own row.
+        # The Hub keeps no copy of this number (it was removed from `_FLEET_DEFAULTS` 2026-10-19), so an edit to the row
+        # is the edit; the operator's override on the Models screen is the only other number.
         self.assertEqual(flux_admission['effective_min_free_memory_gb'], 2.8)
         self.assertEqual(flux_admission['catalog_min_free_memory_gb'], 2.8)
         self.assertEqual(flux_admission['default_min_free_memory_gb'], 2.8)
+        self.assertEqual(flux_admission['min_free_source'], 'model_default')
         self.assertEqual(flux_admission['default_min_total_memory_gb'], 8.0)
 
     def test_the_memory_policy_names_the_model_a_running_job_actually_loaded(self):

@@ -1064,6 +1064,20 @@ class StudioMonitor:
                 # The tier and verdict published are the floor dispatch enforces, not the worker's
                 # own literal (VoxCPM2 4-bit read 16 GB here while the Hub ran it on 8 GB).
                 annotated = memory_admission.publish_floor(dict(m), total_gb)
+                # The live-free floor dispatch enforces for this model, and whose number it is -
+                # the model's own published row, or the operator's override. The Models screen
+                # reads the aggregate catalog it already has, so the number in force travels with
+                # the row instead of costing a request per model. Deliberately `hub_*` keys and
+                # never `min_free_memory_gb`: `workload_policy` reads that key back, so the
+                # enforced number must not be written into the worker's own key.
+                try:
+                    free_policy = memory_admission.describe(
+                        str(m.get("repo") or m.get("model_id") or ""), m)
+                except ValueError:
+                    free_policy = None  # an unreadable published floor stays visible as published
+                if free_policy is not None:
+                    annotated["hub_free_memory_gb"] = free_policy["effective_min_free_memory_gb"]
+                    annotated["hub_free_memory_source"] = free_policy["min_free_source"]
                 # Do not federate obsolete hosted-lane metadata. Render's raw
                 # dispatch hint remains in its direct worker catalog, where the
                 # broker reads it, but the Hub's public aggregate is local-only.

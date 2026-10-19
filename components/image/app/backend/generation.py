@@ -223,8 +223,9 @@ FLUX2_KLEIN = ImageModel(
     limits={'min_steps': 2, 'max_steps': 100, 'min_guidance': 0.0, 'max_guidance': 30.0,
             'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
     # Free memory needed before start; owner chose 2.8 GB on 2026-10-02 for headroom - measured 8 GB M1+M2 runs started cleanly from 3.76 GB free
-    # (3.76-4.14 GB free; peak 2.16-2.68 GB; ~0 swap). This is the free memory a job needs to begin, NOT its peak. The
-    # Hub's fleet default (`memory_admission._FLEET_DEFAULTS`) carries the same 2.8, because it outranks this row.
+    # (3.76-4.14 GB free; peak 2.16-2.68 GB; ~0 swap). This is the free memory a job needs to begin, NOT its peak. This row is the one home for
+    # that number: the Hub reads it through `workload_policy.required_free_memory_gb` and keeps no copy of its own, so an edit here is the edit
+    # (the operator's override on the Models screen is the only other number, and it wins).
     # The bounded configurations (tiers in `FLUX2_*_BELOW_BYTES` above) were added after the 8 GB runs showed the
     # unbounded one at 9.8 GB of MLX memory and ~4 GB of swap per image; 24 GB and up are unchanged.
     min_free_memory_gb=2.8,

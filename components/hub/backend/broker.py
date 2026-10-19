@@ -331,12 +331,33 @@ def _memory_gate(mem: dict, host: dict, reserved_gb: float = 0.0) -> tuple[str, 
       ("wait", note) — could run, but not enough free RAM right now → defer
       ("run",  None) — clear to dispatch
     Peer Hubs provide the same host-memory snapshot for remote Macs, allowing
-    the primary Hub to avoid a request that their own engine would reject."""
+    the primary Hub to avoid a request that their own engine would reject.
+
+    **`skip` is for a Mac that can never take the job; `wait` only for one that is short right
+    now** — `min_total` answers that for the model's *tier*, and the free floor below answers it
+    for the model's *live* floor.
+    """
     min_total = mem.get("min_total")
     if min_total and host["total_gb"] < min_total:
         return ("skip", f"needs a ~{min_total}GB machine; this one has "
                         f"{host['total_gb']}GB — trying other machines")
     need_free = _required_free_memory(mem)
+    # **A Mac whose whole RAM is below the free floor is not a candidate.** Free memory is always
+    # strictly less than the machine's own RAM (macOS and the workers are resident), so a floor at
+    # or above this Mac's shipped memory can never be met however idle it becomes — and `wait`
+    # there parks the item behind a machine that will never clear it. Judged against the *class*
+    # (`memory_class_gb`), not the raw total: a Mac reporting 8.59 GB is an 8 GB Mac and 8.4 GB of
+    # free memory is not something it can produce.
+    #
+    # Real shape: the fleet is ~35 8 GB M1/M2 Macs (`research/owner-hardware.md`) and Fish Audio S2
+    # Pro 4-bit publishes an 8.4 GB free-before-start floor; job `97bdce60` (126 attempts, 3,068
+    # `INSUFFICIENT_MEMORY` hand-backs in `gateway-kh.log.1`) is the same defect one class up,
+    # where the Gateway's only mitigation is a 15-minute in-memory cooldown
+    # (`fleet.MEMORY_COOLDOWN_S`) that a restart forgets.
+    class_gb = memory_class_gb(host["total_gb"])
+    if class_gb is not None and need_free >= class_gb:
+        return ("skip", f"needs ~{need_free:.1f}GB free; this is a {class_gb:g}GB Mac, whose whole "
+                        "memory could never be free — trying other machines")
     effective_free = host["available_gb"] - reserved_gb
     if effective_free < need_free:
         return ("wait", f"waiting for memory: needs ~{need_free:.1f}GB, "
@@ -661,6 +682,21 @@ _speed_cache: dict[str, tuple[float, list]] = {}
 _MEMORY_CLASSES = (8, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192, 256, 512)
 
 
+def memory_class_gb(memory_gb: object) -> float | None:
+    """The memory size this Mac shipped with — 8.59 GB of RAM is an 8 GB Mac, 17.18 a 16 GB one.
+
+    A Mac reports its total in bytes/1e9, so every shipped size lands a little above its name
+    (`_MEMORY_CLASSES`). This is the Hub's own vocabulary for a *class* of Mac, and the one number
+    a free-memory floor can be judged against: an 8 GB Mac cannot have 8.4 GB free however idle it
+    becomes, because macOS and the workers are resident. `None` when the total is not a number.
+    """
+    try:
+        gb = float(memory_gb)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return float(max((c for c in _MEMORY_CLASSES if c <= gb + 0.5), default=round(gb)))
+
+
 def mac_class(chip: object, memory_gb: object) -> str:
     """"M4 · 16 GB": the chip family without "Apple", and the shipped memory size (as the Gateway)."""
     family = str(chip or "").replace("Apple", "").strip() or "unknown chip"
@@ -668,8 +704,8 @@ def mac_class(chip: object, memory_gb: object) -> str:
         gb = float(memory_gb)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return f"{family} · ? GB"
-    size = max((c for c in _MEMORY_CLASSES if c <= gb + 0.5), default=round(gb))
-    return f"{family} · {size} GB"
+    size = memory_class_gb(gb)
+    return f"{family} · {size:g} GB"
 
 
 def _speed_samples(model: str) -> list[tuple[str, float]]:

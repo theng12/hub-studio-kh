@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from backend import cache, generation, main, voicestudio_genstudio_integration
+from backend import cache, catalog, generation, main, voicestudio_genstudio_integration
 
 
 QWEN_CUSTOM_REPO = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
@@ -476,10 +476,19 @@ def test_catalog_reports_runtime_cache_load_and_memory_truth(monkeypatch) -> Non
     assert vox["loaded"] is True
     assert vox["runtime_ready"] is True
     assert vox["available"] is True
-    assert vox["cold_load_required_free_memory_gb"] == 3.55
-    assert vox["loaded_required_free_memory_gb"] == 2.75
-    assert vox["required_free_memory_gb"] == 2.75
-    # VoxCPM2 has enough *free* memory here (3.0 available vs 2.75 needed) but
+    # **One floor, and it is the one the row publishes.** `min_free_memory_gb` (2.8, owner's
+    # choice 2026-10-02 from the real 8 GB M1+M2 runs that started cleanly from 3.25 GB free) is
+    # what this worker enforces AND what the Hub reads (`workload_policy.required_free_memory_gb`).
+    # The size formula (2.3 + 1.25 = 3.55) must not be a second, stricter floor: live on
+    # 2026-10-19 it refused 8 GB Macs the row's own measurement qualifies — "needs about 3.5 GB
+    # free and has about 3.4 GB free" on studio-mac-0107-m2-8-256-hub and
+    # studio-mac-1401-m2-8-256-hub, job 97bdce60, 3,068 INSUFFICIENT_MEMORY hand-backs.
+    vox_row = next(m for m in catalog.CATALOG if m.repo == target)
+    assert vox_row.min_free_memory_gb == 2.8
+    assert vox["cold_load_required_free_memory_gb"] == vox_row.min_free_memory_gb
+    assert vox["loaded_required_free_memory_gb"] == vox_row.min_free_memory_gb
+    assert vox["required_free_memory_gb"] == vox_row.min_free_memory_gb
+    # VoxCPM2 has enough *free* memory here (3.0 available vs 2.8 needed) but
     # not enough *total*: its floor moved 8 -> 16 GB after the fleet measured it
     # taking 738 s to make 15 s of audio on an 8 GB Mac. Both halves of
     # `memory_eligible` matter, and this is the case that proves the total-memory

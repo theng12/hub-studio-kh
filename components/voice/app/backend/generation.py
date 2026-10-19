@@ -503,7 +503,30 @@ def _no_wav_produced_error(output_dir, family: str, gen_kwargs: dict,
 
 
 def _required_free_memory_gb(model_entry, *, loaded: bool) -> float:
-    """Use the exact same RAM estimate for inventory and admission."""
+    """How much free memory this model needs, from the row that publishes it.
+
+    **The published floor is the authority, and the Hub reads the same key.** `min_free_memory_gb`
+    on the model's own catalog row is the measured free-before-start figure, carrying its
+    `min_free_memory_note`; `workload_policy.required_free_memory_gb` enforces it on the Hub side
+    and `catalog.serialize_model` publishes it. This function used to *also* invent a floor as a
+    formula (`size_gb + MEMORY_HEADROOM_GB`) and publish it as `required_free_memory_gb`, and the
+    Hub takes the strictest of the two — so one model had two admission floors and the invented
+    one won.
+
+    **Measured, 2026-10-19.** VoxCPM2 4-bit: row 2.8 GB (owner's choice for headroom; the real
+    8 GB M1+M2 runs started cleanly from 3.25 GB free), formula **3.55**. The Hub therefore
+    admitted an 8 GB Mac this preflight then refused — live as *"needs about 3.5 GB free and has
+    about 3.4 GB free"* on `studio-mac-0107-m2-8-256-hub` and `studio-mac-1401-m2-8-256-hub`, job
+    `97bdce60` (126 attempts, 3,068 `INSUFFICIENT_MEMORY` hand-backs in `gateway-kh.log.1`), on
+    Macs the row's own measurement says are fine.
+
+    **A floor must never be a formula** (`AGENTS.md`, MLX memory discipline). The estimate below
+    is kept only for a row that publishes no floor — a model nobody has measured yet — where the
+    `loaded` case is cheaper because a resident model does not pay the load again.
+    """
+    published = getattr(model_entry, "min_free_memory_gb", None)
+    if published is not None:
+        return round(float(published), 2)
     model_gb = max(0.5, float(model_entry.size_gb or 0.5))
     required = (
         max(1.5, model_gb * 0.45) + MEMORY_HEADROOM_GB

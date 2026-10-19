@@ -1442,8 +1442,10 @@ CATALOG: tuple[ModelEntry, ...] = (
         # 8 GB, measured (owner decision 2026-10-04). It was 16 GB / 5.6 GB free while the kernel's peak
         # footprint was unsettled (5.41-23.93 GB on the staging Mac). The 8 GB M1 run settled it
         # (`_orchestra/audit-20261001/breeze-8gb/results/TTS 8GB Run 20261004-230549`): worker peak 4.69 GB,
-        # each clip started with 3.31-3.46 GB free. The Hub enforces the same 8 / 3.2 from
-        # `memory_admission._FLEET_DEFAULTS`; these literals only keep this worker's own UI in agreement.
+        # each clip started with 3.31-3.46 GB free. This row is the one home for the 3.2 GB free floor: the
+        # Hub reads it through `workload_policy.required_free_memory_gb` and keeps no copy of its own, and
+        # this worker's own preflight reads the same row (`_required_free_memory_gb`). The Hub still carries
+        # the 8 GB *total* as its own measurement, because the manifest says 16 and is read first.
         min_unified_memory_gb=8,
         min_free_memory_gb=3.2,
         min_free_memory_note=(
