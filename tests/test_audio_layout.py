@@ -184,10 +184,12 @@ class AudioLayoutTests(unittest.TestCase):
 
         On Models the library-wide note and the "start the local services" line lived *below* the
         split, so they appeared at the very bottom of the window, far from the list they describe.
+        The split is the view's own divider now (the details pane is a two-way drag), so that is
+        what the note has to stay above.
         """
         models = page("modelsWorkspace")
         note = models.index("Start the local services to inspect the model library")
-        split = models.index("HSplitView")
+        split = models.index("modelSplitDivider")
         self.assertLess(note, split, "the library note belongs above the list, not below the split")
 
     def test_the_voice_tabs_are_labelled_short_enough_to_fit(self) -> None:

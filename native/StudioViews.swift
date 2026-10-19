@@ -1013,6 +1013,13 @@ struct StudioContent: View {
     /// The Studios whose Models section the operator has folded away. A search ignores this, so a
     /// result can never stay hidden inside a collapsed section.
     @State private var collapsedModelSections: Set<String> = []
+    /// How wide the model list is, and whether a drag is in flight.
+    ///
+    /// The owner reads the details more often than the model name — *"it should work both ways
+    /// because more often than not, I want to see details more than the model name"* — so the
+    /// split is dragged either way and the width is remembered across launches.
+    @AppStorage("studioHub.modelsListWidth") private var modelsListWidth: Double = 380
+    @State private var modelsSplitDragStart: Double?
     /// What the operator has typed into "Your defaults for this model", before it is saved. Cleared
     /// whenever the model or the Studio's published answer changes, so a stale draft cannot be
     /// saved onto a model it was not written for.
@@ -3773,8 +3780,104 @@ struct StudioContent: View {
     /// The list comes from `StudioFunction.allCases`, so a Studio added to the app gets a section
     /// with its own symbol, name and count without an edit here — and a Studio that is missing from
     /// the list below cannot be missing from the screen.
+    /// The list only has to hold a model's name and its status badge; everything past that belongs
+    /// to the details. The ceiling keeps the details able to take most of the window.
+    private static let modelsListMinWidth: Double = 360
+    private static let modelsListMaxWidth: Double = 720
+
     private var modelSections: [NativeModelSection] {
         workspace.modelSections(search: modelSearch, installedOnly: installedOnly)
+    }
+
+    /// The functions the tab bar offers: the ones this library actually holds a model for.
+    ///
+    /// A Studio with nothing in it is not a tab. It used to be a heading with nothing under it
+    /// ("Video — 0 models"), which is the row of nothing the owner asked to be rid of, and a tab
+    /// that only says zero is the same row. The one exception is the Studio the operator arrived
+    /// from — the generator pages' "Manage … Models" rows land here — because a tab that vanished
+    /// under the click that chose it reads as a broken button.
+    ///
+    /// The order is the app's own (`StudioPage.createOrder`, the sidebar's), so a Studio added to
+    /// the enum is placed without an edit here, and one the order does not name still gets a tab.
+    private var modelTabFunctions: [StudioFunction] {
+        var available = StudioFunction.allCases.filter(modelLibraryHolds)
+        if let chosen = StudioFunction(rawValue: modelFilter), !available.contains(chosen) {
+            available.append(chosen)
+        }
+        let placed = StudioPage.createOrder.filter { available.contains($0) }
+        return placed + available.filter { !StudioPage.createOrder.contains($0) }
+    }
+
+    /// Whether this library holds any model for a function at all — before the search and before
+    /// "Installed only", so a tab cannot vanish under the operator's own typing.
+    private func modelLibraryHolds(_ function: StudioFunction) -> Bool {
+        workspace.modelSections(search: "", installedOnly: false)
+            .first { $0.function == function }?.models.isEmpty == false
+    }
+
+    /// The one tab bar: every function, with the count this view would show under it.
+    private var modelTabs: some View {
+        let counts = modelSections.reduce(into: [StudioFunction: Int]()) { $0[$1.function] = $1.models.count }
+        let total = counts.values.reduce(0, +)
+        return Picker("Function", selection: $modelFilter) {
+            Text("All \(total)").tag("All functions")
+            ForEach(modelTabFunctions) { function in
+                Text("\(StudioPage.page(for: function)?.title ?? function.rawValue) \(counts[function] ?? 0)")
+                    .tag(function.rawValue)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .accessibilityLabel("Function")
+    }
+
+    /// The sections the list draws: every Studio with something in it under "All", the chosen
+    /// Studio's own section under a function's tab. A section with nothing under it is drawn
+    /// nowhere — an empty heading is the row of nothing the owner asked to be rid of.
+    private var modelSectionsToShow: [NativeModelSection] {
+        modelSections.filter { section in
+            !section.models.isEmpty
+                && (modelFilter == "All functions" || section.function.rawValue == modelFilter)
+        }
+    }
+
+    /// The divider between the list and the details, dragged either way and remembered.
+    ///
+    /// This was an `HSplitView` whose details side was capped at 380 pt and whose list side had a
+    /// 380 pt floor, so the divider would only move one way. Both sides now have their own floor
+    /// and no ceiling but the window's.
+    private var modelSplitDivider: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor))
+            .frame(width: 1)
+            .frame(width: HubSpace.m)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let start = modelsSplitDragStart ?? modelsListWidth
+                        if modelsSplitDragStart == nil { modelsSplitDragStart = start }
+                        modelsListWidth = min(max(start + value.translation.width,
+                                                  Self.modelsListMinWidth), Self.modelsListMaxWidth)
+                    }
+                    .onEnded { _ in modelsSplitDragStart = nil }
+            )
+            // A drag is not reachable from the keyboard, so the divider is adjustable too.
+            .accessibilityElement()
+            .accessibilityLabel("Resize the model list")
+            .accessibilityValue("\(Int(modelsListWidth)) points")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    modelsListWidth = min(modelsListWidth + 40, Self.modelsListMaxWidth)
+                case .decrement:
+                    modelsListWidth = max(modelsListWidth - 40, Self.modelsListMinWidth)
+                default: break
+                }
+            }
     }
 
     /// When the Models tab (re)reads every Studio's published defaults: the connection, never the
@@ -3822,7 +3925,12 @@ struct StudioContent: View {
             Image(systemName: model.function.symbol).foregroundStyle(.secondary).frame(width: 22)
             VStack(alignment: .leading, spacing: HubSpace.xs) {
                 Text(model.label).font(HubType.rowTitle)
-                Text(model.function.rawValue).font(HubType.caption).foregroundStyle(.secondary)
+                // Under "All" the second line is the Studio the model belongs to. Inside that
+                // Studio's own tab the tab already says it, so the line carries the size the
+                // catalogue states instead of repeating the heading on every row.
+                if let detail = modelRowDetail(model) {
+                    Text(detail).font(HubType.caption).foregroundStyle(.secondary)
+                }
                 // Scanning the library, "how is this one chunked?" should not need a
                 // click per model: the section size and the speed route are the two
                 // facts that differ between families and decide how a long script runs.
@@ -3831,21 +3939,23 @@ struct StudioContent: View {
                         .font(HubType.caption).foregroundStyle(.tertiary)
                 }
             }
-            Spacer()
+            Spacer(minLength: HubSpace.m)
             if model.paused {
                 StatusBadge(text: "Paused", status: .warn, symbol: "pause.circle.fill")
             }
             StatusBadge(text: model.cached ? "Installed" : "Not installed", status: model.cached ? .ok : .off)
-        }.padding(.vertical, HubSpace.s).tag(model.repo)
+        }
+        // The badges keep their own room at the trailing edge instead of being pressed against it.
+        .padding(.vertical, HubSpace.s).padding(.trailing, HubSpace.s).tag(model.repo)
     }
 
-    /// The "jump to section" picker: selecting a Studio unfolds its section and scrolls to it. It
-    /// is not a filter — every other Studio stays on screen, because the point of the picker is to
-    /// save scrolling, not to hide models.
-    private func jumpToModelSection(_ value: String, proxy: ScrollViewProxy) {
-        guard let function = StudioFunction(rawValue: value) else { return }
-        collapsedModelSections.remove(function.id)
-        withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(function.id, anchor: .top) }
+    /// A row's second line: the Studio's name only where the list is not already one Studio's, plus
+    /// the size the catalogue states — the same figure the details pane labels "Estimated size".
+    private func modelRowDetail(_ model: NativeModel) -> String? {
+        var parts: [String] = []
+        if modelFilter == "All functions" { parts.append(model.function.rawValue) }
+        if let size = model.sizeGB { parts.append(String(format: "%.2f GB", size)) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// Every read-only fact this model publishes, each with the artefact that states it.
@@ -3885,6 +3995,10 @@ struct StudioContent: View {
                         Text(fact.value).font(HubType.secondary.monospacedDigit())
                             .textSelection(.enabled)
                             .multilineTextAlignment(.trailing)
+                            // A published bound can be long ("up to 40000 characters · required");
+                            // it wraps to the next line rather than being cut off with an ellipsis
+                            // the moment the details pane is narrow.
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     if let source = fact.source, !source.isEmpty {
                         Text("Source: \(source)").font(HubType.caption).foregroundStyle(.tertiary)
@@ -4153,19 +4267,19 @@ struct StudioContent: View {
         PageScaffold(title: pageTitle(.models), subtitle: "One library for every workspace. Install models here, then choose them where you create.") {
             if !connected { setup }
             HStack(spacing: HubSpace.m) {
-                TextField("Search models", text: $modelSearch).textFieldStyle(.roundedBorder).frame(maxWidth: 310)
-                Picker("Jump to", selection: $modelFilter) {
-                    Text("All functions").tag("All functions")
-                    ForEach(StudioFunction.allCases) { Text($0.rawValue).tag($0.rawValue) }
-                }.frame(maxWidth: 230)
-                .help("Jump to one Studio's section. It does not hide the others, and a search still reaches every section.")
+                TextField("Search models", text: $modelSearch).textFieldStyle(.roundedBorder).frame(maxWidth: 320)
                 Toggle("Installed only", isOn: $installedOnly).toggleStyle(.checkbox)
-                Spacer()
+                Spacer(minLength: HubSpace.xl)
                 Button("Verify All") { Task { await workspace.verifyInstalledModels() } }
                     .help("Re-check every installed model against its pinned file digests")
                     .disabled(!connected || workspace.updatingModels)
                 Button { Task { await workspace.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh model library").accessibilityLabel("Refresh model library").disabled(!connected || workspace.refreshing)
             }
+
+            // One tab per function, each with the count this view would show. This replaced a
+            // "Jump to" picker over one long stack of sections — the owner's report was "it has no
+            // tab or proper spacing. it's squished", and a heading every few rows is not a tab.
+            modelTabs
 
             // Where the models listed below actually live, with the same reveal the Settings row
             // offers: "where did my model folder go" is asked here, on the page that lists them, and
@@ -4214,32 +4328,45 @@ struct StudioContent: View {
             }
             if workspace.refreshing && workspace.models.isEmpty { ProgressView("Reading model library…").controlSize(.small) }
             // With nothing in the library at all, the sentence is about the services; with a
-            // library but nothing matching, it is about the filters. Every Studio keeps its section
-            // either way — a Studio with no model listed is a fact, not an empty row to hide.
+            // library but nothing matching, it is about the tabs, the search and "Installed only".
             else if workspace.models.isEmpty { Text(connected ? "No models match this view. Catalogs for the remaining engines will appear when those engines are integrated." : "Start the local services to inspect the model library.").font(HubType.secondary).foregroundStyle(.secondary) }
-            else if modelSections.isEmpty { Text("No models match this view. Clear the search or turn off Installed only to see the whole library.").font(HubType.secondary).foregroundStyle(.secondary) }
-            HSplitView {
-                ScrollViewReader { proxy in
-                    List(selection: $selectedModel) {
-                        // One section per Studio, derived from the Studio list itself. A Studio the
-                        // Hub offers no model for still gets its own section: it is a fact about
-                        // that Studio, and a section that vanishes is a section nobody can learn.
-                        ForEach(modelSections) { section in
-                            Section {
-                                if isModelSectionExpanded(section.function) {
-                                    ForEach(section.models) { model in modelListRow(model) }
-                                }
-                            } header: {
-                                modelSectionHeader(section)
+            else if modelSectionsToShow.isEmpty {
+                // Two different nothings. A Studio whose catalogue lists no model at all is a fact
+                // about the Hub, and "clear the search" would point at a control that changes
+                // nothing; that tab exists only because the operator arrived from that Studio.
+                if let chosen = StudioFunction(rawValue: modelFilter), !modelLibraryHolds(chosen) {
+                    Text("\(StudioPage.page(for: chosen)?.title ?? chosen.rawValue) has no model in this library yet. It will appear here when the Hub offers one.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                } else {
+                    Text("No models match this view. Clear the search or turn off Installed only to see the whole library.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 0) {
+                List(selection: $selectedModel) {
+                    // Under "All" the headings are the Studio list itself, so a Studio the Hub
+                    // offers a model for is named without an edit here. Inside a function's own
+                    // tab the tab is the heading, and a second one would only repeat it.
+                    ForEach(modelSectionsToShow) { section in
+                        Section {
+                            if isModelSectionExpanded(section.function) {
+                                ForEach(section.models) { model in modelListRow(model) }
                             }
+                        } header: {
+                            if modelFilter == "All functions" { modelSectionHeader(section) }
                         }
                     }
-                    .listStyle(.plain).frame(minWidth: 380)
-                    .onChange(of: modelFilter) { _, value in jumpToModelSection(value, proxy: proxy) }
-                    .onAppear { if modelFilter != "All functions" { jumpToModelSection(modelFilter, proxy: proxy) } }
                 }
-                ScrollView {
-                    if let model = workspace.models.first(where: { $0.repo == selectedModel }) {
+                .listStyle(.plain)
+                // With nothing selected the list takes the whole width rather than sitting in its
+                // remembered column beside an empty panel. Once a model is picked it goes back to
+                // that column, which is what the divider drags and what is remembered.
+                .frame(width: selectedModel == nil ? nil : CGFloat(modelsListWidth))
+                // Nothing selected, nothing to inspect: the list keeps the whole width rather than
+                // leaving a panel that says only "select a model" across a third of the page.
+                if let model = workspace.models.first(where: { $0.repo == selectedModel }) {
+                    modelSplitDivider
+                    ScrollView {
                         VStack(alignment: .leading, spacing: HubSpace.l) {
                             Text(model.label).font(HubType.section).textSelection(.enabled)
                             Text(model.repo).font(HubType.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -4340,8 +4467,8 @@ struct StudioContent: View {
                                 }
                             }
                         }.padding(HubSpace.l)
-                    } else { empty("Model details", "Select a model to inspect its status and available actions.", symbol: "externaldrive") }
-                }.frame(minWidth: 260, idealWidth: 320, maxWidth: 380)
+                    }.frame(minWidth: 320, maxWidth: .infinity)
+                }
             }
             if !activeDownloads.isEmpty {
                 Divider()
