@@ -4247,16 +4247,20 @@ struct NativeAPITests {
         // manifest in a single pass, so one malformed manifest refuses the whole route; read inside
         // a hard `try`, that threw the refresh, marked the Hub unreachable and emptied every model
         // picker on every Mac - the chat-mlx failure. The catalog and the pickers must survive with
-        // the package information missing, and the operator must be told why every model suddenly
-        // reads as unsupported.
+        // the package information missing, and a blip must not throw away rows the app already had:
+        // blanking them made every model read as unsupported and disabled its Download button until
+        // the next poll, with the install state known a moment earlier.
         let modelsBeforePackageFailure = store.models.count
+        let supportedBeforePackageFailure = store.models.map(\.supported)
         FixtureProtocol.setPackagesUnavailable(true)
         await store.refresh()
         require(store.isReachable, "a failed package list must not mark the Hub unreachable")
         require(store.models.count == modelsBeforePackageFailure,
                 "a failed package list must leave the catalog and the model list populated")
-        require(store.models.allSatisfy { !$0.supported },
-                "with no package rows nothing can be installed or dispatched, and nothing may claim otherwise")
+        require(store.models.map(\.supported) == supportedBeforePackageFailure,
+                "a failed package list must keep the last good rows, never blank every model")
+        require(store.modelPackagesUnread == false,
+                "rows were held through the failure, so the page must not claim the list was never read")
         require(store.startupNote?.contains("package list") == true,
                 "a degraded package read needs a visible reason, got: \(store.startupNote ?? "nil")")
         FixtureProtocol.setPackagesUnavailable(false)
