@@ -148,9 +148,35 @@ struct ReleaseIdentity: Equatable {
 struct TrustedPublisher: Equatable {
     let publisherId: String?
     let fingerprint: String?
+    /// The installed key itself, lowercase hex, when the route published one. This is the value
+    /// the operator pasted; the fingerprint is what a *fingerprint* pasted by mistake looks like,
+    /// so the screen shows the key's own first characters and never only the fingerprint.
+    let publicKey: String?
 
     /// The fingerprint to show, or nil when there is no usable key.
     var installedFingerprint: String? { fingerprint }
+
+    /// The installed key's first 8 characters, the way GatewayKH prints it ("e6b9eece…"), or nil.
+    var keyPrefix: String? {
+        guard let publicKey, publicKey.count >= 8 else { return nil }
+        return String(publicKey.prefix(8))
+    }
+}
+
+/// What this Mac's last poll of its controller concluded, reported by `GET /api/hub/release` as
+/// ``last_sync``. A Mac whose updates are being refused can then say why on the screen that
+/// configures updates, instead of looking merely out of date.
+struct ReleaseSyncStatus: Equatable {
+    let ok: Bool
+    let error: String?
+    let result: String?
+    let at: Double?
+
+    /// The refusal in one line, or nil when the last poll was fine (or none has run yet).
+    var refusal: String? {
+        guard !ok, let error, !error.isEmpty else { return nil }
+        return error
+    }
 }
 
 enum ReleaseSignature {

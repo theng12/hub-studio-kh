@@ -2375,6 +2375,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         itself (``public_key``) so a node can pin it at join.  ``delta`` says this
         controller takes manifest-only pushes (a gateway that finds no ``delta`` key
         pushes the whole disk image) and whether it holds this release's manifest.
+        ``last_sync`` is the last controller poll's own conclusion (``ok``,
+        ``error``, ``result``, ``at``) so a Mac being refused an update can say why.
         """
         trusted = app_release.trusted_publisher()
         release = app_release.load_release()
@@ -2387,6 +2389,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             },
             "delta": {"schema": app_release.fm.SCHEMA,
                       "manifest": app_release.held_manifest(release) is not None},
+            "last_sync": release_sync.last_sync_report(),
         }
 
     @app.post("/api/hub/release")

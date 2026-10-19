@@ -257,6 +257,27 @@ def trusted_publisher() -> dict[str, Any] | None:
     return {**value, "public_key": public_hex.lower(), "fingerprint": recomputed}
 
 
+def _known_fingerprints() -> set[str]:
+    """Every 64-hex value this Mac has seen named as a *fingerprint*, never as a key.
+
+    A fingerprint is the sha256 of a key, so it is itself 64 hex characters and parses as a
+    perfectly good 32-byte Ed25519 public key. Stored as one, it is accepted by every route and
+    then refuses every release silently, because the signature is checked against the wrong
+    bytes - a Mac on 0.6.181 sat wedged for days on exactly this. The two places a fingerprint
+    is published are the trusted record and the held descriptor's key-id fields."""
+    seen: set[str] = set()
+    trusted = trusted_publisher()
+    if trusted is not None:
+        seen.add(trusted["fingerprint"])
+    release = load_release()
+    if isinstance(release, dict):
+        for field in ("publisher_key_id", CONTROLLER_KEY_ID_FIELD):
+            value = release.get(field)
+            if isinstance(value, str) and _HEX64.fullmatch(value):
+                seen.add(value.lower())
+    return seen
+
+
 def set_trusted_publisher(body: Any) -> dict[str, Any]:
     """Set or replace the trusted gateway key.  Owner action (Hub token only).
 
@@ -276,6 +297,13 @@ def set_trusted_publisher(body: Any) -> dict[str, Any]:
         if publisher_id is not None and len(publisher_id) > 128:
             raise ReleaseRefused(400, "publisher_id is longer than 128 characters")
     raw = _parse_public_key(body.get("public_key"))
+    if raw.hex() in _known_fingerprints():
+        raise ReleaseRefused(
+            400,
+            "this looks like the fingerprint, not the key: paste the Public key shown in "
+            "Gateway Settings → App Update Key (the 64-hex key itself, not the fingerprint "
+            "printed beside it). A fingerprint stored here is accepted but refuses every "
+            "release, silently.")
     key_id = fingerprint(raw)
     record = {
         "publisher_id": publisher_id,

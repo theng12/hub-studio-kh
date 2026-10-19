@@ -3618,6 +3618,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The gateway key the owner has installed on this controller, or nil when none is installed.
     /// Read from `trusted_publisher` on `GET /api/hub/release`; never inferred from a release.
     @Published private(set) var trustedPublisher: TrustedPublisher?
+    /// What this Mac's last poll of its controller concluded (`last_sync` on the same route), or
+    /// nil when no poll has concluded yet. A refusal names the fault on the App updates screen.
+    @Published private(set) var releaseLastSync: ReleaseSyncStatus?
     /// The existing restart path, called once, after a verified swap.
     var onReleaseRestartRequested: (() -> Void)?
     /// Performs the swap of a verified artifact. Injectable so the download-and-verify path can be
@@ -3859,6 +3862,7 @@ final class NativeWorkspaceStore: ObservableObject {
         drainLease = nil
         controllerReleaseIdentity = nil
         trustedPublisher = nil
+        releaseLastSync = nil
     }
 
     func refresh() async { await refresh(reportErrors: true) }
@@ -7999,6 +8003,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     let answer = try? await readRelease()
                     guard connectionID == requestConnection else { return }
                     trustedPublisher = answer?.trustedPublisher
+                    releaseLastSync = answer?.lastSync
                     offeredRelease = answer?.descriptor?.offered
                     offeredReleaseDescriptor = answer?.descriptor
                     updateOffered = false
@@ -8023,6 +8028,7 @@ final class NativeWorkspaceStore: ObservableObject {
             let answer = try await readRelease()
             guard connectionID == requestConnection else { return }
             trustedPublisher = answer.trustedPublisher
+            releaseLastSync = answer.lastSync
             guard let descriptor = answer.descriptor else {
                 offeredRelease = nil
                 offeredReleaseDescriptor = nil
@@ -8557,6 +8563,7 @@ final class NativeWorkspaceStore: ObservableObject {
     private struct ReleaseAnswer {
         let descriptor: ReleaseDescriptor?
         let trustedPublisher: TrustedPublisher?
+        let lastSync: ReleaseSyncStatus?
     }
 
     /// Parse the additive `trusted_publisher` value. A null, or an object carrying no 64-hex
@@ -8567,8 +8574,21 @@ final class NativeWorkspaceStore: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .flatMap { $0.isEmpty ? nil : $0 }
         let fingerprint = (object["fingerprint"] as? String).flatMap(ReleaseSignature.normalizedHex)
+        let publicKey = (object["public_key"] as? String).flatMap(ReleaseSignature.normalizedHex)
         guard fingerprint != nil || publisherId != nil else { return nil }
-        return TrustedPublisher(publisherId: publisherId, fingerprint: fingerprint)
+        return TrustedPublisher(publisherId: publisherId, fingerprint: fingerprint,
+                                publicKey: publicKey)
+    }
+
+    /// Parse the additive `last_sync` value. An absent or malformed value reads as "no poll has
+    /// concluded yet" rather than as a refusal: a Mac must never be told it was refused on the
+    /// strength of a field the route did not send.
+    static func parseLastSync(_ value: Any?) -> ReleaseSyncStatus? {
+        guard let object = value as? [String: Any], let ok = object["ok"] as? Bool else { return nil }
+        return ReleaseSyncStatus(ok: ok,
+                                 error: (object["error"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                                 result: (object["result"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                                 at: (object["at"] as? NSNumber)?.doubleValue)
     }
 
     private func readRelease() async throws -> ReleaseAnswer {
@@ -8578,11 +8598,13 @@ final class NativeWorkspaceStore: ObservableObject {
             throw ReleaseError("The controller's release answer was not JSON with a release field.")
         }
         let trusted = Self.parseTrustedPublisher(object["trusted_publisher"])
-        if release is NSNull { return ReleaseAnswer(descriptor: nil, trustedPublisher: trusted) }
+        let lastSync = Self.parseLastSync(object["last_sync"])
+        if release is NSNull { return ReleaseAnswer(descriptor: nil, trustedPublisher: trusted,
+                                                    lastSync: lastSync) }
         guard let dictionary = release as? [String: Any], let descriptor = ReleaseDescriptor(json: dictionary) else {
             throw ReleaseError("The controller holds a release whose descriptor does not match the agreed schema. Refusing it.")
         }
-        return ReleaseAnswer(descriptor: descriptor, trustedPublisher: trusted)
+        return ReleaseAnswer(descriptor: descriptor, trustedPublisher: trusted, lastSync: lastSync)
     }
 
     /// A moment the Hub stamped, as a person reads it. The Hub's unit is seconds since 1970 and

@@ -329,13 +329,78 @@ def test_artifact_is_404_when_nothing_is_held(hub):
 # ── tokens and allowlist ───────────────────────────────────────────────────
 
 
+def test_a_fingerprint_pasted_as_the_key_is_refused_with_what_to_paste(hub):
+    """Mac 1607's mistake (2026-10-19): the App Update Key's *fingerprint* is 64 hex characters
+    too, so it parsed as a 32-byte key, was stored as one, and then refused every release
+    silently - the Mac sat on 0.6.181 for days. Both places this Mac knows a fingerprint from
+    (its trusted record and its held descriptor) must refuse it and say what to paste instead."""
+    from components.hub.backend import app_release, ed25519
+
+    gateway_seed, _ = _keypair()
+    _trust(hub, gateway_seed)
+    fingerprint = app_release.fingerprint(ed25519.public_key(gateway_seed))
+    artifact = secrets.token_bytes(2048)
+    pushed = hub.post("/api/hub/release", headers=_fleet_headers(),
+                      json=_body(_descriptor(artifact, gateway_seed), artifact))
+    assert pushed.status_code == 200, pushed.text
+
+    for source in ("the trusted record", "the held descriptor"):
+        if source == "the held descriptor":
+            # The state 1607 was in: the descriptor still names the gateway's key id.
+            app_release.TRUST_FILE.unlink()
+            assert app_release.trusted_publisher() is None
+            assert app_release.load_release()["publisher_key_id"] == fingerprint
+        refused = hub.post("/api/hub/release/trust", headers=_hub_headers(),
+                           json={"public_key": fingerprint, "publisher_id": "gatewaykh"})
+        assert refused.status_code == 400, (source, refused.text)
+        detail = refused.json()["detail"]
+        assert "fingerprint" in detail and "Gateway Settings" in detail, (source, detail)
+
+    # The real key is still accepted, and the refused paste stored nothing.
+    accepted = hub.post("/api/hub/release/trust", headers=_hub_headers(),
+                        json={"public_key": ed25519.public_key(gateway_seed).hex()})
+    assert accepted.status_code == 200, accepted.text
+    assert app_release.trusted_publisher()["public_key"] == ed25519.public_key(gateway_seed).hex()
+
+
+def test_get_release_reports_what_the_last_controller_poll_concluded(hub):
+    """A Mac whose updates are being refused must be able to name the fault on the screen that
+    configures updates, instead of looking merely out of date."""
+    from components.hub.backend import release_sync
+
+    saved = dict(release_sync.last_sync)
+    try:
+        release_sync.last_sync.update(at=None, result=None, error=None)
+        body = hub.get("/api/hub/release", headers=_fleet_headers()).json()
+        assert body["last_sync"] == {"at": None, "result": None, "error": None, "ok": False}
+
+        release_sync.last_sync.update(
+            at=1790000000.0, result=None,
+            error="the release is signed by a gateway key other than the one this Mac trusts")
+        body = hub.get("/api/hub/release", headers=_fleet_headers()).json()
+        assert body["last_sync"]["ok"] is False
+        assert body["last_sync"]["error"] == (
+            "the release is signed by a gateway key other than the one this Mac trusts")
+        assert body["last_sync"]["at"] == 1790000000.0
+
+        release_sync.last_sync.update(result="already mirrored", error=None)
+        body = hub.get("/api/hub/release", headers=_fleet_headers()).json()
+        assert body["last_sync"]["ok"] is True and body["last_sync"]["error"] is None
+    finally:
+        release_sync.last_sync.clear()
+        release_sync.last_sync.update(saved)
+
+
 def test_trust_is_hub_only_and_get_routes_are_fleet_readable(hub):
     from components.hub.backend import auth
 
     seed, public = _keypair()
     empty = hub.get("/api/hub/release", headers=_fleet_headers())
     assert empty.status_code == 200
-    assert empty.json() == {"release": None, "trusted_publisher": None, "delta": NO_DELTA}
+    assert set(empty.json()) == {"release", "trusted_publisher", "delta", "last_sync"}
+    assert empty.json()["release"] is None
+    assert empty.json()["trusted_publisher"] is None
+    assert empty.json()["delta"] == NO_DELTA
 
     refused = hub.post("/api/hub/release/trust", headers=_fleet_headers(),
                        json={"public_key": public.hex(), "publisher_id": "gatewaykh"})
@@ -377,23 +442,32 @@ def test_trust_rejects_a_bad_key(hub):
 
 def test_get_release_reports_the_installed_trusted_publisher(hub):
     """The additive ``trusted_publisher`` field: null before an owner installs a
-    gateway key, the exact fingerprint after, and never a fabricated value."""
+    gateway key, the exact fingerprint after, and never a fabricated value.
+
+    ``last_sync`` is the other additive field and is checked on its own below; it is set aside
+    here so these assertions stay about the trust anchor.
+    """
     from components.hub.backend import ed25519
 
     seed, public = _keypair()
     fingerprint = hashlib.sha256(public).hexdigest()
 
+    def without_last_sync(body: dict) -> dict:
+        return {key: value for key, value in body.items() if key != "last_sync"}
+
     # Before any trust install the key is absent, reported as an explicit null.
     before = hub.get("/api/hub/release", headers=_fleet_headers())
     assert before.status_code == 200, before.text
-    assert before.json() == {"release": None, "trusted_publisher": None, "delta": NO_DELTA}
+    assert without_last_sync(before.json()) == {
+        "release": None, "trusted_publisher": None, "delta": NO_DELTA}
     assert "trusted_publisher" in before.json()
+    assert "last_sync" in before.json()
 
     # After the owner installs one, GET reports it verbatim.
     _trust(hub, seed, publisher_id="gatewaykh")
     after = hub.get("/api/hub/release", headers=_fleet_headers())
     assert after.status_code == 200, after.text
-    assert after.json() == {
+    assert without_last_sync(after.json()) == {
         "release": None,
         "trusted_publisher": {"publisher_id": "gatewaykh",
                               "fingerprint": fingerprint,
@@ -426,7 +500,7 @@ def test_get_release_release_key_is_unchanged_by_the_added_field(hub):
                       json=_body(descriptor, artifact)).json()
 
     answer = hub.get("/api/hub/release", headers=_fleet_headers()).json()
-    assert set(answer) == {"release", "trusted_publisher", "delta"}
+    assert set(answer) == {"release", "trusted_publisher", "delta", "last_sync"}
     assert answer["release"] == stored
     # The descriptor itself gained nothing from the additive response field.
     assert set(answer["release"]) == set(stored)

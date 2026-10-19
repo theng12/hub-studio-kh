@@ -47,6 +47,17 @@ BLOB_WAIT_POLL_S = 5.0
 last_sync: dict[str, Any] = {"at": None, "result": None, "error": None}
 
 
+def last_sync_report() -> dict[str, Any]:
+    """The last poll in the one shape the route and the app read: ``ok``, the refusal in plain
+    words (``error``), what it concluded (``result``) and when (``at``, epoch seconds).
+
+    Published by ``GET /api/hub/release`` so a Mac whose updates are being refused names its own
+    fault on the screen that configures updates, instead of looking merely out of date."""
+    snapshot = dict(last_sync)
+    snapshot["ok"] = snapshot.get("at") is not None and snapshot.get("error") is None
+    return snapshot
+
+
 def controller_target() -> tuple[str, dict[str, str]] | None:
     """The controller this Mac joined and the credential to present, or None when this Mac is not
     a node. A node presents its own credential (``NODE_ALLOWED``); the group token only before

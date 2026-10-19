@@ -5262,9 +5262,13 @@ struct StudioContent: View {
     @ViewBuilder private var trustedPublisherRow: some View {
         VStack(alignment: .leading, spacing: HubSpace.xs) {
             Text("Trusted Gateway App Update Key").font(HubType.rowTitle)
-            if let fingerprint = workspace.trustedPublisher?.installedFingerprint {
-                ValueRow("App Update Key (fingerprint)") {
-                    Text(fingerprint)
+            if workspace.trustedPublisher?.installedFingerprint != nil {
+                // The key's own first characters, not the fingerprint. A fingerprint is 64 hex
+                // characters too, so pasting one into the key field is accepted and then refuses
+                // every release silently (the Mac 1607 wedged on 0.6.181 for days). Showing the
+                // stored *key* is what lets the operator see that mistake on this screen.
+                ValueRow("App Update Key") {
+                    Text(workspace.trustedPublisher?.keyPrefix.map { "\($0)…" } ?? "installed")
                         .font(HubType.mono)
                         .textSelection(.enabled)
                         .multilineTextAlignment(.trailing)
@@ -5278,6 +5282,13 @@ struct StudioContent: View {
                 Text("No App Update Key installed yet — this Mac cannot accept an app release.")
                     .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+            // A Mac whose updates are being refused names its own fault here, on the screen that
+            // configures updates, instead of looking merely out of date.
+            if let refusal = workspace.releaseLastSync?.refusal {
+                Text("Updates refused: \(refusal)")
+                    .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
         }
     }
 
@@ -5287,7 +5298,7 @@ struct StudioContent: View {
         VStack(alignment: .leading, spacing: HubSpace.s) {
             Text("Change App Update Key").font(HubType.rowTitle)
             HStack {
-                TextField("64 hex or base64 Ed25519 public key", text: $publisherKeyDraft)
+                TextField("Paste the key from Gateway → Settings → App Update Key", text: $publisherKeyDraft)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 360)
                     .font(HubType.mono)
                 TextField("Publisher id (optional)", text: $publisherIdDraft)
@@ -5306,7 +5317,7 @@ struct StudioContent: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!connected)
-                Text("Paste the App Update Key public key GatewayKH publishes. It must be 64 hex characters (either case) or standard base64.")
+                Text("Paste the key from Gateway → Settings → App Update Key (starts with e6b9eece on this fleet). 64 hex characters (either case) or standard base64 — the Public key itself, never the fingerprint printed beside it.")
                     .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
