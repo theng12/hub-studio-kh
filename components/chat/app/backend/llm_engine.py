@@ -24,20 +24,36 @@ from typing import Callable, Generator
 
 # Conservative default when the model publishes nothing. It is the app's own long-form budgeting
 # floor, **not a claim about this model** — Qwen3.5-9B 4-bit's own `config.json` states
-# `max_position_embeddings = 262144`, and this number is two orders of magnitude below it.
+# `max_position_embeddings = 262144`, and this number is an order of magnitude below it.
 #
-# Raised 4,096 -> 16,384 on 2026-09-26, and it **must move with the Hub's chat deadline**. GatewayKH
-# measured the workload and the coupling:
+# Raised 4,096 -> 16,384 on 2026-09-26 and 16,384 -> **128,000 on 2026-10-19**, the owner's
+# decision: *"4096 is too small. all models write more than that. the minimum is at least 128K
+# tokens."* It is the last resort only — a figure the model states always wins, and a caller's
+# number always wins over both.
 #
-#     16,384 tokens at 1,800 s is 76 / 65 / 51 % on M1 / M2 / M4 — the same margin 8,192 at 900 s
-#     gives today. 16,384 at 900 s is 152 / 130 / 101 %, which times out on every chip including
-#     the M4. The two numbers are one ceiling and cannot be changed apart.
+# **What this does to the chat deadline, plainly.** The Hub's own floor is
+# `standalone.MODALITY_DEADLINE_FLOOR_S["chat"] = 1800.0`, and the pair was tuned together on
+# measured throughput: 16,384 tokens in 1,800 s is 76 / 65 / 51 % on M1 / M2 / M4 (≈ 12.0 / 14.0
+# / 17.9 tokens a second; the same arithmetic that set the 1,800 s floor from 12,090 tokens in
+# 1,008 s on an M1). At those rates **1,800 s now buys about 21,500 (M1) / 25,200 (M2) / 32,100
+# (M4) tokens — a sixth to a quarter of the allowance this constant publishes. A caller that
+# genuinely generates 128,000 tokens is therefore cut by the DEADLINE, not by the ceiling,
+# roughly 2.0-3.0 hours before it could finish** (10,700 s on an M1, 7,200 s on an M4).
 #
-# The Hub side of that pair is `standalone.MODALITY_DEADLINE_FLOOR_S["chat"] = 1800.0`, and it is
-# raised with this one, in the same build. If this constant is raised again, that floor has to be
-# re-derived from the same arithmetic, or the lane publishes a capacity it cannot reach before its
-# own deadline.
-FALLBACK_MAX_OUTPUT_TOKENS = 16384
+# That is stated rather than fixed, deliberately. Raising this constant does not by itself make
+# an answer longer: a chat answer stops at EOS, and the ceiling is a maximum, not a target — it
+# removes a cap, it does not add work. Raising the deadline would, and it is a different
+# decision with a different cost: a lane is held for hours and a broken job is noticed in hours
+# instead of 30 minutes (the trade the owner weighed and accepted at 1,800 s: *"every job may
+# hang 30 min instead of 15"*). `stall.py` still catches a worker that has gone quiet in about
+# two minutes whatever this number is. So the two numbers no longer agree, and the floor is the
+# half left alone — **whoever raises it next must re-derive it from this arithmetic, in the same
+# build, or the lane publishes a capacity it cannot reach before its own deadline.**
+#
+# The default is also clamped to the room the model's own context leaves
+# (`_refuse_over_context(asked=False)`), so a model with a smaller window than this figure —
+# gemma4-26b-a4b-qat-4bit states 32,768 — is not refused for a number it never chose.
+FALLBACK_MAX_OUTPUT_TOKENS = 128_000
 
 # This worker's sampling defaults. They live here, not in a route literal, so the value the
 # lane contract publishes and the value a request is served with cannot drift apart.
@@ -289,7 +305,7 @@ class ChatEngine:
         is a sentence and a sentence is not something a consumer can branch on — and the consumer
         here is two hops away, with a gateway in between that must relay rather than interpret.
         Without a token the gateway had to guess, and it guessed ``provider`` for every stated
-        value: the live row publishes ``max_output_tokens: 16384`` with
+        value: the live row publishes ``max_output_tokens: 128000`` with
         ``source_kind: worker_default`` here, and the gateway was describing that as a number the
         *model* stated. That is the claim this field exists to stop.
 
@@ -415,22 +431,60 @@ class ChatEngine:
     def _budget(self, max_tokens: int | None) -> int:
         return min(int(max_tokens or self.max_output_tokens), self.max_output_tokens)
 
-    def _refuse_over_context(self, prompt_tokens: int | None, budget: int) -> None:
-        """Refuse a prompt that cannot fit the context the model states.
+    def _named_a_figure_of_its_own(self, max_tokens: int | None) -> bool:
+        """Whether this request named a figure of its own, rather than one this lane serves with.
+
+        The route resolves an omitted `max_tokens` to the lane's published default
+        (`main._lane_output_budget`, which is `min(FALLBACK_MAX_OUTPUT_TOKENS, ceiling)`), so by
+        the time the engine sees the value, *"the caller asked for nothing"* and *"the caller
+        asked for exactly the lane's default"* are one number and cannot be told apart. The lane
+        therefore treats that figure as its own — a request naming something **else** named a
+        choice, and that choice is refused when it does not fit the model's context. See
+        `_refuse_over_context` for what "ours" changes.
+        """
+        if max_tokens is None:
+            return False
+        return int(max_tokens) != min(FALLBACK_MAX_OUTPUT_TOKENS, self.max_output_tokens)
+
+    def _refuse_over_context(self, prompt_tokens: int | None, budget: int, *,
+                             asked: bool) -> int:
+        """Refuse a prompt that cannot fit the context the model states — and return the
+        allowance the request will actually run with.
 
         Written as a refusal, not a truncation: a caller that sends more than the model can hold
         is told the measured count and the model's own number. Where nothing states a context
         window the check refuses nothing - this worker does not invent a limit.
+
+        **A number this worker filled in is not the caller's, so it is not the caller's to be
+        refused for.** `asked=False` means the request named no figure of its own
+        (`_named_a_figure_of_its_own`) and `_budget` served the worker default — 128,000 since
+        the owner's 2026-10-19 decision ("the minimum is at least 128K tokens"). A model that
+        states a smaller context than that would otherwise REFUSE every request that names no
+        allowance: gemma4-26b-a4b-qat-4bit states `qualification.context_window_tokens = 32768`,
+        and the prompt alone would never leave 128,000 of room, so the model would be unusable
+        for exactly the caller that asked for nothing. So our own default shrinks to the room the
+        context leaves and the caller gets the longest answer the model can hold. A figure the
+        request named itself is never shrunk — it is theirs to be refused, with the measured
+        counts, exactly as before.
         """
         limit = self.context_window_tokens
         if limit is None or prompt_tokens is None:
-            return
-        if prompt_tokens + budget > limit:
+            return budget
+        if prompt_tokens + budget <= limit:
+            return budget
+        if not asked:
+            room = limit - prompt_tokens
+            if room >= 1:
+                return room
             raise ChatContextExceeded(
-                f"messages: the prompt is {prompt_tokens} tokens and max_tokens asks for "
-                f"{budget} more, {prompt_tokens + budget} together, above the {limit} tokens "
-                f"this model states ({self.context_window_source}). Send a shorter prompt or a "
-                f"smaller max_tokens; this worker refuses rather than truncating.")
+                f"messages: the prompt is {prompt_tokens} tokens, above the {limit} tokens this "
+                f"model states ({self.context_window_source}). Send a shorter prompt; this worker "
+                f"refuses rather than truncating.")
+        raise ChatContextExceeded(
+            f"messages: the prompt is {prompt_tokens} tokens and max_tokens asks for "
+            f"{budget} more, {prompt_tokens + budget} together, above the {limit} tokens "
+            f"this model states ({self.context_window_source}). Send a shorter prompt or a "
+            f"smaller max_tokens; this worker refuses rather than truncating.")
 
     def check_prompt_fits(self, messages: list[dict], *, max_tokens: int | None = None,
                           response_format=None, thinking: bool = False) -> int | None:
@@ -445,7 +499,10 @@ class ChatEngine:
             working = self._with_instruction(messages, self.json_instruction(response_format))
             budget = self._budget(max_tokens)
             prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
-            self._refuse_over_context(prompt_tokens, budget)
+            # Nothing is generated here, so the allowance this returns is not kept: the check
+            # only has to agree with the generation path that this request would be accepted.
+            asked = self._named_a_figure_of_its_own(max_tokens)
+            self._refuse_over_context(prompt_tokens, budget, asked=asked)
             return prompt_tokens
 
     def _prompt(self, messages: list[dict], *, thinking: bool = False) -> str:
@@ -599,7 +656,7 @@ class ChatEngine:
             instruction = self.json_instruction(response_format)
             working = self._with_instruction(messages, instruction)
             prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
-            self._refuse_over_context(prompt_tokens, budget)
+            budget = self._refuse_over_context(prompt_tokens, budget, asked=self._named_a_figure_of_its_own(max_tokens))
             self._generating = True
             started = time.time()
             try:
@@ -709,7 +766,7 @@ class ChatEngine:
             budget = self._budget(max_tokens)
             working = self._with_instruction(messages, self.json_instruction(response_format))
             prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
-            self._refuse_over_context(prompt_tokens, budget)
+            budget = self._refuse_over_context(prompt_tokens, budget, asked=self._named_a_figure_of_its_own(max_tokens))
             self._generating = True
             self._last_activity_at = time.time()
             # Where `complete()` starts its own window: after `_load_locked()`, so a cold turn's

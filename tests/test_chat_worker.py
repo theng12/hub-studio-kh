@@ -691,9 +691,15 @@ class PromptBudgetTests(unittest.TestCase):
         self.assertIsNone(engine.context_window_tokens)
 
     def test_the_route_refuses_a_prompt_past_the_context_before_streaming(self) -> None:
+        # The prompt itself is past the model's stated context — what the name says. The prompt
+        # used to be 90 of 100, so what actually refused the request was the lane's own default
+        # budget not fitting, and that is no longer a refusal: a figure the request did not name
+        # is shrunk to the room the context leaves (`_refuse_over_context`, `asked=False`), or a
+        # model with a smaller context than the lane default could never serve an unsized
+        # request at all. See `RealEngineIntegrationTests` for that half.
         with tempfile.TemporaryDirectory() as tmp:
-            engine = self._engine(Path(tmp), context=100, tokens=90)
-            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(90))):
+            engine = self._engine(Path(tmp), context=100, tokens=150)
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _CountedTokenizer(150))):
                 policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
                 client = TestClient(create_app(engine, policy, TOKEN, "a" * 64))
                 for stream in (False, True):
@@ -704,6 +710,7 @@ class PromptBudgetTests(unittest.TestCase):
                                      f"stream={stream} did not refuse a prompt past the context")
                     detail = response.json()["detail"]
                     self.assertIn("messages", detail)
+                    self.assertIn("150", detail, "the refusal does not name the measured prompt")
                     self.assertIn("100", detail)
 
 
@@ -828,9 +835,11 @@ class RealEngineIntegrationTests(unittest.TestCase):
         # the context the model states. The old value was 8192, hand-tuned against a 4096-token
         # fallback; when the fallback went to 16,384 this fixture became the binding constraint
         # and the request was refused, which is the refusal working correctly. Keep it
-        # comfortably above FALLBACK_MAX_OUTPUT_TOKENS so the fallback is what binds.
+        # comfortably above FALLBACK_MAX_OUTPUT_TOKENS so the fallback is what binds — 262,144
+        # is Qwen3.5-9B 4-bit's own `max_position_embeddings`, and the fallback is 128,000 since
+        # the owner's 2026-10-19 decision.
         (model_dir / "config.json").write_text(
-            json.dumps({"text_config": {"max_position_embeddings": 65536}}))
+            json.dumps({"text_config": {"max_position_embeddings": 262144}}))
         (model_dir / "model.safetensors").write_bytes(b"weights")
         (model_dir / "tokenizer.json").write_text("{}")
         return model_dir
@@ -863,7 +872,73 @@ class RealEngineIntegrationTests(unittest.TestCase):
             self.assertNotIn("temp", captured["kwargs"])
             self.assertEqual(body["usage"], {"prompt_tokens": 1, "completion_tokens": 2,
                                              "total_tokens": 3})
-            self.assertEqual(engine.context_window_tokens, 65536)
+            self.assertEqual(engine.context_window_tokens, 262144)
+
+    def test_a_context_smaller_than_the_fallback_still_serves_an_unsized_request(self) -> None:
+        """A number this worker filled in may not refuse the request it was invented to serve.
+
+        `_budget` uses `FALLBACK_MAX_OUTPUT_TOKENS` (128,000 since the owner's 2026-10-19
+        decision) when the caller names nothing, and a model can state a much smaller context —
+        gemma4-26b-a4b-qat-4bit states `qualification.context_window_tokens = 32768`. Refusing
+        every unsized request on such a model would make it unusable for exactly the caller that
+        asked for nothing, so the worker's own default shrinks to the room the context leaves,
+        and the generation runs with that number.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "model"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(
+                json.dumps({"text_config": {"max_position_embeddings": 64}}))
+            (model_dir / "model.safetensors").write_bytes(b"weights")
+            (model_dir / "tokenizer.json").write_text("{}")
+            engine = ChatEngine(model_dir=model_dir, model_id="mlx-community/Qwen3.5-9B-4bit",
+                                revision="c" * 40)
+            captured: dict = {}
+
+            def fake_generate(model, tokenizer, prompt, **kwargs):
+                captured["kwargs"] = kwargs
+                return "ok"
+
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _StubTokenizer())), \
+                    mock.patch("mlx_lm.stream_generate", _stream_text(fake_generate)):
+                policy = memory_policy_module.MemoryPolicy(root, engine)
+                app = create_app(engine, policy, TOKEN, "b" * 64)
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                        json={"messages": [{"role": "user", "content": "hi"}]})
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(captured["kwargs"]["max_tokens"], 63,
+                             "the room the 64-token context leaves after the 1-token prompt")
+
+    def test_a_callers_own_number_over_the_context_is_still_refused(self) -> None:
+        """The other half: a figure the caller chose is theirs to be refused, with the counts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "model"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(
+                json.dumps({"text_config": {"max_position_embeddings": 64}}))
+            (model_dir / "model.safetensors").write_bytes(b"weights")
+            (model_dir / "tokenizer.json").write_text("{}")
+            engine = ChatEngine(model_dir=model_dir, model_id="mlx-community/Qwen3.5-9B-4bit",
+                                revision="c" * 40)
+
+            with mock.patch("mlx_lm.load", lambda *a, **k: (object(), _StubTokenizer())):
+                policy = memory_policy_module.MemoryPolicy(root, engine)
+                app = create_app(engine, policy, TOKEN, "b" * 64)
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                        json={"messages": [{"role": "user", "content": "hi"}],
+                              "max_tokens": 1000})
+
+            self.assertEqual(response.status_code, 422, response.text)
+            detail = response.json()["detail"]
+            self.assertIn("1000", detail)
+            self.assertIn("64", detail)
 
     def test_engine_from_environment_resolves_the_library_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1646,10 +1721,11 @@ class _StatedLimitEngine(_RecordingEngine):
     The shipped Qwen3.5-9B 4-bit ships no `generation_config.json`, so this worker's fallback is
     the only bound, and a stated ceiling has to sit *above* it for the two to be told apart.
     That is what this fixture is for, so its value must move whenever the fallback moves — it
-    was 8192 against a 4096 fallback, and at 16,384 that silently inverted its purpose.
+    was 8192 against a 4096 fallback, and at 16,384 that silently inverted its purpose. 262,144
+    is Qwen3.5-9B 4-bit's own `max_position_embeddings`, and it stays above the 128,000 fallback.
     """
 
-    max_output_tokens = 32768
+    max_output_tokens = 262144
 
     def model_limits(self) -> dict:
         return {
