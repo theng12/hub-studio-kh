@@ -2,6 +2,28 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.191 — 2026-10-20
+
+### A job that stops making progress is stopped, and you are told why
+
+If an Image or Voice job running on this Mac freezes — no progress at all, not just slow — the app
+now stops it and says so plainly, for example "stopped: no image progress for 63 minutes". Until
+now it was only quietly noticed: the part of the app that checks for this existed, but nothing ever
+called it, so the job sat there until you cancelled it. The waiting is generous: **an hour for an
+Image job and two hours for a Voice job**, because Voice only reports progress between long sections
+of narration. A job that is still moving is never touched, and work running on another Mac is left
+to that Mac.
+
+A job is only marked stopped once the worker has actually taken the stop, so you will not see a job
+reported as finished while it is still holding the Mac.
+
+### Smaller fixes
+
+The app's quit-and-relaunch helper now waits the full time it says it waits. Its old arithmetic
+counted whole seconds from when the shell started, so a two-second wait could be as little as one
+second — and it could ask a Hub that was still closing down to quit immediately. The tests that
+guard this, and the flaky ones around them, no longer fail at random.
+
 ## 0.6.190 — 2026-10-20
 
 ### Chat work gets the time it actually needs — and no more

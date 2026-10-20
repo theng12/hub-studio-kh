@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.191 — 2026-10-20
+
+One tested fix branch was merged over verified main `2868be4` (0.6.190) in worktree
+`_worktrees/studio-hub-kh/release-191`: `fix/flaky-gate-tests` (`25c9299`), which also carries the
+merged `fix/fault-injection` (`0a09916`). `native/StudioHub.swift` moves, so the app binary is
+rebuilt.
+
+- **A local Image or Voice job that stops making progress is now actually stopped.** `components/hub/backend/automatic_recovery.py` was adopted with the rest of the source Hub's backend, but its caller lived in `main.py`, which the adoption records as an excluded entry point — nothing in the packaged Hub ever called it, so a local job whose own progress froze was only *flagged* (`stall.py` deliberately never acts). `broker._stop_a_stalled_local_job` is that caller: it observes the local job's own counters on the poll the Hub already makes, tells the worker to stop when the policy says eligible, and ends the item with a plain reason ("stopped: no image progress for 63 minutes") under its own code, **`STALLED`**. A peer's job is left to the peer, whose own Hub runs the same check.
+- **The windows are the module's measured budgets — 1 hour for Image, 2 hours for Voice — not Chat's five minutes.** Voice progress moves only at long-form *section* boundaries and one measured Breeze section took 1,747 s on an M1, so a five-minute window would stop healthy narration. A job that keeps moving, or has not yet reached its budget, is left alone.
+- **Image progress was read from a field nobody writes.** The observer named `current_step` / `total_steps`, which no worker in this app has ever published — `components/image/app/backend/generation.py` writes **`denoise_step` / `denoise_steps`** — so the stage evidence was false for every Image job and the observer could never have fired. The stage fields now live in one table, named after the workers that publish them.
+- **A stalled item is only ended once the worker took the stop.** The signal goes first; an unconfirmed one leaves the item running for the next poll. Before this, a signal that never landed would have reported a dead job while a live one still held the Mac, and the durable phase would then read as `cancel_requested`, which the policy treats as protected and never retries.
+- **The activity timestamp is the item's own last progress** (the merged `fix/fault-injection`). `components/hub/backend/activity.py` follows the item rather than the queue around it, so a stall is judged on the job's own silence.
+- **The flaky gate tests are fixed at the source.** The Voice child's teardown crash is isolated; the PID file is written aside and renamed, so a reader that waits for the path to exist can no longer find it empty; and the native quit wait counts **half-second ticks** instead of `SECONDS` arithmetic — `SECONDS` is whole seconds since the shell started, so `$((SECONDS + 2))` could be reached as little as 1.0 s later and the helper could SIGTERM a Hub that was still quitting normally, which was a real product bug as well as the source of the native test's timing flake. Environment leaks between test modules are fixed at the source rather than worked around.
+- Tests: `tests/test_hub_stall_stop.py` (new) drives the stop through the real proxy and pins the reason, the durable record and the cases that must not stop; `tests/test_local_stall_stop.py` (new) pins the local caller; `components/voice/app/tests/test_native_executor.py` and `test_priority_mlx_models.py` carry the race and environment fixes.
+
 ## 0.6.190 — 2026-10-20
 
 One tested feature branch was merged over verified main `5aab40e` (0.6.189) in worktree
