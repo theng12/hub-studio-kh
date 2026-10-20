@@ -369,6 +369,7 @@ def summary(batch: dict, include_raw: bool = False, include_results: bool = True
             "max_tries": MAX_TRIES, "started_at": pack.get("started_at"),
             "retry_at": pack.get("retry_at"),
             "duration_seconds": pack.get("duration_seconds"), "error": pack.get("error"),
+            "error_code": pack.get("error_code"),
             # The worker's own stated generation time, under the name the page path uses for the
             # same fact, so a reader never has to guess which of the two numbers is the model's.
             "generation_s": pack.get("generation_s"),
@@ -734,6 +735,8 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
                     generation=None) -> None:
     started = time.time()
     reservation_owner: str | None = None
+    limit: chat_deadline.ChatDeadline | None = None
+    posted: float | None = None
     try:
         if _expire_genstudio_batch(batch):
             return
@@ -772,6 +775,7 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
         # own generation window. Optional bookkeeping; a failed write is logged and the pack
         # runs under the worker's normal memory mode.
         reservation_owner = broker._begin_preferred_reservation(studio, "chat")
+        posted = time.monotonic()
         response = await chat_deadline.await_with_progress(
             monitor, str(studio["id"]),
             monitor._client.post(
@@ -854,13 +858,24 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
         pack.update(state="partial" if pack["results"] else "error",
                     error=chat_deadline.stall_reason(exc.silent_for), finished_at=time.time())
     except Exception as exc:
+        if (isinstance(exc, httpx.ReadTimeout) and limit is not None and posted is not None
+                and chat_deadline.deadline_passed(posted, limit)):
+            # The proxy lane's rule: a read timeout on this one-request lane is the job's own
+            # allowance running out. Terminal and named, not a retry - a second try would only
+            # run the whole limit again. (httpx's read-timeout message is empty, so the generic
+            # path below could not say why.)
+            pack.update(state="partial" if pack["results"] else "error",
+                        error=chat_deadline.deadline_reason(limit),
+                        error_code="CHAT_DEADLINE_REACHED", finished_at=time.time())
+            return
+        reason = str(exc) or type(exc).__name__
         if broker._is_machine_reservation_refusal(exc) and not batch.get("cancelled"):
             # A node already running other work answered at its door: nothing ran and the Mac is
             # healthy. A wait, as Subtitle and the broker treat it - not a spent try, which after
             # MAX_TRIES busy answers ended the pack "local is reserved for other work on this Mac".
             pack.update(state="queued", studio=None, tries=max(0, pack["tries"] - 1),
                         retry_at=time.time() + broker.MACHINE_RESERVED_AVOID_S,
-                        error=f"waiting for a free machine: {exc}")
+                        error=f"waiting for a free machine: {reason}")
             return
         transient = isinstance(exc, (httpx.HTTPError, OSError, ValueError)) or getattr(exc, "transient", False)
         capacity = broker._is_capacity_failure(str(exc))
@@ -873,10 +888,10 @@ async def _run_pack(monitor, batch: dict, pack: dict, studio: dict, owner: str,
                                                 len(TRANSIENT_RETRY_DELAYS) - 1)])
             pack.update(state="queued", studio=None,
                         retry_at=time.time() + delay,
-                        error=f"try {pack['tries']} failed; retrying in {delay}s: {exc}")
+                        error=f"try {pack['tries']} failed; retrying in {delay}s: {reason}")
         else:
             pack.update(state="partial" if pack["results"] else "error",
-                        error=str(exc), finished_at=time.time())
+                        error=reason, finished_at=time.time())
     finally:
         busy_studios.discard(studio["id"])
         broker.release_external_machine(studio.get("machine", "local"), owner)
