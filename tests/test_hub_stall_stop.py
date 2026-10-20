@@ -98,6 +98,12 @@ os.environ.update({
     # the real code path (not a shortened copy of it) is what runs.
     "STUDIOHUB_CHAT_STALL_SECONDS": "0.4",
 })
+# This Hub owns no model library, and the packaged model gate only runs where one is configured.
+# An inherited value sends the proxy down a readiness path whose catalog this fixture's stub
+# monitor does not carry, so the proof would fail on the release gate's own environment (which
+# binds an empty models root) and pass on a bare one. Same reason `test_chat_hub_wiring`'s
+# fixtures say so themselves.
+os.environ.pop("STUDIOHUB_MODELS_DIR", None)
 
 from components.hub.backend import activity, broker, chat_jobs, ledger, peers  # noqa: E402
 
