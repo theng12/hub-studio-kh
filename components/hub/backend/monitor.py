@@ -311,7 +311,15 @@ class StudioMonitor:
             catalog_state_path or DATA_DIR / "catalog_observations.json"
         )
         self._restart_alerts: dict[str, dict] = {}
-        self._client = httpx.AsyncClient()
+        # **The one client a controller reaches its fleet with, and the one place the pull
+        # fallback is installed.** Every controller-to-node call that is not an explicit relay —
+        # the peer poll, a worker dispatch, Chat's relay, Subtitle's, a shared-voice sync, a
+        # model-memory release — goes through this client, so a Mac the controller cannot dial is
+        # reached through its own check-in without a single call site being rewritten.
+        # `fleet_pull.PullTransport` dials first and falls back only when the dial fails, so a Mac
+        # the controller *can* reach is untouched.
+        from . import fleet_pull
+        self._client = fleet_pull.client()
         self._task: asyncio.Task | None = None
         self._catalog_task: asyncio.Task | None = None
         self._catalog_refresh_lock: asyncio.Lock | None = None

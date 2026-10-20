@@ -191,8 +191,15 @@ def verify_node_credential(node_id: str, offered: str | None) -> bool:
 
 
 def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = None,
-              last_stops: dict[str, dict[str, Any]] | None = None) -> float | None:
+              last_stops: dict[str, dict[str, Any]] | None = None, *,
+              via: str = "probe") -> float | None:
     """Stamp `last_seen_at` for the nodes that just answered. Returns the stamp, or `None`.
+
+    `via` is **why** this controller believes the Mac is there: `"probe"` when it dialled the
+    stored address and got an answer, `"check-in"` when the Mac's own authenticated call home is
+    the evidence. Both are evidence; the reason is kept distinct because the two fail in
+    different ways, and an operator looking at a Mac that never answers a dial needs to know the
+    controller is hearing from it at all.
 
     Batched deliberately: `inventory()` probes every node on every fleet read, and a write
     per node would turn one page refresh into fifty-three file rewrites. `last_seen_at` is
@@ -215,6 +222,7 @@ def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = 
         if row is None:
             continue
         row["last_seen_at"] = now
+        row["last_seen_via"] = via
         known = (startups or {}).get(node_id)
         if isinstance(known, dict):
             # Kept so a Mac that later goes quiet is still described by what it last said about its
@@ -237,6 +245,214 @@ def note_seen(node_ids: list[str], startups: dict[str, dict[str, Any]] | None = 
 def _answered(snapshot: dict[str, Any] | None) -> bool:
     """Whether this is a snapshot the node answered with this controller's credential."""
     return isinstance(snapshot, dict) and bool(snapshot.get("reachable")) and snapshot.get("auth") is not False
+
+
+# -- the node's own call home: evidence of life, and the pull channel's door -----------------
+#
+# **A dial the controller cannot make was the only evidence of life it accepted, and for a Shops
+# Mac there is no such dial.** Sharing a Tailscale node works one way: the shared Mac reaches its
+# controller, the controller cannot reach it. Three Shops Macs therefore joined and then read
+# `never_connected` for ever while they were switched on, checking in every minute. The node's own
+# authenticated call is evidence — it is the Mac saying so, with a credential only that Mac holds —
+# and it is now recorded as such, with the reason kept distinct from a probe.
+
+#: How long a Mac may go without checking in before it stops counting as there. A node checks in
+#: every 60 s, so this is three missed ticks.
+CHECKIN_FRESH_S = 180.0
+
+#: What a check-in carries into the roster row, so a controller that cannot dial still knows what
+#: the Mac is: its own name for itself, what it runs, and what it says it is doing.
+_CHECKIN_KEYS = ("last_checkin_at", "checkin_version", "checkin_workstation",
+                 "checkin_current_job", "checkin_startup", "checkin_last_stop",
+                 "checkin_resources")
+
+#: What a node's own `/api/hub/resources?local_only=true` answer may carry into the roster. The
+#: controller is reading another machine's word about itself, so only the fields a roster row and a
+#: dispatch decision actually use travel — the same rule `_current_job_of` and `_workstation_of`
+#: already follow.
+_RESOURCE_KEYS = ("host", "studios", "version", "startup", "current_job", "last_stop",
+                  "workstation", "priority_order", "chat_priority", "source")
+
+
+def _resources_of(value: object, node_id: str) -> dict[str, Any] | None:
+    """A node's own resources snapshot, cut to the contract, or `None` when it did not send one.
+
+    A node that names a *different* Mac in the snapshot it sent is not describing itself, and its
+    answer is dropped rather than filed against this row.
+    """
+    if not isinstance(value, dict):
+        return None
+    machine = value.get("machine")
+    if isinstance(machine, dict):
+        named = str(machine.get("id") or "").strip().lower()
+        if named and named != node_id:
+            return None
+    out: dict[str, Any] = {key: value.get(key) for key in _RESOURCE_KEYS if key in value}
+    # The node answered through its own authenticated call, so the two facts `dispatch_ready`
+    # reads are true by construction: it is there, and it is this controller's credential it
+    # answered with. Marked `pulled` so every reader can see this was not a dial.
+    out.update({"reachable": True, "auth": True, "status": "connected", "pulled": True})
+    return out
+
+
+def checkin_alive(row: dict[str, Any] | None, *, now: float | None = None) -> bool:
+    """Whether this Mac's own call home is recent enough to count as being there.
+
+    Deliberately the *only* question asked of it. A check-in is the Mac's word about itself, so it
+    is treated exactly as a probe answer is: a fact about now, with a window, not a flag that stays
+    true once set.
+    """
+    at = (row or {}).get("last_checkin_at")
+    if isinstance(at, bool) or not isinstance(at, (int, float)) or at <= 0:
+        return False
+    return (time.time() if now is None else now) - float(at) <= CHECKIN_FRESH_S
+
+
+def dial_is_failing(row: dict[str, Any] | None) -> bool:
+    """Whether this controller's most recent evidence about the Mac came from its own call home.
+
+    **The rule that keeps "dial first" from meaning "wait ten minutes for a dial that cannot
+    work".** `probe` dials every node on every roster read, and the reason it last succeeded or
+    failed is recorded as `last_seen_via`. While that reads `check-in`, the controller's dial is
+    known to be failing *now*, so a relay goes straight to the queue — a Mac on a foreign tailnet
+    is not going to start answering because the caller waited out a 960 s read timeout.
+
+    It is not a permanent verdict. The moment a dial succeeds the reason goes back to `probe` and
+    every relay dials again, so nothing is stuck behind a stale belief.
+    """
+    return checkin_alive(row) and str((row or {}).get("last_seen_via") or "") == "check-in"
+
+
+def record_checkin(node_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Take one node's authenticated call home. Returns the roster row, or `None` if unknown.
+
+    Everything here is the node's word about itself and is validated as such: the address it
+    reports goes through the same `validate_address` a join does, so a Mac can never point this
+    controller at an arbitrary host by checking in. A field the node does not send is left alone —
+    an older Hub that reports only that it is alive still stamps `last_seen_at`.
+    """
+    node_id = str(node_id or "").strip().lower()
+    nodes = _read()
+    row = nodes.get(node_id)
+    if row is None:
+        return None
+    now = time.time()
+    row["last_checkin_at"] = now
+    row["last_seen_at"] = now
+    row["last_seen_via"] = "check-in"
+
+    address = payload.get("address")
+    if address:
+        try:
+            clean = validate_address(address)
+        except ValueError as exc:
+            log.info("node %s reported an address this controller will not use (%s)", node_id, exc)
+        else:
+            if clean != row.get("address"):
+                # **The address stops being frozen at join time.** It was written once, at join,
+                # and a Mac never re-joins on its own — so a Mac whose address changed was stuck at
+                # the old one for ever, on a roster nobody could correct. The Mac knows where it
+                # answers; it says so every minute now.
+                log.info("node %s now answers at %s (the roster said %s)",
+                         node_id, clean, row.get("address"))
+                row["address"] = clean
+                row["address_changed_at"] = now
+    name = payload.get("name")
+    if name:
+        try:
+            row["name"] = valid_name(name)
+        except ValueError:
+            pass
+    studios = _studios(payload.get("studios")) if "studios" in payload else []
+    if studios:
+        # Never emptied: a Mac mid-start, or one that says nothing, must not erase what it runs.
+        row["studios"] = studios
+    version = str(payload.get("version") or "").strip()
+    if version:
+        row["checkin_version"] = version[:64]
+    # **The node's own answer to the probe the controller cannot make.** Its app reads its own
+    # Hub's `/api/hub/resources?local_only=true` — the exact route `PROBE_PATH` dials — and sends
+    # the answer with the check-in. One field carries what a dial would have returned, so the
+    # roster, the peer cache and the scheduler all see the same facts on a Mac nobody can dial.
+    resources = _resources_of(payload.get("resources"), node_id)
+    if resources is not None:
+        row["checkin_resources"] = resources
+    workstation = _workstation_of(payload.get("workstation"))
+    if workstation is not None:
+        row["checkin_workstation"] = workstation
+    current_job = _current_job_of(payload.get("current_job"))
+    row["checkin_current_job"] = current_job
+    startup = payload.get("startup")
+    if isinstance(startup, dict):
+        row["checkin_startup"] = {
+            "open_at_login": startup.get("open_at_login"),
+            "start_services_on_launch": startup.get("start_services_on_launch"),
+            "macos_trash_auto_empty": startup.get("macos_trash_auto_empty"),
+            "observed_at": now,
+        }
+        row["last_startup"] = dict(row["checkin_startup"])
+    stop = last_stop_of(payload.get("last_stop"))
+    if stop is not None:
+        row["checkin_last_stop"] = stop
+        row["last_stop"] = stop
+    _write(nodes)
+    return row
+
+
+def _checkin_reported(row: dict[str, Any]) -> dict[str, Any]:
+    """The carried fields a check-in gave, in the shape a probe answer uses.
+
+    Read by `probe` when the dial fails, so a Mac the controller cannot dial still reports its
+    version, its Lite Mode and what it is working on — the same fields, from the same kind of
+    source, as a machine that answered. The node's own full resources snapshot wins when it sent
+    one: it is the same answer the dial would have returned, so nothing is approximated.
+    """
+    snapshot = row.get("checkin_resources")
+    if isinstance(snapshot, dict):
+        return {**snapshot, "pulled": True}
+    startup = row.get("checkin_startup")
+    startup = dict(startup) if isinstance(startup, dict) else None
+    stop = row.get("checkin_last_stop")
+    return {
+        "version": row.get("checkin_version"),
+        "startup": startup,
+        "current_job": row.get("checkin_current_job"),
+        "last_stop": dict(stop) if isinstance(stop, dict) else _last_known_stop(row),
+        "workstation": row.get("checkin_workstation"),
+    }
+
+
+def _forget_pull(node_id: str) -> None:
+    """Drop the work held for a Mac this controller no longer has.
+
+    A removed Mac must not keep a queue on its old controller: it is somebody else's machine now,
+    and the queued requests carry what this group asked of it.
+    """
+    from . import fleet_pull
+    fleet_pull.forget(node_id)
+
+
+def checkin_snapshot(node_id: str) -> dict[str, Any] | None:
+    """A check-in-alive node's snapshot as a peer snapshot, or `None`.
+
+    What `peers` reads when its own poll of a Mac failed: the Mac is calling home, so the answer
+    it sent with the call stands in for the dial. Without this a Shops Mac would read as online on
+    the roster and still be invisible to the scheduler, which is a Mac that is up and never given
+    work — the second half of the same fault.
+    """
+    row = _read().get(str(node_id or "").strip().lower())
+    if row is None or not checkin_alive(row):
+        return None
+    reported = _checkin_reported(row)
+    reported.setdefault("reachable", True)
+    reported.setdefault("auth", True)
+    reported.setdefault("status", "connected")
+    # A complete snapshot shape even when the node sent no `resources`: every consumer of the peer
+    # cache reads `host` and `studios`, and a missing key would be a KeyError on a healthy Mac.
+    reported.setdefault("host", None)
+    reported.setdefault("studios", {})
+    reported["pulled"] = True
+    return reported
 
 
 def valid_name(value: object) -> str:
@@ -521,6 +737,7 @@ def leave(node_id: str) -> bool:
     del nodes[node_id]
     _write(nodes)
     confirm_node(node_id)
+    _forget_pull(node_id)
     return True
 
 
@@ -608,6 +825,7 @@ def remove(node_id: str, *, by: str = "") -> dict[str, Any] | None:
     }
     _write(document["nodes"], document["removed"])
     confirm_node(node_id)   # a removed Mac is not waited for: it is not in the group any more
+    _forget_pull(node_id)
     return dict(document["removed"][node_id])
 
 
@@ -825,7 +1043,12 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
                 "detail": _CREDENTIAL_DETAIL.format(
                     why=str(snapshot.get("status") or "the credential was refused"))}
     if snapshot.get("reachable") and snapshot.get("auth", True):
-        return {**row, **carried, "state": "reachable", "detail": None}
+        return {**row, **carried, "state": "reachable", "detail": None,
+                "via": "check-in" if snapshot.get("pulled") else "probe"}
+    if checkin_alive(row):
+        # The same rule as `probe`'s own fallback: a poll that did not come back is not a Mac that
+        # is gone while the Mac is calling home every minute.
+        return {**row, **carried, "state": "reachable", "detail": None, "via": "check-in"}
     return {**row, **carried, "state": "unreachable", "startup": _last_known_startup(row),
             "reason": str(snapshot.get("status") or "unreachable"),
             "detail": f"could not reach the node ({snapshot.get('status') or 'unreachable'})"}
@@ -854,6 +1077,11 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
     row["credential_issued_at"] = node.get("credential_issued_at")
     row["last_startup"] = node.get("last_startup")
     row["last_stop"] = node.get("last_stop")
+    # What this Mac last said about itself on its own call home. It is the whole of what a
+    # controller that cannot dial knows, so it travels on every roster row.
+    for key in _CHECKIN_KEYS:
+        row[key] = node.get(key)
+    row["last_seen_via"] = node.get("last_seen_via")
     # Whether this controller holds a credential for the machine, never the credential. A
     # roster row with no hash is a row from before per-node credentials existed, and it reads
     # as "the next join of this id has to prove itself" rather than as "trusted".
@@ -864,7 +1092,12 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
     joined_at = node.get("joined_at") or 0
     row["never_connected"] = bool(
         joined_at and time.time() - joined_at > NEVER_CONNECTED_AFTER_S
-        and (node.get("last_seen_at") or 0) - joined_at < 60)
+        and (node.get("last_seen_at") or 0) - joined_at < 60
+        # **A Mac that checks in has been heard from.** The flag means "this controller has never
+        # once heard from it", and a node whose own call home arrives every minute has been heard
+        # from. Measured 2026-10-20: three Shops Macs sat at "never connected" for 51 hours while
+        # checking in every 60 s, because the only evidence counted was a dial that cannot be made.
+        and not checkin_alive(node))
     snapshot = fresh_snapshot(str(node.get("id") or ""))
     if snapshot is not None:
         return _from_snapshot(row, snapshot)
@@ -900,6 +1133,12 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         host = body.get("host") if isinstance(body.get("host"), dict) else {}
         order = _priority_order_of(body)
         return {**row, "state": "reachable", "detail": None, "host": host,
+                # **Why this controller believes the Mac is there.** A node it cannot dial answers
+                # through the pull channel, and that answer travelled on the node's own check-in
+                # connection: the state is the same, the reason is not, and an operator reading a
+                # Shops Mac needs to be able to tell the two apart.
+                "via": ("check-in" if getattr(response, "extensions", {}).get("studiohub_pull")
+                        else "probe"),
                 "version": body.get("version"), "source": body.get("source"),
                 "startup": _startup_of(body.get("startup"), row),
                 "current_job": _current_job_of(body.get("current_job")),
@@ -908,6 +1147,14 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
                 "priority_order": order,
                 "chat_priority": bool(order and order[0] == "chat")}
     except (httpx.HTTPError, OSError) as exc:
+        # **A Mac this controller cannot dial is not a Mac that is gone.** Sharing a Tailscale node
+        # works one way, so three Shops Macs could never be dialled at all — while each of them
+        # called home every 60 s. When the node's own authenticated call is recent, that call is the
+        # evidence: the state is `reachable` (the Mac is there and talking), and the reason is kept
+        # distinct so the roster and the Gateway can say *why* they believe it.
+        if checkin_alive(node):
+            return {**row, "state": "reachable", "detail": None, "via": "check-in",
+                    **_checkin_reported(node)}
         # A message that stops at the colon ("could not reach the node: ") reads as though the
         # reason were withheld, and it happens whenever the exception carries an empty message -
         # which is the common case for a connect timeout or a reset. Always name what was tried,
@@ -934,19 +1181,25 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     # **Last seen.** One batched write for the machines that answered, so a page refresh is not
     # one file rewrite per Mac — and so "switched off" and "gone a month" stop looking the same
     # (M20/B1). The rows being published carry the same stamp, so this read reports it.
+    #
+    # A Mac that is reachable only because it checked in is stamped by `record_checkin` when the
+    # call arrives, and is deliberately not stamped again here: `last_seen_via` has to keep saying
+    # which evidence this controller actually has, and a probe it could not make is not evidence.
+    probed = [row for row in rows
+              if row.get("state") == "reachable" and row.get("via") != "check-in"]
     seen_at = note_seen(
-        [row["id"] for row in rows if row.get("state") == "reachable"],
-        {row["id"]: row["startup"] for row in rows
-         if row.get("state") == "reachable" and isinstance(row.get("startup"), dict)
-         and not row["startup"].get("stale")},
-        {row["id"]: row["last_stop"] for row in rows
-         if row.get("state") == "reachable" and isinstance(row.get("last_stop"), dict)
-         and not row["last_stop"].get("stale")})
+        [row["id"] for row in probed],
+        {row["id"]: row["startup"] for row in probed
+         if isinstance(row.get("startup"), dict) and not row["startup"].get("stale")},
+        {row["id"]: row["last_stop"] for row in probed
+         if isinstance(row.get("last_stop"), dict) and not row["last_stop"].get("stale")})
     if seen_at is not None:
-        for row in rows:
-            if row.get("state") == "reachable":
-                row["last_seen_at"] = seen_at
-                row["never_connected"] = False
+        for row in probed:
+            row["last_seen_at"] = seen_at
+    for row in rows:
+        if row.get("state") == "reachable":
+            row["never_connected"] = False
+            row["last_seen_via"] = row.get("via") or row.get("last_seen_via") or "probe"
     # **Which Macs are still on the previous Fleet token** (a rotation they were off for). Named
     # on the row and counted, so the app can say "N nodes still on the previous token" instead of
     # the operator finding out when the old token stops working.
@@ -977,6 +1230,11 @@ async def inventory(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
         "summary": {
             "total": len(rows),
             "reachable": sum(row["state"] == "reachable" for row in rows),
+            # How many of those this controller believes because the Mac called in, not because it
+            # managed to dial it. The Gateway reads this to tell "we can reach it" from "it is
+            # reaching us", which is the whole of the Shops problem.
+            "check_in": sum(row["state"] == "reachable" and row.get("via") == "check-in"
+                            for row in rows),
             "unreachable": sum(row["state"] == "unreachable" for row in rows),
             "unauthorized": sum(row["state"] == "unauthorized" for row in rows),
             "error": sum(row["state"] == "error" for row in rows),
@@ -1105,6 +1363,9 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
         "role": role,
         "address": row.get("address"),
         "state": row.get("state"),
+        # Why this controller believes it: "probe" (it dialled and was answered) or "check-in"
+        # (the Mac called in and this controller cannot dial it at all).
+        "via": row.get("via"),
         "detail": row.get("detail"),
         "version": row.get("version"),
         # The probe's host snapshot travels with the row: the overview shows one machine's chip
@@ -1143,6 +1404,87 @@ class StartupRelayError(Exception):
         self.status, self.body = status, body
 
 
+#: The answer a relay gives when it could not dial the Mac and held the request for it instead.
+#: 202, not 200: nothing has happened on the Mac yet, and a caller that reads `ok: true` as
+#: "done" would be reading a promise as a fact.
+QUEUED_STATUS = 202
+
+
+def _dial_timeout(node: dict[str, Any], timeout: httpx.Timeout) -> httpx.Timeout:
+    """A dial that is already known to be failing is not given a job's timeout to fail in.
+
+    A relay's timeout is the time the *work* may take (a transcription waits 960 s). Handing that
+    same number to a dial of a Mac on a foreign tailnet means a caller waits sixteen minutes to be
+    told what the roster already knew: the dial does not work there. The Mac's own call home is
+    the channel, so the dial is given the probe's short budget and the queue takes over.
+    """
+    return PROBE_TIMEOUT if dial_is_failing(node) else timeout
+
+
+def _timeout_seconds(timeout: httpx.Timeout) -> float:
+    """The wait a relay's own timeout asks for, in seconds, capped so a bad number cannot hang.
+
+    The **read** budget is the answer: it is how long the caller said it would wait for the Mac to
+    answer. Summing every phase (read + write + connect + pool) triples it, and a 30 s relay turned
+    into a 94 s wait — measured on this very fallback before it was written down.
+    """
+    read = getattr(timeout, "read", None)
+    if isinstance(read, (int, float)) and not isinstance(read, bool) and read > 0:
+        return min(float(read), 1800.0)
+    values = [getattr(timeout, name, None) for name in ("read", "write", "connect", "pool")]
+    total = max((float(value) for value in values
+                 if isinstance(value, (int, float)) and not isinstance(value, bool) and value),
+                default=0.0)
+    return max(0.0, min(total, 1800.0))
+
+
+async def _queue_for_unreachable(node_id: str, method: str, path: str, *, payload: Any = None,
+                                 content: bytes | None = None, content_type: str = "",
+                                 kind: str = "relay",
+                                 wait_s: float = 0.0) -> "StartupRelayError | dict[str, Any] | None":
+    """Hold a request for a Mac this controller cannot dial, or `None` when it is not checking in.
+
+    The whole of the relay fallback. Dialling is tried first, always; this runs only in the branch
+    where the dial failed. It queues **the request the dial would have sent** — same method, same
+    path, same body — so the node's own Hub answers it exactly as it would have answered the
+    controller, and nothing here has to know what the request means.
+
+    **Two answers, because there are two kinds of request.**
+
+    * A **settings change** (Lite Mode, a rename, startup, job priority) is answered at once with
+      `202` and a command id: the Mac applies it on its next call home, and nothing is waiting for
+      a result. A caller that read `ok: true` as "done" would be reading a promise as a fact, so
+      the status is 202 and `queued` is set.
+    * **Work** (a test transcription, a picture analysis, a model install, a Trash listing) is
+      something the caller expects an answer for, so `wait_s` is the relay's own timeout and the
+      Mac's answer is returned when it arrives — the same wait the dial would have cost.
+
+    `None` means "this Mac is not calling home either", which is the honest answer that keeps the
+    old `NODE_UNREACHABLE` behaviour for a Mac that really is off.
+    """
+    from . import fleet_pull
+    if not checkin_alive(_read().get(node_id)):
+        return None
+    try:
+        command = fleet_pull.queue_json(node_id, method, path, payload, kind=kind) \
+            if content is None else fleet_pull.queue(node_id, method, path, content=content,
+                                                     content_type=content_type, kind=kind)
+    except (OSError, ValueError) as exc:
+        log.warning("could not queue %s %s for node %s: %s", method, path, node_id, exc)
+        return None
+    if wait_s > 0:
+        result = await fleet_pull.await_result(node_id, command["id"], wait_s)
+        if result is not None:
+            body = result.get("json")
+            if isinstance(body, dict):
+                return {**body, "queued": False, "via": "check-in"}
+            return {"ok": True, "queued": False, "via": "check-in", "result": body}
+    return StartupRelayError(QUEUED_STATUS, {
+        "ok": True, "queued": True, "node": node_id, "command": command["id"],
+        "detail": ("this controller cannot dial that Mac, so the request was held for it: it "
+                   "checks in every minute and applies it then.")})
+
+
 async def relay_startup(node_id: str, payload: dict[str, Any], *, actor: str = "fleet",
                         client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """Pass a startup request to one joined node, with the credential a controller holds.
@@ -1170,8 +1512,15 @@ async def relay_startup(node_id: str, payload: dict[str, Any], *, actor: str = "
         client = _probe_client()
     try:
         response = await client.post(f"{address}/api/hub/startup/request", json=fields,
-                                     timeout=STARTUP_RELAY_TIMEOUT)
+                                     timeout=_dial_timeout(node, STARTUP_RELAY_TIMEOUT))
     except httpx.HTTPError as exc:
+        held = await _queue_for_unreachable(wanted, "POST", "/api/hub/startup/request",
+                                            payload=fields, kind="startup")
+        if held is not None:
+            startup_control.audit("relay_queued", {"node": wanted, "action": fields.get("action")})
+            if isinstance(held, StartupRelayError):
+                raise held from exc
+            return {**held, "node": wanted}
         reason = _unreachable_reason(exc)
         detail = ("no Studio Hub is running on that Mac, so nothing can receive the request - its "
                   "services are off. Start Studio Hub there once (Start Services); a joined Mac "
@@ -1229,6 +1578,14 @@ async def relay_name(node_id: str, name: object, *,
         response = await client.post(f"{node.get('address') or ''}/api/hub/machine-label",
                                      json={"name": clean}, timeout=PROBE_TIMEOUT)
     except httpx.HTTPError as exc:
+        held = await _queue_for_unreachable(wanted, "POST", "/api/hub/machine-label",
+                                            payload={"name": clean}, kind="rename")
+        if isinstance(held, StartupRelayError):
+            # Held for the Mac, so the roster keeps the old name: the Mac has not taken the new
+            # one, and its own call home will carry it here the moment it has.
+            raise held from exc
+        if held is not None:
+            return {**held, "node": wanted}
         raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
                                       "reason": _unreachable_reason(exc),
                                       "detail": "that Mac did not answer, so it was not renamed - "
@@ -1274,6 +1631,12 @@ async def relay_workstation(node_id: str, changes: object, *,
         response = await client.post(f"{node.get('address') or ''}/api/hub/workstation",
                                      json=changes, timeout=PROBE_TIMEOUT)
     except httpx.HTTPError as exc:
+        held = await _queue_for_unreachable(wanted, "POST", "/api/hub/workstation",
+                                            payload=changes, kind="workstation")
+        if isinstance(held, StartupRelayError):
+            raise held from exc
+        if held is not None:
+            return {**held, "node": wanted}
         raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
                                       "reason": _unreachable_reason(exc),
                                       "detail": "that Mac did not answer, so its settings did not "
@@ -1318,6 +1681,13 @@ async def relay_work_policy(node_id: str, method: str, body: object = None, *,
             method, f"{node.get('address') or ''}/api/hub/work-policy",
             json=body if method == "POST" else None, timeout=PROBE_TIMEOUT)
     except httpx.HTTPError as exc:
+        held = await _queue_for_unreachable(wanted, method, "/api/hub/work-policy",
+                                            payload=body if method == "POST" else None,
+                                            kind="work_policy")
+        if isinstance(held, StartupRelayError):
+            raise held from exc
+        if held is not None:
+            return {**held, "node": wanted}
         raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
                                       "reason": _unreachable_reason(exc),
                                       "detail": "that Mac did not answer, so its priority did not change"}) from exc
@@ -1376,9 +1746,25 @@ async def relay_model(node_id: str, method: str, path: str, *, payload: Any = No
         extra: dict[str, Any] = {"json": payload} if payload is not None else {}
         if content is not None:
             extra = {"content": content, "headers": {"Content-Type": content_type}}
-        response = await client.request(method, f"{node.get('address') or ''}/api/hub/fleet/nodes/local{path}",
-                                        timeout=timeout, **extra)
+        response = await client.request(
+            method, f"{node.get('address') or ''}/api/hub/fleet/nodes/local{path}",
+            timeout=_dial_timeout(node, timeout), **extra)
     except httpx.HTTPError as exc:
+        # A model install, a status read, a test transcription, a vision analysis or a trash
+        # operation: the same request, held for the Mac to replay on its own Hub.
+        # **Work, not a setting**: the caller is waiting for an answer (a transcript, an
+        # analysis, a Trash listing), so the wait is the relay's own timeout and the Mac's answer
+        # is returned when it arrives. A Mac that does not answer in time is reported as queued
+        # rather than as a failure - the request is not lost, it is held.
+        held = await _queue_for_unreachable(
+            wanted, method, f"/api/hub/fleet/nodes/local{path}",
+            payload=payload if content is None else None,
+            content=content, content_type=content_type, kind="model",
+            wait_s=_timeout_seconds(timeout))
+        if isinstance(held, StartupRelayError):
+            raise held from exc
+        if held is not None:
+            return {**held, "node": wanted}
         raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
                                       "reason": _unreachable_reason(exc),
                                       "detail": "that Mac did not answer, so nothing ran there - "

@@ -2219,6 +2219,61 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             monitor.reload_registry()
         return fleet.status(asked)
 
+    @app.post("/api/hub/fleet/nodes/{node_id}/checkin")
+    async def fleet_node_checkin(node_id: str, body: dict[str, Any],
+                                 request: Request) -> dict[str, Any]:
+        """**A joined Mac's own call home — evidence of life, and the pull channel's door.**
+
+        This is the answer to a fleet the controller cannot dial. Sharing a Tailscale node works
+        one way, so three Shops Macs reach their controller and their controller can never reach
+        them; every one of them was reading `never_connected` for ever while checking in every
+        minute. The Mac's own authenticated call is evidence, and this route records it as such —
+        `last_seen_at`, a `check-in` reason kept distinct from a probe, its current address, its
+        version and its Lite Mode.
+
+        It is also where work arrives. The body carries the ids the Mac has run and the answers it
+        got, and the answer carries back the requests this controller could not dial it with —
+        each one the exact request the dial would have sent, for the Mac to replay on its own Hub.
+
+        A node credential may check in only for the Mac that holds it, checked here for the same
+        reason the status route checks it: an allowlist cannot see who is asking.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        from .backend import fleet_pull
+        payload = body if isinstance(body, dict) else {}
+        actor = hub_auth._fleet_actor(request)
+        asked = node_id.strip().lower()
+        own = actor.get("kind") == "node" and str(actor.get("node_id") or "").lower() == asked
+        if actor.get("kind") == "node" and not own:
+            raise HTTPException(403, "a node credential may check in only for the Mac that holds it")
+        row = fleet.record_checkin(asked, payload)
+        # What the Mac has already run, and what it answered. Recorded before the queue is read, so
+        # a command it has finished can never be handed back to it in this same answer.
+        seen = [str(value) for value in (payload.get("seen") or []) if value] \
+            if isinstance(payload.get("seen"), list) else []
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        for entry in results:
+            if not isinstance(entry, dict) or not entry.get("id"):
+                continue
+            try:
+                status = int(entry.get("status") or 200)
+            except (TypeError, ValueError):
+                status = 200
+            fleet_pull.record_result(asked, str(entry["id"]), status, entry.get("json"))
+        fleet_pull.ack(asked, seen)
+        if row is None:
+            # A Mac this controller has never heard of, or has removed. The same three states the
+            # status route answers, so the Mac's own handling of `removed`/`unknown` is unchanged.
+            return {**fleet.status(asked), "server_time": time.time(),
+                    "reachable_via": None, "commands": []}
+        if payload.get("address") or payload.get("studios"):
+            # Where it answers and what it runs decide the dispatch registry, so a change is
+            # picked up now rather than at the next restart - the same reason a join reloads it.
+            monitor.reload_registry()
+        return {**fleet.status(asked), "server_time": time.time(), "reachable_via": "check-in",
+                "commands": fleet_pull.take_commands(asked, seen)}
+
     @app.post("/api/hub/fleet/nodes/{node_id}/readmit")
     async def fleet_readmit(node_id: str) -> dict[str, Any]:
         """Undo an eviction: allow this id to join again.

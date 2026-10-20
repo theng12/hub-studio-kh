@@ -185,11 +185,31 @@ final class FixtureProtocol: URLProtocol {
     /// `<credential>|<query>` so the suite can see what went on the wire.
     static var statusAnswer: (Int, String)?
     static var statusCallsList: [String] = []
+    /// Every call home this Mac made: the credential it presented, and the body it sent. The
+    /// pull channel is only real if the Mac's own address, version and resources travel on it.
+    static var checkinCalls: [[String: Any]] = []
+    /// The commands the controller hands back, once, on the first call home that asks.
+    static var checkinCommands: [[String: Any]] = []
+    /// When set, a call home that carries answers is refused with this status — the controller
+    /// not taking the results, which is the window a command could be run twice in.
+    static var checkinResultStatus: Int?
+    /// Every request replayed on this Mac's own Hub: path and the credential it was sent with.
+    static var fleetReplays: [[String: String]] = []
     static func setStatus(_ status: Int?, body: String = "") {
         lock.lock(); defer { lock.unlock() }
         statusAnswer = status.map { ($0, body) }
     }
     static func statusCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return statusCallsList }
+    static func checkins() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return checkinCalls }
+    static func resetCheckins() { lock.lock(); defer { lock.unlock() }; checkinCalls = [] }
+    static func setCheckinCommands(_ value: [[String: Any]]) {
+        lock.lock(); defer { lock.unlock() }; checkinCommands = value
+    }
+    static func setCheckinResultStatus(_ value: Int?) {
+        lock.lock(); defer { lock.unlock() }; checkinResultStatus = value
+    }
+    static func replays() -> [[String: String]] { lock.lock(); defer { lock.unlock() }; return fleetReplays }
+    static func resetReplays() { lock.lock(); defer { lock.unlock() }; fleetReplays = [] }
     static func resetStatusCalls() { lock.lock(); defer { lock.unlock() }; statusCallsList = [] }
     static func setJoinRemoval(_ detail: String?) {
         lock.lock(); defer { lock.unlock() }; joinRemovalDetail = detail
@@ -750,6 +770,46 @@ final class FixtureProtocol: URLProtocol {
                 finish((200, "application/json", Data(#"{"ok":true,"removed":{"id":"controller-local"}}"#.utf8)))
                 return
             }
+            if method == "POST", parts.count == 2, parts[1] == "checkin" {
+                // **The Mac's own call home.** Recorded whole, so a test can assert what actually
+                // travelled rather than that a function ran, and answered with the commands the
+                // controller could not dial this Mac with.
+                let body = (try? JSONSerialization.jsonObject(with: requestBody())) as? [String: Any]
+                let results = (body?["results"] as? [[String: Any]]) ?? []
+                let answered = Set(results.compactMap { $0["id"] as? String })
+                Self.lock.lock()
+                Self.checkinCalls.append(["token": offered, "controller": !isLocalHub,
+                                          "body": body ?? [:]])
+                // **The controller's own rule**: a command is handed back until it has the result,
+                // and nothing else. That is what makes a lost answer a real case rather than a
+                // contrived one.
+                let hand = isLocalHub ? []
+                    : Self.checkinCommands.filter { !answered.contains($0["id"] as? String ?? "") }
+                let refuse = !isLocalHub && !answered.isEmpty ? Self.checkinResultStatus : nil
+                Self.lock.unlock()
+                if let refuse {
+                    finish((refuse, "application/json",
+                            Data(#"{"detail":"the controller did not take the answers"}"#.utf8)))
+                    return
+                }
+                let answer: [String: Any] = ["id": parts[0], "state": "member", "detail": NSNull(),
+                                             "reachable_via": "check-in", "commands": hand]
+                let encoded = (try? JSONSerialization.data(withJSONObject: answer)) ?? Data()
+                finish((200, "application/json", encoded))
+                return
+            }
+            if parts.count >= 2, parts[0] == "local" {
+                // A command replayed on this Mac's OWN Hub. The path is the controller's own
+                // request path, and the credential must be this Mac's Hub token - never the
+                // controller's Fleet token, which is not this Mac's to present.
+                Self.lock.lock()
+                Self.fleetReplays.append(["path": "/api/hub/fleet/nodes/" + remainder,
+                                          "token": offered, "method": method])
+                Self.lock.unlock()
+                finish((200, "application/json",
+                        Data(#"{"ok":true,"entries":[],"replayed":true}"#.utf8)))
+                return
+            }
             if method == "GET", parts.count == 2, parts[1] == "status" {
                 Self.lock.lock()
                 Self.statusCallsList.append("\(offered)|\(request.url?.query ?? "")")
@@ -1068,7 +1128,9 @@ final class FixtureProtocol: URLProtocol {
                 result = (status, "application/json",
                           Data(#"{"detail":"this Mac's fleet credential was refused"}"#.utf8))
             } else {
-                result = (200, "application/json", Data(#"{"host":{"chip":"Apple M4","memory_gb":16.0},"version":"0.4.0","source":"local"}"#.utf8))
+                // The shape the real route answers with, Lite Mode and studios included: a Mac's
+                // own call home carries this answer to a controller that cannot dial it.
+                result = (200, "application/json", Data(#"{"host":{"chip":"Apple M4","memory_gb":16.0},"version":"0.4.0","source":"local","workstation":{"enabled":true,"state":"idle"},"studios":{"image":{"id":"image","status":"up"}}}"#.utf8))
             }
         case ("GET", "/api/health"):
             result = (200, "application/json", Data(#"{"ok":true,"busy":false}"#.utf8))
@@ -8393,6 +8455,107 @@ struct NativeAPITests {
         require(fleetGateStore.catalogReadError == nil && !fleetGateStore.fleetRosterReachable
                 && !fleetGateStore.fleetRefreshing && fleetGateStore.fleetReadError == nil,
                 "disconnect must clear catalog and fleet connection evidence")
+
+        // ---------------------------------------------------------------------------------------
+        // 0.6.193 — the pull channel: a Mac its controller cannot dial still works.
+        //
+        // Three Shops Macs reach their controller through Tailscale **node sharing**, which works
+        // one way: the shared Mac dials out, the sharer cannot dial back. Every one of them joined
+        // and then read "never connected" for ever while calling home every minute, because the
+        // only evidence of life the controller accepted was a dial it could not make. The Mac's own
+        // call home is now the channel: it carries what this Mac is, and it takes back the requests
+        // the controller could not dial.
+        let pullStore = NativeWorkspaceStore(sessionConfiguration: configuration)
+        await pullStore.connect(baseURL: URL(string: "http://127.0.0.1:45678")!,
+                                dataDirectory: temporary.appendingPathComponent("pull-channel"),
+                                token: "native-test-token")
+        FixtureProtocol.setCredentialOrigin("adopted")
+        FixtureProtocol.resetFleetRequests()
+        FixtureProtocol.resetCheckins()
+        FixtureProtocol.resetReplays()
+        await pullStore.joinController(address: "192.168.1.21:8080", token: "fleet-token-value",
+                                       boundHosts: LocalAddresses.current().map(\.address))
+        // The membership the app persists at join and restores on start. Set here rather than
+        // through the startup path so no re-join loop is in flight while the call home is driven.
+        await pullStore.refreshConnection()
+        pullStore.storedMembership = NativeWorkspaceStore.FleetMembership(
+            controllerAddress: "192.168.1.21:8080", token: "fleet-token-value",
+            boundHosts: LocalAddresses.current().map(\.address),
+            nodeCredential: pullStore.nodeCredential)
+        // A command the controller could not dial this Mac with: **the exact request it would have
+        // sent**, headers included, for this Mac to replay on its own Hub.
+        FixtureProtocol.setCheckinCommands([[
+            "id": "c_pull_1", "kind": "model", "method": "POST",
+            "path": "/api/hub/fleet/nodes/local/trash",
+            "headers": ["Content-Type": "application/json",
+                        "X-Hub-Token": "the-controllers-fleet-token"],
+            "content_b64": Data(#"{}"#.utf8).base64EncodedString(),
+            "content_type": "application/json",
+        ]])
+        FixtureProtocol.resetCheckins()
+        // **The controller does not take the answers.** It hands a command back until it has the
+        // result, so this is the one window in which the same command arrives twice — and it is
+        // the window a Mac that re-ran its work would double-execute a job in.
+        FixtureProtocol.setCheckinResultStatus(500)
+        await pullStore.fleetCheckinTick()
+
+        let checkins = FixtureProtocol.checkins()
+        // Two: the call home that takes the work, and the one that hands the answers straight back
+        // rather than waiting a minute for the controller to stop holding a connection for them.
+        require(checkins.count == 2, "the call home must reach the controller: \(checkins)")
+        require(checkins[0]["token"] as? String == FixtureProtocol.issuedNodeCredential,
+                "the call home must present this Mac's own credential, got: "
+                + "\(String(describing: checkins[0]["token"]))")
+        let sent = checkins[0]["body"] as? [String: Any] ?? [:]
+        require((sent["address"] as? String)?.hasPrefix("http://") == true,
+                "the call home must carry this Mac's current address, so an address that changed is "
+                + "no longer stuck at what the roster recorded at join. Got: "
+                + "\(String(describing: sent["address"]))")
+        require(sent["resources"] != nil,
+                "the call home must carry the answer this Mac's own Hub gives on the route the "
+                + "controller probes, or a Mac nobody can dial is still invisible to the scheduler")
+        require(sent["workstation"] != nil,
+                "the call home must carry this Mac's Lite Mode as its own Hub reports it")
+        require((sent["seen"] as? [String])?.isEmpty == true,
+                "nothing has been run yet, so nothing is acknowledged yet")
+
+        // The command ran on **this Mac's own Hub**, with **this Mac's own** credential.
+        let replays = FixtureProtocol.replays()
+        require(replays.count == 1 && replays[0]["path"] == "/api/hub/fleet/nodes/local/trash",
+                "the command must be replayed on this Mac's own Hub: \(replays)")
+        require(replays[0]["token"] == "native-test-token",
+                "the replay must present this Mac's own Hub token, never the controller's Fleet "
+                + "token, got: \(String(describing: replays[0]["token"]))")
+
+        // The answer went straight back, because the controller is holding a connection for it.
+        let followUp = FixtureProtocol.checkins().last ?? [:]
+        let delivered = (followUp["body"] as? [String: Any])?["results"] as? [[String: Any]] ?? []
+        require(delivered.count == 1 && delivered[0]["id"] as? String == "c_pull_1"
+                && delivered[0]["status"] as? Int == 200,
+                "the answer must be handed back at once: \(delivered)")
+        require((followUp["body"] as? [String: Any])?["seen"] as? [String] == ["c_pull_1"],
+                "the command must be acknowledged by id, which is what stops it being handed back")
+
+        // **A command is never run twice, even when the controller did not take the answer.**
+        FixtureProtocol.resetReplays()
+        await pullStore.fleetCheckinTick()
+        require(FixtureProtocol.replays().isEmpty,
+                "a command whose answer was lost must not be run again: "
+                + "\(FixtureProtocol.replays())")
+        FixtureProtocol.setCheckinResultStatus(nil)
+
+        // And a controller older than this build has no such route: the Mac simply carries on.
+        FixtureProtocol.resetCheckins()
+        FixtureProtocol.resetReplays()
+        FixtureProtocol.setCheckinResultStatus(404)
+        await pullStore.fleetCheckinTick()
+        FixtureProtocol.setCheckinResultStatus(nil)
+        require(pullStore.controllerRemoval == nil,
+                "an older controller answering 404 must never be read as a removal")
+        require(FixtureProtocol.replays().isEmpty,
+                "an older controller answering 404 must leave this Mac exactly as it was")
+        pullStore.disconnect()
+        FixtureProtocol.setCheckinCommands([])
 
         print("Native API contract checks passed")
     }
