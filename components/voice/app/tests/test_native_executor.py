@@ -146,7 +146,12 @@ def hanging_native_call(_payload, _cancel_requested):
 if __name__ == "__main__":
     executor = ExclusiveNativeExecutor(hanging_native_call)
     executor._start()
-    Path(sys.argv[1]).write_text(str(executor._process.pid))
+    # Written aside and renamed: `write_text` creates the file and *then* fills it, so a reader
+    # that waits for the path to exist can find it empty.
+    pid_path = Path(sys.argv[1])
+    staging = pid_path.with_suffix(".tmp")
+    staging.write_text(str(executor._process.pid))
+    staging.replace(pid_path)
     while True:
         time.sleep(1)
 """
@@ -159,10 +164,14 @@ if __name__ == "__main__":
     child_pid = None
     try:
         deadline = time.monotonic() + 8
-        while not pid_file.exists() and supervisor_process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.02)
+        while child_pid is None and supervisor_process.poll() is None and time.monotonic() < deadline:
+            try:
+                child_pid = int(pid_file.read_text())
+            except (FileNotFoundError, ValueError):
+                # Not written yet, or still empty: wait for a value, not for a path.
+                time.sleep(0.02)
         assert supervisor_process.poll() is None
-        child_pid = int(pid_file.read_text())
+        assert child_pid is not None, "the supervisor never wrote its child's pid"
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             if os.getpgid(child_pid) == child_pid:

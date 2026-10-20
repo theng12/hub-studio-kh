@@ -259,6 +259,10 @@ class ChatHubForwardingTests(unittest.TestCase):
         registry._labels_cache = None
         registry._flags_cache = None
         self.app = create_app(start_background=False)
+        # The model-readiness gate only applies where this Hub owns a model library to verify
+        # against; this fixture has none, and an inherited value would make the test depend on
+        # the machine it runs on.
+        os.environ.pop("STUDIOHUB_MODELS_DIR", None)
 
     def tearDown(self) -> None:
         self.stack.close()
@@ -383,6 +387,10 @@ class ChatCompletionJobTests(_PackagedHub, unittest.TestCase):
             "managed_output_roots": [],
         }])
         self.addCleanup(self.tear_down_hub)
+        # The model-readiness gate only applies where this Hub owns a model library to verify
+        # against; this fixture has none, and an inherited value would make the test depend on
+        # the machine it runs on.
+        os.environ.pop("STUDIOHUB_MODELS_DIR", None)
 
     def send(self, client, payload: dict | None = None):
         return client.post(
@@ -934,6 +942,10 @@ class PeerLeaseDisconnectTests(_PackagedHub, unittest.TestCase):
         ])
         self.addCleanup(self.tear_down_hub)
         self.addCleanup(self.release_leases)
+        # The model-readiness gate only applies where this Hub owns a model library to verify
+        # against; this fixture has none, and an inherited value would make the test depend on
+        # the machine it runs on.
+        os.environ.pop("STUDIOHUB_MODELS_DIR", None)
 
     def release_leases(self) -> None:
         for owner in list(standalone._PEER_LEASES):

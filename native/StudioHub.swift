@@ -981,16 +981,22 @@ final class StudioController: ObservableObject {
 enum RelaunchHelper {
     static let waitSeconds = 120
     static let graceSeconds = 10
+    /// The waits are counted half-second ticks, not `SECONDS` arithmetic. `SECONDS` is whole
+    /// seconds since the second the shell started in, so `$((SECONDS + 2))` was reached as little
+    /// as 1.0 s later when the shell started late in a second — the helper could SIGTERM a Hub
+    /// that was still quitting normally. Counting the ticks it actually slept makes `wait` mean
+    /// at least `wait`.
     static let script = """
     pid=$1; app=$2; wait=$3; grace=$4; opener=$5
     gone() { ! kill -0 "$pid" 2>/dev/null; }
-    end=$((SECONDS + wait)); while ! gone && [ "$SECONDS" -lt "$end" ]; do sleep 0.5; done
+    hold() { ticks=$(($1 * 2)); while ! gone && [ "$ticks" -gt 0 ]; do sleep 0.5; ticks=$((ticks - 1)); done; }
+    hold "$wait"
     if ! gone; then
       kill -TERM "$pid" 2>/dev/null
-      end=$((SECONDS + grace)); while ! gone && [ "$SECONDS" -lt "$end" ]; do sleep 0.5; done
+      hold "$grace"
       if ! gone; then
         kill -KILL "$pid" 2>/dev/null
-        end=$((SECONDS + 5)); while ! gone && [ "$SECONDS" -lt "$end" ]; do sleep 0.2; done
+        ticks=25; while ! gone && [ "$ticks" -gt 0 ]; do sleep 0.2; ticks=$((ticks - 1)); done
       fi
     fi
     exec "$opener" "$app"
