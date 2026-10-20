@@ -2,6 +2,38 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.193 — 2026-10-20
+
+### A Mac your main Mac cannot reach still works, and still shows as online
+
+Three of the shop Macs sit on a different Tailscale account from the controller. Sharing a Tailscale
+machine only works one way: the shared Mac can call out, but the Mac holding it can never call back.
+So every check the controller made on those three Macs failed, and because the only thing that
+counted as "this Mac is alive" was a successful check, all three sat on the Fleet page as machines
+that had **never once answered** — for 51 hours — while they were switched on and reporting in every
+minute.
+
+They are now heard the other way round. A Mac reports in on its own call home, and that call is
+evidence it is alive: the Mac shows as **online**, its address is corrected if it moved, and the
+Fleet page says how the controller knows it is there — it reached out to the Mac, or the Mac reached
+in. A Mac that is simply switched off is unchanged and still warns exactly as before.
+
+### Work reaches a Mac the controller cannot dial
+
+Everything the controller used to do by reaching out — turning Lite Mode on or off, renaming a Mac,
+changing when it starts, installing or testing a model, running a transcription — is handed to the
+Mac the next time it reports in, which is at most a minute later. A setting is confirmed as soon as
+the controller has it and says so plainly; work you are waiting for an answer to is waited for, the
+same as if the controller had reached the Mac directly. A Mac that can still be reached the ordinary
+way is never affected: the direct route is always tried first, and this path is only used when it
+fails.
+
+### Nothing breaks if only some Macs have the update
+
+The two sides can be updated in either order. A Mac on this version talking to an older controller is
+told the feature is not there and carries on exactly as it did before; an older Mac on this
+controller is untouched.
+
 ## 0.6.192 — 2026-10-20
 
 ### A scene pack that runs out of time now says so, once
