@@ -189,6 +189,8 @@ FACTS["offline_node_state"] = activity._state_at(
     "node-a", _DOWN, [REGISTRY[0]], _offline_live, [], NOW)[0]
 FACTS["offline_node_stalled_seconds"] = _offline_live[0]["stalled_seconds"]
 FACTS["offline_node_current_job"] = activity._current_job(_offline_live[0])
+FACTS["offline_node_row"] = activity.fleet_snapshot(
+    [REGISTRY[0]], _DOWN, SILENT, None, now=NOW)["machines"][0]
 '''
 
 # Case 4: the Chat pack lane's stall stop actually acts.
@@ -501,10 +503,12 @@ class AMacThatGoesOfflineMidJobTests(unittest.TestCase):
                              "an offline Mac holding a job reported no silence at all")
 
     def test_the_row_still_names_the_job_it_holds(self) -> None:
-        """`working` is not a lie here - the Hub is still holding the job - so the fix is not to
-        change the state but to make the silence beside it visible."""
-        self.assertEqual(self.facts["offline_node_state"], "working")
+        """The Mac is `offline`, and the job it still holds is named, not hidden."""
+        self.assertEqual(self.facts["offline_node_state"], "offline")
         self.assertEqual(self.facts["offline_node_current_job"]["job_id"], "job-a")
+        row = self.facts["offline_node_row"]
+        self.assertEqual((row["state"], row["job_waiting"]), ("offline", True))
+        self.assertEqual(row["current_job"]["job_id"], "job-a")
 
 
 class AChatPackThatGoesQuietIsStoppedTests(unittest.TestCase):

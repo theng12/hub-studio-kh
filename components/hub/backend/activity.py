@@ -514,11 +514,13 @@ def _state_at(machine: str, statuses: dict, studios: list[dict], live: list[dict
     ) else None
     if health_problem or recent_error:
         return "needs_attention", now, active[0] if active else None, latest
+    if all_down:
+        # Every studio on the Mac is down by the fleet's own rule (`monitor` status), so a job it
+        # still holds is waiting, not being worked. The job stays named for the operator.
+        return "offline", now, active[0] if active else None, latest
     if active:
         current = active[0]
         return "working", now, current, latest
-    if all_down:
-        return "offline", now, None, latest
     # An error older than the attention window ages like any other finished job.
     if latest and latest["state"] in TERMINAL_STATES and latest_time is not None:
         age = max(0.0, now - latest_time)
@@ -770,6 +772,8 @@ def fleet_snapshot(registry: list[dict], statuses: dict, batches: dict,
             # What this machine is on right now, in one object a Gateway can read without
             # guessing which of the fields below describe the live job and which the last one.
             "current_job": _current_job(current),
+            # True when the Mac is offline but the Hub still holds this job: it is waiting.
+            "job_waiting": state == "offline" and current is not None,
             "model": (current or latest or {}).get("model"),
             "operation": (current or latest or {}).get("operation"),
             "job_id": (current or latest or {}).get("job_id") or (current or latest or {}).get("id"),
