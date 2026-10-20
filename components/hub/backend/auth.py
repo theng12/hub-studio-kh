@@ -558,6 +558,12 @@ FLEET_ALLOWED = (
     # Whether this controller still lists a Mac: how a removal reaches the Mac itself. Read-only;
     # a node credential may ask only about its own id (checked in the route).
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/status$"),
+    # **The Mac's own call home, which is also the pull channel's door.** It reports what it is
+    # and takes back the requests this controller could not dial it with — a Shops Mac reaches its
+    # controller through one-way Tailscale node sharing, so a dial is not always available and the
+    # Mac's own authenticated call is. A node credential may check in only for itself (checked in
+    # the route, as the status route already does); the Fleet token may check in for any node.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/checkin$"),
     # Remote app update: a controller mirrors a signed release and its nodes pull it. Publishing
     # is fleet-reachable because GatewayKH holds only the Fleet token; the signature made with the
     # key the owner installed via POST /api/hub/release/trust is what authorises the release.
@@ -677,6 +683,12 @@ NODE_ALLOWED = (
     ("GET", r"^/api/hub/fleet/overview$"),
     ("DELETE", r"^/api/hub/fleet/nodes/[^/]+$"),
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/status$"),
+    # **This Mac's own call home.** The narrowest addition to this list, and the one that makes a
+    # Mac the controller cannot dial usable at all: it is the node saying "here I am, here is my
+    # address, here is what I am" and taking back the work held for it. It may only ever check in
+    # for itself — the route compares the path id against the credential's own node id — so it
+    # grants a leaf Mac nothing about any other machine.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/checkin$"),
     # **Reading the release its controller holds** - the descriptor, the file manifest and the
     # blobs it names, or (as a last resort) the disk image. Read-only: publishing stays with the
     # gateway's Fleet token, and a node can only ever install what the gateway signed.

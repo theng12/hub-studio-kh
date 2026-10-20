@@ -312,6 +312,9 @@ class FleetNodeStoreTests(unittest.TestCase):
         self.assertEqual(inventory["summary"],
                          {"total": 2, "reachable": 1, "unreachable": 1, "unauthorized": 0,
                           "error": 0, "removed": 0, "on_previous_token": 0,
+                          # How many of the reachable ones this controller believes because the Mac
+                          # called in rather than because it managed to dial it (0.6.193).
+                          "check_in": 0,
                           "previous_token_until": None})
 
     def test_a_node_that_answers_nonsense_is_an_error_not_a_success(self) -> None:

@@ -268,6 +268,22 @@ def _remote_machines(registry: list[dict]) -> dict[str, list[dict]]:
 _inflight = {"v": False}
 
 
+def _checkin_fallback(studio: dict, snapshot: dict) -> dict:
+    """A dial that failed is not the last word when the Mac is calling home itself.
+
+    Sharing a Tailscale node works one way, so a Shops Mac can reach its controller and the
+    controller can never reach it. Its own check-in carries the same `/api/hub/resources` answer
+    the poll was dialling for, so the poll uses that instead of filing the Mac as unreachable —
+    which is what kept it out of the scheduler while it was up and idle.
+    """
+    node_id = studio.get("fleet_node")
+    if not node_id:
+        return snapshot
+    from . import fleet_nodes
+    pulled = fleet_nodes.checkin_snapshot(str(node_id))
+    return pulled if pulled is not None else snapshot
+
+
 async def refresh(registry: list[dict], client: httpx.AsyncClient):
     """Refresh each remote machine's host+studio stats from its peer Hub.
     TTL-guarded so it only actually hits the network once a snapshot is PEER_REFRESH_S old. Safe to
@@ -339,6 +355,20 @@ async def _refresh_stale(machines, stale, client, now):
         token = _peer_token(s0)
         auth_generation = _auth_generation
         headers = {"X-Hub-Token": token} if token else {}
+        # **A Mac the controller's dial is known to fail is not dialled again here.** The poll runs
+        # every few seconds with a five-second budget, and a Shops Mac answers none of it: the
+        # roster already holds the answer the Mac sent on its own call home, so the poll takes that
+        # rather than stalling the whole sweep on a dial that cannot work. The moment a dial
+        # succeeds the roster says so and this dials again.
+        if s0.get("fleet_node"):
+            from . import fleet_nodes
+            node_id = str(s0["fleet_node"])
+            if fleet_nodes.dial_is_failing(fleet_nodes._read().get(node_id)):
+                pulled = fleet_nodes.checkin_snapshot(node_id)
+                if pulled is not None:
+                    if store(machine, pulled, entry, auth_generation):
+                        note_reachability(machine, pulled)
+                    return
         # A node that missed a rotation is asked with the older token it still holds.
         on_older = bool(s0.get("fleet_node") and held_token(s0["fleet_node"]) == token)
         try:
@@ -411,6 +441,11 @@ async def _refresh_stale(machines, stale, client, now):
                     and not isinstance(data.get("preferred_hold_remaining_s"), bool)
                     else 0.0),
                 "reachable": True, "auth": True, "status": "connected",
+                # **Whether this answer came through the Mac's own call home.** A Shops Mac cannot
+                # be dialled at all, so the poll reached it through the pull channel; the roster
+                # keeps the reason distinct so an operator can tell a dialled Mac from one that
+                # called in, and so the dial is not attempted again with a job's timeout.
+                "pulled": bool(getattr(r, "extensions", {}).get("studiohub_pull")),
             }
             clears_rejection = False
             if entry and entry[1].get(_DISPATCH_REJECTED):
@@ -434,22 +469,22 @@ async def _refresh_stale(machines, stale, client, now):
         except httpx.ConnectError:
             # TCP refused: nothing is listening on :47873 there — the Studio Hub
             # isn't actually running on that machine (even if its studios are).
-            snapshot = {"host": None, "studios": {},
-                        "reachable": False, "auth": True,
-                        "status": "no_hub"}
+            snapshot = _checkin_fallback(s0, {"host": None, "studios": {},
+                                              "reachable": False, "auth": True,
+                                              "status": "no_hub"})
             if store(machine, snapshot, entry, auth_generation):
                 note_reachability(machine, snapshot)
         except (httpx.TimeoutException, httpx.ConnectTimeout):
             # Packets dropped: a firewall is blocking :47873, or the Mac is asleep/off.
-            snapshot = {"host": None, "studios": {},
-                        "reachable": False, "auth": True,
-                        "status": "unreachable"}
+            snapshot = _checkin_fallback(s0, {"host": None, "studios": {},
+                                              "reachable": False, "auth": True,
+                                              "status": "unreachable"})
             if store(machine, snapshot, entry, auth_generation):
                 note_reachability(machine, snapshot)
         except Exception:
-            snapshot = {"host": None, "studios": {},
-                        "reachable": False, "auth": True,
-                        "status": "unreachable"}
+            snapshot = _checkin_fallback(s0, {"host": None, "studios": {},
+                                              "reachable": False, "auth": True,
+                                              "status": "unreachable"})
             if store(machine, snapshot, entry, auth_generation):
                 note_reachability(machine, snapshot)
 

@@ -7406,6 +7406,11 @@ final class NativeWorkspaceStore: ObservableObject {
         lastMembershipCheck = now
         await retryPendingLeave(now: now)
         await askControllerWhetherStillListed()
+        // **The same tick, on the same credential, and now two-way.** The call above asks whether
+        // this Mac is still listed; this one tells the controller what this Mac *is* and takes back
+        // the requests it could not dial. A Shops Mac reaches its controller through one-way
+        // Tailscale node sharing, so for those Macs this is the only channel there is.
+        await fleetCheckinTick(now: now)
     }
 
     private func retryPendingLeave(now: Date) async {
@@ -7473,6 +7478,233 @@ final class NativeWorkspaceStore: ObservableObject {
         } else if answer.0 == 200 {
             membershipUnknownStreak = 0
         }
+    }
+
+    // MARK: Fleet pull channel — a Mac its controller cannot dial still works
+
+    /// One request the controller could not dial this Mac with: **the exact call it would have
+    /// made**, for this Mac to replay on its own Hub.
+    ///
+    /// Nothing here decides what a command means. The controller sends the request it was going to
+    /// send and this Mac runs it locally, so a command can never drift from the dialled call it
+    /// replaces — and the controller's Fleet token is never presented: this Mac uses its own Hub
+    /// credential, which is the only one its own Hub trusts.
+    struct FleetCommand: Equatable {
+        let id: String
+        let method: String
+        let path: String
+        let headers: [String: String]
+        let contentB64: String?
+        let contentType: String?
+
+        /// Refuse anything that is not a plain path on this Mac's own Hub. The controller is
+        /// another machine's word, so a path that could reach somewhere else is dropped rather
+        /// than followed.
+        init?(_ raw: [String: Any]) {
+            guard let id = raw["id"] as? String, !id.isEmpty,
+                  let method = raw["method"] as? String, !method.isEmpty,
+                  let path = raw["path"] as? String,
+                  path.hasPrefix("/"), !path.contains("://"), !path.contains("..") else { return nil }
+            self.id = id
+            self.method = method.uppercased()
+            self.path = path
+            self.headers = (raw["headers"] as? [String: String]) ?? [:]
+            self.contentB64 = raw["content_b64"] as? String
+            self.contentType = raw["content_type"] as? String
+        }
+    }
+
+    /// Command ids this Mac has run or refused, and the answers it owes the controller. Both are
+    /// cleared only once the controller has taken them, so a call home lost in flight does not run
+    /// a command twice: the controller never re-issues an id it has seen, and this Mac never runs
+    /// one it has already listed here.
+    private var fleetSeenCommands: [String] = []
+    private var fleetPendingResults: [[String: Any]] = []
+    private static let fleetSeenLimit = 128
+
+    /// **The Mac's own call home, which is also the pull channel's door.**
+    ///
+    /// Once a minute, and again immediately after it has run anything: tell the controller what
+    /// this Mac is — its current address, its version, its Lite Mode, and the answer its own Hub
+    /// gives on the route the controller probes — hand back what it has already run, and take the
+    /// requests the controller could not dial it with.
+    ///
+    /// **A controller older than this build answers 404 and nothing here happens**, so the rollout
+    /// order does not matter: the existing `GET …/status` call keeps reporting a removal, and a
+    /// Mac on an older controller works exactly as it did.
+    func fleetCheckinTick(now: Date = Date()) async {
+        guard controllerRemoval == nil, !joiningFleet, rejoinTask == nil, startupRejoinTask == nil,
+              controllerIdentity?.settings.fleetCredentialOrigin == "adopted",
+              let membership = storedMembership,
+              let target = try? Self.privateHTTPAddress(membership.controllerAddress),
+              let nodeID = controllerIdentity?.settings.controllerId.lowercased(),
+              let requestConnection = connectionID else { return }
+        let own = nodeOriginCredential
+        let path = "api/hub/fleet/nodes/\(nodeID)/checkin"
+        let first = await fleetCall(target, path: path, credential: own,
+                                    body: await fleetCheckinBody(nodeID: nodeID, membership: membership,
+                                                                 target: target))
+        guard connectionID == requestConnection else { return }
+        var answer = first
+        if let status = first?.0, status == 401,
+           let group = fleetTokenCredential, group != own,
+           let again = await fleetCall(target, path: path, credential: group,
+                                       body: await fleetCheckinBody(nodeID: nodeID,
+                                                                    membership: membership,
+                                                                    target: target)) {
+            answer = again
+        }
+        guard connectionID == requestConnection, let (status, payload) = answer else { return }
+        // An older controller has no such route: this Mac is not broken, it simply has nothing to
+        // pull through, and the status call above still carries the removal.
+        guard status != 404, status != 405, status == 200 else { return }
+        if payload["state"] as? String == "removed" {
+            // A removal reaches this Mac here too, so the new route cannot become a way to miss one.
+            await askControllerWhetherStillListed()
+            return
+        }
+        let commands = (payload["commands"] as? [[String: Any]]) ?? []
+        guard !commands.isEmpty else { return }
+        var ran: [[String: Any]] = []
+        for raw in commands {
+            guard let command = FleetCommand(raw) else { continue }
+            // Recorded **before** it runs: a command that hangs or crashes this Mac must not be
+            // handed back to it by the controller on the next tick.
+            fleetSeenCommands.append(command.id)
+            ran.append(await runFleetCommand(command))
+        }
+        if fleetSeenCommands.count > Self.fleetSeenLimit {
+            fleetSeenCommands.removeFirst(fleetSeenCommands.count - Self.fleetSeenLimit)
+        }
+        fleetPendingResults.append(contentsOf: ran)
+        // Hand the answers straight back: the controller is holding a connection open for them.
+        let delivered = await fleetCall(target, path: path, credential: own,
+                                        body: await fleetCheckinBody(nodeID: nodeID,
+                                                                     membership: membership,
+                                                                     target: target))
+        guard connectionID == requestConnection else { return }
+        if delivered?.0 == 200 {
+            fleetPendingResults.removeAll()
+            fleetSeenCommands.removeAll()
+        }
+    }
+
+    /// What this Mac tells its controller about itself on one call home.
+    private func fleetCheckinBody(nodeID: String, membership: FleetMembership,
+                                  target: URL) async -> [String: Any] {
+        var payload: [String: Any] = ["node_id": nodeID]
+        if let name = controllerIdentity?.settings.machineName, !name.isEmpty { payload["name"] = name }
+        // **This Mac's current address, every minute.** The roster address was written once, at
+        // join, and a Mac never re-joins on its own — so a Mac that moved kept an address nothing
+        // could correct, and its controller kept dialling the old one.
+        if let address = Self.studioAddress(for: target, port: baseURL?.port,
+                                            boundHosts: membership.boundHosts) {
+            payload["address"] = address
+        }
+        if let resources = await localHubObject("/api/hub/resources?local_only=true") {
+            // **The answer the controller's own probe would have got.** Its probe reads this exact
+            // route, so sending the answer means the roster, the peer cache and the scheduler all
+            // see the same facts on a Mac nobody can dial.
+            payload["resources"] = resources
+            if let version = resources["version"] as? String { payload["version"] = version }
+            if let workstation = resources["workstation"] { payload["workstation"] = workstation }
+            if let studios = resources["studios"] as? [String: Any] {
+                let offered = studios.keys.sorted().compactMap { modality -> [String: String]? in
+                    guard let row = studios[modality] as? [String: Any],
+                          let id = row["id"] as? String, !id.isEmpty else { return nil }
+                    return ["id": id, "modality": modality]
+                }
+                if !offered.isEmpty { payload["studios"] = offered }
+            }
+        } else if let version = hubVersion?.version {
+            payload["version"] = version
+        }
+        if let report = startupReportProvider?(), let object = try? Self.fleetJSONObject(report) {
+            payload["startup"] = object
+        }
+        payload["seen"] = fleetSeenCommands
+        payload["results"] = fleetPendingResults
+        return payload
+    }
+
+    /// One authenticated exchange with the controller on the check-in route. `nil` when it did not
+    /// answer at all, which is a Mac whose controller is off rather than a Mac with a fault.
+    private func fleetCall(_ target: URL, path: String, credential: String?,
+                           body: [String: Any]?) async -> (Int, [String: Any])? {
+        var request = URLRequest(url: target.appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let credential, !credential.isEmpty {
+            request.setValue(credential, forHTTPHeaderField: "X-Hub-Token")
+        }
+        request.httpBody = body.flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse else { return nil }
+        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return (http.statusCode, object ?? [:])
+    }
+
+    /// Replay one command on **this Mac's own Hub**, with this Mac's own credential.
+    private func runFleetCommand(_ command: FleetCommand) async -> [String: Any] {
+        guard let baseURL else {
+            return ["id": command.id, "status": 503,
+                    "json": ["ok": false, "detail": "Studio Hub is not running on this Mac."]]
+        }
+        let base = baseURL.absoluteString.hasSuffix("/")
+            ? String(baseURL.absoluteString.dropLast()) : baseURL.absoluteString
+        guard let url = URL(string: base + command.path) else {
+            return ["id": command.id, "status": 400,
+                    "json": ["ok": false, "detail": "the request address is invalid"]]
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = command.method
+        // The work may take minutes. This is the same budget the controller would have waited on
+        // the dial it could not make, so a long job is not cut short by the hop.
+        request.timeoutInterval = 900
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let hubToken { request.setValue(hubToken, forHTTPHeaderField: "X-Hub-Token") }
+        for (name, value) in command.headers where !name.lowercased().hasPrefix("x-hub-token") {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        if let encoded = command.contentB64, let data = Data(base64Encoded: encoded) {
+            request.httpBody = data
+            if let type = command.contentType, !type.isEmpty {
+                request.setValue(type, forHTTPHeaderField: "Content-Type")
+            }
+        }
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse else {
+            return ["id": command.id, "status": 503,
+                    "json": ["ok": false, "detail": "this Mac's Studio Hub did not answer."]]
+        }
+        let payload = (try? JSONSerialization.jsonObject(with: data)) ?? NSNull()
+        return ["id": command.id, "status": http.statusCode, "json": payload]
+    }
+
+    /// One plain read of this Mac's own Hub, kept as raw JSON. Used for the resources snapshot,
+    /// which is passed on verbatim rather than decoded and re-encoded.
+    private func localHubObject(_ path: String) async -> [String: Any]? {
+        guard let baseURL else { return nil }
+        let base = baseURL.absoluteString.hasSuffix("/")
+            ? String(baseURL.absoluteString.dropLast()) : baseURL.absoluteString
+        guard let url = URL(string: base + path) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let hubToken { request.setValue(hubToken, forHTTPHeaderField: "X-Hub-Token") }
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            return nil
+        }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    private static func fleetJSONObject<T: Encodable>(_ value: T) throws -> Any {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        return try JSONSerialization.jsonObject(with: encoder.encode(value))
     }
 
     /// Stop the backed-off re-join and put it back at the first interval. Called when this Mac is
