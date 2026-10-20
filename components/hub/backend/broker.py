@@ -2654,9 +2654,12 @@ async def _stop_a_stalled_local_job(client: httpx.AsyncClient, b: dict, item: di
     if not verdict.get("eligible"):
         return False
     reason = automatic_recovery.stall_reason(modality, verdict.get("no_progress_s") or 0.0)
+    if not await _signal_worker_cancel(client, item):
+        # The worker did not take the stop. Leave the item running so the next poll tries again;
+        # ending it here would report a dead job while a live one still holds the Mac.
+        return False
     _recovery().mark(str(studio.get("id") or ""), str(job.get("id") or ""),
                      "cancel_requested", reason)
-    await _signal_worker_cancel(client, item)
     item.update(state="error", error=reason, error_code="STALLED",
                 finished_at=time.time(), retry_at=None)
     ledger.save_batch(b)

@@ -58,10 +58,11 @@ class LocalStallStopTests(unittest.TestCase):
         self.addCleanup(setattr, broker.ledger, "save_batch", self.previous_save)
         broker.ledger.save_batch = lambda _batch: None
         self.cancels: list[dict] = []
+        self.cancel_taken = True
 
         async def _cancel(_client, item):
             self.cancels.append(dict(item))
-            return True
+            return self.cancel_taken
 
         self.previous_cancel = broker._signal_worker_cancel
         self.addCleanup(setattr, broker, "_signal_worker_cancel", self.previous_cancel)
@@ -135,6 +136,24 @@ class LocalStallStopTests(unittest.TestCase):
         self._watch("image-1", "image", [dict(frozen) for _ in range(20)], end=time.time())
         stopped, _item = self._stop("image", frozen)
         self.assertFalse(stopped)
+
+    def test_a_worker_that_does_not_take_the_stop_is_tried_again(self) -> None:
+        """The item is only ended once the worker took the stop signal.
+
+        Ending it on a signal that never landed would report a dead job while a live one still
+        holds the Mac — and the durable record would then say `cancel_requested`, which the policy
+        reads as protected and never retries.
+        """
+        self.cancel_taken = False
+        frozen = _job()
+        self._watch("image-1", "image", [dict(frozen) for _ in range(20)], end=time.time())
+        stopped, item = self._stop("image", frozen)
+        self.assertFalse(stopped)
+        self.assertEqual(item["state"], "running")
+        self.assertNotIn("error_code", item)
+        self.assertTrue(self.cancels, "the worker was still told to stop")
+        self.assertNotEqual(broker._recovery().snapshot()["jobs"][0]["phase"], "cancel_requested",
+                            "a stop that was not taken is not recorded as one")
 
     def test_a_nodes_job_is_the_nodes_to_stop(self) -> None:
         frozen = _job()
