@@ -114,6 +114,16 @@ class AttentionMeansNow(unittest.TestCase):
         self.assertEqual(self.state([]), "ready")
         self.assertEqual(self.state([self.finished("done", 3 * 3600)]), "long_idle")
 
+    def test_an_offline_mac_that_still_holds_a_job_reads_offline_not_working(self) -> None:
+        job = {"machine": "m", "studio": "image", "state": "running", "job_id": "job-a",
+               "observed_at": self.NOW, "updated_at": self.NOW}
+        down = {s: {"status": "down", "activity_support": None} for s in ("voice", "image")}
+        state, _, current, _ = activity._state_at("m", down, self.STUDIOS, [job], [], self.NOW)
+        self.assertEqual(state, "offline")
+        self.assertEqual(current["job_id"], "job-a", "the job it holds must still be named")
+        working, *_ = activity._state_at("m", up("voice", "image"), self.STUDIOS, [job], [], self.NOW)
+        self.assertEqual(working, "working")
+
 
 if __name__ == "__main__":
     unittest.main()

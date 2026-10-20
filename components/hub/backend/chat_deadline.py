@@ -152,6 +152,14 @@ def deadline_reason(deadline: ChatDeadline) -> str:
             f"({deadline.note})")
 
 
+def deadline_passed(started: float, deadline: ChatDeadline) -> bool:
+    """Whether the job's own limit has elapsed since `started` (a `time.monotonic()` reading).
+
+    A read timeout on a one-request Chat job is the deadline only when this is true.
+    """
+    return time.monotonic() - started >= deadline.seconds
+
+
 def _duration(seconds: float) -> str:
     """Seconds as the words a person would say: hours, then minutes, then seconds.
 

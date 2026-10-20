@@ -24,7 +24,9 @@ import time
 import unittest
 from unittest import mock
 
-from components.hub.backend import chat_deadline
+import httpx
+
+from components.hub.backend import chat_deadline, chat_jobs
 
 
 def studio(machine: str = "local") -> dict:
@@ -254,6 +256,68 @@ class StallStopTests(unittest.IsolatedAsyncioTestCase):
                 os.environ.pop("STUDIOHUB_CHAT_STALL_SECONDS", None)
             else:
                 os.environ["STUDIOHUB_CHAT_STALL_SECONDS"] = original
+
+
+class PackLaneTimeoutTests(unittest.TestCase):
+    """The pack lane names its own deadline stop, as the proxy lane does, and never retries it.
+
+    A read timeout is the deadline only once the job's own computed limit has elapsed; httpx's
+    timeout messages are empty, so no retry line may print the exception text alone.
+    """
+
+    def run_pack(self, error: Exception, *, limit_s: float, tries: int = 1) -> tuple[dict, int]:
+        posts = []
+
+        class Client:
+            async def post(self, *args, **kwargs):
+                posts.append(1)
+                raise error
+
+        class Monitor:
+            _client = Client()
+            status: dict = {}
+
+        batch = {"id": "batch-1", "kind": "completion", "model": "m",
+                 "created_at": time.time() - 1, "cancelled": False, "packs": [],
+                 "genstudio_execution": None}
+        pack = {"index": 0, "pack_id": "pack-1", "scene_ids": ["a"],
+                "messages": [{"role": "user", "content": "p"}], "params": {},
+                "state": "running", "tries": tries, "studio": "chat", "results": {},
+                "raw_responses": [], "usage": None}
+        batch["packs"] = [pack]
+        studio = {"id": "chat", "machine": "local", "host": "127.0.0.1", "port": 1,
+                  "hub_token": "t", "modality": "chat"}
+        limit = chat_deadline.ChatDeadline(seconds=limit_s, note="test arithmetic")
+        with mock.patch.object(chat_jobs, "_save"), \
+                mock.patch.object(chat_deadline, "chat_deadline", return_value=limit):
+            asyncio.run(chat_jobs._run_pack(Monitor(), batch, pack, studio, "owner"))
+        return pack, len(posts)
+
+    def test_a_read_timeout_past_the_jobs_own_deadline_is_a_named_terminal_stop(self) -> None:
+        pack, posts = self.run_pack(httpx.ReadTimeout(""), limit_s=0.0)
+        limit = chat_deadline.ChatDeadline(seconds=0.0, note="test arithmetic")
+        self.assertEqual(pack["state"], "error")
+        self.assertEqual(pack["error"], chat_deadline.deadline_reason(limit))
+        self.assertEqual(pack["error_code"], "CHAT_DEADLINE_REACHED")
+        self.assertEqual(posts, 1, "a deadline stop must not re-submit the pack")
+        self.assertIsNotNone(pack.get("finished_at"))
+
+    def test_a_read_timeout_before_the_deadline_is_still_a_retry_with_a_reason(self) -> None:
+        pack, _ = self.run_pack(httpx.ReadTimeout(""), limit_s=3600.0)
+        self.assertEqual(pack["state"], "queued")
+        self.assertNotIn("error_code", pack)
+        self.assertRegex(pack["error"], r"retrying in \d+s: \S")
+
+    def test_a_connect_timeout_stays_a_retry_with_a_reason(self) -> None:
+        pack, _ = self.run_pack(httpx.ConnectTimeout(""), limit_s=0.0)
+        self.assertEqual(pack["state"], "queued")
+        self.assertRegex(pack["error"], r"retrying in \d+s: ConnectTimeout")
+
+    def test_a_terminal_failure_with_an_empty_message_still_has_a_reason(self) -> None:
+        pack, _ = self.run_pack(httpx.ConnectTimeout(""), limit_s=0.0,
+                                tries=chat_jobs.MAX_TRIES)
+        self.assertEqual(pack["state"], "error")
+        self.assertEqual(pack["error"], "ConnectTimeout")
 
 
 if __name__ == "__main__":
