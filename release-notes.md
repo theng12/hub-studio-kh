@@ -2,6 +2,22 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.192 — 2026-10-20
+
+### A scene pack that runs out of time now says so, once
+
+When a scene pack used up its own time limit, the app treated it like a passing network hiccup: it
+printed "retrying in 5s:" with nothing after the colon and started the whole wait again, several
+times over. It now stops at that point and tells you why, using the same plain wording a single chat
+job gets — how long the limit was and how it was worked out. Real network hiccups are still retried.
+No message in the app can show a blank reason any more.
+
+### A Mac that has gone offline no longer looks busy
+
+If every worker on a Mac had gone away but a job was still assigned to it, the fleet view showed that
+Mac as "working". It now shows **offline**, with the job marked as waiting, so you can see at a glance
+that the job is waiting for the Mac to come back rather than being worked on.
+
 ## 0.6.191 — 2026-10-20
 
 ### A job that stops making progress is stopped, and you are told why

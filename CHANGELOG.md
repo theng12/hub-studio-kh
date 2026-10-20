@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.192 — 2026-10-20
+
+One tested fix branch was merged over verified main `fd27422` (0.6.191) in worktree
+`_worktrees/studio-hub-kh/release-192`: `fix/pack-deadline-named` (`884553c`, on top of `5a105ab`). No
+native source moves, so the app binary is unchanged.
+
+- **A scene pack that runs out of its own time limit now stops, says so, and does not retry.** `_run_pack` had a terminal branch for a stalled worker but none for a read timeout, so the job's own deadline fell into the generic transient retry — it printed "retrying in 5s: " with an **empty reason** (httpx's read-timeout message is empty) and re-ran the whole deadline up to `MAX_TRIES` times. A read timeout once the pack's own computed deadline has elapsed is now terminal, under the code **`CHAT_DEADLINE_REACHED`**, with the plain arithmetic reason from `chat_deadline.deadline_reason` — the same wording the proxy lane already uses. A connection timeout and other transient errors still retry.
+- **No retry or terminal line can print an empty reason any more.** When an exception carries no message, the line falls back to the exception's class name.
+- **A Mac that is completely offline but still holds a job reads "offline", not "working".** `activity._state_at` checked for work before it checked whether every studio on the Mac was down, so a Mac whose workers were all gone but whose queue item was still open showed as working. The fleet's existing all-studios-down rule (no new threshold) now comes first; the held job stays named as `current_job` and the fleet row carries **`job_waiting: true`**.
+- Tests: `tests/test_chat_job_deadline.py` pins the terminal deadline stop, the retry of a connection timeout, and the never-empty reason; `tests/test_fleet_health_idle.py` pins the offline-with-job-waiting row; `tests/test_hub_stall_stop.py` follows the new state order.
+
 ## 0.6.191 — 2026-10-20
 
 One tested fix branch was merged over verified main `2868be4` (0.6.190) in worktree
