@@ -2,13 +2,58 @@ from __future__ import annotations
 
 from pathlib import Path
 import inspect
+import json
+import os
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from backend import catalog, generation, long_form_policy, model_audits
+
+# `generation.diagnostics()` deep-imports every model stack on purpose (see the note beside
+# `_package_installed`), and one of those stacks makes the *interpreter's exit* unreliable.
+# onnxruntime starts Microsoft's 1DS telemetry worker thread when its C++ extension loads, and
+# that thread races the process's C++ static destructors: `PosixTelemetry::~PosixTelemetry`
+# flushes while the worker is still dispatching, or torch's `TorchLibraryInit` deregisters
+# operators under it. The process then dies with SIGABRT ("recursive_mutex lock failed") or
+# SIGSEGV *after* every test has passed — about one run in ten, which is what made the release
+# gate's Voice suite look flaky. Nothing in this repository can fix a third-party teardown race,
+# so the deep import runs in a throwaway interpreter that leaves without running those
+# destructors. `os._exit` is safe here: this process exists only to print one JSON object.
+_DIAGNOSTICS_PROBE = """
+import json
+import os
+import sys
+
+from backend import generation
+
+# Behind a marker: importing the backend prints its own progress lines on the same stream.
+print("DIAGNOSTICS:" + json.dumps(generation.diagnostics()))
+sys.stdout.flush()
+os._exit(0)
+"""
+
+
+def _diagnostics_in_a_child() -> dict:
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(part for part in sys.path if part)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    completed = subprocess.run(
+        [sys.executable, "-c", _DIAGNOSTICS_PROBE],
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert completed.returncode == 0, f"the diagnostics probe failed:\n{completed.stderr}"
+    marker = completed.stdout.rfind("DIAGNOSTICS:")
+    assert marker >= 0, f"the diagnostics probe printed no result:\n{completed.stdout}"
+    return json.loads(completed.stdout[marker + len("DIAGNOSTICS:"):])
 
 
 class _VoiceLibrary:
@@ -119,7 +164,7 @@ def test_qwen_17b_base_uses_the_official_language_roster_and_its_floor() -> None
 
 
 def test_diagnostics_cover_every_wired_engine_and_show_package_versions() -> None:
-    result = generation.diagnostics()
+    result = _diagnostics_in_a_child()
 
     assert {engine["family"] for engine in result["engines"]} == generation._WIRED_FAMILIES
     # Derived, not hardcoded. This used to assert a fixed count and then name the engines that

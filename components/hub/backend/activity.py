@@ -274,6 +274,10 @@ def _broker_jobs(registry: list[dict], batches: dict,
                 "origin": "hub", "origin_device": hub_origin_device,
                 "started_at": _finite(item.get("started_at"), minimum=0),
                 "finished_at": _finite(item.get("finished_at"), minimum=0),
+                # The item's own last sign of life, which `_observed_jobs` reads as the receipt for
+                # a job no studio snapshot covers. Without it that row had to be stamped with the
+                # moment the Hub looked, and silence became indistinguishable from reporting.
+                "last_progress_at": _finite(item.get("last_progress_at"), minimum=0),
             })
     return result
 
@@ -435,7 +439,13 @@ def _observed_jobs(registry: list[dict], statuses: dict, batches: dict,
             marker = (row["machine"], row["studio"], row["id"], row["state"])
             if marker in seen:
                 continue
-            result.append({**row, "observed_at": now, "activity_received_at": now,
+            # The receipt is the job's own last sign of life, never the moment of this poll: a
+            # worker that has stopped reporting must read as silent, which is what `stall.py` is
+            # fed. `last_progress_at` is that clock - the same one `broker.batch_summary` reads -
+            # and `now` is the answer only for an item that has never stated one.
+            result.append({**row, "observed_at": now,
+                           "activity_received_at": (row.get("last_progress_at")
+                                                    or row.get("started_at") or now),
                            "reported_at": now})
             seen.add(marker)
     # A job whose worker has stopped reporting while still holding it. **Visible, never

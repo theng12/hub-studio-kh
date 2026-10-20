@@ -32,7 +32,7 @@ from pathlib import Path
 
 import httpx
 
-from . import (artifact_metadata, cloud_guard, execution_assets,
+from . import (artifact_metadata, automatic_recovery, cloud_guard, execution_assets,
                execution_identity, ledger, model_ids, peers, shared_voices)
 from . import routing as routing_rule
 from .memory_control import FleetMemoryControl, SUPPORTED_MODALITIES
@@ -2617,6 +2617,53 @@ async def _signal_worker_cancel(client: httpx.AsyncClient, item: dict) -> bool:
     except httpx.HTTPError as e:
         item["cancel_error"] = str(e) or type(e).__name__
     return False
+
+
+# ───────────── bounded local recovery ─────────────
+
+# `automatic_recovery` holds the policy — a measured stall budget per modality, and the durable
+# record of what this Hub has already decided — for Image and Voice jobs this Mac runs itself.
+# Nothing called it, so a local job whose own stage counter stopped moving was only *flagged*
+# (`stall.py`, which deliberately never acts) and never stopped: the lane deadline the Hub
+# publishes is the caller's to poll against, and a job this Mac's own page submitted has no
+# caller to enforce it. This is the caller it was missing.
+_RECOVERY: automatic_recovery.AutomaticRecoveryState | None = None
+
+
+def _recovery() -> automatic_recovery.AutomaticRecoveryState:
+    """The Hub's recovery state, beside its other durable state. Built on first use, not at
+    import: the data directory is the process's to decide, as it is for every other store."""
+    global _RECOVERY
+    if _RECOVERY is None:
+        _RECOVERY = automatic_recovery.AutomaticRecoveryState(DATA_DIR / "recovery.json")
+    return _RECOVERY
+
+
+async def _stop_a_stalled_local_job(client: httpx.AsyncClient, b: dict, item: dict,
+                                    studio: dict, job: dict) -> bool:
+    """Stop this Mac's own Image/Voice job once its own progress has been frozen too long.
+
+    Only a local Studio: a node's job belongs to the node, whose own Hub runs the same check, and
+    stopping it from here would fight the peer's own reconciliation. Returns True when the item is
+    terminal, so the poll loop stops polling.
+    """
+    if not peers.is_local_studio(studio):
+        return False
+    modality = str(b.get("modality") or "")
+    verdict = _recovery().observe(str(studio.get("id") or ""), modality, job)
+    if not verdict.get("eligible"):
+        return False
+    reason = automatic_recovery.stall_reason(modality, verdict.get("no_progress_s") or 0.0)
+    if not await _signal_worker_cancel(client, item):
+        # The worker did not take the stop. Leave the item running so the next poll tries again;
+        # ending it here would report a dead job while a live one still holds the Mac.
+        return False
+    _recovery().mark(str(studio.get("id") or ""), str(job.get("id") or ""),
+                     "cancel_requested", reason)
+    item.update(state="error", error=reason, error_code="STALLED",
+                finished_at=time.time(), retry_at=None)
+    ledger.save_batch(b)
+    return True
 
 
 _abandoned_peer_cancels: set[asyncio.Task] = set()
@@ -5587,6 +5634,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 _record_worker_progress(item, j.get("progress"), j.get("progress_stage"))
                 item["chunk_index"] = j.get("chunk_index")
                 item["chunk_total"] = j.get("chunk_total")
+                if await _stop_a_stalled_local_job(client, b, item, studio, j):
+                    return
                 continue
             if j.get("error") or state in ("error", "cancelled"):
                 if b["cancelled"]:

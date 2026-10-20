@@ -29,16 +29,28 @@ from types import SimpleNamespace
 from unittest import mock
 
 # The Hub's own data root, set before the backend imports read it — the gate's env does the
-# same. Never the owner's real hub data.
+# same. Never the owner's real hub data, and never left behind: a `setdefault` here put a models
+# root into the whole test process, so every later module that reads `STUDIOHUB_MODELS_DIR` saw a
+# library that is not there and took the packaged model gate. That is what made twelve
+# `test_chat_hub_wiring` tests fail whenever this module was imported first.
 _TEMPORARY = tempfile.TemporaryDirectory()
+_SCRATCH = Path(_TEMPORARY.name)
+_OWNED = ("STUDIOHUB_DATA_DIR", "STUDIOHUB_MODELS_DIR", "STUDIOHUB_WORKERS_FILE")
+_WAS = {key: os.environ.get(key) for key in _OWNED}
 os.environ.setdefault("STUDIOHUB_DATA_DIR", _TEMPORARY.name)
-os.environ.setdefault("STUDIOHUB_MODELS_DIR", str(Path(_TEMPORARY.name) / "models"))
-os.environ.setdefault("STUDIOHUB_WORKERS_FILE", str(Path(_TEMPORARY.name) / "workers.json"))
+os.environ.setdefault("STUDIOHUB_MODELS_DIR", str(_SCRATCH / "models"))
+os.environ.setdefault("STUDIOHUB_WORKERS_FILE", str(_SCRATCH / "workers.json"))
 Path(os.environ["STUDIOHUB_MODELS_DIR"]).mkdir(parents=True, exist_ok=True)
 Path(os.environ["STUDIOHUB_WORKERS_FILE"]).write_text("[]\n")
 
 from components.chat.app.backend.llm_engine import FALLBACK_MAX_OUTPUT_TOKENS  # noqa: E402
 from components.hub.backend import chat_jobs  # noqa: E402
+
+for _key, _value in _WAS.items():
+    if _value is None:
+        os.environ.pop(_key, None)
+    else:
+        os.environ[_key] = _value
 
 MODEL = "org/chat-model"
 REVISION = "rev-1"
