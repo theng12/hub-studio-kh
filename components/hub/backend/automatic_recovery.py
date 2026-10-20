@@ -35,6 +35,45 @@ def stall_threshold_s(modality: object) -> float | None:
     return DEFAULT_STALL_S.get(str(modality or ""))
 
 
+# The (stage, total) pair each worker actually publishes while its job makes progress. Image
+# Studio reports its denoise step; Voice Studio reports its long-form section index. The names are
+# the workers' own — `components/image/app/backend/generation.py` writes `denoise_step`, and
+# `components/voice/app/backend/generation.py` writes `chunk_index`. A signature is only evidence
+# if it reads a field something writes: this table used to name `current_step`, which no worker in
+# this app has ever published, so `stage_evidence` was false for every Image job and the whole
+# observer could never fire.
+_PROGRESS_FIELDS: dict[str, tuple[str, str]] = {
+    "image": ("denoise_step", "denoise_steps"),
+    "voice": ("chunk_index", "chunk_total"),
+}
+
+
+def progress_fields(modality: object) -> tuple[str, str] | None:
+    """The ``(stage, total)`` pair this modality's worker publishes, or ``None`` when it has none."""
+    return _PROGRESS_FIELDS.get(str(modality or ""))
+
+
+def stall_reason(modality: object, silent_for: float) -> str:
+    """The plain words for a stall stop, distinct from a deadline stop.
+
+    The same shape as `chat_deadline.stall_reason`, because an operator reads both on the same
+    Jobs page and they must not be mistaken for each other.
+    """
+    name = str(modality or "job") or "job"
+    return f"stopped: no {name} progress for {_duration(silent_for)}"
+
+
+def _duration(seconds: float) -> str:
+    """Seconds as the words a person would say: hours, then minutes, then seconds."""
+    value = max(0.0, float(seconds))
+    for size, name in ((3600.0, "hour"), (60.0, "minute")):
+        if value >= size * 1.5:
+            whole = int(round(value / size))
+            return f"{whole} {name}" + ("" if whole == 1 else "s")
+    whole = max(1, int(round(value)))
+    return f"{whole} second" + ("" if whole == 1 else "s")
+
+
 def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -43,12 +82,10 @@ def _number(value: object) -> float | None:
 
 
 def _signature(modality: str, job: dict) -> list[object]:
-    fields = (
-        ("state", "progress", "current_step", "total_steps")
-        if modality == "image"
-        else ("state", "progress", "chunk_index", "chunk_total")
-    )
-    return [job.get(field) for field in fields]
+    fields = progress_fields(modality)
+    if fields is None:
+        return [job.get("state"), job.get("progress")]
+    return [job.get(field) for field in ("state", "progress", *fields)]
 
 
 class AutomaticRecoveryState:
@@ -110,10 +147,7 @@ class AutomaticRecoveryState:
         model = str(job.get("model") or (job.get("params") or {}).get("repo") or "")[:500]
         signature = _signature(modality, job)
         threshold = stall_threshold_s(modality)
-        stage_field, total_field = (
-            ("current_step", "total_steps") if modality == "image"
-            else ("chunk_index", "chunk_total")
-        )
+        stage_field, total_field = progress_fields(modality) or (None, None)
         stage = _number(job.get(stage_field))
         total = _number(job.get(total_field))
         stage_evidence = bool(stage is not None and total is not None and total > 0 and stage <= total)
