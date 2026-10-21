@@ -660,5 +660,109 @@ class TheNodeIdentityStopsFollowingTheHostnameTest(unittest.TestCase):
         self.assertEqual(self.control_plane.SETTINGS_FILE.read_text(), "{not json")
 
 
+class JoinedRenderWorkerReadTest(unittest.TestCase):
+    """A controller republishes a joined leaf's render row from one bounded extra read.
+
+    The row is routing evidence, not authority: a node that refuses the read, runs an older
+    Hub, or answers something that is not that closed row simply has no render worker here,
+    and the probe's own reachability answer never changes because of it.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="studiohub-render-cap-")
+        self.old_data = fleet_nodes.DATA_DIR
+        fleet_nodes.DATA_DIR = Path(self.temporary.name)
+        fleet_nodes._render_capability_cache.clear()
+        self.addCleanup(self.restore)
+
+    def restore(self) -> None:
+        fleet_nodes.DATA_DIR = self.old_data
+        fleet_nodes._render_capability_cache.clear()
+        self.temporary.cleanup()
+
+    def _capability(self) -> dict:
+        bounds = {"max_rss_bytes": 10737418240, "max_wall_seconds": 14400,
+                  "min_available_memory_bytes": 2147483648, "output_limit_bytes": 8589934592}
+        return {
+            "operation": "video.final_render",
+            "physical_machine_id": "local",
+            "hardware_class": "m4-16gb",
+            "profile_digest": "a1" * 32,
+            "tools_digest": "b2" * 32,
+            "compiler_digest": "c3" * 32,
+            "qualification_digest": "d4" * 32,
+            "selected_tier": "H.264 · hardware (videotoolbox, q:v 65)",
+            "exact_encoder": "h264_videotoolbox",
+            "font_support": False,
+            "bounds": bounds,
+            "profile_execution_bounds": {"max_duration_sec": 10800},
+            "production_eligible": False,
+            "production_enabled": False,
+            "available_capacity": {"slots": 0, "slots_total": 1},
+            "qualification_candidates": [{
+                "vector_id": "intent-1", "hardware_class": "m4-16gb",
+                "profile_digest": "a1" * 32, "tools_digest": "b2" * 32,
+                "compiler_digest": "c3" * 32, "qualification_digest": "d4" * 32,
+                "selected_tier": "H.264 · hardware (videotoolbox, q:v 65)",
+                "exact_encoder": "h264_videotoolbox", "font_support": False,
+                "bounds": dict(bounds),
+                "profile_execution_bounds": {"max_duration_sec": 10800},
+                "production_eligible": False, "qualification_only": True,
+                "available_capacity": {"slots": 1, "slots_total": 1},
+            }],
+        }
+
+    def _client(self, capability_status: int, body: object):
+        import httpx
+
+        class Client:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            async def get(self, url, timeout=None, **kwargs):
+                self.calls.append(url)
+                if url.endswith(fleet_nodes.PROBE_CAPABILITY_PATH):
+                    if capability_status == 200:
+                        return httpx.Response(200, json=body,
+                                              request=httpx.Request("GET", url))
+                    return httpx.Response(capability_status, request=httpx.Request("GET", url))
+                return httpx.Response(200, json={"version": "0.6.194", "host": {}},
+                                      request=httpx.Request("GET", url))
+
+            async def aclose(self):
+                pass
+
+        return Client()
+
+    def _probe(self, client) -> dict:
+        return asyncio.run(fleet_nodes.probe(
+            {"id": "shop-m4", "name": "shop-m4", "address": "http://127.0.0.1:9"}, client))
+
+    def test_a_live_row_is_remembered_and_expires_as_a_hint(self) -> None:
+        client = self._client(200, self._capability())
+        row = self._probe(client)
+        self.assertEqual(row["state"], "reachable")
+        capability = fleet_nodes.render_capabilities()["shop-m4"]
+        self.assertEqual(capability["operation"], "video.final_render")
+        self.assertEqual(
+            len(capability["qualification_candidates"][0]["profile_digest"]), 64)
+        self.assertIn(fleet_nodes.PROBE_CAPABILITY_PATH, client.calls[-1])
+        self.assertEqual(
+            fleet_nodes.render_capabilities(now=time.time() + 46), {})
+
+    def test_an_older_hub_or_a_refusal_leaves_no_worker_and_no_state_change(self) -> None:
+        for status in (404, 401, 500):
+            with self.subTest(status):
+                fleet_nodes._render_capability_cache.clear()
+                row = self._probe(self._client(status, None))
+                self.assertEqual(row["state"], "reachable")
+                self.assertEqual(fleet_nodes.render_capabilities(), {})
+
+    def test_a_body_that_is_not_that_closed_row_is_not_remembered(self) -> None:
+        body = {**self._capability(), "unexpected": True}
+        self._probe(self._client(200, body))
+        self.assertEqual(fleet_nodes.render_capabilities(), {})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -468,9 +468,9 @@ def live_batches() -> dict[str, dict]:
     an activity item, so adding a queue is a change in that queue's module plus one line here,
     and `tests/test_activity_operations.py` fails if a queue module is left out.
     """
-    from . import broker, chat_jobs, transcription_jobs
+    from . import broker, chat_jobs, render_executor, transcription_jobs
     batches: dict[str, dict] = {}
-    for module in (broker, transcription_jobs, chat_jobs):
+    for module in (broker, transcription_jobs, chat_jobs, render_executor):
         batches.update(module.activity_batches())
     return batches
 

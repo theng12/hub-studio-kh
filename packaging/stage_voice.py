@@ -12,8 +12,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import Literal
 
 ROOT = Path(__file__).resolve().parents[1]
+RenderAuthorityMode = Literal['tool-only', 'descriptor-only', 'sealed-candidate']
+RENDER_AUTHORITY_MODES: tuple[RenderAuthorityMode, ...] = (
+    'tool-only', 'descriptor-only', 'sealed-candidate')
 
 # The Image runtime is the proven mflux 0.20 base plus pinned mlx-serve 26.10.1 native subtree.
 # The native engine is qualified on 24 GiB (packaged M4 run, qualification/evidence/qwen-image-21-20261008-24gb);
@@ -143,6 +147,9 @@ def copy_model_manifests(destination: Path) -> None:
     """Ship the model manifests, minus any retired model (`components/retired_models.py`)."""
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
+    # Not `packaging.stage_render_tools`: the runtime's PyPI `packaging` shadows this directory.
+    if str(ROOT / 'packaging') not in sys.path:
+        sys.path.insert(0, str(ROOT / 'packaging'))
     from components import retired_models
     copy_tracked_tree(ROOT / 'model-manifests', destination, suffix='.json',
                       skip=lambda path: retired_models.manifest_retired(
@@ -579,13 +586,22 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           include_hub: bool = False, image_runtime: Path | None = None,
           unqualified_image_runtime: str | None = None,
           video_runtime: Path | None = None, unqualified_video_runtime: str | None = None,
-          yue2_runtime: Path | None = None, unqualified_yue2_runtime: str | None = None) -> Path:
+          yue2_runtime: Path | None = None, unqualified_yue2_runtime: str | None = None,
+          render_authority: RenderAuthorityMode = 'tool-only',
+          render_tools_dir: Path | None = None) -> Path:
+    if render_authority not in RENDER_AUTHORITY_MODES:
+        raise ValueError(f'unsupported render authority mode: {render_authority}')
+    if render_authority != 'tool-only':
+        include_hub = True
     output = output.expanduser().absolute()
     if output.exists():
         raise FileExistsError(f'Refusing to replace existing artifact: {output}')
     validate_runtime(runtime)
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
+    # Not `packaging.stage_render_tools`: the runtime's PyPI `packaging` shadows this directory.
+    if str(ROOT / 'packaging') not in sys.path:
+        sys.path.insert(0, str(ROOT / 'packaging'))
     from components import retired_models
     if video_runtime is not None and retired_models.is_retired(VIDEO_MODEL_PACKAGE):
         print(f'NOTE: {VIDEO_MODEL_PACKAGE} is retired, so --video-runtime is ignored: this release '
@@ -610,6 +626,11 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     provenance = json.loads((ROOT / 'research/voice-adoption.json').read_text())
     hub_provenance = None
     if include_hub:
+        if render_tools_dir is None:
+            raise ValueError('A Hub build needs --render-tools-dir: the directory holding the pinned '
+                             'universal ffmpeg and ffprobe (nothing is looked up by default)')
+        from stage_render_tools import production_pins
+        render_pins = production_pins(render_tools_dir)  # fail now, not after the long stage
         hub_provenance = json.loads((ROOT / 'research/hub-adoption.json').read_text())['source']
         if not (ROOT / 'components/hub/standalone.py').is_file():
             raise ValueError('Bundled Hub entry point is missing')
@@ -770,6 +791,21 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         raise ValueError(
             'The staged bundle is missing modules its own code imports, so a worker would die at '
             f'startup. Failed bundle preserved at {saved}. Add the new files to git and stage again:\n  ' + '\n  '.join(gaps))
+    if include_hub:
+        from stage_render_tools import (
+            PRODUCTION_AUTHORITY_PINS,
+            _stage_render_authority_into,
+            _stage_render_tools_into,
+        )
+        scratch = Path(tempfile.mkdtemp(
+            prefix='.studiohub-render-tools-', dir=output.parent))
+        scratch.chmod(0o700)
+        _stage_render_tools_into(resources, scratch, render_pins)
+        _stage_render_authority_into(
+            resources, scratch, render_authority, PRODUCTION_AUTHORITY_PINS)
+        # The manifest and descriptors were hard-linked out of scratch; keeping it would leave a
+        # dot-directory in the output folder whose links hold the same ~264 MB alive.
+        shutil.rmtree(scratch, ignore_errors=True)
     # Hash all shipped code/resources including the worker, shell and plist.
     # The manifest is excluded from its own payload hash to avoid recursion.
     release['payload_sha256'] = tree_digest(contents)
@@ -800,6 +836,11 @@ if __name__ == '__main__':
     parser.add_argument('--unqualified-video-runtime', metavar='REASON',
                         help='Stage a non-qualified Video runtime anyway, recording this reason')
     parser.add_argument('--hub', action='store_true', help='Include the local Hub service (always enabled for native app builds)')
+    parser.add_argument('--render-authority', choices=RENDER_AUTHORITY_MODES,
+                        default='tool-only')
+    parser.add_argument('--render-tools-dir', type=Path,
+                        help='Absolute directory holding the pinned universal ffmpeg and ffprobe; '
+                             'required for any Hub build (they are verified by size and sha256)')
     args = parser.parse_args()
     print(stage(args.runtime, args.output, native_shell=args.native_shell,
                 include_hub=args.hub, image_runtime=args.image_runtime,
@@ -807,4 +848,6 @@ if __name__ == '__main__':
                 video_runtime=args.video_runtime,
         yue2_runtime=args.yue2_runtime,
         unqualified_yue2_runtime=args.unqualified_yue2_runtime,
-                unqualified_video_runtime=args.unqualified_video_runtime))
+                unqualified_video_runtime=args.unqualified_video_runtime,
+                render_authority=args.render_authority,
+                render_tools_dir=args.render_tools_dir))

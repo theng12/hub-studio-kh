@@ -15,6 +15,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 import uuid
@@ -31,8 +32,12 @@ from starlette.concurrency import run_in_threadpool
 
 from components import shelved_models
 from . import disk_governor, output_storage, standalone_config, workstation
-from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, routing as routing_rule
+from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, resources, routing as routing_rule
 from .backend import app_release, chat_deadline, chat_jobs, peers, release_sync, shared_voices, startup_control, transcription_jobs, update_drain, vocabulary
+from .backend import render_executor as render_executor_module, render_service
+from .backend.render_assets import RenderAssetStore
+from .backend.render_executor import InstalledRenderAuthorityLoader, RenderExecutor
+from .backend.render_jobs import RenderJobRuntime
 from .backend.monitor import StudioMonitor
 
 # The key one unusable manifest carries into the catalog so its row can say what is wrong
@@ -1417,12 +1422,44 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     # And its node identity, for the same reason: derived from the hostname until the first save,
     # so a rename in macOS before then would have orphaned the roster row.
     control_plane.ensure_controller_id()
+    data_root = standalone_config.data_dir()
+    # The /api/hub/resources route below binds `resources` locally in this function.
+    from .backend import resources as resource_stats
+    # data_dir() is already resolved (that is what makes /var and /tmp paths work on macOS),
+    # so the strict reader's no-symlink guarantee starts at this resolved data root.
+    installed_authority = InstalledRenderAuthorityLoader(
+        Path(__file__).resolve().parents[2],
+        hardware_identity=resource_stats.hardware_identity,
+        data_root=data_root,
+    )
+    render_assets_store = RenderAssetStore(
+        data_root / "render-assets", max_chunk_bytes=8 * 1024 * 1024,
+        max_asset_bytes=standalone_config.DEFAULT_MAX_BYTES,
+        reserve_bytes=standalone_config.DEFAULT_MINIMUM_FREE_BYTES,
+        free_bytes=lambda path: shutil.disk_usage(path).free,
+    )
+    render_runtime = RenderJobRuntime(
+        data_root / "final-renders", database_path=ledger.DB_FILE,
+        qualification_resolver=installed_authority.resolve,
+        free_bytes=lambda path: shutil.disk_usage(path).free,
+    )
+    final_render_executor = RenderExecutor(
+        render_runtime, render_assets_store, installed_authority,
+        machine="local", broker_api=broker,
+    )
+    final_render_service = render_service.RenderService(
+        render_runtime, render_assets_store, final_render_executor, installed_authority,
+        trash_root=output_storage.trash_root)
+    broker.configure_render_executor(final_render_executor)
+    render_executor_module.configure(final_render_executor)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         ledger.prepare_database()
         output_storage.prepare()
         output_storage.recover_process_leases()
+        # Durable render ownership is restored before any queue or dispatcher can grant this Mac.
+        final_render_executor.recover_and_restore_physical_holds()
         broker.restore_batches()
         transcription_jobs.restore_batches()
         # A pause this build can never clear is not a safety feature, it is a permanent refusal.
@@ -1480,11 +1517,19 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     print(f"[hub] Trash Folder adoption left {problem['source']}: {problem['error']}", flush=True)
             except OSError:
                 pass
+
+            def after_cleanup(first: bool) -> None:
+                """The disk governor takes its turn, then render retirement, on this timer."""
+                try:
+                    disk_governor.sweep(_disk_context(monitor), startup=first)
+                finally:
+                    final_render_service.sweep(force=True)
+
             output_storage.start_background(
                 lambda: {worker.get("machine", "local") for worker in monitor.registry},
                 standalone_config.load_device_settings,
-                # The disk governor takes its turn in the same thread: start-up first, then every pass.
-                after_sweep=lambda first: disk_governor.sweep(_disk_context(monitor), startup=first),
+                # Render retirement rides the same pass: no second cleanup service.
+                after_sweep=after_cleanup,
             )
             monitor.start()
             # Mint the fleet credential at startup, rather than lazily on the first request that
@@ -1504,6 +1549,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             yield
         finally:
             if start_background:
+                # Fence render admission before any drain snapshot. The dispatcher may still
+                # observe queued work while shutdown begins, but it cannot claim or launch it.
+                final_render_executor.begin_shutdown()
                 if storage_sweep is not None:
                     storage_sweep.cancel()
                     try:
@@ -1529,15 +1577,35 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     except BaseException:
                         pass
                 await shared_voices.stop()
+                await final_render_executor.stop()
                 await broker.stop_dispatcher()
                 await transcription_jobs.stop()
                 await control_plane.runtime.stop()
                 await monitor.stop()
                 from . import model_downloads
                 model_downloads.shutdown()
+            render_assets_store.close()
+            broker.configure_render_executor(None)
+            render_executor_module.configure(None)
 
     app = FastAPI(title="Studio Hub", version=_app_version(), lifespan=lifespan)
     app.middleware("http")(auth.make_middleware(token))
+    render_service.register_routes(
+        app, final_render_service, hub_token=token, fleet_token=peers.fleet_token,
+        settings=control_plane.load_settings,
+    )
+
+    async def _relay_final_render(node_id, operation, **kwargs):
+        from .backend import fleet_nodes as fleet
+        try:
+            return await fleet.relay_final_render(node_id, operation, **kwargs)
+        except fleet.StartupRelayError as error:
+            raise HTTPException(error.status, error.body) from error
+
+    render_service.register_relay_routes(
+        app, _relay_final_render, hub_token=token, fleet_token=peers.fleet_token,
+        settings=control_plane.load_settings,
+    )
     # **JSON goes over the WAN compressed.** A Gateway's read of one controller is ~3.6 MB of
     # JSON (`/api/hub/models` ~2 MB, `capabilities` ~1 MB, `jobs` ~0.4 MB) over a Tailscale link
     # measured at 0.5-1.2 MB/s, so it took 4-20 s while `/health` answered in milliseconds. That

@@ -18,11 +18,13 @@ import logging
 import os
 import re
 import secrets
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 import tempfile
 import time
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -46,6 +48,31 @@ PROBE_TIMEOUT = httpx.Timeout(6.0, connect=3.0)
 # peer Hub reads for the same purpose, it is in `auth.FLEET_ALLOWED`, and its answer carries the
 # host facts a controller needs to decide where work fits.
 PROBE_PATH = "/api/hub/resources?local_only=true"
+# A node's own final-render worker row, so a controller can republish it and let the Gateway
+# see a joined leaf's render capacity. A fixed path on purpose: it is read over the fleet
+# credential like the probe above, and an older node answers 404, which is "no render lane".
+PROBE_CAPABILITY_PATH = "/api/hub/final-renders/capability"
+_RENDER_CAPABILITY_LIMIT_BYTES = 64 * 1024
+# A short-lived hint, refreshed by every probe. It is never production authority: production
+# still comes only from the node's own `render-authority/enabled/<chip>-<mem>gb.json`.
+_RENDER_CAPABILITY_TTL_SECONDS = 45.0
+# The peer snapshot answers reachability without a dial but says nothing about a render worker,
+# so that row is re-read on this interval rather than on every roster pass. It also rate-limits
+# the read for a node with no lane at all (an older Hub answers 404 every time).
+_RENDER_CAPABILITY_REFRESH_SECONDS = 30.0
+_RENDER_CAPABILITY_KEYS = frozenset((
+    "operation", "physical_machine_id", "hardware_class", "profile_digest", "tools_digest",
+    "compiler_digest", "qualification_digest", "selected_tier", "exact_encoder", "font_support",
+    "bounds", "profile_execution_bounds", "production_eligible", "production_enabled",
+    "available_capacity", "qualification_candidates",
+))
+_RENDER_CANDIDATE_KEYS = frozenset((
+    "vector_id", "hardware_class", "profile_digest", "tools_digest", "compiler_digest",
+    "qualification_digest", "selected_tier", "exact_encoder", "font_support", "bounds",
+    "profile_execution_bounds", "production_eligible", "qualification_only", "available_capacity",
+))
+_render_capability_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+_render_capability_lock = threading.Lock()
 _CREDENTIAL_DETAIL = ("the node answered but rejected this controller's credential ({why}) - "
                       "re-join it with the current Fleet Token")
 
@@ -1078,6 +1105,115 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
             "detail": f"could not reach the node ({snapshot.get('status') or 'unreachable'})"}
 
 
+def _render_capability(value: object) -> dict[str, Any] | None:
+    """Accept one node's closed final-render worker row, or `None` for anything else.
+
+    A node is authenticated by the probe that carried this, but its answer is still data: the
+    keys are closed here so a malformed or older answer can never reach the controller's
+    capabilities as a worker row.
+    """
+    if not isinstance(value, dict) or set(value) != _RENDER_CAPABILITY_KEYS:
+        return None
+    if value.get("operation") != "video.final_render":
+        return None
+    if (not isinstance(value.get("physical_machine_id"), str)
+            or not value["physical_machine_id"]
+            or type(value.get("font_support")) is not bool
+            or type(value.get("production_eligible")) is not bool
+            or type(value.get("production_enabled")) is not bool):
+        return None
+    for name in ("hardware_class", "profile_digest", "tools_digest", "compiler_digest",
+                 "qualification_digest", "selected_tier", "exact_encoder"):
+        if value[name] is not None and not isinstance(value[name], str):
+            return None
+    capacity = value.get("available_capacity")
+    if (not isinstance(capacity, dict) or set(capacity) != {"slots", "slots_total"}
+            or type(capacity["slots"]) is not int or type(capacity["slots_total"]) is not int
+            or capacity["slots"] < 0 or capacity["slots_total"] < 1):
+        return None
+    bounds = value.get("bounds")
+    if bounds is not None and (
+            not isinstance(bounds, dict)
+            or set(bounds) != {"max_rss_bytes", "max_wall_seconds",
+                               "min_available_memory_bytes", "output_limit_bytes"}
+            or any(type(bounds[key]) is not int or bounds[key] <= 0 for key in bounds)):
+        return None
+    if value.get("profile_execution_bounds") is not None \
+            and not isinstance(value["profile_execution_bounds"], dict):
+        return None
+    candidates = value.get("qualification_candidates")
+    if not isinstance(candidates, list):
+        return None
+    for candidate in candidates:
+        if (not isinstance(candidate, dict) or set(candidate) != _RENDER_CANDIDATE_KEYS
+                or candidate.get("production_eligible") is not False
+                or candidate.get("qualification_only") is not True
+                or not isinstance(candidate.get("vector_id"), str)
+                or not candidate["vector_id"]):
+            return None
+        slot = candidate.get("available_capacity")
+        if (not isinstance(slot, dict) or set(slot) != {"slots", "slots_total"}
+                or type(slot["slots"]) is not int or type(slot["slots_total"]) is not int
+                or slot["slots"] not in (0, 1) or slot["slots_total"] != 1):
+            return None
+    return value
+
+
+def _remember_render_capability(node_id: str, value: dict[str, Any] | None) -> None:
+    """Record the answer, including "asked, there is no lane", so a node with none is not re-asked
+    on every roster pass. The stamp is the read time either way; `None` is never published."""
+    with _render_capability_lock:
+        _render_capability_cache[node_id] = (time.time(), value)
+
+
+def _render_capability_due(node_id: str, *, now: float | None = None) -> bool:
+    at = time.time() if now is None else now
+    with _render_capability_lock:
+        stamped = _render_capability_cache.get(node_id, (0.0, None))[0]
+    return at - stamped >= _RENDER_CAPABILITY_REFRESH_SECONDS
+
+
+def render_capabilities(*, now: float | None = None) -> dict[str, dict[str, Any]]:
+    """Fresh render worker rows for joined nodes; a hint that expires, never authority."""
+    at = time.time() if now is None else now
+    with _render_capability_lock:
+        return {node_id: value
+                for node_id, (stamped, value) in _render_capability_cache.items()
+                if value is not None and at - stamped <= _RENDER_CAPABILITY_TTL_SECONDS}
+
+
+async def _probe_render_capability(client: httpx.AsyncClient, node: dict[str, Any],
+                                   older: str | None) -> dict[str, Any] | None:
+    """One bounded extra read of the node's own render worker row; absent on any answer
+    this controller cannot use. It is evidence for a worker row, never for reachability, so
+    a 404 from an older Hub, a refused credential or a body that is not that row all read
+    as "no render worker here" and leave the probe's own answer untouched."""
+    try:
+        response = await client.get(
+            f"{node['address']}{PROBE_CAPABILITY_PATH}", timeout=PROBE_TIMEOUT,
+            **({"headers": {"X-Hub-Token": older}} if older else {}))
+        if not response.is_success or len(response.text) > _RENDER_CAPABILITY_LIMIT_BYTES:
+            return None
+        return _render_capability(response.json())
+    except Exception:  # noqa: BLE001 - a side read must never change the probe's answer
+        return None
+
+
+async def _refresh_render_capability(node: dict[str, Any],
+                                     client: httpx.AsyncClient | None = None) -> None:
+    """Read and remember one node's render row; owns a client only when given none."""
+    node_id = str(node.get("id") or "")
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        _remember_render_capability(
+            node_id, await _probe_render_capability(client, node, held_token(node_id)))
+    finally:
+        if owned:
+            await client.aclose()
+
+
 async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """Ask one node whether it is there, and report what it says about itself.
 
@@ -1122,8 +1258,13 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         joined_at and time.time() - joined_at > NEVER_CONNECTED_AFTER_S
         and not heard
         and not checkin_alive(node))
-    snapshot = fresh_snapshot(str(node.get("id") or ""))
+    node_id = str(node.get("id") or "")
+    snapshot = fresh_snapshot(node_id)
     if snapshot is not None:
+        # The peer snapshot answers reachability without a dial, but it carries no render row,
+        # so that one bounded read is refreshed here on its own interval.
+        if _render_capability_due(node_id):
+            await _refresh_render_capability(node, client)
         return _from_snapshot(row, snapshot)
     owned = client is None
     if owned:
@@ -1140,22 +1281,32 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
             # fix is the credential: a node re-joined with its own token, or a controller whose
             # fleet token was replaced. The state is its own so the Fleet page can say so and the
             # counts do not hide it.
+            _remember_render_capability(node_id, None)
             return {**row, "state": "unauthorized",
                     "detail": _CREDENTIAL_DETAIL.format(why=f"HTTP {response.status_code}")}
         if not response.is_success:
+            _remember_render_capability(node_id, None)
             return {**row, "state": "error",
                     "detail": (f"{node.get('address') or 'the node'} answered "
                                f"HTTP {response.status_code} on {PROBE_PATH}")}
         try:
             body = response.json()
         except ValueError:
+            _remember_render_capability(node_id, None)
             return {**row, "state": "error", "detail": "node returned an invalid response"}
         if not isinstance(body, dict):
+            _remember_render_capability(node_id, None)
             return {**row, "state": "error", "detail": "node returned an invalid response"}
         # The probe's answer is also the host snapshot the Fleet page shows for this machine, so
         # one pass over the roster feeds both routes rather than the page waiting for the poll.
         host = body.get("host") if isinstance(body.get("host"), dict) else {}
         order = _priority_order_of(body)
+        # A second, bounded read of the node's own render worker row. A node without the lane
+        # (or an older Hub) answers 404 and this stays absent; it never affects the probe's own
+        # reachability answer or the node's state.
+        if _render_capability_due(node_id):
+            _remember_render_capability(
+                node_id, await _probe_render_capability(client, node, older))
         return {**row, "state": "reachable", "detail": None, "host": host,
                 # **Why this controller believes the Mac is there.** A node it cannot dial answers
                 # through the pull channel, and that answer travelled on the node's own check-in
@@ -1177,6 +1328,7 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         # evidence: the state is `reachable` (the Mac is there and talking), and the reason is kept
         # distinct so the roster and the Gateway can say *why* they believe it.
         if checkin_alive(node):
+            _remember_render_capability(node_id, None)
             return {**row, "state": "reachable", "detail": None, "via": "check-in",
                     **_checkin_reported(node)}
         # A message that stops at the colon ("could not reach the node: ") reads as though the
@@ -1187,6 +1339,7 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         detail = f"could not reach {node.get('address') or 'the node'} ({PROBE_PATH}): {type(exc).__name__}"
         if reason:
             detail = f"{detail}: {reason}"
+        _remember_render_capability(node_id, None)
         return {**row, "state": "unreachable", "reason": _unreachable_reason(exc), "detail": detail,
                 "startup": _last_known_startup(row), "last_stop": _last_known_stop(row)}
     finally:
@@ -1742,6 +1895,181 @@ async def relay_work_policy(node_id: str, method: str, body: object = None, *,
 TRANSCRIBE_RELAY_TIMEOUT = httpx.Timeout(960.0, connect=4.0)
 #: A relayed picture analysis: four outlines on a slow 8 GB Mac stay well inside this.
 VISION_RELAY_TIMEOUT = httpx.Timeout(150.0, connect=4.0)
+
+
+@dataclass(frozen=True)
+class RenderRelayResponse:
+    status_code: int
+    headers: dict[str, str]
+    body: bytes
+
+
+_RENDER_RELAY_RESPONSE_HEADERS = frozenset({
+    "content-range", "content-type", "content-length", "etag", "x-content-sha256",
+    "accept-ranges",
+})
+_RENDER_JOB_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+_RENDER_BLOB_SHA = re.compile(r"[0-9a-f]{64}\Z")
+_RENDER_DISPATCH_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+=,~-]{0,255}\Z")
+_RENDER_RANGE = re.compile(r"bytes=(\d+)-(\d+)\Z")
+_RENDER_IF_MATCH = re.compile(r'"[0-9a-f]{64}"\Z')
+_MAX_RENDER_RELAY_RESPONSE = 8 * 1024 * 1024
+
+
+def _render_relay_segment(operation: str, identity: str) -> str:
+    if operation == "submit":
+        if identity:
+            raise ValueError("submit does not accept a render identity")
+        return ""
+    patterns = {
+        "blob_put": _RENDER_BLOB_SHA,
+        "blob_status": _RENDER_BLOB_SHA,
+        "key_get": _RENDER_DISPATCH_KEY,
+        "key_cancel": _RENDER_DISPATCH_KEY,
+        "status": _RENDER_JOB_ID,
+        "cancel": _RENDER_JOB_ID,
+        "output": _RENDER_JOB_ID,
+        "ack": _RENDER_JOB_ID,
+    }
+    pattern = patterns.get(operation)
+    if pattern is None:
+        raise ValueError("unsupported final-render relay operation")
+    if (type(identity) is not str or pattern.fullmatch(identity) is None
+            or ".." in identity
+            or any(value in identity for value in ("/", "\\", "%", "?", "#"))):
+        raise ValueError("final-render relay identity is invalid")
+    return quote(identity, safe="")
+
+
+async def relay_final_render(
+    node_id: str,
+    operation: str,
+    *,
+    identity: str = "",
+    body: bytes = b"",
+    headers: dict[str, str] | None = None,
+    size_bytes: int | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> RenderRelayResponse:
+    """Relay one fixed final-render operation to one joined node; no caller path or host."""
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        raise StartupRelayError(404, {"ok": False, "code": "UNKNOWN_NODE",
+                                      "detail": f"this controller has no joined Mac {node_id!r}"})
+    segment = _render_relay_segment(operation, identity)
+    paths = {
+        "blob_put": f"/api/hub/final-renders/blobs/{segment}",
+        "blob_status": f"/api/hub/final-renders/blobs/{segment}/status",
+        "submit": "/api/hub/final-renders",
+        "key_get": f"/api/hub/final-renders/by-idempotency-key/{segment}",
+        "key_cancel": f"/api/hub/final-renders/by-idempotency-key/{segment}/cancel",
+        "status": f"/api/hub/final-renders/{segment}",
+        "cancel": f"/api/hub/final-renders/{segment}/cancel",
+        "output": f"/api/hub/final-renders/{segment}/output",
+        "ack": f"/api/hub/final-renders/{segment}/ack",
+    }
+    methods = {
+        "blob_put": "PUT", "blob_status": "GET", "submit": "POST",
+        "key_get": "GET", "key_cancel": "POST", "status": "GET",
+        "cancel": "POST", "output": "GET", "ack": "POST",
+    }
+    request_headers = {
+        name: value for name, value in (headers or {}).items()
+        if name.lower() in {
+            "range", "content-range", "content-length", "content-type",
+            "if-match", "idempotency-key", "x-studio-render-qualification-vector",
+        }
+    }
+    params = {"size_bytes": size_bytes} if operation == "blob_status" else None
+    requested_range = None
+    if operation == "output":
+        range_value = next((value for key, value in request_headers.items()
+                            if key.lower() == "range"), "")
+        match = _RENDER_RANGE.fullmatch(range_value)
+        if match is None:
+            raise ValueError("relayed render output requires one bounded Range")
+        start, end = map(int, match.groups())
+        if start > end or end - start + 1 > _MAX_RENDER_RELAY_RESPONSE:
+            raise ValueError("relayed render output requires one bounded Range")
+        if_match = next((value for key, value in request_headers.items()
+                         if key.lower() == "if-match"), "")
+        if _RENDER_IF_MATCH.fullmatch(if_match) is None:
+            raise ValueError("relayed render output requires one exact If-Match")
+        requested_range = (start, end)
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        async with client.stream(
+                methods[operation], f"{node.get('address') or ''}{paths[operation]}",
+                content=body, headers=request_headers, params=params,
+                timeout=httpx.Timeout(60.0, connect=4.0)) as response:
+            response_headers = {
+                key.lower(): value for key, value in response.headers.items()
+            }
+            declared = response_headers.get("content-length")
+            try:
+                declared_bytes = int(declared) if declared is not None else None
+            except ValueError as exc:
+                raise StartupRelayError(502, {
+                    "ok": False, "code": "NODE_ERROR",
+                    "detail": "that Mac returned an invalid render Content-Length",
+                }) from exc
+            if (declared_bytes is not None
+                    and (declared_bytes < 0
+                         or declared_bytes > _MAX_RENDER_RELAY_RESPONSE)):
+                raise StartupRelayError(502, {
+                    "ok": False, "code": "NODE_ERROR",
+                    "detail": "that Mac returned an oversized render response",
+                })
+            if operation == "output" and 200 <= response.status_code < 300:
+                content_range = response_headers.get("content-range") or ""
+                match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", content_range)
+                if match is None or response.status_code != 206:
+                    raise StartupRelayError(502, {
+                        "ok": False, "code": "NODE_ERROR",
+                        "detail": "that Mac ignored the bounded render output range",
+                    })
+                start, end, total = map(int, match.groups())
+                expected = end - start + 1
+                if (requested_range != (start, end) or start > end or end >= total
+                        or expected > _MAX_RENDER_RELAY_RESPONSE
+                        or (declared_bytes is not None and declared_bytes != expected)):
+                    raise StartupRelayError(502, {
+                        "ok": False, "code": "NODE_ERROR",
+                        "detail": "that Mac returned an invalid render output range",
+                    })
+            content = bytearray()
+            async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                if len(content) + len(chunk) > _MAX_RENDER_RELAY_RESPONSE:
+                    raise StartupRelayError(502, {
+                        "ok": False, "code": "NODE_ERROR",
+                        "detail": "that Mac returned an oversized render response",
+                    })
+                content.extend(chunk)
+            if declared_bytes is not None and len(content) != declared_bytes:
+                raise StartupRelayError(502, {
+                    "ok": False, "code": "NODE_ERROR",
+                    "detail": "that Mac returned an incomplete render response",
+                })
+            status_code = response.status_code
+            allowed_headers = {
+                key: value for key, value in response.headers.items()
+                if key.lower() in _RENDER_RELAY_RESPONSE_HEADERS
+            }
+    except httpx.HTTPError as exc:
+        raise StartupRelayError(502, {
+            "ok": False, "code": "NODE_UNREACHABLE", "reason": _unreachable_reason(exc),
+            "detail": "that Mac did not answer; the render outcome remains unknown",
+        }) from exc
+    finally:
+        if owned:
+            await client.aclose()
+    return RenderRelayResponse(
+        status_code=status_code, headers=allowed_headers, body=bytes(content),
+    )
 
 
 async def relay_model(node_id: str, method: str, path: str, *, payload: Any = None,

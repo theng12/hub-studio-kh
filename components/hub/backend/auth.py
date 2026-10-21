@@ -535,6 +535,25 @@ FLEET_ALLOWED = (
     # The node still decides what can be retried: only an ``error`` item, never
     # a live or uncertain one.
     ("POST", r"^/api/hub/jobs/[^/]+/items/[0-9]+/retry$"),
+    # Closed final-render transfer/lifecycle surface. Every dynamic value is one path segment;
+    # the route derives scope from this credential and never accepts a caller namespace.
+    ("PUT", r"^/api/hub/final-renders/blobs/[0-9a-f]{64}$"),
+    ("GET", r"^/api/hub/final-renders/blobs/[0-9a-f]{64}/status$"),
+    ("GET", r"^/api/hub/final-renders/capability$"),
+    ("POST", r"^/api/hub/final-renders$"),
+    ("GET", r"^/api/hub/final-renders/by-idempotency-key/[^/]+$"),
+    ("POST", r"^/api/hub/final-renders/by-idempotency-key/[^/]+/cancel$"),
+    ("GET", r"^/api/hub/final-renders/[^/]+$"),
+    ("POST", r"^/api/hub/final-renders/[^/]+/(?:cancel|ack)$"),
+    ("GET", r"^/api/hub/final-renders/[^/]+/output$"),
+    ("PUT", r"^/api/hub/fleet/nodes/[^/]+/final-renders/blobs/[0-9a-f]{64}$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/final-renders/blobs/[0-9a-f]{64}/status$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/final-renders$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/final-renders/by-idempotency-key/[^/]+$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/final-renders/by-idempotency-key/[^/]+/cancel$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/final-renders/[^/]+$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/final-renders/[^/]+/(?:cancel|ack)$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/final-renders/[^/]+/output$"),
     ("POST", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs/[^/]+$"),

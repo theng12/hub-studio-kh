@@ -783,6 +783,42 @@ def _managed_release_reason(managed_release: dict | None,
     return None
 
 
+def _render_slots(capability: dict) -> int:
+    """The final-render slots a worker can actually offer right now.
+
+    Production authority decides when a worker is production; without it, a live one-use
+    qualification intent is the only work it can take, and the Gateway only looks at a
+    worker whose row is ready and not drained - so the intent is the slot count there too.
+    """
+    if capability.get("production_enabled") and capability.get("production_eligible"):
+        return int((capability.get("available_capacity") or {}).get("slots") or 0)
+    return max((
+        int((candidate.get("available_capacity") or {}).get("slots") or 0)
+        for candidate in capability.get("qualification_candidates") or ()
+    ), default=0)
+
+
+def _render_candidate_encodes(render_encode, candidates: object) -> list[dict]:
+    """Give each live qualification candidate its own compiler-derived encode fact.
+
+    A qualification-only worker has no production authority, so the worker-level
+    `selected_tier`/`exact_encoder` are null; the candidate carries the real ones. The
+    Gateway intersects `encode` over the candidate it selects, so publishing it here is what
+    lets the one-use intent take exactly the run it was qualified for. The candidate stays
+    `production_eligible: False` - this fact says what can execute, never who may render.
+    """
+    if not candidates:
+        return []
+    return [
+        {
+            **candidate,
+            "encode": render_encode.supported_encode(
+                candidate.get("selected_tier"), candidate.get("exact_encoder")),
+        }
+        for candidate in candidates
+    ]
+
+
 async def build_snapshot(monitor, *, app_version: str, settings: dict,
                          readiness: dict, base_capacity: dict,
                          managed_release: dict | None = None) -> dict:
@@ -937,8 +973,85 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
         })
         workers.append(worker)
 
+    from . import render_encode, render_executor
+    render = render_executor.capability()
+    if render is not None:
+        slots = _render_slots(render)
+        workers.append({
+            **render,
+            # What this machine's authority can actually execute, compiled from the same
+            # pinned compiler the executor runs. Absent authority publishes None.
+            "encode": render_encode.supported_encode(
+                render.get("selected_tier"), render.get("exact_encoder")),
+            # The live one-use intent is a candidate, not production: the Gateway intersects
+            # the encode fact on the candidate it selects, so each carries its own.
+            "qualification_candidates": _render_candidate_encodes(
+                render_encode, render.get("qualification_candidates")),
+            "studio_type": "render",
+            "studio_version": app_version,
+            "service_id": "hub-final-render",
+            "online": True,
+            "ready": slots > 0,
+            "busy": render["physical_machine_id"] in busy_machines,
+            "physical_machine_busy": render["physical_machine_id"] in busy_machines,
+            "standing_by": peers.standing_by(render["physical_machine_id"]),
+            "drained": slots == 0,
+            "maintenance": False,
+            "machine_quarantined": False,
+            "managed_release": None,
+            "last_seen_at": _rfc3339(observed),
+            "available_capacity": {"slots": slots, "slots_total": 1},
+            "models": [],
+            "supported_operations": ["video.final_render"],
+        })
+
+    # A joined leaf's render worker, republished from its own bounded capability read. The
+    # Gateway selects by (controller, physical_machine_id) and relays to that node, so the
+    # row is the node's own capability with the node's id in place of its local "local".
+    from . import fleet_nodes
+    for node_id, capability in sorted(fleet_nodes.render_capabilities().items()):
+        busy = node_id in busy_machines
+        paused = not machine_enabled(node_id) or peers.standing_by(node_id)
+        slots = 0 if busy or paused else _render_slots(capability)
+        workers.append({
+            **capability,
+            # The controller holds the same pinned compiler, so a joined leaf's published
+            # authority strings answer the same question without a new node route.
+            "encode": render_encode.supported_encode(
+                capability.get("selected_tier"), capability.get("exact_encoder")),
+            # Same fact for the leaf's live intent, compiled by the controller's pinned
+            # compiler from the leaf's own published authority strings.
+            "qualification_candidates": _render_candidate_encodes(
+                render_encode, capability.get("qualification_candidates")),
+            "studio_type": "render",
+            "studio_version": app_version,
+            "service_id": f"{node_id}:hub-final-render",
+            "physical_machine_id": node_id,
+            "online": True,
+            "ready": slots > 0,
+            "busy": busy,
+            "physical_machine_busy": busy,
+            "standing_by": peers.standing_by(node_id),
+            "drained": slots == 0,
+            "maintenance": False,
+            "machine_quarantined": bool(
+                (protections.get(node_id) or {}).get("quarantined")),
+            "managed_release": None,
+            "last_seen_at": _rfc3339(observed),
+            "available_capacity": {"slots": slots, "slots_total": 1},
+            "models": [],
+            "supported_operations": ["video.final_render"],
+        })
+
     machines = []
-    for machine in sorted({row.get("machine", "local") for row in monitor.registry}):
+    # A joined leaf that runs no worker studio (a render-only Mac) has no row in
+    # `monitor.registry`, because `remote_studios()` publishes one entry per studio.
+    # Its render worker is still republished below, so the worker would name a
+    # `physical_machine_id` with no matching machine row. Every published worker
+    # must resolve to a machine; union the render node ids to keep that contract.
+    render_node_ids = set(fleet_nodes.render_capabilities().keys())
+    registry_machines = {row.get("machine", "local") for row in monitor.registry}
+    for machine in sorted(registry_machines | render_node_ids):
         machine_workers = [row for row in workers if row["physical_machine_id"] == machine]
         peer_online, host = _machine_host(machine)
         online = peer_online or any(row["online"] for row in machine_workers)
@@ -970,12 +1083,15 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
             row["workers_total"] += 1
             row["workers_online"] += int(worker["online"])
             row["workers_ready"] += int(worker["ready"])
-            row["available_worker_slots"] += int(
-                worker["available_capacity"]["slots"] > 0
-                and any(model["operation"] == operation
-                        and model["availability"]["available_now"]
-                        for model in worker["models"])
-            )
+            if operation == "video.final_render":
+                row["available_worker_slots"] += int(
+                    worker["available_capacity"]["slots"] > 0)
+            else:
+                row["available_worker_slots"] += int(
+                    worker["available_capacity"]["slots"] > 0
+                    and any(model["operation"] == operation
+                            and model["availability"]["available_now"]
+                            for model in worker["models"]))
 
     controller_drained = (
         settings.get("role") == "agent"

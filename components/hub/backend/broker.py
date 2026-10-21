@@ -277,6 +277,7 @@ batches: dict[str, dict] = {}
 _busy: set[str] = set()  # studio ids currently running an item for us
 _maintenance: set[str] = set()  # drained by fleet maintenance/update operations
 _external_machine_leases: dict[str, str] = {}
+_render_executor = None
 # The auxiliary queues share the same physical-machine lease. The legacy turn
 # cache remains as a test/reset compatibility surface; ranked FIFO does not read
 # or populate it.
@@ -1164,6 +1165,11 @@ async def next_work(machine: str) -> tuple[int, float, str, str] | None:
         candidates.append((*_priority_key(
             machine, "transcription", transcription[0],
             f"transcription:{transcription[1]}"), "transcription"))
+    render = (await _render_executor.dispatchable_candidate(machine)
+              if _render_executor is not None else None)
+    if render is not None:
+        candidates.append((*_priority_key(
+            machine, "render", render[0], f"render:{render[1]}"), "render"))
     policy = preferred_policy(machine)
     if policy:
         preferred = [c for c in candidates if c[3] == policy["modality"]]
@@ -1584,6 +1590,23 @@ def configure_admission_guard(guard) -> None:
     """Install the packaged model readiness check without importing its app."""
     global _admission_guard
     _admission_guard = guard
+
+
+def configure_render_executor(executor) -> None:
+    """Attach the final-render lane to this existing scheduler."""
+    global _render_executor
+    _render_executor = executor
+
+
+def render_dispatch_allowed(machine: str, owner: str | None = None) -> bool:
+    """Apply this broker's existing pause, Lite, drain, and quarantine gates to render."""
+    if (not machine_enabled(machine)
+            or not studio_enabled(machine, "hub-final-render")
+            or "hub-final-render" in _maintenance
+            or _machine_blocked(machine)
+            or peers.standing_by(machine)):
+        return False
+    return machine not in busy_machines() or _external_machine_leases.get(machine) == owner
 
 
 def admission_refusal(envelope: dict) -> dict | None:
@@ -2317,6 +2340,15 @@ def acquire_external_machine(machine: str, owner: str) -> bool:
     return True
 
 
+def restore_external_machine(machine: str, owner: str) -> None:
+    """Restore one durable physical hold without replacing any owner."""
+    current = _external_machine_leases.get(machine)
+    if current is not None and current != owner:
+        raise RuntimeError(f"physical machine {machine!r} is already held by {current!r}")
+    _external_machine_leases[machine] = owner
+    _wakeup.set()
+
+
 def external_dispatch_allowed(
         machine: str, lane: str, *, other_lane_has_work: bool) -> bool:
     """Compatibility shim; ranked FIFO arbitration now runs immediately before lease."""
@@ -2339,6 +2371,9 @@ def note_external_memory_block(machine: str, lane: str) -> None:
 
 
 def _pending_render_for_machine(machine: str) -> bool:
+    if (_render_executor is not None
+            and _render_executor.pending_for_machine(machine)):
+        return True
     if not any(
         b.get("modality") == "render" and not b.get("cancelled")
         and any(item.get("state") == "queued" for item in b.get("items", []))
@@ -4549,6 +4584,8 @@ async def _dispatch_loop():
                 # forever; release it so later work can run.
                 discard_stale_uncertain(now=sweep_now)
             assigned = False
+            if _render_executor is not None:
+                assigned = await _render_executor.dispatch_ready()
             for batch in list(batches.values()):
                 if (batch.get("modality") in DURABLE_ASYNC_MODALITIES
                         and batch.get("cancelled")):

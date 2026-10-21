@@ -2,6 +2,52 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.195 — 2026-10-21
+
+### A Mac on your fleet can now finish a final video
+
+When the Gateway has a finished set of video pieces for a final render, Studio Hub can take that
+job and hand back the finished video. It does the final pass on the Mac — overlay layers, colour
+grade, vignette, film grain, the aged-film look, letterbox, presentation frame and logo — using
+the render tools that ship with the app. It loads no model, so it does not take time from Image,
+Voice or Chat work. A Mac finishes one render at a time, and the work waits its turn under the
+pause, Lite Mode and maintenance settings you already use.
+
+### The finished file is returned in verified pieces
+
+The Hub writes the job down before it starts, so a request that arrives twice still runs once, and
+cancelling stops that exact render. If the app restarts and cannot prove what happened to a render,
+it says so instead of quietly starting it again. The finished video is handed back only in checked
+byte ranges tied to the exact output the Hub measured, and the job is not cleared until the other
+side acknowledges it.
+
+### It stays off until you allow it
+
+A Mac does not become a renderer just by updating. It needs a record placed for its exact hardware
+class; until then it advertises no render capacity. A separate, one-use qualification run can be
+allowed without turning production on. That permission can be used once, for one exact request, and
+only a finished qualification run can produce the measured record that turns production on.
+
+### Only the video settings that Mac can really produce are offered
+
+The Hub works out what a Mac can actually encode from the same renderer that will run the job, and
+offers only those settings. A request for an encode the Mac cannot produce is refused before any of
+its files are kept or any work is started, so it cannot fail halfway through. A qualification run's
+one-use permission is treated the same way, so the first test render is matched to what that Mac was
+measured for.
+
+### Nothing is deleted when a render is cleaned up
+
+Finished and abandoned render files are moved into your Trash folder after a quiet period, never
+deleted. Anything still in use, still being downloaded, still waiting to be published or still
+needed to finish a job is left alone, and a finished file is only moved once the other side has
+confirmed it received it. If the Trash folder is not available, the files stay where they are
+instead of being moved somewhere unexpected.
+
+**This build is a candidate.** It has not been qualified on hardware, no render has been tested
+end to end with the Gateway, and it is not part of a released or installed build. No qualification
+record has been produced.
+
 ## 0.6.194 — 2026-10-21
 
 ### A Mac that has joined can keep itself up to date
