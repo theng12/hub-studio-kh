@@ -664,7 +664,6 @@ class InstalledRenderAuthorityLoader:
         return True
 
 
-batches: dict[str, dict[str, Any]] = {}
 _configured_executor = None
 
 
@@ -678,10 +677,9 @@ def capability() -> dict[str, Any] | None:
 
 
 def activity_batches() -> dict[str, dict[str, Any]]:
-    result = dict(batches)
-    if _configured_executor is not None:
-        result.update(_configured_executor.activity_batches())
-    return result
+    if _configured_executor is None:
+        return {}
+    return dict(_configured_executor.activity_batches())
 
 
 class RenderExecutor:

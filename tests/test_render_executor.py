@@ -2096,5 +2096,30 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
             await executor._validate_output(context, authority, "b" * 64)
 
 
+    def test_activity_publishes_the_configured_executor_render_lane(self) -> None:
+        from components.hub.backend import activity, render_executor
+        authority = self.authority()
+        runtime = FakeRuntime(self.root, self.raw, authority.qualification, [])
+        executor = RenderExecutor(
+            runtime=runtime, assets=None, authority=authority,
+            machine="local", broker_api=FakeBroker([]))
+        previous = render_executor._configured_executor
+        self.addCleanup(render_executor.configure, previous)
+        render_executor.configure(executor)
+
+        merged = activity.live_batches()
+        self.assertIn("render:job-1", merged,
+                      "the executor's live job never reached the activity view")
+        row = merged["render:job-1"]
+        self.assertEqual(row["modality"], "render")
+        self.assertEqual(row["items"][0]["operation"], "video.final_render")
+        self.assertEqual(row["items"][0]["state"], "accepted")
+
+        render_executor.configure(None)
+        self.assertEqual(
+            [key for key in activity.live_batches() if key.startswith("render:")], [],
+            "an unconfigured Hub must not advertise a render lane it does not have")
+
+
 if __name__ == "__main__":
     unittest.main()

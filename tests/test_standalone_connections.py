@@ -300,7 +300,10 @@ class IndependentClientTests(unittest.TestCase):
         self.assertEqual(capabilities["schema"], "studiohub.site-capabilities")
         self.assertEqual(capabilities["site_id"], settings["site_id"])
         self.assertEqual(capabilities["authority"]["global"], "genstudio")
-        self.assertEqual([row["service_id"] for row in capabilities["workers"]], ["voice"])
+        # The final-render lane is a worker row of its own, present even with no qualified
+        # authority: it reports the machine honestly instead of vanishing from the page.
+        self.assertEqual([row["service_id"] for row in capabilities["workers"]],
+                         ["voice", "hub-final-render"])
         self.assertEqual([row["physical_machine_id"] for row in capabilities["machines"]],
                          ["local"])
 

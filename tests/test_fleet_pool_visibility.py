@@ -444,7 +444,8 @@ class FleetProbeSourceTests(unittest.TestCase):
 
     The live-Hub cases above prove the behaviour end to end; these pin the two mechanisms:
     which route a direct probe asks, and that a machine with a current snapshot is not read
-    twice. `peers._cache` is saved and restored rather than assumed empty.
+    twice. `peers._cache` and the render-capability cache are saved and restored rather than
+    assumed empty.
     """
 
     NODE = {"id": "node-1", "name": "Studio Mini 01", "address": "http://10.0.0.5:47873",
@@ -453,15 +454,24 @@ class FleetProbeSourceTests(unittest.TestCase):
                  "reachable": True, "auth": True, "status": "connected", "version": "0.6.57"}
 
     def setUp(self):
-        from components.hub.backend import peers
+        from components.hub.backend import fleet_nodes, peers
         self.peers = peers
+        self.fleet_nodes = fleet_nodes
         self.saved = dict(peers._cache)
+        self.saved_render = dict(fleet_nodes._render_capability_cache)
         peers._cache.clear()
+        fleet_nodes._render_capability_cache.clear()
+        # A current snapshot is still not dialled for reachability. The render row travels on
+        # its own bounded refresh interval (covered in test_fleet_nodes), so pin it fresh here
+        # rather than letting one test's side read decide the next test's call count.
+        fleet_nodes._render_capability_cache["node-1"] = (time.time(), None)
         self.addCleanup(self.restore)
 
     def restore(self):
         self.peers._cache.clear()
         self.peers._cache.update(self.saved)
+        self.fleet_nodes._render_capability_cache.clear()
+        self.fleet_nodes._render_capability_cache.update(self.saved_render)
 
     def probe(self, client):
         from components.hub.backend import fleet_nodes

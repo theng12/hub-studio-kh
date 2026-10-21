@@ -1,4 +1,5 @@
 """Exercise relocation, external state and the worker's launch boundary."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -643,14 +644,37 @@ class StagingTests(unittest.TestCase):
             native = base / 'StudioHub'
             native.write_bytes(b'native-shell')
             native.chmod(0o755)
+            # A Hub build requires the two pinned render tools. The real pins name ~132 MB
+            # universal binaries, so the fixture supplies its own tiny pins through the seam
+            # `stage_voice` imports at stage time; the staging code still copies and verifies
+            # them by size and sha256 exactly as it does for production. Loaded by path (and
+            # placed in sys.modules for that import) so this never shadows the runtime's PyPI
+            # `packaging` with this repo's packaging directory.
+            tools_spec = importlib.util.spec_from_file_location(
+                'stage_render_tools', ROOT / 'packaging' / 'stage_render_tools.py')
+            stage_render_tools = importlib.util.module_from_spec(tools_spec)
+            tools_spec.loader.exec_module(stage_render_tools)
+            tools = base / 'render-tools'
+            tools.mkdir()
+            pins = []
+            for tool_name in ('ffmpeg', 'ffprobe'):
+                payload = f'#!/bin/sh\n# {tool_name} fixture\n'.encode()
+                (tools / tool_name).write_bytes(payload)
+                pins.append(stage_render_tools._ToolPin(
+                    tool_name, tools / tool_name, len(payload),
+                    hashlib.sha256(payload).hexdigest()))
             artifact = base / 'Studio Hub.app'
-            with mock.patch.object(module, 'ROOT', repo):
+            with mock.patch.object(module, 'ROOT', repo), \
+                    mock.patch.dict(sys.modules, {'stage_render_tools': stage_render_tools}), \
+                    mock.patch.object(stage_render_tools, 'production_pins',
+                                      lambda _directory: tuple(pins)):
                 try:
                     # The fixture runtime is synthetic, so it is not the tree the models were
                     # qualified on and `stage_voice` refuses it by design. The override is the
                     # deliberate way through: it stages and records that the runtime is not the
                     # qualified one, which is what this test then checks.
                     module.stage(runtime, artifact, native_shell=native,
+                                 render_tools_dir=tools,
                                  **({'image_runtime': runtime,
                                      'unqualified_image_runtime': 'synthetic staging fixture'}
                                     if image else {}),
