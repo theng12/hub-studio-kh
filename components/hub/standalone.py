@@ -2202,8 +2202,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         """Does this controller still list this Mac? `member`, `removed` (with when) or `unknown`.
 
         How a removal made here reaches the Mac itself: the node asks on its own tick and clears
-        its membership when the answer is `removed`. Read-only and mints no credential, so it can
-        be asked every minute. A node credential may ask only about its own id.
+        its membership when the answer is `removed`. It mints no credential and enqueues no work,
+        so it can be asked every minute. A node credential may ask only about its own id.
+
+        A node's own call is recorded as presence and nothing else: it stamps `last_status_at`/
+        `last_seen_at`, never marks the Mac reachable or pullable, and never overwrites a
+        `check-in`/`probe` reason. A group or Hub credential does not stamp.
 
         `name` is the Mac's current label. Only that Mac may set it (a node credential, its own
         id): the roster name is written at join, so a rename otherwise never reaches this side.
@@ -2217,19 +2221,21 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(403, "a node credential may ask only about the Mac that holds it")
         if own and name and fleet.rename(asked, name):
             monitor.reload_registry()
-        return fleet.status(asked)
+        result = fleet.status(asked)
+        if own and result.get("state") == "member":
+            fleet.note_status_seen(asked)
+        return result
 
     @app.post("/api/hub/fleet/nodes/{node_id}/checkin")
     async def fleet_node_checkin(node_id: str, body: dict[str, Any],
                                  request: Request) -> dict[str, Any]:
         """**A joined Mac's own call home — evidence of life, and the pull channel's door.**
 
-        This is the answer to a fleet the controller cannot dial. Sharing a Tailscale node works
-        one way, so three Shops Macs reach their controller and their controller can never reach
-        them; every one of them was reading `never_connected` for ever while checking in every
-        minute. The Mac's own authenticated call is evidence, and this route records it as such —
-        `last_seen_at`, a `check-in` reason kept distinct from a probe, its current address, its
-        version and its Lite Mode.
+        This is the answer to a fleet the controller cannot dial: a Mac behind one-way Tailscale
+        node sharing reaches its controller and its controller can never reach it. The Mac's own
+        authenticated call is evidence, and this route records it as such — `last_seen_at`, a
+        `check-in` reason kept distinct from a probe, its current address, its version and its
+        Lite Mode.
 
         It is also where work arrives. The body carries the ids the Mac has run and the answers it
         got, and the answer carries back the requests this controller could not dial it with —

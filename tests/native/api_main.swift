@@ -8459,10 +8459,10 @@ struct NativeAPITests {
         // ---------------------------------------------------------------------------------------
         // 0.6.193 — the pull channel: a Mac its controller cannot dial still works.
         //
-        // Three Shops Macs reach their controller through Tailscale **node sharing**, which works
-        // one way: the shared Mac dials out, the sharer cannot dial back. Every one of them joined
-        // and then read "never connected" for ever while calling home every minute, because the
-        // only evidence of life the controller accepted was a dial it could not make. The Mac's own
+        // A Mac behind one-way Tailscale **node sharing** can dial out while the sharer cannot dial
+        // back. The three Shops Macs that prompted this joined and then read "never connected" for
+        // ever (51 hours after joining), because the only evidence of life the controller accepted
+        // was a dial it could not make. Whether they were running was never proven. The Mac's own
         // call home is now the channel: it carries what this Mac is, and it takes back the requests
         // the controller could not dial.
         let pullStore = NativeWorkspaceStore(sessionConfiguration: configuration)

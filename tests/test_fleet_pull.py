@@ -1,10 +1,11 @@
 """A Mac the controller cannot dial is a Mac that is here.
 
-Three Shops Macs reach their controller through Tailscale **node sharing**, and sharing works one
-way: the shared Mac can dial out and the sharer cannot dial back. Every one of them joined, and
-then read `never_connected` for ever — 51 hours, measured 2026-10-20 — because the only evidence
-of life the controller accepted was a dial it could not make, while the Mac was calling home every
-minute. These tests pin the four things that fix it:
+These tests model a node behind one-way Tailscale **node sharing**: the shared Mac can dial out and
+the sharer cannot dial back. The three Shops Macs that prompted the channel were in that position,
+joined, and then read `never_connected` for ever — 51 hours after joining at the 2026-10-20
+measurement — because the only evidence of life the controller accepted was a dial it could not
+make. Whether they were running and calling home was never proven: the controller recorded no call
+from them. These tests pin the four things that fix the channel for a Mac in that position:
 
 * the Mac's own authenticated call home **is** evidence, and the reason is kept distinct;
 * it carries the Mac's current address, so an address is no longer frozen at join time;
@@ -119,7 +120,7 @@ class CheckinIsEvidenceOfLife(PullCase):
 
     def test_the_call_home_stamps_last_seen_and_clears_never_connected(self) -> None:
         # Joined long ago, never once dialled successfully: the state that read "never connected"
-        # for 51 hours on a Mac that was switched on and checking in.
+        # for 51 hours on a Mac whose liveness was never proven.
         nodes = fleet_nodes._read()
         nodes[NODE]["joined_at"] = time.time() - 51 * 3600
         nodes[NODE]["last_seen_at"] = nodes[NODE]["joined_at"]

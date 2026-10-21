@@ -60,10 +60,15 @@ def last_sync_report() -> dict[str, Any]:
 
 def controller_target() -> tuple[str, dict[str, str]] | None:
     """The controller this Mac joined and the credential to present, or None when this Mac is not
-    a node. A node presents its own credential (``NODE_ALLOWED``); the group token only before
-    the first join has been answered."""
+    a node. A node presents its own credential; the group token only before the first join is
+    answered.
+
+    Membership is the test, exactly as ``fleet_nodes.membership`` defines it — an adopted credential
+    and a validated controller address; the role is not part of it. Requiring ``role == "agent"``
+    can strand a joined Mac before it can pull the build that makes it visible. A ``controller`` is
+    excluded: promotion mints its own credential and clears the adopted origin."""
     member = fleet_nodes.membership()
-    if not member["member"] or member["role"] != "agent":
+    if not member["member"] or member["role"] == "controller":
         return None
     token = fleet_nodes.node_credential() or peers.current_fleet_token()
     return member["controller_url"], ({"X-Hub-Token": token} if token else {})

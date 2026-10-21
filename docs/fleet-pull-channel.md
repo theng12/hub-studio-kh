@@ -4,22 +4,25 @@
 
 ## The problem, measured
 
-Three Shops Macs are on Tailscale accounts that are **not** the Gateway Mac's. There are three
-tailnets and one Shops controller (`hq-macmini`, `100.120.246.9`). Each Shops Mac reaches the
-controller through Tailscale **node sharing**, and sharing works one way: the shared node can
-dial out, the sharer cannot dial back.
+The Shops fleet spans three Tailscale accounts and one Shops controller (`hq-macmini`). For **the
+three Macs below** the controller cannot dial back: reverse dialing failed for them, and their
+outbound reachability was never proven (no controller build recorded a call from them). That is a
+property of those three paths, not of Shops as a whole — five other Shops Macs answer the
+controller's probe normally.
 
 So `office-imac-blue-m1-8-256-hub`, `grace-2fs-imac-hub` and `kt-ksw-imac-blue-16-512-001-hub`
 joined, and then never answered a single probe. `fleet_nodes.probe()` decided reachability **only**
 by dialling the stored address, and `last_seen_at` was stamped only from a dial that answered.
 Nothing ever answered, so nothing was ever stamped, so all three read `never_connected=true` for
-ever — 51 hours, measured — while they were switched on and checking in every 60 seconds.
+ever — 51 hours after joining at the last measurement. Whether they were running was never proven:
+the controller recorded no call from them, because the status call they make was read-only.
 
 The address was frozen too: the roster address is written once, at join (`fleet_nodes.join`), and a
 Mac never re-joins on its own.
 
-**The channel that did work was the one the node starts.** The node already made an authenticated
-call home every 60 s. It was read-only, and its answer was never treated as evidence of life.
+**The channel that worked was the one the node starts.** A node's app already made an authenticated
+call home every 60 s — the read-only `GET …/status` on builds before 0.6.193, the check-in after —
+and its answer was never treated as evidence of life.
 
 ## The principle
 
@@ -92,9 +95,16 @@ A command is retired when the node acks it (`seen`/`results`) or when it expires
 ### Roster fields added
 
 `last_checkin_at`, `checkin_address`, `checkin_version`, `checkin_workstation`,
-`checkin_startup`, `checkin_current_job`, `checkin_last_stop`, `checkin_resources`, and
-`last_seen_via` (`"probe"` | `"check-in"`). `last_seen_at` is stamped by both, and
-`never_connected` is cleared by either.
+`checkin_startup`, `checkin_current_job`, `checkin_last_stop`, `checkin_resources`,
+`last_status_at`, and `last_seen_via` (`"probe"` | `"check-in"` | `"status"`). `last_seen_at` is
+stamped by all three, and `never_connected` is cleared by any of them.
+
+`"status"` is presence only: an authenticated `GET …/status` from a node's own credential proves
+the Mac reached this controller, and nothing else — not a dial that works, not a version, not a Mac
+that can be given pull work. It is kept in `last_status_at`, and it never overwrites a `check-in`
+or `probe` reason: a build that polls status *and* checks in must keep reading `check-in` between
+check-ins, or `dial_is_failing` and the pull transport would stop recognising a Mac they already
+know they cannot dial. Only `"check-in"` makes a node check-in alive.
 
 A node is **check-in alive** while `last_checkin_at` is inside `CHECKIN_FRESH_S` (180 s = three
 missed ticks).
@@ -141,8 +151,10 @@ stale belief.
 **Controller first, then nodes, then the Gateway. Both directions stay safe.**
 
 1. **The Hub ships alone.** It gains the check-in route, the queue and the transport. Old nodes keep
-   calling `GET …/status`, and a node the controller *can* dial is unaffected: the transport dials
-   first and only a transport failure reaches the queue.
+   calling `GET …/status` — and the controller records that authenticated call as presence
+   (`last_seen_via: "status"`), so an old node that can reach the controller stops reading
+   `never_connected`. A node the controller *can* dial is unaffected: the transport dials first and
+   only a transport failure reaches the queue.
 2. **The node's app ships.** It POSTs the check-in. If the controller answers **404** (it is older),
    the app does nothing at all and the existing `GET …/status` call keeps reporting a removal. A Mac
    that never updates keeps working and keeps being shown honestly.

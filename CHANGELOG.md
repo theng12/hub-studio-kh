@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.194 — 2026-10-21
+
+Integrated on `release/0.6.194` (worktree `_worktrees/studio-hub-kh/release-194`) over canonical
+main `439584a` (0.6.193), from `fix/shops-checkin-20261021`. No `native/*.swift` source moves, so
+the app binary is unchanged and 0.6.193's binary is reused. **Gates have not run; nothing is
+committed, built, installed or published.** Runtime outcome for the three Shops Macs stays
+unresolved until live evidence distinguishes reachable / check-in-only / offline / unknown.
+
+- **A joined Mac can mirror its controller's release.** The join records the adopted credential and the controller address but not the role, so the Hub's default `role` stays `standalone`, while `release_sync.controller_target()` required `role == "agent"`. A joined Mac was therefore a member of the group and still never mirrored the controller's release, so it could not pull the build that would make it visible — this can strand a joined Mac before its first check-in. `controller_target()` now keys on `fleet_nodes.membership()` (adopted credential + validated address) and excludes a `controller`.
+- **A node's authenticated status call is recorded as presence.** `GET /api/hub/fleet/nodes/{id}/status` was authenticated but recorded nothing, so a Mac that could reach its controller still read `never_connected` for ever. It now stamps `last_status_at` (and `last_seen_at`, forward-only) for a node's **own** credential against a live roster row, and nothing else — no dial that works, no version, no resources, no pull eligibility. It **never overwrites** a `check-in`/`probe` reason, so `dial_is_failing` and the pull transport behave exactly as in 0.6.193. A group or Hub credential stamps nothing.
+- **`never_connected` means "never heard from", by either direction.** It now clears on a check-in, a successful probe, or a status ask (its first-minute case included).
+- Deliberately not changed: the pull transport, `dial_is_failing`, the check-in route's behaviour, and the `node`/`fleet`/`hub` auth scopes.
+- Tests (added, not yet run): `tests/test_release_sync_target.py`, `tests/test_fleet_status_presence.py` (a real `create_app` route proof of credential scope). Accuracy-only wording in `tests/test_fleet_pull.py`, `tests/test_fleet_pull_end_to_end.py`, `tests/native/api_main.swift`, `docs/fleet-pull-channel.md`.
+
 ## 0.6.193 — 2026-10-20
 
 One tested feature branch was merged over verified main `bc84fe2` (0.6.192) in worktree

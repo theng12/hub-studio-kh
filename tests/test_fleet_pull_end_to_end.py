@@ -1,9 +1,11 @@
 """A Shops Mac the controller cannot dial, end to end, through a real controller Hub.
 
-This is the fault the whole channel exists for, reproduced as a test: three Shops Macs reach their
-controller through Tailscale **node sharing**, which works one way. Each Mac joins, and the
-controller can then never reach it — every dial times out — so it read `never_connected` for 51
-hours while it was switched on and calling home every minute.
+This is the fault the whole channel exists for, reproduced as a test: a Mac reaches its controller
+through Tailscale **node sharing**, which can work one way. The Mac joins, and the controller can
+then never reach it — every dial times out — so it read `never_connected` for ever. The three Shops
+Macs that prompted this were in that position and had read `never_connected` 51 hours after joining;
+whether they were running and calling home was never proven, because the controller recorded no
+call from them.
 
 A real controller Hub process, over a real socket, and a node that speaks the wire contract the
 Swift app speaks (`native/StudioAPI.swift`): it declares an address that **accepts a connection and

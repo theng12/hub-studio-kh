@@ -2,6 +2,41 @@
 
 ## ▶ TAKE OVER HERE
 
+### ST-SHOPS-BOOTSTRAP-20261021 — INTEGRATED SOURCE on `release/0.6.194`; gates PENDING; no commit/build/install/publish
+
+Owner request: fix the three Shops Macs that never connected (`office-imac-blue-m1-8-256-hub`,
+`grace-2fs-imac-hub`, `kt-ksw-imac-blue-16-512-001-hub`). Integrated in worktree
+`_worktrees/studio-hub-kh/release-194`, branch `release/0.6.194`, over canonical main
+`439584a69565780e1721cdf4c17cbb5489aaf200` (0.6.193), from `fix/shops-checkin-20261021`.
+
+Two source-proven fixes: (1) `release_sync.controller_target()` required `role == "agent"`, but the
+app's join (`/api/hub/fleet/adopt`) records the adopted credential and `parent_controller_url`
+without the role, so a joined Mac (default `standalone`) never mirrored its controller's release and
+could not pull the build that would make it visible — it now keys on `fleet_nodes.membership()`
+(adopted credential + validated address) and excludes a `controller`. (2) `GET
+/api/hub/fleet/nodes/{id}/status` was authenticated but recorded nothing, so a Mac that could reach
+its controller still read `never_connected` — `fleet_nodes.note_status_seen()` now stamps
+`last_status_at` (and `last_seen_at`, forward-only) as presence and nothing else, never overwriting a
+`check-in`/`probe` reason (so `dial_is_failing` and the pull transport are unchanged), and
+`standalone.fleet_node_status` stamps it only for a node's own credential against a live roster row.
+`never_connected` now clears on a check-in, a successful probe, or a status ask.
+
+Files: `components/hub/backend/fleet_nodes.py`, `components/hub/backend/release_sync.py`,
+`components/hub/standalone.py`; new `tests/test_fleet_status_presence.py`,
+`tests/test_release_sync_target.py`; accuracy-only wording in `tests/test_fleet_pull.py`,
+`tests/test_fleet_pull_end_to_end.py`, `tests/native/api_main.swift`, `docs/fleet-pull-channel.md`.
+
+Status: INTEGRATED SOURCE only. Gates PENDING; nothing committed, built, installed or published.
+Coordinator owns gate/release. **Runtime outcome for the three stays UNRESOLVED** — current evidence
+is a failed reverse dial and no recorded call from them; their outbound reachability and whether they
+were running were never proven, so code and a controller-only rollout cannot resolve it and the
+three need local/on-site checks. **Correction to 0.6.193:** its entry claimed the three were
+"switched on and checking in every minute" / "calling home every 60 s"; that is **unsupported** — no
+0.6.185/192/193 controller build recorded a call from them.
+
+**Everything below this block is historical: superseded statuses, kept for the record. Do not read
+them as current state or as an action list.**
+
 ### ST-SSD-MODEL-LOCATION-20261018 — 0.6.185 SOURCE PREPARED; gates UNRUN, not integrated
 
 Owner request: unify the SSD installer's model folder with the folder the app uses, and add a "Show in Finder" control for the current model folder. Seven source paths are prepared on `release/hub-0.6.185` (worktree `_worktrees/studio-hub-kh/release-185`, cut from verified main `7d556ea`): the new resolver `components/model_library.py` and `tests/test_model_library_root.py` (new); tracked edits to `native/ShellCore.swift`, `native/StudioHub.swift`, `native/StudioViews.swift`, `qualification/copy_models_for_this_mac.py`, `tests/test_copy_models_for_this_mac.py`; metadata (CHANGELOG/release-notes/VERSION 0.6.185/HANDOFF/BOARD). Product candidate independently accepted SOURCE-only (`E/hub-ssd-model-location-20261018/independent-f1f5-review-20261018.md`, bd756); F1–F5 correction frozen at `FREEZE-F1F5-corrections-20261018.md` (`a40b0c94…`). **Nothing is committed/staged/built/tested/installed/published and no gate has run** (runner current at `01b3adc2…`: lifecycle residuals independently closed, the final #7 source-identity delta PASSED SOURCE-only; gates UNRUN). REMAINING: execution grant → full Python gates on the current final 0.6.185 source with matching VERSION 0.6.185/headings → two explicit-path commits (the seven source paths, then the five metadata paths) with all bytes unchanged → fresh native gate on the clean final 0.6.185 commit → packaging/DMG → main integration → paced rollout. Hold the 0.6.184 candidate and the partial 0.6.184 fleet (10 of 11 required Macs at 1100) unchanged. Plan: `E/hub-ssd-model-location-20261018/ADDENDUM-2-185-gate-plan-f1f5-20261018.md`.

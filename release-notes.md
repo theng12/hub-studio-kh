@@ -2,6 +2,27 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.194 — 2026-10-21
+
+### A Mac that has joined can keep itself up to date
+
+When a Mac joins a controller it takes the controller's credential, but joining and switching a Mac
+into the "node" role were always two separate steps. The part that copies a controller's update
+onto a joined Mac was checking the role rather than the credential, so a Mac that had joined could
+be left unable to fetch the very update that would let it report in. It now checks the credential —
+the same test the rest of the fleet logic uses — so a joined Mac updates like any other, and a
+controller never mistakes itself for a node.
+
+### A Mac that can reach you now shows as alive
+
+Older builds already make one call to their controller every minute — a plain "am I still listed?"
+check. The controller accepted it but wrote nothing down, so a Mac that could reach the controller
+could still sit on the Fleet page as one that had **never once been heard from**. That call is now
+recorded as a sign of life, and only that: it does not make the Mac reachable, does not carry a
+version or resources, and does not let it be given work — those still need a real report-in or a
+successful check. A Mac that reports in as well keeps being treated as reporting in, so nothing
+about how work is routed changes.
+
 ## 0.6.193 — 2026-10-20
 
 ### A Mac your main Mac cannot reach still works, and still shows as online

@@ -249,12 +249,9 @@ def _answered(snapshot: dict[str, Any] | None) -> bool:
 
 # -- the node's own call home: evidence of life, and the pull channel's door -----------------
 #
-# **A dial the controller cannot make was the only evidence of life it accepted, and for a Shops
-# Mac there is no such dial.** Sharing a Tailscale node works one way: the shared Mac reaches its
-# controller, the controller cannot reach it. Three Shops Macs therefore joined and then read
-# `never_connected` for ever while they were switched on, checking in every minute. The node's own
-# authenticated call is evidence — it is the Mac saying so, with a credential only that Mac holds —
-# and it is now recorded as such, with the reason kept distinct from a probe.
+# A node behind one-way Tailscale node sharing can reach its controller but not be dialled by it,
+# so a dial-only liveness check leaves it reading `never_connected` for ever. The node's own
+# authenticated call is evidence, recorded with the reason kept distinct from a probe.
 
 #: How long a Mac may go without checking in before it stops counting as there. A node checks in
 #: every 60 s, so this is three missed ticks.
@@ -397,6 +394,33 @@ def record_checkin(node_id: str, payload: dict[str, Any]) -> dict[str, Any] | No
         row["last_stop"] = stop
     _write(nodes)
     return row
+
+
+def note_status_seen(node_id: str, at: float | None = None) -> bool:
+    """Record that a node asked, with its own credential, whether it is still listed.
+
+    `GET …/status` is the call a node makes every 60 s on builds predating check-in; the route
+    admits a node credential only for the Mac that holds it, so the call proves that Mac reached
+    this controller — presence, and nothing else. Kept in ``last_status_at`` and **never
+    overwriting** a ``check-in``/``probe`` reason, or `dial_is_failing` would stop recognising a
+    Mac it knows it cannot dial. ``last_seen_at`` moves forward only; unknown and removed ids are
+    not stamped. Returns whether a live roster row was stamped.
+    """
+    node_id = str(node_id or "").strip().lower()
+    if not node_id:
+        return False
+    nodes = _read()
+    row = nodes.get(node_id)
+    if row is None:
+        return False
+    now = float(at if at is not None else time.time())
+    row["last_status_at"] = now
+    if now > float(row.get("last_seen_at") or 0):
+        row["last_seen_at"] = now
+    if str(row.get("last_seen_via") or "") not in ("check-in", "probe"):
+        row["last_seen_via"] = "status"
+    _write(nodes)
+    return True
 
 
 def _checkin_reported(row: dict[str, Any]) -> dict[str, Any]:
@@ -1082,21 +1106,21 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
     for key in _CHECKIN_KEYS:
         row[key] = node.get(key)
     row["last_seen_via"] = node.get("last_seen_via")
+    # The last authenticated status ask: presence only, kept apart from `last_seen_at`/`last_seen_via`.
+    row["last_status_at"] = node.get("last_status_at")
     # Whether this controller holds a credential for the machine, never the credential. A
     # roster row with no hash is a row from before per-node credentials existed, and it reads
     # as "the next join of this id has to prove itself" rather than as "trusted".
     row["has_credential"] = bool(node.get("credential_hash"))
-    # Joined more than a day ago and never once answered a probe since. `last_seen_at` is seeded
-    # with the join time, so "never" means it has not moved past it. The row still offers Remove;
-    # this only lets the page say why it is worth removing.
+    # Joined more than a day ago and never once heard from since — neither a dial the controller
+    # made (`last_seen_at` past the join seed) nor a call home (`check-in`, or the status ask an
+    # older build makes). The row still offers Remove; this only lets the page say why.
     joined_at = node.get("joined_at") or 0
+    heard = ((node.get("last_seen_at") or 0) - joined_at >= 60
+             or bool(node.get("last_status_at")))
     row["never_connected"] = bool(
         joined_at and time.time() - joined_at > NEVER_CONNECTED_AFTER_S
-        and (node.get("last_seen_at") or 0) - joined_at < 60
-        # **A Mac that checks in has been heard from.** The flag means "this controller has never
-        # once heard from it", and a node whose own call home arrives every minute has been heard
-        # from. Measured 2026-10-20: three Shops Macs sat at "never connected" for 51 hours while
-        # checking in every 60 s, because the only evidence counted was a dial that cannot be made.
+        and not heard
         and not checkin_alive(node))
     snapshot = fresh_snapshot(str(node.get("id") or ""))
     if snapshot is not None:
