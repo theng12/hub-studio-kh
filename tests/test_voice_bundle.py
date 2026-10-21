@@ -653,7 +653,13 @@ class StagingTests(unittest.TestCase):
             tools_spec = importlib.util.spec_from_file_location(
                 'stage_render_tools', ROOT / 'packaging' / 'stage_render_tools.py')
             stage_render_tools = importlib.util.module_from_spec(tools_spec)
-            tools_spec.loader.exec_module(stage_render_tools)
+            # `@dataclass` resolves its own class through `sys.modules` while the class is
+            # being created, so the module has to be registered BEFORE it is executed or the
+            # decorator raises `AttributeError: 'NoneType' object has no attribute '__dict__'`.
+            # `mock.patch.dict` registers it for the import and restores the registry
+            # afterwards, so the fixture leaves no module behind.
+            with mock.patch.dict(sys.modules, {'stage_render_tools': stage_render_tools}):
+                tools_spec.loader.exec_module(stage_render_tools)
             tools = base / 'render-tools'
             tools.mkdir()
             pins = []
