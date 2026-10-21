@@ -1,28 +1,34 @@
-> **0.6.194 gated, artifact verified, main pushed, rollout started — closeout status — 2026-10-21.**
-> The integration block below predates the gates; this is their actual outcome. Product main is
-> `a152792faedf2d7d8d03a0201ce69a3aab9cf98f` (tree `ff8add13…`), pushed and matching `origin/main`.
-> Full gate on that exact tree, **exit 0, `source_unchanged` and `binary_unchanged` both true**
-> (`shops/hub-0194-release/gate-acceptance-194.json`, proof `gate-194/gate-finish.json`):
-> focused 14 run / 0 skip / 0 fail; unittest 2,600 run / 15 skipped / 0 failures / 0 errors;
-> regressions 425 passed; voice 1,016 passed / 28 skipped — the 15 skips are the same known
-> environment-only/discovery skips recorded in the raw logs. The artifact was then built and
-> independently re-derived from the bytes on disk (`shops/hub-0194-release/artifact-root-verified.json`):
-> six staged checks with zero skips, four packaged image imports, `hdiutil verify` exit 0;
-> primary `dist/StudioHub-0.6.194-a152792.dmg`, 1,318,509,056 bytes,
-> SHA-256 `5ddad999acb74534f5628bdc2bbd665d4fae1696ee5031ea8d3570d587a3c580`, native binary
-> unchanged from 0.6.193 (`275d967c…`, the binary-reuse call held — the release is Python-only),
-> artifact receipt/settlement `ARTIFACT-PASSED.settled.json`, state `passed`. Main was pushed.
-> The paced rollout has **started, not finished**, order `This Mac → 1100 → 1200 → 1300 → 1400 →
-> 1500 → 1600 → Shops`: This Mac is verified on 0.6.194 (state `verified`, timestamp
-> 2026-10-21T04:02:24Z); site 1100 accepted its publication and is rollout-active in the paced
-> wait; current counts and offline deferrals are in the live driver state. At this dated
-> closeout snapshot, later sites are still pending, so **no fleet-complete and no Shops-repair claim may be drawn
-> from this entry**; the three original Shops Macs remain unreachable in evidence. Live rollout
-> state is owned by `shops/hub-0194-release/status-fixed.json` and `driver-fixed.json`, which
-> move as the driver works. Receipts directory:
-> `~/Developer/_orchestra/app-closeout-20261021/shops/hub-0194-release/`. Rollout driver
-> preparation was independently reviewed source-only before any run
-> (`rollout-preparation/independent-review-20261021.md`, verdict accepted).
+> **0.6.194 gated, artifact accepted, rolled out to all eight sites — 2026-10-21.**
+> Product commit `a152792faedf2d7d8d03a0201ce69a3aab9cf98f` (tree `ff8add13…`); this handoff entry
+> is a later docs-only commit on top of it, so the product commit and the installer identity are
+> unaffected by any later handoff edit. Full gate on `a152792`, exit 0, `source_unchanged` and
+> `binary_unchanged` both true (`shops/hub-0194-release/gate-acceptance-194.json`, proof
+> `gate-194/gate-finish.json`): focused 14 run / 0 skip / 0 fail; unittest 2,600 run / 15 skipped /
+> 0 failures / 0 errors; regressions 425 passed; voice 1,016 passed / 28 skipped. Artifact accepted
+> and re-derived from the bytes on disk (`shops/hub-0194-release/artifact-root-verified.json`): six
+> staged checks with zero skips, four packaged image imports, `hdiutil verify` exit 0;
+> `dist/StudioHub-0.6.194-a152792.dmg`, 1,318,509,056 bytes, SHA-256
+> `5ddad999acb74534f5628bdc2bbd665d4fae1696ee5031ea8d3570d587a3c580`, native binary reused from
+> 0.6.193 (`275d967c…`, Python-only release); settlement `ARTIFACT-PASSED.settled.json`, state
+> `passed`.
+> **Rollout complete at all eight sites** (`This Mac → 1100 → 1200 → 1300 → 1400 → 1500 → 1600 →
+> Shops`), observed completed 2026-10-21T05:57:42Z
+> (`shops/hub-0194-release/rollout-completed-20261021.json`, source `status-fixed.json`): **60 dated
+> per-site verified observations** (This Mac 1, 1100 11, 1200 11, 1300 11, 1400 11, 1500 5, 1600 5,
+> Shops 5), eight accepted publications, no timed-out site — per-site observations are dated, not
+> one simultaneous snapshot. **Three required 1600-site nodes were offline and skipped, never
+> verified** — `studio-mac-1604-m1-8-256-hub`, `studio-mac-1605-m2-8-256-hub`,
+> `terranes-1606-m1-16-512-hub`.
+> **No repair claim for the three original never-connected Shops Macs** (`grace-2fs-imac-hub`,
+> `kt-ksw-imac-blue-16-512-001-hub`, `office-imac-blue-m1-8-256-hub`): they were not in the
+> reachable required set and stay `never_connected` with `last_status_at` null; a controller-only
+> rollout cannot bootstrap them, so they need local/on-site inspection
+> (`shops/SHOPS-POST194-CONNECTION-RESULT.md`). Live rollout state:
+> `shops/hub-0194-release/status-fixed.json` / `driver-fixed.json`.
+> **Hub cleanup is still in progress** — no worktree move is claimed here; the live manifest is
+> `app-closeout-20261021/cleanup-final-dependencies.md`, and a retirement counts only once its
+> receipt exists. Receipts directory:
+> `~/Developer/_orchestra/app-closeout-20261021/shops/hub-0194-release/`.
 >
 > **0.6.194 a joined Mac can mirror its controller's release, and a node's own status call counts as life — 2026-10-21. INTEGRATED SOURCE ON `release/0.6.194`; GATES PENDING; no commit, build, install or publish.** Integrated in worktree `_worktrees/studio-hub-kh/release-194` over canonical main `439584a` (0.6.193) from `fix/shops-checkin-20261021`. No `native/*.swift` moves, so the app binary is unchanged (0.6.193's binary reused). Owner request: fix the three Shops Macs that never connected (`office-imac-blue-m1-8-256-hub`, `grace-2fs-imac-hub`, `kt-ksw-imac-blue-16-512-001-hub`). Two source fixes: (1) `release_sync.controller_target()` required `role == "agent"`, but a join records the adopted credential and the controller address without the role, so a joined Mac (default role `standalone`) never mirrored its controller's release and could not pull the build that makes it visible — it now keys on `fleet_nodes.membership()` (adopted credential + validated address) and excludes a `controller`; (2) `GET /api/hub/fleet/nodes/{id}/status` was authenticated but recorded nothing, so a Mac that could reach its controller still read `never_connected` — a node's own authenticated call now stamps `last_status_at` (and `last_seen_at`, forward-only) as presence and nothing else, never overwriting a `check-in`/`probe` reason (so `dial_is_failing` and the pull transport are unchanged), and `never_connected` now clears on a check-in, a successful probe, or a status ask. Regressions added (not run): `tests/test_release_sync_target.py`, `tests/test_fleet_status_presence.py`. **Correction to 0.6.193:** its entry claimed the three Shops Macs were "switched on and checking in every minute" / "calling home every 60 s" — that is **unsupported**: no 0.6.185/192/193 controller build recorded a call from them, and their outbound reachability and whether they were running were never proven. **Runtime outcome for the three stays UNRESOLVED** — current evidence is a failed reverse dial and no recorded call; code and a controller-only rollout cannot resolve it, so the three need local/on-site checks. Diagnosis: `_orchestra/app-closeout-20261021/shops/SHOPS-CHECKIN-DIAGNOSIS-20261021.md`. Board: `ST-SHOPS-BOOTSTRAP-20261021`.
 > **0.6.193 the fleet pull channel: a Mac the controller cannot dial still works — 2026-10-20. PREPARED AND GATED ON `release/0.6.193`; main integration and rollout REMAIN WITH THE COORDINATOR.** One tested feature branch was merged over verified main `bc84fe2` (0.6.192) in worktree `_worktrees/studio-hub-kh/release-193`: `pull-fleet` (`efbf399`), auto-merging cleanly with no conflict. `native/StudioAPI.swift` moves, so the app binary is rebuilt. Design note: `docs/fleet-pull-channel.md` — **read its rollout order: controller first, then nodes, then the Gateway.** What is in it: three Shops Macs reach their controller through Tailscale **node sharing**, and sharing works one way (the shared Mac can dial out, the sharer cannot dial back), so `fleet_nodes.probe()` — which accepted only a dial as evidence of life, with `note_seen` stamping `last_seen_at` only from one — left all three reading `never_connected` for ever, **measured 51 hours**, while they were on and calling home every 60 s; the roster address was written once at join and never again, so a Mac that moved could not correct it. The node's own authenticated call home is now the channel: **`POST /api/hub/fleet/nodes/{id}/checkin`** (Fleet token **or** the node's own credential, which may check in only for its own id) stamps `last_seen_at` with the reason kept distinct (`last_seen_via` `probe` | `check-in`), carries the Mac's current address, version, Lite Mode, startup and its own verbatim answer to `GET /api/hub/resources?local_only=true` — the exact route the probe dials — clears `never_connected`, and hands back queued requests; a node is check-in alive while `last_checkin_at` is inside `CHECKIN_FRESH_S` (180 s). Every command carries an idempotent id the node acks (a command delivered twice runs once) and is **exactly the HTTP request the dial would have sent**, replayed on the node's own Hub with its **own** token — the controller's Fleet token is stripped and never reaches the node; a command retires on ack or `expires_at` (900 s). **Dialling stays the first choice:** `fleet_pull.PullTransport` is installed on the controller's shared outbound client (`monitor._client`), so job dispatch, job batches, shared-voice fleet-sync, fleet-token rotation and model-memory calls reach the queue **with no broker, Chat or Subtitle call site changed** — it dials first and only a transport error against a check-in-alive node reaches the queue, `dial_is_failing()` (from `last_seen_via == check-in`) skips a dial already known to be failing rather than giving it a job's whole timeout, and a successful dial puts everything back on `probe`. Settings changes answer **`202`** with `queued: true` and the command id (the Mac applies it on its next call home); work the caller expects an answer for is waited for. `peers.one` takes the check-in snapshot when the dial is known to fail, so the scheduler sees a Mac that is up rather than one that reads online and is never given work. **Either side may ship first:** a controller older than this build answers **404** and the node does nothing at all, keeping `GET …/status`. The Gateway (0.2.194) carries `node_via` on the flat machine row and recognises `202 + queued` in `_node_post`. Left dial-only deliberately, with reasons in the note: `peers.py`'s dead relay helpers, and `delivery.py`'s artifact receipt ack and `transcription_jobs.py`'s ack. REMAINING (coordinator): main integration and paced fleet rollout (controllers first, including the Shops controller, then nodes). The full Python gates (unittest/regressions/voice), the fresh native gate on the clean release commit and packaging/DMG are run by the 0.6.193 release worker and recorded in the receipts directory below. Receipts directory: `~/Developer/_orchestra/codex-takeover-20261012/hub-0193-release/`. VERSION `0.6.193`.
