@@ -2,6 +2,24 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.196 — 2026-10-24
+
+### Remote rendering is switched on from the Gateway
+
+A Mac takes final renders for other Macs only after you switch it on in the Gateway (Fleet →
+Remote rendering). It stays off until you do.
+
+### Each Mac can be given its own image model
+
+When the Gateway's image pool is used, each Mac makes images with the model for its memory size,
+or the one you chose for it in the Gateway. Jobs that ask for a particular model by name still run
+on any Mac that has it.
+
+### Opening a folder in Finder no longer upsets the Hub
+
+The hidden files Finder leaves behind (such as `.DS_Store`) are now ignored everywhere the Hub
+checks its own folders.
+
 ## 0.6.195 — 2026-10-21
 
 ### A Mac on your fleet can now finish a final video

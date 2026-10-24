@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.196 — 2026-10-24
+
+- **Remote final rendering can be switched on per Mac from the Gateway.** `POST /api/hub/fleet/nodes/{id}/render-authority` (Fleet token; not in `NODE_ALLOWED`) relays the owner's choice to the Mac's own `POST /api/hub/render-authority`, stored at `<data root>/render-authority/opt-in/unqualified.json`. Off by default, and then byte-identical to 0.6.195; while on, the leaf publishes `accepted_unqualified` on its render capability row.
+- **Per-Mac image-pool model.** `registry.assigned_image_model` / `set_assigned_image_model` in `machine_flags.json`; `POST /api/hub/fleet/nodes/{id}/assigned-image-model` (Fleet token); new routing form `assigned` — the broker (`_can_run`) runs such work only on a Mac whose assigned model is the job's model. Published as `assigned_image_model` on every Mac row of the fleet overview. Work with any other routing ignores it.
+- **macOS metadata never makes the Hub refuse its own folders.** `components/os_metadata.py` (shared names: `.DS_Store`, AppleDouble `._*`, `.localized`, `Icon\r`, Spotlight/fsevents/Trashes folders) is skipped by the render asset store scans, the file manifest and model-catalogue discovery; a genuinely unknown entry is still refused.
+- Gates on this source: offline unittest 2901 run / 15 skipped / 0 failures / 0 errors; hub regressions 435 passed; voice 1016 passed / 28 skipped.
+
 ## 0.6.195 — 2026-10-21
 
 Prepared on `feat/fleet-render-finish-20261021` (worktree
