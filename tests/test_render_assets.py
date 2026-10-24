@@ -434,7 +434,10 @@ class RenderAssetStoreTest(unittest.TestCase):
                             for directory in directories for name in names))
         result = self.store.retire_stale(now=time.time() + 2 * 24 * 3600)
         self.assertEqual(result, {"retired": 1, "published": 1, "retained": 0})
-        for directory in directories[:7]:
+        # The store's own folders keep their Finder files; the retired upload moved away whole
+        # (retirement moves the upload tree intact), so it is not looked for in its old place.
+        self.assertFalse(upload.exists())
+        for directory in directories[:6]:
             for name in names:
                 self.assertEqual((directory / name).read_bytes(), b"finder")
 
