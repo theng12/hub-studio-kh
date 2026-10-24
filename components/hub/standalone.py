@@ -3953,6 +3953,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         ttl_seconds: float | None = Form(None),
         source_asset_id: str = Form(""),
         sha256: str = Form(""),
+        display_name: str = Form(""),
     ) -> dict[str, Any]:
         """Stage one clone reference for later Voice jobs — one contract, two origins.
 
@@ -3995,6 +3996,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 language=language,
                 ttl_seconds=(execution_assets.DEFAULT_TTL_SECONDS if ttl_seconds is None
                              else int(ttl_seconds)),
+                display_name=display_name,
                 **({"source_asset_id": source_asset_id} if source_asset_id.strip() else {}),
             )
         except execution_assets.ExecutionAssetError as exc:

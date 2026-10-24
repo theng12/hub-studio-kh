@@ -2,6 +2,23 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.197 — 2026-10-24
+
+### Narration clips play again
+
+Clips made through the Gateway are M4A files. The Hub only accepted WAV when checking a clip before
+playing it, so it refused them with "Voice clip verification failed". Any real audio file now plays
+and saves, with the right file extension.
+
+### Each clip says which voice spoke it
+
+Rows in Recent audio and Jobs show the voice's name and ID.
+
+### A little room around the "working" ring
+
+The coloured ring that shows work in progress now sits a few points away from the list it
+surrounds, instead of touching it.
+
 ## 0.6.196 — 2026-10-24
 
 ### Remote rendering is switched on from the Gateway

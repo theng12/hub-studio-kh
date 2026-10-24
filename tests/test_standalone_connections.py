@@ -1441,7 +1441,8 @@ class FleetVoiceDispatchTests(unittest.TestCase):
         # A clone needs a reference clip, and it goes through the same Hub contract the app's
         # picker uses - which is what makes a pushed clone and a local one the same thing.
         status, staged, _ = controller.post_multipart(
-            "/api/hub/voice-references", {"transcript": "exact words", "language": "en"},
+            "/api/hub/voice-references", {"transcript": "exact words", "language": "en",
+                                          "display_name": "Yim Mengly"},
             {"audio": ("reference.wav", VOICE_WAV, "audio/wav")}, token=controller.token)
         self.assertEqual(status, 201, staged)
 
@@ -1478,6 +1479,10 @@ class FleetVoiceDispatchTests(unittest.TestCase):
         self.assertEqual(audio, VOICE_WAV,
                          "the controller must return the node's audio unchanged; "
                          f"job: {self.voice_state(controller, batch)}")
+        # The row says which voice spoke it (owner, 2026-10-24): the name it was staged under.
+        status, job, _ = controller.request(f"/api/hub/jobs/{batch}", token=controller.token)
+        self.assertEqual(job["items"][0].get("voice"),
+                         {"name": "Yim Mengly", "id": staged["asset_id"]})
 
     @staticmethod
     def voice_state(controller, batch: str) -> str:

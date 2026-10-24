@@ -78,8 +78,13 @@ private enum JobMachineFilter: String, CaseIterable, Identifiable {
 /// unmistakable: the ring travels around the Generate button and the preview while work is in
 /// flight. Because it is a `TimelineView`, it costs nothing when idle - the view is not in the
 /// hierarchy at all once the last job finishes.
+///
+/// `inset` keeps a margin between the ring and what it surrounds (a list or a preview), so rows
+/// never run into the colour. It applies whether or not the ring shows, so nothing moves when work
+/// starts or stops.
 private struct ActiveAura<Content: View>: View {
     let active: Bool
+    var inset: CGFloat = 0
     @ViewBuilder var content: () -> Content
 
     private static var rainbow: [Color] {
@@ -92,6 +97,7 @@ private struct ActiveAura<Content: View>: View {
                 let phase = context.date.timeIntervalSinceReferenceDate
                     .truncatingRemainder(dividingBy: 8) / 8
                 content()
+                    .padding(inset)
                     .overlay {
                         RoundedRectangle(cornerRadius: HubRadius.card, style: .continuous)
                             .stroke(AngularGradient(colors: Self.rainbow, center: .center,
@@ -103,7 +109,7 @@ private struct ActiveAura<Content: View>: View {
                     }
             }
         } else {
-            content()
+            content().padding(inset)
         }
     }
 }
@@ -2048,7 +2054,7 @@ struct StudioContent: View {
                     }
                     // A card, not a pane: the picture is a fixed height so the prompt, its settings
                     // and the history below it keep the room. Click it for the large view.
-                    ActiveAura(active: !activeImages.isEmpty) {
+                    ActiveAura(active: !activeImages.isEmpty, inset: HubSpace.s) {
                         Group {
                             if loadingImage { ProgressView("Loading image…").frame(maxWidth: .infinity, maxHeight: .infinity) }
                             else if let imagePreview, let job = previewImageJob {
@@ -2488,7 +2494,7 @@ struct StudioContent: View {
                 }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
                 VStack(alignment: .leading, spacing: HubSpace.m) {
                     Text("Preview").font(HubType.section)
-                    ActiveAura(active: !activeMusic.isEmpty) {
+                    ActiveAura(active: !activeMusic.isEmpty, inset: HubSpace.s) {
                         if let job = previewMusicJob {
                             musicPlayerCard(job)
                         } else {
@@ -3297,7 +3303,7 @@ struct StudioContent: View {
                     // height of the transport. Reserving the space is the fix; with nothing loaded
                     // the controls are disabled and say so.
                     audioTransport(loadedAudioJob)
-                    ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio) {
+                    ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio, inset: HubSpace.s) {
                         Group {
                             if workspace.audioJobs.isEmpty {
                                 empty("Your audio will appear here", "Generated audio collects here, newest first.", symbol: "waveform")
@@ -7095,8 +7101,18 @@ struct StudioContent: View {
             } catch { fileActionError = error.localizedDescription }
         }
     }
+    /// The extension the Hub's own record names (an M4A saved as ".wav" would not open).
+    static func audioFileExtension(_ job: NativeJob) -> String {
+        switch (job.mediaType ?? "").lowercased() {
+        case "audio/mp4", "audio/x-m4a", "audio/aac": return "m4a"
+        case "audio/mpeg", "audio/mp3": return "mp3"
+        case "audio/flac", "audio/x-flac": return "flac"
+        case "audio/ogg", "audio/opus": return "ogg"
+        default: return "wav"
+        }
+    }
     private func saveAudio(_ job: NativeJob) {
-        let panel = NSSavePanel(); panel.nameFieldStringValue = "audio-\(job.id).wav"; panel.allowedContentTypes = [.wav]
+        let panel = NSSavePanel(); panel.nameFieldStringValue = "audio-\(job.id).\(Self.audioFileExtension(job))"; panel.allowedContentTypes = [.audio]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         // The bytes are verified against the Hub's receipt before the write, then the write is
         // re-read, and only then is delivery acknowledged - the same order the Image and
@@ -7125,7 +7141,7 @@ struct StudioContent: View {
         catch { fileActionError = error.localizedDescription }
     }
     private func saveMusic(_ job: NativeJob) {
-        let panel = NSSavePanel(); panel.nameFieldStringValue = "music-\(job.id).wav"; panel.allowedContentTypes = [.wav]
+        let panel = NSSavePanel(); panel.nameFieldStringValue = "music-\(job.id).\(Self.audioFileExtension(job))"; panel.allowedContentTypes = [.audio]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         // Same order as every other workspace: fetch, verify the bytes against the Hub's receipt,
         // write, re-read, and only then acknowledge delivery.

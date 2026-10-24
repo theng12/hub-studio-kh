@@ -2596,6 +2596,9 @@ struct NativeJob: Identifiable, Equatable {
             // the same in history.
             if !text.isEmpty { parts.append("\(text.count) characters") }
             if let speed = voiceSettings?.speed { parts.append("speed \(Self.trimmed(speed))×") }
+            if let voice = voiceSettings, voice.voiceID != nil || voice.voiceName != nil {
+                parts.append("voice " + [voice.voiceName, voice.voiceID].compactMap { $0 }.joined(separator: " · "))
+            }
         case .chat, .transcription:
             break
         }
@@ -4221,7 +4224,7 @@ final class NativeWorkspaceStore: ObservableObject {
             if !refreshNotes.isEmpty { startupNote = refreshNotes.joined(separator: " ") }
             // Only what the Hub still lists is remembered; anything it forgets leaves with it.
             finishedJobCache = finished
-            audioJobs = history.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
+            audioJobs = history.map(namingVoice).sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             imageJobs = images.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             musicJobs = musics.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
             videoJobs = videos.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }
@@ -5370,9 +5373,9 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// Fetch one Music artifact and verify it against the Hub's own receipt.
     ///
-    /// The count, the SHA-256 and the RIFF/WAVE magic are required, exactly as the Voice path
-    /// requires them: bytes that are not the generated WAV must never be played or saved under an
-    /// audio name.
+    /// The count, the SHA-256 and a real audio container are required, exactly as the Voice path
+    /// requires them: bytes that are not the generated audio must never be played or saved under
+    /// an audio name.
     func musicData(for job: NativeJob) async throws -> Data {
         guard let requestConnection = connectionID else { throw NativeAPIError.message("Start the local services before retrieving music.") }
         guard job.state == "done", musicJobs.contains(where: { $0.id == job.id }),
@@ -5383,9 +5386,7 @@ final class NativeWorkspaceStore: ObservableObject {
         let data = try await performData(makeRequest(["api", "hub", "jobs", job.id, "items", "0", "artifact"]))
         guard connectionID == requestConnection else { throw NativeAPIError.message("The Hub connection changed before music retrieval completed.") }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        guard Int64(data.count) == bytes, digest == sha.lowercased(),
-              data.count >= 12, data.prefix(4) == Data([0x52, 0x49, 0x46, 0x46]),
-              data[8..<12] == Data([0x57, 0x41, 0x56, 0x45]) else {
+        guard Int64(data.count) == bytes, digest == sha.lowercased(), Self.audioContainer(of: data) != nil else {
             throw NativeAPIError.message("Music verification failed. Refresh the job and retrieve its original result again.")
         }
         return data
@@ -5800,6 +5801,15 @@ final class NativeWorkspaceStore: ObservableObject {
     /// this exists to fix. An unrecognised payload falls back to WAV, which is what the engine
     /// writes by default.
     static func audioExtension(of data: Data) -> String {
+        audioContainer(of: data) ?? ".wav"
+    }
+
+    /// The audio container these bytes really are, or nil when they are not audio at all.
+    ///
+    /// A clip is verified against this, not against WAV alone: the Gateway asks for M4A for
+    /// narration, so a WAV-only check refused every one of those perfectly good clips
+    /// ("Voice clip verification failed", owner 2026-10-24).
+    static func audioContainer(of data: Data) -> String? {
         let bytes = [UInt8](data.prefix(12))
         if bytes.count >= 12, String(decoding: bytes[0..<4], as: UTF8.self) == "RIFF",
            String(decoding: bytes[8..<12], as: UTF8.self) == "WAVE" { return ".wav" }
@@ -5808,7 +5818,7 @@ final class NativeWorkspaceStore: ObservableObject {
         if bytes.count >= 12, String(decoding: bytes[4..<8], as: UTF8.self) == "ftyp" { return ".m4a" }
         if bytes.count >= 4, String(decoding: bytes[0..<4], as: UTF8.self) == "OggS" { return ".ogg" }
         if bytes.count >= 4, String(decoding: bytes[0..<4], as: UTF8.self) == "fLaC" { return ".flac" }
-        return ".wav"
+        return nil
     }
 
     /// Chosen voice from the library, or nil to use a clip chosen from disk.
@@ -5825,6 +5835,16 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The saved voices a clone can use: a voice with no transcript cannot be aligned, so it is not
     /// offered as a working choice rather than being offered and then refused.
     var selectableVoices: [NativeVoice] { voices.filter { $0.readyForCloning } }
+
+    /// A job that names one of this Hub's own library voices by id gets that voice's name too.
+    func namingVoice(_ job: NativeJob) -> NativeJob {
+        guard var voice = job.voiceSettings, voice.voiceName == nil, let id = voice.voiceID,
+              let named = voices.first(where: { $0.id == id }) else { return job }
+        var job = job
+        voice.voiceName = named.name
+        job.voiceSettings = voice
+        return job
+    }
 
     /// The saved voices that cannot be used yet, kept visible and named so an operator can see what
     /// to fix. A saved voice with no transcript is not a voice that does not exist, and filtering it
@@ -9073,11 +9093,11 @@ final class NativeWorkspaceStore: ObservableObject {
         _ = try await performData(request)
     }
 
-    /// The Hub records the byte count, the SHA-256 and the decoded WAV shape when it adopts a
-    /// finished voice job, so a clip that arrives truncated or altered is refused here rather
-    /// than played or saved as if it were the generation. The RIFF/WAVE header is required for
-    /// the same reason the Image path requires a PNG magic number: bytes that are not audio
-    /// must never reach the operator's disk under a .wav name.
+    /// The Hub records the byte count and the SHA-256 when it adopts a finished voice job, so a
+    /// clip that arrives truncated or altered is refused here rather than played or saved as if
+    /// it were the generation. A real audio container (WAV, M4A, MP3, FLAC, Ogg) is required for
+    /// the same reason the Image path requires a PNG magic number: bytes that are not audio must
+    /// never reach the operator's disk under an audio name.
     func audioData(for job: NativeJob) async throws -> Data {
         guard let requestConnection = connectionID else { throw NativeAPIError.message("Start the local services before retrieving audio.") }
         guard job.state == "done", audioJobs.contains(where: { $0.id == job.id }),
@@ -9089,9 +9109,7 @@ final class NativeWorkspaceStore: ObservableObject {
         let data = try await performData(request)
         guard connectionID == requestConnection else { throw NativeAPIError.message("The local engine connection changed before audio retrieval completed.") }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        guard Int64(data.count) == bytes, digest == sha.lowercased(),
-              data.count >= 12, data.prefix(4) == Data([0x52, 0x49, 0x46, 0x46]),
-              data[8..<12] == Data([0x57, 0x41, 0x56, 0x45]) else {
+        guard Int64(data.count) == bytes, digest == sha.lowercased(), Self.audioContainer(of: data) != nil else {
             throw NativeAPIError.message("Voice clip verification failed. Refresh the job and retrieve its original result again.")
         }
         return data
@@ -9990,6 +10008,15 @@ final class NativeWorkspaceStore: ObservableObject {
         return nil
     }
 
+    private static func voiceSettings(_ item: HubJobItem?) -> NativeVoiceSettings? {
+        var settings = item?.params?.voiceSettings ?? NativeVoiceSettings()
+        if let voice = item?.voice {
+            settings.voiceID = voice.id.flatMap { $0.isEmpty ? nil : $0 } ?? settings.voiceID
+            settings.voiceName = voice.name.flatMap { $0.isEmpty ? nil : $0 }
+        }
+        return settings == NativeVoiceSettings() ? nil : settings
+    }
+
     private static func mapHubJob(_ wire: HubJobDetail) -> NativeJob {
         let item = wire.items.first
         return NativeJob(id: wire.id, state: item?.state ?? "queued", progress: item?.progress ?? 0,
@@ -9999,7 +10026,7 @@ final class NativeWorkspaceStore: ObservableObject {
             imageSettings: item?.params?.imageSettings,
             musicSettings: item?.params?.musicSettings,
             videoSettings: item?.params?.videoSettings,
-            voiceSettings: item?.params?.voiceSettings,
+            voiceSettings: voiceSettings(item),
             artifactPath: item?.artifactPath,
             durationSeconds: item?.audioDurationS ?? item?.durationSeconds,
             requestedWidth: item?.params?.width, requestedHeight: item?.params?.height,
@@ -11084,6 +11111,7 @@ private struct HubJobDetail: Decodable {
     let stalledSeconds: Double?
     let items: [HubJobItem]
 }
+private struct HubJobVoice: Decodable { let name: String?; let id: String? }
 private struct HubJobItem: Decodable {
     let state: String
     /// The item's position in the batch, which is what the discard route is addressed with.
@@ -11109,6 +11137,8 @@ private struct HubJobItem: Decodable {
     let sha256: String?
     let mediaType: String?
     let params: HubJobParams?
+    /// The voice a Gateway job cloned, as the Hub recorded it from the staged reference.
+    let voice: HubJobVoice?
     /// Where the worker wrote the artifact **on its own disk**, which the Hub records when it
     /// adopts a finished job (`artifact_path`). This is what "Show in Folder" reveals, and it is
     /// the only field that answers the operator's question — *where is the actual file?* — without
@@ -11176,6 +11206,8 @@ private struct HubJobParams: Decodable {
     /// default equals 1.0; the row shows it because a clip generated at 1.5× is a different
     /// result from one at the model's pace.
     let speed: Double?
+    /// A voice chosen from this Hub's own library.
+    let voiceLibraryId: String?
     /// A finished job's own controls, exactly as the Hub echoed them. A control the model did not
     /// publish is absent here too, so the row shows what was really asked for.
     var imageSettings: NativeImageSettings? {
@@ -11197,8 +11229,8 @@ private struct HubJobParams: Decodable {
                                    seed: seed)
     }
     var voiceSettings: NativeVoiceSettings? {
-        guard speed != nil else { return nil }
-        return NativeVoiceSettings(speed: speed)
+        guard speed != nil || voiceLibraryId != nil else { return nil }
+        return NativeVoiceSettings(speed: speed, voiceID: voiceLibraryId)
     }
 }
 
@@ -11216,6 +11248,11 @@ struct NativeVideoSettings: Equatable {
 /// What a Voice job was asked for, beyond the model and the text.
 struct NativeVoiceSettings: Equatable {
     var speed: Double?
+    /// Which voice spoke it (owner, 2026-10-24: a row that does not say which voice is useless when
+    /// several voices run at once). The id is the Gateway's voice id for a Gateway job, or this
+    /// Hub's library id; the name is the Gateway's, or looked up in this Hub's own library.
+    var voiceID: String? = nil
+    var voiceName: String? = nil
 }
 private struct HubJobSubmit: Decodable { let batchId: String; let replayed: Bool? }
 private struct HubCancelResponse: Decodable { let ok: Bool }

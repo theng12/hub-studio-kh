@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.197 — 2026-10-24
+
+- **Voice and music clips in M4A, MP3, FLAC or Ogg play and save.** `audioData`/`musicData` (native/StudioAPI.swift) verified the bytes and checksum and then required a RIFF/WAVE header, so every Gateway narration clip (the Gateway asks for M4A) failed with "Voice clip verification failed" although its bytes matched the receipt. Verification now requires any real audio container (`audioContainer(of:)`, nil for non-audio); Save names the file by the job's media type.
+- **Audio rows say which voice spoke.** The stage route takes an optional `display_name` (a label: not part of the asset identity); the broker records `item["voice"] = {name, id}` from the staged reference (id = the sender's `source_asset_id`, else the asset id) before dispatch. A job using this Hub's own library voice shows that voice's name from the library. Shown as "voice Name · id" on the row. Gateway 0.2.197 sends the name.
+- **The generating ring keeps a margin.** `ActiveAura(inset:)` pads what it surrounds by `HubSpace.s` (always, so nothing moves when work starts); used on the Recent audio list and the Image and Music previews.
+
 ## 0.6.196 — 2026-10-24
 
 - **Remote final rendering can be switched on per Mac from the Gateway.** `POST /api/hub/fleet/nodes/{id}/render-authority` (Fleet token; not in `NODE_ALLOWED`) relays the owner's choice to the Mac's own `POST /api/hub/render-authority`, stored at `<data root>/render-authority/opt-in/unqualified.json`. Off by default, and then byte-identical to 0.6.195; while on, the leaf publishes `accepted_unqualified` on its render capability row.

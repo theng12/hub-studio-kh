@@ -5349,6 +5349,9 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 item["error_code"] = exc.code
                 item["error"] = exc.detail
                 return
+            # Which voice this is, for the job rows: the name and id its sender staged it under.
+            item["voice"] = {"name": reference.get("display_name") or "",
+                             "id": reference.get("source_asset_id") or voice_reference_asset_id}
             if reference.get("transcript"):
                 body["ref_transcript"] = reference["transcript"]
             if requeue_if_peer_changed():

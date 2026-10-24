@@ -123,7 +123,7 @@ def _segments(value: object) -> list[dict[str, Any]]:
 def stage_voice_reference(
     *, audio_bytes: bytes, filename: str, source_asset_id: str,
     declared_sha256: str, transcript: str = "", transcript_segments: object = None,
-    language: str = "", ttl_seconds: int = DEFAULT_TTL_SECONDS,
+    language: str = "", ttl_seconds: int = DEFAULT_TTL_SECONDS, display_name: str = "",
 ) -> dict[str, Any]:
     """GenStudio-owned variant: binds the execution copy to a durable source asset."""
     if not source_asset_id.strip() or len(source_asset_id) > 500:
@@ -137,14 +137,14 @@ def stage_voice_reference(
         ).hexdigest(),
         declared_sha256=declared_sha256, transcript=transcript,
         transcript_segments=transcript_segments, language=language,
-        ttl_seconds=ttl_seconds,
+        ttl_seconds=ttl_seconds, display_name=display_name, source_asset_id=source_asset_id.strip(),
     )
 
 
 def stage_local_voice_reference(
     *, audio_bytes: bytes, filename: str, declared_sha256: str = "",
     transcript: str = "", transcript_segments: object = None,
-    language: str = "", ttl_seconds: int = DEFAULT_TTL_SECONDS,
+    language: str = "", ttl_seconds: int = DEFAULT_TTL_SECONDS, display_name: str = "",
 ) -> dict[str, Any]:
     """Local-ingestion variant: one app-chosen file, no GenStudio source.
 
@@ -159,14 +159,14 @@ def stage_local_voice_reference(
         source_fingerprint="",
         declared_sha256=declared_sha256, transcript=transcript,
         transcript_segments=transcript_segments, language=language,
-        ttl_seconds=ttl_seconds,
+        ttl_seconds=ttl_seconds, display_name=display_name,
     )
 
 
 def _stage_voice_reference(
     *, audio_bytes: bytes, filename: str, source_fingerprint: str,
     declared_sha256: str, transcript: str, transcript_segments: object,
-    language: str, ttl_seconds: int,
+    language: str, ttl_seconds: int, display_name: str = "", source_asset_id: str = "",
 ) -> dict[str, Any]:
     if not audio_bytes:
         raise ExecutionAssetError("REFERENCE_AUDIO_EMPTY", "The private voice reference is empty.")
@@ -193,6 +193,9 @@ def _stage_voice_reference(
     if len(transcript) > 200_000:
         raise ExecutionAssetError("REFERENCE_TRANSCRIPT_TOO_LARGE", "The reference transcript is too long.")
     ttl = max(300, min(int(ttl_seconds), MAX_TTL_SECONDS))
+    # Labels only, for the job rows ("which voice spoke this"): not part of the asset's identity.
+    labels = {"display_name": display_name.strip()[:200] or None,
+              "source_asset_id": source_asset_id[:500] or None}
     identity = hashlib.sha256(
         json.dumps({
             "source": source_fingerprint,
@@ -214,6 +217,7 @@ def _stage_voice_reference(
         if existing:
             existing["expires_at"] = max(_expires_at(existing), expires_at)
             existing["updated_at"] = time.time()
+            existing.update({k: v for k, v in labels.items() if v})
             _atomic_json(target / "metadata.json", existing)
             return existing
 
@@ -235,6 +239,7 @@ def _stage_voice_reference(
             "transcript": transcript,
             "transcript_segments": segments,
             "language": language.strip() or None,
+            **labels,
             "created_at": time.time(),
             "updated_at": time.time(),
             "expires_at": expires_at,

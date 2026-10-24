@@ -2930,6 +2930,15 @@ struct NativeAPITests {
         require(NativeWorkspaceStore.audioExtension(of: Data("OggS".utf8)) == ".ogg", "an Ogg stream")
         require(NativeWorkspaceStore.audioExtension(of: Data()) == ".wav",
                 "an unreadable payload must not claim a format it cannot prove")
+        // Verification accepts any real container — the Gateway's narration is M4A, and a
+        // WAV-only check refused every one of those clips (owner, 2026-10-24) — but never bytes
+        // that are not audio at all.
+        require(NativeWorkspaceStore.audioContainer(
+            of: Data([0, 0, 0, 0x1C, 0x66, 0x74, 0x79, 0x70, 0x4D, 0x34, 0x41, 0x20])) == ".m4a",
+                "an M4A clip is audio")
+        require(NativeWorkspaceStore.audioContainer(of: Data("{\"detail\":1}".utf8)) == nil
+                && NativeWorkspaceStore.audioContainer(of: Data()) == nil,
+                "JSON or nothing is not audio, whatever its checksum")
 
         // Reference timings shipped beside a clip. Every long voice in the kit carries a
         // `transcript.timed.json`, and the engine needs those timings to window a reference longer

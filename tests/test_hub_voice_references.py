@@ -182,6 +182,18 @@ class VoiceReferenceRouteTests(unittest.TestCase):
         # The private source identity is never published.
         self.assertNotIn("source_asset_fingerprint", payload)
 
+    def test_the_voice_name_is_a_label_not_part_of_the_asset(self) -> None:
+        first = self._stage(transcript="Exact words.", display_name="Old name").json()
+        second = self._stage(transcript="Exact words.", display_name="Yim Mengly").json()
+        self.assertEqual(first["asset_id"], second["asset_id"], "renaming a voice is the same reference")
+        metadata, _ = execution_assets.resolve_voice_reference(second["asset_id"])
+        self.assertEqual(metadata["display_name"], "Yim Mengly")
+        staged = self._stage(transcript="Exact words.", source_asset_id="studio-hub-local::voice-ea2ba2e97f62",
+                             sha256=AUDIO_SHA, display_name="Yim Mengly").json()
+        metadata, _ = execution_assets.resolve_voice_reference(staged["asset_id"])
+        self.assertEqual(metadata["source_asset_id"], "studio-hub-local::voice-ea2ba2e97f62")
+        self.assertNotIn("source_asset_id", staged, "the staging answer still publishes no source")
+
     def test_genstudio_and_local_ingestion_share_validation(self) -> None:
         local = self._stage(filename="voice.txt").json()["detail"]["code"]
         remote = self._stage(
