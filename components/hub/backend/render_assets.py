@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from components.os_metadata import is_os_metadata
+
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _ID = re.compile(r"[0-9a-f]{32}\Z")
 _OFFSET_NAME = re.compile(r"[0-9a-f]{16}\.json\Z")
@@ -361,9 +363,16 @@ def _identity(info: os.stat_result) -> tuple[int, int]:
     return info.st_dev, info.st_ino
 
 
+@contextmanager
+def _scan_entries(descriptor: int) -> Iterator[Iterator[os.DirEntry]]:
+    # Filter before validation, emptiness checks, recovery and retirement accounting.
+    with os.scandir(descriptor) as iterator:
+        yield (entry for entry in iterator if not is_os_metadata(entry.name))
+
+
 def _known_entries(parent_fd: int, allowed: set[str], *, initializing: bool = False) -> set[str]:
     entries = set()
-    with os.scandir(parent_fd) as iterator:
+    with _scan_entries(parent_fd) as iterator:
         for entry in iterator:
             if entry.name not in allowed:
                 if initializing:
@@ -865,7 +874,7 @@ class RenderAssetStore:
             os.fsync(archive_fd)
 
     def _recover_changes(self, dirs: _UploadDirs) -> None:
-        with os.scandir(dirs.changes) as iterator:
+        with _scan_entries(dirs.changes) as iterator:
             for entry in iterator:
                 if re.fullmatch(r"candidate-[0-9a-f]{32}\.json", entry.name):
                     continue
@@ -877,14 +886,14 @@ class RenderAssetStore:
                     self._complete_change(dirs, entry.name, marker, archive_fd)
                 finally:
                     os.close(archive_fd)
-        with os.scandir(dirs.changes) as iterator:
+        with _scan_entries(dirs.changes) as iterator:
             if next(iterator, None) is not None:
                 raise AssetRecoveryRequiredError("upload has unresolved change evidence")
 
     @staticmethod
     def _upload_is_pristine(dirs: _UploadDirs) -> bool:
         for descriptor in (dirs.ranges, dirs.chunks, dirs.assembly, dirs.protections, dirs.changes):
-            with os.scandir(descriptor) as iterator:
+            with _scan_entries(descriptor) as iterator:
                 if next(iterator, None) is not None:
                     return False
         return True
@@ -923,7 +932,7 @@ class RenderAssetStore:
 
     def _find_init_candidate(self, owner: str, sha256: str, size: int) -> dict[str, Any] | None:
         found = None
-        with os.scandir(self._index_fd) as iterator:
+        with _scan_entries(self._index_fd) as iterator:
             for entry in iterator:
                 if not entry.name.startswith("candidate-") or not entry.name.endswith(".json"):
                     continue
@@ -1049,7 +1058,7 @@ class RenderAssetStore:
         expected = re.compile(rf"{owner}-[0-9a-f]{{64}}\.json\Z")
         names = [f"{owner}-{sha256}.json"] if sha256 is not None else []
         if sha256 is None:
-            with os.scandir(self._index_fd) as entries:
+            with _scan_entries(self._index_fd) as entries:
                 names = [entry.name for entry in entries if expected.fullmatch(entry.name)]
         found = None
         for name in names:
@@ -1080,7 +1089,7 @@ class RenderAssetStore:
             for name in ("ranges", "chunks", "assembly", "protections", "changes"):
                 descriptors[name] = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=upload_fd)
             dirs = _UploadDirs(upload_id, self.root / "uploads" / upload_id, upload_fd, descriptors["ranges"], descriptors["chunks"], descriptors["assembly"], descriptors["protections"], descriptors["changes"])
-            with os.scandir(dirs.changes) as entries:
+            with _scan_entries(dirs.changes) as entries:
                 for entry in entries:
                     if re.fullmatch(r"candidate-[0-9a-f]{32}\.json", entry.name):
                         continue
@@ -1549,7 +1558,7 @@ class RenderAssetStore:
         reference = _validated_reference(reference_id)
         released = 0
         with self._exclusive():
-            with os.scandir(self._uploads_fd) as uploads:
+            with _scan_entries(self._uploads_fd) as uploads:
                 names = sorted(entry.name for entry in uploads)
             for name in names:
                 if _ID.fullmatch(name) is None:
@@ -1560,7 +1569,7 @@ class RenderAssetStore:
                     continue
                 try:
                     self._recover_changes(dirs)
-                    with os.scandir(dirs.protections) as protections:
+                    with _scan_entries(dirs.protections) as protections:
                         leaves = sorted(entry.name for entry in protections)
                     for leaf in leaves:
                         if re.fullmatch(r"[0-9a-f]{64}\.json", leaf) is None:
@@ -1587,7 +1596,7 @@ class RenderAssetStore:
         owner = _owner_token(owner_scope)
         grouped: dict[str, dict[str, Any]] = {}
         with self._exclusive():
-            with os.scandir(self._uploads_fd) as uploads:
+            with _scan_entries(self._uploads_fd) as uploads:
                 for entry in uploads:
                     if not _ID.fullmatch(entry.name):
                         raise AssetRecoveryRequiredError("unexpected upload directory")
@@ -1598,7 +1607,7 @@ class RenderAssetStore:
                     try:
                         self._recover_changes(dirs)
                         head = self._validated_head(dirs)
-                        with os.scandir(dirs.protections) as protections:
+                        with _scan_entries(dirs.protections) as protections:
                             for leaf in protections:
                                 if re.fullmatch(r"[0-9a-f]{64}\.json", leaf.name) is None:
                                     raise AssetRecoveryRequiredError("upload has unknown protection evidence")
@@ -1629,7 +1638,7 @@ class RenderAssetStore:
     def _newest_mtime(descriptor: int, depth: int = 2) -> float:
         """The newest touch under one upload, so a live range upload is not aged out."""
         newest = os.fstat(descriptor).st_mtime
-        with os.scandir(descriptor) as entries:
+        with _scan_entries(descriptor) as entries:
             names = [entry.name for entry in entries]
         for name in names:
             info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
@@ -1763,7 +1772,7 @@ class RenderAssetStore:
             except OSError:
                 return None
             try:
-                with os.scandir(protections) as entries:
+                with _scan_entries(protections) as entries:
                     leaves = sorted(entry.name for entry in entries)
                 for leaf in leaves:
                     if re.fullmatch(r"[0-9a-f]{64}\.json", leaf) is None:
@@ -1791,7 +1800,7 @@ class RenderAssetStore:
             except OSError:
                 return None
             try:
-                with os.scandir(changes) as entries:
+                with _scan_entries(changes) as entries:
                     for entry in entries:
                         if re.fullmatch(
                                 r"candidate-[0-9a-f]{32}\.json",
@@ -1868,7 +1877,7 @@ class RenderAssetStore:
                 return int(day["fd"])
 
             try:
-                with os.scandir(self._uploads_fd) as uploads:
+                with _scan_entries(self._uploads_fd) as uploads:
                     names = sorted(entry.name for entry in uploads)
                 for name in names:
                     if _ID.fullmatch(name) is None:

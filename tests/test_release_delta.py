@@ -174,7 +174,11 @@ class ManifestTests(Fixture):
 
     def test_ds_store_and_the_manifest_directory_are_not_listed(self) -> None:
         app = make_app(self.tmp / "ds", NEW_FILES, NEW_LINKS, readonly=False)
-        (app / R / "components/.DS_Store").write_bytes(b"junk")
+        for name in (".DS_Store", "._broker.py", ".localized", "Icon\r"):
+            (app / R / "components" / name).write_bytes(b"junk")
+        metadata_dir = app / R / "components/.Spotlight-V100"
+        metadata_dir.mkdir()
+        (metadata_dir / "index.db").write_bytes(b"metadata")
         fm.write(app)
         entries = fm.scan(app)
         self.assertEqual(entries, fm.scan(self.new))

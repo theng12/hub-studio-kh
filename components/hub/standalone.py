@@ -31,6 +31,7 @@ from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddle
 from starlette.concurrency import run_in_threadpool
 
 from components import shelved_models
+from components.os_metadata import is_os_metadata
 from . import disk_governor, output_storage, standalone_config, workstation
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, resources, routing as routing_rule
 from .backend import app_release, chat_deadline, chat_jobs, peers, release_sync, shared_voices, startup_control, transcription_jobs, update_drain, vocabulary
@@ -174,7 +175,7 @@ def _model_catalog() -> dict[str, dict[str, Any]]:
     location = os.environ.get("STUDIOHUB_MODEL_MANIFESTS", "").strip()
     root = Path(location).expanduser().resolve() if location else Path(__file__).resolve().parents[2] / "model-manifests"
     try:
-        paths = sorted(root.glob("*.json"))
+        paths = sorted(path for path in root.glob("*.json") if not is_os_metadata(path.name))
     except OSError as exc:
         raise ValueError(f"model manifest catalog is unavailable: {root}") from exc
     catalog: dict[str, dict[str, Any]] = {}
@@ -1994,6 +1995,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 }
                 row["priority_order"] = registry_view.priority_order("local")
                 row["chat_priority"] = registry_view.chat_priority("local")
+                row["assigned_image_model"] = registry_view.assigned_image_model("local")
             else:
                 snapshot = peers.cached(machine) or {}
                 # The roster's probe is the one read of this machine: it answers directly when no
@@ -2043,6 +2045,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 )
                 row["priority_order"] = remote_order
                 row["chat_priority"] = bool(remote_order and remote_order[0] == "chat")
+                # Kept on this controller, which is the one that dispatches (registry flags).
+                row["assigned_image_model"] = registry_view.assigned_image_model(machine)
             stats = measured.get(machine) or {}
             rows.append({
                 **row,
@@ -2054,6 +2058,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "disk": host.get("disk"),
                 "current_job": working_on.get(machine) or (member or {}).get("current_job"),
                 "chip": host.get("chip"),
+                # This Mac's own IPv4 interface addresses (resources.network_addresses), so the
+                # Gateway can tell a worker on the same local network from one reached over
+                # Tailscale. None from a Mac whose Hub predates it - never guessed from `address`.
+                "network": host.get("network"),
                 "jobs": stats.get("count", 0),
                 "average_seconds": stats.get("avg_s"),
                 "modalities": stats.get("modalities") or {},
@@ -2096,6 +2104,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "disk_total_gb": host.get("disk_total_gb"), "disk": host.get("disk"),
                 "current_job": working_on.get(machine) or member.get("current_job"),
                 "chip": host.get("chip"),
+                # This Mac's own IPv4 interface addresses (resources.network_addresses), so the
+                # Gateway can tell a worker on the same local network from one reached over
+                # Tailscale. None from a Mac whose Hub predates it - never guessed from `address`.
+                "network": host.get("network"),
                 "jobs": (measured.get(machine) or {}).get("count", 0),
                 "average_seconds": (measured.get(machine) or {}).get("avg_s"),
                 "modalities": modalities,
@@ -3317,6 +3329,35 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         transcription_jobs._wakeup.set()
         return JSONResponse({"ok": True, "node": wanted, "paused": paused})
 
+    @app.post("/api/hub/fleet/nodes/{node_id}/assigned-image-model")
+    async def fleet_node_assigned_image_model(node_id: str, body: dict[str, Any]) -> JSONResponse:
+        """Set the image pool's model for one Mac in this group (owner, 2026-10-24).
+
+        The Gateway decides it - Auto by the Mac's RAM, or the owner's own pick - and sends the
+        result here with its Fleet token. Only work submitted with `routing: assigned` reads it;
+        a job that names its model still runs on any Mac that has it. Kept in `machine_flags.json`
+        like the pause. `model: null` clears it. A node's own credential cannot call this.
+        """
+        from .backend import broker, registry
+        from .backend import fleet_nodes as fleet
+        if not isinstance(body, dict) or "model" not in body or not (body["model"] is None or isinstance(body["model"], str)):
+            return JSONResponse({"ok": False, "code": "VALUE_REQUIRED",
+                                 "detail": "model must be a model id or null"}, status_code=400)
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            machine = "local"
+        elif wanted in fleet._read():
+            machine = wanted
+        else:
+            return JSONResponse({"ok": False, "code": "NODE_UNKNOWN",
+                                 "detail": f"this controller has no Mac {wanted!r}"}, status_code=404)
+        try:
+            registry.set_assigned_image_model(machine, body["model"])
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "code": "BAD_SETTING", "detail": str(exc)}, status_code=400)
+        broker.wake_dispatcher()
+        return JSONResponse({"ok": True, "node": wanted, "model": registry.assigned_image_model(machine)})
+
     @app.get("/api/hub/workstation")
     def workstation_read() -> dict[str, Any]:
         """This Mac's workstation mode: its settings, what it is doing now and today's counts."""
@@ -3379,6 +3420,63 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             return JSONResponse({"ok": True, "node": wanted, "work_policy": policy})
         try:
             answer = await fleet.relay_work_policy(wanted, "POST", body)
+        except fleet.StartupRelayError as error:
+            return JSONResponse(error.body, status_code=error.status)
+        return JSONResponse(answer)
+
+    # **Remote final rendering, allowed per Mac from the Gateway (owner, 2026-10-23).** The setting
+    # is this Mac's own - it is the one that offers the capacity - so it is kept here, and the
+    # controller relays the Gateway's change to it with the Fleet token, the way Lite Mode is.
+    # Neither route is in `NODE_ALLOWED` and nothing in the app sets it.
+    _RENDER_AUTHORITY_BODY = {"accept_unqualified", "requested_by", "encode"}
+
+    def _render_authority_change(body: dict[str, Any]) -> JSONResponse:
+        if not isinstance(body, dict) or not body or set(body) - _RENDER_AUTHORITY_BODY:
+            return JSONResponse({"ok": False, "code": "BAD_SETTING", "detail":
+                                 "send accept_unqualified, requested_by and optionally encode"},
+                                status_code=400)
+        try:
+            state = installed_authority.set_opt_in(
+                body.get("accept_unqualified"), body.get("requested_by"), body.get("encode"))
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "code": "BAD_SETTING", "detail": str(exc)},
+                                status_code=400)
+        broker.wake_dispatcher()
+        return JSONResponse({"ok": True, "render_authority": state})
+
+    @app.get("/api/hub/render-authority")
+    def render_authority_read() -> dict[str, Any]:
+        """This Mac's remote-rendering opt-in: the choice, who made it, and whether it can act."""
+        return {"ok": True, "render_authority": installed_authority.opt_in_state()}
+
+    @app.post("/api/hub/render-authority")
+    def render_authority_write(body: dict[str, Any]) -> JSONResponse:
+        return _render_authority_change(body)
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/render-authority")
+    async def fleet_node_render_authority_read(node_id: str) -> JSONResponse:
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            return JSONResponse({"ok": True, "node": wanted, "render_authority":
+                                 await run_in_threadpool(installed_authority.opt_in_state)})
+        try:
+            answer = await fleet.relay_render_authority(wanted, "GET")
+        except fleet.StartupRelayError as error:
+            return JSONResponse(error.body, status_code=error.status)
+        return JSONResponse(answer)
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/render-authority")
+    async def fleet_node_render_authority_write(node_id: str, body: dict[str, Any]) -> JSONResponse:
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            answer = await run_in_threadpool(_render_authority_change, body)
+            if answer.status_code == 200:
+                return JSONResponse({**json.loads(answer.body), "node": wanted})
+            return answer
+        try:
+            answer = await fleet.relay_render_authority(wanted, "POST", body)
         except fleet.StartupRelayError as error:
             return JSONResponse(error.body, status_code=error.status)
         return JSONResponse(answer)

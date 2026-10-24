@@ -164,3 +164,43 @@ def packet_is_supported(packet: Mapping[str, Any], raw_packet: bytes,
     except (UnsupportedFinalRenderCombination, TypeError, ValueError):
         return False
     return tier_supports(selected_tier, exact_encoder, plan.tiers)
+
+
+# The encode an owner-opt-in leaf is pinned to when the setting names none. An authority is one
+# (tier, encoder) pair, exactly as an `enabled/` record is, so the opt-in names the encode and the
+# pinned compiler says which pair it builds; the label is never typed or stored by anyone.
+DEFAULT_OPT_IN_ENCODE: dict[str, Any] = {
+    "container": "mp4", "requested_codec": "h264", "requested_effort": "medium",
+    "crf": 23, "quality_cpu_preset": "medium", "bitrate_kbps": None,
+}
+
+
+def normalize_encode(value: object) -> dict[str, Any] | None:
+    """The closed encode this module advertises, or None for anything else."""
+    if type(value) is not dict or set(value) != set(_ENTRY_KEYS):
+        return None
+    if (value["container"] not in _CONTAINERS or value["requested_codec"] not in _CODECS
+            or value["requested_effort"] not in _EFFORTS
+            or value["bitrate_kbps"] is not None
+            or (value["crf"], value["quality_cpu_preset"]) not in _QUALITY_PAIRS
+            or type(value["crf"]) is not int):
+        return None
+    return {name: value[name] for name in _ENTRY_KEYS}
+
+
+def primary_pair(encode: Mapping[str, Any]) -> tuple[str, str] | None:
+    """The (tier label, exact encoder) the pinned compiler runs first for this encode.
+
+    None when the compiler refuses the combination, the first tier would drop requested
+    features, or its argv names no output encoder.
+    """
+    try:
+        plan = plan_for(encode)
+    except (UnsupportedFinalRenderCombination, TypeError, ValueError, KeyError):
+        return None
+    tier = plan.tiers[0]
+    if tier.condition != "always" or tier.drops_burned_in_features or "-c:v" not in tier.argv:
+        return None
+    # An input decoder option can also be spelled -c:v; the output encoder is the last one.
+    index = len(tier.argv) - 1 - tier.argv[::-1].index("-c:v")
+    return (tier.label, tier.argv[index + 1]) if index + 1 < len(tier.argv) else None

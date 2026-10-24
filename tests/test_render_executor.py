@@ -21,6 +21,7 @@ import psutil
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from components.hub.backend import render_encode  # noqa: E402
 from components.hub.backend.final_render_compiler import EncodeTier, FinalRenderPlan  # noqa: E402
 from components.hub.backend.render_hash_v1 import render_hash  # noqa: E402
 from components.hub.backend.render_executor import (  # noqa: E402
@@ -826,6 +827,111 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.write_record("enabled", "m4-16gb.json", value=before)
         self.assertEqual(loader.snapshot().qualification.qualification_digest,
                          candidate.qualification_digest)
+
+    async def run_opt_in_render(self, *, receipt_already_exists: bool = False):
+        """One real executor run on an owner-opted-in authority (no qualification intent)."""
+        loader, _document, packet = self.candidate_loader()
+        loader.set_opt_in(True, "owner@gateway")
+        raw = self.qualification_request(packet)
+        qualification = loader.resolve(packet)
+        job_id = str(uuid4())
+        events: list[str] = []
+        runtime = FakeRuntime(self.root, raw, qualification, events)
+        runtime.job.update(
+            id=job_id, owner_scope="site-a:node-a:fleet", purpose="production",
+            qualification_digest=qualification.qualification_digest)
+        asset_files = {}
+        for index, row in enumerate(packet["manifest"]):
+            path = self.root / f"asset-{index}"
+            path.write_bytes(self.mp4_bytes() if row["logical_id"] == "base"
+                             else self.wav_bytes())
+            asset_files[f"{index + 1:032x}"] = path
+        tier_label, encoder = render_encode.primary_pair(render_encode.DEFAULT_OPT_IN_ENCODE)
+        expected = loader.receipt_document_for(qualification.document)
+        receipt_path = self.data_root / "render-authority/receipts" / (
+            InstalledRenderAuthorityLoader._receipt_name(
+                expected["hardware_class"], job_id, expected["qualification_digest"]))
+        if receipt_already_exists:
+            receipt_path.parent.mkdir(mode=0o700)
+            receipt_path.write_bytes(b"{}")
+
+        def compile_plan(_packet_raw, local_assets, output_path):
+            return FinalRenderPlan(
+                tiers=(EncodeTier(tier_label, (
+                    "-i", local_assets["base"], "-i", local_assets["audio"],
+                    "-c:v", encoder, output_path)),),
+                requested_burn_ins=(), input_uses=(),
+            )
+
+        spawned = asyncio.Event()
+
+        async def spawn(*_argv, **_kwargs):
+            spawned.set()
+            return FakeProcess(Path(runtime.claim["output_path"]))
+
+        def validate(context, authority, command_digest):
+            output = Path(context.output_path).read_bytes()
+            return ValidatedOutputReceipt(
+                owner_scope=context.owner_scope, hub_job_id=context.hub_job_id,
+                attempt_id=context.attempt_id,
+                accepted_request_sha256=context.accepted_request_sha256,
+                receipt_digest="5" * 64, output_sha256=hashlib.sha256(output).hexdigest(),
+                output_size_bytes=len(output),
+                profile_digest=authority.qualification.profile_digest,
+                tools_digest=authority.qualification.tools_digest,
+                compiler_digest=authority.qualification.compiler_digest,
+                qualification_digest=authority.qualification.qualification_digest,
+                generated_command_digest=command_digest,
+                selected_tier=authority.selected_tier, feature_losses=(),
+            )
+
+        executor = RenderExecutor(
+            runtime, FakeAssets(asset_files), authority=loader, machine="local",
+            broker_api=FakeBroker(events), compile_plan=compile_plan, spawn=spawn,
+            output_validator=validate,
+            process_identity=lambda process, executable: ProcessIdentity(
+                pid=process.pid, process_group_id=process.pid,
+                start_token=f"boot:1:{executable}"),
+            group_exists=lambda _pgid: False, available_memory=lambda: 4_000_000_000,
+            free_bytes=lambda _path: 9_000_000,
+        )
+        with mock.patch.object(RenderExecutor, "_process_tree_rss",
+                               staticmethod(lambda _pid: 4_096)):
+            self.assertTrue(await executor.dispatch_ready())
+            await spawned.wait()
+            await executor.stop()
+        return events, qualification, expected, job_id, receipt_path
+
+    async def test_opt_in_run_writes_its_own_real_measured_receipt(self) -> None:
+        events, qualification, expected, job_id, path = await self.run_opt_in_render()
+
+        self.assertTrue(qualification.production_eligible)
+        self.assertEqual(qualification.document["opt_in"]["accepted_by"], "owner@gateway")
+        self.assertNotIn("measured", qualification.document,
+                         "the authority itself never claims a measurement")
+        self.assertIn("publish", events)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        receipt = json.loads(path.read_bytes())
+        wall = receipt["measured"]["wall_seconds"]
+        self.assertIs(type(wall), int)
+        self.assertGreaterEqual(wall, 1)
+        self.assertEqual(receipt, {
+            **expected, "intent_id": job_id,
+            "measured": {
+                "peak_rss_bytes": 4_096, "wall_seconds": wall,
+                "min_free_bytes": 9_000_000, "output_bytes": len(b"validated-output"),
+                "hub_job_id": job_id, "receipt_digest": "5" * 64,
+            },
+        })
+        self.assertFalse(receipt["production_eligible"])
+
+    async def test_opt_in_run_without_a_durable_receipt_is_not_published(self) -> None:
+        events, _qualification, _expected, _job_id, path = await self.run_opt_in_render(
+            receipt_already_exists=True)
+
+        self.assertNotIn("publish", events)
+        self.assertIn("output_validation_failed", events)
+        self.assertEqual(path.read_bytes(), b"{}", "an existing receipt is never replaced")
 
     def test_strict_reader_refuses_links_loose_modes_and_oversize(self) -> None:
         from components.hub.backend import render_authority_files as files

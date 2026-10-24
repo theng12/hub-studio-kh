@@ -633,6 +633,17 @@ FLEET_ALLOWED = (
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/workstation$"),
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/work-policy$"),
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/work-policy$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/assigned-image-model$"),
+    # **Remote final rendering, allowed per Mac from the Gateway (owner, 2026-10-23).** The
+    # controller relays the Gateway's choice (`.../fleet/nodes/{id}/render-authority`) to the
+    # Mac's own `/api/hub/render-authority`, which keeps it and offers the capacity as an honest
+    # `accepted_unqualified` authority. The body is closed (accept_unqualified, requested_by,
+    # encode) and the Mac records who asked. Not in `NODE_ALLOWED`: a leaf's own credential
+    # cannot grant another Mac's rendering.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/render-authority$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/render-authority$"),
+    ("GET", r"^/api/hub/render-authority$"),
+    ("POST", r"^/api/hub/render-authority$"),
     # **Installing a model from the Gateway (owner decision 2026-10-04: the owner's Gateway may make a
     # Mac install a model).** Only the download and its status, each through the fleet path, which
     # refuses a shelved model, an unknown package, a full disk and a model this Mac has too little

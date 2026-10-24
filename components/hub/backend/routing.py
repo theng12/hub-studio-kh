@@ -13,12 +13,15 @@ from __future__ import annotations
 POOL = "pool"
 #: Keep the Hub Mac as the control plane and wait for a Mac that is not this one.
 REMOTE = "remote"
+#: Only Macs the Gateway's image pool assigned this job's model to (owner, 2026-10-24). Read by
+#: the broker, which knows the model; see ``registry.assigned_image_model``.
+ASSIGNED = "assigned"
 #: Pin one Studio, spelled ``studio:<id>``.
 STUDIO_PREFIX = "studio:"
 #: Pin one Mac, spelled ``machine:<id>``. ``local`` means this Mac.
 MACHINE_PREFIX = "machine:"
 
-_RULE = "routing must be pool, remote, studio:<id> or machine:<id>"
+_RULE = "routing must be pool, remote, assigned, studio:<id> or machine:<id>"
 
 
 def parse(value: object) -> tuple[str, str | None]:
@@ -31,7 +34,7 @@ def parse(value: object) -> tuple[str, str | None]:
     if value is None or value == "":
         return POOL, None
     routing = str(value).strip()
-    if routing in {POOL, REMOTE}:
+    if routing in {POOL, REMOTE, ASSIGNED}:
         return routing, None
     for prefix in (STUDIO_PREFIX, MACHINE_PREFIX):
         if routing.startswith(prefix):

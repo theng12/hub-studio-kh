@@ -24,7 +24,7 @@ import uuid
 import psutil
 
 from components import host_memory
-from . import render_authority_files
+from . import render_authority_files, render_encode
 from .final_render_compiler import compile_final_render_packet
 from .render_hash_v1 import decode_render_json
 from .render_jobs import (
@@ -63,6 +63,9 @@ class InstalledRenderAuthority:
     bounds: ResourceBounds
     font_support: bool
     profile_execution_bounds: dict[str, Any]
+    # Present only for an owner-opted-in, unmeasured authority: who accepted it and when. A
+    # measured or enabled authority never carries it.
+    opt_in: dict[str, Any] | None = None
 
 
 class _UncertainProcessOutcome(RuntimeError):
@@ -167,13 +170,27 @@ def _hardware_class(identity: dict[str, Any]) -> str:
     return f"{chip}-{memory}gb"
 
 
+OPT_IN_PROVENANCE = "owner-opt-in-unqualified"
+
+
 class InstalledRenderAuthorityLoader:
     """Installed tool evidence plus the operator's runtime authority records.
 
     ``<data root>/render-authority/enabled/<hardware_class>.json`` present for this Mac's
     own hardware class is what grants production. ``qualify.json`` is a time-windowed,
     one-use intent to run one qualification job. Absence or mismatch means no authority.
+
+    A third, weaker grant exists only when the owner turned it on through the controller's
+    settings relay: ``opt-in/unqualified.json``. It makes the installed, identity-checked tools
+    offer capacity for one named encode as ``accepted_unqualified`` - never as a measured
+    qualification. The memory floor, tool identity and tier checks are the same ones; what is
+    missing is the measurement, and it stays missing: the first real render writes the first
+    real receipt (see ``receipt_document_for``).
     """
+
+    _UNQUALIFIED_FORMAT = "studio.render.accepted-unqualified.v1"
+    _OPT_IN_FORMAT = "studio.render.accept-unqualified-setting.v1"
+    _OPT_IN_KEYS = {"format", "enabled", "encode", "set_by", "set_at"}
 
     _RECEIPT_KEYS = {
         "format", "production_eligible", "profile_digest", "tools_digest",
@@ -181,6 +198,7 @@ class InstalledRenderAuthorityLoader:
         "exact_encoder", "font_support", "bounds", "files",
     }
     _ENABLED_KEYS = _RECEIPT_KEYS | {"intent_id", "measured"}
+    _UNQUALIFIED_KEYS = _RECEIPT_KEYS | {"opt_in"}
     _MEASURED_KEYS = {
         "peak_rss_bytes", "wall_seconds", "min_free_bytes", "output_bytes",
         "hub_job_id", "receipt_digest",
@@ -369,9 +387,16 @@ class InstalledRenderAuthorityLoader:
         *, production: bool = False,
     ) -> InstalledRenderAuthority | None:
         try:
+            unqualified = set(document) == self._UNQUALIFIED_KEYS
             if (
-                set(document) not in (self._RECEIPT_KEYS, self._ENABLED_KEYS)
-                or document["format"] != "studio.render.qualification-receipt.v1"
+                set(document) not in (
+                    self._RECEIPT_KEYS, self._ENABLED_KEYS, self._UNQUALIFIED_KEYS)
+                or document["format"] != (
+                    self._UNQUALIFIED_FORMAT if unqualified
+                    else "studio.render.qualification-receipt.v1")
+                or (unqualified and not self._opt_in_evidence(document["opt_in"]))
+                # An unqualified document is only ever an opt-in authority: it can never be the
+                # contents of an enabled/ record, because that record's key set is closed.
                 # Always false: it sits inside qualification_digest. Production comes only
                 # from the record's placement in enabled/, never from this field.
                 or document["production_eligible"] is not False
@@ -464,9 +489,26 @@ class InstalledRenderAuthorityLoader:
                 exact_encoder=str(document["exact_encoder"]), bounds=bounds,
                 font_support=document["font_support"] is True,
                 profile_execution_bounds=json.loads(_canonical(profile_bounds)),
+                opt_in=dict(document["opt_in"]) if unqualified else None,
             )
         except (OSError, TypeError, ValueError, KeyError):
             return None
+
+    @staticmethod
+    def _opt_in_evidence(value: Any) -> bool:
+        """Who accepted the unmeasured authority and when; evidence, never part of the digest."""
+        try:
+            return (
+                type(value) is dict
+                and set(value) == {"provenance", "accepted_by", "accepted_at"}
+                and value["provenance"] == OPT_IN_PROVENANCE
+                and type(value["accepted_by"]) is str
+                and 0 < len(value["accepted_by"]) <= 120
+                and value["accepted_by"].isascii() and value["accepted_by"].isprintable()
+                and type(value["accepted_at"]) is int and value["accepted_at"] > 0
+            )
+        except (KeyError, TypeError):
+            return False
 
     def _enabled(self) -> dict[str, Any] | None:
         hardware_class = self._own_class()
@@ -484,7 +526,11 @@ class InstalledRenderAuthorityLoader:
 
     def snapshot(self) -> InstalledRenderAuthority | None:
         document = self._enabled()
-        return self._authority(document, production=True) if document is not None else None
+        if document is not None:
+            return self._authority(document, production=True)
+        # A valid enabled/ record always wins; the weaker, unmeasured grant is only ever what
+        # is left when there is no measured one.
+        return self._unqualified_authority()
 
     def _intent(self) -> dict[str, Any] | None:
         intent = self._record(self._INTENT_KEYS, "qualify.json")
@@ -506,8 +552,16 @@ class InstalledRenderAuthorityLoader:
             return None
         return intent
 
-    def _intent_document(self, intent: dict[str, Any]) -> dict[str, Any] | None:
-        """Hub, not the operator, derives everything but the run settings from installed files."""
+    def _installed_document(
+        self, selected_tier: str, exact_encoder: str, font_support: bool,
+        min_available_memory_bytes: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Hub, not the operator, derives everything but the run settings from installed files.
+
+        The memory floor defaults to the profile's own process-tree limit: the Hub never
+        offers capacity to a Mac that could not hold the most the profile allows one render
+        to use.
+        """
         hardware_class = self._own_class()
         if hardware_class is None:
             return None
@@ -526,13 +580,15 @@ class InstalledRenderAuthorityLoader:
                 "production_eligible": False,
                 "profile_digest": profile.digest, "tools_digest": tools.digest,
                 "compiler_digest": compiler.digest, "hardware_class": hardware_class,
-                "selected_tier": intent["selected_tier"],
-                "exact_encoder": intent["exact_encoder"],
-                "font_support": intent["font_support"],
+                "selected_tier": selected_tier,
+                "exact_encoder": exact_encoder,
+                "font_support": font_support,
                 "bounds": {
                     "max_rss_bytes": profile_bounds["process_tree_rss_limit_bytes"],
                     "max_wall_seconds": profile_bounds["cumulative_wall_seconds"],
-                    "min_available_memory_bytes": intent["min_available_memory_bytes"],
+                    "min_available_memory_bytes": (
+                        profile_bounds["process_tree_rss_limit_bytes"]
+                        if min_available_memory_bytes is None else min_available_memory_bytes),
                     "output_limit_bytes": profile_bounds["output_limit_bytes"],
                 },
                 "files": {
@@ -545,6 +601,124 @@ class InstalledRenderAuthorityLoader:
             return None
         document["qualification_digest"] = self._record_digest(document)
         return document
+
+    def _intent_document(self, intent: dict[str, Any]) -> dict[str, Any] | None:
+        return self._installed_document(
+            intent["selected_tier"], intent["exact_encoder"], intent["font_support"],
+            intent["min_available_memory_bytes"])
+
+    # --- owner opt-in: accepted_unqualified -------------------------------------------------
+
+    def _opt_in_record(self) -> dict[str, Any] | None:
+        """The persisted setting, or None when it is absent, unsafe or malformed (= off)."""
+        record = self._record(self._OPT_IN_KEYS, "opt-in", "unqualified.json")
+        try:
+            if (
+                record is None
+                or record["format"] != self._OPT_IN_FORMAT
+                or type(record["enabled"]) is not bool
+                or render_encode.normalize_encode(record["encode"]) is None
+                or type(record["set_by"]) is not str
+                or not 0 < len(record["set_by"]) <= 120
+                or not record["set_by"].isascii() or not record["set_by"].isprintable()
+                or type(record["set_at"]) is not int or record["set_at"] < 1
+            ):
+                return None
+        except (KeyError, TypeError):
+            return None
+        return record
+
+    def _unqualified_authority(
+        self, packet: dict[str, Any] | None = None,
+    ) -> InstalledRenderAuthority | None:
+        """Capacity the owner accepted without a measurement, or None while the setting is off."""
+        record = self._opt_in_record()
+        if record is None or record["enabled"] is not True:
+            return None
+        pair = render_encode.primary_pair(record["encode"])
+        if pair is None:
+            return None
+        # font_support is False: the shipped profile is a no-font combination set, and a flag
+        # nobody measured must not claim more than the profile itself does.
+        document = self._installed_document(pair[0], pair[1], False)
+        if document is None:
+            return None
+        document["format"] = self._UNQUALIFIED_FORMAT
+        document["opt_in"] = {
+            "provenance": OPT_IN_PROVENANCE, "accepted_by": record["set_by"],
+            "accepted_at": record["set_at"],
+        }
+        # The evidence is outside the digest, so re-saving the setting never changes the
+        # authority a queued job was accepted under.
+        document["qualification_digest"] = self._record_digest(document)
+        return self._authority(document, packet, production=True)
+
+    def opt_in_state(self) -> dict[str, Any]:
+        """What the setting says now, and whether this Mac can act on it."""
+        record = self._opt_in_record()
+        enabled = record is not None and record["enabled"] is True
+        authority = self._unqualified_authority() if enabled else None
+        return {
+            "accept_unqualified": enabled,
+            "provenance": OPT_IN_PROVENANCE,
+            "set_by": record["set_by"] if record else None,
+            "set_at": record["set_at"] if record else None,
+            "encode": dict(record["encode"]) if record else None,
+            "default_encode": dict(render_encode.DEFAULT_OPT_IN_ENCODE),
+            "selected_tier": authority.selected_tier if authority else None,
+            "exact_encoder": authority.exact_encoder if authority else None,
+            # True only when the installed tools, hardware class and encode all pass the same
+            # checks a measured authority passes; a Mac that cannot act on it says so here.
+            "effective": authority is not None,
+        }
+
+    def set_opt_in(self, enabled: object, requested_by: object,
+                   encode: object = None) -> dict[str, Any]:
+        """Persist the owner's choice. Raises ``ValueError`` with a sentence for the caller."""
+        if type(enabled) is not bool:
+            raise ValueError("accept_unqualified must be true or false")
+        if self.data_root is None:
+            raise ValueError("this Hub has no data folder to keep the setting in")
+        who = requested_by if isinstance(requested_by, str) else ""
+        if not (0 < len(who) <= 120 and who.isascii() and who.isprintable()):
+            raise ValueError(
+                "requested_by must name who changed this (1-120 printable ASCII characters)")
+        previous = self._opt_in_record()
+        if encode is not None:
+            chosen = render_encode.normalize_encode(encode)
+            if chosen is None:
+                raise ValueError("encode is not one of the combinations the pinned compiler offers")
+        else:
+            chosen = (dict(previous["encode"]) if previous
+                      else dict(render_encode.DEFAULT_OPT_IN_ENCODE))
+        if enabled and render_encode.primary_pair(chosen) is None:
+            raise ValueError("the pinned compiler cannot build that encode without dropping features")
+        record = {
+            "format": self._OPT_IN_FORMAT, "enabled": enabled, "encode": chosen,
+            "set_by": who, "set_at": int(self._clock()),
+        }
+        try:
+            render_authority_files.write_record_replace(
+                self.data_root, "opt-in", "unqualified.json", _canonical(record),
+                expected_uid=self._uid)
+        except (OSError, ValueError) as exc:
+            raise ValueError("the setting could not be saved on this Mac") from exc
+        return self.opt_in_state()
+
+    def receipt_document_for(self, document: dict[str, Any]) -> dict[str, Any] | None:
+        """The measured-receipt form of an opted-in authority, for the run that just proved it.
+
+        Same tier, encoder, bounds and tool pins; the receipt format and its own digest. The
+        opt-in evidence stays on the job row - the receipt's key set is closed so it can later
+        be copied into ``enabled/`` exactly as a qualification receipt can.
+        """
+        if (type(document) is not dict or set(document) != self._UNQUALIFIED_KEYS
+                or document["format"] != self._UNQUALIFIED_FORMAT):
+            return None
+        receipt = {key: document[key] for key in self._RECEIPT_KEYS}
+        receipt["format"] = "studio.render.qualification-receipt.v1"
+        receipt["qualification_digest"] = self._record_digest(receipt)
+        return receipt
 
     def _candidate(
         self, packet: dict[str, Any] | None = None, *, open_only: bool = True,
@@ -567,6 +741,10 @@ class InstalledRenderAuthorityLoader:
         if (production is not None
                 and production.qualification.profile_digest == packet["recipe"]["profile_digest"]):
             return production.qualification
+        unqualified = self._unqualified_authority(packet) if enabled is None else None
+        if (unqualified is not None
+                and unqualified.qualification.profile_digest == packet["recipe"]["profile_digest"]):
+            return unqualified.qualification
         # A qualification job may claim after its acceptance window closes; the one-use
         # intent was spent at acceptance under the permit, so only the installed evidence
         # and the intent's own settings are re-checked here.
@@ -1237,20 +1415,36 @@ class RenderExecutor:
         self, context: RenderExecutionContext, receipt: ValidatedOutputReceipt,
         measured: dict[str, Any], started: float,
     ) -> bool:
-        """Leave one durable receipt before a qualification output is published."""
+        """Leave one durable receipt before a qualification or opt-in output is published.
+
+        A qualification run writes the receipt its one-use intent was spent on. A run on an
+        owner-opted-in authority writes the receipt the authority never had: the measured
+        numbers of this very render, keyed by the Hub job id. Nothing else gets one.
+        """
         permit = context.qualification_permit
         document = context.qualification.document
         writer = getattr(self._authority, "write_receipt", None)
-        if context.purpose != "qualification":
+        opted_in = (type(document) is dict
+                    and document.get("format")
+                    == InstalledRenderAuthorityLoader._UNQUALIFIED_FORMAT)
+        if context.purpose != "qualification" and not opted_in:
             return True
-        if permit is None or document is None or writer is None:
-            return False
+        if opted_in:
+            convert = getattr(self._authority, "receipt_document_for", None)
+            document = convert(document) if callable(convert) else None
+            intent_id = context.hub_job_id
+            if document is None or writer is None:
+                return False
+        else:
+            if permit is None or document is None or writer is None:
+                return False
+            intent_id = permit.vector_id
         wall_seconds = math.ceil(self._monotonic() - started)
         if wall_seconds > document["bounds"]["max_wall_seconds"]:
             # Never clamp measured evidence: a run whose post-validation wall exceeds its
             # declared bound is an honest failed qualification, not a shortened receipt.
             return False
-        return writer(document, permit.vector_id, {
+        return writer(document, intent_id, {
             "peak_rss_bytes": measured["peak_rss_bytes"],
             "wall_seconds": wall_seconds,
             "min_free_bytes": measured["min_free_bytes"],
@@ -1626,7 +1820,7 @@ class RenderExecutor:
                         "slots": int(available), "slots_total": 1,
                     },
                 })
-        return {
+        row = {
             "operation": "video.final_render",
             "physical_machine_id": self.machine,
             "hardware_class": (
@@ -1652,3 +1846,8 @@ class RenderExecutor:
             "available_capacity": {"slots": int(ready), "slots_total": 1},
             "qualification_candidates": qualification_candidates,
         }
+        if authority is not None and authority.opt_in is not None:
+            # The one extra key, present only while the owner's opt-in is the authority. A Mac
+            # with the setting off publishes exactly the row an unmodified Hub does.
+            row["accepted_unqualified"] = dict(authority.opt_in)
+        return row

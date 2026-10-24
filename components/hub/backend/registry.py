@@ -354,6 +354,32 @@ def set_preferred_reservation(machine: str, modality: str, owner: str,
     _write_flags(flags)
 
 
+def assigned_image_model(machine: str) -> str | None:
+    """The image model the Gateway's image pool assigned to this Mac, or None (no assignment).
+
+    Only work submitted with ``routing: assigned`` reads it: a job that names its model directly
+    still runs on any Mac that has the model (owner, 2026-10-24).
+    """
+    row = load_flags().get(machine, {})
+    value = row.get("assigned_image_model") if isinstance(row, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def set_assigned_image_model(machine: str, model: str | None) -> None:
+    """Set (or clear, with None) the image pool's model for this Mac."""
+    if model is not None and (not isinstance(model, str) or not model.strip() or len(model) > 300):
+        raise ValueError("assigned image model must be a model id or null")
+    flags = dict(load_flags())
+    saved = flags.get(machine, {})
+    row = dict(saved) if isinstance(saved, dict) else {}
+    if model is None:
+        row.pop("assigned_image_model", None)
+    else:
+        row["assigned_image_model"] = model.strip()
+    flags[machine] = row
+    _write_flags(flags)
+
+
 def set_machine_enabled(machine: str, enabled: bool):
     global _flags_cache
     flags = dict(load_flags())

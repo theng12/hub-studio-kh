@@ -66,6 +66,15 @@ _RENDER_CAPABILITY_KEYS = frozenset((
     "bounds", "profile_execution_bounds", "production_eligible", "production_enabled",
     "available_capacity", "qualification_candidates",
 ))
+# The one key an owner-opted-in leaf adds (render_executor.RenderExecutor.capability). It is
+# optional by design, and that is the whole mixed-fleet story: a leaf with the setting off
+# publishes exactly _RENDER_CAPABILITY_KEYS, byte for byte what an unmodified Hub sends, so this
+# controller and an older one both accept it; a controller of this build accepts either shape,
+# so an older leaf keeps working; only an opted-in leaf under an older controller is dropped
+# from the render roster (as "no render worker here"), which is the same zero capacity it had
+# before the opt-in existed.
+_RENDER_OPT_IN_KEY = "accepted_unqualified"
+_RENDER_OPT_IN_EVIDENCE_KEYS = frozenset(("provenance", "accepted_by", "accepted_at"))
 _RENDER_CANDIDATE_KEYS = frozenset((
     "vector_id", "hardware_class", "profile_digest", "tools_digest", "compiler_digest",
     "qualification_digest", "selected_tier", "exact_encoder", "font_support", "bounds",
@@ -1112,10 +1121,29 @@ def _render_capability(value: object) -> dict[str, Any] | None:
     keys are closed here so a malformed or older answer can never reach the controller's
     capabilities as a worker row.
     """
-    if not isinstance(value, dict) or set(value) != _RENDER_CAPABILITY_KEYS:
+    if not isinstance(value, dict):
+        return None
+    opted_in = set(value) == _RENDER_CAPABILITY_KEYS | {_RENDER_OPT_IN_KEY}
+    if not opted_in and set(value) != _RENDER_CAPABILITY_KEYS:
         return None
     if value.get("operation") != "video.final_render":
         return None
+    if opted_in:
+        # An unmeasured authority is still a production-shaped row (that is what lets the
+        # Gateway select it), so the evidence of who accepted it has to be well formed and the
+        # row has to actually be the production row it claims to be.
+        evidence = value[_RENDER_OPT_IN_KEY]
+        if (not isinstance(evidence, dict)
+                or set(evidence) != _RENDER_OPT_IN_EVIDENCE_KEYS
+                or evidence["provenance"] != "owner-opt-in-unqualified"
+                or not isinstance(evidence["accepted_by"], str)
+                or not 0 < len(evidence["accepted_by"]) <= 120
+                or type(evidence["accepted_at"]) is not int or evidence["accepted_at"] < 1
+                or value.get("production_eligible") is not True
+                or value.get("production_enabled") is not True
+                or not isinstance(value.get("selected_tier"), str)
+                or not isinstance(value.get("exact_encoder"), str)):
+            return None
     if (not isinstance(value.get("physical_machine_id"), str)
             or not value["physical_machine_id"]
             or type(value.get("font_support")) is not bool
@@ -1888,6 +1916,64 @@ async def relay_work_policy(node_id: str, method: str, body: object = None, *,
         from . import peers
         peers.invalidate(wanted)
     return {"ok": True, "node": wanted, "work_policy": answer}
+
+
+async def relay_render_authority(node_id: str, method: str, body: object = None, *,
+                                client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Read or change one joined Mac's final-render opt-in **on that Mac**.
+
+    The setting is the node's own (it is the one that offers the capacity), so it is written
+    there with this controller's Fleet token and kept nowhere else - no SSH, no new port, the
+    same dial-then-check-in-queue path as Lite Mode and work priority. Raises `StartupRelayError`.
+    """
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        raise StartupRelayError(404, {"ok": False, "code": "UNKNOWN_NODE",
+                                      "detail": f"this controller has no joined Mac {node_id!r}"})
+    if method not in {"GET", "POST"}:
+        raise ValueError("render-authority relay supports GET or POST")
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        response = await client.request(
+            method, f"{node.get('address') or ''}/api/hub/render-authority",
+            json=body if method == "POST" else None, timeout=PROBE_TIMEOUT)
+    except httpx.HTTPError as exc:
+        held = await _queue_for_unreachable(wanted, method, "/api/hub/render-authority",
+                                            payload=body if method == "POST" else None,
+                                            kind="render_authority")
+        if isinstance(held, StartupRelayError):
+            raise held from exc
+        if held is not None:
+            return {**held, "node": wanted}
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
+                                      "reason": _unreachable_reason(exc),
+                                      "detail": "that Mac did not answer, so its remote "
+                                                "rendering setting did not change"}) from exc
+    finally:
+        if owned:
+            await client.aclose()
+    try:
+        answer = response.json()
+    except ValueError:
+        answer = {}
+    if response.status_code == 400 and isinstance(answer, dict):
+        raise StartupRelayError(400, answer)
+    if response.status_code in (401, 403, 404, 405):
+        raise StartupRelayError(409, {
+            "ok": False, "code": "RENDER_AUTHORITY_UNSUPPORTED",
+            "detail": "that Mac must update and restart Studio Hub before remote rendering "
+                      "can be allowed on it"})
+    if not response.is_success or not isinstance(answer, dict):
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_ERROR",
+                                      "detail": f"that Mac answered HTTP {response.status_code}"})
+    if method == "POST":
+        # Read the leaf's row again now, so the roster does not keep advertising the old
+        # answer for the rest of its refresh interval.
+        await _refresh_render_capability(node)
+    return {"ok": True, "node": wanted, "render_authority": answer.get("render_authority")}
 
 
 #: A relayed test transcription waits for the node's answer: the node's own Subtitle deadline

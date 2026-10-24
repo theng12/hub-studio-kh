@@ -11,6 +11,7 @@ process RSS + host memory pressure is the honest picture.
 """
 
 from functools import lru_cache
+import ipaddress
 import json
 import shutil
 import socket
@@ -100,6 +101,33 @@ def hardware_identity() -> dict:
     }
 
 
+def network_addresses() -> list[dict]:
+    """This Mac's IPv4 interface addresses, for classifying who shares a local network.
+
+    Facts only (interface, address, prefix length); whether one is a private LAN or Tailscale's
+    100.64.0.0/10 is the reader's call. Loopback and link-local addresses say nothing about a
+    shared network and are left out.
+    """
+    try:
+        interfaces = psutil.net_if_addrs()
+    except (OSError, psutil.Error):
+        return []
+    rows: list[dict] = []
+    for name in sorted(interfaces):
+        for entry in interfaces[name]:
+            if entry.family != socket.AF_INET or not entry.address or not entry.netmask:
+                continue
+            try:
+                interface = ipaddress.ip_interface(f"{entry.address}/{entry.netmask}")
+            except ValueError:
+                continue
+            if interface.ip.is_loopback or interface.ip.is_link_local:
+                continue
+            rows.append({"interface": name, "address": str(interface.ip),
+                         "prefix_length": interface.network.prefixlen})
+    return rows[:16]
+
+
 def host_stats() -> dict:
     vm = psutil.virtual_memory()
     stats = {
@@ -111,6 +139,7 @@ def host_stats() -> dict:
         "percent": vm.percent,
         "cpu_percent": psutil.cpu_percent(interval=None),
         "cpu_count": psutil.cpu_count(),
+        "network": network_addresses(),
     }
     try:
         la1, la5, la15 = psutil.getloadavg()

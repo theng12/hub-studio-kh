@@ -17,7 +17,7 @@ Layout, under ``Contents/Resources/file-manifest/`` (the directory is not itself
 A TSV line is ``type<TAB>x<TAB>size<TAB>sha256-or-link-target<TAB>path``, sorted by path:
 ``f`` a regular file, ``l`` a symlink (size 0, the target in place of the digest). ``x`` is the
 owner-execute bit and **only** that bit: an installed app is 0444/0555 and the same file in a DMG
-is 0644/0755, so full modes would make every file "changed". ``.DS_Store`` is never listed.
+is 0644/0755, so full modes would make every file "changed". OS metadata is never listed.
 """
 from __future__ import annotations
 
@@ -30,10 +30,11 @@ import stat
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from components.os_metadata import is_os_metadata
+
 SCHEMA = "studiohub.file-manifest.v1"
 DIR_REL = "Contents/Resources/file-manifest"
 INDEX_NAME = "index.json"
-IGNORED_NAMES = frozenset({".DS_Store"})
 RUNTIMES_PREFIX = "Contents/Resources/runtimes/"
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _GROUP = re.compile(r"^(?:core|runtime-[A-Za-z0-9_.+-]{1,64})$")
@@ -83,7 +84,7 @@ def walk(app_root: Path) -> Iterable[tuple[str, os.stat_result, Path]]:
     """Every file and symlink under the bundle (relative posix path, lstat, absolute path).
 
     Symlinks are reported, never followed - a symlinked directory is one entry, not its contents.
-    The manifest directory and ``.DS_Store`` are skipped.
+    The manifest directory and OS metadata are skipped.
     """
     root = str(app_root)
     skip = (root.rstrip("/") + "/" + DIR_REL)
@@ -91,13 +92,14 @@ def walk(app_root: Path) -> Iterable[tuple[str, os.stat_result, Path]]:
         if directory == skip:
             dirnames[:] = []
             continue
+        dirnames[:] = [name for name in dirnames if not is_os_metadata(name)]
         for name in list(dirnames):
             full = os.path.join(directory, name)
             if os.path.islink(full):
                 dirnames.remove(name)
                 filenames.append(name)
         for name in filenames:
-            if name in IGNORED_NAMES:
+            if is_os_metadata(name):
                 continue
             full = os.path.join(directory, name)
             info = os.lstat(full)

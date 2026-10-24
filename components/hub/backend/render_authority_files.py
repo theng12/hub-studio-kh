@@ -179,3 +179,64 @@ def write_record_once(data_root: Path, directory: str, filename: str, raw: bytes
             os.close(directory_fd)
     finally:
         os.close(authority_fd)
+
+
+def _private_child(parent_fd: int, name: str, expected_uid: int) -> int:
+    """Open (creating owner-only when absent) a child that must be a private directory."""
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    fd = os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
+    try:
+        _validate_directory(os.fstat(fd), expected_uid=expected_uid, policy="private")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def write_record_replace(data_root: Path, directory: str, filename: str, raw: bytes,
+                         *, expected_uid: int) -> None:
+    """Publish ``render-authority/<directory>/<filename>`` (0600), replacing any earlier copy.
+
+    Only for a setting the Hub itself owns (``opt-in/unqualified.json``); evidence such as a
+    receipt goes through ``write_record_once`` and is never replaced. The authority directory
+    and ``directory`` are created owner-only when absent and must already be owner-only when
+    present. The bytes are fsynced to a private temp file and one atomic rename publishes
+    them, so a crash leaves either the old record or the new one and never a partial.
+    """
+    final = _plain_name(filename)
+    temp = f".{final}.{secrets.token_hex(8)}.tmp"
+    descriptors: list[int] = []
+    try:
+        parent_fd = os.open(Path(data_root), _DIR_FLAGS)
+        descriptors.append(parent_fd)
+        for name in (AUTHORITY_DIRECTORY, _plain_name(directory)):
+            parent_fd = _private_child(parent_fd, name, expected_uid)
+            descriptors.append(parent_fd)
+        fd = os.open(
+            temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600, dir_fd=parent_fd)
+        try:
+            try:
+                view = memoryview(raw)
+                while view:
+                    view = view[os.write(fd, view):]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.rename(temp, final, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except BaseException:
+            try:
+                os.unlink(temp, dir_fd=parent_fd)
+            except OSError:
+                pass
+            raise
+        os.fsync(parent_fd)
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass

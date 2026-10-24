@@ -114,6 +114,8 @@ def write_file_manifest(app: Path) -> dict:
     it - loaded by path because `components.hub.backend` is not importable from here.
     """
     import importlib.util
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
     spec = importlib.util.spec_from_file_location(
         'studiohub_file_manifest',
         Path(__file__).resolve().parents[1] / 'components/hub/backend/file_manifest.py')

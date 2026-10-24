@@ -79,6 +79,17 @@ class ModelPackageTests(unittest.TestCase):
         self.assertEqual((installed / 'weights.safetensors').read_bytes(), b'actual weights')
         self.assertTrue((self.source / 'weights.safetensors').exists())
 
+    def test_finder_metadata_never_invalidates_installed_index_or_model_files(self):
+        installed = packages.import_folder(self.manifest, self.source, self.library)
+        for directory in (self.library, self.library / '.studiohub', installed):
+            for name in ('.DS_Store', '._x'):
+                (directory / name).write_bytes(b'finder')
+        self.assertEqual(packages.preflight(self.manifest, self.library)['state'], 'files_verified')
+        self.assertEqual(packages.verify_installed(self.manifest, self.library)['state'], 'files_verified')
+        # Unlisted Finder files do not replace verification of the required bytes.
+        (installed / 'weights.safetensors').write_bytes(b'broken')
+        self.assertNotEqual(packages.verify_installed(self.manifest, self.library)['state'], 'files_verified')
+
     def test_missing_companion_does_not_publish_install(self):
         (self.source / 'tokenizer/config.json').unlink()
         with self.assertRaisesRegex(packages.PackageError, 'tokenizer/config.json'):

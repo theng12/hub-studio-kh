@@ -178,6 +178,29 @@ class ModelPackageIsolationTests(unittest.TestCase):
         models = payload["body"].get("models", []) if isinstance(payload["body"], dict) else []
         return payload["status"], models
 
+    def test_startup_and_restart_ignore_finder_metadata_in_all_data_and_model_folders(self) -> None:
+        data = Path(self.env["STUDIOHUB_DATA_DIR"])
+        directories = [data / name for name in (
+            "", "hub", "hub/trash", "image", "video", "music", "voice",
+            "subtitle/processor", "subtitle/inputs", "snapshot-views",
+            "subtitle/snapshot-views", "render-assets",
+        )]
+        directories += [self.library / name for name in
+                        ("", ".studiohub", "hub", "whisper-base/" + "a" * 40)]
+        for directory in directories:
+            directory.mkdir(parents=True, exist_ok=True)
+            for name in (".DS_Store", "._x"):
+                (directory / name).write_bytes(b"finder")
+        (self.library / ".studiohub/installed.json").write_text("{}")
+        (self.manifests / "._whisper-turbo.json").write_bytes(b"appledouble")
+        for _restart in range(2):
+            status, models = self._route()  # real app construction and lifespan, background work off
+            self.assertEqual(status, 200)
+            self.assertTrue(models)
+            self.assertFalse(any(str(model.get("package_id", "")).startswith("._") for model in models))
+        self.assertTrue(all((directory / name).read_bytes() == b"finder"
+                            for directory in directories for name in (".DS_Store", "._x")))
+
     def test_one_unusable_manifest_does_not_take_the_route_down(self) -> None:
         status, models = self._route()
         self.assertEqual(

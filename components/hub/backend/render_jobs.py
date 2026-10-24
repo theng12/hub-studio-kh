@@ -145,6 +145,21 @@ def _text(value: Any, name: str, *, maximum: int = 256) -> str:
     return value
 
 
+def _label(value: Any, name: str, *, maximum: int = 256) -> str:
+    """A compiler-issued display label: bounded, non-empty, no control characters.
+
+    Unlike ``_text`` this admits non-ASCII. The pinned compiler's own tier labels contain
+    ``\u00b7`` ("H.264 \u00b7 preset medium"), so demanding ASCII refused the receipt of every
+    real render at output validation. The label is still compared exactly (to the capability
+    row and the machine's authority) and hashed in the receipt digest, so nothing is let through
+    that was not already matched byte for byte.
+    """
+    if (not isinstance(value, str) or not value or len(value) > maximum
+            or value != value.strip() or not value.isprintable()):
+        raise ValueError(f"{name} must be 1-{maximum} printable characters")
+    return value
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -331,7 +346,7 @@ class ValidatedOutputReceipt:
                      "qualification_digest", "generated_command_digest"):
             _digest(getattr(self, name), name)
         _positive_int(self.output_size_bytes, "output_size_bytes")
-        _text(self.selected_tier, "selected_tier")
+        _label(self.selected_tier, "selected_tier")
         if (type(self.feature_losses) is not tuple
                 or any(not isinstance(value, str) or not value or len(value) > 256
                        for value in self.feature_losses)):

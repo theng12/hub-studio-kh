@@ -410,6 +410,75 @@ class RenderAssetStoreTest(unittest.TestCase):
         if detail is not None:
             self.assertEqual(caught.exception.detail, detail)
 
+    def test_finder_metadata_survives_open_upload_recovery_protection_and_retirement(self) -> None:
+        payload = b"finder-safe upload"
+        asset = self.upload("owner", payload)
+        upload_id = self.upload_id(asset)
+        upload = self.upload_dir(upload_id)
+        directories = [self.root] + [self.root / name for name in
+                       ("uploads", "index", "assets", "published", "_trash")]
+        directories += [upload] + [upload / name for name in
+                                  ("ranges", "chunks", "assembly", "protections", "changes")]
+        names = (".DS_Store", "._x", ".localized", "Icon\r", ".Spotlight-V100",
+                 ".fseventsd", ".Trashes", ".TemporaryItems")
+        self.store.close()
+        for directory in directories:
+            for name in names:
+                (directory / name).write_bytes(b"finder")
+        self.store = self.open_store()
+        self.assertEqual(self.store.describe("owner", asset["asset_handle"])["sha256"], digest(payload))
+        self.assertEqual(self.store.begin_upload("owner", digest(payload), len(payload))["upload_id"], upload_id)
+        self.assertEqual(self.store.active_protection("owner"), [])
+        self.assertEqual(self.store.upload_by_digest("owner", digest(payload), len(payload))["upload_id"], upload_id)
+        self.assertTrue(all((directory / name).read_bytes() == b"finder"
+                            for directory in directories for name in names))
+        result = self.store.retire_stale(now=time.time() + 2 * 24 * 3600)
+        self.assertEqual(result, {"retired": 1, "published": 1, "retained": 0})
+        for directory in directories[:7]:
+            for name in names:
+                self.assertEqual((directory / name).read_bytes(), b"finder")
+
+    def test_unknown_change_protection_and_upload_entries_keep_their_refusal(self) -> None:
+        payload = b"strict evidence"
+        begun = self.store.begin_upload("owner", digest(payload), len(payload))
+        upload = self.upload_dir(begun["upload_id"])
+        paths = (upload / "changes", upload / "protections", self.root / "uploads")
+        for directory in paths:
+            for name in (".DS_Store", "._x"):
+                (directory / name).write_bytes(b"finder")
+        for index, directory in enumerate(paths):
+            with self.subTest(directory=directory):
+                stray = directory / "unknown-entry"
+                stray.write_bytes(b"unknown")
+                with self.assertRaises(RenderAssetError) as caught:
+                    self.store.active_protection("owner")
+                expected = (("STORE_UNSAFE", "render asset store is unsafe") if index == 0
+                            else ("RECOVERY_REQUIRED", "render upload requires recovery"))
+                self.assertEqual((caught.exception.code, caught.exception.detail), expected)
+                self.assertEqual(stray.read_bytes(), b"unknown")
+                stray.rename(self._trash_bucket / f"unknown-{index}")
+
+    def test_real_unknown_entries_still_refused_beside_finder_metadata(self) -> None:
+        payload = b"strict"
+        begun = self.store.begin_upload("owner", digest(payload), len(payload))
+        upload = self.upload_dir(begun["upload_id"])
+        for name in (".DS_Store", "._x"):
+            (self.root / name).write_bytes(b"finder")
+            (upload / name).write_bytes(b"finder")
+        stray = upload / "unknown-file"
+        stray.write_bytes(b"unknown")
+        with self.assertRaises(RenderAssetError) as caught:
+            self.store.begin_upload("owner", digest(payload), len(payload))
+        self.assertEqual((caught.exception.code, caught.exception.detail),
+                         ("RECOVERY_REQUIRED", "render upload requires recovery"))
+        self.assertEqual(stray.read_bytes(), b"unknown")
+        self.store.close()
+        (self.root / "unknown-file").write_bytes(b"unknown")
+        with self.assertRaises(RenderAssetError) as caught:
+            self.open_store()
+        self.assertEqual((caught.exception.code, caught.exception.detail),
+                         ("STORE_UNSAFE", "render asset store is unsafe"))
+
     def test_closed_record_codec_is_canonical_and_round_trips_every_kind(self) -> None:
         for kind in ("format", "init", "upload_head", "range", "asset", "protection", "record_change"):
             with self.subTest(kind=kind):

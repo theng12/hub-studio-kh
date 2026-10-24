@@ -164,6 +164,21 @@ class QualificationReceiptAuthorityTests(unittest.TestCase):
         return {**self.document, "intent_id": INTENT_ID,
                 "measured": self.measured(), **changes}
 
+    def test_authority_record_read_ignores_finder_neighbors(self) -> None:
+        from components.hub.backend.render_authority_files import read_record
+        import os
+
+        path = self.write_record("enabled", f"{HARDWARE_CLASS}.json", value=self.enabled_record())
+        for directory in (self.data_root, path.parent.parent, path.parent):
+            for name in (".DS_Store", "._x"):
+                (directory / name).write_bytes(b"finder")
+        self.assertEqual(read_record(self.data_root, "enabled", path.name,
+                                     expected_uid=os.geteuid()), path.read_bytes())
+        # The named record retains the exact existing permissions guard.
+        path.chmod(0o644)
+        with self.assertRaises(ValueError):
+            read_record(self.data_root, "enabled", path.name, expected_uid=os.geteuid())
+
     def test_enabled_measured_evidence_is_typed_and_within_declared_bounds(self) -> None:
         for label, measured in {
             "string peak": self.measured(peak_rss_bytes="1"),

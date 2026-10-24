@@ -38,7 +38,7 @@ from . import routing as routing_rule
 from .memory_control import FleetMemoryControl, SUPPORTED_MODALITIES
 from .peers import studio_request
 from .monitor import is_cached
-from .registry import DATA_DIR, base_url, label_for, machine_enabled, studio_enabled
+from .registry import DATA_DIR, assigned_image_model, base_url, label_for, machine_enabled, studio_enabled
 from .resources import host_stats
 from . import stall
 from . import update_drain
@@ -858,6 +858,8 @@ def _can_run(studio: dict, entry: dict, model: str, routing: str) -> bool:
     whatever its pause, health or current load."""
     if (not routing_rule.allows(studio, routing)
             or (routing == routing_rule.REMOTE and peers.is_local_studio(studio))
+            or (routing == routing_rule.ASSIGNED
+                and assigned_image_model(studio.get("machine", "local")) != model)
             or not entry.get("cached", is_cached(entry))
             or _model_block_note(studio, model, entry)
             or not peers.lite_mode_allows(studio, model)):
