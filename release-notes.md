@@ -2,6 +2,23 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.198 — 2026-10-25
+
+### Remote final rendering takes real episode sizes
+
+When a Mac finishes a final video for the fleet, it used to accept one picture size at 24 frames a
+second. It now accepts any even size up to 4K and 24, 25, 30 or 60 frames a second, as long as the
+whole job fits the Mac's work budget (about three hours of 4K at 60 frames a second). Everything
+else about a remote render is unchanged, and remote rendering still stays off until a Mac is
+switched on in the Gateway and a remote render has been shown to match a local one.
+
+### The KH Updater agent is built in, but switched off for now
+
+Studio Hub can now set up and run the KH Updater agent on a Mac. The support is built into the app
+but does nothing yet: it turns on only once your publisher details are in place, and this build was
+made without them, so it simply reports that it is waiting. Updating the app itself is still KH
+Updater's job, not Studio Hub's.
+
 ## 0.6.197 — 2026-10-24
 
 ### Narration clips play again
