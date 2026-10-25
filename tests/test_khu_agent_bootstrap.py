@@ -82,14 +82,35 @@ class _EnrolHandler(BaseHTTPRequestHandler):
     def log_message(self, *args, **kwargs):
         return
 
+    def _record(self):
+        # Recorded so a test can prove no credential travelled with a request, and which routes
+        # the bootstrap actually used.
+        self.server.seen_headers.append(dict(self.headers))
+        self.server.seen_paths.append(self.path)
+
+    def do_GET(self):
+        self._record()
+        if not self.path.startswith("/commands"):
+            self.send_response(404)
+            self.end_headers()
+            return
+        # The publisher knows exactly one token; anything else is a Mac it dropped.
+        if self.headers.get("authorization") != f"Bearer {self.server.issued_token}":
+            self.send_response(401)
+            self.end_headers()
+            return
+        data = b'{"reply": "", "signature": ""}'
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_POST(self):
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(length)
-        # Recorded so a test can prove no credential travelled with the request.
-        self.server.seen_headers.append(dict(self.headers))
-        self.server.seen_paths.append(self.path)
+        self._record()
         if self.path == "/status":
-            # The publisher knows exactly one token; anything else is a Mac it dropped.
             if self.headers.get("authorization") != f"Bearer {self.server.issued_token}":
                 self.send_response(401)
                 self.end_headers()
@@ -479,6 +500,31 @@ class KhAgentBootstrapTests(unittest.TestCase):
         self.assertIs(answer["tokenRejected"], False)
         self.assertNotIn("no longer recognises", answer["detail"])
         self.assertNotIn(new_token, answer["detail"])
+
+    def test_the_stale_probe_is_a_read_that_cannot_make_a_dead_mac_look_alive(self):
+        """The probe must not touch the record it asks about.
+
+        A `POST /status` probe would refresh the publisher's `lastSeen`, so a Mac whose agent
+        died would look alive on the owner's page for ever. The probe is `GET /commands` with
+        no `capabilities` parameter, which also leaves the capabilities the real agent
+        advertised alone.
+        """
+        recorder = self._recorder()
+        bootstrap = khu_agent.Bootstrap(self.kit, self.home, allow_test=True, run=recorder)
+        bootstrap.install()
+        asyncio.run(bootstrap.enrol("fixture-mac"))
+        self.server.seen_paths.clear()
+        self.server.seen_headers.clear()
+
+        self.assertEqual(asyncio.run(bootstrap.enrol("fixture-mac")), "current")
+        probes = list(zip(self.server.seen_paths, self.server.seen_headers))
+        self.assertEqual(len(probes), 1, probes)
+        path, headers = probes[0]
+        self.assertTrue(path.startswith("/commands?"), path)
+        self.assertIn("machine=fixture-mac", path)
+        self.assertNotIn("capabilities", path)
+        self.assertEqual(headers.get("authorization"), f"Bearer {self.issued_token}")
+        self.assertNotIn("/status", self.server.seen_paths)
 
     def test_a_good_check_reports_no_rejected_token(self):
         recorder = self._recorder()

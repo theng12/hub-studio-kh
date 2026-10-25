@@ -203,6 +203,11 @@ class Bootstrap:
     async def _token_rejected(self, publisher: dict, saved: dict, machine: str) -> bool:
         """True only when the publisher answers 401 for the stored token.
 
+        The probe is `GET /commands` with NO `capabilities` parameter: it must not change the
+        record it is asking about. A `POST /status` probe would refresh the publisher's
+        `lastSeen` and make a Mac whose agent died look alive on the owner's page, and it would
+        also rewrite what that Mac last reported.
+
         Anything else — 200, 404, a server error, a timeout, an unreachable host — is not
         proof of staleness, so a working config is never dropped on an unreachable publisher.
         """
@@ -210,9 +215,9 @@ class Bootstrap:
         origin = f"{parsed.scheme}://{parsed.netloc}"
         try:
             async with httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=10) as client:
-                response = await client.post(f"{origin}/status",
-                                             headers={"authorization": f"Bearer {saved['token']}"},
-                                             json={"machine": machine})
+                response = await client.get(f"{origin}/commands",
+                                            params={"machine": machine},
+                                            headers={"authorization": f"Bearer {saved['token']}"})
         except httpx.HTTPError:
             return False
         return response.status_code == 401
