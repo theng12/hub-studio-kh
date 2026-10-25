@@ -366,9 +366,20 @@ class InstalledRenderAuthorityLoader:
             manifest = packet["manifest"]
             frame_count = math.ceil(
                 recipe["target_duration_sec"] * canvas["working_fps"])
+            width, height = canvas["width"], canvas["height"]
+            if "bounds_version" in bounds:
+                limits = bounds["canvas_range"]
+                canvas_allowed = (
+                    type(bounds["bounds_version"]) is int and bounds["bounds_version"] == 2
+                    and type(width) is int and type(height) is int
+                    and width > 0 and height > 0 and width % 2 == height % 2 == 0
+                    and max(width, height) <= limits["max_edge"]
+                    and width * height <= limits["max_pixels"]
+                )
+            else:
+                canvas_allowed = {"width": width, "height": height} in bounds["canvas_pairs"]
             return (
-                {"width": canvas["width"], "height": canvas["height"]}
-                    in bounds["canvas_pairs"]
+                canvas_allowed
                 and canvas["working_fps"] in bounds["working_fps"]
                 and recipe["target_duration_sec"] <= bounds["max_duration_sec"]
                 and len(recipe["operations"]) <= bounds["max_operations"]

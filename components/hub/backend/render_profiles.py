@@ -146,17 +146,29 @@ def _positive_number(value, kind, path):
 def _bounds(value):
     if value is None:
         return
-    bounds = _exact(value, _BOUND_KEYS, "profile", "execution_bounds")
-    pairs = bounds["canvas_pairs"]
-    if type(pairs) is not list:
-        _invalid("profile", "execution_bounds.canvas_pairs must be an array")
-    for index, value in enumerate(pairs):
-        pair = _exact(value, ("width", "height"), "profile",
-                      "execution_bounds.canvas_pairs[" + str(index) + "]")
-        _positive_int(pair["width"], "profile",
-                      "execution_bounds.canvas_pairs[" + str(index) + "].width")
-        _positive_int(pair["height"], "profile",
-                      "execution_bounds.canvas_pairs[" + str(index) + "].height")
+    if type(value) is dict and "bounds_version" in value:
+        bounds = _exact(value, (set(_BOUND_KEYS) - {"canvas_pairs"})
+                        | {"bounds_version", "canvas_range"}, "profile", "execution_bounds")
+        if type(bounds["bounds_version"]) is not int or bounds["bounds_version"] != 2:
+            _invalid("profile", "execution_bounds.bounds_version is unsupported")
+        canvas = _exact(bounds["canvas_range"], ("max_edge", "max_pixels"),
+                        "profile", "execution_bounds.canvas_range")
+        for key in canvas:
+            _positive_int(canvas[key], "profile", "execution_bounds.canvas_range." + key)
+        if canvas["max_edge"] < 2 or canvas["max_edge"] % 2 or canvas["max_pixels"] < 4:
+            _invalid("profile", "execution_bounds.canvas_range cannot admit an even canvas")
+    else:
+        bounds = _exact(value, _BOUND_KEYS, "profile", "execution_bounds")
+        pairs = bounds["canvas_pairs"]
+        if type(pairs) is not list:
+            _invalid("profile", "execution_bounds.canvas_pairs must be an array")
+        for index, value in enumerate(pairs):
+            pair = _exact(value, ("width", "height"), "profile",
+                          "execution_bounds.canvas_pairs[" + str(index) + "]")
+            _positive_int(pair["width"], "profile",
+                          "execution_bounds.canvas_pairs[" + str(index) + "].width")
+            _positive_int(pair["height"], "profile",
+                          "execution_bounds.canvas_pairs[" + str(index) + "].height")
     rates = bounds["working_fps"]
     if type(rates) is not list:
         _invalid("profile", "execution_bounds.working_fps must be an array")

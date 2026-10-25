@@ -9,6 +9,7 @@ from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from components.hub.backend import render_profiles
 from components.hub.backend.render_hash_v1 import render_hash
 from components.hub.backend.render_profiles import (
     DescriptorMatch,
@@ -270,20 +271,56 @@ class RenderProfileTests(unittest.TestCase):
 
 
 class PackagedRenderProfileTests(unittest.TestCase):
-    def test_candidate_envelope_covers_the_measured_full_length_finals(self):
+    def test_v2_bounds_are_closed_and_reject_unknown_versions(self):
+        original = PACKAGED_PROFILE_PATH.read_bytes()
+        mutations = (
+            lambda b: b.update(bounds_version=1),
+            lambda b: b.update(bounds_version=3),
+            lambda b: b.update(bounds_version=True),
+            lambda b: b.update(bounds_version=2.0),
+            lambda b: b.pop("bounds_version"),
+            lambda b: b.update(canvas_pairs=[]),
+            lambda b: b["canvas_range"].update(extra=1),
+            lambda b: b["canvas_range"].pop("max_edge"),
+            lambda b: b.update(canvas_range=[]),
+            lambda b: b["canvas_range"].update(max_edge=3841),
+            lambda b: b["canvas_range"].update(max_edge=True),
+            lambda b: b["canvas_range"].update(max_pixels=0),
+            lambda b: b["canvas_range"].update(max_pixels=8294400.0),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                value = json.loads(original)
+                mutate(value["execution_bounds"])
+                with self.assertRaisesRegex(ValueError, "Invalid render profile descriptor"):
+                    validate_render_profile_descriptor(raw(value))
+
+    def test_v1_reader_shape_explicitly_refuses_v2_bounds(self):
+        bounds = json.loads(PACKAGED_PROFILE_PATH.read_bytes())["execution_bounds"]
+        # Freeze the V1 reader's closed key set from the literal V1 descriptor above.
+        with self.assertRaisesRegex(ValueError, "execution_bounds has missing or unknown fields"):
+            render_profiles._exact(bounds, json.loads(PROFILE_RAW)["execution_bounds"],
+                                   "profile", "execution_bounds")
+        # V2 readers still accept frozen V1 descriptors under their original byte identity.
+        self.assertEqual(validate_render_profile_descriptor(PROFILE_RAW).digest, PROFILE_SHA256)
+
+    def test_candidate_envelope_covers_three_hours_of_4k60(self):
         raw = PACKAGED_PROFILE_PATH.read_bytes()
         validate_render_profile_descriptor(raw)
         value = json.loads(raw)
         bounds = value["execution_bounds"]
 
         self.assertFalse(value["production_eligible"])
+        self.assertEqual(bounds["bounds_version"], 2)
+        self.assertNotIn("canvas_pairs", bounds)
+        self.assertEqual(bounds["canvas_range"], {"max_edge": 3840, "max_pixels": 8294400})
+        self.assertEqual(bounds["working_fps"], [24, 25, 30, 60])
         self.assertEqual(bounds["max_duration_sec"], 10800)
-        self.assertEqual(bounds["max_pixel_frames"], 1920 * 1080 * 24 * 10800)
+        self.assertEqual(bounds["max_pixel_frames"], 3840 * 2160 * 60 * 10800)
         self.assertEqual(bounds["max_operations"], 8)
         self.assertEqual(bounds["max_assets"], 4)
-        # The longest observed final (8473.1 s) must fit the candidate envelope.
-        self.assertGreaterEqual(bounds["max_duration_sec"], 8473.1)
-        self.assertGreaterEqual(bounds["max_pixel_frames"], 1920 * 1080 * 24 * 8473.1)
+        self.assertEqual(bounds["max_asset_bytes"], 8589934592)
+        self.assertEqual(bounds["max_total_input_bytes"], 17179869184)
         # The experimental resource fences stay unchanged until a measured receipt.
         self.assertEqual(bounds["cumulative_wall_seconds"], 14400)
         self.assertEqual(bounds["process_tree_rss_limit_bytes"], 10737418240)
