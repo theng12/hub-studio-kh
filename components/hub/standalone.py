@@ -2199,21 +2199,41 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         a controller must not be able to un-join a node, because leaving is the Mac owner's
         decision and the local Hub token never leaves this machine.
         """
+        from .backend import app_release
         from .backend import fleet_nodes as fleet
         from .backend import peers
+        from .backend import state_trash
         peers.set_fleet_token("")
+        # A Mac that missed the last rotation was being held on its old group token so this
+        # controller could still tell it the new one. None of that survives leaving: there is no
+        # group left here to be told about, and the held values are copies of a group secret.
+        peers.clear_previous_tokens()
         # **The credential the old controller issued goes too.** A Mac that is leaving — or being
         # sold — must not keep a working key to the group it just left, and the app cannot delete
         # it because the file is the Hub's own business (`0600`, in the Hub's data directory).
         # Found by the native work: the app cleared its copy and the Hub's stayed, which is inert
         # after leaving but is exactly the wrong thing to find on a Mac in someone else's hands.
         fleet.set_node_credential(None)
+        # **And the gateway key this Mac pinned while it was in that group.** `release_sync`
+        # refuses a descriptor signed by a key other than the pinned one, and `pin_publisher`
+        # never replaces an existing pin — that is an owner action. So a Mac that left group A and
+        # joined group B whose gateway signs with a different key would have refused every release
+        # from its new controller, for ever, with a sentence about a key nobody on that Mac chose.
+        # The pin belongs to the membership: the app already clears its own copy of it on leave
+        # (`clearGroupMembershipLocally`), and this is the Hub's half. Archived rather than
+        # deleted so the operator can still read which gateway that Mac was following.
+        archived = state_trash.move_to_trash(app_release.TRUST_FILE, reason="leave-fleet")
         control_plane.save_settings({
             "fleet_credential_origin": "minted",
             "role": "standalone",
             "parent_controller_url": None,
         })
-        return {"ok": True, "left": True}
+        return {"ok": True, "left": True,
+                # What it keeps is as load-bearing as what it drops: an operator reading "left"
+                # has to know his models and his Hub identity are untouched.
+                "kept": ["this Mac's Machine ID", "its model library", "its owner settings",
+                         "its local Hub token", "its jobs and output"],
+                "archived": {"gateway_publisher_pin": archived} if archived else {}}
 
     @app.post("/api/hub/fleet/nodes", status_code=201)
     async def fleet_join(body: dict[str, Any], request: Request) -> dict[str, Any]:
@@ -2509,6 +2529,138 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 # skipped: a machine missing from the push with no explanation reads as a failure.
                 "promoted": promoted,
                 **result}
+
+    @app.post("/api/hub/fleet/reset")
+    def fleet_reset() -> dict[str, Any]:
+        """**Disassemble this controller's group and start a clean one** (owner, 2026-10-25).
+
+        The action for a controller whose group the owner no longer wants: every node row goes,
+        every per-node credential is revoked, the machines that were waiting on the previous Fleet
+        token are forgotten, and a **fresh group token** is minted. It is the controller-side half of
+        the reset flow the owner asked for — *"make sure we can disassemble the nodes and
+        controllers so I can restart anew. It's just one focus day of resetting and enrolling."* —
+        and the other half is each node's own `POST /api/hub/fleet/leave`.
+
+        **Why not just remove every node?** `fleet.remove` is an eviction and writes a tombstone that
+        refuses that id for ever, which is right for a Mac being sold and wrong here: the same Macs
+        re-enrol minutes later, and a controller that refused its own roster by name would make the
+        reset one-way. So the roster is **archived, not evicted** — moved into the data directory's
+        `_trash` (`backend/state_trash`) — and no id is recorded as removed.
+
+        **Hub-token only, and deliberately in neither credential's allowlist.** This is the owner's
+        decision about his own machines. A Fleet token that could wipe the roster it belongs to would
+        turn one leaked group credential into a fleet-wide reset, and a node's own credential is
+        narrower still by design.
+
+        It is **not a rotation**: rotating hands the same nodes a new secret. This drops the nodes and
+        mints a new secret, and the answer names both, because "the Macs are gone" and "the token
+        changed" are two facts an operator acts on differently.
+        """
+        from .backend import fleet_nodes as fleet
+        from .backend import peers
+        report = fleet.reset_fleet(by="operator")
+        # The new group credential is minted after the old nodes are gone: a rotation would have
+        # pushed it to them, and there is nobody left to push it to.
+        peers.clear_previous_tokens()
+        peers.set_fleet_token("")
+        monitor.reload_registry()
+        return {**report, "token": peers.current_fleet_token(),
+                "detail": ("This controller has forgotten its group and keeps the record in its "
+                           "Trash Folder. Every Mac is now a standalone Hub: each one leaves from "
+                           "its own Connections page, then all of them can join this Mac again "
+                           "with the new Fleet token shown here.")}
+
+    @app.post("/api/hub/fleet/repoint")
+    async def fleet_repoint(body: dict[str, Any]) -> dict[str, Any]:
+        """**Move this Mac to another controller without re-joining it** (owner, 2026-10-25).
+
+        The address-only repoint: the controller changes, and this Mac's own identity — its Machine
+        ID, its per-node credential, the group Fleet token, its release pins, its model library and
+        its owner settings — is carried across untouched. `fleet_nodes.repoint` owns the checks and
+        the one atomic write; the route only has to classify the refusal.
+
+        **Reachable with this Mac's Hub token or the current group Fleet credential, and never with
+        a node's own credential.** `auth.FLEET_ALLOWED` carries it and `auth.NODE_ALLOWED` does not
+        (`node_origin_allowed` is the intersection of the two), which is the same boundary
+        `POST /api/hub/fleet` already has — a group token may set this Mac's membership, a leaf
+        Mac's credential may not. It grants nothing new: that route can already point this Mac at
+        another controller, destructively. This one keeps the Mac.
+
+        A 409 is not a malformed request: it is this Mac saying the migration does not apply to it
+        (it is not a member, the operation names an address it has already left, the destination
+        does not hold its credential, or the operation id was used for a different pair of
+        addresses). The body of that answer names **which**, in a `code` and a sentence, because the
+        caller's next step differs — and because a controller pushing this operation has to report
+        the reason per Mac, which it can only do from what the Mac said.
+        """
+        from .backend import fleet_nodes as fleet
+        try:
+            return await fleet.repoint(body)
+        except fleet.RepointRefused as exc:
+            return JSONResponse({"ok": False, "code": exc.code, "detail": exc.detail,
+                                 "repointed": False}, status_code=exc.status)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/hub/fleet/repoint-nodes")
+    async def fleet_repoint_nodes(body: dict[str, Any]) -> dict[str, Any]:
+        """**Push an address-only repoint to this controller's joined Macs** (owner, 2026-10-25).
+
+        The old controller is the only party every node already trusts and can dial, so it is the
+        one that delivers the move — the same reason a handover is performed from here. This is
+        deliberately **not** a handover: nothing is retired, no token rotates, and this controller
+        keeps its roster, its credential and its work. A Mac it cannot reach keeps the address it
+        has and is named in the answer as pending, never as moved.
+
+        Every Mac gets a distinct operation id derived from the caller's, so a retry of the same
+        push is a replay of the same operation on each node (`already_applied`) rather than a second
+        instruction — and a fresh migration id picks up where the last one stopped.
+
+        `expected_controller_url` is required, and it is the **caller's** statement of where these
+        Macs are now: which of this controller's own addresses a node recorded at join is the app's
+        decision, and the route that would tell this side (`GET /api/hub/controller`) is outside the
+        Fleet credential's scope on purpose. The same shape as `POST /api/hub/fleet`, which takes the
+        new head's address from its caller. A wrong value is safe — each node compares it with its
+        own membership and refuses.
+        """
+        from .backend import fleet_nodes as fleet
+        from .backend import peers
+        address = body.get("controller_url")
+        try:
+            destination = fleet.validate_address(address)
+        except ValueError as exc:
+            raise HTTPException(400, f"controller_url {exc}") from exc
+        try:
+            expected = fleet.validate_address(body.get("expected_controller_url"))
+        except ValueError as exc:
+            raise HTTPException(
+                400, f"expected_controller_url {exc}. It is where these Macs are now — the address "
+                     f"they were told at join — and each node refuses the operation if it does not "
+                     f"match its own membership.") from exc
+        migration = str(body.get("operation_id") or "").strip()
+        if not fleet.REPOINT_OPERATION_PATTERN.fullmatch(migration):
+            raise HTTPException(
+                400, "operation_id must be 8-120 letters, numbers, dots, dashes, colons or "
+                     "underscores, starting with a letter or number")
+        wanted = body.get("nodes")
+        if wanted is not None and not isinstance(wanted, list):
+            raise HTTPException(400, "nodes must be a list of node ids when given")
+        registry = fleet.remote_studios()
+        if wanted:
+            keep = {str(node).strip().lower() for node in wanted}
+            registry = [row for row in registry
+                        if str(row.get("fleet_node") or "").lower() in keep]
+        # `remote_studios` is where each Mac is delivered: the address the node itself declared and
+        # this controller has been probing — and the destination's own `/status` is then asked from
+        # the node, not from here.
+        #
+        # The client is the **pull-capable** one (`fleet_pull.client`), so a Mac this controller
+        # cannot dial still receives the repoint through its own check-in: that is the delivery path
+        # the design names, and it is why an unreachable Mac is reported `pending` rather than lost.
+        from .backend import fleet_pull
+        async with fleet_pull.client() as client:
+            result = await peers.sync_repoint(registry, client, destination, migration, expected)
+        return {"ok": True, "repointed_to": destination, "operation_id": migration, **result}
 
     # ── remote app-update release (controller side) ────────────────────────
     # GatewayKH pushes a signed release; this Mac verifies and mirrors it, and

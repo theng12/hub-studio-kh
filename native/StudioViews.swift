@@ -1060,6 +1060,15 @@ struct StudioContent: View {
     @State private var controllerDraft = ""
     /// The name being typed. Kept apart from the Hub's answer so the field does not fight the poll.
     @State private var machineNameDraft = ""
+    /// The Machine ID and the site being typed, same rule. Editable only while this Mac is not in a
+    /// group; the Hub refuses the change as well, and its refusal is the authority.
+    @State private var machineIdDraft = ""
+    @State private var siteIdDraft = ""
+    @State private var siteNameDraft = ""
+    /// "Machine ID copied" and the like, shown under the row that was copied rather than up in the
+    /// token block: the operator just pressed a button here, and a confirmation somewhere else is
+    /// a confirmation they will not see.
+    @State private var identityCopyNote: String?
     @State private var controllerToken = ""
     /// The role the operator picked in the picker but has not confirmed. The picker itself shows
     /// the Hub's own answer, so a cancelled confirmation leaves the control where it was.
@@ -1067,6 +1076,9 @@ struct StudioContent: View {
     /// Leaving, removing a node and rotating the Fleet token are each one press away from something
     /// that cannot be undone by pressing the same button again, so each is confirmed first.
     @State private var confirmingLeave = false
+    /// Resetting a whole group is the largest of these: it drops every Mac this controller knows
+    /// and mints a new group secret, so it names how many Macs and what the nodes have to do.
+    @State private var confirmingFleetReset = false
     @State private var confirmingRotation = false
     @State private var confirmingHandover = false
     @State private var confirmingInstall = false
@@ -5695,8 +5707,13 @@ struct StudioContent: View {
             VStack(alignment: .leading, spacing: HubSpace.m) {
                 Text("Group operations").font(HubType.rowTitle)
                 if retired {
-                    Text("This controller has handed its group over, so there is nothing left to rotate or hand over.")
+                    Text("This controller has handed its group over, so there is nothing left to rotate or hand over. Resetting its fleet only clears a roster that is already empty — it does not un-retire this Mac.")
                         .font(HubType.secondary).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // Still offered here: the owner is disassembling his own machines today, and a
+                    // retired controller that was re-pointed by hand should not have to be told to
+                    // edit a JSON file before it can start a group again.
+                    fleetResetControl
                 } else {
                     HStack(alignment: .top) {
                         Button("Rotate Fleet token…") { confirmingRotation = true }
@@ -5705,6 +5722,12 @@ struct StudioContent: View {
                             .font(HubType.secondary).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    // **The clean-slate counterpart to a rotation** (owner, 2026-10-25: *"make sure
+                    // we can disassemble the nodes and controllers so I can restart anew"*). A
+                    // rotation keeps the group and changes its secret; this drops the group. Both
+                    // are here because they answer two different decisions, and putting the reset
+                    // behind a different word is what stops an operator reaching for the wrong one.
+                    fleetResetControl
                     VStack(alignment: .leading, spacing: HubSpace.tight) {
                         Text("Hand over to…").font(HubType.rowTitle)
                         Text("Give this group to a Mac that is running as a controller (promote it first). This controller pushes the new head and the new Fleet token to every node it can reach, then retires itself: it keeps its history and stops taking work.")
@@ -5747,6 +5770,20 @@ struct StudioContent: View {
         } else if let report = workspace.fleetOperation {
             // A Mac that is no longer a controller can still have run one of these a moment ago.
             fleetOperationReportView(report)
+        }
+    }
+
+    /// **Start this controller over**: drop its whole roster and mint a new group token.
+    ///
+    /// One view so the retired and the working controller show the same control with the same
+    /// sentence — the action is local and keeps its records, so it is available in both states.
+    @ViewBuilder private var fleetResetControl: some View {
+        HStack(alignment: .top) {
+            Button("Reset the fleet…") { confirmingFleetReset = true }
+                .disabled(!connected || workspace.fleetOperationRunning)
+            Text("Start over: forget every Mac on this roster, revoke every per-node credential and mint a new Fleet token. **Nothing is deleted** — the old roster is kept in this Hub's Trash Folder, and no Mac is barred from joining again. Each Mac leaves from its own Connections page, then joins again with the new token.")
+                .font(HubType.secondary).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -5860,6 +5897,18 @@ struct StudioContent: View {
                     }
                     .disabled(!connected || machineNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                               == (workspace.controllerIdentity?.settings.machineName ?? ""))
+                    // The other two identifiers have one, and a name is the value an operator most
+                    // often has to type somewhere else (a Channel name, a Gateway label), so it
+                    // gets the same affordance rather than making him select the text by hand.
+                    Button("Copy name") {
+                        let value = workspace.controllerIdentity?.settings.machineName ?? ""
+                        guard !value.isEmpty else { return }
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(value, forType: .string)
+                        identityCopyNote = "Machine name copied: \(value)"
+                    }
+                    .controlSize(.small)
+                    .disabled((workspace.controllerIdentity?.settings.machineName ?? "").isEmpty)
                 }
                 Text("What this Mac is called in the fleet, in Jobs and to the gateway. It is a label, not an identity: renaming it never changes routing or a node's registration.")
                     .font(HubType.caption).foregroundStyle(.secondary)
@@ -5870,16 +5919,18 @@ struct StudioContent: View {
                 machineNameDraft = value ?? ""
             }
 
-            // **The identity, beside the label that is not one.** `controller_id` is what a join
-            // registers and what the controller routes by, and it never changes when this Mac is
-            // renamed — so a Mac that was renamed away from its hostname is still the same node,
-            // and the operator can read the value that actually identifies it.
-            // The label is what the owner sees everywhere; the id is only a key, kept as a tooltip.
-            ValueRow("Node identity", value: workspace.controllerIdentity?.settings.machineName ?? "Not reporting")
-                .help("Internal id: \(workspace.controllerIdentity?.settings.controllerId ?? "not reporting")")
-            Text("This Mac is shown by this name everywhere. Hover for the internal id it registers with a controller and is routed by: renaming this Mac never changes it, so a rename never re-registers a node.")
-                .font(HubType.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // **The identifiers, in plain view** (owner, 2026-10-25: *"what are the identifiers on
+            // Studio Hub for each machine? Make sure they're prominent and easily edited, so I
+            // don't repeat my current mistake, because they're hard to change. With this move I
+            // want a clean slate."*).
+            //
+            // They used to be a **tooltip** on a row that showed the *name*: the one value a
+            // controller routes by was the one value not on the screen, and the only way to change
+            // it was to edit the settings file by hand. So: the Machine ID and the site are printed
+            // with the sentence that says what each is for, each with a Copy button, and they are
+            // **editable while this Mac is not in a group** — which is exactly when they can be
+            // changed without breaking somebody else's roster.
+            machineIdentifiers
 
             ValueRow("This Mac is", value: roleTitle(workspace.controllerIdentity?.settings.role))
             ValueRow("Group", value: groupStatus)
@@ -6035,6 +6086,17 @@ struct StudioContent: View {
                 Text("This Mac drops the group's token and runs on its own again, so its controller can no longer send it work. It also asks the controller to drop this Mac from its roster; if the controller is off, it still lists this Mac and has to be cleaned up there. Joining again needs the controller's current Fleet token.")
             }
         .confirmationDialog(
+            "Reset this controller's fleet?",
+            isPresented: $confirmingFleetReset,
+            titleVisibility: .visible) {
+                Button("Reset the Fleet", role: .destructive) {
+                    Task { await workspace.resetFleet() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("\(workspace.fleetNodes.map { "\($0.nodes.count) Mac\($0.nodes.count == 1 ? "" : "s")" } ?? "Every Mac on this roster") will be forgotten and every per-node credential on this controller revoked, and a new Fleet token will be minted. The old roster is kept in this Hub's Trash Folder, so nothing is lost. The Macs are not told: each one leaves from its own Connections page, and then joins this Mac again with the new token. GatewayKH needs the new token too.")
+            }
+        .confirmationDialog(
             "Rotate the Fleet token?",
             isPresented: $confirmingRotation,
             titleVisibility: .visible) {
@@ -6094,6 +6156,139 @@ struct StudioContent: View {
         static let macMaximum: CGFloat = 360
         /// The narrowest width the one-line-per-Mac table is drawn at; below it each Mac is a small card.
         static let wideMinimum: CGFloat = 796
+    }
+
+    /// **This Mac's Machine ID and site**, printed plainly and editable exactly when editing is
+    /// honest.
+    ///
+    /// The rule is the Hub's (`control_plane.save_settings` refuses it too, and its sentence is the
+    /// one that finally decides): `controller_id` becomes this Mac's roster `node_id` when it joins,
+    /// so a controller routes to this Mac by it. Changing it under a live membership would leave
+    /// the controller holding a row for a Mac that no longer answers to it, while the Mac's own
+    /// credential stayed keyed to the old id — so while this Mac is in a group the value is shown,
+    /// the reason is stated, and the way out (Leave) is one press away rather than a paragraph.
+    @ViewBuilder private var machineIdentifiers: some View {
+        let settings = workspace.controllerIdentity?.settings
+        let inGroup = settings?.fleetCredentialOrigin == "adopted"
+        VStack(alignment: .leading, spacing: HubSpace.s) {
+            identifierLine("Machine ID", value: settings?.controllerId, copyLabel: "Copy ID",
+                           explanation: "The key a controller routes to this Mac by. A join registers "
+                               + "it as this Mac's node id.")
+            identifierLine("Site", value: settings.map { "\($0.siteName) (\($0.siteId))" },
+                           copyLabel: "Copy site",
+                           explanation: "Which site this Mac belongs to: the gateway groups its "
+                               + "locations by this when it lists what the Hub can do.")
+            if let identityCopyNote {
+                Text(identityCopyNote).font(HubType.caption).foregroundStyle(.secondary)
+            }
+            if inGroup {
+                Text("Read-only while this Mac is in a group: its controller routes to it by this "
+                     + "Machine ID, so changing it now would leave that controller holding a row "
+                     + "that no longer answers, and this Mac's own credential is keyed to the old "
+                     + "id. Leave the fleet first, change them, then join again.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: HubSpace.s) {
+                    Button("Leave this group…") { confirmingLeave = true }
+                        .disabled(!connected)
+                    Text("Returns this Mac to running on its own. Nothing else changes: its model "
+                         + "library, its jobs and its output stay where they are.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                machineIdentityEditor
+            }
+        }
+        .onAppear { loadIdentityDrafts() }
+        .onChange(of: workspace.controllerIdentity?.settings.controllerId) { _, _ in loadIdentityDrafts() }
+        .onChange(of: workspace.controllerIdentity?.settings.siteId) { _, _ in loadIdentityDrafts() }
+        .onChange(of: workspace.controllerIdentity?.settings.siteName) { _, _ in loadIdentityDrafts() }
+    }
+
+    /// One identifier, printed where it can be read and copied: the value in a monospace face so a
+    /// person can compare two Macs character by character, and the sentence saying what it is for.
+    @ViewBuilder private func identifierLine(_ label: String, value: String?,
+                                             copyLabel: String, explanation: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: HubSpace.s) {
+                Text(label).font(HubType.body).frame(width: 96, alignment: .leading)
+                Text(value ?? "Not reporting")
+                    .font(HubType.mono).textSelection(.enabled)
+                    .foregroundStyle(value == nil ? Color.secondary : Color.primary)
+                Button(copyLabel) {
+                    guard let value, !value.isEmpty else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(value, forType: .string)
+                    identityCopyNote = "\(label) copied: \(value)"
+                }
+                .controlSize(.small)
+                .disabled(value?.isEmpty ?? true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(label): \(value ?? "not reporting")")
+            Text(explanation).font(HubType.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).padding(.leading, 96 + HubSpace.s)
+        }
+    }
+
+    /// The three fields, while this Mac is its own: the identity is set up here, before a join
+    /// freezes it.
+    @ViewBuilder private var machineIdentityEditor: some View {
+        VStack(alignment: .leading, spacing: HubSpace.s) {
+            HStack(spacing: HubSpace.s) {
+                Text("Machine ID").font(HubType.body).frame(width: 96, alignment: .leading)
+                TextField("studio-mini-01", text: $machineIdDraft)
+                    .textFieldStyle(.roundedBorder).frame(width: 220).font(HubType.mono)
+            }
+            HStack(spacing: HubSpace.s) {
+                Text("Site ID").font(HubType.body).frame(width: 96, alignment: .leading)
+                TextField("local-site", text: $siteIdDraft)
+                    .textFieldStyle(.roundedBorder).frame(width: 220).font(HubType.mono)
+                Text("Site name").font(HubType.body).frame(width: 76, alignment: .leading)
+                TextField("Local site", text: $siteNameDraft)
+                    .textFieldStyle(.roundedBorder).frame(width: 200)
+            }
+            HStack(spacing: HubSpace.s) {
+                Button("Save Machine ID and site") {
+                    Task {
+                        await workspace.setMachineIdentity(
+                            controllerId: machineIdDraft.trimmingCharacters(in: .whitespacesAndNewlines),
+                            siteId: siteIdDraft.trimmingCharacters(in: .whitespacesAndNewlines),
+                            siteName: siteNameDraft.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                }
+                .disabled(!connected || !identityDraftChanged)
+                if let note = workspace.identityNote {
+                    Text(note).font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Text("Set the Machine ID before this Mac joins anything: it is what the controller "
+                 + "registers and routes by, and it is read-only from then on. Lowercase letters, "
+                 + "numbers, dots, dashes and underscores — e.g. `studio-mini-01`, `shops-till-02`. "
+                 + "The suggestion is only a suggestion: nothing is derived from this Mac's hostname "
+                 + "beyond the single default it started with.")
+                .font(HubType.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The Hub's own answers into the three drafts. Called on appear and whenever any of them
+    /// changes under the page, so a save elsewhere (a leave, a reset) does not leave a stale value
+    /// in the field to be saved back over the new one.
+    private func loadIdentityDrafts() {
+        guard let settings = workspace.controllerIdentity?.settings else { return }
+        machineIdDraft = settings.controllerId
+        siteIdDraft = settings.siteId
+        siteNameDraft = settings.siteName
+    }
+
+    private var identityDraftChanged: Bool {
+        guard let settings = workspace.controllerIdentity?.settings else { return false }
+        return machineIdDraft.trimmingCharacters(in: .whitespacesAndNewlines) != settings.controllerId
+            || siteIdDraft.trimmingCharacters(in: .whitespacesAndNewlines) != settings.siteId
+            || siteNameDraft.trimmingCharacters(in: .whitespacesAndNewlines) != settings.siteName
     }
 
     /// Every Mac in the group, in one table: is it there, what is it doing, how full is its disk and
@@ -6276,6 +6471,16 @@ struct StudioContent: View {
             if let facts = nodeFactsLine(row) {
                 Text(facts).font(HubType.caption).foregroundStyle(.secondary)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            // **The id beside the name** (owner, 2026-10-25: *"make sure they're prominent and
+            // easily edited, so I don't repeat my current mistake"*). A rename never changes the id
+            // a controller routes by, so two Macs whose names look alike are only told apart by
+            // this — and a row that showed only the name could not be checked against the id a
+            // person is holding in another window. `local` is this controller's own machine, which
+            // is a name and not a roster id, so it is left alone.
+            if let nodeId = row.node?.id, !nodeId.isEmpty, nodeId != "local" {
+                Text("ID \(nodeId)").font(HubType.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
             }
             if let address = row.address, !address.isEmpty {
                 Text(address).font(HubType.caption).foregroundStyle(.secondary)

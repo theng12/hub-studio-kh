@@ -182,6 +182,25 @@ def nodes_on_previous_token() -> dict[str, float]:
     return {node: float(row["until"]) for node, row in _held_tokens().items()}
 
 
+def clear_previous_tokens() -> int:
+    """Forget every node still waiting on a previous Fleet token. Returns how many went.
+
+    A rotation keeps the old token good for a bounded window so an offline Mac is not stranded -
+    that is the whole point of the file. A group that has been **disassembled** has no such Mac to
+    strand: its nodes are no longer on the roster, the group token they held has just been replaced,
+    and keeping their old value good would leave a working group credential on this Mac for machines
+    it has deliberately forgotten.
+
+    **The file is cleared, not archived** — the same treatment `set_node_credential(None)` and a
+    cleared database URL get, and for the same reason: `_trash` is for records the owner may want
+    back, and a retired credential is not one. It stores the *plaintext* Fleet token each waiting
+    node still holds, so a copy under `_trash` would be a copy of the group secret on disk.
+    """
+    gone = len(_held_tokens())
+    PREVIOUS_TOKENS_FILE.unlink(missing_ok=True)
+    return gone
+
+
 def accepts_previous_token(offered: str | None) -> bool:
     """Whether `offered` is a token a not-yet-confirmed node still holds (constant-time)."""
     if not offered:
@@ -1037,3 +1056,114 @@ async def sync_fleet_token(
         "manual": manual, "pending": len(results) - verified - manual,
         "machines": results,
     }
+
+
+#: How long a controller waits for one node to answer a repoint. Longer than the 5 s peer call
+#: because the node itself dials the destination before it answers (its own probe budget is 6 s), and
+#: shorter than a job's timeout because nothing here is generation work.
+REPOINT_TIMEOUT_S = 30.0
+
+
+async def sync_repoint(registry: list[dict], client: httpx.AsyncClient, destination: str,
+                       migration: str, expected: str) -> dict:
+    """Push an **address-only repoint** to every node this controller can reach.
+
+    The delivery path is the one a rotation already uses — dial the Mac, and let the pull transport
+    hand the same request to a Mac that cannot be dialled, through its own check-in — so an
+    unreachable node is *queued*, not forgotten. `fleet_pull`'s transport is installed on the client
+    the caller passes, which is what makes the second half true.
+
+    **Nothing is retired and no token is rotated.** This is not a handover: the old controller keeps
+    its credential, its roster and its work, and the nodes move their parent address and nothing
+    else. That is what lets a controller keep generating alongside the one that took its nodes, and
+    what keeps every node's own identity intact.
+
+    `expected` is the address the caller believes these Macs are on — the fence, and **the caller's
+    to state**, exactly as `POST /api/hub/fleet` takes the new head's address from its caller rather
+    than deriving it. This controller cannot derive it: which of its own addresses a node recorded
+    at join (Tailscale, LAN, loopback) is the *app's* decision, and the route that would tell it —
+    `GET /api/hub/controller` — is deliberately outside the Fleet credential's scope, because it
+    carries this Mac's settings. A wrong fence is safe: the node compares it with its own membership
+    and refuses, which is the whole point of it.
+
+    Per-node status is one of:
+
+    * `repointed` — the Mac moved and its own answer says so. A 200 from a direct dial is the Mac
+      itself saying it wrote the destination (it writes before it answers, and in the same process),
+      which is the strongest evidence this side can get; there is no second read that could prove
+      more, for the reason above;
+    * `already_there` — the Mac was on the destination before this push, and wrote nothing;
+    * `pending` — the request was queued or the Mac did not answer. **Never read as moved**: the Mac
+      still holds its old address, the same operation can be pushed again, and that is what the
+      owner's fallback (or the next push) is for;
+    * `failed` — the Mac refused, and `detail` is the node's own sentence saying why.
+    """
+    machines = _remote_machines(registry)
+    results: dict[str, dict] = {}
+
+    async def one(machine: str, studios: list[dict]) -> tuple[str, dict]:
+        studio = studios[0]
+        url = _peer_url(studio)
+        token = held_token(machine) or fleet_token()
+        headers = {"X-Hub-Token": token} if token else {}
+        operation = f"{migration}:{machine}"
+        try:
+            answer = await client.post(f"{url}/api/hub/fleet/repoint", headers=headers,
+                                       json={"operation_id": operation,
+                                             "expected_controller_url": expected,
+                                             "controller_url": destination},
+                                       timeout=REPOINT_TIMEOUT_S)
+        except httpx.HTTPError as exc:
+            return machine, {"ok": False, "status": "pending", "from_url": expected,
+                             "to_url": destination, "operation_id": operation,
+                             "detail": ("the request was held for that Mac or it did not answer "
+                                        f"({str(exc).strip() or type(exc).__name__}); it keeps "
+                                        f"the controller it has and the same operation can be "
+                                        f"pushed again")}
+        body: dict = {}
+        try:
+            body = answer.json() or {}
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        if answer.status_code == 202 or body.get("queued"):
+            return machine, {"ok": False, "status": "pending", "from_url": expected,
+                             "to_url": destination, "operation_id": operation,
+                             "detail": "the request is waiting for that Mac's next check-in"}
+        if answer.status_code in {401, 403}:
+            return machine, {"ok": False, "status": "failed", "from_url": expected,
+                             "to_url": destination, "operation_id": operation,
+                             "detail": "that Mac refused this controller's credential, so it was "
+                                       "not moved (it holds a different Fleet token)"}
+        if not answer.is_success:
+            return machine, {"ok": False, "status": "failed", "from_url": expected,
+                             "to_url": destination, "operation_id": operation,
+                             "code": body.get("code"),
+                             "detail": str(body.get("detail") or
+                                           f"that Mac answered HTTP {answer.status_code}")}
+        if body.get("already_there"):
+            return machine, {"ok": True, "status": "already_there", "from_url": expected,
+                             "to_url": destination, "operation_id": operation,
+                             "detail": f"already on the controller at {destination}"}
+        moved_to = str(body.get("controller_url") or "").strip()
+        if not body.get("repointed") or moved_to.rstrip("/") != destination.rstrip("/"):
+            return machine, {"ok": False, "status": "pending", "from_url": expected,
+                             "to_url": destination, "operation_id": operation,
+                             "detail": ("that Mac accepted the move but does not report the new "
+                                        f"controller (it says {moved_to or 'nothing'}); it will "
+                                        f"be confirmed on its next check-in")}
+        return machine, {"ok": True, "status": "repointed", "from_url": expected,
+                         "to_url": destination, "operation_id": operation,
+                         "detail": f"moved from {expected} to {destination}"}
+
+    rows = await asyncio.gather(*(one(machine, studios)
+                                  for machine, studios in machines.items()))
+    results = dict(rows)
+    counted = {status: sum(row["status"] == status for row in results.values())
+               for status in ("repointed", "already_there", "pending", "failed")}
+    # This controller's own view of each Mac is a cache keyed by address family, and a node does not
+    # move until its next dispatch — but its *reported* facts are what the roster reads, so the peer
+    # cache is dropped rather than left to its TTL.
+    _cache.clear()
+    return {"total": len(results), **counted, "machines": results}
