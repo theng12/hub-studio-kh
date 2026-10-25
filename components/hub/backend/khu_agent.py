@@ -264,6 +264,9 @@ class Bootstrap:
                                   "stateDir": str(self.root / "state"), "stubBase": str(self.base),
                                   "apps": app_config(self.home, self.kit),
                                   "intervalMinutes": 5, "once": False})
+        # This Mac holds a token the publisher has just accepted: a later failure (a launchd
+        # problem, say) must not keep reporting a token the publisher no longer knows.
+        self.token_rejected = False
         return "re-enrolled" if re_enrolling else "enrolled"
 
     def activate(self) -> None:

@@ -380,7 +380,8 @@ class KhAgentBootstrapTests(unittest.TestCase):
         self.server.next_token = new_token
 
         self.assertEqual(asyncio.run(bootstrap.enrol("fixture-mac")), "re-enrolled")
-        self.assertTrue(bootstrap.token_rejected)
+        self.assertFalse(bootstrap.token_rejected,
+                         "once the fresh config is written, this Mac is not a rejected one")
         fresh = json.loads(config_file.read_text())
         self.assertEqual(fresh["token"], new_token)
         self.assertEqual(fresh["machine"], "fixture-mac")
@@ -461,6 +462,23 @@ class KhAgentBootstrapTests(unittest.TestCase):
         self.assertNotIn(old_token, answer["detail"])
         self.assertNotIn(new_token, answer["detail"])
         self.assertIn("enrolled again", answer["detail"])
+
+    def test_a_re_enrolled_mac_that_fails_to_activate_is_not_reported_as_rejected(self):
+        """The token is good again; a launchd failure is a different problem and must say so."""
+        recorder = self._recorder()
+        bootstrap = khu_agent.Bootstrap(self.kit, self.home, allow_test=True, run=recorder)
+        bootstrap.install()
+        asyncio.run(bootstrap.enrol("fixture-mac"))
+        new_token = secrets.token_hex(32)
+        self.server.issued_token = new_token
+        self.server.next_token = new_token
+        recorder.bootstrap_rc = 1  # launchd refuses the job
+
+        answer = asyncio.run(khu_agent.check_once(bootstrap, "fixture-mac"))
+        self.assertEqual(answer["state"], "waiting")
+        self.assertIs(answer["tokenRejected"], False)
+        self.assertNotIn("no longer recognises", answer["detail"])
+        self.assertNotIn(new_token, answer["detail"])
 
     def test_a_good_check_reports_no_rejected_token(self):
         recorder = self._recorder()
