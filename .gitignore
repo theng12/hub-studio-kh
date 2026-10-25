@@ -18,6 +18,13 @@ components/hub.db
 components/.fleet_token
 components/.kh_studio_token
 .kh_studio_token
+# The per-node credential a controller issued this Mac. A secret like the two above, and it was
+# missing from this list: the suite writes one into the checkout whenever a test joins a Hub
+# without redirecting `fleet_nodes.NODE_CREDENTIAL_FILE`, so `git add -A` could commit it.
+components/.node_credential
+# Left by a run: the Hub's own runtime archive and its startup audit trail.
+components/startup_audit.jsonl
+components/trash/
 
 # Written by the Hub at runtime; the role tests redirect it, but a manual run must not commit it.
 /components/controller_settings.json

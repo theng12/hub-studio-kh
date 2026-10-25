@@ -691,6 +691,19 @@ FLEET_ALLOWED = (
     # token to rotate. A node's own credential is deliberately not in `NODE_ALLOWED`: a leaf Mac
     # must not re-point itself at a controller of its choosing.
     ("POST", r"^/api/hub/fleet$"),
+    # **The address-only repoint (owner, 2026-10-25).** The same statement with the credential and
+    # the node's identity left alone: the controller moved, so every Mac it owns is told where it
+    # went without being re-joined. Fleet-reachable for the same reason the line above is — the
+    # controller is the only party every node trusts — and **not** in `NODE_ALLOWED`, so a leaf
+    # Mac's own credential cannot re-point it. It grants nothing the route above does not already:
+    # that one can set this Mac's parent address destructively; this one keeps the Mac.
+    #
+    # Unlike that route it **is** deliverable through the pull queue, which is the point: a Mac the
+    # controller cannot dial still has to be able to follow. `PULL_MEMBERSHIP_PATHS` refuses the
+    # adoption push on a replay because that one changes *which group* the Mac is in; a repoint
+    # continues the group it is already in, and every node checks the operation's
+    # `expected_controller_url` against its own membership before it writes anything.
+    ("POST", r"^/api/hub/fleet/repoint$"),
 )
 _FLEET_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in FLEET_ALLOWED)
 
@@ -747,6 +760,39 @@ def node_origin_allowed(method: str, path: str) -> bool:
     token is allowed, which would break a node that upgraded to per-node credentials (A8).
     """
     return node_path_allowed(method, path) and fleet_path_allowed(method, path)
+
+
+#: The header the app puts on a request it is replaying for its controller. `fleet_pull` hands a
+#: node the request the controller could not dial, and the app runs it against its own Hub with the
+#: Hub token — which is exactly what the operator's own window uses, so without this marker the Hub
+#: cannot tell a queued command from a person.
+PULL_HEADER = "x-studiohub-pull"
+
+#: **Membership, which a controller may never decide for this Mac** — even through the queue it is
+#: allowed to deliver work through. Each of these is deliberately outside both fleet allowlists
+#: already (`FLEET_ALLOWED`, `NODE_ALLOWED`), so a direct call with a Fleet or node credential is
+#: refused; the pull channel was the one route around that, because the *app* replays the command
+#: under this Mac's own credential. Left open, one leaked group token could make every node leave
+#: its group, or adopt a different one, without the owner touching any of them.
+PULL_MEMBERSHIP_PATHS = frozenset((
+    ("POST", "/api/hub/fleet/leave"),
+    ("POST", "/api/hub/fleet/adopt"),
+    ("POST", "/api/hub/fleet/reset"),
+    # The rotation/handover push. It is fleet-reachable on purpose — a controller hands its nodes a
+    # new credential and head that way — but a *replayed* one is a controller choosing this Mac's
+    # membership, which is the case this list exists for.
+    ("POST", "/api/hub/fleet"),
+))
+
+
+def pull_origin(request: Request) -> bool:
+    """Whether this request is the app replaying a command its controller queued."""
+    return bool(str(request.headers.get(PULL_HEADER) or "").strip())
+
+
+def pull_membership_refused(method: str, path: str) -> bool:
+    """Whether a replayed command is asking to change which group this Mac belongs to."""
+    return (str(method or "").upper(), str(path or "")) in PULL_MEMBERSHIP_PATHS
 
 
 def _fleet_actor(request: Request) -> dict[str, Any]:
@@ -882,6 +928,25 @@ def make_middleware(token: str):
         offered = presented_token(request)
         if offered is not None:
             if secrets.compare_digest(offered, token):
+                # **A replayed controller command is not the Mac's owner.** The app runs a queued
+                # command against this Hub with this Mac's own Hub token (`runFleetCommand`), so on
+                # this side a pull-delivered request is indistinguishable from the operator sitting
+                # at the Mac — and every owner-only route would be reachable by the controller that
+                # queued it. Two of those routes are **this Mac's membership**, which the code
+                # deliberately keeps out of both fleet allowlists: a controller must not be able to
+                # un-join a node, adopt it into a group, or reset the fleet it holds. Before this,
+                # it could, simply by queuing `POST /api/hub/fleet/leave` and letting the Mac replay
+                # it. The app marks its replays with `X-StudioHub-Pull`; the refusal is here because
+                # the policy belongs with the allowlists, not in a second copy inside the app.
+                if pull_origin(request) and pull_membership_refused(request.method, request.url.path):
+                    return JSONResponse(
+                        {"detail": f"{request.method} {request.url.path} was refused by "
+                                   f"{_this_machine_name()}: this request was replayed from a "
+                                   f"controller's queue, and a controller may not change which "
+                                   f"group this Mac belongs to. Leaving a fleet, adopting one and "
+                                   f"resetting one are the Mac owner's decisions, made here."},
+                        status_code=403,
+                    )
                 request.state.fleet_actor = {"kind": "hub", "node_id": None}
                 response = await call_next(request)
                 response.set_cookie(COOKIE_NAME, offered, httponly=True,

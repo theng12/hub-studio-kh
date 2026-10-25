@@ -900,6 +900,256 @@ def readmit(node_id: str) -> dict[str, Any] | None:
     return dict(row)
 
 
+def reset_fleet(*, by: str = "operator") -> dict[str, Any]:
+    """**Disassemble this controller's group**: forget every node, revoke every credential, and keep
+    the record.
+
+    The owner's clean-slate action (2026-10-25), after a move: *"make sure we can disassemble the
+    nodes and controllers so I can restart anew."* Every Mac he owns is then re-enrolled against a
+    controller he chooses, which is a day of work he wants to do once rather than repair a group
+    whose addresses and credentials he no longer trusts.
+
+    **It is deliberately not the eviction path.** `remove` leaves a tombstone in `removed` that
+    refuses that id for ever, which is right for a Mac being sold and wrong here: the same Macs
+    re-enrol minutes later, and a controller that refused its own roster by name would make the
+    reset one-way. Nothing here is recorded as removed, so every id may join again at once.
+
+    **Nothing is deleted.** The roster and the pull queue are moved into the data directory's
+    `_trash` (`backend/state_trash`), because a roster is the only record of which Macs were in the
+    group and a disassembled group is exactly the thing worth reading afterwards. A move that fails
+    raises, and the reset does not happen: "the old roster was kept" is not a promise to break
+    quietly.
+
+    The caller mints the new group token (`peers.set_fleet_token("")`) and forgets the machines
+    still waiting on a previous one (`peers.clear_previous_tokens`) — this function owns the roster,
+    not the credentials — and reloads the dispatch registry.
+    """
+    from . import fleet_pull
+    from . import state_trash
+
+    document = _document()
+    forgotten = [{"id": node_id, "name": str(row.get("name") or node_id)}
+                 for node_id, row in sorted(document["nodes"].items())]
+    # Archive **first**, and both files, while they still hold everything: the write below opens a
+    # fresh empty roster, and a queue archived afterwards would be an empty one.
+    archived = {}
+    for label, path, reason in (("roster", store_path(), "reset-fleet"),
+                                ("queue", fleet_pull.store_path(), "reset-fleet")):
+        where = state_trash.move_to_trash(path, reason=reason)
+        if where:
+            archived[label] = where
+    # Both sets empty: no live rows, and no tombstones — see the docstring.
+    _write({}, {})
+    # The queue's in-process view of the roster (which origin belongs to which node, and who is
+    # waiting on an answer) is keyed by nothing the reset rewrote, so it is dropped explicitly
+    # rather than left to its two-second TTL.
+    fleet_pull.reset_store()
+    with _render_capability_lock:
+        _render_capability_cache.clear()
+    log.info("fleet reset by %s: %d node(s) forgotten, kept in %s",
+             by, len(forgotten), ", ".join(archived.values()) or "nothing to keep")
+    return {"ok": True, "reset": True, "by": by, "total": len(forgotten),
+            "forgotten": forgotten, "archived": archived}
+
+
+#: What an operation id may look like: `repoint-<anything>` a controller or the app chose, at least
+#: eight characters and at most 120. Deliberately its own pattern rather than the node-id one - this
+#: is an opaque label for one migration, not a machine, and a driver is free to date it or separate
+#: its parts with `:`.
+REPOINT_OPERATION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,119}")
+
+#: A repoint this Mac will not apply, carrying the status the route should answer with. Its own type
+#: because these are not malformed requests: the asking controller is well formed and refused on
+#: purpose, and the difference between "your request was wrong" (400) and "this Mac is not in the
+#: state you think it is" (409) is the difference between fixing the caller and re-reading the Mac.
+class RepointRefused(ValueError):
+    def __init__(self, status: int, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.status = status
+        self.code = code
+        self.detail = detail
+
+
+async def _destination_knows_us(address: str, node_id: str, credential: str,
+                                *, client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Whether the controller at `address` already knows this Mac, asked with this Mac's **own**
+    credential and nothing else.
+
+    This is the whole trust check of an address-only repoint, and it is deliberately narrow: the
+    node presents the credential its *current* controller issued, and only a controller holding the
+    transferred roster - the same credential hashes - can recognise it. A group Fleet token is not
+    offered as a fallback, because the shared token is exactly what cannot tell one controller from
+    another, and accepting it here would turn "the roster moved" into "anyone with the group secret
+    can claim this Mac".
+
+    Redirects are off. An address that answers 302 is a controller that has moved again, and
+    following it silently would store an address this Mac never verified.
+    """
+    owned = client is None
+    if owned:
+        client = httpx.AsyncClient(follow_redirects=False)
+    try:
+        response = await client.get(f"{address}/api/hub/fleet/nodes/{quote(node_id)}/status",
+                                    headers={"X-Hub-Token": credential}, timeout=PROBE_TIMEOUT)
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        # A controller that answers 200 with a bare string, a list or a number is not answering the
+        # question. Treated as no answer rather than trusted or crashed on: the caller then refuses
+        # the repoint, which is the safe direction.
+        if not isinstance(body, dict):
+            body = {}
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        return {"ok": False, "code": "DESTINATION_UNREACHABLE",
+                "detail": (f"the controller at {address} answered nothing "
+                           f"({type(exc).__name__}), so this Mac's membership was left alone")}
+    finally:
+        if owned:
+            await client.aclose()
+    state = str((body or {}).get("state") or "")
+    if response.status_code == 200 and state == "member":
+        return {"ok": True, "state": state}
+    if state == "removed":
+        return {"ok": False, "code": "DESTINATION_REMOVED_THIS_MAC",
+                "detail": (f"the controller at {address} has this Mac on its removed list, so it "
+                           f"cannot be repointed to it - re-admit this Mac there first, or join "
+                           f"it again with that controller's Fleet token")}
+    if response.status_code in (401, 403):
+        said = str((body or {}).get("detail") or "").strip()
+        return {"ok": False, "code": "DESTINATION_DOES_NOT_KNOW_THIS_MAC",
+                "detail": (f"the controller at {address} refused this Mac's own credential "
+                           f"(HTTP {response.status_code}): it does not hold this Mac's roster row "
+                           f"with the credential it was issued, so a repoint would leave the Mac "
+                           f"answering a controller that does not recognise it. Transfer the "
+                           f"roster first, or use a full re-join."
+                           + (f" That controller said: {said[:300]}" if said else ""))}
+    return {"ok": False, "code": "DESTINATION_UNKNOWN_ANSWER",
+            "detail": (f"the controller at {address} answered HTTP {response.status_code} "
+                       f"({state or 'no state'}) for this Mac, which is not proof that it knows it")}
+
+
+async def repoint(payload: dict[str, Any], *,
+                  client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """**Move this Mac to a different controller without re-joining it.**
+
+    A continuation of one trust domain, not a new membership: the controller changed address (or
+    the owner moved a Mac to another of his own controllers that already holds the group's roster),
+    and every leaf of this Mac's identity has to survive it - its Machine ID, its per-node
+    credential, the group Fleet token, its release pins, its model library and its owner settings.
+
+    Which is why this is a separate operation from joining. `join`/`adopt` are how a Mac *enters* a
+    group: they mint a new credential, and the Fleet-token push clears the node credential outright.
+    Re-joining forty Macs to hand two of them to another controller reissues forty credentials and
+    re-registers forty machines, and every one of those is a chance to lose an identity. This writes
+    exactly two keys.
+
+    The body carries no credential, no node id and no settings - only the three things the operation
+    needs:
+
+    * `operation_id` - the durable identity of *this* migration, so a retry after a lost reply
+      returns what happened instead of doing it again;
+    * `expected_controller_url` - the controller this Mac is believed to be on now. It is the fence
+      against a stale instruction: a queued repoint that arrives after the Mac has already moved
+      elsewhere names the address it left, not the one it is on, and is refused rather than applied;
+    * `controller_url` - where to move to, checked by the same private-IPv4 validator every other
+      address this Hub stores goes through.
+
+    **Nothing is written before every check has passed**, and the destination must already recognise
+    this Mac's own credential (see `_destination_knows_us`). If any of that fails, this Mac keeps the
+    controller it has and says why - a half-moved Mac is worse than an unmoved one, because it
+    answers a controller that thinks it is somewhere else.
+
+    Authorisation is deliberately the group Fleet credential or this Mac's own operator, and
+    **never a node credential** (`auth.FLEET_ALLOWED` carries it, `auth.NODE_ALLOWED` does not), the
+    same boundary `POST /api/hub/fleet` has. It is not a new power: a Fleet token can already set
+    this Mac's parent address through that route, destructively. This is the version that keeps the
+    Mac intact.
+    """
+    from . import control_plane
+
+    operation_id = str(payload.get("operation_id") or "").strip()
+    if not REPOINT_OPERATION_PATTERN.fullmatch(operation_id):
+        raise ValueError("operation_id must be 8-120 letters, numbers, dots, dashes, colons or "
+                         "underscores, starting with a letter or number")
+    # Both addresses go through the one validator that already decides what this Hub may store.
+    expected = validate_address(payload.get("expected_controller_url"))
+    destination = validate_address(payload.get("controller_url"))
+
+    current = membership()
+    if not current["member"]:
+        raise RepointRefused(409, "NOT_A_MEMBER",
+                             "this Mac is not in a group, so there is no controller to move away "
+                             "from. Join the new controller instead - a repoint only ever continues "
+                             "a membership this Mac already has.")
+    # **The receipt is consulted before the fence, and that order is the whole point.** An operation
+    # that already applied leaves the Mac on the address it moved *to*, so its own
+    # `expected_controller_url` — the address it came from — no longer matches the current
+    # membership. Checking the fence first would refuse every honest retry of an operation whose
+    # reply was lost, which is the one case the receipt exists for. A *stale* operation (a different
+    # id, naming an address this Mac has left) is still refused below, untouched.
+    receipt = control_plane.load_settings().get("repoint_receipt")
+    if isinstance(receipt, dict) and str(receipt.get("operation_id") or ""):
+        if str(receipt["operation_id"]) == operation_id:
+            if (str(receipt.get("from_url") or "") == expected
+                    and str(receipt.get("to_url") or "") == destination):
+                return {"ok": True, "repointed": True, "already_applied": True,
+                        "controller_url": destination, "operation_id": operation_id,
+                        "previous_controller_url": expected,
+                        "applied_at": receipt.get("applied_at")}
+            raise RepointRefused(
+                409, "OPERATION_ID_REUSED",
+                f"operation {operation_id!r} was already applied to a different pair of addresses "
+                f"({receipt.get('from_url')} → {receipt.get('to_url')}). One operation id means one "
+                f"migration: choose a new id for a new move, so a replay can never be mistaken for "
+                f"a second instruction.")
+    if current["controller_url"] != expected:
+        raise RepointRefused(
+            409, "STALE_EXPECTED_URL",
+            f"this Mac's controller is {current['controller_url']}, not {expected}. The operation "
+            f"names an address this Mac has already left, so it was not applied - a repoint that "
+            f"overwrote a newer move would take this Mac back to a controller it left on purpose.")
+    if destination == current["controller_url"]:
+        # Already there. Reported as its own outcome rather than as a fresh success, and nothing is
+        # written: there is no state change to record, and a receipt for a no-op would be a record
+        # of a migration that never happened.
+        return {"ok": True, "repointed": False, "already_there": True,
+                "controller_url": destination, "operation_id": operation_id,
+                "detail": f"this Mac is already on the controller at {destination}"}
+
+    node_id = str(control_plane.load_settings().get("controller_id") or "").strip().lower()
+    credential = node_credential()
+    if not credential:
+        raise RepointRefused(
+            409, "NO_NODE_CREDENTIAL",
+            "this Mac holds no node credential, so there is nothing for a new controller to "
+            "recognise: this Mac would arrive unknown and refuse to answer it. Re-join instead.")
+    confirmed = await _destination_knows_us(destination, node_id, credential, client=client)
+    if not confirmed["ok"]:
+        raise RepointRefused(409, confirmed["code"], confirmed["detail"])
+
+    # **One write, carrying the receipt and the new address together.** Two writes could land one
+    # without the other, which is exactly the state the app cannot recover from: an address whose
+    # migration has no record, or a record whose address was never stored. `save_settings` writes
+    # atomically and updates the process cache with the same values, so every reader in this process
+    # sees the new controller on its next call rather than after a restart.
+    applied_at = time.time()
+    control_plane.save_settings({
+        "parent_controller_url": destination,
+        "repoint_receipt": {"operation_id": operation_id, "from_url": expected,
+                            "to_url": destination, "applied_at": applied_at,
+                            "state": "applied"},
+    })
+    log.info("node %s repointed from %s to %s (operation %s)",
+             node_id, expected, destination, operation_id)
+    return {"ok": True, "repointed": True, "already_applied": False,
+            "controller_url": destination, "previous_controller_url": expected,
+            "operation_id": operation_id, "applied_at": applied_at,
+            # Named because the promise of this operation is what it *did not* touch.
+            "kept": ["this Mac's Machine ID", "its per-node credential", "the group Fleet token",
+                     "its release pins", "its model library", "its owner work settings"]}
+
+
 def remote_studios() -> list[dict[str, Any]]:
     """Dispatchable studio entries for every joined node.
 

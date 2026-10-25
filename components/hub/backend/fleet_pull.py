@@ -449,6 +449,19 @@ def client(**kwargs: Any) -> httpx.AsyncClient:
     return httpx.AsyncClient(**kwargs)
 
 
+def reset_store() -> None:
+    """Drop this process's view of the queue: the file has been archived by a fleet reset.
+
+    Nothing is written here — the caller owns the file (`fleet_nodes.reset_fleet` moves it into the
+    data directory's `_trash` first), so what is left is the two pieces of state this module keeps
+    in memory: which origin belongs to which node, and which callers are holding a connection open
+    for an answer that will never come because the node is no longer on the roster.
+    """
+    global _ORIGIN_CACHE
+    _ORIGIN_CACHE = None
+    _WAITERS.clear()
+
+
 def reset_for_tests() -> None:
     global _ORIGIN_CACHE
     _ORIGIN_CACHE = None

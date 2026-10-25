@@ -91,6 +91,12 @@ def defaults() -> dict:
         # these, so the retirement is enforced by the same function every remote caller uses.
         "handed_over_to": None,
         "handed_over_at": None,
+        # **The last address-only repoint this Mac applied.** One record, holding the operation id,
+        # the address it moved from, the address it moved to and when. It has a second job beyond
+        # bookkeeping: the app reads it at startup so a Mac whose Hub followed a new controller
+        # stops re-joining the old one, and an exact replay of the same operation is answered from
+        # here instead of being applied twice. `None` until this Mac is repointed.
+        "repoint_receipt": None,
     }
 
 
@@ -230,7 +236,7 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
         # Carried like every other key in `defaults()`. The file's own comment above records what
         # dropping one costs: joining wrote "adopted", nothing persisted it, and every reader was
         # told "minted".
-        for key in ("handed_over_to", "handed_over_at"):
+        for key in ("handed_over_to", "handed_over_at", "repoint_receipt"):
             if key in values:
                 updated[key] = values[key]
             else:
@@ -247,6 +253,39 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
             raise ValueError("controller_id must use lowercase letters, numbers, dots, dashes, or underscores")
         if not 1 <= len(updated["site_name"]) <= 120:
             raise ValueError("site_name must be between 1 and 120 characters")
+        # **This Mac's identity is not editable from inside a group** (owner, 2026-10-25: *"what are
+        # the identifiers on Studio Hub for each machine? Make sure they're prominent and easily
+        # edited, so I don't repeat my current mistake, because they're hard to change."*).
+        #
+        # Editable and routed-by are not the same thing. `controller_id` becomes this Mac's roster
+        # `node_id` when it joins, and its controller addresses work to that id; changing it under a
+        # live membership would leave the controller holding a row for a Mac that no longer answers
+        # to it, and the Mac's own credential would still be keyed to the old id. So the answer is a
+        # refusal that names the way out — `POST /api/hub/fleet/leave` — rather than a rename that
+        # quietly breaks the group. Read-only while joined, freely editable standalone: the whole
+        # point is that the owner sets these up *before* he enrols, on a clean slate.
+        if str(current.get("fleet_credential_origin") or "minted").lower() == "adopted":
+            for key, label in (("controller_id", "Machine ID"),
+                               ("site_id", "Site ID"), ("site_name", "Site name")):
+                if updated[key] != current.get(key):
+                    raise ValueError(
+                        f"{label} cannot be changed while this Mac is in a group: its controller "
+                        f"routes by this Mac's Machine ID and knows it by these. Leave the fleet "
+                        f"first (Connections → Leave this group), change it, then join again.")
+        # **A second Mac may not answer to an id this controller already routes to.** A join
+        # registers `controller_id` as the roster's `node_id`, so two machines with one id are one
+        # routed machine: work meant for one lands on the other and the roster shows a single row.
+        # Checked against this Mac's own roster, which is the only list it can be sure of locally —
+        # a controller it is not joined to cannot be asked, and guessing there would be worse.
+        if updated["controller_id"] != current.get("controller_id"):
+            from . import fleet_nodes
+            existing = fleet_nodes._read().get(updated["controller_id"])
+            if existing is not None:
+                raise ValueError(
+                    f"'{updated['controller_id']}' is already a Mac in this controller's roster "
+                    f"({existing.get('name') or updated['controller_id']} at "
+                    f"{existing.get('address') or 'an unknown address'}). Two Macs answering to one "
+                    f"Machine ID are one routed machine, not two: choose another id.")
         candidate_url = None
         if new_database_url is not None and new_database_url.strip():
             candidate_url = new_database_url.strip()

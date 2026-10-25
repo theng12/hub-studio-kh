@@ -1425,6 +1425,13 @@ struct NativeControllerSettings: Decodable, Equatable {
     /// still taking jobs. Absent from a Hub older than the handover route.
     let handedOverTo: String?
     let handedOverAt: Double?
+    /// **The controller this Mac's Hub is following right now**, which is the backend's answer and
+    /// not the app's. Kept because the two can differ by design: an address-only repoint moves a Mac
+    /// between controllers by writing this key on the Hub, and the app is not part of that
+    /// transaction. Read it, and follow it (see `followHubMembershipIfMoved`), or the app keeps
+    /// re-joining the controller the Mac has left. Absent from a Hub older than the field, and
+    /// absent means "nothing to follow" rather than an address.
+    let parentControllerUrl: String?
 }
 
 struct NativeControllerReadiness: Decodable, Equatable {
@@ -1881,6 +1888,27 @@ struct NativeFleetSyncAnswer: Decodable, Equatable {
     let manual: Int
     let pending: Int
     let machines: [String: NativeFleetSyncMachine]
+}
+
+/// `POST /api/hub/fleet/reset`: what a controller's group reset did.
+///
+/// `forgotten` carries the ids and names of the Macs that were on the roster — the answer has to
+/// name them, because "5 Macs forgotten" without the five is a number the operator cannot check
+/// against the shelf. `archived` names where the old roster was kept.
+struct NativeFleetResetAnswer: Decodable, Equatable {
+    let ok: Bool?
+    let reset: Bool?
+    let total: Int
+    let forgotten: [Forgotten]
+    /// Label (`roster`, `queue`) -> where it was kept. Empty when there was nothing to keep.
+    let archived: [String: String]
+    let token: String?
+    let detail: String?
+
+    struct Forgotten: Decodable, Equatable, Identifiable {
+        let id: String
+        let name: String
+    }
 }
 
 /// What the operator is shown after a rotation or a handover.
@@ -3492,9 +3520,23 @@ final class NativeWorkspaceStore: ObservableObject {
     private var workPolicyRevision = 0
     private var workPolicyReadID: UUID?
     /// Truthful Hub identity for the Connections screen.
-    @Published private(set) var controllerIdentity: NativeControllerIdentity?
+    /// **Setting this is also how the app learns its controller moved.** Every path that reads the
+    /// identity publishes it here, and the `didSet` reconciles the saved membership with the Hub's
+    /// own answer. One place rather than a call at each reader, because a reader that forgot would
+    /// silently keep re-joining the old controller — which is the failure this exists to prevent.
+    /// The work is a string comparison and, when they differ, an in-memory swap plus one small
+    /// preferences write; it makes no network call, so re-firing it is harmless.
+    @Published private(set) var controllerIdentity: NativeControllerIdentity? {
+        didSet {
+            if controllerIdentity != oldValue { followHubMembershipIfMoved() }
+        }
+    }
     @Published private(set) var hubVersion: NativeVersion?
     @Published private(set) var roleNote: String?
+    /// What the last Machine ID / Site edit concluded, in the Hub's own words. Kept apart from
+    /// `roleNote` because the two live in different sections of the same page, and a rename note
+    /// appearing under the role picker was already one confusing answer in the wrong place.
+    @Published private(set) var identityNote: String?
     @Published private(set) var fleetNodes: NativeFleetInventory?
     /// Every Mac in the fleet in one row each, for the fleet screen.
     @Published private(set) var fleetOverview: NativeFleetOverview?
@@ -7685,6 +7727,14 @@ final class NativeWorkspaceStore: ObservableObject {
         request.timeoutInterval = 900
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let hubToken { request.setValue(hubToken, forHTTPHeaderField: "X-Hub-Token") }
+        // **This is a replay, and the Hub is told so.** The request runs under this Mac's own Hub
+        // token — the same credential the operator's window uses — so without a marker the Hub
+        // cannot tell a command its controller queued from a person sitting at the Mac. It matters
+        // for one class of route: `POST /api/hub/fleet` and its `leave`/`adopt`/`reset` siblings
+        // decide which group this Mac belongs to, and those are the owner's decisions. The Hub
+        // refuses them when this header is present; the policy lives there, not in a second list
+        // here that would have to be kept in step.
+        request.setValue(command.id, forHTTPHeaderField: "X-StudioHub-Pull")
         for (name, value) in command.headers where !name.lowercased().hasPrefix("x-hub-token") {
             request.setValue(value, forHTTPHeaderField: name)
         }
@@ -7742,6 +7792,67 @@ final class NativeWorkspaceStore: ObservableObject {
         guard controllerIdentity?.settings.fleetCredentialOrigin == "adopted" else { return }
         await joinController(address: membership.controllerAddress, token: token,
                              boundHosts: membership.boundHosts, quiet: true)
+    }
+
+    /// **Follow the controller this Mac's Hub reports, when it is not the one the app has saved.**
+    ///
+    /// An address-only repoint moves a Mac between controllers by writing one key on the Hub. The
+    /// app is not in that transaction, so without this the saved membership stays on the *old*
+    /// controler and every path that trusts it keeps pointing the wrong way: the startup re-join,
+    /// the status ask that decides whether this Mac is still listed, the check-in that takes work
+    /// back, and the release mirror. A Mac that had deliberately moved would drag itself back at the
+    /// next launch, because `hasRejoinableMembership` reads the saved address.
+    ///
+    /// **Only the address changes**, which is the whole difference between a repoint and a re-join:
+    /// the group Fleet token, this Mac's own node credential, the networks it answers on and the
+    /// pinned release key all belong to the membership and are carried across untouched. That is why
+    /// this rebuilds one field instead of calling `joinController` — a join would mint a new
+    /// credential and re-register the Mac, which is exactly what the operation exists to avoid.
+    ///
+    /// The in-flight attempts are cancelled first: an old-address re-join may already be off, and its
+    /// late callback would otherwise write the address this function just replaced.
+    func followHubMembershipIfMoved() {
+        guard let identity = controllerIdentity,
+              identity.settings.fleetCredentialOrigin == "adopted",
+              let hubAddress = identity.settings.parentControllerUrl?
+                  .trimmingCharacters(in: .whitespacesAndNewlines), !hubAddress.isEmpty,
+              let membership = storedMembership,
+              Self.membershipAddressesDiffer(hubAddress, membership.controllerAddress)
+        else { return }
+        let previous = membership.controllerAddress
+        // Fence the work that reads the old address before it is replaced. `cancelMembershipRejoin`
+        // stops the backed-off loop; the startup attempt's generation id is bumped by
+        // `invalidateStartupMembershipAttempt`, so an attempt already in flight cannot publish.
+        cancelMembershipRejoin()
+        invalidateStartupMembershipAttempt()
+        membershipUnknownStreak = 0
+        storedMembership = FleetMembership(controllerAddress: hubAddress,
+                                           token: membership.token,
+                                           boundHosts: membership.boundHosts,
+                                           nodeCredential: membership.nodeCredential,
+                                           releasePublisherKey: membership.releasePublisherKey)
+        controllerAddress = hubAddress
+        // The app owns the preferences file, so the new address is written through the callback a
+        // join already uses. Without this the move would last exactly until the next launch.
+        onControllerJoined?(hubAddress)
+        controllerRemoval = nil
+        note(.success, "This Mac's controller moved to \(hubAddress); it was \(previous). "
+            + "The group's token and this Mac's own credential are unchanged, so nothing was "
+            + "re-joined.")
+    }
+
+    /// Whether two membership addresses name different controllers, allowing for the `http://`
+    /// prefix and a trailing slash on either. The Hub stores `http://<ip>:<port>`; the app has kept
+    /// whatever was typed or last read, and treating those as a move would fire a false "your
+    /// controller moved" note on every read.
+    static func membershipAddressesDiffer(_ left: String, _ right: String) -> Bool {
+        func canonical(_ value: String) -> String {
+            var text = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if text.hasPrefix("http://") { text = String(text.dropFirst("http://".count)) }
+            while text.hasSuffix("/") { text.removeLast() }
+            return text
+        }
+        return canonical(left) != canonical(right)
     }
 
     /// What a launch does once the Hub is ready: learn who this Mac is, then re-join its group.
@@ -8082,6 +8193,92 @@ final class NativeWorkspaceStore: ObservableObject {
                                     verified: answer.verified, manual: answer.manual,
                                     pending: answer.pending, followed: followed,
                                     unfinished: unfinished, outcomes: outcomes)
+    }
+
+    /// **Disassemble this controller's group and start a clean one** (owner, 2026-10-25).
+    ///
+    /// The controller-side half of the reset flow. Every node row is forgotten, every per-node
+    /// credential is revoked, and the Hub mints a fresh Fleet token; the roster it dropped is
+    /// archived in the Hub's Trash Folder rather than deleted, so which Macs were in the group is
+    /// still readable afterwards. This is *not* a rotation — a rotation hands the same nodes a new
+    /// secret, this drops the nodes — so the page reports both facts and the new token.
+    ///
+    /// The nodes are not told: a disassembled group has no channel left to tell them on, and each
+    /// one leaves from its own Connections page (`leaveGroup`). That is the owner's flow — reset
+    /// the controllers, leave on the Macs, enrol everything again.
+    func resetFleet() async {
+        guard !fleetOperationRunning, let requestConnection = connectionID else { return }
+        fleetOperationRunning = true
+        fleetOperation = nil
+        defer { fleetOperationRunning = false }
+        do {
+            let answer: NativeFleetResetAnswer = try await sendEmpty(
+                ["api", "hub", "fleet", "reset"], method: "POST")
+            guard connectionID == requestConnection else { return }
+            // A fresh Fleet token was minted, so the value beside the Copy button is re-read rather
+            // than left showing the credential of the group that no longer exists.
+            onFleetCredentialChanged?()
+            // **A "Send here" pin named a Mac that is gone, so it is cleared.** Every machine the
+            // roster held has just been forgotten, which makes a `machine:` pin void by
+            // construction — cleared here rather than inferred from a roster read, because a read
+            // that is already in flight would still show the pin's machine and the pin would survive
+            // exactly when it was certainly void. The Hub would otherwise refuse every new job with
+            // a sentence about a Mac that is not listed.
+            let pinCleared = routingPin?.hasPrefix("machine:") == true
+            if pinCleared { routingPin = nil }
+            // Re-read the roster so the table shows the group as it now is: empty.
+            await refreshFleetNodes()
+            guard connectionID == requestConnection else { return }
+            await refreshConnection()
+            guard connectionID == requestConnection else { return }
+            let counted = answer.total == 1 ? "1 Mac" : "\(answer.total) Macs"
+            let kept = answer.archived.values.first.map { " The record is kept at \($0)." } ?? ""
+            let pinLine = pinCleared
+                ? " The \"Send here\" pin was cleared, because that Mac is no longer in the fleet."
+                : ""
+            let message = "This controller reset its group: \(counted) forgotten and a new Fleet "
+                + "token minted. Each of those Macs leaves from its own Connections page, then "
+                + "joins this one again with the new token." + kept + pinLine
+            note(.success, message)
+            error = nil
+        } catch {
+            guard connectionID == requestConnection else { return }
+            let message = Self.actionable(error, action: "Reset the fleet")
+            note(.failure, message)
+            self.error = message
+        }
+    }
+
+    /// Set this Mac's **Machine ID, Site ID and Site name**.
+    ///
+    /// Editable only while this Mac is not in a group, and the Hub enforces that too: `controller_id`
+    /// becomes this Mac's roster `node_id` when it joins, so a controller routes by it, and changing
+    /// it under a live membership would leave the controller holding a row for a Mac that no longer
+    /// answers to it. The Hub's refusal is the authority; this function does not re-implement the
+    /// rule, it only reports what came back.
+    func setMachineIdentity(controllerId: String, siteId: String, siteName: String) async {
+        guard let requestConnection = connectionID else { return }
+        identityNote = nil
+        do {
+            // The Hub's controller route is a PUT whose reply is the flat settings object rather
+            // than the `{settings, readiness}` envelope, so the body is not decoded here and the
+            // refresh below reads the truth - the same shape `setRole` uses.
+            let _: EmptyResponse = try await sendJSON(
+                ["api", "hub", "controller"], method: "PUT",
+                body: MachineIdentityRequest(controllerId: controllerId, siteId: siteId,
+                                             siteName: siteName))
+            guard connectionID == requestConnection else { return }
+            await refreshConnection()
+            guard connectionID == requestConnection else { return }
+            let settings = controllerIdentity?.settings
+            identityNote = "This Mac's Machine ID is now \(settings?.controllerId ?? controllerId)"
+                + (settings.map { " (site \($0.siteId), \($0.siteName))" } ?? "")
+                + ". A controller this Mac joins later registers this id, so set it before joining."
+            error = nil
+        } catch {
+            guard connectionID == requestConnection else { return }
+            self.error = Self.actionable(error, action: "Change this Mac's identity")
+        }
     }
 
     /// The name of a machine in this controller's roster, for a result that must name Macs rather
@@ -10566,6 +10763,14 @@ private struct ModelHealthRecheck: Encodable { let model: String; let studio: St
 private struct HubModelRecheck: Decodable { let ok: Bool }
 
 private struct RoleChange: Encodable { let role: String }
+/// `PUT /api/hub/controller`, the identity half of it: this Mac's Machine ID and its site. Every
+/// field is sent on every save so the Hub's answer is the whole identity rather than a merge the
+/// page would have to re-derive. Snake-cased by the encoder, which the Hub reads.
+private struct MachineIdentityRequest: Encodable {
+    let controllerId: String
+    let siteId: String
+    let siteName: String
+}
 /// `POST /api/hub/fleet` on this Mac with the Hub token: a rotation. `token` is omitted — the Hub
 /// mints the new value, so it never travels from the app.
 private struct FleetTokenRequest: Encodable { let token: String? }

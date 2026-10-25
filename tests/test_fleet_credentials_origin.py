@@ -182,11 +182,27 @@ class FleetCredentialTests(unittest.TestCase):
 
         The route is outside the fleet credential's allowlist for the same reason adopting is -
         both change which group this Mac answers to, and that is the Mac owner's decision.
+
+        **The rule is asserted against the allowlists, not against the module's text.** It used to be
+        `assertNotIn("/api/hub/fleet/leave", auth_source)`, which was a proxy: it held only while
+        nothing in that file *named* the path. The pull-channel guard (`auth.PULL_MEMBERSHIP_PATHS`)
+        names it in order to refuse a replayed command, and the proxy failed on a change that made
+        the boundary stricter rather than weaker. What matters is what a fleet credential can
+        *call*, so that is the question asked here - and it is the stronger one: adding the route to
+        `FLEET_ALLOWED` fails this, while merely naming it no longer does.
         """
-        source = (ROOT / "components" / "hub" / "backend" / "auth.py").read_text()
-        self.assertNotIn("/api/hub/fleet/leave", source,
-                         "leaving must not be callable with the borrowed fleet credential")
-        self.assertNotIn("/api/hub/fleet/adopt", source)
+        from components.hub.backend import auth
+
+        for method, path in (("POST", "/api/hub/fleet/leave"),
+                             ("POST", "/api/hub/fleet/adopt"),
+                             ("POST", "/api/hub/fleet/reset")):
+            with self.subTest(path=path):
+                self.assertFalse(
+                    auth.fleet_path_allowed(method, path),
+                    f"a borrowed fleet credential must not be able to call {path}")
+                self.assertFalse(
+                    auth.node_origin_allowed(method, path),
+                    f"a node's own credential must not be able to call {path}")
 
 
 if __name__ == "__main__":
