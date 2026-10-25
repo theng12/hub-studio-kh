@@ -24,7 +24,8 @@ from . import ed25519
 log = logging.getLogger("studiohub.khu_agent")
 KIT_FILES = {"VERSION", "bin/khu", "bin/khu-stub", "install-agent.sh",
              "com.khupdater.agent.plist", "agent-config.example.json", "publisher.json"}
-STATUS = {"state": "pending", "detail": "KH Updater has not been checked yet."}
+STATUS = {"state": "pending", "tokenRejected": False,
+          "detail": "KH Updater has not been checked yet."}
 
 
 def preserve(path: Path, root: Path) -> None:
@@ -137,6 +138,7 @@ class Bootstrap:
         self.kit, self.home, self.allow_test, self.run = kit, home, allow_test, run
         self.root = home / "Library/KHUpdater"
         self.base = self.root / "base"
+        self.token_rejected = False
 
     def install(self) -> str:
         verify_kit(self.kit, allow_test=self.allow_test)
@@ -198,15 +200,39 @@ class Bootstrap:
             raise ValueError("unsafe version link")
         os.replace(fresh, link)
 
-    async def enrol(self, machine: str) -> None:
+    async def _token_rejected(self, publisher: dict, saved: dict, machine: str) -> bool:
+        """True only when the publisher answers 401 for the stored token.
+
+        Anything else — 200, 404, a server error, a timeout, an unreachable host — is not
+        proof of staleness, so a working config is never dropped on an unreachable publisher.
+        """
+        parsed = urlsplit(publisher["feedURL"])
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        try:
+            async with httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=10) as client:
+                response = await client.post(f"{origin}/status",
+                                             headers={"authorization": f"Bearer {saved['token']}"},
+                                             json={"machine": machine})
+        except httpx.HTTPError:
+            return False
+        return response.status_code == 401
+
+    async def enrol(self, machine: str) -> str:
         config_file = self.base / "config.json"
         publisher = publisher_config(json.loads((self.kit / "publisher.json").read_text()),
                                      allow_test=self.allow_test)
+        re_enrolling = False
         if config_file.exists():
             saved = json.loads(config_file.read_text())
             if any(saved[k] != publisher[k] for k in ("feedURL", "publicKey")) or saved["machine"] != machine:
                 raise ValueError("installed agent has another authority or identity")
-            return
+            if not await self._token_rejected(publisher, saved, machine):
+                return "current"
+            # The publisher dropped this Mac. Keep the dead config as evidence and enrol again
+            # through the window-gated flow below; nothing here trusts the old token.
+            preserve(config_file, self.root)
+            self.token_rejected = True
+            re_enrolling = True
         request_file = self.root / "enrol-request.json"
         if not request_file.exists():
             private_json(request_file, {"machine": machine, "nonce": secrets.token_hex(32)})
@@ -238,6 +264,7 @@ class Bootstrap:
                                   "stateDir": str(self.root / "state"), "stubBase": str(self.base),
                                   "apps": app_config(self.home, self.kit),
                                   "intervalMinutes": 5, "once": False})
+        return "re-enrolled" if re_enrolling else "enrolled"
 
     def activate(self) -> None:
         if not (self.base / "config.json").is_file():
@@ -270,13 +297,23 @@ class Bootstrap:
 async def check_once(bootstrap: Bootstrap, machine: str) -> dict:
     try:
         state = await asyncio.to_thread(bootstrap.install)
-        await bootstrap.enrol(machine)
+        enrolment = await bootstrap.enrol(machine)
         await asyncio.to_thread(bootstrap.activate)
-        answer = {"state": state, "detail": "KH Updater enrolled; launchd job is loaded."}
+        if enrolment == "re-enrolled":
+            answer = {"state": state, "tokenRejected": True,
+                      "detail": "The publisher had dropped this Mac's token; KH Updater enrolled again."}
+        else:
+            answer = {"state": state, "tokenRejected": False,
+                      "detail": "KH Updater enrolled; launchd job is loaded."}
     except Exception:
         # Never format an exception: HTTP and subprocess errors may carry a credential.
         log.warning("KH Updater setup incomplete; waiting for a verified kit and publisher enrolment.")
-        answer = {"state": "waiting", "detail": "KH Updater setup incomplete. Check the kit, publisher authorisation and launchd job."}
+        rejected = bootstrap.token_rejected
+        detail = "KH Updater setup incomplete. Check the kit, publisher authorisation and launchd job."
+        if rejected:
+            detail = ("The publisher no longer recognises this Mac; it enrols again when the owner "
+                      "opens an enrolment window.")
+        answer = {"state": "waiting", "tokenRejected": rejected, "detail": detail}
     STATUS.update(answer)
     return answer
 

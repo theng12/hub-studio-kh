@@ -87,9 +87,27 @@ class _EnrolHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         # Recorded so a test can prove no credential travelled with the request.
         self.server.seen_headers.append(dict(self.headers))
+        self.server.seen_paths.append(self.path)
+        if self.path == "/status":
+            # The publisher knows exactly one token; anything else is a Mac it dropped.
+            if self.headers.get("authorization") != f"Bearer {self.server.issued_token}":
+                self.send_response(401)
+                self.end_headers()
+                return
+            data = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         request = json.loads(body.decode())
         if self.path != "/enrol":
             self.send_response(404)
+            self.end_headers()
+            return
+        if self.server.enrol_status != 200:
+            self.send_response(self.server.enrol_status)
             self.end_headers()
             return
         payload = {
@@ -98,7 +116,7 @@ class _EnrolHandler(BaseHTTPRequestHandler):
             "feedURL": self.server.feed_url,
             "publicKey": self.server.public_key_b64,
             "issuedAt": int(time.time()),
-            "token": self.server.issued_token,
+            "token": self.server.next_token or self.server.issued_token,
         }
         signed = _sign(self.server.seed, payload)
         data = json.dumps(signed).encode()
@@ -195,7 +213,10 @@ class KhAgentBootstrapTests(unittest.TestCase):
         # The feed URL in the reply must match what's in the kit's publisher.json.
         server.feed_url = f"http://127.0.0.1:{port}/release.json"
         server.issued_token = self.issued_token
+        server.next_token = None
+        server.enrol_status = 200
         server.seen_headers = []
+        server.seen_paths = []
         self.server = server
         self.thread = threading.Thread(target=server.serve_forever, daemon=True)
         self.thread.start()
@@ -343,6 +364,125 @@ class KhAgentBootstrapTests(unittest.TestCase):
         self.assertEqual(answer["state"], "waiting")
         self.assertNotIn(self.issued_token, answer["detail"])
         self.assertNotIn(self.canary_secret, answer["detail"])
+
+    def test_a_rejected_token_is_dropped_and_the_mac_enrols_again(self):
+        """A Mac removed from the publisher must not keep a dead token forever."""
+        recorder = self._recorder()
+        bootstrap = khu_agent.Bootstrap(self.kit, self.home, allow_test=True, run=recorder)
+        bootstrap.install()
+        self.assertEqual(asyncio.run(bootstrap.enrol("fixture-mac")), "enrolled")
+        config_file = self.home / "Library/KHUpdater/base/config.json"
+        old_token = json.loads(config_file.read_text())["token"]
+        self.assertEqual(old_token, self.issued_token)
+        # The publisher dropped this Mac and would hand out a different token on re-enrolment.
+        new_token = secrets.token_hex(32)
+        self.server.issued_token = new_token
+        self.server.next_token = new_token
+
+        self.assertEqual(asyncio.run(bootstrap.enrol("fixture-mac")), "re-enrolled")
+        self.assertTrue(bootstrap.token_rejected)
+        fresh = json.loads(config_file.read_text())
+        self.assertEqual(fresh["token"], new_token)
+        self.assertEqual(fresh["machine"], "fixture-mac")
+        self.assertEqual(fresh["feedURL"], self.publisher["feedURL"])
+        self.assertEqual(fresh["publicKey"], self.public_b64)
+        # The dead config is archived, not silently overwritten or deleted.
+        archived = list((self.home / "Library/KHUpdater/_trash").glob("*/config.json"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(json.loads(archived[0].read_text())["token"], old_token)
+        # A third run sees a token the publisher still honours: no re-enrol loop.
+        self.assertEqual(asyncio.run(bootstrap.enrol("fixture-mac")), "current")
+        self.assertEqual(json.loads(config_file.read_text())["token"], new_token)
+
+        # Re-enrolment goes through the same reply checks: an unverified reply writes nothing.
+        self.server.issued_token = secrets.token_hex(32)
+        self.server.next_token = self.server.issued_token
+        self.server.seed, _ = _seed()
+        with self.assertRaises(ValueError):
+            asyncio.run(bootstrap.enrol("fixture-mac"))
+        self.assertFalse(config_file.exists())
+
+    def test_an_unreachable_publisher_never_discards_a_config(self):
+        recorder = self._recorder()
+        bootstrap = khu_agent.Bootstrap(self.kit, self.home, allow_test=True, run=recorder)
+        bootstrap.install()
+        asyncio.run(bootstrap.enrol("fixture-mac"))
+        config_file = self.home / "Library/KHUpdater/base/config.json"
+        before = config_file.read_bytes()
+        self.server.shutdown()
+        self.server.server_close()
+
+        self.assertEqual(asyncio.run(bootstrap.enrol("fixture-mac")), "current")
+        self.assertEqual(config_file.read_bytes(), before)
+        self.assertFalse(bootstrap.token_rejected)
+
+    def test_a_rejected_token_with_no_window_waits_and_says_so(self):
+        recorder = self._recorder()
+        bootstrap = khu_agent.Bootstrap(self.kit, self.home, allow_test=True, run=recorder)
+        bootstrap.install()
+        asyncio.run(bootstrap.enrol("fixture-mac"))
+        config_file = self.home / "Library/KHUpdater/base/config.json"
+        old_token = json.loads(config_file.read_text())["token"]
+        # The publisher dropped this Mac and no enrolment window is open.
+        self.server.issued_token = secrets.token_hex(32)
+        self.server.enrol_status = 403
+
+        with self.assertRaises(ValueError):
+            asyncio.run(bootstrap.enrol("fixture-mac"))
+        self.assertTrue(bootstrap.token_rejected)
+        archived = list((self.home / "Library/KHUpdater/_trash").glob("*/config.json"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(json.loads(archived[0].read_text())["token"], old_token)
+
+        # A later check reports plainly that the publisher no longer knows this Mac. The same
+        # bootstrap keeps the flag, which is what the Hub's long-running loop holds.
+        answer = asyncio.run(khu_agent.check_once(bootstrap, "fixture-mac"))
+        self.assertEqual(answer["state"], "waiting")
+        self.assertIs(answer["tokenRejected"], True)
+        self.assertIs(khu_agent.STATUS["tokenRejected"], True)
+        self.assertNotIn(old_token, answer["detail"])
+        self.assertNotIn(self.server.issued_token, answer["detail"])
+        self.assertNotIn(self.canary_secret, answer["detail"])
+
+    def test_check_once_surfaces_a_re_enrolment(self):
+        recorder = self._recorder()
+        bootstrap = khu_agent.Bootstrap(self.kit, self.home, allow_test=True, run=recorder)
+        bootstrap.install()
+        asyncio.run(bootstrap.enrol("fixture-mac"))
+        old_token = self.issued_token
+        new_token = secrets.token_hex(32)
+        self.server.issued_token = new_token
+        self.server.next_token = new_token
+
+        answer = asyncio.run(khu_agent.check_once(bootstrap, "fixture-mac"))
+        self.assertEqual(answer["state"], "current")
+        self.assertIs(answer["tokenRejected"], True)
+        self.assertIs(khu_agent.STATUS["tokenRejected"], True)
+        self.assertNotIn(old_token, answer["detail"])
+        self.assertNotIn(new_token, answer["detail"])
+        self.assertIn("enrolled again", answer["detail"])
+
+    def test_a_good_check_reports_no_rejected_token(self):
+        recorder = self._recorder()
+        bootstrap = khu_agent.Bootstrap(self.kit, self.home, allow_test=True, run=recorder)
+        answer = asyncio.run(khu_agent.check_once(bootstrap, "fixture-mac"))
+        self.assertEqual(answer["state"], "installed")
+        self.assertIs(answer["tokenRejected"], False)
+        self.assertIs(khu_agent.STATUS["tokenRejected"], False)
+
+    def test_enrol_request_sends_no_origin_or_referer_header(self):
+        """The publisher refuses /enrol when either is present: that is a browser, not the agent."""
+        recorder = self._recorder()
+        bootstrap = khu_agent.Bootstrap(self.kit, self.home, allow_test=True, run=recorder)
+        bootstrap.install()
+        asyncio.run(bootstrap.enrol("fixture-mac"))
+        enrol_headers = [headers for path, headers in zip(self.server.seen_paths, self.server.seen_headers)
+                         if path == "/enrol"]
+        self.assertTrue(enrol_headers, "the publisher fixture saw no /enrol request")
+        for headers in enrol_headers:
+            lowered = {name.lower() for name in headers}
+            self.assertNotIn("origin", lowered)
+            self.assertNotIn("referer", lowered)
 
 
 if __name__ == "__main__":
