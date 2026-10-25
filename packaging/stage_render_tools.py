@@ -77,8 +77,8 @@ def production_pins(tools_dir: Path) -> tuple[_ToolPin, _ToolPin]:
 _AUTHORITY_DIRECTORY = Path(__file__).resolve().parent / "render-authority"
 PRODUCTION_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
     _AuthorityPin(
-        "PROFILE.json", _AUTHORITY_DIRECTORY / "PROFILE.json", 933,
-        "34495ebc66dbb6e0388d11d04a8ecb35736239e2519f5d46a87cc7659c97f7be",
+        "PROFILE.json", _AUTHORITY_DIRECTORY / "PROFILE.json", 970,
+        "ad3f1c9d47d5f59400b1b1d03596a59fba6dc2f26817ac5cc2c77f8837f24863",
     ),
     _AuthorityPin(
         "TOOLS.json", _AUTHORITY_DIRECTORY / "TOOLS.json", 796,

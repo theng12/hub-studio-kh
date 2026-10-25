@@ -344,7 +344,7 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
             "min_available_memory_bytes": 2_000_000_000, **changes,
         }
 
-    def candidate_loader(self, *, memory_gb: int = 16):
+    def candidate_loader(self, *, memory_gb: int = 16, profile_bounds=None):
         resources = self.root / "candidate-resources"
         tools_root = resources / "render-tools"
         tools_root.mkdir(parents=True)
@@ -410,6 +410,8 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
             "hardware_qualification_record_sha256": None,
             "fidelity_record_sha256": None, "production_eligible": False,
         }
+        if profile_bounds is not None:
+            profile_descriptor["execution_bounds"] = copy.deepcopy(profile_bounds)
         profile_raw = compact(profile_descriptor)
         (tools_root / "PROFILE.json").write_bytes(profile_raw)
         packet = copy.deepcopy(json.loads(
@@ -1031,6 +1033,147 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await executor.dispatchable_candidate("local"))
         self.assertFalse(executor.pending_for_machine("local"))
         self.assertEqual(executor.capability()["available_capacity"]["slots"], 0)
+
+    def test_v2_loader_publishes_and_admits_the_packaged_envelope(self) -> None:
+        bounds = json.loads((ROOT / "packaging/render-authority/PROFILE.json").read_bytes())["execution_bounds"]
+        loader, _, packet = self.candidate_loader(profile_bounds=bounds)
+        broker = FakeBroker([])
+        broker.busy_machines = lambda: set()
+        executor = RenderExecutor(
+            runtime=SimpleNamespace(qualification_consumed=lambda _intent: False),
+            assets=None, authority=loader, machine="local", broker_api=broker,
+            available_memory=lambda: 16_000_000_000,
+        )
+        capability = executor.capability()
+        self.assertFalse(capability["production_enabled"])
+        candidate = capability["qualification_candidates"][0]
+        self.assertFalse(candidate["production_eligible"])
+        self.assertEqual(candidate["profile_execution_bounds"], bounds)
+        for fps in (24, 25, 30, 60, 5, 50):
+            with self.subTest(fps=fps):
+                packet["recipe"]["canvas"] = {
+                    "width": 1080, "height": 1920, "working_fps": fps,
+                }
+                packet["recipe_digest"] = render_hash("recipe", packet["recipe"])
+                packet["packet_digest"] = render_hash("packet", {
+                    "recipe_digest": packet["recipe_digest"],
+                    "manifest_digest": packet["manifest_digest"],
+                })
+                qualification = loader.resolve(packet)
+                if fps in (5, 50):
+                    self.assertIsNone(qualification)
+                else:
+                    self.assertIsNotNone(qualification)
+                    self.assertFalse(qualification.production_eligible)
+        authority = loader.qualification_candidates()[0][1]
+        self.assertEqual(authority.bounds.max_rss_bytes, bounds["process_tree_rss_limit_bytes"])
+        self.assertEqual(authority.bounds.max_wall_seconds, bounds["cumulative_wall_seconds"])
+        self.assertEqual(authority.bounds.output_limit_bytes, bounds["output_limit_bytes"])
+        self.assertEqual(authority.qualification.scratch_reserve_bytes, bounds["scratch_reserve_bytes"])
+        self.assertEqual(authority.qualification.min_free_bytes,
+                         bounds["scratch_reserve_bytes"] + bounds["output_limit_bytes"])
+
+    def test_v2_profile_admission_accepts_requested_rates_and_canvases(self) -> None:
+        bounds = json.loads((ROOT / "packaging/render-authority/PROFILE.json").read_bytes())["execution_bounds"]
+        packet = {"recipe": {"operations": [], "target_duration_sec": 10800}, "manifest": []}
+        for fps in (24, 25, 30, 60):
+            for width, height in ((1280, 720), (1920, 1080), (2560, 1440),
+                                  (3840, 2160), (1080, 1920), (2160, 3840),
+                                  (2048, 2048), (1672, 942), (2, 2)):
+                with self.subTest(fps=fps, width=width, height=height):
+                    packet["recipe"]["canvas"] = {"width": width, "height": height,
+                                                    "working_fps": fps}
+                    self.assertTrue(InstalledRenderAuthorityLoader._profile_allows(packet, bounds))
+
+    def test_v2_profile_admission_refuses_invalid_rates_canvases_and_versions(self) -> None:
+        bounds = json.loads((ROOT / "packaging/render-authority/PROFILE.json").read_bytes())["execution_bounds"]
+        packet = {"recipe": {"operations": [], "target_duration_sec": 1}, "manifest": []}
+        for fps, width, height in ((5, 1920, 1080), (50, 1920, 1080),
+                                   (24, 1919, 1080), (24, 1920, 1079),
+                                   (24, 3842, 2160), (24, 2160, 3842),
+                                   (24, 3840, 3840), (24, 2880, 2882),
+                                   (24, 3842, 2), (24, 2, 3842),
+                                   (24, 0, 1080), (24, 1920, 0),
+                                   (24, -2, 1080), (24, 1920, -2),
+                                   (24, True, 1080), (24, 1920, True),
+                                   (24, 1920.0, 1080), (24, 1920, 1080.0)):
+            with self.subTest(fps=fps, width=width, height=height):
+                packet["recipe"]["canvas"] = {"width": width, "height": height,
+                                                "working_fps": fps}
+                self.assertFalse(InstalledRenderAuthorityLoader._profile_allows(packet, bounds))
+        packet["recipe"]["canvas"] = {"width": 1920, "height": 1080, "working_fps": 24}
+        for version in (1, 3, True, 2.0):
+            with self.subTest(bounds_version=version):
+                self.assertFalse(InstalledRenderAuthorityLoader._profile_allows(
+                    packet, {**bounds, "bounds_version": version}))
+
+    def test_v2_profile_ceil_budget_and_retained_packet_fences(self) -> None:
+        bounds = json.loads((ROOT / "packaging/render-authority/PROFILE.json").read_bytes())["execution_bounds"]
+        packet = {"recipe": {"operations": [], "target_duration_sec": 1.001,
+                             "canvas": {"width": 1920, "height": 1080, "working_fps": 24}},
+                  "manifest": []}
+        pixels = 1920 * 1080
+        self.assertTrue(InstalledRenderAuthorityLoader._profile_allows(
+            packet, {**bounds, "max_pixel_frames": 25 * pixels}))
+        self.assertFalse(InstalledRenderAuthorityLoader._profile_allows(
+            packet, {**bounds, "max_pixel_frames": 25 * pixels - 1}))
+        full_length = copy.deepcopy(packet)
+        full_length["recipe"].update(
+            canvas={"width": 3840, "height": 2160, "working_fps": 60},
+            target_duration_sec=10800,
+        )
+        self.assertTrue(InstalledRenderAuthorityLoader._profile_allows(full_length, bounds))
+        full_length["recipe"]["target_duration_sec"] += 1 / 120
+        # Relax only duration so this refusal proves the packaged pixel-frame budget.
+        self.assertFalse(InstalledRenderAuthorityLoader._profile_allows(
+            full_length, {**bounds, "max_duration_sec": 10801}))
+        cases = (
+            ("max_duration_sec", lambda p: p["recipe"].update(target_duration_sec=10801)),
+            ("max_operations", lambda p: p["recipe"].update(operations=[{}] * 9)),
+            ("max_assets", lambda p: p.update(manifest=[{"size_bytes": 1}] * 5)),
+            ("max_asset_bytes", lambda p: p.update(manifest=[{"size_bytes": bounds["max_asset_bytes"] + 1}])),
+            ("max_total_input_bytes", lambda p: p.update(manifest=[{"size_bytes": bounds["max_asset_bytes"]}] * 3)),
+        )
+        for limit, mutate in cases:
+            with self.subTest(limit=limit):
+                value = json.loads(json.dumps(packet))
+                mutate(value)
+                self.assertFalse(InstalledRenderAuthorityLoader._profile_allows(value, bounds))
+
+    async def test_render_process_retains_wall_rss_output_and_free_disk_fences(self) -> None:
+        authority = self.authority()
+        output = self.root / "bounded.mp4"
+        payload = b"validated-output"
+        output_limit = len(payload)
+        authority = replace(
+            authority,
+            bounds=replace(authority.bounds, output_limit_bytes=output_limit),
+            qualification=replace(
+                authority.qualification, output_limit_bytes=output_limit,
+                min_free_bytes=authority.qualification.scratch_reserve_bytes + output_limit),
+        )
+        context = SimpleNamespace(output_path=str(output), workspace=str(self.root))
+        identity = ProcessIdentity(pid=731, process_group_id=731, start_token="fake:1")
+        for fence in (None, "wall", "rss", "output", "scratch"):
+            with self.subTest(fence=fence):
+                executor = RenderExecutor(
+                    runtime=None, assets=None, authority=lambda: authority,
+                    machine="local", broker_api=None, group_exists=lambda _pgid: False,
+                    monotonic=lambda: 30 if fence == "wall" else 29,
+                    free_bytes=lambda _path: authority.qualification.min_free_bytes
+                        - (1 if fence == "scratch" else 0),
+                )
+                executor._process_tree_rss = lambda _pid: authority.bounds.max_rss_bytes + (
+                    1 if fence == "rss" else 0)
+                executor._stop_exact_group = mock.AsyncMock(return_value=0)
+                bounded = replace(authority, bounds=replace(
+                    authority.bounds,
+                    output_limit_bytes=output_limit - (1 if fence == "output" else 0)))
+                self.assertEqual(await executor._wait_with_bounds(
+                    FakeProcess(output), identity, context, bounded, attempt_deadline=30),
+                    (0, fence is not None))
+                self.assertEqual(executor._stop_exact_group.await_count,
+                                 0 if fence is None else 1)
 
     async def test_physical_claim_precedes_one_exact_hardware_spawn_and_validated_publish(self) -> None:
         packet = json.loads((ROOT / "tests/fixtures/final-render-compiler-v1.json").read_text())["f0_base_audio"]["packet"]

@@ -719,8 +719,8 @@ class RenderToolsStagingTests(unittest.TestCase):
         self.assertEqual(
             tuple((pin.relative_path, pin.size_bytes, pin.sha256) for pin in pins),
             (
-                ("PROFILE.json", 933,
-                 "34495ebc66dbb6e0388d11d04a8ecb35736239e2519f5d46a87cc7659c97f7be"),
+                ("PROFILE.json", 970,
+                 "ad3f1c9d47d5f59400b1b1d03596a59fba6dc2f26817ac5cc2c77f8837f24863"),
                 ("TOOLS.json", 796,
                  "98c25ae582d4ee43ee1cf665192365149f8d9f860c229a0be9da131df43eba8a"),
                 ("COMPILER.json", 447,
