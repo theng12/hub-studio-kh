@@ -2,6 +2,18 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.199 — 2026-10-26
+
+### The KH Updater agent is now active
+
+The KH Updater agent built into Studio Hub now turns on automatically when the publisher config is present. If a Mac's token gets dropped by the publisher, the agent detects it (with a safe probe that does not refresh `lastSeen`), preserves the dead config as evidence, and enrols again. The status page shows which Macs needed re-enrolment.
+
+### The SSD kit carries the KH Updater installer
+
+Every drive prepared with the kit now includes a `KH Updater/` folder with the installer (`Install KH Updater.command`), the apps config, and the installer script. The folder appears when both the agent kit and the publisher config are passed to the kit builder; without both, the drive gets a README saying the publisher key has not been created yet.
+### Fleet re-point without re-joining
+A Mac can now switch to a different controller without being uninstalled and rejoined from scratch. The Settings → Fleet screen gains a **Leave** button that drops the controller credential and stops the check-in loop, and a **Reset** button that wipes the machine identity for a fresh start. The Machine ID field is now editable, so a renamed Mac re-enrols with the new name rather than carrying the old one.
+
 ## 0.6.198 — 2026-10-25
 
 ### Remote final rendering takes real episode sizes
