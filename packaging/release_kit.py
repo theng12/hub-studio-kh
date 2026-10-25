@@ -7,6 +7,14 @@ package at the pinned revision.
 
 It exits non-zero when a package the app advertises is missing or unverified in the
 library, so a kit can never be published claiming to be complete when it is not.
+
+**The second thing a kit hands to a machine is the KH Updater agent.** `--khu-agent` stages that
+one: it takes the credential-free kit kh-updater's own `packaging/build-agent-kit.sh` produced,
+adds the publisher descriptor beside it, pins every staged byte in `MANIFEST.json`, and reads the
+copy back before anything can use it. Same shape as `stage_khu_agent.py`, which stages the same
+kind of kit into the Hub's bundle, and the same reader accepts both (`khu_agent.verify_kit`, and
+mirrored in `packaging/kit-khu/khu-install.py` for the drive) - so a kit that was altered on the
+drive is refused there exactly as it would be inside the app.
 """
 from __future__ import annotations
 
@@ -15,8 +23,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -165,12 +176,208 @@ def build(app: Path, library: Path) -> dict:
     }
 
 
+#: The credential-free files kh-updater's own `packaging/build-agent-kit.sh` produces.
+KHU_KIT_FILES = (
+    "VERSION",
+    "bin/khu",
+    "bin/khu-stub",
+    "install-agent.sh",
+    "com.khupdater.agent.plist",
+    "agent-config.example.json",
+)
+#: Added here from the publisher descriptor; the kit builder never produces it.
+KHU_PUBLISHER_FILE = "publisher.json"
+#: Everything that lands in the staged kit, and what the readers check for.
+KHU_STAGED_FILES = tuple(sorted(KHU_KIT_FILES + (KHU_PUBLISHER_FILE,)))
+#: Executable on the destination Mac; everything else is data.
+KHU_EXECUTABLE = frozenset(("bin/khu", "bin/khu-stub", "install-agent.sh"))
+KHU_MANIFEST_FORMAT = "studiohub.khu-agent.v1"
+KHU_PUBLISHER_KEYS = frozenset(("feedURL", "enrolURL", "publicKey", "testAuthority"))
+#: **Not part of the kit.** A drive may carry the owner's plain backup of the publisher's signing
+#: key in a folder of its own at the root. Nothing is ever staged into it, copied out of it or
+#: pinned in a manifest, and a path inside it is refused rather than assumed harmless.
+PROTECTED_AT_ROOT = "KH Updater signing key backup"
+
+
+def inside_protected(path: Path) -> bool:
+    return PROTECTED_AT_ROOT in Path(path).expanduser().parts
+
+
+def file_digest(path: Path) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    return size, digest.hexdigest()
+
+
+def regular_file(path: Path, what: str) -> None:
+    """Refuse anything that is not a plain, non-empty regular file.
+
+    A symlink would let the manifest describe one file while the Mac runs another.
+    """
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"agent kit {what} is not a regular file: {path}")
+    if info.st_size <= 0:
+        raise ValueError(f"agent kit {what} is empty: {path}")
+
+
+def validate_agent_kit(kit: Path) -> Path:
+    """The credential-free kit: exactly those files, no extras, no aliases."""
+    kit = Path(kit).expanduser()
+    if kit.is_symlink() or not kit.is_dir():
+        raise ValueError(f"agent kit is not a directory: {kit}")
+    found = set()
+    for path in kit.rglob("*"):
+        if path.is_dir() and not path.is_symlink():
+            continue
+        found.add(path.relative_to(kit).as_posix())
+    if found != set(KHU_KIT_FILES):
+        detail = []
+        missing = sorted(set(KHU_KIT_FILES) - found)
+        extra = sorted(found - set(KHU_KIT_FILES))
+        if missing:
+            detail.append("missing " + ", ".join(missing))
+        if extra:
+            detail.append("unexpected " + ", ".join(extra))
+        raise ValueError("agent kit contents are wrong: " + "; ".join(detail))
+    for name in KHU_KIT_FILES:
+        regular_file(kit / name, name)
+    return kit
+
+
+def validate_publisher_descriptor(path: Path, *, allow_test: bool = False) -> dict:
+    """The owner's publisher.json: the pinned key and the two URLs, and nothing else."""
+    path = Path(path).expanduser()
+    regular_file(path, KHU_PUBLISHER_FILE)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"publisher descriptor is not JSON: {path}") from exc
+    if not isinstance(value, dict) or set(value) != KHU_PUBLISHER_KEYS:
+        raise ValueError("publisher descriptor must be exactly feedURL, enrolURL, publicKey, "
+                         "testAuthority")
+    if value["testAuthority"] is not False and not allow_test:
+        # A kit that may be handed out must never pin a test key: the kit's own reader refuses it,
+        # and a kit carrying one could not enrol anything.
+        raise ValueError("refusing to stage a testAuthority publisher descriptor")
+    if not isinstance(value["publicKey"], str) or not value["publicKey"]:
+        raise ValueError("publisher descriptor has no public key")
+    return value
+
+
+def build_agent_manifest(kit_version: str, files: dict[str, tuple[int, str]]) -> dict:
+    return {
+        "format": KHU_MANIFEST_FORMAT,
+        "agent_version": kit_version,
+        # Stated here because it is what a Mac does with the kit: install and enrol. It never
+        # updates an app - that stays KH Updater's own signed-feed job.
+        "stage": "bootstrap-only",
+        "files": {name: {"bytes": size, "sha256": digest}
+                  for name, (size, digest) in sorted(files.items())},
+    }
+
+
+def stage_agent_kit(output: Path, kit: Path, publisher_json: Path, *,
+                    allow_test: bool = False) -> dict:
+    """Stage a ready agent kit at `output`, or refuse and leave nothing behind.
+
+    Built in a private sibling directory and moved into place, so a failure leaves no half-written
+    kit for a Mac to install from, and a second call cannot merge into one.
+    """
+    kit = validate_agent_kit(kit)
+    descriptor = validate_publisher_descriptor(publisher_json, allow_test=allow_test)
+    if inside_protected(kit) or inside_protected(publisher_json) or inside_protected(output):
+        raise ValueError("refusing to stage into or out of the publisher signing key backup: it "
+                         "is not part of the kit")
+    output = Path(output).expanduser().absolute()
+    # `absolute`, not `resolve`: a drive is reached through a symlink on macOS (`/Volumes/...`),
+    # and the kit belongs at the path the operator named.
+    if output.exists() or output.is_symlink():
+        raise ValueError(f"refusing to replace an existing agent kit: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.parent.is_symlink() or not output.parent.is_dir():
+        raise ValueError(f"the agent kit's folder is not a directory: {output.parent}")
+
+    version = (kit / "VERSION").read_text(encoding="utf-8").strip()
+    if not version or any(character not in "0123456789." for character in version):
+        raise ValueError(f"agent kit version is not a dotted number: {version!r}")
+
+    scratch = Path(tempfile.mkdtemp(prefix=".khu-agent-", dir=output.parent))
+    scratch.chmod(0o700)
+    staged = scratch / output.name
+    try:
+        (staged / "bin").mkdir(parents=True)
+        files: dict[str, tuple[int, str]] = {}
+        for name in KHU_KIT_FILES:
+            target = staged / name
+            shutil.copyfile(kit / name, target)
+            target.chmod(0o755 if name in KHU_EXECUTABLE else 0o644)
+            files[name] = file_digest(target)
+        # Written from the descriptor's own bytes, so the pinned key in the kit is exactly the one
+        # the publisher printed and every Mac's config will trust.
+        publisher_target = staged / KHU_PUBLISHER_FILE
+        publisher_target.write_text(json.dumps(descriptor, indent=2, sort_keys=True) + "\n",
+                                    encoding="utf-8")
+        publisher_target.chmod(0o644)
+        files[KHU_PUBLISHER_FILE] = file_digest(publisher_target)
+
+        manifest = build_agent_manifest(version, files)
+        if tuple(manifest["files"]) != KHU_STAGED_FILES:
+            raise ValueError("agent kit manifest is missing a file")
+        manifest_path = staged / "MANIFEST.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                                 encoding="utf-8")
+        manifest_path.chmod(0o644)
+
+        # Prove the copy before anything can use it: size and hash of every staged byte.
+        for name, pin in manifest["files"].items():
+            if file_digest(staged / name) != (pin["bytes"], pin["sha256"]):
+                raise ValueError(f"staged agent kit file does not match its manifest: {name}")
+
+        os.rename(staged, output)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return {"mode": "khu-agent", "agent_version": version, "staged": str(output),
+            "files": sorted(manifest["files"]), "problems": []}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--app", type=Path, required=True)
+    parser.add_argument("--app", type=Path,
+                        help="a staged Studio Hub app (its install-kit manifest is what is built)")
     parser.add_argument("--library", type=Path, default=PROJECT_ROOT / "model-library")
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True,
+                        help="where the manifest - or, with --khu-agent, the staged kit - goes")
+    parser.add_argument("--khu-agent", type=Path,
+                        help="a built KH Updater agent kit to stage instead of an app")
+    parser.add_argument("--khu-publisher", type=Path,
+                        help="the publisher descriptor to pin into that kit")
+    parser.add_argument("--allow-test-authority", action="store_true",
+                        help="accept a testAuthority descriptor; never for a kit that is handed out")
     arguments = parser.parse_args()
+
+    if arguments.khu_agent or arguments.khu_publisher:
+        if arguments.app:
+            parser.error("--app and --khu-agent are different kits; choose one")
+        if not arguments.khu_agent or not arguments.khu_publisher:
+            parser.error("--khu-agent and --khu-publisher go together")
+        try:
+            result = stage_agent_kit(arguments.output, arguments.khu_agent,
+                                     arguments.khu_publisher,
+                                     allow_test=arguments.allow_test_authority)
+        except (ValueError, OSError) as error:
+            print(json.dumps({"mode": "khu-agent", "problems": [str(error)]}, indent=1))
+            return 1
+        print(json.dumps({key: result[key] for key in ("agent_version", "staged", "problems")},
+                         indent=1))
+        return 0
+
+    if not arguments.app:
+        parser.error("--app is required unless --khu-agent is given")
     app = arguments.app.expanduser().resolve()
     if not (app / "Contents" / "Resources" / "release-manifest.json").is_file():
         parser.error(f"{app} is not a staged Studio Hub app")

@@ -9,6 +9,7 @@ and the order to set them up.
 | `Story Studio/` | Story Studio KH | 1.4.235 | Writes and produces the episode: ideas, script, prompts, thumbnails, final video |
 | `GatewayKH/` | GatewayKH | 0.2.67 | The middle man: one address, one model catalogue, routes work to your Macs |
 | `Studio Hub KH/` | Studio Hub | its `focused-release-manifest.json` | Runs the models themselves — images, voice, subtitles, music |
+| `KH Updater/` | KH Updater | its `khu-agent/VERSION` | Keeps the three apps up to date on every Mac, from the publisher's signed releases |
 
 ---
 
@@ -24,13 +25,14 @@ and GatewayKH decides which of your Macs should do the work. It holds the combin
 catalogue and a private shelf of your Content Packs. It does **not** generate anything, so
 it needs no GPU and very little memory; it can run on a small always-on Mac.
 
-> **The two version numbers above are stamped on the drive, not taken from this file.**
-> `packaging/kit_stamp_index.py` reads them from the newest `Story Studio/*.dmg` and
-> `GatewayKH/installers/*.dmg` actually present and rewrites these rows — and the drive-root copy
-> of this document — every time a kit is prepared. Hand-editing them here is only about giving the
-> *repository* copy a sensible value; the drive always describes what it carries. The Studio Hub row
-> names no version at all for the same reason: it points at the kit's generated
-> `focused-release-manifest.json`.
+> **The version numbers above are stamped on the drive, not taken from this file.**
+> `packaging/kit_stamp_index.py` reads them from the newest `Story Studio/*.dmg`, the newest
+> `GatewayKH/installers/*.dmg` and `KH Updater/khu-agent/VERSION` actually present and rewrites
+> these rows — and the drive-root copy of this document — every time a kit is prepared.
+> Hand-editing them here is only about giving the *repository* copy a sensible value; the drive
+> always describes what it carries. Two rows name no version in this file for the same reason: the
+> Studio Hub row points at the kit's generated `focused-release-manifest.json`, and the KH Updater
+> row at the agent kit's own `VERSION`, so neither can describe a build the drive does not carry.
 
 **Studio Hub** is the muscle. It runs the actual models on each Mac. One Mac is the
 **controller** (it owns a site: itself plus every Mac that joins it) and the others are
@@ -70,22 +72,28 @@ contains a secret: every credential is added by hand on the machine that needs i
 
 ## Setup order
 
-Do it in this order. Each step has a guide in `GatewayKH/`.
+Do it in this order. The linking steps each have a guide in `GatewayKH/`.
 
 1. **Install the apps.** `Studio Hub KH/` and `Story Studio/` have their own README with
    the install steps. GatewayKH is in `GatewayKH/`.
-2. **Gateway host** — install GatewayKH on one Mac and read its API key (guide
+2. **Install KH Updater on every Mac** — one double-click per Mac: `KH Updater/Install KH
+   Updater.command`, with the publisher's enrolment window open at the Mac Studio first. It
+   is what keeps the three apps current from then on, and it is worth doing before the Macs
+   are spread around a site. `KH Updater/README.md` has the two-step version on the
+   publisher. A Mac that already has the agent — every Hub Mac gets it from Studio Hub
+   itself — says so and changes nothing.
+3. **Gateway host** — install GatewayKH on one Mac and read its API key (guide
    `01-gateway-host.md`). Choose an always-on Mac if you want work to run overnight.
-3. **Controller host** — install Studio Hub on a capable Mac, set it as **Controller**,
+4. **Controller host** — install Studio Hub on a capable Mac, set it as **Controller**,
    tick **Tailscale** under Connections → Fleet, restart the services
    (`02-controller-host.md`).
-4. **Join nodes** — on every other Mac, install Studio Hub and join the controller with
+5. **Join nodes** — on every other Mac, install Studio Hub and join the controller with
    its Fleet token (`03-join-nodes.md`).
-5. **Add locations** — in GatewayKH, add each controller with its address and Fleet token
+6. **Add locations** — in GatewayKH, add each controller with its address and Fleet token
    (`04-add-locations.md`). Its models arrive disabled; enable the ones you want.
-6. **Point Story Studio at the gateway** — Settings → This Mac → GenStudio KH: the Base
+7. **Point Story Studio at the gateway** — Settings → This Mac → GenStudio KH: the Base
    URL and the gateway's API key.
-7. **Verify** — `05-verify.md` proves the whole chain before you rely on it.
+8. **Verify** — `05-verify.md` proves the whole chain before you rely on it.
    `06-troubleshooting.md` is the measured failure list; `CHECKLIST.md` is the per-Mac
    tick list.
 
@@ -126,9 +134,12 @@ Video Generation Kit/
   GatewayKH/           README.md + installers/ + the six setup guides
   Story Studio/        README.md + the installer DMG
   Studio Hub KH/       README.md + the app, the models and its own guides
+  KH Updater/          README.md + Install KH Updater.command + the agent kit + apps.json
 ```
 
-Each folder's own `README.md` covers that app's role and install steps in detail.
+Each folder's own `README.md` covers that app's role and install steps in detail. `KH Updater/`
+is the one folder that is not part of the chain: it is the agent that keeps the three apps
+current, and it belongs on every Mac.
 
 ## The one thing to remember
 

@@ -1,0 +1,9 @@
+{
+  "_note": "The apps KH Updater manages on a Mac, by bundle identifier. 'Install KH Updater.command' looks in ~/Applications and /Applications for one of these bundles and records the ones it finds. 'hub' and 'story' are status only: those two keep their own updaters, which let running work finish first. Only 'gateway' is stopped and replaced by KH Updater. Add a line here if an app ships under a new bundle identifier; nothing else has to change.",
+  "apps": {
+    "local.studiohub.standalone": {"app": "hub", "recipe": "hub"},
+    "kh.gateway.menubar": {"app": "gateway", "recipe": "gateway"},
+    "com.storystudio.kh": {"app": "story", "recipe": "story"},
+    "com.storystudio.desktop": {"app": "story", "recipe": "story"}
+  }
+}

@@ -18,6 +18,12 @@ What it reads, and what it refuses to guess:
     does not restate a number the manifest already derives.
   * **Story Studio** — the newest `*.dmg` in `Story Studio/`, version read from its filename.
   * **GatewayKH** — the newest `*.dmg` in `GatewayKH/installers/`, version read from its filename.
+  * **KH Updater** — the `VERSION` inside `KH Updater/khu-agent/`, which is what the agent kit on
+    that drive actually is. A drive laid out before the publisher key existed carries no agent kit,
+    so there is no version to state: that row is left alone and reported, and the row itself names
+    the artefact rather than a number for exactly that reason. A drive that *does* carry an agent
+    kit whose version cannot be read or is not a dotted number is refused instead - that is a
+    defect, not an empty answer.
 
 A folder with no installer, or a filename with no version in it, is left **exactly as it is** and
 reported: a stamped `unknown` would be a new wrong answer rather than a fix for an old one.
@@ -44,6 +50,19 @@ import sys
 from pathlib import Path
 
 VERSION = re.compile(r"(\d+\.\d+\.\d+)")
+#: **Not part of the kit.** A drive may carry the owner's plain backup of the publisher's signing
+#: key in a folder of its own at the root. It is not read, stamped, copied or tidied here, and any
+#: path inside it is refused rather than assumed harmless.
+PROTECTED_AT_ROOT = "KH Updater signing key backup"
+#: What an agent kit's `VERSION` file states, whole. Never read out of a filename: the agent kit
+#: is not an installer whose name happens to carry a number.
+AGENT_VERSION = re.compile(r"[0-9]+(\.[0-9]+)*")
+#: Where the KH Updater kit's staged agent lives, relative to the kit root.
+AGENT_KIT = ("KH Updater", "khu-agent")
+
+
+def inside_protected(path: Path) -> bool:
+    return PROTECTED_AT_ROOT in Path(path).expanduser().parts
 
 
 def newest_installer(folder: Path, pattern: str = "*.dmg") -> tuple[Path | None, str | None]:
@@ -57,6 +76,30 @@ def newest_installer(folder: Path, pattern: str = "*.dmg") -> tuple[Path | None,
     newest = max(files, key=lambda p: p.stat().st_mtime)
     match = VERSION.search(newest.name)
     return newest, (match.group(1) if match else None)
+
+
+def agent_version(kit: Path) -> tuple[str | None, str, bool]:
+    """The version of the agent kit staged in this kit, a reason when there is none, and whether
+    that reason is a defect.
+
+    `None` has to mean two things here, and they are not the same thing: a drive with no agent kit
+    on it has nothing to state (False), while a drive with an agent kit whose version cannot be
+    read has a defect (True). Folding them into one answer is how a half-prepared drive comes to
+    look finished.
+    """
+    staged = kit.joinpath(*AGENT_KIT)
+    if staged.is_symlink() or not staged.is_dir():
+        return None, "no agent kit on this drive (the publisher key has not been created yet)", False
+    version_file = staged / "VERSION"
+    if not version_file.exists():
+        return None, f"{version_file.resolve()} is missing", True
+    try:
+        stated = version_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None, f"{version_file.resolve()} cannot be read", True
+    if not AGENT_VERSION.fullmatch(stated):
+        return None, f"{version_file.resolve()} does not state a version ({stated!r})", True
+    return stated, "", False
 
 
 def _stamp_row(text: str, label: str, version: str) -> tuple[str, bool]:
@@ -96,6 +139,10 @@ def resolve_drive(argument: str) -> Path:
 
 
 def stamp(drive: Path) -> int:
+    if inside_protected(drive):
+        print(f"REFUSED: {drive} is inside the publisher signing key backup, which is not part "
+              "of the kit")
+        return 2
     kit = drive / "Video Generation Kit"
     index = kit / "Studio Hub KH" / "README.md"
     if not index.exists():
@@ -125,6 +172,19 @@ def stamp(drive: Path) -> int:
             problems.append("GatewayKH: the index has no row for that folder")
         else:
             print(f"GatewayKH     -> {gateway_version}   ({gateway.name})")
+
+    agent, agent_reason, agent_defect = agent_version(kit)
+    if agent is None:
+        if agent_defect:
+            problems.append(f"KH Updater: {agent_reason}")
+        else:
+            print(f"KH Updater    -- left alone: {agent_reason}")
+    else:
+        text, ok = _stamp_row(text, "KH Updater", agent)
+        if not ok:
+            problems.append("KH Updater: the index has no row for that folder")
+        else:
+            print(f"KH Updater    -> {agent}")
 
     if not problems:
         # A separate count: `problems` is the list of *reasons it refused*, and a folder it could
