@@ -590,7 +590,9 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           video_runtime: Path | None = None, unqualified_video_runtime: str | None = None,
           yue2_runtime: Path | None = None, unqualified_yue2_runtime: str | None = None,
           render_authority: RenderAuthorityMode = 'tool-only',
-          render_tools_dir: Path | None = None) -> Path:
+          render_tools_dir: Path | None = None,
+          khu_agent_kit: Path | None = None,
+          khu_publisher_json: Path | None = None) -> Path:
     if render_authority not in RENDER_AUTHORITY_MODES:
         raise ValueError(f'unsupported render authority mode: {render_authority}')
     if render_authority != 'tool-only':
@@ -808,6 +810,22 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         # The manifest and descriptors were hard-linked out of scratch; keeping it would leave a
         # dot-directory in the output folder whose links hold the same ~264 MB alive.
         shutil.rmtree(scratch, ignore_errors=True)
+    # The KH Updater agent kit travels inside the Hub. It is staged only when both halves are
+    # handed in - the credential-free kit and the owner's publisher descriptor - because a
+    # bundle that carried one without the other could not enrol, and the descriptor is the
+    # pinned trust anchor. `components['khu-agent']` records whether it was staged, so a
+    # release that shipped without one says so in its own manifest.
+    if include_hub and khu_agent_kit is not None and khu_publisher_json is not None:
+        from stage_khu_agent import stage_agent_kit
+        staged_kit = stage_agent_kit(resources, khu_agent_kit, khu_publisher_json)
+        components['khu-agent'] = {
+            'agent_version': staged_kit.agent_version,
+            'kit_manifest_sha256': hashlib.sha256(
+                staged_kit.manifest_path.read_bytes()).hexdigest(),
+        }
+    elif include_hub:
+        print('NOTE: this Hub build ships no KH Updater agent kit; pass --khu-agent-kit '
+              'and --khu-publisher-json to include one.', file=sys.stderr)
     # Hash all shipped code/resources including the worker, shell and plist.
     # The manifest is excluded from its own payload hash to avoid recursion.
     release['payload_sha256'] = tree_digest(contents)
@@ -843,6 +861,12 @@ if __name__ == '__main__':
     parser.add_argument('--render-tools-dir', type=Path,
                         help='Absolute directory holding the pinned universal ffmpeg and ffprobe; '
                              'required for any Hub build (they are verified by size and sha256)')
+    parser.add_argument('--khu-agent-kit', type=Path,
+                        help='Credential-free agent kit from kh-updater '
+                             'packaging/build-agent-kit.sh; staged with --khu-publisher-json')
+    parser.add_argument('--khu-publisher-json', type=Path,
+                        help="The owner's ~/Library/KHUpdater/publisher.json: the feed and "
+                             'enrolment URLs and the pinned public key. Required with --khu-agent-kit')
     args = parser.parse_args()
     print(stage(args.runtime, args.output, native_shell=args.native_shell,
                 include_hub=args.hub, image_runtime=args.image_runtime,
@@ -852,4 +876,6 @@ if __name__ == '__main__':
         unqualified_yue2_runtime=args.unqualified_yue2_runtime,
                 unqualified_video_runtime=args.unqualified_video_runtime,
                 render_authority=args.render_authority,
-                render_tools_dir=args.render_tools_dir))
+                render_tools_dir=args.render_tools_dir,
+                khu_agent_kit=args.khu_agent_kit,
+                khu_publisher_json=args.khu_publisher_json))

@@ -1545,6 +1545,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             # The module was complete and nothing started it, which is the same shape of miss as a
             # route with no caller: the machinery existed and no voice could ever move.
             shared_voices.start_reconciler(monitor)
+            from .backend import khu_agent
+            khu_agent_task = _asyncio.create_task(khu_agent.loop())
             await control_plane.runtime.start(monitor, _app_version())
         try:
             yield
@@ -1575,6 +1577,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     release_mirror.cancel()
                     try:
                         await release_mirror
+                    except BaseException:
+                        pass
+                if 'khu_agent_task' in locals() and khu_agent_task is not None:
+                    khu_agent_task.cancel()
+                    try:
+                        await khu_agent_task
                     except BaseException:
                         pass
                 await shared_voices.stop()
@@ -1638,6 +1646,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # The same `_bind_facts()` the health route publishes, so the two cannot disagree.
         return {**standalone_config.load_device_settings(), "bind": _bind_facts(),
                 "warnings": standalone_config.settings_warnings()}
+
+    @app.get("/api/hub/khu/status")
+    def khu_status() -> dict[str, Any]:
+        from .backend import khu_agent
+        return {"ok": True, **khu_agent.STATUS}
 
     @app.put("/api/hub/settings")
     def save_settings(body: dict[str, Any]) -> dict[str, dict[str, int | bool]]:
