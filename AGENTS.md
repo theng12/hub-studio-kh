@@ -27,6 +27,14 @@
 
 ## Working rules
 
+- **A fleet rollout fans out — owner, 2026-10-26: *"it shouldn't block the rest. we can just keep
+  updating or installing ... we can just fan it out."*** `scripts/hub_rollout.py` publishes to every
+  site in parallel, each with its own bounded gate: a busy site is re-polled on its own, an
+  unreachable one is reported *deferred: unreachable* and retried inside its window, and a member
+  that is offline or silent past the window is a warning in the receipt — none of them halts
+  another site. The one rule that still binds: nothing is published into a site with work running,
+  or with non-terminal Gateway jobs routed to it. A rerun never republishes.
+
 - **Every removal goes to this project's `_trash/` — never `rm`.** This covers *all*
   of it, not only what the owner asks for: a file he names, and equally a file you
   decide is clutter while cleaning up. Move it into `_trash/` (create the folder if
