@@ -2,6 +2,26 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.201 — 2026-10-26
+
+### A Renders page shows what this Mac rendered
+
+Library now has a **Renders** page: how many renders finished, how long they took in total, and a newest-first list of each one with the machine that did it, the quality it was rendered at and why it failed if it did. Open a row to see its details and **play the video right there** while this Mac still holds it; if the file has already gone back to Story Studio, the page says so instead of showing a broken player.
+
+A Mac on the network that does not answer is shown as not answering, so the page still works and you can see which Mac to look at. Renders that finished before this version were not recorded by the Hub, and the page says that rather than showing zero.
+
+### A render can carry your channel and episode name
+
+Story Studio can now send the channel and episode with a render, and the Renders page shows them instead of that long job number. It is a label only — it never decides where a render goes or whether it is accepted. A render with no name keeps its job number.
+
+### The Voice runtime no longer carries its tests
+
+Every Python library the Voice engine needs arrived with its own test files, and the previous build also carried the pytest test tool itself — about 41 MB of nothing the app ever runs. This build removes it, and the build now refuses to produce an installer if a runtime it could not clean is left in place. The proof that nothing that matters moved: of the 31,686 files left, 31,685 are byte-for-byte the same as the previous release, and the one that differs is the list of files the runtime keeps. Voice was tested on the cleaned runtime and passed in full.
+
+### The SSD kit is checked in the test suite
+
+The KH Updater folder on each kit drive, the README that appears when there is no publisher key, and the installer that enrols a Mac are now all pinned by tests, so a later change cannot quietly break kit setup or touch the signing-key backup folder.
+
 ## 0.6.200 — 2026-10-26
 
 ### A corrected build of 0.6.199
