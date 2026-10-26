@@ -2262,6 +2262,9 @@ struct NativeRender: Decodable, Equatable, Identifiable {
     /// `succeeded` | `failed` | `cancelled` | `running`, which is what the page counts.
     let outcome: String
     let purpose: String?
+    /// Which channel and episode Story Studio says this render belongs to. Display only, and
+    /// absent for a render it sent no name for — the page then keeps naming the job id.
+    let display: NativeRenderDisplay?
     /// The routing key the Hub recorded (`local` on the Mac that rendered it).
     let machine: String?
     /// The Mac's name, when this answer came from a controller that knows it.
@@ -2292,6 +2295,22 @@ struct NativeRender: Decodable, Equatable, Identifiable {
     /// The file on this Mac, when the Hub still holds it. Nil means it was returned to Story
     /// Studio and is no longer here — not that it is missing.
     let localFile: String?
+}
+
+/// The channel and episode labels Story Studio sent with a render, as the Hub publishes them.
+///
+/// **Display, never dispatch**: the Hub routes, accepts and dedupes on other fields entirely, and
+/// nothing here reaches a request. Either label may be absent, and a render from a build that sent
+/// neither has no `display` at all — the page then shows the job id, as it always did.
+struct NativeRenderDisplay: Decodable, Equatable {
+    let channel: String?
+    let episode: String?
+
+    /// `Channel · Episode`, or whichever one the Hub stated, or nil when it stated neither.
+    var label: String? {
+        let parts = [channel, episode].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 }
 
 /// The totals above the list, added per Mac: a number is either measured or absent.

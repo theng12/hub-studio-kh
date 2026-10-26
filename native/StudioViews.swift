@@ -286,6 +286,10 @@ private struct VideoPreviewSheet: View {
 enum RenderCopy {
     static func title(_ render: NativeRender) -> String {
         let kind = render.purpose == "qualification" ? "Qualification render" : "Final render"
+        // The channel and episode Story Studio named this render with, when it sent them. The
+        // job id the row used to be titled by is still in Details, so nothing is lost by naming
+        // the render the way the customer knows it.
+        if let named = render.display?.label { return "\(kind) · \(named)" }
         return "\(kind) \(String(render.id.prefix(8)))"
     }
 
@@ -442,6 +446,12 @@ private struct RenderDetailSheet: View {
                     Divider()
                     Group {
                         ValueRow("Story instance", value: render.storyUuid ?? "not recorded")
+                        if let channel = render.display?.channel {
+                            ValueRow("Channel", value: channel)
+                        }
+                        if let episode = render.display?.episode {
+                            ValueRow("Episode", value: episode)
+                        }
                         ValueRow("Intent", value: render.intentId ?? "not recorded")
                         ValueRow("Attempt", value: render.attemptNo.map(String.init) ?? "not recorded")
                         ValueRow("Gateway attempt", value: render.gatewayAttemptKey ?? "not recorded")
@@ -4755,9 +4765,10 @@ struct StudioContent: View {
     /// The owner, 2026-10-26: *"there's no render tab so there's no way to see the resulting video
     /// and how many has been processed, and the duration records etc..."* Every field here is one
     /// the Hub's render lane already recorded; nothing is computed on this page and nothing is
-    /// named that the packet did not name. The packet Story sends carries the Story instance, the
-    /// intent and the attempt, and **no channel or episode name**, so a row is titled by its job id
-    /// and says which Story instance it belongs to. Guessing a name would be inventing one.
+    /// named that the packet did not name. Story Studio now sends the channel and episode with the
+    /// request as **display only** (it decides no routing or acceptance), so a row is titled with
+    /// them; a render it sent no name for is still titled by its job id, and a name is never
+    /// guessed.
     private var rendersWorkspace: some View {
         PageScaffold(title: pageTitle(.renders), subtitle: "Final videos rendered for Story Studio, newest first: what came out, how long it took, and which Mac made it.", scrolls: true,
                      trailing: {

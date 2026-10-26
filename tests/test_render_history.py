@@ -107,6 +107,22 @@ class ReadTests(unittest.TestCase):
         self.assertEqual(row["gateway_attempt_key"], "gateway-job-1")
         self.assertIsNone(row["failure"])
 
+    def test_display_labels_story_sent_are_published_and_absent_ones_stay_absent(self) -> None:
+        """Channel and episode for the row, or nothing: never a name the Hub made up."""
+        insert(self.path, "job-1",
+               display_json=json.dumps({"channel": "Khmer History",
+                                        "episode": "EP012 ការធ្លាក់ចុះ"}))
+        insert(self.path, "job-2", created_at=NOW - 900, display_json=None)
+        insert(self.path, "job-3", created_at=NOW - 1200,
+               display_json=json.dumps({"channel": "", "episode": 7}))
+        rows = {row["id"]: row for row in self.read()["renders"]}
+        self.assertEqual(rows["job-1"]["display"],
+                         {"channel": "Khmer History", "episode": "EP012 ការធ្លាក់ចុះ"})
+        # A render Story Studio sent no name for is not named by the Hub.
+        self.assertIsNone(rows["job-2"]["display"])
+        # Stored labels that are not labels are dropped rather than shown.
+        self.assertIsNone(rows["job-3"]["display"])
+
     def test_counts_minutes_average_and_speed_come_from_the_renders_themselves(self) -> None:
         insert(self.path, "job-1")                     # 300 s output, 60 s wall
         insert(self.path, "job-2", created_at=NOW - 900, started_at=NOW - 840,
@@ -241,6 +257,20 @@ class StartedAtTests(unittest.TestCase):
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(render_jobs)")}
             self.assertIn("started_at", columns)
             self.assertIsNone(render_history.read(path, now=NOW)["renders"][0]["started_at"])
+
+    def test_a_row_accepted_before_the_labels_existed_reports_no_name(self) -> None:
+        """The column is added to an existing database, and its older rows keep no name."""
+        with tempfile.TemporaryDirectory(prefix="render-history-migrate-display-") as directory:
+            path = Path(directory) / "hub.db"
+            database(path)
+            insert(path, "job-1")
+            with sqlite3.connect(path) as connection:
+                connection.execute("ALTER TABLE render_jobs DROP COLUMN display_json")
+            RenderJobRuntime(Path(directory) / "renders", database_path=path)
+            with sqlite3.connect(path) as connection:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(render_jobs)")}
+            self.assertIn("display_json", columns)
+            self.assertIsNone(render_history.read(path, now=NOW)["renders"][0]["display"])
 
     def test_binding_the_render_process_is_when_the_wall_clock_starts(self) -> None:
         from components.hub.backend.render_jobs import ProcessIdentity

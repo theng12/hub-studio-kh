@@ -16,6 +16,11 @@ Two facts are derived, and each says where it came from:
   settlement. `started_at` is written from this build on; a render accepted before it has no
   measured wall time and reports `None`, never 0.
 
+* **A render's channel and episode** are the labels Story Studio sent with the request (stored in
+  `display_json` at acceptance). They are display only — no routing, dispatch, hashing or
+  acceptance decision reads them — and a render that sent neither reports `display: None`, so the
+  tab names it by job id rather than guessing.
+
 A zero that means two things is a defect (AGENTS.md §6): nothing here returns 0 for "the
 Hub does not know". A length, a wall time, an average and a speed are each either a measured
 number or `None`, and `unknown_duration` counts the rows the first could not be given for.
@@ -41,8 +46,8 @@ SUCCEEDED = "output_ready"
 #: `request_bytes` is never read here: a page of renders must not drag in a megabyte of
 #: accepted request bodies per row.
 _COLUMNS = (
-    "id, state, machine, purpose, created_at, updated_at, started_at, packet_json, "
-    "output_path, output_receipt_json, recovery_note, stopped_evidence_json, "
+    "id, state, machine, purpose, created_at, updated_at, started_at, display_json, "
+    "packet_json, output_path, output_receipt_json, recovery_note, stopped_evidence_json, "
     "story_uuid, intent_id, attempt_no, gateway_attempt_key, dispatch_key, "
     "profile_digest, tools_digest, compiler_digest"
 )
@@ -106,6 +111,21 @@ def _failure(row: Any, state: str) -> str | None:
     return "The Hub recorded no reason."
 
 
+def _display(row: Any) -> dict[str, str] | None:
+    """The channel and episode Story Studio named this render with, or None.
+
+    Display only, and never invented: a render accepted before Story sent one has no name here,
+    and the tab keeps naming it by its job id. A value that is not a bounded label is dropped
+    rather than shown.
+    """
+    stored = _json(row["display_json"])
+    labels = {
+        name: stored[name] for name in ("channel", "episode")
+        if isinstance(stored.get(name), str) and stored[name]
+    }
+    return labels or None
+
+
 def entry(row: Any, *, now: float) -> dict[str, Any]:
     """One render, as the tab shows it. Every field is either measured or None."""
     packet = _json(row["packet_json"])
@@ -131,6 +151,9 @@ def entry(row: Any, *, now: float) -> dict[str, Any]:
         "outcome": outcome(state),
         "purpose": row["purpose"] or "production",
         "machine": row["machine"],
+        # Which channel and episode this render belongs to, as Story Studio named them. None
+        # when it sent no name, so the tab falls back to the job id rather than a guess.
+        "display": _display(row),
         "created_at": _stated_number(row["created_at"]),
         "started_at": started,
         "finished_at": settled,

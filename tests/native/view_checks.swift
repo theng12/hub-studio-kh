@@ -84,7 +84,7 @@ enum ViewChecks {
         // show only what it has, and a 0 would read as a measured nothing (AGENTS.md §6).
         let legacy = NativeRender(
             id: "c41d0e88-1f52-4c6b-8e27-3a9b5c6d7e1f", state: "output_ready",
-            outcome: "succeeded", purpose: "production", machine: "local",
+            outcome: "succeeded", purpose: "production", display: nil, machine: "local",
             machineName: "This Mac", createdAt: 1_800_000_000, startedAt: nil, finishedAt: nil,
             wallSeconds: nil, runningSeconds: nil, videoSeconds: nil, width: nil, height: nil,
             frameRate: nil, container: nil, codec: nil, effort: nil, crf: nil, tier: nil,
@@ -101,7 +101,7 @@ enum ViewChecks {
         // had been rendered, or a failure would read as five minutes of video.
         let failed = NativeRender(
             id: "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d", state: "failed", outcome: "failed",
-            purpose: "production", machine: "blue-2", machineName: "Blue Room 2",
+            purpose: "production", display: nil, machine: "blue-2", machineName: "Blue Room 2",
             createdAt: 1_800_000_000, startedAt: 1_799_999_900, finishedAt: 1_799_999_940,
             wallSeconds: 40, runningSeconds: nil, videoSeconds: 300, width: 1920, height: 1080,
             frameRate: 30, container: "mp4", codec: "h264", effort: "hardware", crf: 23,
@@ -118,6 +118,27 @@ enum ViewChecks {
               "a render with no channel or episode name is titled by its own job id")
         check(RenderCopy.facts(legacy).contains("This Mac"),
               "the row names the Mac that rendered it")
+        // A render Story Studio named shows which channel and episode it belongs to, and the job
+        // id it was titled by before is still reachable in Details — nothing is invented for a
+        // render that sent neither.
+        let named = NativeRender(
+            id: "8e1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b", state: "output_ready",
+            outcome: "succeeded", purpose: "production",
+            display: NativeRenderDisplay(channel: "Khmer History", episode: "EP012 The Fall"),
+            machine: "local", machineName: "This Mac", createdAt: 1_800_000_000,
+            startedAt: 1_799_999_900, finishedAt: 1_799_999_940, wallSeconds: 40,
+            runningSeconds: nil, videoSeconds: 300, width: 1920, height: 1080,
+            frameRate: 30, container: "mp4", codec: "h264", effort: "hardware", crf: 23,
+            tier: "hardware-h264", outputBytes: 25_000_000, outputSha256: nil,
+            profileDigest: nil, storyUuid: nil, intentId: nil, attemptNo: 1,
+            gatewayAttemptKey: nil, dispatchKey: nil, failure: nil, localFile: nil)
+        check(RenderCopy.title(named).contains("Khmer History")
+                && RenderCopy.title(named).contains("EP012 The Fall"),
+              "a named render is titled by its channel and episode: \(RenderCopy.title(named))")
+        check(RenderCopy.title(legacy).contains("c41d0e88"),
+              "a render with no name keeps its job id in the title")
+        check(NativeRenderDisplay(channel: nil, episode: "EP013").label == "EP013",
+              "one label alone is still shown")
         check(RenderCopy.status(legacy) == .ok && RenderCopy.outcomeLabel(legacy) == "Done",
               "a published output reads as done")
 
