@@ -20,7 +20,10 @@ than a background loop:
   kit cannot ship `httpx`;
 * a run that fails *after* it has written something moves what it wrote to `~/Library/_trash`
   instead of leaving a half-install behind (the Hub keeps its partial state and retries every five
-  minutes; a file someone double-clicked does not);
+  minutes; a file someone double-clicked does not) - **except a failed agent start**, which is not
+  a failed install: the files and the launchd job are finished, so they stay and the run prints
+  launchctl's own reason and the one command that retries it (the same rule as kh-updater's
+  `install-agent.sh`, owner 2026-10-26);
 * the machine name is settled here - asked for and confirmed - rather than passed in.
 
 The Ed25519 verification at the bottom is the `verify` half of
@@ -57,6 +60,14 @@ PLIST_NAME = LAUNCHD_LABEL + ".plist"
 #: The Hub's own rule for its `controller_id` (`control_plane.ID_PATTERN`).
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
 HUB_BUNDLE_ID = "local.studiohub.standalone"
+
+
+class StartFailed(ValueError):
+    """The install finished; launchd refused to start it. Carries launchctl's own words."""
+
+    def __init__(self, reason: str, plist: Path):
+        super().__init__(reason)
+        self.plist = plist
 
 
 # --------------------------------------------------------------------------- small file helpers
@@ -406,7 +417,13 @@ class Bootstrap:
         except (ValueError, UnicodeDecodeError):
             raise ValueError("publisher reply was not JSON") from None
 
-    def activate(self) -> None:
+    def activate(self) -> bool:
+        """Write the launchd job and load it. True when launchd already had it loaded.
+
+        A failed `bootstrap` raises with launchctl's own words: the install is finished by then,
+        and the caller keeps it rather than trashing it (the same rule as kh-updater's
+        `install-agent.sh`).
+        """
         if not (self.base / "config.json").is_file():
             raise ValueError("agent not enrolled")
         plist = self.home / "Library/LaunchAgents" / PLIST_NAME
@@ -428,11 +445,13 @@ class Bootstrap:
         probe = self.run([launchctl, "print", domain + "/" + LAUNCHD_LABEL],
                          capture_output=True, timeout=10)
         if probe.returncode == 0:
-            return
+            return True
         result = self.run([launchctl, "bootstrap", domain, str(plist)],
                           capture_output=True, timeout=15)
         if result.returncode:
-            raise ValueError("launchd did not start KH Updater")
+            reason = (result.stderr or result.stdout or b"").decode(errors="replace").strip()
+            raise StartFailed(reason or "launchctl refused without a message", plist)
+        return False
 
 
 class _NoRedirects(HTTPRedirectHandler):
@@ -654,8 +673,14 @@ def main(argv: list[str]) -> int:
         print(f"  Agent files: {state} (agent {bootstrap.kit_version()})")
         bootstrap.enrol(machine)
         print(f"  Enrolled as {machine}.")
-        bootstrap.activate()
-        print("  Started at login: the launchd job is loaded.")
+        loaded = bootstrap.activate()
+    except StartFailed as failure:
+        # The install is finished and stays: only the start failed, and one command retries it.
+        # Trashing it here would make this Mac enrol a second time for a launchd hiccup.
+        print(f"  KH Updater is installed but launchd did not start it: {failure}")
+        print("  The install is kept; nothing was removed. Start it later with:")
+        print(f"  launchctl bootstrap gui/{os.getuid()} {failure.plist}")
+        return 1
     except (ValueError, KeyError, OSError) as error:
         where = trash_partial_install(home, plist)
         print(f"  KH Updater was NOT installed: {error}")
@@ -666,6 +691,8 @@ def main(argv: list[str]) -> int:
         print("  Open the publisher's page on the Mac Studio, open its enrolment window, "
               "then run this file again.")
         return 1
+    print("  Agent installed; launchd already has com.khupdater.agent loaded, so it was left alone."
+          if loaded else "  Started at login: the launchd job is loaded.")
     print()
     print("  KH Updater will keep the three apps on this Mac up to date.")
     return 0

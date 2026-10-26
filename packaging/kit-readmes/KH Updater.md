@@ -33,6 +33,14 @@ If the window is shut the publisher refuses, and the run leaves nothing behind â
 moves whatever it had written to `~/Library/_trash`. Nothing is half-installed, and you can run
 the file again once the window is open.
 
+**If the agent is installed and launchd refuses to start it, the install is kept.** The run says
+what launchd answered and prints the one command that retries the start, so a hiccup at login does
+not cost you a second enrolment:
+
+```
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.khupdater.agent.plist
+```
+
 Run it on every Mac. If Studio Hub already installed the agent on a Hub Mac, this file says the
 agent is already there and changes nothing â€” whichever ran first wins, and the two never argue.
 

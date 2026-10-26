@@ -671,15 +671,47 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("agent kit checksum mismatch", result.stdout)
         self.assertFalse((self.home / "Library/KHUpdater").exists())
 
-    def test_a_launchd_that_will_not_start_it_leaves_nothing_behind(self) -> None:
+    def test_a_launchd_that_will_not_start_it_keeps_the_install_and_says_how_to_retry(self) -> None:
+        """The same rule as kh-updater's `install-agent.sh` (owner, 2026-10-26).
+
+        A failed start is not a failed install: the agent's files and its launchd job are
+        finished, and trashing them would make the person enrol a second time. The run says
+        what launchctl answered, keeps everything, and prints the one command that retries.
+        """
         stub = self.work / "launchctl-refusing"
-        stub.write_text('#!/bin/sh\nexit 1\n')
+        stub.write_text('#!/bin/sh\necho "$*" >> "$KHU_LAUNCHCTL_LOG"\n'
+                        'echo "Bootstrap failed: 5: Input/output error" >&2\nexit 1\n')
         stub.chmod(0o755)
         result = self.run_installer(env={"KH_UPDATER_LAUNCHCTL": str(stub)})
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("launchd did not start KH Updater", result.stdout)
-        self.assertFalse((self.home / "Library/KHUpdater").exists())
-        self.assertFalse((self.home / "Library/LaunchAgents/com.khupdater.agent.plist").exists())
+        root = self.home / "Library/KHUpdater"
+        plist = self.home / "Library/LaunchAgents/com.khupdater.agent.plist"
+        self.assertTrue((root / "base/config.json").is_file(), "the enrolment is kept")
+        self.assertTrue(plist.is_file(), "the launchd job is kept")
+        self.assertIn("KH Updater is installed but launchd did not start it", result.stdout)
+        self.assertIn("Input/output error", result.stdout, "launchctl's own reason is shown")
+        self.assertIn(f"launchctl bootstrap gui/{os.getuid()} {plist}", result.stdout,
+                      "the one command that retries it is named")
+        self.assertFalse((self.home / "Library/_trash").exists(),
+                         "a finished install is never moved to the trash")
+        # The Mac stays enrolled: a second run finds it and changes nothing.
+        second = self.run_installer()
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertIn("already installed", second.stdout)
+        self.assertEqual(len(self.publisher.server.seen), 1, "it did not enrol a second time")
+
+    def test_a_launchd_that_already_has_the_job_loaded_is_left_alone(self) -> None:
+        """The rule `khu_agent.Bootstrap.activate` and `install-agent.sh` both use."""
+        stub = self.work / "launchctl-loaded"
+        stub.write_text('#!/bin/sh\necho "$*" >> "$KHU_LAUNCHCTL_LOG"\n'
+                        '[ "$1" = "print" ] && exit 0\nexit 0\n')
+        stub.chmod(0o755)
+        result = self.run_installer(env={"KH_UPDATER_LAUNCHCTL": str(stub)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("already has com.khupdater.agent loaded", result.stdout)
+        self.assertFalse(any(line.startswith("bootstrap ")
+                             for line in self.log.read_text().splitlines()),
+                         "an already-loaded job is never bootstrapped twice")
 
 
 # --------------------------------------------------------------------------- the two clients

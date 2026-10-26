@@ -26,8 +26,11 @@
 #   - Already installed and enrolled: it says so and changes nothing.
 #   - Agent kit or publisher record missing: it says which, and installs nothing. (A kit whose
 #     publisher key has not been created yet has no install file at all, only a README.)
-#   - Enrolment refused, or the agent could not be started: nothing is left half-installed -
-#     whatever it wrote is moved to ~/Library/_trash and it says where.
+#   - Enrolment refused: nothing is left half-installed - whatever it wrote is moved to
+#     ~/Library/_trash and it says where.
+#   - Installed, but launchd refused to start it: the install is KEPT (the agent is enrolled and
+#     its launchd job is written), it prints launchctl's own reason and the one command that
+#     retries the start, and exits non-zero.
 #
 # The `KH_UPDATER_*` names below are for testing this against scratch folders with a stand-in
 # publisher; nobody sets them in real use.
