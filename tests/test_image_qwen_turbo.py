@@ -61,7 +61,6 @@ class QwenTurboRegistryTests(unittest.TestCase):
             ({"aspect_ratio": "4:3", "width": 1152, "height": 864},
              "qualified 1K aspect ratio"),
             ({"negative_prompt": "fog"}, "negative prompt"),
-            ({"reference_images": ["reference.png"]}, "Reference images"),
             ({"lora_paths": ["turbo.safetensors"]}, "LoRAs"),
         ):
             with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, message):
@@ -70,6 +69,27 @@ class QwenTurboRegistryTests(unittest.TestCase):
                     "aspect_ratio": "1:1", "width": 1024, "height": 1024,
                     **changes,
                 })
+
+    def test_the_reference_lane_accepts_references_and_names_a_missing_file(self) -> None:
+        """The row is the second Reference-to-Image model (owner, 2026-10-26).
+
+        A reference request is an *edit* request on this row now, so it is validated as one: an
+        unreadable reference is a blocking error naming the file, never permission to fall back
+        to text-to-image.
+        """
+        model = generation.QWEN_IMAGE_21_TURBO
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference = root / 'reference.png'
+            reference.write_bytes(b'not a png')
+            with self.assertRaisesRegex(ValueError, 'not a readable PNG, JPEG or WebP image'):
+                generation.validate_request({
+                    'repo': model.repo, 'prompt': 'A temple at blue hour',
+                    'aspect_ratio': '1:1', 'reference_images': [str(reference)]})
+            with self.assertRaisesRegex(ValueError, 'missing or unreadable'):
+                generation.validate_request({
+                    'repo': model.repo, 'prompt': 'A temple at blue hour',
+                    'aspect_ratio': '1:1', 'reference_images': [str(root / 'absent.png')]})
 
     def test_explicit_false_synthetic_candidate_still_blocks_submit_and_readiness(self) -> None:
         model = generation.QWEN_IMAGE_21_TURBO

@@ -52,7 +52,7 @@ def test_the_wait_is_one_minute_when_another_mac_offers_the_model(fixture_monito
     batch = {"modality": "image", "model": "model-a", "routing": "pool"}
     seen = []
 
-    def pool(modality, model, routing="pool"):
+    def pool(modality, model, routing="pool", mode=None):
         seen.append((modality, model, routing))
         return machines
     monkeypatch.setattr(broker, "pool_machines", pool)
@@ -102,7 +102,8 @@ def test_a_job_that_waits_past_the_bound_is_handed_back_with_the_sentence(fixtur
     monkeypatch.setattr(broker, "_catalog_entry", entry)
     monkeypatch.setattr(broker, "is_cached", lambda e: True)
     monkeypatch.setattr(broker, "_model_block_note", lambda *a, **k: None)
-    monkeypatch.setattr(broker, "_admission_requirements", lambda model, e: dict(MEM))
+    monkeypatch.setattr(broker, "_admission_requirements",
+                        lambda model, e, mode=None: dict(MEM))
     monkeypatch.setattr(broker, "_host_for_studio", lambda s: {"total_gb": 8.0, "available_gb": 1.0})
     monkeypatch.setattr(broker, "release_idle_siblings", no_release)
     monkeypatch.setattr(broker, "_post_item_webhook", no_hook)

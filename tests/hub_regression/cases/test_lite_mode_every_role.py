@@ -229,7 +229,8 @@ def test_todays_count_includes_this_macs_own_queue(group, lite, monkeypatch, rol
     async def entry(studio, model):
         return {"repo": model, "cached": True}
     monkeypatch.setattr(broker, "_catalog_entry", entry)
-    monkeypatch.setattr(broker, "_admission_requirements", lambda model, entry: None)
+    monkeypatch.setattr(broker, "_admission_requirements",
+                        lambda model, entry, mode=None: None)
     monkeypatch.setattr(broker, "is_cached", lambda entry: True)
     monkeypatch.setattr(broker, "_model_block_note", lambda *a, **k: None)
     broker.submit_batch({"modality": "voice", "model": LITE, "items": [{"text": "one"}]})

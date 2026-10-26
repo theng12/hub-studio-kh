@@ -138,27 +138,38 @@ def _manifest_tiers() -> dict[str, float]:
 
 
 def requirement_gb(model: str, catalog_entry: dict, *,
-                   use_override: bool = True) -> tuple[float | None, str]:
+                   use_override: bool = True, mode: str | None = None) -> tuple[float | None, str]:
     """The total RAM this model needs, and where the number came from.
 
     Returns ``(gb, source)`` with ``source`` one of ``operator_override``, ``measured``,
-    ``manifest``, ``catalog`` or ``none`` (``gb`` is ``None``: nothing was published, so nothing
-    is enforced). This is the eligibility floor the scheduler uses; see the module docstring.
+    ``manifest``, ``catalog``, ``reference_lane`` or ``none`` (``gb`` is ``None``: nothing was
+    published, so nothing is enforced). This is the eligibility floor the scheduler uses; see the
+    module docstring.
+
+    ``mode='edit'`` adds one rung: a model's reference lane peaks far higher than its
+    text-to-image lane (FLUX.2 Klein 4-bit: 12.44 GB measured against ~3 GB bounded), and the
+    worker publishes that lane's own floor in its lane contract. The strictest of the two wins, so
+    a Mac that can render text-to-image is still not a candidate for an edit item until it clears
+    the edit floor.
     """
     key = _normalized(model or catalog_entry.get("repo"))
     override = _read().get(key) if use_override else None
     if override:
-        return override["min_total_memory_gb"], "operator_override"
-    measured = _FLEET_DEFAULTS.get(key)
-    if measured:
-        return measured["min_total_memory_gb"], "measured"
-    tier = _manifest_tiers().get(key)
-    if tier is not None:
-        return tier, "manifest"
-    tier = workload_policy.required_total_memory_gb(model, catalog_entry)
-    if tier is not None:
-        return tier, "catalog"
-    return None, "none"
+        gb, source = override["min_total_memory_gb"], "operator_override"
+    elif (measured := _FLEET_DEFAULTS.get(key)):
+        gb, source = measured["min_total_memory_gb"], "measured"
+    elif (tier := _manifest_tiers().get(key)) is not None:
+        gb, source = tier, "manifest"
+    elif (tier := workload_policy.required_total_memory_gb(model, catalog_entry)) is not None:
+        gb, source = tier, "catalog"
+    else:
+        gb, source = None, "none"
+    if mode == "edit":
+        reference = workload_policy.required_reference_total_memory_gb(model, catalog_entry)
+        if reference is not None and (gb is None or reference > gb):
+            return reference, "reference_lane"
+    return gb, source
+
 
 
 def publish_floor(row: dict, total_gb: float | None) -> dict:
@@ -249,7 +260,7 @@ def _write(values: dict[str, dict]) -> None:
             temporary.unlink()
 
 
-def describe(model: str, catalog_entry: dict) -> dict:
+def describe(model: str, catalog_entry: dict, mode: str | None = None) -> dict:
     """Return catalog, model-default, and effective site-local RAM floors.
 
     ``effective_min_total_memory_gb`` is the model's requirement (`requirement_gb`) and is
@@ -276,33 +287,49 @@ def describe(model: str, catalog_entry: dict) -> dict:
     catalog_free = _number(catalog_entry.get("min_free_memory_gb"))
     qualified_total = workload_policy.required_total_memory_gb(model, catalog_entry)
     qualified_free = workload_policy.required_free_memory_gb(model, catalog_entry)
+    # The reference (edit) lane's own floors, published in the worker's lane contract. Absent for
+    # every model without that lane, and for every text-to-image item on a model with one.
+    reference_total = workload_policy.required_reference_total_memory_gb(model, catalog_entry)
+    reference_free = workload_policy.required_reference_free_memory_gb(model, catalog_entry)
+    editing = mode == "edit"
     fleet_default = _FLEET_DEFAULTS.get(key)
     workload_default = bool(
         (qualified_total is not None and qualified_total != catalog_total)
         or (qualified_free is not None and qualified_free != catalog_free)
     )
 
-    default_total = requirement_gb(model, catalog_entry, use_override=False)[0]
+    default_total = requirement_gb(model, catalog_entry, use_override=False, mode=mode)[0]
     # The row's own published floor, and nothing else: a Hub-side copy of it would outrank the row
     # and make an edit to the row invisible.
     default_free = max(DEFAULT_MIN_FREE_MEMORY_GB, qualified_free or 0.0)
+    if editing and reference_free is not None:
+        default_free = max(default_free, reference_free)
     override = _read().get(key)
-    required_total, total_source = requirement_gb(model, catalog_entry)
+    required_total, total_source = requirement_gb(model, catalog_entry, mode=mode)
     effective_total = required_total or 0.0
-    effective_free = (
-        override["min_free_memory_gb"] if override else default_free
-    )
-    min_free_source = (
-        "operator_override" if override
-        else "model_default" if qualified_free is not None
-        else "default"
-    )
+    base_free = override["min_free_memory_gb"] if override else default_free
+    # A reference job's own floor is a measurement of the edit lane, not a site preference: it is
+    # enforced even over an operator override that is lower, and `min_free_source` says so, because
+    # otherwise the screen would name a number the gate is not using.
+    if editing and reference_free is not None and reference_free >= base_free:
+        effective_free = reference_free
+        min_free_source = "reference_lane"
+    else:
+        effective_free = base_free
+        min_free_source = (
+            "operator_override" if override
+            else "model_default" if qualified_free is not None
+            else "default"
+        )
+
     source = "operator_override" if override else (
         # Compatibility with the published contract: a Hub production floor reports as
         # `fleet_default`, and the measurement question ("has anybody measured this model?") is
         # answered by `fleet_default_measured` below rather than by reusing this string.
-        "fleet_default" if fleet_default or workload_default else "catalog"
+        "reference_lane" if total_source == "reference_lane"
+        else "fleet_default" if fleet_default or workload_default else "catalog"
     )
+
     if fleet_default:
         default_reason = str(fleet_default.get("reason") or "Fleet-measured override")
     elif workload_default:
@@ -325,8 +352,13 @@ def describe(model: str, catalog_entry: dict) -> dict:
             )
     return {
         "model": str(model or catalog_entry.get("repo") or ""),
+        # The lane these floors describe. `edit` adds the reference lane's rung; absent means the
+        # model's own (text-to-image) floors, exactly as before this lane existed.
+        "mode": mode or "txt2img",
         "catalog_min_total_memory_gb": catalog_total,
         "catalog_min_free_memory_gb": catalog_free,
+        "reference_min_total_memory_gb": reference_total,
+        "reference_min_free_memory_gb": reference_free,
         "default_min_total_memory_gb": default_total,
         "default_min_free_memory_gb": default_free,
         "effective_min_total_memory_gb": effective_total,

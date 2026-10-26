@@ -69,7 +69,11 @@ SUBTITLE_FIELDS: dict[str, type] = {
 CHOICES: tuple[dict[str, Any], ...] = (
     {"package_id": "flux2-klein-4b-mlx-4bit", "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit", "revision": "7fd24828501390b67a92c8b66d2fc5a707d0ba1a", "engine": "image-mflux"},
     {"package_id": "qwen-image-2-1-mlx-serve-4bit", "model_id": "ddalcu/Qwen-Image-2.1-MLX-Serve-4bit", "revision": "88eb1b3bb5591ed59b68a6e1a1c2d9baade73e38", "engine": "image-mlx-serve", "minimum_macos": "26.2", "captured_at": "2026-10-06", "quantization": "MLX 4-bit", "quantization_source": "the publisher model id states it: ddalcu/Qwen-Image-2.1-MLX-Serve-4bit", "license": {"weights": "Apache-2.0"}},
-    {"package_id": "qwen-image-2-1-mflux-q4", "model_id": "mlx-community/Qwen-Image-2.1-mflux-q4", "revision": "746a58556820933a2df5c75887a2570f1ad200c0", "engine": "image-mflux", "captured_at": "2026-10-06", "quantization": "MLX 4-bit", "quantization_source": "the publisher model id states q4: mlx-community/Qwen-Image-2.1-mflux-q4", "license": {"weights": "Apache-2.0"}},
+    # The weights are Qwen's own (qwen-research), not Apache-2.0: the previous record said
+    # Apache-2.0 for this pack, which is the licence of the mlx-community *conversion* tooling,
+    # not of the model it converted (owner finding, 2026-10-26). The Turbo row below already
+    # recorded `qwen-research`, so the two Qwen packs disagreed about one upstream model.
+    {"package_id": "qwen-image-2-1-mflux-q4", "model_id": "mlx-community/Qwen-Image-2.1-mflux-q4", "revision": "746a58556820933a2df5c75887a2570f1ad200c0", "engine": "image-mflux", "captured_at": "2026-10-06", "quantization": "MLX 4-bit", "quantization_source": "the publisher model id states q4: mlx-community/Qwen-Image-2.1-mflux-q4", "license": {"weights": "qwen-research"}},
     # Qwen Image 2.1 Turbo is a distinct official eight-step checkpoint, not the Viggle LoRA.
     # The pinned model_index.json declares its eight sample_sigmas and pipeline components.
     {"package_id": "qwen-image-2-1-turbo-mflux-q4", "model_id": "mflux-community/qwen-image-2-1-turbo-mflux-q4", "revision": "bda8951ec6b8cc288a961432fe15c22433521a1d", "engine": "image-mflux", "captured_at": "2026-10-12", "production_allowed": True, "display_name": "Qwen Image 2.1 Turbo Low-RAM MLX 4-bit", "quantization": "MLX 4-bit", "quantization_source": "the publisher checkpoint is the Qwen Image 2.1 Turbo quantized MLX 4-bit conversion", "license": {"weights": "qwen-research"}},

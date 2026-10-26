@@ -70,10 +70,16 @@ def _studio_target_for_url(url: str) -> tuple[str, dict[str, str]]:
 
 def _multipart_fields(body: dict) -> dict:
     """Flatten the JSON param body into the studio's img2img/edit form fields
-    (strings; CSV for lora lists). Unknown fields are ignored by the studio."""
+    (strings; CSV for lora lists). Unknown fields are ignored by the studio.
+
+    ``aspect_ratio`` and ``resolution`` travel too: an image request names its geometry that way
+    (the Gateway's body has them and not ``width``/``height``), and dropping them here made every
+    reference render fall back to the worker's own default ratio — a 1:1 request quietly became
+    16:9. A worker that ignores them still sees ``width``/``height`` when the caller supplied them.
+    """
     out = {}
-    for k in ("repo", "prompt", "negative_prompt", "width", "height", "steps",
-              "guidance", "seed", "image_strength", "quantize"):
+    for k in ("repo", "prompt", "negative_prompt", "width", "height", "aspect_ratio",
+              "resolution", "steps", "guidance", "seed", "image_strength", "quantize"):
         v = body.get(k)
         if v is not None:
             out[k] = str(v)
@@ -96,6 +102,85 @@ def _video_multipart_fields(body: dict) -> dict:
         if v is not None:
             out[k] = str(v)
     return out
+
+
+# ── an image item's lane ────────────────────────────────────────────────────
+# A reference-to-image item is a different lane on the same model: it needs a Mac that advertises
+# `edit`, and it peaks far higher than text-to-image (12.44 GB measured vs ~3 GB bounded). Both
+# facts are per item, so they are computed from the item rather than from the model alone.
+
+def _item_mode(item: dict) -> str:
+    """``'edit'`` for an item carrying reference images, else ``'txt2img'``.
+
+    Resolved from the item, never assumed from the model: one model serves both lanes.
+    """
+    params = item.get("params") or {}
+    references = params.get("reference_images")
+    return "edit" if isinstance(references, (list, tuple)) and references else "txt2img"
+
+
+def _batch_mode(batch: dict) -> str:
+    """The stricter lane any queued item of this batch needs, so the pool serves it."""
+    return ("edit" if any(_item_mode(item) == "edit" for item in batch.get("items") or ())
+            else "txt2img")
+
+
+def _reference_limits(entry: dict | None) -> dict:
+    """The reference block a worker published in its lane contract, or ``{}``."""
+    contract = (entry or {}).get("lane_contract")
+    references = (contract or {}).get("references") if isinstance(contract, dict) else None
+    return references if isinstance(references, dict) else {}
+
+
+async def _image_reference_files(client: httpx.AsyncClient, entry: dict | None,
+                                 refs: list, mode: str) -> list:
+    """The multipart parts for an image reference job, in the order the request named them.
+
+    ``edit`` takes N references as repeated ``images`` parts, against the count window the worker
+    published; ``img2img`` keeps its single ``image`` part. A worker that advertises `edit`
+    without a count window is refused rather than sent a set nobody stated it can take - guessing
+    is how a reference becomes a silent text-to-image render.
+    """
+    if mode != "edit":
+        img_bytes, mime = await _resolve_reference(client, refs[0])
+        # Video Studio's one source image is a `file` part; Image Studio's img2img one is `image`.
+        part = "file" if mode == "img2video" else "image"
+        return [(part, (f"reference{_ext(mime)}", img_bytes, mime))]
+    limits = _reference_limits(entry)
+    minimum, maximum = limits.get("min"), limits.get("max")
+    if not isinstance(minimum, int) or not isinstance(maximum, int):
+        raise ValueError(
+            f"model advertises edit but publishes no reference count window "
+            f"(min/max) in its lane contract; refusing {len(refs)} reference image(s)")
+    if not minimum <= len(refs) <= maximum:
+        raise ValueError(
+            f"{len(refs)} reference image(s) sent; this model takes {minimum} to {maximum}")
+    files = []
+    for index, ref in enumerate(refs):
+        img_bytes, mime = await _resolve_reference(client, ref)
+        files.append(("images", (f"reference{index}{_ext(mime)}", img_bytes, mime)))
+    return files
+
+
+async def _reference_dispatch(client: httpx.AsyncClient, studio: dict, batch: dict,
+                              entry: dict | None, refs: list, ref_mode: str | None,
+                              supported_modes: tuple[str, ...]) -> tuple[str, str, dict, list]:
+    """``(mode, url, headers, files)`` for one reference job, or ``ValueError`` naming why not.
+
+    One function so the decision is testable without a running dispatcher: which mode this worker
+    can serve, the endpoint that serves it, and the multipart parts. A worker that advertises
+    neither mode is refused here, before anything is posted.
+    """
+    caps = (entry or {}).get("capabilities") or []
+    mode = ref_mode or next((name for name in supported_modes if name in caps), None)
+    if not mode or mode not in supported_modes or mode not in caps:
+        raise ValueError(
+            f"model {batch.get('model')} does not support reference images "
+            f"(needs {'/'.join(supported_modes)} capability)")
+    files = await _image_reference_files(client, entry, list(refs), mode)
+    path = "/api/generate/video2video" if mode == "img2video" else f"/api/generate/{mode}"
+    url, headers = studio_request(studio, path)
+    return mode, url, headers, files
 
 
 async def _resolve_reference(client: httpx.AsyncClient, ref: dict):
@@ -397,7 +482,8 @@ def _admission_wait_expired(item: dict, studio: dict, mem: dict, note: str | Non
     started = item.setdefault("admission_wait_started_at", now)
     limit = ADMISSION_WAIT_HANDBACK_S
     if b is not None and pool_machines(b["modality"], b.get("model") or "",
-                                       b.get("routing", "pool")) - {studio.get("machine", "local")}:
+                                       b.get("routing", "pool"),
+                                       _batch_mode(b)) - {studio.get("machine", "local")}:
         limit = min(limit, ADMISSION_WAIT_HANDBACK_ELSEWHERE_S)
     return now - float(started) >= limit
 
@@ -407,11 +493,16 @@ def _local_gate(mem: dict, host: dict) -> tuple[str, str | None]:
     return _memory_gate(mem, host, _reserved["gb"])
 
 
-def _admission_requirements(model: str, entry: dict) -> dict | None:
-    """Resolve the editable site policy used immediately before dispatch."""
+def _admission_requirements(model: str, entry: dict,
+                            mode: str | None = None) -> dict | None:
+    """Resolve the editable site policy used immediately before dispatch.
+
+    ``mode='edit'`` asks for the model's reference lane, which has its own measured floors (a
+    reference item peaks far above text-to-image); the lane's floors win where they are stricter.
+    """
     if entry.get("is_cloud"):
         return None
-    policy = memory_admission.describe(model, entry)
+    policy = memory_admission.describe(model, entry, mode=mode)
     return {
         "min_total": policy["effective_min_total_memory_gb"],
         "min_free": policy["effective_min_free_memory_gb"],
@@ -503,8 +594,13 @@ CLEAR_MACHINE_MODELS = frozenset({"vanch007/mlx-Yue2-3B"})
 
 
 async def prepare_machine_memory(client: httpx.AsyncClient, studio: dict,
-                                 model: str, entry: dict) -> tuple[str, str | None]:
-    """Run admission, coordinated idle handoff, then one fresh admission check."""
+                                 model: str, entry: dict,
+                                 mode: str | None = None) -> tuple[str, str | None]:
+    """Run admission, coordinated idle handoff, then one fresh admission check.
+
+    ``mode='edit'`` applies the reference lane's own floors, so an edit item waits or skips a Mac
+    that can take text-to-image but not a 12.44 GB reference render.
+    """
     if model in CLEAR_MACHINE_MODELS:
         handoff = await release_idle_siblings(client, studio)
         if handoff["busy"]:
@@ -516,7 +612,7 @@ async def prepare_machine_memory(client: httpx.AsyncClient, studio: dict,
         if handoff["released"] and not peers.is_local_studio(studio):
             peers.invalidate(studio.get("machine", "local"))
             await peers.refresh(_monitor().registry, client)
-    mem = _with_machine_floor(_admission_requirements(model, entry), studio)
+    mem = _with_machine_floor(_admission_requirements(model, entry, mode=mode), studio)
     if mem is None:
         return "run", None
     is_local = peers.is_local_studio(studio)
@@ -545,7 +641,8 @@ async def prepare_machine_memory(client: httpx.AsyncClient, studio: dict,
     return decision, note
 
 
-def memory_admission_dispatchable(studio: dict, model: str, entry: dict) -> bool:
+def memory_admission_dispatchable(studio: dict, model: str, entry: dict,
+                                  mode: str | None = None) -> bool:
     """Return whether current telemetry can admit this model without a wait.
 
     This is a cache/telemetry-only probe for the shared Chat/transcription
@@ -555,7 +652,7 @@ def memory_admission_dispatchable(studio: dict, model: str, entry: dict) -> bool
     MemoryGuard remains authoritative, with the memory-failure turn fallback
     preventing the opposite lane from being stranded.
     """
-    mem = _with_machine_floor(_admission_requirements(model, entry), studio)
+    mem = _with_machine_floor(_admission_requirements(model, entry, mode=mode), studio)
     if mem is None:
         return True
     host = _host_for_studio(studio)
@@ -795,7 +892,8 @@ def _wait_for_faster_mac(batch: dict, item: dict, studio: dict) -> bool:
     seconds = _mac_seconds(modality, model)
     finish: dict[str, list[float]] = {}
     for machine, (other, _entry) in _pool_members(
-            modality, model, batch.get("routing", routing_rule.POOL)).items():
+            modality, model, batch.get("routing", routing_rule.POOL),
+            _batch_mode(batch)).items():
         if machine == here or (other["id"] not in _busy and machine not in leased):
             continue
         order = priority_order(machine)
@@ -811,7 +909,8 @@ def _wait_for_faster_mac(batch: dict, item: dict, studio: dict) -> bool:
     return min(done for done, _own in finish.values()) < seconds(here)
 
 
-def _pool_members(modality: str, model: str, routing: str = "pool") -> dict[str, tuple]:
+def _pool_members(modality: str, model: str, routing: str = "pool",
+                  mode: str | None = None) -> dict[str, tuple]:
     """machine -> (studio, catalog row) for every distinct Mac that could run this model at all.
 
     A job's *pool*: capacity, not availability. A Mac counts while it is up, enabled, not in
@@ -820,6 +919,10 @@ def _pool_members(modality: str, model: str, routing: str = "pool") -> dict[str,
     the model's requirement (`memory_admission.requirement_gb`; unknown RAM counts). Busy Macs
     count - they will free up. Reads cached catalogs only, and the last-good row rather than the
     fresh-only one, so a catalog that is briefly stale does not shrink the pool to nothing.
+
+    ``mode='edit'`` requires the Mac to advertise the model's reference lane *and* to clear the
+    edit floor, so a reference job's pool is the Macs that can actually serve it - the same rule
+    the Gateway applies to a location.
     """
     mon = _monitor()
     members: dict[str, tuple] = {}
@@ -829,7 +932,7 @@ def _pool_members(modality: str, model: str, routing: str = "pool") -> dict[str,
                 or _machine_blocked(machine)
                 or mon.status.get(studio["id"], {}).get("status") != "up"
                 or not peers.dispatch_ready(studio)
-                or not _can_run(studio, entry, model, routing)):
+                or not _can_run(studio, entry, model, routing, mode)):
             continue
         members[machine] = (studio, entry)
     return members
@@ -853,9 +956,14 @@ def _paused(studio: dict) -> bool:
             or not studio_enabled(machine, studio["id"]))
 
 
-def _can_run(studio: dict, entry: dict, model: str, routing: str) -> bool:
+def _can_run(studio: dict, entry: dict, model: str, routing: str,
+             mode: str | None = None) -> bool:
     """Whether this Studio could run the model at all once free - routing, files, RAM tier -
-    whatever its pause, health or current load."""
+    whatever its pause, health or current load.
+
+    ``mode='edit'`` also requires the worker to advertise the reference lane: a Mac whose worker
+    does not publish `edit` cannot serve a reference job however much RAM it has.
+    """
     if (not routing_rule.allows(studio, routing)
             or (routing == routing_rule.REMOTE and peers.is_local_studio(studio))
             or (routing == routing_rule.ASSIGNED
@@ -864,8 +972,11 @@ def _can_run(studio: dict, entry: dict, model: str, routing: str) -> bool:
             or _model_block_note(studio, model, entry)
             or not peers.lite_mode_allows(studio, model)):
         return False
+    if mode == "edit" and "edit" not in (entry.get("capabilities") or []):
+        return False
     known = _known_memory_gb(studio)
-    return known is None or known >= (memory_admission.requirement_gb(model, entry)[0] or 0.0)
+    return known is None or known >= (memory_admission.requirement_gb(model, entry, mode=mode)[0]
+                                      or 0.0)
 
 
 def every_capable_mac_paused(modality: str, model: str | None,
@@ -883,14 +994,16 @@ def every_capable_mac_paused(modality: str, model: str | None,
     return bool(capable) and all(_paused(studio) for studio in capable)
 
 
-def pool_machines(modality: str, model: str, routing: str = "pool") -> set[str]:
+def pool_machines(modality: str, model: str, routing: str = "pool",
+                  mode: str | None = None) -> set[str]:
     """The Macs that could run this model at all - see `_pool_members`."""
-    return set(_pool_members(modality, model, routing))
+    return set(_pool_members(modality, model, routing, mode))
 
 
-def _pool_size(modality: str, model: str, routing: str = "pool") -> float:
+def _pool_size(modality: str, model: str, routing: str = "pool",
+               mode: str | None = None) -> float:
     """Pool size for ordering: a job nobody can run sorts last (infinity) and holds nothing up."""
-    return len(_pool_members(modality, model, routing)) or math.inf
+    return len(_pool_members(modality, model, routing, mode)) or math.inf
 
 
 def _broker_dispatchable_work(machine: str) -> list[tuple[str, float, str]]:
@@ -903,8 +1016,8 @@ def _broker_dispatchable_work(machine: str) -> list[tuple[str, float, str]]:
             continue
         queued = [i for i in b["items"]
                   if i["state"] == "queued" and (i.get("retry_at") or 0) <= now]
-        member = _pool_members(b["modality"], b.get("model") or "", b["routing"]).get(machine) \
-            if queued else None
+        member = _pool_members(b["modality"], b.get("model") or "", b["routing"],
+                               _batch_mode(b)).get(machine) if queued else None
         if member is None or admission_refusal(b):
             continue
         studio, entry = member
@@ -917,10 +1030,11 @@ def _broker_dispatchable_work(machine: str) -> list[tuple[str, float, str]]:
                 continue
             entry = fresh
         if (studio not in _eligible_studios(b["modality"], b["routing"], b.get("model"))
-                or not _can_run(studio, entry, b.get("model") or "", b["routing"])
+                or not _can_run(studio, entry, b.get("model") or "", b["routing"],
+                                _batch_mode(b))
                 or not _supports_genstudio_voice_evidence(b, studio)
                 or not _catalog_matches_genstudio_revision(b, entry)
-                or not memory_admission_dispatchable(studio, b["model"], entry)
+                or not memory_admission_dispatchable(studio, b["model"], entry, _batch_mode(b))
                 or not any(_shared_voice_allows_studio(b, i, studio)
                            and _item_allows_studio(i, studio, now)
                            and not _wait_for_faster_mac(b, i, studio) for i in queued)):
@@ -3014,7 +3128,7 @@ def terminal_result(b: dict, item: dict) -> dict | None:
         "machine_id": item.get("machine"),
         "resource_usage": item.get("resource_usage"),
     }
-    return {
+    result = {
         "status": "succeeded",
         "asset_id": item.get("asset_id"),
         "artifact_url": hub_artifact_url(b, item),
@@ -3041,6 +3155,14 @@ def terminal_result(b: dict, item: dict) -> dict | None:
         "resolved_seed": item.get("resolved_seed"),
         **evidence,
     }
+    # The anti-silent-drop proof for a reference render: how many references the worker actually
+    # attached. Present only where the worker stated it, so a text-to-image item's result is
+    # byte-identical to before this lane existed. The Gateway compares it with the number it sent
+    # and fails an item that differs, instead of accepting a text-to-image render as success.
+    if item.get("reference_count") is not None:
+        result["reference_count"] = item.get("reference_count")
+    return result
+
 
 
 def local_artifact_path(item: dict) -> str | None:
@@ -4700,12 +4822,15 @@ async def _dispatch_loop():
                     is_local = peers.is_local_studio(studio)
                     # A worker catalog is one input. Measured fleet defaults
                     # and visible owner overrides form the effective site-local
-                    # admission policy used immediately before dispatch.
-                    mem = _admission_requirements(b["model"], entry)
+                    # admission policy used immediately before dispatch. The item's own lane
+                    # is the last input: a reference (edit) item asks for the model's edit
+                    # floors, which are the measured ones for that lane.
+                    candidate_mode = _item_mode(queued[compatible_index])
+                    mem = _admission_requirements(b["model"], entry, mode=candidate_mode)
                     reserve = 0.0
                     if mem is not None:
                         decision, note = await prepare_machine_memory(
-                            client, studio, b["model"], entry)
+                            client, studio, b["model"], entry, mode=candidate_mode)
                         if decision != "run":
                             # skip → another (maybe bigger/remote) studio may take
                             # it; wait → defer. NEVER errors the whole batch - except that an
@@ -5050,6 +5175,11 @@ def _record_worker_identity(item: dict, studio: dict, job: dict) -> None:
         value = job.get(field)
         if isinstance(value, str) and value.strip():
             item[field] = value.strip()[:500]
+    # The worker's own count of the references it took. A bounded integer it stated, never a
+    # number derived here; `terminal_result` publishes it for the Gateway to compare.
+    count = job.get("reference_count")
+    if type(count) is int and count >= 0:
+        item["reference_count"] = count
 
 
 def _record_worker_failure(item: dict, studio: dict, job: dict, t_start: float) -> None:
@@ -5406,47 +5536,39 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             item["voice_reference_asset_id"] = voice_reference_asset_id
         elif refs:
             entry = await _catalog_entry(studio, b["model"])
-            caps = (entry or {}).get("capabilities") or []
-            if b["modality"] == "video":
-                mode = ref_mode or "img2video"
-                supported_modes = ("img2video",)
-            else:
-                mode = ref_mode or ("img2img" if "img2img" in caps
-                                    else ("edit" if "edit" in caps else None))
-                supported_modes = ("img2img", "edit")
-            if not mode or mode not in supported_modes or mode not in caps:
-                item["state"] = "error"
-                item["error"] = (f"model {b['model']} does not support reference "
-                                 f"images (needs {'img2video' if b['modality'] == 'video' else 'img2img/edit'} capability)")
-                return  # terminal — the finally block cleans up
             try:
-                img_bytes, mime = await _resolve_reference(client, refs[0])
+                if b["modality"] == "video":
+                    # Video keeps its one `file` part and its one mode.
+                    _video_mode, url, headers, files = await _reference_dispatch(
+                        client, studio, b, entry, refs, ref_mode, ("img2video",))
+                    body["mode"] = "img2video"
+                    if requeue_if_peer_changed():
+                        return
+                    reservation_owner = _begin_preferred_reservation(studio, b["modality"])
+                    r = await client.post(
+                        url,
+                        data=_video_multipart_fields(body),
+                        files=files,
+                        headers=headers)
+                else:
+                    # `edit` takes every reference the request names, in order, against the count
+                    # window the worker published; `img2img` keeps its single `image` part.
+                    mode, url, headers, files = await _reference_dispatch(
+                        client, studio, b, entry, refs, ref_mode, ("img2img", "edit"))
+                    if requeue_if_peer_changed():
+                        return
+                    reservation_owner = _begin_preferred_reservation(studio, b["modality"])
+                    durable_post_attempted = True
+                    r = await client.post(
+                        url,
+                        data=_multipart_fields(body),
+                        files=files,
+                        headers=headers)
             except (ValueError, httpx.HTTPError) as e:
                 item["state"] = "error"
-                item["error"] = f"reference image could not be loaded: {e}"
+                item["error"] = f"reference images could not be dispatched: {e}"
                 return
-            if b["modality"] == "video":
-                body["mode"] = "img2video"
-                if requeue_if_peer_changed():
-                    return
-                url, headers = studio_request(studio, "/api/generate/video2video")
-                reservation_owner = _begin_preferred_reservation(studio, b["modality"])
-                r = await client.post(
-                    url,
-                    data=_video_multipart_fields(body),
-                    files={"file": (f"reference{_ext(mime)}", img_bytes, mime)},
-                    headers=headers)
-            else:
-                if requeue_if_peer_changed():
-                    return
-                url, headers = studio_request(studio, f"/api/generate/{mode}")
-                reservation_owner = _begin_preferred_reservation(studio, b["modality"])
-                durable_post_attempted = True
-                r = await client.post(
-                    url,
-                    data=_multipart_fields(body),
-                    files={"image": (f"reference{_ext(mime)}", img_bytes, mime)},
-                    headers=headers)
+
         else:
             if requeue_if_peer_changed():
                 return

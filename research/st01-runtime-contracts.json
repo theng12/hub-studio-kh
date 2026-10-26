@@ -238,9 +238,9 @@
         "python": "3.12"
       },
       "provenance": {
-        "mflux": "PyPI mflux 0.20.0, SHA-256 hashes in requirements.lock.txt; bumped from 0.17.5 for the Z-Image-Turbo engine",
-        "mlx": "0.32.2 macosx_14_0_arm64 wheel, SHA-256 77217798a2b036bae9f213b851d4cde4581893787c9964458b7d471f86036bd6",
-        "mlx_metal": "0.32.2 macosx_14_0_arm64 wheel, SHA-256 3825fff379dbc107dd3413e564a06caeaa24819910ec49c0439e454c06a1b9b8"
+        "mflux": "PyPI mflux 0.23.0, SHA-256 hashes in requirements.lock.txt; bumped from 0.20.0 for the Reference-to-Image lane (2026-10-26), which needs Flux2KleinEdit and QwenImage21Edit; mflux 0.23.0 also requires urllib3>=2.8.0 and pins pillow==12.3.0 (13.0.0 breaks mflux on Python 3.12)",
+        "mlx": "0.32.4 macosx_14_0_arm64 wheel, SHA-256 ff1d7be54758ea3a875b8fe54eff13bed17ad9566505e301f5d7851bf869680f; mflux 0.23.0 declares mlx>=0.32.0,<0.33.0 and this is the version the edit-lane measurements ran on",
+        "mlx_metal": "0.32.4 macosx_14_0_arm64 wheel, SHA-256 8019b2db622599267d66cc168b2f0dbf5af929790a6c3b3913e00eabc42a7947"
       },
       "readiness": "runtime-inputs-only",
       "required_imports": [
@@ -254,7 +254,7 @@
         "fastapi",
         "uvicorn"
       ],
-      "runtime_lock_sha256": "c4fdad2f82f1c83554b581cf04b33fa79cb888d9d2ad9e87107b9bf0780e8f0b",
+      "runtime_lock_sha256": "a732f134731b66525d132efa87ea4122a4fc08549ff31289f2af660d1349f447",
       "st03_runtime_proof": {
         "binaries_checked": 194,
         "failures": 0,

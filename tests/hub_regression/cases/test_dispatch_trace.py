@@ -107,7 +107,7 @@ def test_blocked_pass_retries_failed_write_records_only_actual_gate_and_keeps_sn
     memory_decisions = iter(("wait", "wait", "wait", "run"))
     wait_expirations = iter((False, False, True))
 
-    async def prepare_memory(*_args):
+    async def prepare_memory(*_args, **_kwargs):
         decision = next(memory_decisions)
         return decision, "fixture memory gate"
 
@@ -131,7 +131,8 @@ def test_blocked_pass_retries_failed_write_records_only_actual_gate_and_keeps_sn
     monkeypatch.setattr(broker, "_catalog_matches_genstudio_revision", lambda *_: True)
     monkeypatch.setattr(broker, "_model_block_note", lambda *_: None)
     monkeypatch.setattr(broker, "is_cached", lambda *_: True)
-    monkeypatch.setattr(broker, "_admission_requirements", lambda *_: {"required": 1})
+    monkeypatch.setattr(broker, "_admission_requirements",
+                        lambda *_a, **_k: {"required": 1})
     monkeypatch.setattr(broker, "prepare_machine_memory", prepare_memory)
     monkeypatch.setattr(
         broker, "_admission_wait_expired", lambda *_: next(wait_expirations)

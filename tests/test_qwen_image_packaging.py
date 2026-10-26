@@ -100,7 +100,13 @@ class QwenManifestTests(unittest.TestCase):
                 self.assertEqual(manifest["defaults"], CAPTURE.DETAILS[package_id]["defaults"])
                 self.assertEqual(manifest["source"]["captured_at"], "2026-10-06")
                 self.assertNotIn("default", manifest)
-                self.assertEqual(manifest["license"]["weights"], "Apache-2.0")
+                # The weights are Qwen's own; Apache-2.0 is the licence of the mlx-community
+                # conversion, not of the model it converted. The record said Apache-2.0 for the
+                # mflux pack until 2026-10-26 (owner finding), while the Turbo pack on the same
+                # upstream model already said qwen-research.
+                expected_licence = {"qwen-image-2-1-mflux-q4": "qwen-research"}.get(
+                    package_id, "Apache-2.0")
+                self.assertEqual(manifest["license"]["weights"], expected_licence)
                 self.assertEqual(manifest["quantization"], choice["quantization"])
                 self.assertEqual(
                     manifest["quantization_source"], choice["quantization_source"]

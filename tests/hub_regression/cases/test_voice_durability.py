@@ -541,7 +541,8 @@ def test_voice_dispatch_is_durable_before_worker_task_starts(
 
     monkeypatch.setattr(broker, "_eligible_studios", lambda *args: [studio])
     monkeypatch.setattr(broker, "_catalog_entry", catalog_entry)
-    monkeypatch.setattr(broker, "_admission_requirements", lambda *args: None)
+    monkeypatch.setattr(broker, "_admission_requirements",
+                        lambda *args, **kwargs: None)
     monkeypatch.setattr(broker, "busy_machines", lambda: set())
     monkeypatch.setattr(broker.peers, "dispatch_generation", lambda value: "generation")
     monkeypatch.setattr(broker.peers, "dispatch_ready", lambda *args: True)

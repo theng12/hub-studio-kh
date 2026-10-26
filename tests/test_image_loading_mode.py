@@ -155,8 +155,19 @@ class PublishedOptionsMatchTheModelsOwnPolicy(ImageMemoryModeFixture):
             entries = self.catalog(self.client(host), host)
             for model in MODELS.values():
                 with self.subTest(host=host, model=model.repo):
-                    self.assertEqual(entries[model.repo]['loading_modes'],
+                    published = entries[model.repo]['loading_modes']
+                    # The text lane's block, unchanged by the edit lane's arrival beside it...
+                    self.assertEqual({key: value for key, value in published.items()
+                                      if key != 'edit'},
                                      loading_modes(model, host, 'auto'))
+                    # ...and the edit lane's own, from its own tiers (owner, 2026-10-26: "publish
+                    # the edit modes in /api/catalog loading_modes like the others").
+                    if model.reference_limits:
+                        self.assertEqual(published['edit'],
+                                         loading_modes(model, host, 'auto', lane='edit'))
+                        self.assertEqual(published['edit']['lane'], 'edit')
+                    else:
+                        self.assertNotIn('edit', published)
 
 
 class PlanAndApplyFollowTheSetting(ImageMemoryModeFixture):
