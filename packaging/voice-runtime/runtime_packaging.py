@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 from typing import Iterable
@@ -269,6 +270,190 @@ def verify_file_manifest(root: Path) -> list[dict[str, str]]:
                 mismatches.append({"path": relative, "reason": field})
                 break
     return mismatches
+
+
+# --- Test-only content -----------------------------------------------------------------------
+#
+# A Voice runtime is a whole Python installation, so it carries every wheel's `tests/` directory:
+# numpy, scipy, networkx, torch and mlx_audio alone contribute hundreds of files that no product
+# code runs. 0.6.200 shipped them *and* pytest 9.1.1 with pluggy and iniconfig, because someone
+# installed pytest into `.build/voice-runtime` after it was built and `stage()` copied the tree
+# wholesale. That is what `strip_test_only` closes, at both points a runtime can enter a release -
+# the build stage and the copy into an app bundle: it removes the files, rewrites the runtime's own
+# file manifest so it does not describe files that are gone, and refuses a tree it could not clean.
+#
+# **`tests` is not a synonym for test-only**, which is why the decision is made by scanning the
+# staged sources rather than by a list of exceptions somebody must remember to extend:
+# `jinja2/tests.py` is Jinja's runtime test vocabulary (`from .tests import TESTS`), `mpmath`'s
+# `runtests()` imports `mpmath.tests`, and `scipy/stats/_page_trend_test.py` *is* `page_trend_test`.
+TEST_DIRECTORY_NAMES = frozenset({"tests", "test"})
+TEST_SCAFFOLDING_NAMES = frozenset({"conftest.py", "pytest.ini", "tox.ini"})
+# Console scripts that belong only to a test framework; the distributions are matched by name.
+TEST_FRAMEWORK_DISTRIBUTIONS = frozenset(
+    {"pytest", "_pytest", "pluggy", "iniconfig", "coverage", "hypothesis"}
+)
+TEST_FRAMEWORK_SCRIPTS = frozenset({"py.test", "coverage3"})
+_IMPORT_LINE = re.compile(rb"^[ \t]*(?:from|import)[ \t]+([^\n#]*)", re.MULTILINE)
+_IDENTIFIER = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def is_test_file_name(name: str) -> bool:
+    """True for a file that exists only to be collected by a test runner."""
+    if name in TEST_SCAFFOLDING_NAMES:
+        return True
+    if name.endswith(".py") and name.startswith("test_"):
+        return True
+    # A leading underscore keeps scipy's `_page_trend_test.py` and `_bws_test.py`: those are the
+    # implementations of `scipy.stats.page_trend_test` and `scipy.stats.bws_test`.
+    return name.endswith("_test.py") and not name.startswith("_")
+
+
+def is_test_framework_entry(name: str) -> bool:
+    """True for a test framework's package, `.dist-info` directory or console script."""
+    return (
+        name in TEST_FRAMEWORK_SCRIPTS
+        or name.split("-", 1)[0].lower() in TEST_FRAMEWORK_DISTRIBUTIONS
+    )
+
+
+def _test_directory_targets(root: Path, source: Path, token: str) -> list[Path]:
+    """Where an import of a test-named module points, as absolute candidate directories."""
+    dots = len(token) - len(token.lstrip("."))
+    components = token.lstrip(".").split(".")
+    named = [index for index, part in enumerate(components) if part in TEST_DIRECTORY_NAMES]
+    if not named:
+        return []
+    components = components[: named[-1] + 1]
+    base = source.parent
+    for _ in range(dots - 1):
+        base = base.parent
+    if dots:
+        return [base.joinpath(*components)]
+    return [
+        search_root.joinpath(*components)
+        for search_root in (root, *sorted(root.glob("lib/python*/site-packages")))
+    ]
+
+
+def referenced_test_content(root: Path) -> tuple[set[Path], set[str]]:
+    """Test-named packages and modules that the staged sources still import.
+
+    A relative import resolves against the importing file's own directory, an absolute one against
+    the runtime root and every `lib/python*/site-packages` in it. Both halves matter: `mpmath`'s
+    `from .tests import runtests` names a *directory*, while torch's Dynamo **imports
+    `torch._inductor.test_operators` from `trace_rules.py` at run time** - a `test_`-named module
+    that removing by filename alone broke `AutoTokenizer`, and therefore Whisper transcription.
+    """
+    directories: set[Path] = set()
+    modules: set[str] = set()
+    for path in root.rglob("*.py"):
+        relative = path.relative_to(root)
+        if is_test_file_name(path.name) or TEST_DIRECTORY_NAMES & set(relative.parts[:-1]):
+            continue  # the importer is test-only too and is being removed
+        try:
+            contents = path.read_bytes()
+        except OSError:
+            continue
+        if b".test" not in contents and b"test_" not in contents:
+            continue
+        for statement in _IMPORT_LINE.findall(contents):
+            text = statement.decode("ascii", "ignore")
+            modules.update(
+                match.decode("ascii", "ignore") for match in _IDENTIFIER.findall(statement)
+            )
+            module = text.split(" import ", 1)[0].split(",", 1)[0]
+            directories.update(_test_directory_targets(root, path, module.strip()))
+    return directories, modules
+
+
+def test_only_hits(root: Path) -> list[Path]:
+    """Every staged path that exists only to run tests, in bundle order."""
+    references, imported = referenced_test_content(root)
+    hits: list[Path] = []
+    for directory, subdirectories, files in os.walk(root):
+        current = Path(directory)
+        retained = []
+        for name in sorted(subdirectories):
+            candidate = current / name
+            if name in TEST_DIRECTORY_NAMES:
+                if candidate not in references:
+                    hits.append(candidate)
+                    continue
+            elif is_test_framework_entry(name) and name.endswith(".dist-info"):
+                hits.append(candidate)
+                continue
+            elif name.lower() in TEST_FRAMEWORK_DISTRIBUTIONS:
+                hits.append(candidate)
+                continue
+            retained.append(name)
+        subdirectories[:] = retained
+        for name in sorted(files):
+            path = current / name
+            if is_test_file_name(name):
+                # A test package or module a package's own code imports stays whole:
+                # `mpmath.runtests()` runs the very modules inside `mpmath/tests`, and torch's
+                # Dynamo imports `torch._inductor.test_operators`. Keeping the directory and
+                # deleting its tests would be the same lie in a smaller size.
+                if path.stem not in imported and not references.intersection(path.parents):
+                    hits.append(path)
+            elif current == root / "bin" and is_test_framework_entry(name):
+                hits.append(path)
+    return hits
+
+
+def _remove(path: Path) -> int:
+    """Delete one staged path, returning the bytes it held. Staged runtimes are read-only."""
+    parent_mode = stat.S_IMODE(path.parent.stat().st_mode)
+    path.parent.chmod(parent_mode | stat.S_IWUSR)
+    try:
+        if path.is_dir() and not path.is_symlink():
+            freed = sum(
+                entry.lstat().st_size
+                for entry in path.rglob("*")
+                if entry.is_file() and not entry.is_symlink()
+            )
+            for entry in (path, *path.rglob("*")):
+                if entry.is_symlink():
+                    continue
+                mode = stat.S_IMODE(entry.lstat().st_mode)
+                entry.chmod(mode | stat.S_IWUSR | stat.S_IRUSR | stat.S_IXUSR)
+            shutil.rmtree(path)
+            return freed
+        freed = path.lstat().st_size
+        path.unlink()
+        return freed
+    finally:
+        path.parent.chmod(parent_mode)
+
+
+def strip_test_only(root: Path) -> dict[str, object]:
+    """Remove every test-only file from a staged runtime and keep its manifest honest.
+
+    Called at the build stage and again when a runtime is copied into an app bundle, because
+    `.build/voice-runtime` is reused between releases: a plain build-time sweep cannot clean a
+    tree that was already built.
+    """
+    hits = test_only_hits(root)
+    freed = sum(_remove(path) for path in hits)
+    manifest = root / MANIFEST_PATH
+    if hits and manifest.is_file():
+        directory_mode = stat.S_IMODE(manifest.parent.stat().st_mode)
+        manifest_mode = stat.S_IMODE(manifest.stat().st_mode)
+        manifest.parent.chmod(directory_mode | stat.S_IWUSR)
+        manifest.chmod(manifest_mode | stat.S_IWUSR)
+        write_file_manifest(root)
+        manifest.chmod(manifest_mode)
+        manifest.parent.chmod(directory_mode)
+    remaining = test_only_hits(root)
+    if remaining:
+        raise RuntimeError(
+            "test-only files survive in the runtime:\n"
+            + json.dumps([path.relative_to(root).as_posix() for path in remaining], indent=2)
+        )
+    return {
+        "removed": [path.relative_to(root).as_posix() for path in hits],
+        "bytes": freed,
+    }
 
 
 def normalize_python_shebangs(root: Path) -> list[str]:
@@ -544,6 +729,9 @@ def main() -> int:
     sanitize_parser = subparsers.add_parser("sanitize-rpaths")
     sanitize_parser.add_argument("root", type=Path)
 
+    strip_parser = subparsers.add_parser("strip-tests")
+    strip_parser.add_argument("root", type=Path)
+
     args = parser.parse_args()
     root = args.root.resolve()
     if args.command == "audit":
@@ -564,6 +752,9 @@ def main() -> int:
     elif args.command == "normalize-shebangs":
         changed = normalize_python_shebangs(root)
         print(json.dumps(changed, indent=2))
+        return 0
+    elif args.command == "strip-tests":
+        print(json.dumps(strip_test_only(root), indent=2))
         return 0
     else:
         changed = sanitize_macho_rpaths(root)

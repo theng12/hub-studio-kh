@@ -164,6 +164,27 @@ def write_file_manifest(app: Path) -> dict:
     return module.write(app)
 
 
+def strip_runtime_tests(runtime: Path) -> dict:
+    """Remove test-only files from a runtime copied into the bundle; returns what went.
+
+    The implementation is `packaging/voice-runtime/runtime_packaging.py` - the same code the build
+    uses, loaded by path because `packaging` here is not a package. A Voice runtime is a whole
+    Python installation, so every wheel's `tests/` directory is in it, and 0.6.200's DMG also
+    carried pytest 9.1.1 with pluggy and iniconfig: someone installed them into
+    `.build/voice-runtime` after it was built, and this step copied the tree wholesale. Nothing in
+    the product runs any of it. `.build` trees are reused between releases, so a build-time sweep
+    alone cannot clean one that was already built - this is the one point a runtime becomes an app
+    bundle, and it refuses a tree it could not clean.
+    """
+    import importlib.util
+    path = Path(__file__).resolve().parent / 'voice-runtime' / 'runtime_packaging.py'
+    spec = importlib.util.spec_from_file_location('studiohub_voice_runtime_packaging', path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.strip_test_only(runtime)
+
+
 def validate_runtime(runtime: Path) -> None:
     runtime = runtime.resolve()
     for path in runtime.rglob('*'):
@@ -748,6 +769,13 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     # cannot describe a build it is not part of.
     shutil.copyfile(ROOT / 'release-notes.md', resources / 'release-notes.md')
     shutil.copytree(runtime, resources / 'runtimes/voice', symlinks=True)
+    # Nothing in the product runs a dependency's tests or pytest, and both were in 0.6.200's
+    # bundle. Removed here, at the staging step, so a reused `.build/voice-runtime` cannot smuggle
+    # them in; the runtime's own `manifest/runtime-files.json` is rewritten to match what ships.
+    stripped = strip_runtime_tests(resources / 'runtimes/voice')
+    if stripped['removed']:
+        print(f"Note: voice runtime ships without {len(stripped['removed'])} test-only files "
+              f"({stripped['bytes'] / (1024 * 1024):.1f} MB): wheel tests/, conftest.py and pytest")
     # The shared private-worker lifecycle every wrapper imports; not a component of its own.
     shutil.copyfile(ROOT / 'packaging/voice_worker.py', resources / 'voice_worker.py')
     # The top-level modules under `components/` that workers import by package path. Staged for

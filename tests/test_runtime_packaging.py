@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -287,6 +288,180 @@ class RuntimePackagingTests(unittest.TestCase):
         self.assertTrue(result.startswith("#!/bin/sh\n'''exec' \"$(dirname \"$0\")/python3\""))
         self.assertNotIn("/private/build", result)
         self.assertIn("print('server')", result)
+
+
+class RuntimeTestOnlyContentTests(unittest.TestCase):
+    """Nothing that exists only to run tests may ship inside the Voice runtime.
+
+    0.6.200's DMG carried every wheel's `tests/` directory plus pytest 9.1.1, pluggy and
+    iniconfig - installed into `.build/voice-runtime` by hand and copied into the bundle
+    wholesale. These pin both halves: the sweep that removes them, and the refusal that stops a
+    tree which still has them from being shipped.
+    """
+
+    def staged_runtime(self, root: Path) -> Path:
+        packages = root / "lib" / "python3.12" / "site-packages"
+        files = {
+            # A wheel's own test tree, and a package's public `testing` API beside it.
+            "numpy/tests/test_basic.py": "def test_it():\n    pass\n",
+            "numpy/testing/__init__.py": "def assert_equal(left, right):\n    assert left == right\n",
+            "numpy/conftest.py": "collect_ignore = []\n",
+            # scipy implements `page_trend_test` and `bws_test` in `_`-prefixed modules.
+            "scipy/stats/_page_trend_test.py": "def page_trend_test():\n    pass\n",
+            "scipy/stats/tests/test_stats.py": "def test_mean():\n    pass\n",
+            # mpmath's own `runtests()` imports its test package, so that one stays.
+            "mpmath/__init__.py": "def runtests():\n    from .tests import runtests as tests\n",
+            "mpmath/tests/__init__.py": "",
+            "mpmath/tests/runtests.py": "def testit(importdir, testdir):\n    pass\n",
+            "mpmath/tests/test_basic.py": "def test_sqrt():\n    pass\n",
+            # Jinja's test vocabulary is a runtime module called `tests`.
+            "jinja2/defaults.py": "from .tests import TESTS as DEFAULT_TESTS\n",
+            "jinja2/tests.py": "TESTS = {}\n",
+            # A vendored test module that is not in a `tests` directory.
+            "cn2an/transform_test.py": "def test_transform():\n    pass\n",
+            # torch's Dynamo imports this one at run time; removing it broke `AutoTokenizer`
+            # (and with it Whisper transcription) when only the filename was consulted.
+            "torch/_dynamo/trace_rules.py": "import torch\nimport torch._inductor.test_operators\n",
+            "torch/_inductor/test_operators.py": "def op():\n    pass\n",
+            # pytest and its friends, as a hand-run `pip install pytest` leaves them.
+            "pytest/__init__.py": "from _pytest import main\n",
+            "pytest-9.1.1.dist-info/METADATA": "Name: pytest\n",
+            "_pytest/main.py": "def console_main():\n    pass\n",
+            "pluggy/__init__.py": "",
+            "pluggy-1.7.0.dist-info/METADATA": "Name: pluggy\n",
+            "iniconfig/__init__.py": "",
+            "pygments/__init__.py": "# not a test framework\n",
+        }
+        for name, contents in files.items():
+            path = packages / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents, encoding="utf-8")
+        (root / "bin").mkdir(parents=True, exist_ok=True)
+        (root / "bin" / "python3").write_bytes(b"runtime")
+        for script in ("pytest", "py.test", "uvicorn"):
+            entrypoint = root / "bin" / script
+            entrypoint.write_text("#!/bin/sh\n", encoding="utf-8")
+            entrypoint.chmod(0o755)
+        return root
+
+    def test_sweep_removes_wheel_tests_and_test_frameworks_and_keeps_runtime_modules(self):
+        packaging = load_packager()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.staged_runtime(Path(temporary))
+            removed = sorted(packaging.strip_test_only(root)["removed"])
+            packages = root / "lib" / "python3.12" / "site-packages"
+            survivors = sorted(
+                path.relative_to(root).as_posix()
+                for path in packages.rglob("*")
+                if path.is_file()
+            )
+
+        self.assertEqual(
+            removed,
+            [
+                "bin/py.test",
+                "bin/pytest",
+                "lib/python3.12/site-packages/_pytest",
+                "lib/python3.12/site-packages/cn2an/transform_test.py",
+                "lib/python3.12/site-packages/iniconfig",
+                "lib/python3.12/site-packages/numpy/conftest.py",
+                "lib/python3.12/site-packages/numpy/tests",
+                "lib/python3.12/site-packages/pluggy",
+                "lib/python3.12/site-packages/pluggy-1.7.0.dist-info",
+                "lib/python3.12/site-packages/pytest",
+                "lib/python3.12/site-packages/pytest-9.1.1.dist-info",
+                "lib/python3.12/site-packages/scipy/stats/tests",
+            ],
+        )
+        # The three runtime modules that merely look like tests, and an unrelated dependency.
+        self.assertIn("lib/python3.12/site-packages/mpmath/tests/runtests.py", survivors)
+        self.assertIn("lib/python3.12/site-packages/mpmath/tests/test_basic.py", survivors)
+        self.assertIn("lib/python3.12/site-packages/scipy/stats/_page_trend_test.py", survivors)
+        self.assertIn("lib/python3.12/site-packages/jinja2/tests.py", survivors)
+        self.assertIn("lib/python3.12/site-packages/numpy/testing/__init__.py", survivors)
+        self.assertIn("lib/python3.12/site-packages/pygments/__init__.py", survivors)
+        self.assertIn("lib/python3.12/site-packages/torch/_inductor/test_operators.py", survivors)
+        self.assertNotIn("lib/python3.12/site-packages/numpy/tests/test_basic.py", survivors)
+        self.assertNotIn("lib/python3.12/site-packages/cn2an/transform_test.py", survivors)
+
+    def test_sweep_rewrites_the_manifest_so_it_does_not_describe_removed_files(self):
+        packaging = load_packager()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.staged_runtime(Path(temporary))
+            packaging.write_file_manifest(root)
+            manifest = root / "manifest" / "runtime-files.json"
+            before = manifest.read_text(encoding="utf-8")
+            # The build stage seals the manifest read-only; rewriting it must not unseal it.
+            manifest.chmod(0o444)
+            manifest.parent.chmod(0o555)
+
+            packaging.strip_test_only(root)
+            after = manifest.read_text(encoding="utf-8")
+
+            self.assertEqual(packaging.verify_file_manifest(root), [])
+            self.assertNotIn("numpy/tests/test_basic.py", after)
+            self.assertEqual(manifest.stat().st_mode & 0o777, 0o444)
+            self.assertEqual(manifest.parent.stat().st_mode & 0o777, 0o555)
+            manifest.parent.chmod(0o755)
+            manifest.chmod(0o644)
+
+        self.assertIn("numpy/tests/test_basic.py", before)
+
+    def test_sweep_works_on_a_read_only_staged_runtime(self):
+        packaging = load_packager()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.staged_runtime(Path(temporary))
+            for path in [root, *root.rglob("*")]:
+                if not path.is_symlink():
+                    path.chmod(path.stat().st_mode & ~0o222)
+            try:
+                removed = packaging.strip_test_only(root)["removed"]
+                self.assertEqual(packaging.test_only_hits(root), [])
+            finally:
+                for path in [root, *root.rglob("*")]:
+                    if not path.is_symlink():
+                        path.chmod(path.stat().st_mode | 0o200)
+
+        self.assertIn("lib/python3.12/site-packages/pytest", removed)
+
+    def test_a_tree_that_cannot_be_cleaned_is_refused_rather_than_shipped(self):
+        packaging = load_packager()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.staged_runtime(Path(temporary))
+            with mock.patch.object(packaging, "_remove", lambda path: 0):
+                with self.assertRaisesRegex(RuntimeError, "test-only files survive"):
+                    packaging.strip_test_only(root)
+
+    def test_the_staging_step_removes_pytest_from_the_runtime_it_copies(self):
+        """The function `stage_voice.stage()` calls, on a tree that carries a stray pytest."""
+        staging = PROJECT_ROOT / "packaging" / "stage_voice.py"
+        spec = importlib.util.spec_from_file_location("stage_voice_under_test", staging)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.staged_runtime(Path(temporary))
+
+            stripped = module.strip_runtime_tests(root)
+
+            self.assertIn("lib/python3.12/site-packages/pytest", stripped["removed"])
+            self.assertIn("bin/pytest", stripped["removed"])
+            self.assertEqual(load_packager().test_only_hits(root), [])
+
+    def test_build_and_staging_both_run_the_sweep_before_the_runtime_is_used(self):
+        """The sweep must be wired in, not only available: a helper nobody calls changes nothing."""
+        build = (PROJECT_ROOT / "packaging" / "voice-runtime" / "build.sh").read_text(
+            encoding="utf-8"
+        )
+        staging = (PROJECT_ROOT / "packaging" / "stage_voice.py").read_text(encoding="utf-8")
+
+        self.assertLess(
+            build.index('runtime_packaging.py" strip-tests "$STAGE"'),
+            build.index('runtime_packaging.py" audit "$STAGE"'),
+        )
+        self.assertLess(
+            staging.index("stripped = strip_runtime_tests(resources / 'runtimes/voice')"),
+            staging.index("runtime_hash = tree_digest(resources / 'runtimes/voice')"),
+        )
 
 
 if __name__ == "__main__":

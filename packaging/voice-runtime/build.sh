@@ -145,6 +145,10 @@ cp "$SCRIPT_DIR/sitecustomize.py" "$STAGE/lib/python${PYTHON_MINOR}/site-package
 "$STAGE/bin/python3" -I -B \
   "$SCRIPT_DIR/runtime_packaging.py" sanitize-rpaths "$STAGE"
 
+echo "Removing test-only files (wheel tests/, conftest.py, test frameworks)"
+"$STAGE/bin/python3" -I -B \
+  "$SCRIPT_DIR/runtime_packaging.py" strip-tests "$STAGE"
+
 find "$STAGE" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 find "$STAGE" -depth -type d -name __pycache__ -empty -delete
 
