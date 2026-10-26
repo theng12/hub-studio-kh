@@ -2,6 +2,24 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.203 — 2026-10-27
+
+### Updates install again on a slow Mac
+
+A Mac on a slow connection could get stuck: the app waited a while for the changed files, gave up, and went looking for the full disk image — but a release that arrives as a list of changed files has no disk image anywhere, so that download could only fail. It now waits for the files, and if they are not ready yet it simply tries again on the next check. Nothing is left half-installed and nothing reports a failure that is not one.
+
+If this Mac really cannot build the update from the changed files, it says why, in plain words, and stops — it no longer goes hunting for a file that was never made.
+
+### Rolling out to the whole fleet at once
+
+Releasing to every site used to stop at the first Mac that was busy or asleep. Now each site is handled on its own: a busy site is retried on its own, an unreachable one is set aside and retried later, and a Mac that stays quiet is a note in the report rather than the end of the rollout. One site can no longer hold up the rest.
+
+What has not changed: nothing is pushed to a site while it is working, and the release file is checked byte for byte and opened read-only before anything is published.
+
+### KH Updater: installing it now also starts it
+
+The KH Updater installer used to install the agent and leave you to start it. It now starts it for you, and leaves an agent that is already running alone. If the start fails, the install is **kept** — you are not made to enrol the Mac a second time — and it prints the one command that retries it. The installer on the SSD kit behaves the same way.
+
 ## 0.6.202 — 2026-10-26
 
 ### Reference to Image: make a picture from your own photos
