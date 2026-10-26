@@ -1,0 +1,52 @@
+{
+  "schema": "studiohub.standalone-release",
+  "schema_version": 1,
+  "version": "0.6.199",
+  "implementation_commit": "f7f9fabee7ed7f1d5806fd6369fefdf1e1b4f7ca",
+  "development_build": false,
+  "qualification": "unqualified-local-proof",
+  "components": {
+    "voice": {
+      "upstream_commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
+      "upstream_version": "2.7.2",
+      "source_sha256": "45c0e48a377e4b2c7bfcc2a183bdacb2bab64b2f4a8a6ea077e57a52309c7426"
+    },
+    "hub": {
+      "upstream_commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
+      "upstream_version": "2.22.0",
+      "source_sha256": "fe28263e3d2fe8cc97fb0952e217d3da9ca1996c87d2eae3ddf9d0919e46918f",
+      "runtime": "voice"
+    },
+    "subtitle": {
+      "source_sha256": "9e5e40ddddc50d83e1573aecd545800de8b03319de5026fcf92efe2d6b51ce4d",
+      "runtime": "voice",
+      "runtime_sha256": "6854e5808be03298d7f9d2481d26e9df2e26aecb5b015c9231c19b18bf8d3153"
+    },
+    "chat": {
+      "source_sha256": "602482e931ea6c488938d551a9764c9aa710a9939e56828048864fd6727add21",
+      "runtime": "voice",
+      "runtime_sha256": "6854e5808be03298d7f9d2481d26e9df2e26aecb5b015c9231c19b18bf8d3153"
+    },
+    "embeddings": {
+      "source_sha256": "99df67143d1a14714b777a8fec8b17434ae697cc0807cd7ba5eed66ac0ae4aca",
+      "runtime": "voice",
+      "runtime_sha256": "6854e5808be03298d7f9d2481d26e9df2e26aecb5b015c9231c19b18bf8d3153"
+    },
+    "vision": {
+      "source_sha256": "c94a55a07d5d95bde267bf46442c7993698ddd3be33cb606deea515117c02db6",
+      "runtime": "voice",
+      "runtime_sha256": "6854e5808be03298d7f9d2481d26e9df2e26aecb5b015c9231c19b18bf8d3153"
+    },
+    "music": {
+      "source_sha256": "cfbd3a89d59af41400b718dcc961ebb82fe82b0cfa262a24ba47259e3381a39b",
+      "runtime": "voice",
+      "runtime_sha256": "6854e5808be03298d7f9d2481d26e9df2e26aecb5b015c9231c19b18bf8d3153"
+    },
+    "khu-agent": {
+      "agent_version": "0.1.0",
+      "kit_manifest_sha256": "3b83eb4423bc2953bbd7791075a84e9dfb7921af70f1167dfebf82d74f97b3dd"
+    }
+  },
+  "runtime_sha256": "6854e5808be03298d7f9d2481d26e9df2e26aecb5b015c9231c19b18bf8d3153",
+  "payload_sha256": "0503a2b2de9e7e2395329b3c83503b675cb906345eebd87f89d8992ad95ce1cf"
+}

@@ -585,6 +585,14 @@ struct ReleaseInstaller {
         // Hub's own `_music_spec` requires before it will start the worker.
         "voice+music-overlay": ["Contents/Resources/runtimes/voice/bin/python3",
                                 "Contents/Resources/runtimes/music/manifest/music-runtime.json"],
+        // The KH Updater agent kit. Not a manifest component yet: the installer already on every
+        // Mac is 0.6.198's, whose table has no such name, so 0.6.199's manifest was refused before
+        // any file was copied and the kit now rides inside the `hub` record. This entry (and
+        // `COMPONENT_WORKERS` in packaging/hub_worker.py) means a later release can list it as a
+        // component without moving the name again; such a release also has to provide the
+        // `khu-agent_worker.py` derived below, or teach this check that the agent has no child.
+        "khu-agent": ["Contents/Resources/khu-agent/bin/khu",
+                      "Contents/Resources/khu-agent/install-agent.sh"],
     ]
 
     static func attachImage(_ image: URL, _ mountPoint: URL) throws {

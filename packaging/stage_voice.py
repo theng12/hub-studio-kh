@@ -79,6 +79,45 @@ VIDEO_MODEL_PACKAGE = 'ltx-2-3-22b-ram-12gb-mlx'
 # spawns the bridge with this tree, resolved as the sibling of its own.
 YUE2_RUNTIME_SHA256 = '75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4'
 
+# What a Hub release ships, declared here so a build cannot quietly narrow it.
+#
+# 0.6.199 shipped a 592 MB DMG (0.6.198 was 1.35 GB) whose Resources/runtimes held only `voice`:
+# the helper driving the stager passed `--hub` and the two KH Updater flags, never
+# `--image-runtime` or `--yue2-runtime`. Each stager whose flag was absent returned None, the
+# manifest simply listed fewer components, and the build exited 0 - so `runtimes/image` (1.3 GB),
+# `runtimes/music-yue2` (698 MB), `image_worker.py` and `yue2_runner.py` were missing from an
+# artifact that installed and then could not run Image or sung-song Music. A successful build is
+# not evidence that the release contains what the product line ships.
+#
+# This table is that declaration. `stage()` refuses a Hub bundle that lacks any of these, and the
+# refusal names what is missing and the flags that stage it. A release that deliberately ships
+# fewer has to edit this table - the change is then in the diff, not in a forgotten flag.
+#
+# What it cannot catch: a runtime present under the right name but built from the wrong contents
+# (the Image and YuE2 content pins in their stagers do that), a missing model package (models live
+# outside the app), a staged file altered after this check (the release manifest and a mount
+# comparison do that), or a DMG step that drops something staging had (prove the mounted image).
+HUB_RELEASE_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    'runtimes': ('voice', 'image', 'music-yue2'),
+    'workers': (
+        'hub_worker.py', 'voice_worker.py', 'subtitle_worker.py', 'chat_worker.py',
+        'embeddings_worker.py', 'vision_worker.py', 'music_worker.py', 'yue2_runner.py',
+        'image_worker.py',
+    ),
+}
+
+
+def missing_release_artifacts(resources: Path) -> list[str]:
+    """Artifacts a Hub release declares (``HUB_RELEASE_ARTIFACTS``) that staging did not produce."""
+    missing = [
+        f'runtimes/{name}'
+        for name in HUB_RELEASE_ARTIFACTS['runtimes']
+        if not (resources / 'runtimes' / name / 'bin' / 'python3').is_file()]
+    missing += [
+        name for name in HUB_RELEASE_ARTIFACTS['workers']
+        if not (resources / name).is_file()]
+    return missing
+
 
 def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
     digest = hashlib.sha256()
@@ -470,6 +509,20 @@ def _stage_video(context: dict) -> dict | None:
 # ship nothing while the build succeeds; `tests/test_chat_packaging.py` checks this table
 # against the Hub's `COMPONENT_WORKERS` table, so a studio cannot be staged without a worker
 # (or spawned without being staged).
+def _stage_khu_agent_component(context: dict) -> None:
+    """The KH Updater agent kit is not a top-level manifest component yet.
+
+    It is staged at the end of `stage()` (it needs the verified kit and the owner's publisher
+    descriptor, not a studio source tree) and recorded inside `components['hub']`: the installer
+    already on every Mac is 0.6.198's, whose `runtimePaths` has no `khu-agent`, and
+    `verifyDeclaredComponents` refuses a manifest key it does not know **before copying a byte**
+    (0.6.199 was refused exactly that way). Registered here, and in the Hub's
+    `COMPONENT_WORKERS`, so both tables know the name; a later release may list it as a component
+    once every installed installer can read it.
+    """
+    return None
+
+
 COMPONENT_STAGERS: dict[str, Callable[[dict], dict | None]] = {
     'voice': _stage_voice,
     'hub': _stage_hub,
@@ -480,6 +533,7 @@ COMPONENT_STAGERS: dict[str, Callable[[dict], dict | None]] = {
     'music': _stage_music,
     'image': _stage_image,
     'video': _stage_video,
+    'khu-agent': _stage_khu_agent_component,
 }
 
 
@@ -724,6 +778,23 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         record = stage_component(context)
         if record is not None:
             components[name] = record
+    # A Hub release must carry what `HUB_RELEASE_ARTIFACTS` declares. 0.6.199 was staged with
+    # neither `--image-runtime` nor `--yue2-runtime`, so both stagers returned None, the manifest
+    # was consistent with the (smaller) bundle, and the build reported success over an app whose
+    # Image and sung-song Music could not start. Refuse here, before hashing, so no installer can
+    # be built from it.
+    if include_hub:
+        missing = missing_release_artifacts(resources)
+        if missing:
+            saved = archive_failed_stage(output)
+            raise ValueError(
+                'The staged Hub app is missing artifacts this release declares, so an installer '
+                'built from it would install a Hub whose runtimes or workers cannot start. '
+                'Missing: ' + ', '.join(missing)
+                + '. Stage them with --image-runtime and --yue2-runtime (the qualified trees named '
+                  'by the release loop in docs/tasks/HANDOFF.md); a deliberate narrower release '
+                  'edits HUB_RELEASE_ARTIFACTS in packaging/stage_voice.py. '
+                  f'The failed bundle is preserved at {saved}.')
     release = {
         'schema': 'studiohub.standalone-release', 'schema_version': 1,
         'version': version, 'implementation_commit': commit,
@@ -813,12 +884,20 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     # The KH Updater agent kit travels inside the Hub. It is staged only when both halves are
     # handed in - the credential-free kit and the owner's publisher descriptor - because a
     # bundle that carried one without the other could not enrol, and the descriptor is the
-    # pinned trust anchor. `components['khu-agent']` records whether it was staged, so a
-    # release that shipped without one says so in its own manifest.
+    # pinned trust anchor. The staging is recorded on the hub component, so a release that
+    # shipped without one says so in its own manifest (and one that shipped one says that too).
     if include_hub and khu_agent_kit is not None and khu_publisher_json is not None:
         from stage_khu_agent import stage_agent_kit
         staged_kit = stage_agent_kit(resources, khu_agent_kit, khu_publisher_json)
-        components['khu-agent'] = {
+        # **Not a top-level component.** A manifest key becomes a runtime the *installed* installer
+        # must know (`native/UpdateClient.swift` `verifyDeclaredComponents`), and every Mac in the
+        # fleet runs the 0.6.198 installer, whose table predates the agent. 0.6.199 listed
+        # `khu-agent` there, and every 0.6.198 Mac refused the release at manifest validation,
+        # before downloading anything: "lists component 'khu-agent' with runtime 'khu-agent',
+        # which this installer does not know". Adding the name to 0.6.200's own Swift cannot help -
+        # the old binary is what validates. The kit therefore rides inside the `hub` component's
+        # record, which old installers already accept, and `Resources/khu-agent/` is unchanged.
+        components['hub']['khu_agent'] = {
             'agent_version': staged_kit.agent_version,
             'kit_manifest_sha256': hashlib.sha256(
                 staged_kit.manifest_path.read_bytes()).hexdigest(),

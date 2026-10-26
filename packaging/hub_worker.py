@@ -256,6 +256,12 @@ COMPONENT_WORKERS: dict[str, Callable[[dict, Path, Path, Path], dict] | None] = 
     'video': _video_spec,
     'embeddings': _embeddings_spec,
     'vision': _vision_spec,
+    # The KH Updater agent runs in this process (`khu_agent.loop`), not as a private child. It is
+    # not a top-level manifest component yet: the installer already on every Mac is 0.6.198's and
+    # refuses a component name its `runtimePaths` does not know, so the kit rides inside the `hub`
+    # record. Registered here (and in `stage_voice.COMPONENT_STAGERS`) so a later release can list
+    # it as a component once every installed installer can read it.
+    'khu-agent': None,
 }
 
 

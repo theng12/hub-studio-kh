@@ -17,6 +17,14 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The runtime names the installer already installed on the fleet (0.6.198, commit 20670dd)
+# accepts. `verifyDeclaredComponents` refuses any manifest component whose runtime is not here,
+# before a byte is copied; 0.6.199's top-level 'khu-agent' component was refused that way on
+# every 0.6.198 Mac. Pinned as a fixture, re-derived from the commit in
+# tests/test_installer_knows_shipped_runtimes.py.
+FLEET_198_INSTALLER_RUNTIMES = frozenset(json.loads(
+    (ROOT / 'tests/native/fixtures/update-client-runtimes-0.6.198.json').read_text())['runtimes'])
+
 
 class BundleTests(unittest.TestCase):
     def _running_uvicorn(self):
@@ -581,7 +589,35 @@ class StagingTests(unittest.TestCase):
         self.assertRegex(music['yue2_runtime_sha256'], r'^[0-9a-f]{64}$')
         self.assertIs(music['yue2_runtime_qualified'], False)   # the fixture tree is synthetic
 
-    def _native_stage(self, image=False, video=False):
+    def test_a_hub_stage_without_the_image_and_music_runtimes_is_refused(self):
+        """0.6.199 shipped a 592 MB DMG whose Resources/runtimes held only `voice`.
+
+        The helper that drove this stager passed `--hub` and the two KH Updater flags, never
+        `--image-runtime` or `--yue2-runtime`. Both stagers returned None, the release manifest
+        matched the smaller bundle, and the build exited 0 over an app whose Image and sung-song
+        Music could not start. The build must refuse that shape and name what is missing.
+        """
+        message = self._native_stage(image=False, yue2=False, expect_refusal=True)
+        for missing in ('runtimes/image', 'runtimes/music-yue2',
+                        'image_worker.py', 'yue2_runner.py'):
+            self.assertIn(missing, message, f'the refusal must name {missing}')
+        self.assertIn('--image-runtime', message, 'the refusal must name the flag that stages it')
+        self.assertIn('--yue2-runtime', message, 'the refusal must name the flag that stages it')
+
+    def test_the_manifest_a_release_writes_installs_on_a_0_6_198_mac(self):
+        """The fleet's own installer validates the release, so the manifest must suit it.
+
+        It reads every key in `components`; a name whose runtime it does not know is refused
+        before any file is copied (0.6.199, 'khu-agent'). The agent kit therefore rides inside the
+        `hub` record, and every component still ships the `<name>_worker.py` the installer derives.
+        """
+        manifest = self._native_stage(khu=True)
+        self.assertNotIn('khu-agent', manifest['components'])
+        hub = manifest['components']['hub']
+        self.assertEqual(hub['khu_agent']['agent_version'], '0.0.1')
+        self.assertRegex(hub['khu_agent']['kit_manifest_sha256'], r'^[0-9a-f]{64}$')
+
+    def _native_stage(self, image=True, yue2=True, video=False, expect_refusal=False, khu=False):
         spec = importlib.util.spec_from_file_location('stage_voice', ROOT / 'packaging/stage_voice.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -624,6 +660,7 @@ class StagingTests(unittest.TestCase):
                 # Music runs on the Voice runtime (no overlay of its own since ACE-Step 1.5 was
                 # retired), so every Hub bundle stages it and the fixture has to carry it.
                 'components/music/app/backend/main.py': '# music fixture',
+                'components/music/app/backend/yue2_runner.py': '# yue2 bridge',
                 'packaging/music_worker.py': '# music worker',
                 'components/embeddings/app/backend/main.py': '# embeddings fixture',
                 'packaging/embeddings_worker.py': '# embeddings worker',
@@ -679,16 +716,50 @@ class StagingTests(unittest.TestCase):
                     # qualified on and `stage_voice` refuses it by design. The override is the
                     # deliberate way through: it stages and records that the runtime is not the
                     # qualified one, which is what this test then checks.
+                    stage_kwargs = {}
+                    if khu:
+                        # A synthetic credential-free kit plus a publisher descriptor: the staging
+                        # code under test is the real one (`stage_khu_agent.stage_agent_kit`).
+                        kit = base / 'agent-kit'
+                        (kit / 'bin').mkdir(parents=True)
+                        for relative, payload in {
+                                'VERSION': '0.0.1\n',
+                                'bin/khu': '#!/bin/sh\n# khu fixture\n',
+                                'bin/khu-stub': '#!/bin/sh\n# stub fixture\n',
+                                'install-agent.sh': '#!/bin/sh\n# install fixture\n',
+                                'com.khupdater.agent.plist': '<plist/>\n',
+                                'agent-config.example.json': '{}\n'}.items():
+                            (kit / relative).write_text(payload)
+                        publisher = base / 'publisher.json'
+                        publisher.write_text(json.dumps({
+                            'feedURL': 'https://publisher.invalid/feed',
+                            'enrolURL': 'https://publisher.invalid/enrol',
+                            'publicKey': 'A' * 43,
+                            'testAuthority': False}))
+                        stage_kwargs.update({'khu_agent_kit': kit,
+                                             'khu_publisher_json': publisher})
+                    if image:
+                        stage_kwargs.update({
+                            'image_runtime': runtime,
+                            'unqualified_image_runtime': 'synthetic staging fixture'})
+                    if yue2:
+                        stage_kwargs.update({
+                            'yue2_runtime': runtime,
+                            'unqualified_yue2_runtime': 'synthetic staging fixture'})
+                    if video:
+                        stage_kwargs.update({
+                            'video_runtime': runtime,
+                            'unqualified_video_runtime': 'synthetic staging fixture'})
+                    if expect_refusal:
+                        # A stage this build must refuse: report why, and prove it left no app.
+                        with self.assertRaises(ValueError) as caught:
+                            module.stage(runtime, artifact, native_shell=native,
+                                         render_tools_dir=tools, **stage_kwargs)
+                        self.assertFalse(artifact.exists(),
+                                         'a refused stage must leave no artifact')
+                        return str(caught.exception)
                     module.stage(runtime, artifact, native_shell=native,
-                                 render_tools_dir=tools,
-                                 **({'image_runtime': runtime,
-                                     'unqualified_image_runtime': 'synthetic staging fixture'}
-                                    if image else {}),
-                                 **({'video_runtime': runtime,
-                                     'unqualified_video_runtime': 'synthetic staging fixture',
-                                     'yue2_runtime': runtime,
-                                     'unqualified_yue2_runtime': 'synthetic staging fixture'}
-                                    if video else {}))
+                                 render_tools_dir=tools, **stage_kwargs)
                 except TypeError as exc:
                     self.fail(f'stage must accept native_shell: {exc}')
             contents = artifact / 'Contents'
@@ -707,6 +778,20 @@ class StagingTests(unittest.TestCase):
             self.assertIn('microphone', plist['NSMicrophoneUsageDescription'].lower())
             manifest = json.loads((contents / 'Resources/release-manifest.json').read_text())
             self.assertFalse(manifest['development_build'])
+            # The installer on every fleet Mac is 0.6.198's: it reads the manifest's component keys
+            # and refuses any runtime its own table lacks, before copying a byte. Every component
+            # this build declares must be one it knows, with the `<name>_worker.py` it derives.
+            for component, record in manifest['components'].items():
+                runtime_name = (record or {}).get('runtime', component)
+                self.assertIn(runtime_name, FLEET_198_INSTALLER_RUNTIMES,
+                              f'the 0.6.198 installer refuses component {component!r}')
+                self.assertTrue((contents / 'Resources' / f'{component}_worker.py').is_file(),
+                                f'{component}_worker.py is missing')
+            if khu:
+                self.assertNotIn('khu-agent', manifest['components'],
+                                 'a top-level khu-agent component is refused by 0.6.198 installers')
+                self.assertTrue((contents / 'Resources/khu-agent/bin/khu').is_file())
+                self.assertTrue((contents / 'Resources/khu-agent/publisher.json').is_file())
             # What ships is what is recorded, and what is recorded is what ships: the release
             # manifest's components are the data every consumer reads, so a component that is
             # staged without a record (or recorded without being staged) is a broken release.

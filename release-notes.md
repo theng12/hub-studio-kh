@@ -2,6 +2,20 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.200 — 2026-10-26
+
+### A corrected build of 0.6.199
+
+Version 0.6.199 was published without the two large runtimes that make Image and sung-song Music work, so those features would not start on a Mac that installed it. This build has the same features as 0.6.199, made again with both runtimes included. If you installed 0.6.199, install this one.
+
+### A missing runtime now stops the build
+
+The build that makes the app now checks that the Image and Music runtimes and their worker files are actually inside it, and refuses to produce an installer when one is missing, naming what is absent. The previous build could finish "successfully" with them left out.
+
+### It installs on a Mac still running the older version
+
+The update check a Mac performs comes from the version it already has. Version 0.6.199 declared one of its pieces in a way the older check did not recognise, so it stopped before copying anything. This build declares it in the way the older check expects, and the build now checks that future releases stay compatible with the versions already installed.
+
 ## 0.6.199 — 2026-10-26
 
 ### The KH Updater agent is now active

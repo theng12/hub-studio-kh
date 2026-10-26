@@ -1,0 +1,6 @@
+{
+  "source": "native/UpdateClient.swift",
+  "source_commit": "20670dda02617b18635a09480f119d7de549c733",
+  "note": "ReleaseInstaller.runtimePaths exactly as the installer already installed on the fleet (0.6.198) reads it, extracted with `git show 20670dd:native/UpdateClient.swift`. verifyDeclaredComponents refuses any manifest component whose runtime is not in this set, before copying a single file; 0.6.199's top-level 'khu-agent' component was refused on every 0.6.198 Mac.",
+  "runtimes": ["voice", "image", "video", "voice+music-overlay"]
+}
