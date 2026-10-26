@@ -23,3 +23,9 @@ packaging/voice-runtime/refresh-lock.sh
 ```
 
 That command uses `.build/voice-runtime-base/bin/python3` as its resolver interpreter. Review `requirements-pilot.txt` before changing scope: F5-TTS is deliberately absent because its TorchCodec dependency requires several shared FFmpeg ABIs that the bounded pilot does not ship.
+
+## Test-only content is removed
+
+A wheel ships its own `tests/` directory, so a Python runtime is full of code no product path runs. The build therefore ends with `runtime_packaging.py strip-tests`, which removes wheel test trees, `conftest.py`/`test_*.py` files and any test framework (pytest, pluggy, iniconfig, …) and rewrites `manifest/runtime-files.json` to match. A tree it cannot clean is refused, not shipped. `packaging/stage_voice.py` runs the same sweep when it copies a runtime into an app bundle, because `.build/voice-runtime` is reused between releases: 0.6.200 shipped pytest 9.1.1 and ~3,200 test files that somebody had installed into the built tree afterwards.
+
+The sweep keeps a `tests` directory or `test_`-named module that the remaining sources still import — `mpmath.__init__` imports `mpmath.tests`, and torch's Dynamo imports `torch._inductor.test_operators` — so a rule based on the name alone would break the runtime.
