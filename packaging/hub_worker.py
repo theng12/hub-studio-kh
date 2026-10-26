@@ -170,10 +170,16 @@ def _music_spec(release: dict, data: Path, runtime: Path, resources: Path) -> di
     }
 
 
+#: The manifest the Video worker pins itself to, by package id. The Hub's one video pack is on
+#: `components/retired_models.py`, so no release stages this today; the spec stays so a release
+#: that declares a Video component is still refused by name when the manifest it needs is missing.
+VIDEO_MODEL_PACKAGE = 'ltx-2-3-22b-ram-12gb-mlx'
+
+
 def _video_spec(release: dict, data: Path, runtime: Path, resources: Path) -> dict:
     """The Video worker runs on its own Python 3.11 runtime, not the shared base.
 
-    `ltx_pipelines_mlx` needs 3.11 while the base runtime is 3.12, so the staged tree is
+    The pack's pipeline needs 3.11 while the base runtime is 3.12, so the staged tree is
     `runtimes/video` and the digest beside it is the pinned identity — the same shape as Image.
     """
     video_runtime = resources / 'runtimes/video'
@@ -181,7 +187,7 @@ def _video_spec(release: dict, data: Path, runtime: Path, resources: Path) -> di
     if (not (video_runtime / 'bin/python3').is_file()
             or not (resources / 'video_worker.py').is_file()
             or not (resources / 'components/video/app/backend/main.py').is_file()
-            or not (resources / 'model-manifests/ltx-2-3-22b-ram-12gb-mlx.json').is_file()
+            or not (resources / f'model-manifests/{VIDEO_MODEL_PACKAGE}.json').is_file()
             or not _runtime_id(video_id)):
         raise ValueError('Incomplete Video worker or release identity')
     return {

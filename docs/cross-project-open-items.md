@@ -147,8 +147,8 @@ spreads it into every lane contract as `deadline_seconds`. So the deadline a sch
 exactly the deadline the Hub holds the job to — their reading of our code is correct, and their
 decision not to carry a second copy (`JOB_DEADLINE_S` as fallback only) is the right shape.
 
-**Why this is now urgent, and not merely tidy: video cannot ship under a 900 s wall.** The LTX-2.3
-runtime's own validated runs on M2 Pro 32 GB hardware are **44:38** for q8 HQ at 480×704×97 and
+**Why this is now urgent, and not merely tidy: video cannot ship under a 900 s wall.** The local
+video runtime's own validated runs on M2 Pro 32 GB hardware are **44:38** for q8 HQ at 480×704×97 and
 **~15 min** for the identity test at 1280×704×97 — that is 2,678 s and 900 s against a 900 s wall.
 The first is **3× over** and the second sits exactly on it. Every video generation on this fleet
 would be cut off mid-flight by the Hub, and `deadline_seconds` would have advertised the wall to any

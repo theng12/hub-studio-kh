@@ -246,7 +246,7 @@ MODALITY_RETRY_CLASS: dict[str, str] = {
     "music": RETRY_CLASS_DURABLE_ASYNC,
     # Voice recovers a dropped attempt by its stable client-request id.
     "voice": RETRY_CLASS_RECEIPT_DURABLE,
-    # Video is a LONG job — 15 to 45 minutes by the LTX-2.3 runtime's own measured runs on an
+    # Video is a LONG job — 15 to 45 minutes by the local video runtime's own measured runs on an
     # M2 Pro 32 GB — so it is asynchronous by nature and cannot answer a terminal result for the
     # POST under any sane deadline. It was classified non-durable on reasoning that describes the
     # *legacy inherited* Video Studio (a synchronous POST returning a finished clip), which is not

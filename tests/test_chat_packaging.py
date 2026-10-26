@@ -78,11 +78,11 @@ class WorkerSpecTests(unittest.TestCase):
             if binary:
                 path.write_text("")
         # The named manifest the Video spec pins itself to, beside the whole catalog the bundle
-        # ships. A build that stages the worker without it is refused by name.
-        (resources / "model-manifests" / "ltx-2-3-22b-ram-12gb-mlx.json").write_text(
-            json.dumps({"engine": "video-ltx", "package_id": "ltx-2-3-22b-ram-12gb-mlx",
-                        "model_id": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX", "revision": "b" * 40,
-                        "files": []}))
+        # ships. A build that stages the worker without it is refused by name. The package id is
+        # read from the spec's own constant, so this fixture cannot drift from what it pins.
+        (resources / "model-manifests" / f"{hub_worker.VIDEO_MODEL_PACKAGE}.json").write_text(
+            json.dumps({"engine": "video-ltx", "package_id": hub_worker.VIDEO_MODEL_PACKAGE,
+                        "model_id": "retired-video-pack", "revision": "b" * 40, "files": []}))
         for index, name in enumerate(chat_manifests):
             (resources / "model-manifests" / name).write_text(json.dumps(
                 chat_manifest(Path(name).stem, f"mlx-community/{Path(name).stem}",

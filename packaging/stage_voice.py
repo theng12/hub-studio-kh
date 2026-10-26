@@ -64,16 +64,16 @@ IMAGE_RUNTIME_SUPERSEDED = {
 # from one that cannot — the pack's mixed 2-8 bit loader lives in the pack, but the pipeline and
 # MLX must be the ones the measurement ran — so the content digest is the identity.
 #
-# **The tree carries the muxer too, and that is why the pin moved on 2026-09-26.** The LTX pack
+# **The tree carries the muxer too, and that is why the pin moved on 2026-09-26.** The video pack
 # shells out to `ffmpeg -c:v libx264` for its MP4, and the app's other ffmpeg (the Voice runtime's,
 # built minimal) has no H.264 encoder at all while still answering `-h encoder=libx264` with exit
 # 0. `packaging/video-runtime/build.sh` now fetches the same pinned ffmpeg 8.1 (osxexperts.net,
 # arm64) that Story Studio ships, verifies its sha256, and refuses to build a runtime that cannot
 # answer for `libx264`.
 VIDEO_RUNTIME_SHA256 = '27304a7a42a17cec3ee9c6acd22a9133794b8bdd331f2e18fa134db513cc2ad7'
-# **LTX-2.3 is retired (`components/retired_models.py`), and so is shipping this runtime.** The Video
-# worker exists only to run that one model (`hub_worker._video_spec` and `video_worker.py` both pin
-# its manifest by name), and a retired manifest is never staged, so a bundle that carried the worker
+# **The local video pack is retired (`components/retired_models.py`), and so is shipping this
+# runtime.** The Video worker exists only to run that one model (`hub_worker._video_spec` and
+# `video_worker.py` both pin its manifest by name), and a retired manifest is never staged, so a bundle that carried the worker
 # would stop the whole Hub at start-up ("Incomplete Video worker"). While the package is on the retired
 # list `stage()` therefore drops `--video-runtime` and the release has no `video` component: no
 # `runtimes/video` (517 MB), no `video_worker.py`, no `components/video`. Taking the two ids off the
@@ -489,7 +489,7 @@ def _stage_video(context: dict) -> dict | None:
     unqualified_reason = context.get('unqualified_video_runtime')
     if found != VIDEO_RUNTIME_SHA256 and not unqualified_reason:
         raise SystemExit(
-            'REFUSING TO STAGE: the Video runtime handed to this build is not the one the LTX '
+            'REFUSING TO STAGE: the Video runtime handed to this build is not the one the video '
             'model was qualified on.\n'
             f'  handed:   {found}\n'
             f'            {context["video_runtime"]}\n'

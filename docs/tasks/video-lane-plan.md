@@ -1,15 +1,12 @@
 # The video lane — scoped plan
 
-> **LTX-2.3 is retired too** (owner, 2026-10-01: "bad quality, can't use it"). `ltx-2-3-22b-ram-12gb-mlx` and
-> `baa-ai/LTX-2.3-22B-RAM-12GB-MLX` are in `components/retired_models.py`, so the Hub offers **no video model**
-> and the release ships **no Video worker or runtime** (`packaging/stage_voice.py`). `components/video/`, the LTX
-> manifest (now `components/video/retired/`) and `packaging/video-runtime/` stay in the repo, dormant, as the starting point for a successor model;
-> to bring Video back, take the two ids off the retired list and pass `--video-runtime` again. Its text encoder
-> `gemma-3-12b-it-4bit` is NOT retired (the owner may reuse it as a chat model). Everything below is history.
-
-> **0.6.120: Lance 3B is retired** (owner, 2026-09-30). Video is LTX-2.3 22B and its gemma-3-12b
-> text encoder only; `lance-3b-video-bf16` and `lance-3b-processor-qwen2-5-vl` are in
-> `components/retired_models.py`. Everything below naming Lance is history.
+> **No video model is offered.** Both local video packs and the text encoder one of them loaded are on
+> `components/retired_models.py` (owner decisions 2026-09-30, 2026-10-01 and 2026-10-02), so the Hub offers
+> **no video model** and the release ships **no Video worker or runtime** (`packaging/stage_voice.py`).
+> `components/video/`, the retired manifests (`components/video/retired/`) and `packaging/video-runtime/`
+> stay in the repo, dormant, as the starting point for a successor model; to bring Video back, take those
+> ids off the retired list and pass `--video-runtime` again. **Everything below is history** — it describes
+> the retired lane, and a successor video plan starts from the owner's decisions, not from this page.
 
 Written 2026-09-26, after the owner's decisions. Status: **scoped, not started.** This is the last
 gate before distribution, alongside "all known bugs fixed".
