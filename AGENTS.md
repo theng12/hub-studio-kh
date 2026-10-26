@@ -5,16 +5,16 @@
 - Read `docs/standalone-plan.md` and the active planning record before work. The canonical plan is `.planning/2026-09-10-standalone-app-feasibility/`; explicitly set `PWF_PLAN_ROOT` to this project and `PLAN_ID` to that directory name when using planning scripts. Do not create a parallel planning system.
 - Existing source checkouts listed in `research/source-checkouts.json` are read-only references. Adopt tracked source at an exact commit into this project during implementation; never copy live environments, credentials, job data, service registration, or whole model caches as part of source adoption. Import selected model assets separately with exact revisions and file checksums, as specified by the accepted qualification plan.
 - Use the smallest implementation that proves the requirement. Reuse existing APIs, UI, worker isolation and safeguards. Do not add a generic plugin system, cross-platform layer, or custom update framework without a demonstrated need.
-- Prefer the existing Graphify snapshot for navigation, then verify against current source. It is incomplete and stale; do not infer absence or safe deletion from it.
+- Prefer the existing Graphify snapshot (`graphify-out/`) for navigation, then verify against current source; refresh it with `graphify update .` when the snapshot predates your session. Graphify is an owner mandate on every task. The snapshot is incomplete and stale; do not infer absence or safe deletion from it.
 - Keep planning state current. Record actual test evidence and distinguish a compatibility target from a passing qualification.
 - Run development checks locally. Do not use GitHub-hosted compute. Do not publish, deploy, tag, enroll nodes, or submit notarization without the appropriate explicit authority.
 
 ## Focused release handoffs — 2026-09-15
 
-- **START HERE:** the `▶ TAKE OVER HERE` block at the top of `docs/tasks/BOARD.md` names the current holder, the integration commit, what is DONE, the single task in progress, and what unlocks next. Read it before anything else.
-- The current design supersedes the six-function release scope: Hub, Image, Voice and independent Subtitle only; Chat/Music/Video are deferred.
-- Before implementation, read docs/implementation-plan.md and docs/tasks/BOARD.md. Claim a READY ST task and record start commit/worktree, owned files and completion proof. If no card is READY, the `▶ TAKE OVER HERE` block names the single task in progress to resume instead of starting new work.
-- One coordinator owns the board and canonical progress; workers own assigned task cards/reports. Serialize shared native, staging and Voice registry edits.
+- **START HERE:** read `docs/tasks/HANDOFF.md` first — its top entry names the current version, the build and what is still open. `docs/tasks/BOARD.md` is **historical** as of 2026-10-21 (release 0.6.194); its `▶ TAKE OVER HERE` block is not current state.
+- The current release scope is what `HUB_RELEASE_ARTIFACTS` (`packaging/stage_voice.py`) stages: Hub, Image, Voice, Subtitle, Chat, Music and Vision all ship; Video is retired/deferred. That constant is the authoritative list, not this sentence.
+- Before implementation, read docs/implementation-plan.md and the top of docs/tasks/HANDOFF.md. The flow used from 0.6.198 to 0.6.202: prepare the release on a `release/<version>` branch in its own worktree cut from `main`; merge each finished feature branch with `--no-ff`, no squash; write `CHANGELOG.md` and `release-notes.md`, bump `VERSION` last; stage and build the DMG; then integrate through `land/<version>-into-main` onto `main` (a fast-forward when the release was cut from `main`). Record start commit/worktree, owned files and completion proof; if no card is READY, the top of HANDOFF names the single task to resume instead of starting new work.
+- One coordinator owns the board and canonical progress; workers own assigned task cards/reports. Serialize edits to the **same** shared files (native, staging, Voice registry); independent files run concurrently.
 - Mark DONE only after required evidence, independent review and integration. Preserve partial model/hardware checkpoints and explicit blockers.
 - Per-device generated-output defaults are editable: **20 GB of live output, kept 7 days, 5 GB minimum free disk** (owner rule 2026-10-19; 3 days from 0.6.117; were 50 GB / 30 days / 1 GB); operating defaults are configurable, while integrity/authentication/active-job safeguards remain enforced. Cleanup never deletes: it **moves** acknowledged output into the Hub's **Trash Folder** (`<hub data>/trash/<UTC date>/<batch>/`), a same-volume rename whose failure just skips the file. The Hub never empties the Trash Folder: the same cleanup timer hands items older than `trash_handoff_days` (default 7), and the oldest items while the unified Trash Folder (every root) is over `trash_handoff_gb` (default 20), to macOS Trash, where they can still be restored. `max_bytes` counts live output only. A settings file written before 0.6.117 that still holds the old defaults reads as the new ones, and one that still holds the untouched 3-day default of `defaults_version` 2 reads as 7.
 - **One governor keeps a Mac from filling (0.6.127 candidate; `components/hub/disk_governor.py`, owner decisions 2026-10-02):** it runs in the Hub's cleanup thread at start-up and every 5 minutes. Tiers by free space: green >= 12%, amber < 12%, red < 6%, stop < 5 GB. Every tier: temp/partial files, leftover release downloads, orphan `.studiohub-old-*`/`-staged-*`, exactly one previous app, and the Trash Folder's size (measured in **physical** bytes, reported against a cap of `min(15 GB, 6% of the disk)`; the governor never empties it - APFS clones share blocks, so logical sizes are never used). Amber/red go on in this order until green: logs, stale `Updates/`, orphans (snapshot views of absent models, partial model staging, HF mirror entries of packages not installed), acked outputs oldest-first (red may take ones younger than the 7-day window). **Never touched:** installed models, unacked or leased outputs, any `_trash` folder. Unacked outputs older than 7 days move to the Trash Folder (ordinary retention). Job history (`hub.db` batches, worker `jobs.json`) is kept 90 days. The state is the `disk` object in `/api/health`, `/api/hub/resources` and each `/api/hub/fleet` row. A model download is refused (507) when it plus a 5 GB margin does not fit; a peer 507 makes the broker avoid that node for 5 minutes without using one of the item's tries; the service log rotates by size while running (16 MB x 2, `packaging/voice_worker.py`), and the rotated copy goes to the Trash Folder.
@@ -34,6 +34,11 @@
   sort out: never delete or tidy anything *inside* it. The one thing that is not a
   file is a Git branch or remote ref — record its name and SHA in a note under
   `_trash/` before deleting it, and never rewrite published history.
+- **One narrow carve-out: `.build/` scratch.** Gitignored build scratch (staged bundles,
+  runtime trees, downloads) may be reclaimed only through `packaging/prune-build-scratch.sh`,
+  and only after that script has made its own verified copy on a kit drive. Moving it to
+  `_trash/` frees nothing (same volume). Nothing else is exempt: every other removal still
+  goes to `_trash/`.
 - **Every change is merged, committed, pushed, and built into a DMG — and the previous DMG moves
   to `_trash/dist/` automatically.** The owner's rule, 2026-09-26: **the whole cycle every time**,
   not only for something you would call a release. Write the `CHANGELOG.md` **and** `release-notes.md`
@@ -45,6 +50,9 @@
   It verifies the stage digest and preserves previous installers in `_trash/dist/`; the old untracked
   `.build/make-dmg.sh` is superseded. Use the project's normal integration flow without moving an
   unrelated primary checkout branch; a coordinator performs release integration and deployment.
+  The per-release gate runner is `scripts/hub_offline_gate.py` (`--root` / `--evidence`,
+  refusing an existing evidence directory); use it instead of copying a per-version
+  `.build/hub-offline-gate-<n>.py`.
 - **Every release updates `docs/tasks/HANDOFF.md`.** Read it first in a new session, and
   keep it current: the version and build, anything newly learned, anything newly
   forbidden, and what is still open. A stale handoff is worse than none, because it is
