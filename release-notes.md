@@ -2,6 +2,30 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.202 — 2026-10-26
+
+### Reference to Image: make a picture from your own photos
+
+Image can now take one or two reference pictures and make a new image from them. Pick **FLUX.2 Klein 4B MLX 4-bit** or **Qwen Image 2.1 Turbo Low-RAM MLX 4-bit**, add your references in the order you want them used, and write the prompt as usual. Both names include the quantization, because that is what runs.
+
+**Which Macs can do it:**
+
+- **16 GB and above** run FLUX.2 Klein 4B MLX 4-bit edit. A 32 GB Mac also gets its full-speed setting.
+- **32 GB** is needed for Qwen Image 2.1 Turbo Low-RAM MLX 4-bit edit — two references at its lower-memory setting still need about 24 GB.
+- **8 GB Macs are not offered Reference to Image.** Two references need about 7.5 GB of working room on top of everything else, so the app refuses with a plain message instead of starting and swapping.
+
+**A smaller Mac is slower, but it does not swap.** The app looks at this Mac's memory and picks the lower-memory way of running the edit automatically: it holds one piece of the model at a time and decodes the picture in smaller pieces. That is slower on a tight Mac, and it is the reason nothing gets pushed into swap. If a Mac has no measured way to run the setting it would pick, it says so and refuses rather than starting a render it cannot hold. The full-speed setting is still there for a Mac with room to spare.
+
+The published numbers, measured through the worker: Klein edit takes about 98 s for one reference and 152 s for two at full speed, or about 69-106 s in the lower-memory setting — which was both smaller and quicker on the Mac we measured. Qwen edit takes about 155-192 s at full speed and 162-183 s in the lower-memory setting.
+
+### The Image engine is updated
+
+The Image engine moves to mflux 0.23.0, with MLX 0.32.4 and Pillow 12.3.0 (Pillow 13 does not run on the Python the app ships). The ordinary text-to-image models were re-measured on it and did not slow down: Klein 31.6 s, Z-Image-Turbo 85.9 s, Qwen Turbo 93.5 s. The older Qwen workaround for renaming weights is gone, because this version of mflux loads the pack itself.
+
+### A square reference request stays square
+
+A bug dropped the aspect ratio on reference requests, so a 1:1 request quietly came back 16:9. It now uses the shape you chose.
+
 ## 0.6.201 — 2026-10-26
 
 ### A Renders page shows what this Mac rendered

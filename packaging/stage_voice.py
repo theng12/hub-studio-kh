@@ -19,12 +19,16 @@ RenderAuthorityMode = Literal['tool-only', 'descriptor-only', 'sealed-candidate'
 RENDER_AUTHORITY_MODES: tuple[RenderAuthorityMode, ...] = (
     'tool-only', 'descriptor-only', 'sealed-candidate')
 
-# The Image runtime is the proven mflux 0.20 base plus pinned mlx-serve 26.10.1 native subtree.
+# The Image runtime is the proven mflux 0.23 base plus pinned mlx-serve 26.10.1 native subtree.
 # The native engine is qualified on 24 GiB (packaged M4 run, qualification/evidence/qwen-image-21-20261008-24gb);
 # the low-q4 package on 16 GiB (packaged M4 run, qualification/evidence/qwen-image-21-20261008-16gb).
-# The Image runtime this build is qualified against, pinned by content. It includes **mflux 0.20.0** -
-# the engine `qualification/z-image-turbo-2026-09-24.md` measured Z-Image-Turbo 6B MLX 4-bit on,
-# and the one the image catalogue publishes in `measured_on`.
+# The Image runtime this build is qualified against, pinned by content. It includes **mflux 0.23.0**
+# (mlx / mlx-metal 0.32.4, pillow 12.3.0, urllib3 2.8.0) - the engine that carries
+# `Flux2KleinEdit` and `QwenImage21Edit`, measured for the Reference-to-Image lane in
+# `qualification/evidence/image-edit-2026-10-26.jsonl`, and the engine the three text-to-image
+# models were re-measured on in `qualification/evidence/image-runtime-0.23-2026-10-26.jsonl`.
+# It replaced the mflux 0.20.0 tree in 0.6.202, when Reference-to-Image shipped; that tree is
+# still named below so a build handed the old one says which it is.
 #
 # Nothing pinned this before, and the release loop in `docs/tasks/HANDOFF.md` named
 # `.build/st03-image-runtime-worker` - which is the **superseded 0.17.5** runtime preserved for the
@@ -38,9 +42,11 @@ RENDER_AUTHORITY_MODES: tuple[RenderAuthorityMode, ...] = (
 # A version string would not have caught it - both trees contain an `mflux` package and both accept
 # the same commands. The content digest is what distinguishes them, and refusing here is what makes
 # the mistake impossible rather than merely documented.
-IMAGE_RUNTIME_SHA256 = 'c5ac478f85d5687e0bd6df715eec5d55a3a59e36aae4f14da352f45ea546923a'
+IMAGE_RUNTIME_SHA256 = 'fde2221191817bb6d3ecfd1208f32ce2ddd7e05cbc5e5d9bdd842759b4a6332b'
 # Kept so the refusal can name what it was handed and where that tree came from.
 IMAGE_RUNTIME_SUPERSEDED = {
+    'c5ac478f85d5687e0bd6df715eec5d55a3a59e36aae4f14da352f45ea546923a':
+        'mflux 0.20.0 + mlx 0.32.2, shipped through 0.6.201',
     'c3acf7661fb9e214c2273f01a61d9ac810250847274959a30ebc2e80c646491f':
         'base mflux 0.20 runtime before Qwen native subtree (through 0.6.149)',
     '7b9b9ff831caa254b928c9d5d05c86df776fbc0fc459a4725cc969c898cba243':
@@ -439,8 +445,9 @@ def _stage_image(context: dict) -> dict | None:
             + (f'\n            -> {known}' if known else '') +
             '\n'
             f'  required: {IMAGE_RUNTIME_SHA256}\n'
-            '            mflux 0.20.0, the engine qualification/z-image-turbo-2026-09-24.md '
-            'measured Z-Image-Turbo 6B MLX 4-bit on\n'
+            '            mflux 0.23.0, the engine the Reference-to-Image measurements ran on and '
+            'the one every text-to-image model was re-measured on '
+            '(qualification/evidence/image-runtime-0.23-2026-10-26.jsonl)\n'
             '  pass --image-runtime .build/image-runtime (the composite Qwen runtime), or update this pin with the '
             'qualification that moved it.'
         )
