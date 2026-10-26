@@ -110,7 +110,7 @@
     }
   ],
   "license": {
-    "weights": "Apache-2.0"
+    "weights": "qwen-research"
   },
   "minimum_macos": "14.0",
   "model_id": "mlx-community/Qwen-Image-2.1-mflux-q4",

@@ -1,4 +1,9 @@
 # MLX publishes macOS-specific wheels.  Keep the Sonoma/arm64 artifacts
 # explicit so a resolver on a newer build host cannot silently raise the floor.
-mlx @ https://files.pythonhosted.org/packages/38/f7/5664e13821491559c953494e6705c818203d6880d713a0c22e12bead9564/mlx-0.32.2-cp312-cp312-macosx_14_0_arm64.whl#sha256=77217798a2b036bae9f213b851d4cde4581893787c9964458b7d471f86036bd6
-mlx-metal @ https://files.pythonhosted.org/packages/f7/ab/ba1952908c5d2a5070cf1cfbfea0161c4751ea62299e2776819810917483/mlx_metal-0.32.2-py3-none-macosx_14_0_arm64.whl#sha256=3825fff379dbc107dd3413e564a06caeaa24819910ec49c0439e454c06a1b9b8
+#
+# Relocked 2026-10-26 to 0.32.4: mflux 0.23.0 declares `mlx>=0.32.0,<0.33.0`, and 0.32.4 is
+# the exact version every Reference-to-Image measurement behind `reference_limits` ran on
+# (qualification/evidence/image-edit-2026-10-26.jsonl). Shipping 0.32.2 would ship a runtime
+# no run in the receipt used.
+mlx @ https://files.pythonhosted.org/packages/69/b0/e726ce51e1b445e4ed08c2d0e036a01c7532f4d1a856328da546a6f883bd/mlx-0.32.4-cp312-cp312-macosx_14_0_arm64.whl#sha256=ff1d7be54758ea3a875b8fe54eff13bed17ad9566505e301f5d7851bf869680f
+mlx-metal @ https://files.pythonhosted.org/packages/77/24/7e5b7ed5d28abacab4577c7a8dd1fca6e9058504f5f95ae4333c09420e2e/mlx_metal-0.32.4-py3-none-macosx_14_0_arm64.whl#sha256=8019b2db622599267d66cc168b2f0dbf5af929790a6c3b3913e00eabc42a7947

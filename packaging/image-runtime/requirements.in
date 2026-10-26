@@ -1,6 +1,13 @@
-# ST-03 Image runtime: pinned FLUX.2 Klein MLX/mflux plus its private HTTP server.
+# ST-03 Image runtime: pinned FLUX.2 Klein / Qwen Image 2.1 MLX/mflux plus its private HTTP server.
 # Source: imagestudio-mac app/requirements-generation.lock.txt at the exact
-# read-only source commit recorded in research/st01-runtime-contracts.json.
-mflux==0.20.0
+# read-only source commit recorded in research/st01-runtime-contracts.json, relocked
+# 2026-10-26 for the Reference-to-Image lane (`edit_model_class` on the Klein and Qwen
+# Turbo rows): mflux 0.23.0, which is what carries `Flux2KleinEdit` and `QwenImage21Edit`.
+mflux==0.23.0
 fastapi==0.141.1
 uvicorn==0.52.4
+# mflux 0.23.0 requires urllib3 >= 2.8.0; the previous lock pinned 2.7.0.
+urllib3>=2.8.0
+# Pinned, not floated: pillow 13.0.0 imports a symbol that exists only on Python 3.14 and
+# takes mflux down on the 3.12 runtime this package ships (owner evidence, QWEN-PROOF.md).
+pillow==12.3.0

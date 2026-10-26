@@ -521,7 +521,11 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # 24 GB (physical M4 run, 2026-10-08); the low-RAM mflux package keeps macOS 14 and
             # is qualified on 16 GB by the owner's physical 16 GiB M4 run of 2026-10-08.
             "qwen-image-2-1-mlx-serve-4bit": "6a0e552d93718bee1f7ef7546dad19ea3798e7506d2b32d099a9af430ff4d97d",
-            "qwen-image-2-1-mflux-q4": "6aabd0eb5b79856a836c91b6aa243f717c88582c4e7b9c4c1b09a3c4a8d595ac",
+            # 2026-10-26: the licence record was corrected from Apache-2.0 (the mlx-community
+            # conversion's licence) to qwen-research (the weights'), which changes this digest and
+            # nothing else. The licence is not part of `manifest_digest`, so installed receipts
+            # stay valid.
+            "qwen-image-2-1-mflux-q4": "475a994ada0bab01a6c13f569ddfc91b573c8ff086cae6f8a7f9f4b96f6eda35",
             # BGE small en v1.5 MLX bf16 (owner decision 2026-10-11), captured at
             # mlx-community/bge-small-en-v1.5-bf16 0e415031: 10 files / 67,702,966 bytes.
             "bge-small-en-v1-5-bf16": "726de16948b3602205ff7c34fac9ccfe096df263a8b0e59949de4b858d3554c9",

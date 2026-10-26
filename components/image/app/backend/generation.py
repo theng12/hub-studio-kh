@@ -63,6 +63,16 @@ EXTENSION_BY_FORMAT = {'png': 'png', 'jpeg': 'jpg'}
 MEDIA_TYPE_BY_SUFFIX = {'.png': 'image/png', '.jpg': 'image/jpeg'}
 _DELIVERED_SUFFIXES = tuple(MEDIA_TYPE_BY_SUFFIX)
 
+# The reference images an edit lane accepts, from the bytes rather than from a caller's claim:
+# PIL's own format name decides, and the media type and file suffix follow from it. WebP has no
+# delivered suffix above (this lane never *writes* one); it is accepted as input like PNG/JPEG.
+REFERENCE_MEDIA_TYPE_BY_FORMAT = {'PNG': 'image/png', 'JPEG': 'image/jpeg', 'WEBP': 'image/webp'}
+REFERENCE_SUFFIX_BY_MEDIA_TYPE = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp'}
+REFERENCE_MEDIA_TYPES = tuple(REFERENCE_MEDIA_TYPE_BY_FORMAT.values())
+# One reference image's ceiling, the video lane's constant: a hand-placed file is the only case
+# that can reach it (Story's own character upload caps at 5 MB).
+MAX_REFERENCE_BYTES = 25 * 1024 * 1024
+
 # The engine this worker serves. It is compared against a manifest's own ``engine`` field in
 # exactly one place - ``load_image_manifests`` - which is how a bundled manifest belonging to
 # another studio is recognised and reported instead of being loaded. Named once so the fact has
@@ -131,6 +141,26 @@ BOUNDED_CACHE_LIMIT_GB = 0.5
 STREAM_BELOW_BYTES = 12_000_000_000   # block streaming (`streaming`): the 8 GB tier only
 FLUX2_LOW_RAM_BELOW_BYTES = 12_000_000_000
 FLUX2_LEAN_BELOW_BYTES = 24_000_000_000
+# The edit lane's thresholds, from its own measurements (see `reference_limits`). They are the
+# memory at which the *reference render* stops fitting, not the text render's: a job carries N
+# encoded references and a concatenated sequence on top of the same weights.
+#
+# Measured 2026-10-26 on one 32 GiB M2 Max, mflux 0.23.0, 4 steps, 1024 canvas, references at
+# 1024 px (qualification/evidence/image-edit-2026-10-26.jsonl): `default` peaks at 12.0 GB and has
+# only been run on a 32 GiB host, so it is offered from 32 GiB up; `bounded-staged` peaks at
+# 5.76 GB and ran 121 s -> 101 s faster than `default` on this host, so it is the configuration
+# for 12-32 GiB rather than a fallback; `bounded-streamed` peaks at 5.69 GB for one reference and
+# 7.47 GB for two. That second figure is why 8 GiB does not get the lane: 7.5 GB of working set
+# leaves no room for macOS on an 8 GiB Mac, so the published floor is 12 GiB (measured peak plus
+# the OS margin the fleet's own rows use) and an 8 GiB Mac is refused instead of swapping.
+EDIT_BOUNDED_BELOW_BYTES = 32 * 1024 ** 3
+EDIT_STREAM_BELOW_BYTES = 12_000_000_000
+# Qwen Image 2.1 Turbo's edit lane is a different shape: its unbounded configuration peaks at
+# 24.2 GB and pushed a 32 GiB host into 9.5 GB of swap with two references, while the bounded one
+# peaks at 12.8 GB and is no slower (183 s against 192 s at two references). So every Mac below
+# the next Apple tier above the host it failed on takes the bounded configuration, and the
+# unbounded one is published without a floor until a larger host is measured.
+QWEN_EDIT_BOUNDED_BELOW_BYTES = 48 * 1024 ** 3
 
 
 @dataclass(frozen=True)
@@ -209,6 +239,28 @@ class ImageModel:
     # Seconds per step on each measured chip (`machdep.cpu.brand_string`): a stored run's whole wall
     # time divided by its steps, so load and decode are inside the figure. Read by `job_deadline_s`.
     seconds_per_step: dict | None = None
+    # The class that runs this model's *reference/edit* lane, when it has one. A second class on
+    # one row, never a second row: both read the same installed package (`package_id`), and
+    # `Flux2KleinEdit` with no references behaves like text-to-image but encodes a blank negative
+    # prompt, so swapping the shipping class would silently change the qualified txt2img lane.
+    # Empty means this model takes no reference images at all.
+    edit_model_class: str = ''
+    # What the edit lane accepts, in the numbers that were actually measured for it:
+    # ``{'min', 'max', 'max_dimension', 'modes': {...}, 'measured_on', 'source'}``. Each entry
+    # of ``modes`` is one configuration's measured block, keyed by the name
+    # `plan_configuration` gives that configuration (`default`, `bounded-staged`,
+    # `bounded-streamed`): ``{'measured': [...], 'peak_gb', 'swap_used_mb',
+    # 'min_total_memory_gb', 'min_free_memory_gb', 'timeout_floor_s'}``. None means the model
+    # has no edit lane, and `validate_request` then refuses `reference_images` in the same words
+    # it always has.
+    reference_limits: dict | None = None
+    # The edit lane's *own* memory tiers (owner, 2026-10-26: "give each edit mode its own memory
+    # tiers in its MemoryPolicy, the same way Klein txt2img does"). A reference render carries
+    # more than a text render - the reference encode and a concatenated sequence - so the
+    # thresholds where a configuration would swap are not the txt2img lane's, and one policy
+    # cannot answer for both. Same knobs, same `apply_memory_plan`, chosen for `lane='edit'`.
+    # None: the lane falls back to the model's own policy.
+    reference_memory: MemoryPolicy | None = None
 
 
 FLUX2_KLEIN = ImageModel(
@@ -293,6 +345,103 @@ FLUX2_KLEIN = ImageModel(
     },
     # 105.94 s / 4 steps, the row above.
     seconds_per_step={'Apple M4': 26.5},
+    # Reference-to-image (FLUX.2 Klein 4B MLX 4-bit multi-reference edit, owner-approved
+    # 2026-10-26). Same installed package and revision as the txt2img row above; a second class,
+    # not a second row. Every number below was measured through this worker on the host named in
+    # `measured_on`, and the receipt is `reference_limits['source']` - see
+    # `qualification/evidence/image-edit-2026-10-26.jsonl` and `docs/lane-execution-contract.md`.
+    #
+    # The lane runs the same three configurations the txt2img lane already has (owner, 2026-10-26:
+    # "make it use far less memory, the way text-to-image already does, so 8 GB and 16 GB Macs can
+    # qualify too. The owner explicitly accepts slower generation for this"), each with its own
+    # measured floor and runtime: below the default floor the job is forced into the bounded
+    # configuration (`memory_plan(lane='edit')`), so an 8 GB Mac never attempts the 14 GB
+    # configuration and a 32 GB Mac keeps the fast one.
+    edit_model_class=('mflux.models.flux2.variants.edit.flux2_klein_edit:'
+                      'Flux2KleinEdit'),
+    # The edit lane's own tiers (owner, 2026-10-26). A reference render carries more than a text
+    # render - N references are VAE-encoded and concatenated into the sequence - so the point
+    # where the unbounded configuration would swap is not the txt2img lane's, and this policy is
+    # the lane's own answer rather than a policy shared with a lane it was not measured on.
+    # Thresholds come from `reference_limits['modes']`'s measurements, never a formula.
+    reference_memory=MemoryPolicy(
+        low_ram_below_bytes=EDIT_BOUNDED_BELOW_BYTES,
+        low_ram_cache_limit_gb=BOUNDED_CACHE_LIMIT_GB, bounded_vae_decode=True,
+        stream_below_bytes=EDIT_STREAM_BELOW_BYTES,
+        weight_definition=('mflux.models.flux2.weights.flux2_weight_definition:'
+                           'Flux2KleinWeightDefinition'),
+        streamed_components=(('text_encoder', ('layers',), False),
+                             ('transformer', ('transformer_blocks',
+                                              'single_transformer_blocks'), True))),
+    reference_limits={
+        # Measured through this worker on the host named in `measured_on`; the receipt is
+        # `reference_limits['source']`. Published limits are the ones that ran and fit: two
+        # references at 1024 px. Larger references and more of them were not run on this lane,
+        # and a number nobody ran is not published.
+        'min': 1,
+        'max': 2,
+        'max_dimension': 1024,
+        'modes': {
+            # The model's own configuration: every component resident at once. 12.0 GB peak.
+            # The rows are the batch taken with the host quietest (load 7-8); earlier runs under
+            # heavier load (a full Hub test gate in parallel) are in the receipt with their own
+            # host facts, and are not published as this configuration's cost.
+            'default': {
+                'measured': [
+                    {'references': 1, 'reference_pixels': 1024, 'seconds': 98.03,
+                     'peak_gb': 12.01, 'swap_delta_mb': 3091.2},
+                    {'references': 2, 'reference_pixels': 1024, 'seconds': 151.56,
+                     'peak_gb': 12.02, 'swap_delta_mb': -467.1},
+                ],
+                'peak_gb': 12.02,
+                # Swap is published as measured, and it is not zero: every 1-reference run of this
+                # configuration grew this host's swap by 3.1-4.6 GB while other applications were
+                # resident, and every 2-reference run reclaimed it. The peak stayed at 12.0 GB
+                # with 18-24 GB free, so this is macOS paging other processes' idle pages during
+                # the render, not the render exhausting memory - but the figure is the receipt's,
+                # not rounded to zero.
+                'swap_used_mb': 4639.2,
+                # The only host this configuration has run on.
+                'min_total_memory_gb': 32.0,
+                # Peak + 2 GB, the fleet's own start-guard rule.
+                'min_free_memory_gb': 14.0,
+                'timeout_floor_s': 900.0,
+            },
+            # Staged hooks + the bounded FLUX.2 decode, no streaming. 5.76 GB peak, and faster
+            # than `default` on this host (101 s vs 182 s for two references).
+            'bounded-staged': {
+                'measured': [
+                    {'references': 1, 'reference_pixels': 1024, 'seconds': 72.39,
+                     'peak_gb': 5.69, 'swap_delta_mb': -856.6},
+                    {'references': 2, 'reference_pixels': 1024, 'seconds': 101.24,
+                     'peak_gb': 5.76, 'swap_delta_mb': -128.1},
+                ],
+                'peak_gb': 5.76,
+                'swap_used_mb': 0.0,
+                'min_total_memory_gb': 12.0,
+                'min_free_memory_gb': 8.0,
+                'timeout_floor_s': 900.0,
+            },
+            # The 8 GB tier: staged + the blocks streamed one at a time + bounded decode. One
+            # reference peaks at 5.69 GB; two peak at 7.47 GB, which is why an 8 GiB Mac is
+            # refused rather than offered this configuration.
+            'bounded-streamed': {
+                'measured': [
+                    {'references': 1, 'reference_pixels': 1024, 'seconds': 69.13,
+                     'peak_gb': 5.69, 'swap_delta_mb': -48.0},
+                    {'references': 2, 'reference_pixels': 1024, 'seconds': 105.56,
+                     'peak_gb': 7.47, 'swap_delta_mb': -64.0},
+                ],
+                'peak_gb': 7.47,
+                'swap_used_mb': 0.0,
+                'min_total_memory_gb': 12.0,
+                'min_free_memory_gb': 9.5,
+                'timeout_floor_s': 900.0,
+            },
+        },
+        'measured_on': '32 GiB M2 Max (Mac14,13), mflux 0.23.0, 4-bit pack',
+        'source': 'qualification/evidence/image-edit-2026-10-26.jsonl',
+    },
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. FLUX is qualified on 16 GB and has '
         'run on 8 GB in production, but Image work here is below the qualified tier and may be '
@@ -513,6 +662,62 @@ QWEN_IMAGE_21_TURBO = ImageModel(
     # 8.0 GB. This is not a Turbo measurement; keep it until Turbo operations establish a floor.
     min_free_memory_gb=8.0,
     guidance_ignored=True,
+    # Reference-image edit on the same installed package and revision (owner, 2026-10-26: the
+    # second Reference-to-Image model, "so there's variation"). A second class on this row, never
+    # a second row: both lanes read the one q4 pack, and its text lane's behaviour - and its
+    # unmeasured status - must not change because the pack gained an edit lane.
+    edit_model_class='components.image.app.backend.qwen_turbo:QwenTurboEdit',
+    # The edit lane's tiers. mflux's levers for this model are the memory saver (text encoder
+    # evicted before the loop, transformer after it), the MLX cache cap and the tiled VAE decode -
+    # it has no staging hooks, so nothing is streamed. Both measured configurations are published
+    # in `reference_limits`; the threshold is where the full configuration was measured to stop
+    # fitting, not a formula.
+    reference_memory=MemoryPolicy(
+        low_ram_below_bytes=QWEN_EDIT_BOUNDED_BELOW_BYTES,
+        low_ram_cache_limit_gb=1.0),
+    reference_limits={
+        # What ran and fit through this worker: one and two references at 1024 px. mflux's own
+        # hard cap on this pipeline is 10 (`MAX_REFERENCES`); this row publishes only what was
+        # measured on it.
+        'min': 1,
+        'max': 2,
+        'max_dimension': 1024,
+        'modes': {
+            # The model's own configuration: nothing evicted, nothing tiled. 24.2 GB peak, and a
+            # 32 GiB host swapped 9.5 GB under two references, so no floor is published: a Mac
+            # that would select this configuration is refused with "no measured ... configuration"
+            # until one is measured on a host that holds it.
+            'default': {
+                'measured': [
+                    {'references': 1, 'reference_pixels': 1024, 'seconds': 154.51,
+                     'peak_gb': 24.21, 'swap_delta_mb': 557.2},
+                    {'references': 2, 'reference_pixels': 1024, 'seconds': 191.82,
+                     'peak_gb': 24.23, 'swap_delta_mb': 9568.3},
+                ],
+                'peak_gb': 24.23,
+                'swap_used_mb': 9568.3,
+                'min_total_memory_gb': None,
+                'min_free_memory_gb': None,
+                'timeout_floor_s': None,
+            },
+            # The bounded one: encoder/transformer evicted, cache capped, VAE decoded in tiles.
+            'bounded-staged': {
+                'measured': [
+                    {'references': 1, 'reference_pixels': 1024, 'seconds': 162.26,
+                     'peak_gb': 10.18, 'swap_delta_mb': -4134.5},
+                    {'references': 2, 'reference_pixels': 1024, 'seconds': 182.96,
+                     'peak_gb': 12.76, 'swap_delta_mb': -4887.2},
+                ],
+                'peak_gb': 12.76,
+                'swap_used_mb': 0.0,
+                'min_total_memory_gb': 24.0,
+                'min_free_memory_gb': 14.8,
+                'timeout_floor_s': 900.0,
+            },
+        },
+        'measured_on': '32 GiB M2 Max (Mac14,13), mflux 0.23.0, 4-bit pack',
+        'source': 'qualification/evidence/image-edit-2026-10-26.jsonl',
+    },
     below_tier_warning=(
         'This Mac has {memory_gb:.0f} GB of unified memory. Qwen Image 2.1 Turbo Low-RAM '
         'MLX 4-bit is available on 16 GB and above; 8 GB is not supported.'),
@@ -597,8 +802,14 @@ DEADLINE_HISTORY_JOBS = 20
 DEADLINE_HISTORY_MIN_JOBS = 3
 
 
-def job_deadline_s(model: ImageModel, steps, chip: str | None = None, history=()) -> float:
-    """Seconds one job of `steps` may run on this Mac; `history` is its own past seconds per step."""
+def job_deadline_s(model: ImageModel, steps, chip: str | None = None, history=(),
+                   floor_s: float = IMAGE_DEADLINE_FLOOR_S) -> float:
+    """Seconds one job of `steps` may run on this Mac; `history` is its own past seconds per step.
+
+    `floor_s` is the lane's own floor where it has a measured, slower configuration (the edit
+    lane's bounded mode), so a first job on a small Mac is not given the general floor and killed
+    mid-render; it can only raise the 900 s base, never lower it below the ceiling clamp.
+    """
     recent = list(history)[-DEADLINE_HISTORY_JOBS:]
     if len(recent) >= DEADLINE_HISTORY_MIN_JOBS:
         per_step = statistics.median(recent)
@@ -606,7 +817,8 @@ def job_deadline_s(model: ImageModel, steps, chip: str | None = None, history=()
         readings = model.seconds_per_step or {}
         per_step = readings.get(chip) or UNMEASURED_SLOWDOWN * max(readings.values(), default=0.0)
     seconds = IMAGE_DEADLINE_OVERHEAD_S + IMAGE_DEADLINE_MARGIN * int(steps or 0) * per_step
-    return round(min(IMAGE_DEADLINE_CEILING_S, max(IMAGE_DEADLINE_FLOOR_S, seconds)), 1)
+    return round(min(IMAGE_DEADLINE_CEILING_S,
+                     max(IMAGE_DEADLINE_FLOOR_S, floor_s, seconds)), 1)
 
 
 @lru_cache(maxsize=1)
@@ -631,25 +843,86 @@ def _under_memory_pressure() -> bool:
     return level >= 2
 
 
+def lane_policy(model: ImageModel, lane: str = 'txt2img') -> MemoryPolicy:
+    """The :class:`MemoryPolicy` that governs one lane of this model.
+
+    The edit lane has its own tiers when the row declares them (``reference_memory``), because a
+    reference render costs more than a text render and the threshold where the full configuration
+    would swap is the lane's own measured fact. A row with no edit-specific policy uses its
+    txt2img one: one policy answering for both is what the owner overruled on 2026-10-26.
+    """
+    if lane == 'edit' and model.reference_memory is not None:
+        return model.reference_memory
+    return model.memory
+
+
+def plan_configuration(plan: dict) -> str:
+    """The name of the configuration a plan actually runs.
+
+    The same four names the txt2img lane publishes (``memory_mode`` in a measured row) plus the
+    bounded split. They are also the keys of an edit row's ``reference_limits['modes']`` and the
+    string a job records as ``reference_mode``, so the configuration a job ran, the numbers
+    published for it and the measurement it came from cannot drift apart.
+    """
+    if plan.get('stream'):
+        return 'bounded-streamed'
+    if plan.get('low_ram'):
+        return 'bounded-staged'
+    if plan.get('lean'):
+        return 'lean'
+    return 'default'
+
+
+def reference_mode(model: ImageModel, total_memory_bytes: int,
+                   selected: str = DEFAULT_LOADING_MODE) -> str:
+    """Which configuration this Mac runs for the edit lane under the machine's setting.
+
+    Derived, never decided separately: it is :func:`plan_configuration` of the very plan
+    :func:`memory_plan` will hand `apply_memory_plan` for ``lane='edit'``, so the floor this Mac
+    publishes for a reference job and the configuration it executes are one answer.
+
+    * ``bounded-streamed`` — below ``stream_below_bytes`` (the 8 GB tier): staged hooks, block
+      streaming and the bounded VAE decode;
+    * ``bounded-staged`` — below ``low_ram_below_bytes`` (the 16 GB tier): staged hooks and the
+      bounded VAE decode, no streaming;
+    * ``lean`` — between there and ``lean_below_bytes`` where the row declares one;
+    * ``default`` — from the last threshold up: the configuration the model shipped with.
+    """
+    return plan_configuration(memory_plan(model, total_memory_bytes, selected, lane='edit'))
+
+
+def reference_mode_values(model: ImageModel, mode: str) -> dict:
+    """The measured numbers for one edit configuration (``{}`` when none was measured)."""
+    modes = (model.reference_limits or {}).get('modes') or {}
+    values = modes.get(mode)
+    return values if isinstance(values, dict) else {}
+
+
 def memory_plan(model: ImageModel, total_memory_bytes: int,
-                mode: str = DEFAULT_LOADING_MODE) -> dict:
+                mode: str = DEFAULT_LOADING_MODE, lane: str = 'txt2img') -> dict:
     """The mflux memory knobs this host gets for this model, under this machine's setting.
 
-    Read-only projection of the model's :class:`MemoryPolicy`, the Mac's actual memory and the
+    Read-only projection of the lane's :class:`MemoryPolicy`, the Mac's actual memory and the
     operator's per-machine ``loading_mode`` choice — the same decision the CLI makes from
     ``--low-ram``/``--mlx-cache-limit-gb``/``--vae-tiling``/``--vae-tile-size``, but chosen
     from the host instead of typed.
 
-    ``mode`` is that choice: ``auto`` keeps the model's own threshold decision, ``low`` forces
+    ``mode`` is that choice: ``auto`` keeps the policy's own threshold decision, ``low`` forces
     the bounded configuration and ``full`` forces the default. Forcing ``low`` cannot invent a
     bounded configuration a model does not declare — a model with no
     ``low_ram_below_bytes`` has one loading mode, so it stays on the default and its catalog
     entry publishes that the setting does not apply (see :func:`loading_modes`).
+
+    ``lane='edit'`` reads the edit lane's own tiers (:func:`lane_policy`). The setting applies
+    there exactly as it does to text-to-image: its thresholds are the edit lane's measured
+    ones, so ``auto`` goes bounded on the Macs where the full reference render would swap and
+    stays full on the Macs where it would not (owner, 2026-10-26: "use each Mac's capacity, so
+    big Macs run at full speed and only small ones go slow").
     """
     if mode not in LOADING_MODES:
         raise ValueError(
             f'unknown memory mode {mode!r}; must be one of: {", ".join(LOADING_MODES)}')
-    policy = model.memory
+    policy = lane_policy(model, lane)
     if policy.low_ram_below_bytes is None:
         low_ram = False
     elif mode == MODE_LOW:
@@ -662,7 +935,8 @@ def memory_plan(model: ImageModel, total_memory_bytes: int,
         raise ValueError(f'unhandled memory mode {mode!r}')
     # The lean tier sits between the bounded one and the default: only `auto` chooses it, because
     # `full` is "the default configuration whatever this Mac's memory is" and `low` is the bounded one.
-    lean = (not low_ram and mode == MODE_AUTO and policy.lean_below_bytes is not None
+    lean = (not low_ram and mode == MODE_AUTO
+            and policy.lean_below_bytes is not None
             and 0 < total_memory_bytes < policy.lean_below_bytes)
     cache_limit = (policy.low_ram_cache_limit_gb if low_ram
                    else policy.lean_cache_limit_gb if lean else None)
@@ -740,6 +1014,9 @@ def apply_memory_plan(instance: object, plan: dict, on_stage=None, model_dir=Non
     # Ours to set in every plan (a plan with no cap restores MLX's own), so the cap never outlives the
     # configuration that asked for it; mflux's saver sets the same number again below.
     _set_mlx_cache_limit(plan['mlx_cache_limit_gb'])
+    # A wrapper that holds an mflux model (`QwenLowRam`) names it: the saver has to see the model's
+    # own `text_encoder`/`transformer`/`tiling_config`, not the wrapper around it.
+    target = getattr(instance, 'memory_target', instance)
     if plan['low_ram'] or plan['vae_tiling']:
         from argparse import Namespace
 
@@ -750,7 +1027,7 @@ def apply_memory_plan(instance: object, plan: dict, on_stage=None, model_dir=Non
             raise RuntimeError('mflux no longer exposes the CLI memory mapping this worker pins')
         args = Namespace(low_ram=plan['low_ram'], mlx_cache_limit_gb=plan['mlx_cache_limit_gb'],
                          vae_tiling=plan['vae_tiling'], vae_tile_size=plan['vae_tile_size'])
-        saver = register(args=args, model=instance)
+        saver = register(args=args, model=target)
     hooks: list[str] = []
     if plan.get('staged') or plan.get('bounded_vae_decode'):
         from . import staging
@@ -794,14 +1071,62 @@ def _stated_text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _stated_memory_measurements(model: ImageModel) -> dict:
+def _reference_measurements(model: ImageModel, bounded_name: str | None = None) -> dict:
+    """The edit lane's own measured peaks and runtimes, in the shape the loading-mode text reads.
+
+    The lane states its numbers per configuration in ``reference_limits['modes']`` (each block's
+    ``peak_gb`` is the worst peak over the reference counts and sizes that ran, and ``measured``
+    is every row). ``bounded_name`` is the configuration this Mac's *Low RAM* setting would run,
+    so the trade the operator is shown is the one this Mac would actually take; it falls back to
+    the strongest bounded configuration that was run. A configuration nobody ran states nothing
+    and the sentences built from this say so.
+    """
+    limits = model.reference_limits or {}
+    modes = limits.get('modes') or {}
+
+    def one(name: str) -> dict:
+        block = modes.get(name) or {}
+        rows = [row for row in (block.get('measured') or []) if isinstance(row, dict)]
+        seconds = [float(row['seconds']) for row in rows if _is_number(row.get('seconds'))]
+        worst = max(rows, key=lambda row: float(row.get('seconds') or 0), default=None)
+        scene = None
+        if worst and _is_number(worst.get('references')):
+            count = int(worst['references'])
+            scene = (f"{count} reference{'s' if count != 1 else ''} at "
+                     f"{worst.get('reference_pixels')} px")
+        return {**_stated_measurement(block.get('peak_gb'), max(seconds) if seconds else None),
+                'scene': scene}
+
+    default, staged, streamed = one('default'), one('bounded-staged'), one('bounded-streamed')
+    if bounded_name not in ('bounded-staged', 'bounded-streamed'):
+        bounded_name = 'bounded-streamed' if streamed['seconds'] is not None else 'bounded-staged'
+    bounded = streamed if bounded_name == 'bounded-streamed' else staged
+    return {
+        DEFAULT_CONFIGURATION: default,
+        LOW_RAM_CONFIGURATION: bounded,
+        'measured_on': (_stated_text(limits.get('measured_on'))
+                        or _stated_text(model.qualification.get('measured_on'))),
+        'evidence': 'measured' if default['seconds'] is not None else None,
+        'scene': default['scene'] or bounded['scene'],
+        'source': limits.get('source'),
+        'configuration': bounded_name,
+        'note': None,
+    }
+
+
+def _stated_memory_measurements(model: ImageModel, lane: str = 'txt2img',
+                                bounded_name: str | None = None) -> dict:
     """Every memory measurement this model itself states, and where each one came from.
 
     Peaks come from the model's own ``qualification['measured_peak_gb']``; runtimes come from
-    its published ``measured_runtime`` rows, matched on the row's own ``memory_mode`` label. A
-    fact the model does not state is ``None`` here, and every sentence built from these facts
-    says so rather than estimating: a number the model did not state must never be published.
+    its published ``measured_runtime`` rows, matched on the row's own ``memory_mode`` label. The
+    edit lane states its own figures per configuration instead (:func:`_reference_measurements`),
+    because its peaks and runtimes are not the text lane's. A fact the model does not state is
+    ``None`` here, and every sentence built from these facts says so rather than estimating: a
+    number the model did not state must never be published.
     """
+    if lane == 'edit' and model.reference_limits:
+        return _reference_measurements(model, bounded_name)
     peaks = model.qualification.get('measured_peak_gb')
     peaks = peaks if isinstance(peaks, dict) else {}
     runtime = model.measured_runtime if isinstance(model.measured_runtime, dict) else {}
@@ -904,25 +1229,36 @@ def _loading_mode_detail(mode: str, measured: dict, policy: MemoryPolicy) -> str
                 f"{_peak_clause(default, low_ram, 'bounded low-RAM')}, and "
                 f"{_seconds_clause(default, low_ram, 'bounded low-RAM')}{location}.")
     return (f"Chooses from this Mac's unified memory: the bounded configuration below "
-            f"{policy.low_ram_below_bytes / 1e9:g} GB, the default at or above it. The trade: "
+            f"{round(policy.low_ram_below_bytes / 1e9, 1):g} GB, the default at or above it. The trade: "
             f"{_peak_clause(low_ram, default, 'default')}, and "
             f"{_seconds_clause(low_ram, default, 'default')}{location}.")
 
 
-def loading_modes(model: ImageModel, total_memory_bytes: int, selected: str) -> dict:
+def loading_modes(model: ImageModel, total_memory_bytes: int, selected: str,
+                  lane: str = 'txt2img') -> dict:
     """The machine-wide ``loading_mode`` setting as it applies to one model on this Mac.
 
     ``selected`` is the operator's persisted choice; ``effective`` is what
     :func:`memory_plan` will actually do for this model's next job on this host, so an
     operator can see that ``auto`` chose the bounded configuration here. ``options`` is empty
-    exactly when the model's own :class:`MemoryPolicy` declares no bounded configuration - the
-    model has one loading mode, and ``reason`` says so in the model's own terms instead of
+    exactly when the lane's own :class:`MemoryPolicy` declares no bounded configuration - the
+    lane has one loading mode, and ``reason`` says so in the model's own terms instead of
     offering a control :func:`apply_memory_plan` would discard.
+
+    ``lane='edit'`` publishes the reference lane's answer from its own tiers and its own measured
+    numbers, so the catalogue shows the edit lane's trade (and the configuration a reference job
+    will run) instead of the text lane's.
     """
-    policy = model.memory
-    plan = memory_plan(model, total_memory_bytes, selected)
+    policy = lane_policy(model, lane)
+    plan = memory_plan(model, total_memory_bytes, selected, lane=lane)
     supported = policy.low_ram_below_bytes is not None
-    measured = _stated_memory_measurements(model)
+    configuration = plan_configuration(plan)
+    # The trade an operator is shown is the one *this* Mac takes: the bounded configuration its
+    # `Low RAM` setting would run, or the one it is running now.
+    bounded_name = (configuration if configuration.startswith('bounded')
+                    else plan_configuration(memory_plan(model, total_memory_bytes, MODE_LOW,
+                                                        lane=lane)))
+    measured = _stated_memory_measurements(model, lane, bounded_name)
     measured['note'] = _missing_measurement_note(model, measured, supported)
     if supported:
         options = [{'id': mode, 'label': spec['label'],
@@ -939,9 +1275,13 @@ def loading_modes(model: ImageModel, total_memory_bytes: int, selected: str) -> 
             reason = (f'{reason} The setting is {plan["requested_mode"]!r} on this Mac; this '
                       f'model still loads its default configuration.')
     return {
+        'lane': lane,
         'supported': supported,
         'selected': plan['requested_mode'],
         'effective': plan['mode'],
+        # The configuration name this lane would run, in the same vocabulary the edit lane's
+        # measured blocks and a job's `reference_mode` use.
+        'configuration': configuration,
         'threshold_bytes': policy.low_ram_below_bytes,
         'options': options,
         'measured': measured,
@@ -1005,11 +1345,18 @@ def release_mlx_memory() -> None:
     _mlx_call('clear_cache')
 
 
-def model_class(model: ImageModel):
-    """Resolve ``'package.module:Class'`` for the requested model."""
-    module_name, _, class_name = model.model_class.partition(':')
+def model_class(model: ImageModel, mode: str = 'txt2img'):
+    """Resolve ``'package.module:Class'`` for the requested model and lane.
+
+    ``mode='edit'`` resolves the row's ``edit_model_class`` - a second class over the same
+    installed package - and refuses, naming the model, when the row has none.
+    """
+    spec = model.edit_model_class if mode == 'edit' else model.model_class
+    if mode == 'edit' and not spec:
+        raise ValueError(f'{model.label} has no reference-image (edit) lane')
+    module_name, _, class_name = spec.partition(':')
     if not module_name or not class_name:
-        raise ValueError(f'Invalid model class for {model.repo}: {model.model_class}')
+        raise ValueError(f'Invalid model class for {model.repo}: {spec}')
     return getattr(importlib.import_module(module_name), class_name)
 
 
@@ -1051,6 +1398,10 @@ def lane_parameters(model: ImageModel) -> list[dict]:
         {'name': 'seed', 'type': 'integer', 'required': False,
          'minimum': model.limits['min_seed'], 'maximum': model.limits['max_seed'],
          'default': model.defaults['seed'], 'note': '-1 draws a random seed'},
+        # Only a model with a measured reference lane publishes this, and only that lane accepts
+        # it: a parameter the validator refuses must not appear in the contract, and the reverse
+        # is the same rule - a lane that takes references must say how many and of what.
+        *_reference_parameter(model),
         # A per-job choice, never an operator default (``model_defaults.editable`` skips
         # ``request_only``): omitting it always means the PNG.
         {'name': 'output_format', 'type': 'string', 'required': False,
@@ -1058,6 +1409,20 @@ def lane_parameters(model: ImageModel) -> list[dict]:
          'note': ('omit for the PNG mflux wrote; jpeg delivers JPEG quality 90, 4:2:0, '
                   'progressive (about 6.6x smaller) and falls back to the PNG if encoding fails')},
     ]
+
+
+def _reference_parameter(model: ImageModel) -> list[dict]:
+    """The edit lane's ``reference_images`` parameter, or nothing when the model has no lane."""
+    limits = model.reference_limits
+    if not limits:
+        return []
+    return [{'name': 'reference_images', 'type': 'array', 'required': False,
+             'min_items': limits['min'], 'max_items': limits['max'],
+             'media_types': list(REFERENCE_MEDIA_TYPES), 'request_only': True,
+             'note': ('character/reference images for the edit lane, in order; each is sent as '
+                      f'one multipart "images" part to POST /api/generate/edit, at most '
+                      f'{limits["max_dimension"]} px on its longest edge')}]
+
 
 
 def defaults_in_force(model: ImageModel, data_dir=None) -> dict:
@@ -1083,7 +1448,61 @@ def defaults_in_force(model: ImageModel, data_dir=None) -> dict:
     return resolved
 
 
-def validate_request(raw: dict, data_dir=None) -> dict:
+def _reference_paths(raw: dict) -> list[str]:
+    """The reference image paths a request names, in order; empty when it names none."""
+    value = raw.get('reference_images')
+    if value is None:
+        return []
+    if (not isinstance(value, (list, tuple))
+            or any(not isinstance(item, str) or not item.strip() for item in value)):
+        raise ValueError('reference_images must be a list of reference image paths')
+    return [item.strip() for item in value]
+
+
+def reference_image_media_type(path) -> tuple[str, str]:
+    """``(media_type, suffix)`` for one readable reference image, or ``ValueError`` naming it.
+
+    The bytes decide, not a caller's content type: an image the engine cannot open is refused
+    here, before a job is queued, rather than inside a paid render.
+    """
+    from PIL import UnidentifiedImageError
+
+    try:
+        with Image.open(path) as image:
+            fmt = (image.format or '').upper()
+            image.verify()
+    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError) as error:
+        raise ValueError(f'Reference image {path} is not a readable PNG, JPEG or WebP image: '
+                         f'{error}') from error
+    media_type = REFERENCE_MEDIA_TYPE_BY_FORMAT.get(fmt)
+    if media_type is None:
+        raise ValueError(f'Reference image {path} is a {fmt or "unknown"} image; this lane takes '
+                         f'{", ".join(REFERENCE_MEDIA_TYPES)}')
+    return media_type, REFERENCE_SUFFIX_BY_MEDIA_TYPE[media_type]
+
+
+def _validate_references(model: ImageModel, references: list[str]) -> list[str]:
+    """Refuse a reference set the edit lane cannot take, naming the published figures."""
+    limits = model.reference_limits
+    if not limits:
+        # The same words this worker has always refused references with, so a model without an
+        # edit lane is not quietly offered one by a caller that reuses this validator.
+        raise ValueError('Reference images, LoRAs, negative prompt and quantization are unavailable')
+    if not model.edit_model_class:
+        raise ValueError(f'{model.label} has no reference-image (edit) lane')
+    if not limits['min'] <= len(references) <= limits['max']:
+        raise ValueError(
+            f'{model.label} takes between {limits["min"]} and {limits["max"]} reference images; '
+            f'this request had {len(references)}')
+    for entry in references:
+        path = Path(entry)
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError(f'Reference image {entry} is missing or unreadable')
+        reference_image_media_type(path)
+    return list(references)
+
+
+def validate_request(raw: dict, data_dir=None, mode: str | None = None) -> dict:
     """One request, resolved against the model it names and this Mac's stored defaults.
 
     ``data_dir`` is where ``model_defaults.json`` lives (the manager's state directory). A
@@ -1091,6 +1510,10 @@ def validate_request(raw: dict, data_dir=None) -> dict:
     stored, over what the model states — and a parameter the request **supplies** always wins.
     With no ``data_dir`` there are no stored defaults to read, so the answer is exactly what the
     lane states: that is the path every direct caller and the existing suite already pins.
+
+    ``mode`` is ``'txt2img'`` or ``'edit'``. It is resolved from the request itself — a request
+    that carries reference images is an edit — and an explicit ``'edit'`` with none is refused by
+    the same count check that refuses too few, never quietly turned into text-to-image.
     """
     if not isinstance(raw, dict):
         raise ValueError('Image request must be an object')
@@ -1101,9 +1524,17 @@ def validate_request(raw: dict, data_dir=None) -> dict:
     defaults = defaults_in_force(model, data_dir)
     if raw.get('model_revision', model.revision) != model.revision:
         raise ValueError(f'Only the pinned {model.label} revision is available')
-    if any(raw.get(key) for key in ('reference_images', 'image_path', 'lora_names',
-                                     'lora_paths', 'negative_prompt', 'quantize')):
-        raise ValueError('Reference images, LoRAs, negative prompt and quantization are unavailable')
+    references = _reference_paths(raw)
+    mode = 'edit' if (mode == 'edit' or references) else 'txt2img'
+    if mode == 'edit':
+        references = _validate_references(model, references)
+    if any(raw.get(key) for key in ('image_path', 'lora_names', 'lora_paths',
+                                     'negative_prompt', 'quantize')):
+        allowed = (f'; this model takes {model.reference_limits["min"]}-'
+                   f'{model.reference_limits["max"]} reference images'
+                   if model.reference_limits else '')
+        raise ValueError('LoRAs, negative prompt and quantization are unavailable' + allowed)
+
     prompt = raw.get('prompt')
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > model.limits['max_prompt']:
         raise ValueError(f'Prompt must contain 1–{model.limits["max_prompt"]} characters')
@@ -1140,6 +1571,10 @@ def validate_request(raw: dict, data_dir=None) -> dict:
     normalized = {'repo': model.repo, 'model_revision': model.revision, 'prompt': prompt.strip(),
                   'aspect_ratio': ratio, 'resolution': '1K', 'width': width, 'height': height,
                   'steps': steps, 'guidance': float(guidance), 'seed': seed}
+    # Echoed only for an edit, so every txt2img request's params are byte-identical to before
+    # this lane existed - older callers compare on recovery.
+    if mode == 'edit':
+        normalized['reference_images'] = references
     # Echoed only when supplied, so the params an older caller compares on recovery are unchanged.
     output_format = raw.get('output_format')
     if output_format is not None:
@@ -1153,7 +1588,7 @@ def validate_request(raw: dict, data_dir=None) -> dict:
 LANE_CONTRACT_SCHEMA = 'studiohub.lane-contract.v1'
 
 
-def lane_contract(model: ImageModel, data_dir=None) -> dict:
+def lane_contract(model: ImageModel, data_dir=None, total_memory_bytes: int | None = None) -> dict:
     """The Image lane's dispatch contract for one model.
 
     What a scheduler needs in order to *ask for* this lane's work: the operation name, the
@@ -1172,10 +1607,16 @@ def lane_contract(model: ImageModel, data_dir=None) -> dict:
     default the worker would not itself accept.
 
     Deliberately **not** listed: the parameters ``validate_request`` refuses outright
-    (``reference_images``, ``image_path``, ``lora_names``, ``lora_paths``, ``negative_prompt``,
-    ``quantize``) and ``width``/``height``, which are derived from ``aspect_ratio`` and refused
-    unless they match the preset. A contract that offers a parameter the lane rejects is worse
-    than one that omits it.
+    (``image_path``, ``lora_names``, ``lora_paths``, ``negative_prompt``, ``quantize``) and
+    ``width``/``height``, which are derived from ``aspect_ratio`` and refused unless they match
+    the preset. A contract that offers a parameter the lane rejects is worse than one that omits
+    it. ``reference_images`` follows that rule in both directions: a model with a measured edit
+    lane publishes it (and accepts it), and one without publishes nothing (and refuses it).
+
+    ``references`` — a top-level block, beside ``parameters`` — is the same statement for the
+    scheduler: the multipart field name, the count window, the reference image's pixel ceiling,
+    the media types, and the measured cost and memory floor of the edit lane. It is present only
+    where the lane exists, so its presence *is* the capability.
     """
     parameters = lane_parameters(model)
     in_force = defaults_in_force(model, data_dir)
@@ -1186,7 +1627,8 @@ def lane_contract(model: ImageModel, data_dir=None) -> dict:
         'schema': LANE_CONTRACT_SCHEMA,
         'modality': 'image',
         # The same token `capabilities.OPERATION_BY_MODALITY` publishes, so a reader can join the
-        # contract to the Hub's operation namespace without a table of its own.
+        # contract to the Hub's operation namespace without a table of its own. The edit lane
+        # shares it: `edit` is a capability token, not a second operation name (frozen 2026-10-26).
         'operation': 'image.text_to_image',
         'parameters': parameters,
         'artifact': {'modality': 'image', 'media_type': 'image/png', 'extension': 'png',
@@ -1207,12 +1649,63 @@ def lane_contract(model: ImageModel, data_dir=None) -> dict:
                           'nothing was written'),
         },
     }
+    if model.reference_limits:
+        contract['references'] = _reference_contract(
+            model, total_memory_bytes,
+            selected=loading_mode.current(data_dir) if data_dir is not None else DEFAULT_LOADING_MODE)
     for parameter in contract['parameters']:
         if parameter.get('note') is None:
             parameter.pop('note', None)
     if model.measured_runtime:
         contract['runtime_seconds'] = model.measured_runtime
     return contract
+
+
+def _reference_contract(model: ImageModel, total_memory_bytes: int | None = None,
+                        selected: str = DEFAULT_LOADING_MODE) -> dict:
+    """The edit lane's own published facts for **this** Mac, from ``model.reference_limits``.
+
+    Read by the Gateway to publish ``min``/``max``/``max_dimension`` and to route a reference job
+    only where a location advertises ``edit``; read by the Hub to size an edit item's memory
+    admission. The memory floor and the runtime are the ones for the configuration this Mac will
+    actually run (``mode``) under its machine-wide setting (``selected``): bounded and slower on a
+    small Mac, the model's own on a large one. Every figure here was measured (the row's
+    ``source`` names the receipt) — a number this model did not measure is absent, never
+    estimated.
+    """
+    limits = model.reference_limits
+    mode = reference_mode(model, int(total_memory_bytes or 0), selected)
+    measured = reference_mode_values(model, mode)
+    return {
+        # The multipart part name `POST /api/generate/edit` accepts, one part per reference.
+        'field': 'images',
+        'min': limits['min'],
+        'max': limits['max'],
+        'max_dimension': limits['max_dimension'],
+        'media_types': list(REFERENCE_MEDIA_TYPES),
+        # Reference images ride in the multipart body, never inside the prompt character budget.
+        'counts_against_prompt': False,
+        # The configuration this Mac runs for the lane, and its measured numbers.
+        'mode': mode,
+        'runtime_seconds': {
+            'measured': list(measured.get('measured') or []),
+            'measured_on': measured.get('measured_on') or limits.get('measured_on'),
+            # A configuration nobody ran states no cost and no evidence, in so many keys: the
+            # capability gate above already refuses to advertise a lane with no measured floor.
+            'evidence': 'measured' if measured.get('measured') else None,
+        },
+        # Swap is a failure for this lane, so it is published beside the peak. Both are the
+        # worst figure over the reference counts and sizes this configuration was measured at;
+        # `runtime_seconds.measured` carries every row.
+        'peak_gb': measured.get('peak_gb'),
+        'swap_used_mb': measured.get('swap_used_mb'),
+        'min_total_memory_gb': measured.get('min_total_memory_gb'),
+        'min_free_memory_gb': measured.get('min_free_memory_gb'),
+        'timeout_floor_s': measured.get('timeout_floor_s'),
+        'source': limits.get('source'),
+    }
+
+
 
 
 def load_image_manifests(directory: Path, required: Path) -> tuple[dict, dict]:
@@ -1318,6 +1811,13 @@ class GenerationManager:
         self.outputs.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.outputs.is_symlink():
             raise ValueError('Image output directory cannot be a symlink')
+        # Reference images staged for an edit job, one directory per job. They live beside
+        # `outputs` and are deleted the moment the job is terminal: a reference is input, never
+        # an artifact, and nothing here outlives the render that used it.
+        self.inputs = data / 'inputs'
+        self.inputs.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.inputs.is_symlink():
+            raise ValueError('Image input directory cannot be a symlink')
         self.state_file = data / 'jobs.json'
         self.library = model_library
         self.manifest = manifest
@@ -1368,18 +1868,23 @@ class GenerationManager:
     # every Studio to release before another needs the RAM - ``release_resident``).
 
     @staticmethod
-    def _plan_key(plan: dict) -> tuple:
-        return (plan['mode'], plan['lean'], plan['bounded_vae_decode'], plan['mlx_cache_limit_gb'])
+    def _plan_key(plan: dict, mode: str = 'txt2img') -> tuple:
+        # The lane is part of the identity: a loaded text-to-image model may never serve an edit
+        # job (a different class, a different call) and the reverse.
+        return (mode, plan['mode'], plan['lean'], plan['bounded_vae_decode'],
+                plan['mlx_cache_limit_gb'])
 
     def _keep_resident(self) -> bool:
         from . import memory_policy
         return memory_policy.keep_resident(self)
 
-    def _acquire(self, model: ImageModel, model_folder: str, plan: dict) -> tuple[object, bool]:
+    def _acquire(self, model: ImageModel, model_folder: str, plan: dict,
+                 mode: str = 'txt2img') -> tuple[object, bool]:
         """The model object for this job, and whether it was already loaded."""
         resident, self._resident = self._resident, None
+        key = self._plan_key(plan, mode)
         if (resident is not None and resident['repo'] == model.repo
-                and resident['key'] == self._plan_key(plan) and plan['resident_ok']
+                and resident['key'] == key and plan['resident_ok']
                 and not _under_memory_pressure()):
             return resident['instance'], True
         if resident is not None:
@@ -1387,13 +1892,15 @@ class GenerationManager:
             # old one goes before the new one loads, never alongside it.
             del resident
             release_mlx_memory()
-        return model_class(model)(
+        return model_class(model, mode)(
             model_path=str(Path(model_folder) / WEIGHTS_SUBDIRECTORY), quantize=None,
             lora_paths=None, lora_scales=None), False
 
-    def _remember(self, repo: str, instance: object, plan: dict) -> None:
-        self._resident = {'repo': repo, 'instance': instance, 'key': self._plan_key(plan),
-                          'idle_since': time.time()}
+    def _remember(self, repo: str, instance: object, plan: dict,
+                  mode: str = 'txt2img') -> None:
+        self._resident = {'repo': repo, 'instance': instance,
+                          'key': self._plan_key(plan, mode), 'idle_since': time.time()}
+
 
     def _forget_resident(self) -> None:
         self._resident = None
@@ -1464,6 +1971,8 @@ class GenerationManager:
                 if not final_matches(job, path):
                     job.update(state='error', error='Final image is unavailable after restart',
                                error_code='OUTPUT_UNAVAILABLE', output_path=None, output_url=None)
+            if job.get('state') in TERMINAL:
+                self._discard_inputs(job)   # a reference never outlives its render
             if job_history.expired(job):
                 continue                  # finished more than 90 days ago: the record goes
             self.jobs[job_id] = job
@@ -1637,18 +2146,23 @@ class GenerationManager:
             'latest': self._activity_projection(latest, observed_at=observed) if latest else None,
         }
 
-    def submit(self, raw: dict) -> dict:
+    def submit(self, raw: dict, mode: str = 'txt2img',
+               job_id: str | None = None) -> dict:
         # The worker's own state directory, so a parameter the request omits takes this Mac's
         # stored default for this model rather than the model's own.
-        params = validate_request(raw, data_dir=self.data)
+        params = validate_request(raw, data_dir=self.data, mode=mode)
+        # Resolved here rather than trusted from the caller: a caller that says edit but sends no
+        # references was refused above, and a caller that sends references *is* an edit whatever
+        # it called itself. The job's own `mode` is that one fact.
+        mode = 'edit' if params.get('reference_images') else 'txt2img'
         admission = self.production_admission(params['repo'])
         if not admission['allowed']:
             raise RuntimeError(f'MODEL_UNQUALIFIED: {admission["reason"]}')
         files = self.preflight(params['repo'])
         if files['state'] != 'files_verified':
             raise RuntimeError(f'MODEL_FILES_UNAVAILABLE: {files.get("reason") or files["state"]}')
-        job_id = uuid4().hex
-        job = {'id': job_id, 'mode': 'txt2img', 'params': params, 'state': 'queued',
+        job_id = job_id or uuid4().hex
+        job = {'id': job_id, 'mode': mode, 'params': params, 'state': 'queued',
                'progress': 0.0, 'denoise_step': None, 'denoise_steps': None,
                'created_at': time.time(), 'started_at': None,
                'finished_at': None, 'generated_at': None, 'duration_seconds': None,
@@ -1659,8 +2173,15 @@ class GenerationManager:
                'memory_mode': None, 'loading_mode_setting': None, 'peak_mlx_bytes': None,
                'model_reused': None, 'memory_hooks': None,
                'worker_id': 'image', 'machine_id': self.machine, 'acknowledged': False}
+        if mode == 'edit':
+            # The anti-silent-drop proof the Gateway checks: how many references were actually
+            # attached, and which bytes, in order. Absolute paths are this worker's own state and
+            # are never echoed; the digests are what the caller can compare against what it sent.
+            job['reference_count'] = len(params['reference_images'])
+            job['reference_digests'] = [sha256(Path(path).read_bytes()).hexdigest()
+                                        for path in params['reference_images']]
         with self.lock:
-            job['deadline_s'] = self._deadline_s(params)
+            job['deadline_s'] = self._deadline_s(params, mode)
             self.jobs[job_id] = job
             self.cancel_events[job_id] = threading.Event()
             try:
@@ -1672,15 +2193,33 @@ class GenerationManager:
         self._enqueue(self._run, job_id, files['folder'])
         return dict(job)
 
-    def _deadline_s(self, params: dict) -> float:
-        """This job's limit on this Mac (`job_deadline_s`), from this Mac's own finished jobs."""
+    def _deadline_s(self, params: dict, mode: str = 'txt2img') -> float:
+        """This job's limit on this Mac (`job_deadline_s`), from this Mac's own finished jobs.
+
+        Read from jobs of *this lane*: an edit job's seconds per step includes the reference
+        encode and is not the same figure, so applying one lane's history to the other's deadline
+        would size it from the wrong measurement. An edit job's floor is the floor of the
+        configuration this Mac will run — the bounded mode's measured, longer figure on a small
+        Mac, so its first render is not killed by the general 900 s floor.
+        """
+        model = MODELS[params['repo']]
+        floor = IMAGE_DEADLINE_FLOOR_S
+        if mode == 'edit':
+            measured = reference_mode_values(
+                model, reference_mode(model, self.total_memory_bytes,
+                                      loading_mode.current(self.data)))
+            floor = max(floor, float(measured.get('timeout_floor_s') or 0.0))
         done = sorted((job for job in self.jobs.values()
                        if job.get('state') == 'done' and job.get('steps')
+                       and job.get('mode', 'txt2img') == mode
                        and (job.get('params') or {}).get('repo') == params['repo']
                        and isinstance(job.get('duration_seconds'), (int, float))),
                       key=lambda job: job.get('finished_at') or 0)
-        return job_deadline_s(MODELS[params['repo']], params['steps'], host_chip(),
-                              [job['duration_seconds'] / job['steps'] for job in done])
+        return job_deadline_s(model, params['steps'], host_chip(),
+                              [job['duration_seconds'] / job['steps'] for job in done],
+                              floor_s=floor)
+
+
 
     def _enqueue(self, function, *args) -> None:
         """Run ``function`` on the one inference thread, in submission order.
@@ -1716,6 +2255,7 @@ class GenerationManager:
                 if job['state'] == 'queued':
                     job.update(state='cancelled', finished_at=time.time())
                     self._persist()
+                    self._discard_inputs(job)
             return dict(job)
 
     def _record_denoise_step(self, job_id: str, step: int, total: int) -> None:
@@ -1761,6 +2301,32 @@ class GenerationManager:
                 return path
         return self.outputs / f"{job['id']}.png"
 
+    def _discard_inputs(self, job: dict) -> None:
+        """Delete this job's staged reference images, at its terminal state.
+
+        A reference is input, never an artifact: it must not outlive the render that used it. Only
+        a directory this worker created (``<data>/inputs/<job id>``) is ever removed, and never by
+        parsing a path out of the record - the check is that the parent is exactly one level below
+        ``self.inputs``. Best effort by design: a leftover file may not fail a finished job.
+        """
+        import shutil
+
+        try:
+            root = self.inputs.resolve()
+        except OSError:
+            return
+        directories = set()
+        for staged in (job.get('params') or {}).get('reference_images') or []:
+            try:
+                directory = Path(staged).parent.resolve()
+            except OSError:
+                continue
+            if directory.parent == root and directory != root:
+                directories.add(directory)
+        for directory in directories:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
     def _run(self, job_id: str, model_folder: str) -> None:
         staged = self.outputs / f'.{job_id}.png'
         staged_jpeg = self.outputs / f'.{job_id}.jpg'
@@ -1772,6 +2338,7 @@ class GenerationManager:
                 if event.is_set():
                     job.update(state='cancelled', finished_at=time.time())
                     self._persist()
+                    self._discard_inputs(job)
                     # This is the job's own thread finishing, so nothing will look the event up
                     # again. A job cancelled while it was still queued - before it ever reached this
                     # lock - returned here without this line and left one threading.Event in the
@@ -1804,15 +2371,20 @@ class GenerationManager:
                 seed = job['params']['seed']
                 if seed == -1:
                     seed = random.randint(0, model.limits['max_seed'])
+                mode = job.get('mode', 'txt2img')
                 plan = memory_plan(model, self.total_memory_bytes,
-                                   loading_mode.current(self.data))
+                                   loading_mode.current(self.data), lane=mode)
                 with self.lock:
                     job['resolved_seed'] = seed
                     # What actually ran, and which machine-wide setting asked for it: `auto`
                     # choosing the bounded configuration here is a different fact from an
-                    # operator forcing it, and a job receipt should not conflate the two.
+                    # operator forcing it, and a job receipt should not conflate the two. An edit
+                    # job also records the lane's own configuration name - the very plan this job
+                    # is about to apply, so a receipt can never claim a tier the run did not take.
                     job['memory_mode'] = plan['mode']
                     job['loading_mode_setting'] = plan['requested_mode']
+                    if mode == 'edit':
+                        job['reference_mode'] = plan_configuration(plan)
                     self._persist()
                 # Pinned mflux 0.20.0 path, dispatched from the registry. ST-01's verified
                 # package adds one model/ prefix to every pack (see WEIGHTS_SUBDIRECTORY).
@@ -1831,7 +2403,7 @@ class GenerationManager:
                     peak, reused = None, False
                 elif model.engine == IMAGE_ENGINE:
                     start_mlx_measurement()
-                    instance, reused = self._acquire(model, model_folder, plan)
+                    instance, reused = self._acquire(model, model_folder, plan, mode)
                     memory_saver = None
                     keep = False
                     set_step_callback = None
@@ -1846,9 +2418,17 @@ class GenerationManager:
                         if callable(set_step_callback):
                             set_step_callback(lambda step, total: self._record_denoise_step(
                                 job_id, step, total))
-                        result = instance.generate_image(seed=seed, prompt=job['params']['prompt'],
-                            num_inference_steps=job['params']['steps'], height=job['params']['height'],
-                            width=job['params']['width'], guidance=job['params']['guidance'])
+                        result = instance.generate_image(
+                            seed=seed, prompt=job['params']['prompt'],
+                            num_inference_steps=job['params']['steps'],
+                            height=job['params']['height'], width=job['params']['width'],
+                            guidance=job['params']['guidance'],
+                            # An edit conditions on the reference tokens; N is arbitrary in
+                            # mflux and capped by this model's own published max (validated
+                            # before the job was queued, in submission order).
+                            **({'image_paths': [Path(path) for path in
+                                                job['params']['reference_images']]}
+                               if mode == 'edit' else {}))
                         peak = peak_mlx_bytes()
                         keep = bool(model.resident_allowed and plan['resident_ok']
                                     and self._keep_resident())
@@ -1861,7 +2441,7 @@ class GenerationManager:
                             # Stays loaded for the next job of this model: only what MLX cached beyond
                             # the weights goes back to macOS. Never kept after a failure - a model that
                             # raised mid-generation is not known to be in a state worth reusing.
-                            self._remember(model.repo, instance, plan)
+                            self._remember(model.repo, instance, plan, mode)
                             del instance, memory_saver
                             release_mlx_memory()
                         else:
@@ -1934,6 +2514,7 @@ class GenerationManager:
             job['finished_at'] = time.time()
             job['duration_seconds'] = job['finished_at'] - job['started_at']
             self._persist()
+        self._discard_inputs(job)
 
     def _deliver(self, job_id: str, job: dict, event: threading.Event, staged: Path,
                  staged_jpeg: Path, content: bytes, dimensions: tuple, peak) -> None:
@@ -1991,6 +2572,7 @@ class GenerationManager:
                 except OSError:
                     pass
                 raise
+        self._discard_inputs(job)
 
 
 def encode_jpeg(source: Path, destination: Path, *, expected_size: tuple) -> bytes:

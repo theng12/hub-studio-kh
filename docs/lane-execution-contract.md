@@ -175,6 +175,75 @@ that table on purpose, because they have their own job modules (`transcription_j
 `uncertain`; `broker.discard_uncertain_item` refuses any item that is not already uncertain; and
 `auth.FLEET_ALLOWED` names the cancel request as `DELETE /api/hub/jobs/{batch_id}`.
 
+### `references` — the image reference/edit lane (0.6.201, owner-approved 2026-10-26)
+
+A model that can render **from character/reference images** publishes a top-level `references`
+block beside `parameters`. It is present *only* where the lane exists, so its presence is the
+capability: the same row also carries `capabilities: ["txt2img", "edit"]` when — and only when —
+this Mac's installed package verifies and its unified memory clears the edit floor. `operation`
+stays `image.text_to_image`; `edit` is a capability token, not a second operation name.
+
+```json
+"references": {
+  "field": "images",
+  "min": 1,
+  "max": 2,
+  "max_dimension": 1024,
+  "media_types": ["image/png", "image/jpeg", "image/webp"],
+  "counts_against_prompt": false,
+  "mode": "bounded-staged",
+  "runtime_seconds": {"measured": [...], "measured_on": "...", "evidence": "measured"},
+  "peak_gb": 5.76,
+  "swap_used_mb": 0.0,
+  "min_total_memory_gb": 12.0,
+  "min_free_memory_gb": 8.0,
+  "timeout_floor_s": 900.0,
+  "source": "qualification/evidence/image-edit-2026-10-26.jsonl"
+}
+```
+
+The same Mac's row also publishes the lane's tiers under the machine-wide setting, in
+`loading_modes.edit` (`lane: "edit"`, `supported`, `selected`, `effective`, `configuration`,
+`options`, `measured`, `reason`): the edit lane is chosen by its own `MemoryPolicy`
+(`ImageModel.reference_memory`), not by the text lane's thresholds, because a reference render
+carries the encoded references and a longer sequence on top of the same weights.
+
+Rules a scheduler can rely on:
+
+- **`field` is the multipart part name.** A reference job is `POST /api/generate/edit`
+  multipart/form-data: one `images` part per reference, in the order the request named them, plus
+  the lane's plain fields (`repo`, `prompt`, `aspect_ratio` or `width`/`height`, `steps`,
+  `guidance`, `seed`, `output_format`).
+- **`min`/`max` are enforced, not advice.** Outside the window the request is refused with both
+  published numbers in the sentence; the worker never truncates or pads the set.
+- **`max_dimension` is the reference image's own pixel ceiling**, measured. A caller that fits its
+  references below it never fails after an upload.
+- **Every figure was measured** (`source` names the receipt). A number the model did not measure is
+  absent, never estimated — the same rule as `runtime_seconds`.
+- **`mode` is the configuration this Mac will run** for the lane under its machine-wide
+  `loading_mode` setting — `default` on a Mac above the lane's own measured threshold,
+  `bounded-staged` below it, and `bounded-streamed` at the 8 GB tier. The bounded configurations
+  are the ones text-to-image already uses to fit small Macs (stage hooks, block streaming, bounded
+  VAE decode; for the Qwen packs, encoder/transformer eviction plus tiled decode) and they are
+  slower; the owner accepted that trade so 8 GB and 16 GB Macs can serve reference renders, and
+  set the rule that big Macs keep full speed (2026-10-26).
+- **`peak_gb` / `swap_used_mb` are the worst figures over the reference counts and sizes this
+  configuration was measured at**; `runtime_seconds.measured` carries every row.
+- **`min_total_memory_gb` / `min_free_memory_gb` are this lane's floors for that configuration.**
+  Total memory a Mac must have to advertise and accept `edit`, and free memory required before a
+  reference job starts. The Hub applies them to an edit item only; a text-to-image item on the same
+  model keeps the model's own floors.
+- **`swap_used_mb` is published beside the peak** because a reference render that swaps is a
+  failure, not a slow success: the receipt records the host's swap before and after each run.
+- **`timeout_floor_s` is the floor for this configuration**, from its measured slowest run with a
+  2x margin, never below the lane's general 900 s. A scheduler sizing a poll timeout reads this
+  rather than the general image floor, so a bounded render on a small Mac is not killed early.
+- **The worker echoes what it attached.** The job record carries `reference_count` and
+  `reference_digests` (sha256, in order). The Hub republishes `reference_count` in the item's
+  `terminal_result`, so a Gateway can fail an item whose count differs from what it sent instead of
+  accepting a text-to-image render that looks like success.
+
+
 ### `output_format` — compress at source (image, music, voice)
 
 *(Not in the 0.6.126 build; lands with the build that adds `components/audio_encode.py`.)*

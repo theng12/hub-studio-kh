@@ -60,7 +60,9 @@ def fleet(monkeypatch):
     monkeypatch.setattr(broker, "studio_enabled",
                         lambda machine, sid: state["enabled"].get(machine, True))
     monkeypatch.setattr(broker, "_machine_blocked", lambda machine: False)
-    monkeypatch.setattr(broker, "_can_run", lambda studio, entry, model, routing: True)
+    # `mode` is the lane the item asks for (text-to-image here); see broker._can_run.
+    monkeypatch.setattr(broker, "_can_run",
+                        lambda studio, entry, model, routing, mode=None: True)
     monkeypatch.setattr(broker, "_published_memory_tier_gb", lambda model, modality: None)
     monkeypatch.setattr(broker, "_host_for_studio", lambda s: HOSTS[s["machine"]])
     monkeypatch.setattr(broker, "priority_order", lambda m: state["priority"].get(m, []))

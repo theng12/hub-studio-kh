@@ -106,3 +106,43 @@ def required_free_memory_gb(requested_model: str, catalog_entry: dict) -> float 
     get nothing.
     """
     return _published_floor(catalog_entry, _FREE_MEMORY_FIELDS, requested_model)
+
+
+# The reference (edit) lane's floors live inside the worker's own lane contract, beside the count
+# window and the measured runtime they were measured with - one block, one producer. They are read
+# only for an edit item: a text-to-image job on the same model keeps the model's own floor.
+def _reference_floor(catalog_entry: dict, field: str, requested_model: str) -> float | None:
+    """One edit-lane memory floor, or ``None`` when the worker published none."""
+    contract = catalog_entry.get("lane_contract")
+    references = contract.get("references") if isinstance(contract, dict) else None
+    if not isinstance(references, dict):
+        return None
+    raw = references.get(field)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if isinstance(raw, bool):
+        parsed = None
+    else:
+        try:
+            parsed = float(raw)
+        except (TypeError, ValueError):
+            parsed = None
+    if parsed is None or not math.isfinite(parsed) or parsed < 0:
+        raise ValueError(
+            f"the catalog row for {requested_model or catalog_entry.get('repo')!r} publishes "
+            f"lane_contract.references.{field}={raw!r}, which is not a memory floor in GB; fix "
+            f"the value in that worker's own /api/catalog row (Hub readers: "
+            f"components/hub/backend/workload_policy.py)")
+    return parsed
+
+
+def required_reference_total_memory_gb(requested_model: str,
+                                       catalog_entry: dict) -> float | None:
+    """The total-memory floor this model's reference (edit) lane publishes, if any."""
+    return _reference_floor(catalog_entry, "min_total_memory_gb", requested_model)
+
+
+def required_reference_free_memory_gb(requested_model: str,
+                                      catalog_entry: dict) -> float | None:
+    """The live-free floor this model's reference (edit) lane publishes, if any."""
+    return _reference_floor(catalog_entry, "min_free_memory_gb", requested_model)

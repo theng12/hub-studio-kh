@@ -6,16 +6,19 @@ import hmac
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import loading_mode, memory_policy
-from .generation import (MEDIA_TYPE_BY_SUFFIX, MODEL_ID, MODELS, QUALIFIED_MINIMUM_MEMORY_BYTES,
-                         GenerationManager, defaults_in_force, final_matches,
-                         lane_contract, lane_parameters, loading_modes,
-                         missing_runtime_model_reason, size_presets)
+from .generation import (MAX_REFERENCE_BYTES, MEDIA_TYPE_BY_SUFFIX, MODEL_ID, MODELS,
+                         QUALIFIED_MINIMUM_MEMORY_BYTES, GenerationManager, defaults_in_force,
+                         final_matches, lane_contract, lane_parameters, loading_modes,
+                         missing_runtime_model_reason, reference_image_media_type,
+                         reference_mode, reference_mode_values, size_presets)
 
 from components import app_version, model_defaults
 
@@ -40,6 +43,35 @@ def _host_facts() -> dict:
     return {'eligible': True, 'macos': version, 'unified_memory_bytes': memory,
             'qualified_minimum_memory_bytes': QUALIFIED_MINIMUM_MEMORY_BYTES,
             'qualification': '16 GB 1K txt2img historical source receipt; this host still needs packaged proof'}
+
+
+def edit_lane(model, state: dict, total_memory_bytes: int, selected: str) -> dict:
+    """Whether this Mac can serve this model's reference-image (edit) lane, and why not.
+
+    The capability statement the Hub publishes, and the same check the route enforces before it
+    accepts a job: a Mac below the floor of the configuration it would run must neither advertise
+    `edit` nor take one. The floor is the model's own measured figure for that configuration
+    (`reference_limits['modes']`), never a number invented here, and the configuration is the one
+    the lane's own tiers select on this host under the machine-wide setting (`selected`).
+    """
+    limits = model.reference_limits
+    if not model.edit_model_class or not limits:
+        return {'available': False, 'reason': f'{model.label} has no reference-image (edit) lane'}
+    if not state.get('ready'):
+        return {'available': False, 'reason': f'{model.label} is not ready on this Mac '
+                                              f'({state.get("state")})'}
+    mode = reference_mode(model, total_memory_bytes, selected)
+    measured = reference_mode_values(model, mode)
+    floor = measured.get('min_total_memory_gb')
+    total_gb = total_memory_bytes / 1e9
+    if not isinstance(floor, (int, float)):
+        return {'available': False, 'mode': mode,
+                'reason': (f'the reference lane has no measured {mode} configuration')}
+    if total_gb < floor:
+        return {'available': False, 'mode': mode,
+                'reason': (f'reference rendering in its {mode} configuration needs about '
+                           f'{floor:g} GB of unified memory; this Mac reports {total_gb:.1f} GB')}
+    return {'available': True, 'mode': mode, 'reason': None}
 
 
 def memory_warning(model, host: dict) -> str | None:
@@ -160,15 +192,34 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                  for ratio, (width, height) in presets.items()]
         ready = state['ready']
         files = state['files']
+        # Whether *this* Mac can serve this model's reference lane: the package is verified, the
+        # host is eligible, and its unified memory clears the edit floor measured for that lane.
+        # A Mac that cannot do it never advertises `edit` (frozen contract, 2026-10-26 §1.5).
+        reference_lane = edit_lane(model, state, manager.total_memory_bytes, selected)
+        capabilities = ['txt2img'] + (['edit'] if reference_lane['available'] else [])
         # How this machine's loading-size setting resolves for this model, from the model's own
         # MemoryPolicy: `selected` is the operator's choice, `effective` is what the next job
         # will actually load, and a model with no bounded configuration publishes no options.
+        # The reference lane's own answer rides beside it (`loading_modes.edit`) whenever the
+        # model has one, from the lane's own tiers and measured numbers.
         modes = loading_modes(model, manager.total_memory_bytes, selected)
+        if model.reference_limits:
+            modes['edit'] = loading_modes(model, manager.total_memory_bytes, selected,
+                                          lane='edit')
         return {
             'label': model.label, 'name': model.label, 'repo': model.repo,
             'model_id': model.repo, 'family': model.family, 'modality': 'image',
             'package_id': model.package_id, 'engine': model.engine,
-            'capabilities': ['txt2img'], 'hub_operation': 'image.text_to_image',
+            'capabilities': capabilities, 'hub_operation': 'image.text_to_image',
+            # The reference lane's own two facts. There is no creativity/strength control: Klein
+            # edit conditions on concat reference tokens and `image_strength` is the init-image
+            # weight, which this lane does not use - so it publishes a fixed mode and no options
+            # rather than a slider mapped backwards onto a different knob.
+            'reference_strength_mode': 'fixed',
+            'supported_reference_strengths': [],
+            # Why this Mac does or does not advertise `edit`: derived state for the operator, not
+            # a second copy of the measured numbers (those are in lane_contract.references).
+            'reference_lane': reference_lane,
             'model_revision': model.revision,
             'qualified_revision': model.revision if state['production_allowed'] else None,
             'qualified_revision_match': True if state['production_allowed'] else False,
@@ -231,7 +282,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             # their enforced bounds, artifact, state vocabulary and cancel semantics. Built from
             # this model's own limits so it cannot disagree with `validate_request`, with each
             # settable parameter's `default` resolved to the value in force on this machine.
-            'lane_contract': lane_contract(model, manager.data),
+            'lane_contract': lane_contract(model, manager.data, manager.total_memory_bytes),
             'qualification': dict(model.qualification),
         }
 
@@ -296,6 +347,86 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/generate/edit')
+    def submit_edit(prompt: str = Form(...),
+                    repo: str = Form(...),
+                    images: list[UploadFile] | None = File(default=None),
+                    aspect_ratio: str | None = Form(default=None),
+                    resolution: str | None = Form(default=None),
+                    width: int | None = Form(default=None),
+                    height: int | None = Form(default=None),
+                    steps: int | None = Form(default=None),
+                    guidance: float | None = Form(default=None),
+                    seed: int | None = Form(default=None),
+                    output_format: str | None = Form(default=None)) -> dict:
+        """Reference-to-image: N reference images plus a prompt, one scene image out.
+
+        Multipart, mirroring `/api/generate/txt2img`: one repeated `images` part per reference, in
+        order, plus the lane's plain form fields. The uploads are staged under this job's own
+        `<data>/inputs/<job id>/` and deleted the moment the job is terminal - a reference is
+        input, never an artifact. Count, media type and readability are refused before a job is
+        queued (422), never inside a render that would then have to fail.
+        """
+        state = _host_eligibility()
+        if not state['eligible']:
+            raise HTTPException(409, state['reason'])
+        model = MODELS.get(repo) if isinstance(repo, str) else None
+        if model is None:
+            raise HTTPException(422, f'{repo!r} is not a registered image model; this worker '
+                                     'serves: ' + ', '.join(sorted(MODELS)))
+        model_host = model_host_facts(model)
+        if not model_host['eligible']:
+            raise HTTPException(409, model_host['reason'])
+        lane = edit_lane(model, model_state(model), manager.total_memory_bytes,
+                         loading_mode.current(manager.data))
+        if not lane['available']:
+            raise HTTPException(409, lane['reason'])
+        # Refuse an over-count before staging a single byte; the same numbers validate_request
+        # enforces, named in the same sentence.
+        limits = model.reference_limits
+        if len(images or []) > limits['max']:
+            raise HTTPException(
+                422, f'{model.label} takes between {limits["min"]} and {limits["max"]} reference '
+                     f'images; this request had {len(images or [])}')
+        job_id = uuid4().hex
+        directory = manager.inputs / job_id
+        directory.mkdir(parents=True, mode=0o700)
+        try:
+            paths = []
+            for index, upload in enumerate(images or []):
+                body = upload.file.read(MAX_REFERENCE_BYTES + 1)
+                if not body:
+                    raise ValueError(f'reference image {index + 1} is empty')
+                if len(body) > MAX_REFERENCE_BYTES:
+                    raise HTTPException(
+                        413, f'reference image {index + 1} is larger than '
+                             f'{MAX_REFERENCE_BYTES // (1024 * 1024)} MB')
+                # Written unfiled first, then named for what it actually is: the media type is
+                # read from the bytes by the same validator a direct caller passes through.
+                staged = directory / f'{index}.upload'
+                staged.write_bytes(body)
+                _media_type, suffix = reference_image_media_type(staged)
+                named = directory / f'{index}{suffix}'
+                staged.replace(named)
+                paths.append(str(named))
+            raw = {'repo': repo, 'prompt': prompt, 'reference_images': paths}
+            for name, value in (('aspect_ratio', aspect_ratio), ('resolution', resolution),
+                                ('width', width), ('height', height), ('steps', steps),
+                                ('guidance', guidance), ('seed', seed),
+                                ('output_format', output_format)):
+                if value is not None:
+                    raw[name] = value
+            return {'job': manager.submit(raw, mode='edit', job_id=job_id)}
+        except HTTPException:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+        except ValueError as exc:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise HTTPException(422, str(exc)) from exc
+        except RuntimeError as exc:
+            shutil.rmtree(directory, ignore_errors=True)
             raise HTTPException(409, str(exc)) from exc
 
     @app.get('/api/generate/jobs')

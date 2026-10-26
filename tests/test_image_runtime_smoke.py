@@ -37,7 +37,8 @@ class ImageRuntimeSmokeTests(unittest.TestCase):
             ):
                 (package / "__init__.py").write_text("", encoding="utf-8")
             (backend / "fixture_model.py").write_text(
-                "class RegistryLocalModel:\n    pass\n", encoding="utf-8"
+                "class RegistryLocalModel:\n    pass\n\n\nclass RegistryLocalEditModel:\n    pass\n",
+                encoding="utf-8"
             )
             registry = backend / "generation.py"
             registry.write_text(
@@ -50,6 +51,8 @@ class ImageRuntimeSmokeTests(unittest.TestCase):
                     LOCAL = ImageModel(
                         repo="local/component",
                         model_class="components.image.app.backend.fixture_model:RegistryLocalModel",
+                        edit_model_class=("components.image.app.backend.fixture_model:"
+                                          "RegistryLocalEditModel"),
                     )
                     MODELS = {model.repo: model for model in (MFLUX, LOCAL)}
                     """
@@ -97,6 +100,9 @@ class ImageRuntimeSmokeTests(unittest.TestCase):
             [
                 "mflux.models.flux2.variants.txt2img.flux2_klein:Flux2Klein",
                 "components.image.app.backend.fixture_model:RegistryLocalModel",
+                # The reference/edit lane's class is imported too: a runtime missing the edit
+                # variant must fail here, not at the first reference render.
+                "components.image.app.backend.fixture_model:RegistryLocalEditModel",
             ],
         )
         self.assertEqual(result["registry"], str(registry.resolve()))

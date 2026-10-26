@@ -40,7 +40,10 @@ THUMB_PROMPT = ('YouTube sleep-story cover art, golden magical theme. Large eleg
 SCENE_PROMPT = ('A quiet moonlit village at the edge of a pine forest, snow on the rooftops, warm light in a few windows, a winding lane '
                 'leading to a small stone bridge over a frozen stream, deep blue night sky full of stars, soft painterly storybook '
                 'illustration, calm and cozy, wide cinematic composition.')
-SCENES = {'klein': ('flux2-klein-4b-mlx-4bit', SCENE_PROMPT, 4), 'zimage': ('z-image-turbo-mflux-4bit', THUMB_PROMPT, 9)}
+SCENES = {'klein': ('flux2-klein-4b-mlx-4bit', SCENE_PROMPT, 4), 'zimage': ('z-image-turbo-mflux-4bit', THUMB_PROMPT, 9),
+          # Qwen Image 2.1 Turbo: eight steps is its row's fixed count (`limits`), so `--steps` cannot
+          # change it - the wrapper refuses anything else.
+          'qwenz': ('qwen-image-2-1-turbo-mflux-q4', SCENE_PROMPT, 8)}
 GB = 1e9
 
 
@@ -74,7 +77,11 @@ class Sampler(threading.Thread):
 
 def find_pack(package_id: str) -> Path:
     """The installed pack's ``model`` folder: ~/StudioHubModels first, then a kit drive."""
-    bases = [Path.home() / 'StudioHubModels', *sorted(Path('/Volumes').glob('KH-STUDIO-*/model-library'))]
+    bases = [Path.home() / 'StudioHubModels', *sorted(Path('/Volumes').glob('KH-STUDIO-*/model-library')),
+             # A kit drive's library sits one level deeper (`<drive>/Video Generation Kit/Studio Hub
+             # KH/model-library`); the shallow glob above found nothing on this Mac, so the probe
+             # reported "no installed pack" for packs that were installed.
+             *sorted(Path('/Volumes').glob('KH-STUDIO-*/*/*/model-library'))]
     for base in bases:
         for pack in sorted((base / package_id).glob('*/model')):
             return pack

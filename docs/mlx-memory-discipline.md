@@ -111,6 +111,55 @@ Results, before and after, same seeds and prompts, with the table and side-by-si
 `_orchestra/audit-20261001/image-memory/` (`index.html`, `table.md`); the probe and report scripts are
 `qualification/image_memory_probe.py` and `qualification/image_memory_report.py`.
 
+### Reference to Image — the edit lane on `flux2-klein-4b-mlx-4bit`
+
+**A second model class on the same package**, not a second package: `Flux2KleinEdit`
+(`mflux.models.flux2.variants.edit.flux2_klein_edit`) encodes one or more reference images and
+concatenates their tokens with the latents. It never coexists with a loaded text-to-image instance
+(the worker's resident cache is keyed by lane), and it is reached only by `POST /api/generate/edit`.
+
+**The lane reuses the bounded path; it adds no second mechanism** (owner, 2026-10-26: it must fit
+8 GB and 16 GB Macs the way text-to-image does, and slower generation is accepted). It runs the
+same `staging` hooks, `streaming` proxies and `vae_bounded` decode — but under **its own**
+`MemoryPolicy` (`ImageModel.reference_memory`), not the text lane's: a reference render carries N
+encoded references and a longer concatenated sequence on top of the same weights, so the point at
+which `default` would swap is the edit lane's own measured fact. `generation.memory_plan(lane="edit")`
+is the one decision, and `plan_configuration()` names what it chose:
+
+| configuration | what it does | how this Mac is chosen |
+|---|---|---|
+| `bounded-streamed` | staged hooks + block streaming + bounded VAE decode, cache cap 0.5 GB | `auto` below `stream_below_bytes` (the 8 GB tier) |
+| `bounded-staged` | staged hooks + bounded VAE decode, cache cap 0.5 GB, no streaming | `auto` below `low_ram_below_bytes` |
+| `lean` | cache cap + bounded decode, model stays loaded | `auto` below `lean_below_bytes` where a lane declares one |
+| `default` | the configuration the model shipped with (fastest) | at or above those thresholds |
+
+Both thresholds come from the lane's own measurements, never a formula. `loading_mode` (`auto`,
+`low`, `full`) applies to the lane exactly as it does to text-to-image (owner, 2026-10-26: "big
+Macs run at full speed, only small ones go slow") — there is no forcing rule, so an operator's
+explicit `full` is honoured, and a Mac whose chosen configuration has no measured floor simply does
+not advertise `edit` (`ImageWorker`'s `edit_lane` gate) instead of starting a render it cannot
+hold. The lane's tiers and the configuration this Mac would run are published in the catalog's
+`loading_modes.edit`, and every edit job records the configuration it actually ran in
+`job["reference_mode"]` (`default` / `bounded-staged` / `bounded-streamed`), next to the settings
+that asked for it.
+
+**`Flux2KleinEdit` is accepted by all three bounded mechanisms** (measured, not inferred;
+`qualification/evidence/image-edit-2026-10-26.jsonl` records `memory_hooks` on every bounded job):
+
+- `staging.supports()` — the class has `_encode_prompt_pair`, `_predict`, `transformer`,
+  `text_encoder` and a `callbacks` manager, so the encode-then-free and free-transformer hooks
+  install;
+- `streaming.supports()` on both streamed component lists — and the class's `_predict` is built
+  through `staging._uncompiled`, so `mx.compile` is never wrapped around an evaluating block;
+- `vae_bounded` — the same FLUX.2 VAE, decoded through the same `decode_packed_latents` shim.
+
+The lane's own floors and runtimes are published per configuration in
+`lane_contract.references` (`min_total_memory_gb`, `min_free_memory_gb`, `runtime_seconds`,
+`peak_gb`, `swap_used_mb`, `timeout_floor_s`), and a Mac advertises `edit` only for the
+configuration it will run and can hold without swapping. The Hub reads the same numbers through
+`memory_admission.requirement_gb(mode="edit")`; they apply to an edit item only, so a
+text-to-image job on the same model keeps Klein's 8 GB tier and 2.8 GB live-free floor above.
+
 ### Qwen Image 2.1 Turbo MLX 4-bit
 
 **Owner-adopted for normal production on 16 GB and larger Macs on 2026-10-13.** The owner waived a
@@ -126,16 +175,45 @@ every job. This is its documented `MemoryPolicy.single_mode_reason`; no memory-m
 Turbo follows the eight sigma nodes stored in the pinned `model/model_index.json`, with an appended terminal
 zero and first-order Euler updates, without the ordinary model's resolution-dependent sigma shift. It accepts
 exactly eight steps, guidance 1, and the existing roughly-one-megapixel square/landscape/portrait presets; no
-negative prompt, reference image, LoRA or block-streaming support is claimed. The adapter normalizes the new
-saved component names for the existing pinned runtime, rather than upgrading the runtimes of other images.
+negative prompt, LoRA or block-streaming support is claimed.
+
+**The schedule is mflux's own since the 0.23.0 runtime** (2026-10-26): `Qwen21TurboScheduler` carries these
+eight nodes, `ModelConfig.qwen_image_21_turbo()` selects them, and `check_generate` refuses guidance != 1.
+`components/image/app/backend/qwen_turbo.py` now passes that config and keeps only what the row publishes: the
+recipe check (the pack's `model_index.json` must state the Turbo curve mflux samples), exactly eight steps,
+guidance 1.0, no negative prompt, and — for the reference lane — `strength` fixed at 1.0. The 0.20.0-era
+weight-renaming adapter was deleted with the runtime bump; mflux's loader normalizes this pack itself, which is
+what the CLI proof ran.
 
 The manifest's 16 GB minimum makes the Hub and normal model-copy flow exclude 8 GB Macs. Its 8.0 GB
 free-before-start floor is a provisional inherited operational assumption from regular Qwen Image 2.1
 Low-RAM MLX 4-bit, explicitly authorized by the owner as an exception to rule 13 above; it is not a Turbo
-measurement. No peak, render time or per-chip `seconds_per_step` is published. Until operational evidence
-supports a different floor, the Hub uses that conservative start guard and the worker keeps its existing
-900-second unmeasured deadline floor. See the active planning record
+measurement. The text lane remains single-mode, and its first measured Turbo run (2026-10-26, mflux 0.23.0,
+1280x720, 8 steps on this 32 GiB M2 Max) peaked at 5.91 GB MLX in 93.5 s — recorded in
+`qualification/evidence/image-edit-2026-10-26.jsonl` as the runtime-bump regression proof, not yet promoted
+into this row. See the active planning record
 `.planning/2026-09-10-standalone-app-feasibility/qwen-image-turbo-20261012.md`.
+
+### Reference to Image on `qwen-image-2-1-turbo-mflux-q4`
+
+**The second Reference-to-Image model** (owner, 2026-10-26: "so there's variation"), a second class on the same
+row and installed package — `components.image.app.backend.qwen_turbo:QwenTurboEdit` over mflux 0.23.0's
+`QwenImage21Edit`. Its levers are not Klein's: this pipeline has no `_encode_prompts`/`_predict`, so
+`staging` installs nothing and nothing is streamed. The bounded configuration is mflux's own low-RAM shape —
+the memory saver evicts the text encoder before the loop and the transformer after it, MLX's cache is capped,
+and the VAE decodes in tiles — applied by `apply_memory_plan` through the wrapper's `memory_target` (the mflux
+model, not the wrapper), because the row's edit lane has measured tiers.
+
+| configuration | measured (1 and 2 references at 1024 px) | peak | swap |
+|---|---|---|---|
+| `default` | 154.5 s / 191.8 s | 24.21 / 24.23 GB | +0.6 GB / **+9.6 GB** |
+| `bounded-staged` | 162.3 s / 183.0 s | 10.18 / 12.76 GB | reclaimed both runs |
+
+The unbounded configuration is not offered: 24.2 GB on a 32 GiB host pushed 9.5 GB into swap with two
+references, so it publishes no floor and any Mac that would select it is refused with "no measured default
+configuration" until a host large enough is measured. `bounded-staged` publishes 24.0 GB total / 14.8 GB free
+(peak + 2) — a 16 GiB Mac does **not** clear it, which is the honest minimum this lane needs, and it is no
+slower than the unbounded one.
 
 ## Voice
 

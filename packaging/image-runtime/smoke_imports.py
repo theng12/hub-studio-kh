@@ -74,11 +74,12 @@ def registry_root(source: Path) -> Path:
 def registry_classes(source: Path) -> list[str]:
     """The ``'<import path>:<ClassName>'`` entries ``MODELS`` is built from.
 
-    Parsed, not imported: this script runs inside the shipped runtime, where the worker's own
-    package tree is not on ``sys.path`` and importing it would pull in the whole FastAPI app just
-    to read a table. Anything other than the registry's current shape is a failure naming the file
-    and what was expected, because a partially-read registry is exactly the silent pass this smoke
-    exists to prevent.
+    Both class fields are read: ``model_class`` (text-to-image) and ``edit_model_class`` (the
+    reference/edit lane). Parsed, not imported: this script runs inside the shipped runtime, where
+    the worker's own package tree is not on ``sys.path`` and importing it would pull in the whole
+    FastAPI app just to read a table. Anything other than the registry's current shape is a failure
+    naming the file and what was expected, because a partially-read registry is exactly the silent
+    pass this smoke exists to prevent.
     """
     tree = ast.parse(source.read_text(), filename=str(source))
     assigned: dict[str, ast.expr] = {}
@@ -108,6 +109,16 @@ def registry_classes(source: Path) -> list[str]:
         # is checked by ``native_leaf`` below instead of being turned into a fake Python import.
         if keyword.value.value:
             classes.append(keyword.value.value)
+        # The reference/edit lane's class, when the row has one. Reading only `model_class` was a
+        # silent hole: a shipped runtime without the edit variant passed this smoke and failed
+        # only when the first reference render started.
+        edit = next((item for item in entry.keywords if item.arg == "edit_model_class"), None)
+        if edit is not None:
+            if not isinstance(edit.value, ast.Constant) or not isinstance(edit.value.value, str):
+                raise SystemExit(f"{source}: {name} has an 'edit_model_class' that is not a "
+                                 f"string; this smoke reads it to import the reference lane.")
+            if edit.value.value and edit.value.value not in classes:
+                classes.append(edit.value.value)
     if not classes:
         raise SystemExit(f"{source}: MODELS names no models, so this smoke would import nothing.")
     return classes

@@ -159,9 +159,14 @@ class ImageBundleTests(unittest.TestCase):
                         self.assertEqual(parameters['steps']['maximum'],
                                          model['generation_limits']['max_steps'])
                         # A parameter the worker refuses must not be offered as a contract.
-                        for refused in ('negative_prompt', 'reference_images', 'lora_names',
-                                        'quantize'):
+                        for refused in ('negative_prompt', 'lora_names', 'quantize'):
                             self.assertNotIn(refused, parameters)
+                        # ...and one it accepts must be: the reference lane is on this row, so
+                        # the contract publishes its window and the row advertises `edit` only
+                        # when this Mac clears the edit floor (it does not here: no model files).
+                        self.assertIn('reference_images', parameters)
+                        self.assertEqual(contract['references']['field'], 'images')
+                        self.assertNotIn('edit', model['capabilities'])
                         refused = client.post(value['url']+'/api/generate/txt2img',
                             json={'repo': model['repo'], 'prompt': 'offline fixture'}, headers=headers)
                         self.assertEqual(refused.status_code, 409)
@@ -221,12 +226,28 @@ class ImageLaneContractTests(unittest.TestCase):
                 self.assertTrue(contract['states']['discard_supported'])
                 self.assertTrue(contract['cancel']['semantics'])
 
-    def test_the_contract_offers_nothing_the_validator_refuses(self):
-        """A parameter the lane rejects must not be advertised as part of its surface."""
+    def test_the_contract_offers_exactly_what_the_validator_accepts(self):
+        """A parameter the lane rejects must not be advertised — and one it accepts must be.
+
+        ``reference_images`` is the live case in both directions (reference-to-image, 2026-10-26):
+        FLUX.2 Klein 4B MLX 4-bit has a measured edit lane, so the parameter is accepted *and*
+        published with that lane's own window; a model with no edit lane publishes nothing and
+        keeps refusing references in the words it always used.
+        """
         model = self.generation.FLUX2_KLEIN
-        offered = {item['name'] for item in self.generation.lane_contract(model)['parameters']}
-        for refused in ('reference_images', 'image_path', 'lora_names', 'lora_paths',
-                        'negative_prompt', 'quantize'):
+        contract = self.generation.lane_contract(model)
+        offered = {item['name'] for item in contract['parameters']}
+        self.assertIn('reference_images', offered)
+        references = next(item for item in contract['parameters']
+                          if item['name'] == 'reference_images')
+        self.assertEqual(references['min_items'], model.reference_limits['min'])
+        self.assertEqual(references['max_items'], model.reference_limits['max'])
+        self.assertEqual(contract['references']['min'], model.reference_limits['min'])
+        self.assertEqual(contract['references']['max'], model.reference_limits['max'])
+        self.assertEqual(contract['references']['max_dimension'],
+                         model.reference_limits['max_dimension'])
+        for refused in ('image_path', 'lora_names', 'lora_paths', 'negative_prompt',
+                        'quantize'):
             with self.subTest(parameter=refused):
                 with self.assertRaises(ValueError):
                     self.generation.validate_request(
@@ -235,6 +256,16 @@ class ImageLaneContractTests(unittest.TestCase):
         # width/height are derived from the aspect ratio and refused unless they match it.
         self.assertNotIn('width', offered)
         self.assertNotIn('height', offered)
+
+        lane_less = self.generation.Z_IMAGE_TURBO
+        self.assertNotIn('reference_images',
+                         {item['name'] for item
+                          in self.generation.lane_contract(lane_less)['parameters']})
+        self.assertNotIn('references', self.generation.lane_contract(lane_less))
+        with self.assertRaisesRegex(ValueError, 'Reference images, LoRAs'):
+            self.generation.validate_request(
+                {'repo': lane_less.repo, 'prompt': 'x', 'reference_images': ['anything']})
+
 
     def test_a_published_runtime_says_where_it_was_measured(self):
         for model in self.generation.MODELS.values():
