@@ -7,7 +7,8 @@ new engine added to that tuple fails this smoke until its runtime module is name
 same shape as the Image runtime's smoke, and it exists for the same reason: a shipped runtime
 missing a module passes a hand-written import list and fails only when the owner runs the model.
 
-Lance (``video-lance``) was retired in 0.6.120; ``video-ltx`` is the only video engine.
+The engine table below names only the engines this build ships; a retired engine's module list has
+been taken out with it, so nothing here looks for a runtime that no longer exists.
 """
 from __future__ import annotations
 

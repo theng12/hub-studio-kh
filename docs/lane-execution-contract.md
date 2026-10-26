@@ -291,8 +291,8 @@ Two notes a gateway must not skip:
     first consumer to read them as a cross product (Story Studio) offered `448p + 16:9`, which the
     lane refuses. `published_canvases()` and `validate_request()` read the same function.
   - **`audio`**: a boolean, published **only by a model that has any**
-    (`VideoModel.generates_audio`). LTX denoises picture and sound together, so unticking it does
-    **not** shorten the run — it skips the audio decode and writes an MP4 with no track. The
+    (`VideoModel.generates_audio`). The lane's pack denoises picture and sound together, so unticking
+    it does **not** shorten the run — it skips the audio decode and writes an MP4 with no track. The
     parameter's own `note` says so, because a checkbox that looks like a saving it is not is the
     kind of thing a scheduler would otherwise plan around. A model that is silent publishes no such
     parameter, and the artifact gate requires a track only when `audio` was left

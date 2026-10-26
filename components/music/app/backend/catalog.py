@@ -83,7 +83,7 @@ class Checkpoint:
 #
 # `mlx-Yue` pins `mlx==0.32.2` while this worker's own runtime (the Voice runtime) carries
 # `mlx==0.31.2`, so the engine runs in a separate interpreter and this worker
-# spawns it — the same shape the Video lane uses for its two engines. The tier below is MEASURED on
+# spawns it — the same shape the Video lane uses for its own engine. The tier below is MEASURED on
 # this Mac, not read from a card: the model card publishes no memory table at all.
 YUE2_REPO = "vanch007/mlx-Yue2-3B"
 YUE2_REVISION = "fa66d203dd56d7e033e05ee8b32269768984c4cc"

@@ -234,20 +234,10 @@ CHOICES: tuple[dict[str, Any], ...] = (
     # lower-case `model/mlx/` destination, which is the same file on macOS's
     # case-insensitive volume and is why the file-selection check compares case-insensitively.
     {"package_id": "stable-audio-3-medium", "model_id": "stabilityai/stable-audio-3-optimized", "revision": "da6edc54ddba10bfd79a077102ded687f80e882b", "engine": "music-mlx", "exclude": ("*.gitignore",)},
-    # ── Video: the LTX-2.3 22B mixed-precision pack and its text encoder ──
-    # The pack is the one that produced the first successful run on this Mac
-    # (qualification/ltx-video-results-20260926-32gb-first-success): 704x448, 97 frames,
-    # 4.04 s with audio, 298.5 s wall, peak process footprint 16.38 GB. Its weights are
-    # quantized per-tensor across 2/3/4/5/6/8 bits and the pack ships its own loader in
-    # `generate.py`; the manifest lists that file because the worker applies it before the
-    # pipeline is constructed. Sample images and the publisher's README are furniture.
-    # (LTX-2.3 22B retired 0.6.127: its capture row moved to _trash/retire-ltx/; its manifest lives dormant in components/video/retired/.)
-    # The text encoder is a real dependency, not a convenience: the pipeline loads it for every
-    # prompt and would otherwise fetch it over the network at generation time. It is declared
-    # `video-ltx` so the Video worker resolves its installed folder and passes the local path,
-    # and it is listed in the pack's `requires_packages` so the Hub marks it a dependency rather
-    # than offering it in a picker as if it were a video model.
-    # (Gemma 3 12B 4-bit, LTX's text encoder, retired 0.6.128: its capture row is gone; its manifest lives dormant in components/video/retired/.)
+    # ── Video: no pack is catalogued. The local video pack and its text encoder were retired
+    # (2026-10-01 and 2026-10-02): their capture rows are gone, an installed copy moves to the
+    # Trash Folder by `components/retired_models.py`, and their manifests live dormant in
+    # `components/video/retired/` where no catalogue reads them. ──
     # ── Embeddings (owner decision 2026-10-11): Story's meaning-based idea duplicate check ──
     # BGE small en v1.5 in mlx-community's bf16 MLX build: a plain BERT encoder, 384 dimensions,
     # MIT. Run by the Embeddings worker in pure MLX on the shared Voice runtime (no new package).
@@ -406,24 +396,8 @@ DETAILS: dict[str, dict[str, Any]] = {
     "s3tokenizerv2": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "Memory floor taken from the Voice catalogue's declared minimum.")},
     # ── Music: the Stable Audio 3 Medium engine ──
     "stable-audio-3-medium": {"defaults": {"dit_model": "dit_medium", "decoder": "same-l", "inference_steps": 8, "guidance_scale": 1.0, "audio_format": "wav", "sample_rate_hz": 44100, "channels": 2, "max_duration_seconds": 380}, "memory": (8, 16, "M2 Max 32 GB: 30s clip 3.89 GB peak / 9.26s; 380s clip 5.05 GB peak / 61.58s.")},
-    # ── Video: the LTX-2.3 22B pack and the text encoder it loads ──
-    # MEASURED here [M] on the 32 GB M2 Max: 704x448, 97 frames, seed 42, 298.5 s wall,
-    # 4.04 s of output with audio, peak process footprint 16.38 GB (ri_phys by the pack's own
-    # runner), peak MLX Metal 13.19 GB, RSS 9.91 GB. The 16 GB tier is a vendor claim this
-    # measurement contradicts for the 22B model, so the floor is 24 GB and a 16 GB machine is
-    # not offered the model. `defaults` mirror the worker's registry entry, which is the
-    # artefact that states them.
-    # `qualified` in this catalog's vocabulary means "a run left a record", and two do: the
-    # standalone qualification run (298.5 s) and the same configuration driven through the
-    # worker's own job path (304.0 s, job 627c7fbc). `reason` states exactly what those runs do
-    # *not* cover — no 24 GB run, text-to-video unmeasured — so the status is not read as more
-    # than it is.
-    # (LTX-2.3 22B retired 0.6.127: its capture row moved to _trash/retire-ltx/; its manifest lives dormant in components/video/retired/.)
-    # A companion: it has no picker row of its own (the Hub marks any package another package
-    # requires as a dependency) and no runtime of its own. The floor mirrors the model whose
-    # pipeline loads it, because a machine that cannot hold the 22B model cannot use the encoder
-    # either.
-    # (Gemma 3 12B 4-bit retired 0.6.128: its manifest lives dormant in components/video/retired/.)
+    # ── Video: no pack is catalogued (see the capture table above; both packages were retired
+    # and nothing here reads their dormant manifests). ──
     "yue2-3b-mlx": {
         "defaults": {"mode": "off", "duration_seconds": 36, "seed": -1, "precision": "8bit",
                      "parameters_source": "components/music/app/backend/catalog.py"},

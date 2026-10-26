@@ -1,5 +1,8 @@
 # Studio Hub task board
 
+> **Historical as of 2026-10-21 (release 0.6.194).** Current state lives at the top of
+> `docs/tasks/HANDOFF.md`; the block below is retained as a record and is not the task to resume.
+
 ## ▶ TAKE OVER HERE
 
 ### ST-SHOPS-BOOTSTRAP-20261021 — INTEGRATED SOURCE on `release/0.6.194`; gates PENDING; no commit/build/install/publish

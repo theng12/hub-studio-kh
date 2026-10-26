@@ -72,12 +72,13 @@ PEER_PROXY_TIMEOUT_FLOOR_S = 900.0
 # rather than a refusal, since a *short* deadline can only cut a job short, and the alternative
 # (falling through to the longest floor) would be the silent-wait failure this table exists to fix.
 #
-# `video` is the only lane that differs today, and it differs on measurement: the LTX-2.3 runtime's
-# own validated runs on an M2 Pro 32 GB are 44:38 for q8 HQ at 480x704x97 and ~15 min for the
-# 1280x704x97 identity test. 900 s would cut the first off at a third of the way through.
+# `video` is the only lane that differs today, and it differs on measurement: the local video
+# runtime's own validated runs on an M2 Pro 32 GB are 44:38 for q8 HQ at 480x704x97 and ~15 min for
+# the 1280x704x97 identity test. 900 s would cut the first off at a third of the way through.
 MODALITY_DEADLINE_FLOOR_S: dict[str, float] = {
-    # The LTX-2.3 runtime's own measured runs on an M2 Pro 32 GB: 44:38 for q8 HQ at 480x704x97,
-    # ~15 min for the 1280x704x97 identity test. A 900 s wall cuts the first off a third through.
+    # The local video runtime's own measured runs on an M2 Pro 32 GB: 44:38 for q8 HQ at
+    # 480x704x97, ~15 min for the 1280x704x97 identity test. A 900 s wall cuts the first off a
+    # third through.
     "video": 7200.0,
     # Chat is the LLM lane, and GatewayKH measured the workload that sets this floor: 30 scenes at
     # ~403 tokens each is 12,090 tokens, 1,008 s on an M1. They asked for the whole Hub ceiling to
@@ -330,10 +331,11 @@ _ENGINE_ROUTE: dict[str, tuple[str, str]] = {
     "music-mlx": ("music", "music"),
     # The Music lane's second engine. YuE2 runs in its own pinned runtime because the port pins
     # `mlx==0.32.2` while the Music overlay carries `mlx==0.31.2`; the worker picks the
-    # interpreter from the manifest's engine, exactly as the Video lane does for its two.
+    # interpreter from the manifest's engine, exactly as the Video lane does for its own.
     "music-yue2": ("music", "music"),
     "chat-mlx": ("chat", "chat"),
-    # Video is one engine: `video-ltx`, the LTX-2.3 22B pack (Lance was retired in 0.6.120).
+    # Video is one engine. No video pack is offered today (`components/retired_models.py`); the
+    # engine id stays as the lane's routing key so a successor pack changes no route.
     "video-ltx": ("video", "video"),
     "embed-mlx": ("embeddings", "embeddings"),
     "vision-mlx": ("vision", "vision"),

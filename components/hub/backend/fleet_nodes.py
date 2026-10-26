@@ -564,8 +564,8 @@ def sync_roster_from_snapshots() -> bool:
     True when a row changed.
 
     **The roster was frozen at join time.** A node names its studios once, when it joins, and a Mac
-    never re-joins on its own; so when an update stopped shipping a studio (Video, after LTX was
-    retired) every Mac that joined before it kept a `video` entry on its controller for ever. The
+    never re-joins on its own; so when an update stopped shipping a studio (Video, after its only
+    pack was retired) every Mac that joined before it kept a `video` entry on its controller for ever. The
     controller then polled a worker that did not exist: the Gateway showed "10 workers are offline",
     every idle Mac read "needs attention" (a reachable machine with a studio `down`) and its activity
     "partially unavailable" — on a healthy, idle fleet. The node's peer snapshot
