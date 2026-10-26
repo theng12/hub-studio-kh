@@ -29,6 +29,13 @@ struct ReleaseNotReady: Error {
     let message: String
 }
 
+/// The Hub will not build the offered release from the files it was pushed as. It is not an ending
+/// on its own: only the caller knows whether a disk image of that release exists to install instead,
+/// and for a manifest-only release none does.
+struct DeltaStageRefused: Error {
+    let reason: String
+}
+
 // MARK: - Canonical JSON
 
 /// Canonical descriptor bytes, byte for byte the same as the controller's

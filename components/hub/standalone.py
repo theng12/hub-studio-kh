@@ -2692,7 +2692,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         plainly whether it can accept a pushed release at all.  It carries the key
         itself (``public_key``) so a node can pin it at join.  ``delta`` says this
         controller takes manifest-only pushes (a gateway that finds no ``delta`` key
-        pushes the whole disk image) and whether it holds this release's manifest.
+        pushes the whole disk image), whether it holds this release's manifest, and
+        (``artifact``) whether the app may install the disk image instead.
         ``last_sync`` is the last controller poll's own conclusion (``ok``,
         ``error``, ``result``, ``at``) so a Mac being refused an update can say why.
         """
@@ -2706,7 +2707,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "public_key": trusted.get("public_key"),
             },
             "delta": {"schema": app_release.fm.SCHEMA,
-                      "manifest": app_release.held_manifest(release) is not None},
+                      "manifest": app_release.held_manifest(release) is not None,
+                      # A release carrying `files_sha256` was pushed as files and left no disk
+                      # image anywhere in the chain - a node relays to a controller that holds
+                      # none - so "fall back to the image" is a guaranteed 404 on it. Anything
+                      # else was pushed as an image, which a node relays from its controller.
+                      "artifact": app_release.ARTIFACT_FILE.is_file()
+                      or "files_sha256" not in (release or {})},
             "last_sync": release_sync.last_sync_report(),
         }
 

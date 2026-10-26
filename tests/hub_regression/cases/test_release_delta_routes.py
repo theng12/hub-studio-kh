@@ -157,6 +157,7 @@ def test_manifest_only_push_answers_with_the_blobs_still_to_send(hub, tmp_path):
     read = hub.get("/api/hub/release", headers=_fleet_headers()).json()
     assert read["release"]["build"] == "abc1234"
     assert read["delta"]["manifest"] is True
+    assert read["delta"]["artifact"] is False, "a release pushed as files has no disk image to install"
     assert read["trusted_publisher"]["public_key"]
 
     sizes = _send_all(hub, blobs, answer["need"])
@@ -235,12 +236,16 @@ def test_a_release_pushed_as_a_disk_image_still_works_beside_the_manifest_one(hu
     assert response.status_code == 200
     assert "need" not in response.json(), "the legacy answer keeps its shape"
     assert app_release.ARTIFACT_FILE.read_bytes() == artifact
+    read = hub.get("/api/hub/release", headers=_fleet_headers()).json()
+    assert read["delta"]["artifact"] is True, "an image push leaves an image to install"
     # A neither-artifact-nor-manifest push is not a release.
     assert _push(hub, {"descriptor": descriptor}).status_code == 400
     # Pushing a manifest-only release afterwards must not leave the old image served as the new one.
     _d, body, _e, _b = _release(seed, FILES_A, tmp_path)
     assert _push(hub, body).status_code == 200
     assert not app_release.ARTIFACT_FILE.exists()
+    read = hub.get("/api/hub/release", headers=_fleet_headers()).json()
+    assert read["delta"]["artifact"] is False, "the old image is not served as the new release"
 
 
 # ── serving ────────────────────────────────────────────────────────────────
@@ -710,6 +715,61 @@ def test_a_node_whose_controller_never_supplies_the_blob_answers_not_ready(hub, 
         os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
 
 
+def test_a_stage_waits_ONE_deadline_for_every_file_it_is_missing(hub, tmp_path, monkeypatch):
+    """``BLOB_WAIT_S`` is the whole run's wait, not each file's: a controller that is late for every
+    file used to get a fresh 15 minutes per file, so a stage could outlast the app watching it and
+    the app then went looking for a disk image that does not exist (2026-10-25)."""
+    from components.hub.backend import release_sync
+    monkeypatch.setattr(release_sync, "BLOB_WAIT_S", 2.0)
+    monkeypatch.setattr(release_sync, "BLOB_WAIT_POLL_S", 0.02)
+    new_files = {**FILES_A,
+                 R + "components/hub/backend/one.py": b"# one\n",
+                 R + "components/hub/backend/two.py": b"# two\n"}
+    _entries_, blobs = _node_holding(hub, tmp_path, new_files)
+    monkeypatch.setattr(release_sync.httpx, "stream", _LateController(blobs, patience=1.5))
+    _installed_app(tmp_path, FILES_A)
+    try:
+        started = time.monotonic()
+        hub.post("/api/hub/release/stage", headers=_hub_headers())
+        status = _wait_for_stage(hub)
+        elapsed = time.monotonic() - started
+        assert status["state"] == "not_ready" and status["code"] == "not_ready", status
+        assert elapsed < release_sync.BLOB_WAIT_S * 1.3, (
+            f"{elapsed:.1f}s: each file must not get its own {release_sync.BLOB_WAIT_S}s wait")
+        # Retryable, as the app's next check expects it to be.
+        assert hub.post("/api/hub/release/stage", headers=_hub_headers()).json()["state"] == "running"
+        _wait_for_stage(hub)
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
+
+
+class _LateController:
+    """A controller that is ``patience`` seconds behind for every blob, then supplies it."""
+
+    def __init__(self, blobs, patience):
+        self.blobs, self.patience, self.first_seen = blobs, patience, {}
+
+    def __call__(self, method, url, **_kw):
+        sha = url.rsplit("/", 1)[1]
+        if time.monotonic() - self.first_seen.setdefault(sha, time.monotonic()) < self.patience:
+            raise httpx.ConnectError("the controller has not received this file yet")
+        data = self.blobs[sha]
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_raw(self):
+                yield data
+        return Response()
+
+
 def test_a_node_fetches_missing_blobs_from_its_controller_by_sha(hub, tmp_path, monkeypatch):
     from components.hub.backend import app_release, file_manifest as fm, release_delta, release_sync
     seed = _seed()
@@ -729,7 +789,7 @@ def test_a_node_fetches_missing_blobs_from_its_controller_by_sha(hub, tmp_path, 
 
     requested: list[str] = []
 
-    def controller_blob(sha, destination, size):
+    def controller_blob(sha, destination, size, _deadline):
         requested.append(sha)
         destination.write_bytes(blobs[sha])
     monkeypatch.setattr(release_sync, "_remote_blob", controller_blob)
