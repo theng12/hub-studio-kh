@@ -58,6 +58,9 @@ enum StudioPage: String, CaseIterable, Identifiable {
     case overview = "Overview", audio = "Audio", transcription = "Transcription", image = "Image"
     case music = "Music", video = "Video", chat = "Chat"
     case models = "Models", voices = "Voices", jobs = "Jobs", connections = "Connections"
+    /// The final renders this Hub has run (owner, 2026-10-26: *"there's no render tab"*). Not a
+    /// Studio: no lane generates into it, the render service records into it.
+    case renders = "Renders"
     case whatsNew = "What's New", settings = "Settings"
     var id: String { rawValue }
     /// Owner-facing name. The raw value stays stable because it is also the StudioFunction
@@ -82,7 +85,7 @@ enum StudioPage: String, CaseIterable, Identifiable {
         let unplaced = available.filter { !createOrder.contains($0) }
         return (placed + unplaced).compactMap { Self(rawValue: $0.rawValue) }
     }()
-    static let library: [Self] = [.models, .voices, .jobs]
+    static let library: [Self] = [.models, .voices, .jobs, .renders]
     static let fleet: [Self] = [.connections]
     static let app: [Self] = [.whatsNew, .settings]
     static let comingLater: [Self] = StudioFunction.allCases
@@ -106,6 +109,7 @@ enum StudioPage: String, CaseIterable, Identifiable {
         case .models: return "externaldrive"
         case .voices: return "person.wave.2"
         case .jobs: return "list.bullet.rectangle"
+        case .renders: return "play.rectangle.on.rectangle"
         case .connections: return "network"
         case .whatsNew: return "sparkles"
         case .settings: return "gearshape"

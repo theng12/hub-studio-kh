@@ -2249,6 +2249,107 @@ struct NativeStatsGroup: Decodable, Equatable {
     let modalities: [String: Int]?
 }
 
+/// One final video render the Hub ran, as `GET /api/hub/renders` publishes it.
+///
+/// Every measurement is optional because the Hub reports a fact it does not have as absent, never
+/// as zero: a render accepted before this build recorded its start has no wall time, and a packet
+/// that states no length has no length. The page shows "unknown" and leaves the rate out; it never
+/// prints a 0 that reads as a measured nothing.
+struct NativeRender: Decodable, Equatable, Identifiable {
+    let id: String
+    /// The lane's own state word (`output_ready`, `rendering`, `failed` …).
+    let state: String
+    /// `succeeded` | `failed` | `cancelled` | `running`, which is what the page counts.
+    let outcome: String
+    let purpose: String?
+    /// Which channel and episode Story Studio says this render belongs to. Display only, and
+    /// absent for a render it sent no name for — the page then keeps naming the job id.
+    let display: NativeRenderDisplay?
+    /// The routing key the Hub recorded (`local` on the Mac that rendered it).
+    let machine: String?
+    /// The Mac's name, when this answer came from a controller that knows it.
+    let machineName: String?
+    let createdAt: Double?
+    let startedAt: Double?
+    let finishedAt: Double?
+    let wallSeconds: Double?
+    let runningSeconds: Double?
+    let videoSeconds: Double?
+    let width: Double?
+    let height: Double?
+    let frameRate: Double?
+    let container: String?
+    let codec: String?
+    let effort: String?
+    let crf: Double?
+    let tier: String?
+    let outputBytes: Double?
+    let outputSha256: String?
+    let profileDigest: String?
+    let storyUuid: String?
+    let intentId: String?
+    let attemptNo: Int?
+    let gatewayAttemptKey: String?
+    let dispatchKey: String?
+    let failure: String?
+    /// The file on this Mac, when the Hub still holds it. Nil means it was returned to Story
+    /// Studio and is no longer here — not that it is missing.
+    let localFile: String?
+}
+
+/// The channel and episode labels Story Studio sent with a render, as the Hub publishes them.
+///
+/// **Display, never dispatch**: the Hub routes, accepts and dedupes on other fields entirely, and
+/// nothing here reaches a request. Either label may be absent, and a render from a build that sent
+/// neither has no `display` at all — the page then shows the job id, as it always did.
+struct NativeRenderDisplay: Decodable, Equatable {
+    let channel: String?
+    let episode: String?
+
+    /// `Channel · Episode`, or whichever one the Hub stated, or nil when it stated neither.
+    var label: String? {
+        let parts = [channel, episode].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// The totals above the list, added per Mac: a number is either measured or absent.
+struct NativeRenderTotals: Decodable, Equatable {
+    let processed: Int
+    let succeeded: Int
+    let failed: Int
+    let cancelled: Int
+    let running: Int
+    let outputSeconds: Double?
+    let outputMinutes: Double?
+    /// Finished renders whose length the Hub could not state — counted, not added as zero.
+    let unknownDuration: Int
+    let measuredRenders: Int
+    let averageWallSeconds: Double?
+    /// Output seconds per wall second over the renders the Hub both timed and knew the length of.
+    let speed: Double?
+}
+
+/// One Mac in the answer: its own count, and whether it answered at all.
+struct NativeRenderMachine: Decodable, Equatable, Identifiable {
+    let machine: String
+    let machineName: String?
+    let renders: Int
+    let ok: Bool
+    let error: String?
+
+    var id: String { machine }
+}
+
+struct NativeRenderHistory: Decodable, Equatable {
+    let role: String?
+    let retentionDays: Int?
+    let renders: [NativeRender]
+    let totals: NativeRenderTotals
+    let machines: [NativeRenderMachine]?
+}
+
+
 /// One engine attempt's measured Chat facts. Every field is optional because a provider that does
 /// not report a measurement has not reported zero. A literal zero remains a real measurement.
 struct NativeChatAttempt: Decodable, Equatable {
@@ -3478,6 +3579,12 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Measured generation history from the Hub, refreshed on demand.
     @Published private(set) var statistics: NativeStatistics?
     @Published private(set) var statisticsHours: Int?
+    /// The final renders this Hub has run, read when the Render page opens. Nil is "not read yet":
+    /// the page says so rather than drawing an empty list, which would claim there were none.
+    @Published private(set) var renderHistory: NativeRenderHistory?
+    /// Why the last read failed, when it did. A Hub older than this build has no such route, and
+    /// that is reported as the Hub's own sentence, not as an empty history.
+    @Published private(set) var renderHistoryError: String?
     /// Result of the last import or verify, so the Models screen can say what happened.
     /// `modelNoteRepo` scopes a per-model result to that model; a nil repo means the note is
     /// about the library as a whole.
@@ -6738,6 +6845,26 @@ final class NativeWorkspaceStore: ObservableObject {
             // Statistics are extra context; an older Hub without the route must not break
             // the Overview screen.
             statistics = nil
+        }
+    }
+
+    /// Read the final renders this Hub has run (`GET /api/hub/renders`).
+    ///
+    /// Read when the page opens, not with every poll: the list changes only when a render finishes,
+    /// and a controller's read asks each joined Mac in turn. A failure is kept as the Hub's own
+    /// sentence — a Hub older than this build answers 404, and that must read as "this Hub cannot
+    /// show renders", never as "there are none".
+    func refreshRenders() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let value: NativeRenderHistory = try await get(["api", "hub", "renders"])
+            guard connectionID == requestConnection else { return }
+            renderHistory = value
+            renderHistoryError = nil
+        } catch {
+            guard connectionID == requestConnection else { return }
+            renderHistory = nil
+            renderHistoryError = error.localizedDescription
         }
     }
 

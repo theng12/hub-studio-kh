@@ -32,6 +32,10 @@ _DISPATCH_KEYS = frozenset({
     "destination_site", "destination_controller", "destination_node",
     "dispatch_key", "dispatch_fence",
 })
+#: The optional labels Story Studio may send so the Render tab can name a render instead of
+#: printing its job id. Display only: nothing routes, dispatches, hashes, or accepts on them.
+_DISPLAY_KEYS = frozenset({"channel", "episode"})
+_DISPLAY_MAX_CHARACTERS = 256
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS render_jobs (
@@ -76,6 +80,15 @@ CREATE TABLE IF NOT EXISTS render_jobs (
   recovery_note TEXT,
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL,
+  -- When the render process was bound. `updated_at` is the other end (the row's last
+  -- lifecycle write, which for a terminal row is its settlement), so the two give the Render
+  -- tab a measured wall time. Null for a row accepted before this column existed: that render
+  -- reports no wall time rather than an invented one.
+  started_at REAL,
+  -- The channel and episode labels Story Studio sent for the Render tab (owner, 2026-10-26).
+  -- Display only, and optional: a request without it still names its render by job id, and no
+  -- dispatch, routing, hashing or acceptance decision reads this column.
+  display_json TEXT,
   UNIQUE(owner_scope, dispatch_key)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_render_one_compute_per_machine
@@ -164,6 +177,25 @@ def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _display(value: Any) -> dict[str, str]:
+    """The optional display-only labels: which channel and episode a render belongs to.
+
+    Both keys are optional and nothing downstream decides anything with them. A label is
+    bounded and NUL-free, and — unlike ``_text`` — admits non-ASCII, because a channel or
+    episode name is the customer's own words and may be in any script. Nothing stricter than
+    that is enforced: refusing a title over a character would turn a display label into a
+    reason a render is not accepted, which is exactly what display must never do.
+    """
+    if type(value) is not dict or not value or not set(value) <= _DISPLAY_KEYS:
+        raise ValueError("render display has missing or unknown fields")
+    for name, label in value.items():
+        if (not isinstance(label, str) or not label
+                or len(label) > _DISPLAY_MAX_CHARACTERS or "\x00" in label):
+            raise ValueError(
+                f"display {name} must be 1-{_DISPLAY_MAX_CHARACTERS} characters without NUL")
+    return value
+
+
 def decode_render_request(
     raw_request: bytes, hub_dispatch_key: str,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
@@ -176,10 +208,13 @@ def decode_render_request(
         value = decode_render_json(raw_request)
     except ValueError as exc:
         raise ValueError("invalid render request: " + str(exc)) from exc
-    if type(value) is not dict or set(value) != {"format", "dispatch", "packet", "assets"}:
+    if (type(value) is not dict
+            or set(value) - {"display"} != {"format", "dispatch", "packet", "assets"}):
         raise ValueError("render request has missing or unknown fields")
     if value["format"] != "studio.render.hub-request.v1":
         raise ValueError("render request format is unsupported")
+    if "display" in value:
+        _display(value["display"])
     dispatch = value["dispatch"]
     if type(dispatch) is not dict or set(dispatch) != _DISPATCH_KEYS:
         raise ValueError("render dispatch has missing or unknown fields")
@@ -412,6 +447,17 @@ class RenderJobRuntime:
                 connection.execute(
                     "ALTER TABLE render_jobs ADD COLUMN validation_pending "
                     "INTEGER NOT NULL DEFAULT 0")
+            if "started_at" not in columns:
+                # Added for the Render tab (owner, 2026-10-26). An existing row keeps NULL: the
+                # fact was never recorded, so the history reports it as unknown, not as zero.
+                connection.execute(
+                    "ALTER TABLE render_jobs ADD COLUMN started_at REAL")
+            if "display_json" not in columns:
+                # Added for the Render tab (owner, 2026-10-26). A row accepted before this keeps
+                # NULL: Story Studio never sent a name, so the tab says what it does know (the job
+                # id) rather than inventing one.
+                connection.execute(
+                    "ALTER TABLE render_jobs ADD COLUMN display_json TEXT")
             for row in connection.execute(
                     "SELECT id,owner_scope,dispatch_key,body_sha256,"
                     "qualification_permit_json,created_at FROM render_jobs "
@@ -609,22 +655,23 @@ class RenderJobRuntime:
                      body_sha256, job_id, now),
                 )
             qualification_json = _canonical(asdict(authority))
+            display_json = _canonical(value["display"]) if "display" in value else None
             connection.execute(
                 """INSERT INTO render_jobs (
                      id, owner_scope, dispatch_key, body_sha256, request_bytes, packet_json,
                      story_uuid, intent_id, attempt_no, gateway_attempt_key,
                      destination_site, destination_controller, destination_node, dispatch_fence,
                      profile_digest, tools_digest, compiler_digest, qualification_digest,
-                     qualification_json, purpose, qualification_permit_json,
+                     qualification_json, purpose, qualification_permit_json, display_json,
                      state, created_at, updated_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'accepted',?,?)""",
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'accepted',?,?)""",
                 (job_id, owner_scope, hub_dispatch_key, body_sha256, raw_request, packet_json,
                  dispatch["story_uuid"], dispatch["intent_id"], dispatch["attempt_no"],
                  dispatch["gateway_attempt_key"], dispatch["destination_site"],
                  dispatch["destination_controller"], dispatch["destination_node"],
                  dispatch["dispatch_fence"], authority.profile_digest, authority.tools_digest,
                  authority.compiler_digest, authority.qualification_digest,
-                 qualification_json, purpose, permit_json, now, now),
+                 qualification_json, purpose, permit_json, display_json, now, now),
             )
             row = self._owned(connection, owner_scope, job_id)
             return self._public(connection, row)
@@ -792,11 +839,13 @@ class RenderJobRuntime:
                     or row["process_pid"] is not None):
                 raise RenderJobConflict("render job cannot bind another process")
             state = "cancel_requested" if row["state"] == "cancel_requested" else "rendering"
+            now = time.time()
             connection.execute(
                 """UPDATE render_jobs SET state=?, process_pid=?, process_group_id=?,
-                   process_start_token=?, updated_at=? WHERE id=? AND owner_scope=?""",
+                   process_start_token=?, started_at=COALESCE(started_at, ?), updated_at=?
+                   WHERE id=? AND owner_scope=?""",
                 (state, process.pid, process.process_group_id, process.start_token,
-                 time.time(), job_id, owner_scope),
+                 now, now, job_id, owner_scope),
             )
             return self._public(connection, self._owned(connection, owner_scope, job_id))
 

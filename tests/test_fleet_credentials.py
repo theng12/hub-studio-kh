@@ -82,6 +82,9 @@ class FleetPermissionTests(unittest.TestCase):
             # The fleet view, for an operator running the app on a Mac that is not the
             # controller. It reads health, disk and measured speed; it changes nothing.
             ("GET", "/api/hub/fleet/overview"),
+            # One Mac's own final renders, which a controller lists on its Render tab
+            # (2026-10-26). A read of what that Mac already recorded, like its Trash Folder.
+            ("GET", "/api/hub/fleet/nodes/node-1/renders"),
         ):
             with self.subTest(method=method, path=path):
                 self.assertTrue(fleet_path_allowed(method, path),
@@ -111,6 +114,9 @@ class FleetPermissionTests(unittest.TestCase):
             ("POST", "/api/hub/there-is-no-such-route"),
             ("GET", "/api/hub/there-is-no-such-route"),
             ("PUT", "/api/hub/stats"),
+            # The Render tab's own page is this Mac's view, not a fleet read: a controller
+            # aggregates by asking each Mac's `/fleet/nodes/<id>/renders`, never this one.
+            ("GET", "/api/hub/renders"),
             ("POST", "/api/hub/jobs/abc123"),
             ("GET", "/api/hub/jobs/abc123/items/0"),
             # Worker reads and metadata edits are individually classified.

@@ -241,6 +241,40 @@ class RenderJobRuntimeTests(unittest.TestCase):
             self.assertIsNotNone(row["cancel_requested_at"])
             self.assertTrue(any(kind == "cancel" for kind, _ in outcomes))
 
+    def test_optional_display_labels_are_stored_but_decide_nothing(self) -> None:
+        """The Render tab's channel and episode: display only, optional, and validated exactly.
+
+        They are stored so a render can be named instead of printed as a job id; no dispatch,
+        routing, hashing or acceptance decision reads them.
+        """
+        named = self.runtime.accept("owner-a", "dispatch-7", request(extra={
+            "display": {"channel": "Khmer History", "episode": "EP012 ការធ្លាក់ចុះ"}}))
+        with sqlite3.connect(self.root / "hub.db") as connection:
+            stored = connection.execute(
+                "SELECT display_json FROM render_jobs WHERE id=?", (named["id"],)).fetchone()[0]
+        self.assertEqual(json.loads(stored),
+                         {"channel": "Khmer History", "episode": "EP012 ការធ្លាក់ចុះ"})
+        self.assertEqual(named["dispatch_key"], "dispatch-7")
+        # One label alone is allowed, and so is neither — an older Story Studio sends no display.
+        one = self.runtime.accept("owner-a", "dispatch-8", request(
+            dispatch_key="dispatch-8", extra={"display": {"episode": "EP013"}}))
+        with sqlite3.connect(self.root / "hub.db") as connection:
+            self.assertEqual(json.loads(connection.execute(
+                "SELECT display_json FROM render_jobs WHERE id=?", (one["id"],)).fetchone()[0]),
+                {"episode": "EP013"})
+        plain = self.runtime.accept("owner-a", "dispatch-9", request(dispatch_key="dispatch-9"))
+        with sqlite3.connect(self.root / "hub.db") as connection:
+            self.assertIsNone(connection.execute(
+                "SELECT display_json FROM render_jobs WHERE id=?", (plain["id"],)).fetchone()[0])
+        for index, bad in enumerate((
+            {}, {"channel": ""}, {"channel": "a\x00b"}, {"channel": "x" * 257},
+            {"channel": 7}, {"channel": "EP014", "host": "node-m4-01"}, ["channel"],
+        )):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "display"):
+                self.runtime.accept("owner-a", f"dispatch-bad-{index}",
+                                    request(dispatch_key=f"dispatch-bad-{index}",
+                                            extra={"display": bad}))
+
     def test_request_is_closed_bounded_and_asset_complete(self) -> None:
         self.assertEqual(MAX_REQUEST_BYTES, 1024 * 1024)
         with self.assertRaisesRegex(ValueError, "unknown fields"):

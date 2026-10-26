@@ -4811,10 +4811,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     raise HTTPException(502, "Chat worker returned activity for another job")
         return JSONResponse(snapshot)
 
-    from . import delivery, operator_controls, statistics
+    from . import delivery, operator_controls, renders, statistics
     delivery.register_routes(app, monitor)
     operator_controls.register_routes(app, monitor)
     statistics.register_routes(app, monitor)
+    # The Render tab (owner, 2026-10-26). Reads the rows `render_jobs` already writes; on a
+    # controller it adds each joined Mac's own list, over the same Fleet-credential read the rest
+    # of the fleet uses. No writes, and nothing here reaches the render lane's own routes.
+    from .backend import fleet_nodes as _fleet_for_renders
+    renders.register_routes(
+        app, database_path=ledger.DB_FILE, pool=_fleet_for_renders.pool,
+        read_node=_fleet_for_renders.read_node, local_machine=_fleet_for_renders.this_machine,
+        settings=control_plane.load_settings)
     return app
 
 

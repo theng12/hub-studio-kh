@@ -14,14 +14,14 @@
 #
 # Defaults: audio, /tmp/studiohub-render, 1920x1053 and 980x620 (this Mac's usual window and the
 # window's own minimum). Pages are named by the sidebar: overview, audio, subtitle, image, music,
-# video, chat, models, voices, jobs, connections, whats-new, settings - and several at once, which
+# video, chat, models, voices, jobs, renders, connections, whats-new, settings - and several at once, which
 # is how the whole app gets looked at after a change: `all` renders every page.
 #
 #   native/render-page.sh all /tmp/studiohub-render 1920x1053
 set -euo pipefail
 ROOT_DIR=$(cd -- "$(dirname -- "$0")/.." && pwd)
 PAGE="${1:-audio}"
-[ "$PAGE" = "all" ] && PAGE="overview,audio,subtitle,image,music,video,chat,models,voices,jobs,connections,whats-new,settings"
+[ "$PAGE" = "all" ] && PAGE="overview,audio,subtitle,image,music,video,chat,models,voices,jobs,renders,connections,whats-new,settings"
 OUT="${2:-/tmp/studiohub-render}"
 shift 2 2>/dev/null || true
 source "$ROOT_DIR/native/sdk.sh"
