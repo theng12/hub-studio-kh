@@ -13,7 +13,9 @@ its controller by sha256), and the result is verified. The native app then swaps
 refusal ends as ``state: "fallback"``, which the app answers by downloading the disk image as it
 always has - except ``state: "not_ready"``: a controller still receiving the release's files, which
 the app simply asks again about later (a node whose controller cannot supply a file yet answers
-the same).
+the same). A release pushed as a manifest has **no** disk image in the chain, so a Mac whose app is
+told "fallback" there has nothing to install; ``GET /api/hub/release`` says so under ``delta``
+(``artifact``) and the app never asks for an image it cannot get (2026-10-25).
 """
 from __future__ import annotations
 
@@ -38,8 +40,10 @@ POLL_INTERVAL_S = 300.0
 FIRST_POLL_DELAY_S = 45.0
 TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 BLOB_ATTEMPTS = 3
-# How long a controller's stage waits for the blobs a gateway is still pushing (~33 blobs over ~2 min
-# in the 0.6.151 rollout), and how often it looks.
+# How long one stage waits in total for files it does not have yet (a gateway pushing them, or a
+# controller still receiving them) - ~33 blobs over ~2 min in the 0.6.151 rollout - and how often it
+# looks. One deadline for the whole run, never one per file: a stage that outlived the app's wait
+# sent the app looking for a disk image that does not exist (2026-10-25).
 BLOB_WAIT_S = 15 * 60
 BLOB_WAIT_POLL_S = 5.0
 
@@ -174,7 +178,7 @@ async def loop() -> None:
 # ── fetching one blob from the controller (blocking; runs in the stage thread) ─────────
 
 
-def _remote_blob(sha: str, destination: Path, size: int) -> None:
+def _remote_blob(sha: str, destination: Path, size: int, deadline: float) -> None:
     target = controller_target()
     if target is None:
         raise release_delta.DeltaRefused("missing_blob", f"this Mac holds no copy of {sha} and has no controller to ask")
@@ -182,8 +186,10 @@ def _remote_blob(sha: str, destination: Path, size: int) -> None:
     last: Exception | None = None
     # A controller still receiving the release, or restarting into its own update, cannot supply a
     # blob for a while; and a node holds no disk image of its own (the relay would 404). So the node
-    # keeps asking, as long as a controller waits for its own blobs, then answers `not_ready`.
-    deadline = time.monotonic() + BLOB_WAIT_S
+    # keeps asking until the stage's one deadline, then answers `not_ready`.
+    #
+    # The deadline is the STAGE's, not this blob's: a per-blob wait multiplied by the number of
+    # missing files let one stage run for over an hour, outliving the app's own wait (2026-10-25).
     attempt = 0
     while True:
         try:
@@ -203,13 +209,13 @@ def _remote_blob(sha: str, destination: Path, size: int) -> None:
             time.sleep(BLOB_WAIT_POLL_S)
 
 
-def get_blob(sha: str, destination: Path, size: int) -> None:
+def get_blob(sha: str, destination: Path, size: int, deadline: float) -> None:
     """This Mac's own copy of the bytes if it has one, else the controller's."""
     local = app_release.blob_file(sha)
     if local is not None:
         shutil.copyfile(local, destination)
         return
-    _remote_blob(sha, destination, size)
+    _remote_blob(sha, destination, size, deadline)
 
 
 # ── applying (the stage job the native app polls) ──────────────────────────
@@ -248,16 +254,15 @@ def start_stage() -> dict[str, Any]:
     return stage_status()
 
 
-def _await_blobs(descriptor: Mapping[str, Any]) -> None:
+def _await_blobs(descriptor: Mapping[str, Any], deadline: float) -> None:
     """A gateway pushes the manifest first and the blobs after it, and the release is advertised as
     soon as the manifest lands. A controller's own app that checks inside that window would find a
     blob missing with no controller to ask, and a manifest-pushed controller holds no disk image to
     fall back to - so a controller waits here (reported as ``downloading``) until the blobs are in.
-    Still missing after ``BLOB_WAIT_S``: ``not_ready``, which the app retries, never a failure."""
+    Still missing at ``deadline``: ``not_ready``, which the app retries, never a failure."""
     if controller_target() is not None or app_release.ARTIFACT_FILE.is_file():
         return  # a node fetches from its controller; a held disk image is a working fallback
     sizes = app_release._held_blob_sizes()
-    deadline = time.monotonic() + BLOB_WAIT_S
     total = None
     while missing := app_release.missing_blobs():
         if (app_release.load_release() or {}).get("signature") != descriptor.get("signature"):
@@ -282,9 +287,13 @@ def _run_stage(descriptor: Mapping[str, Any]) -> None:
         app = release_delta.installed_app_root()
         if app is None:
             raise release_delta.DeltaRefused("not_installed", "this Hub is not running from an installed app")
-        _await_blobs(descriptor)
+        # One deadline for everything this run waits on: waiting for the gateway's blobs and
+        # fetching a missing one from the controller share it, so a stage cannot outlast the app.
+        deadline = time.monotonic() + BLOB_WAIT_S
+        _await_blobs(descriptor, deadline)
         staged, summary = release_delta.stage(
-            app, fm.flatten(held[1]), descriptor["files_sha256"], get_blob,
+            app, fm.flatten(held[1]), descriptor["files_sha256"],
+            lambda sha, destination, size: get_blob(sha, destination, size, deadline),
             artifact_bytes=descriptor.get("bytes"), progress=progress)
         _set(state="staged", phase="staged", staged_app=str(staged), summary=summary)
     except release_delta.DeltaRefused as exc:

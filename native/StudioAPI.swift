@@ -3831,6 +3831,10 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The descriptor behind `offeredRelease`, kept for install so verification runs against the
     /// same bytes that were offered rather than a second, possibly different, read.
     private var offeredReleaseDescriptor: ReleaseDescriptor?
+    /// Whether a disk image can be installed for the offered release (`delta.artifact`, read with the
+    /// descriptor). Nil means the Hub did not say, and the install judges it from the signed
+    /// descriptor instead: a manifest push carries `files_sha256` and leaves no image in the chain.
+    private var offeredReleaseHasImage: Bool?
     /// Persist or clear the pinned key with this Mac's controller membership.
     var onReleasePublisherKeyChanged: ((ReleasePublisherKey?) -> Void)?
     /// The controller's own release-signing identity as its route reports it — what a joining node
@@ -3848,10 +3852,10 @@ final class NativeWorkspaceStore: ObservableObject {
     /// driven in tests without writing to /Applications.
     var installVerifiedArtifact: (URL, ReleaseDescriptor) throws -> String = ReleaseInstaller.live.install
     /// Builds the offered release on this Mac's own Hub as a copy of the installed app plus only
-    /// the files that changed, and returns the staged bundle - or nil, meaning "use the disk image".
-    /// Throws `ReleaseNotReady` while the Hub is still receiving the release. Injectable so the choice
-    /// between the two can be driven without a Hub.
-    var stageDeltaRelease: ((ReleaseDescriptor) async throws -> URL?)?
+    /// the files that changed, and returns the staged bundle. It never answers "use the disk image":
+    /// a manifest-only release has none, so waiting throws `ReleaseNotReady` and a refusal throws
+    /// with its reason. Injectable so the path can be driven without a Hub.
+    var stageDeltaRelease: ((ReleaseDescriptor) async throws -> URL)?
     /// Verifies a staged bundle and swaps it in, restoring the old app on failure. Returns the build
     /// that landed. Injectable for the same reason as `installVerifiedArtifact`.
     var installStagedApp: (URL, ReleaseDescriptor) throws -> String = ReleaseInstaller.live.swapStagedApp
@@ -8701,6 +8705,7 @@ final class NativeWorkspaceStore: ObservableObject {
                     releaseLastSync = answer?.lastSync
                     offeredRelease = answer?.descriptor?.offered
                     offeredReleaseDescriptor = answer?.descriptor
+                    offeredReleaseHasImage = answer?.hasDiskImage
                     updateOffered = false
                     releaseRefusal = "The controller now presents a different App Update Key (fingerprint \(presented.shortFingerprint)…) than the one pinned on this Mac (\(existing.shortFingerprint)…). A pinned key is only replaced by an explicit action on this Mac, so no update can be installed."
                     return
@@ -8715,6 +8720,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 trustedPublisher = answer?.trustedPublisher
                 offeredRelease = answer?.descriptor?.offered
                 offeredReleaseDescriptor = answer?.descriptor
+                offeredReleaseHasImage = answer?.hasDiskImage
                 updateOffered = false
                 releaseRefusal = "This Mac just pinned the controller's App Update Key (fingerprint \(presented.shortFingerprint)…). Check again to verify the release against it — a key read at the same time as an artifact proves nothing."
                 return
@@ -8727,12 +8733,14 @@ final class NativeWorkspaceStore: ObservableObject {
             guard let descriptor = answer.descriptor else {
                 offeredRelease = nil
                 offeredReleaseDescriptor = nil
+                offeredReleaseHasImage = nil
                 updateOffered = false
                 releaseRefusal = nil
                 return
             }
             offeredRelease = descriptor.offered
             offeredReleaseDescriptor = descriptor
+            offeredReleaseHasImage = answer.hasDiskImage
             guard descriptor.controllerKeyId == pinnedKey.fingerprint else {
                 updateOffered = false
                 releaseRefusal = "The release names controller App Update Key (fingerprint) \(descriptor.controllerKeyId.prefix(12))…, which is not the key pinned on this Mac (\(pinnedKey.shortFingerprint)…). Refusing it."
@@ -8852,17 +8860,38 @@ final class NativeWorkspaceStore: ObservableObject {
             if case .unsupported(let reason) = ReleaseArtifactForm.classify(filename: descriptor.filename) {
                 throw ReleaseError(reason)
             }
-            // A release that carries a file manifest is first built from the installed app and the
-            // few files that changed (seconds, not a 1.8 GB download); anything that cannot be
-            // proved on the Hub's side comes back as nil and the disk image is used as before.
+            // A release that carries a file manifest was pushed as files, not as a disk image, so it
+            // is first built from the installed app and the few files that changed (seconds, not a
+            // 1.8 GB download). No disk image of such a release exists anywhere in the chain, so a
+            // stage that cannot finish is retried or reported — never replaced by a download that
+            // could only answer 404 (2026-10-25: a member Mac spent an update cycle on exactly that).
             var staged: URL?
             if descriptor.raw["files_sha256"] != nil {
                 phase = "staging"
                 releaseProgress = "Preparing the update from the files that changed…"
-                staged = try await (stageDeltaRelease ?? { try await self.requestDeltaStage($0) })(descriptor)
+                do {
+                    staged = try await (stageDeltaRelease ?? { try await self.requestDeltaStage($0) })(descriptor)
+                } catch let refused as DeltaStageRefused {
+                    // The Hub will not build this release from the files it was pushed as. Where a
+                    // disk image exists that is the answer; a manifest push leaves none anywhere in
+                    // the chain, so there the only honest ending is "nothing was installed".
+                    guard offeredReleaseHasImage ?? false else {
+                        throw ReleaseError("This release arrived as files only, and it could not be built on this Mac (\(refused.reason)). There is no disk image of it to install instead, so nothing was installed.")
+                    }
+                    staged = nil
+                    releaseProgress = "The update could not be built from the changed files (\(refused.reason)); downloading the full image instead…"
+                }
+            } else {
+                staged = nil
             }
             var artifact: URL?
             if staged == nil {
+                // The disk image — and only when this release really has one: `delta.artifact` from
+                // the Hub, or (a Hub that does not publish it) the signed descriptor having no file
+                // manifest. Anything else would be the guaranteed 404 above.
+                guard offeredReleaseHasImage ?? (descriptor.raw["files_sha256"] == nil) else {
+                    throw ReleaseNotReady(message: "it arrived as files only, and this Mac has no disk image of it to install instead")
+                }
                 phase = "downloading"
                 releaseProgress = "Downloading \(descriptor.filename) — \(descriptor.offered.sizeDisplay)…"
                 // `downloadReleaseArtifact` returns only a file it has already verified against the
@@ -8963,40 +8992,59 @@ final class NativeWorkspaceStore: ObservableObject {
         if rmdir(folder.path) != 0 { HubTrash.retire(folder, into: hubTrash, label: "update-staging") }
     }
 
+    /// How long a stage may take before the app asks again on its next check. A stage that outlives
+    /// it is **not ready**, never a disk-image download: a release delivered as files has no image.
+    /// Writable so the lifecycle check can prove that ending without waiting 45 minutes.
+    static var deltaStageWait: TimeInterval = 45 * 60
+
     /// Ask this Mac's own Hub to build the offered release from the installed app plus the files
-    /// that changed, and wait for it. Returns the staged bundle, or nil for "use the disk image":
-    /// the Hub said it cannot (no manifest, a file it could not fetch or verify, too much changed),
-    /// it did not know the route (an older Hub), or it did not finish in time.
-    private func requestDeltaStage(_ descriptor: ReleaseDescriptor) async throws -> URL? {
+    /// that changed, and wait for it. Returns the staged bundle.
+    ///
+    /// It never means "use the disk image" as a nil used to: a release is only staged when it carries
+    /// a file manifest, which says it was pushed as files, and no disk image of it exists to install
+    /// instead. So a Hub still working throws `ReleaseNotReady` (asked again on the next check, which
+    /// is not a failure), and a Hub that will not build one throws with its own reason. What the app
+    /// must never do again is abandon a slow stage and download an image that 404s (2026-10-25).
+    private func requestDeltaStage(_ descriptor: ReleaseDescriptor) async throws -> URL {
         func status(_ data: Data) -> [String: Any] {
             ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
         }
+        var start = try makeRequest(["api", "hub", "release", "stage"], method: "POST")
+        start.timeoutInterval = 30
+        var answer: [String: Any]
         do {
-            var start = try makeRequest(["api", "hub", "release", "stage"], method: "POST")
-            start.timeoutInterval = 30
-            var answer = status(try await performData(start))
-            let deadline = Date().addingTimeInterval(45 * 60)
-            while answer["state"] as? String == "running" {
-                guard installingRelease, Date() < deadline else { return nil }
-                releaseProgress = Self.deltaProgress(answer)
+            answer = status(try await performData(start))
+        } catch {
+            // A Hub that could not be asked (a route it does not have yet, a read that failed on
+            // the way) is asked again later: the release itself is fine, and there is nothing else
+            // to install from.
+            throw ReleaseNotReady(message: "the Hub could not prepare it: \(Self.describe(error))")
+        }
+        let deadline = Date().addingTimeInterval(Self.deltaStageWait)
+        while answer["state"] as? String == "running" {
+            guard installingRelease, Date() < deadline else {
+                throw ReleaseNotReady(message: "its files are still being prepared on this Mac")
+            }
+            releaseProgress = Self.deltaProgress(answer)
+            do {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
                 answer = status(try await performData(makeRequest(["api", "hub", "release", "stage"])))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // One unreadable poll is not evidence that the Hub gave up; the next check asks
+                // again and finds either the staged app or the same job still running.
+                throw ReleaseNotReady(message: "the Hub could not be read while it prepared the update")
             }
-            if answer["state"] as? String == "not_ready" {
-                throw ReleaseNotReady(message: (answer["message"] as? String) ?? "its files are still arriving")
-            }
-            guard answer["state"] as? String == "staged", let path = answer["staged_app"] as? String,
-                  path.hasPrefix("/") else {
-                let why = (answer["message"] as? String) ?? "the Hub did not say why"
-                releaseProgress = "The update could not be built from the changed files (\(why)); downloading the full image instead…"
-                return nil
-            }
-            return URL(fileURLWithPath: path)
-        } catch let wait as ReleaseNotReady {
-            throw wait
-        } catch {
-            return nil
         }
+        if answer["state"] as? String == "not_ready" {
+            throw ReleaseNotReady(message: (answer["message"] as? String) ?? "its files are still arriving")
+        }
+        guard answer["state"] as? String == "staged", let path = answer["staged_app"] as? String,
+              path.hasPrefix("/") else {
+            throw DeltaStageRefused(reason: (answer["message"] as? String) ?? "the Hub did not say why")
+        }
+        return URL(fileURLWithPath: path)
     }
 
     private static func deltaProgress(_ status: [String: Any]) -> String {
@@ -9259,6 +9307,9 @@ final class NativeWorkspaceStore: ObservableObject {
         let descriptor: ReleaseDescriptor?
         let trustedPublisher: TrustedPublisher?
         let lastSync: ReleaseSyncStatus?
+        /// `delta.artifact`: whether a disk image can be installed for this release. Nil on a Hub
+        /// that predates the field — never guessed.
+        let hasDiskImage: Bool?
     }
 
     /// Parse the additive `trusted_publisher` value. A null, or an object carrying no 64-hex
@@ -9294,12 +9345,16 @@ final class NativeWorkspaceStore: ObservableObject {
         }
         let trusted = Self.parseTrustedPublisher(object["trusted_publisher"])
         let lastSync = Self.parseLastSync(object["last_sync"])
+        // Additive: an answer without it (an older Hub) reads as unknown, and the install falls back
+        // to what the signed descriptor says rather than inventing an image.
+        let hasDiskImage = (object["delta"] as? [String: Any])?["artifact"] as? Bool
         if release is NSNull { return ReleaseAnswer(descriptor: nil, trustedPublisher: trusted,
-                                                    lastSync: lastSync) }
+                                                    lastSync: lastSync, hasDiskImage: hasDiskImage) }
         guard let dictionary = release as? [String: Any], let descriptor = ReleaseDescriptor(json: dictionary) else {
             throw ReleaseError("The controller holds a release whose descriptor does not match the agreed schema. Refusing it.")
         }
-        return ReleaseAnswer(descriptor: descriptor, trustedPublisher: trusted, lastSync: lastSync)
+        return ReleaseAnswer(descriptor: descriptor, trustedPublisher: trusted, lastSync: lastSync,
+                             hasDiskImage: hasDiskImage)
     }
 
     /// A moment the Hub stamped, as a person reads it. The Hub's unit is seconds since 1970 and

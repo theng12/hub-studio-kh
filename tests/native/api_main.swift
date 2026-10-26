@@ -1830,8 +1830,15 @@ final class FixtureProtocol: URLProtocol {
             Self.releaseStageRequests += 1
             Self.lock.unlock()
             if let script, !script.isEmpty {
-                result = (method == "POST" ? 202 : 200, "application/json",
-                          (try? JSONSerialization.data(withJSONObject: script[min(index, script.count - 1)])) ?? Data())
+                let answer = script[min(index, script.count - 1)]
+                if let failure = answer["http_status"] as? Int {
+                    // A poll that could not be read: the app must retry, not fall back.
+                    result = (failure, "application/json",
+                              Data(#"{"detail":"the Hub could not be read"}"#.utf8))
+                } else {
+                    result = (method == "POST" ? 202 : 200, "application/json",
+                              (try? JSONSerialization.data(withJSONObject: answer)) ?? Data())
+                }
             } else {
                 result = (404, "application/json", Data(#"{"detail":"Not Found"}"#.utf8))
             }
@@ -2336,8 +2343,16 @@ private func releaseIdentityJSON(publicKey: Data, fingerprint: String,
     ])
 }
 
-private func releaseBody(_ descriptor: [String: Any]) -> Data {
-    try! JSONSerialization.data(withJSONObject: ["release": descriptor])
+private func releaseBody(_ descriptor: [String: Any], deltaArtifact: Bool? = nil,
+                         deltaManifest: Bool = true) -> Data {
+    var answer: [String: Any] = ["release": descriptor]
+    if let deltaArtifact {
+        // What `GET /api/hub/release` says beside the release: whether a disk image can be installed
+        // for it. A Hub that predates the field publishes no `delta` at all.
+        answer["delta"] = ["schema": "studiohub.file-manifest.v1", "manifest": deltaManifest,
+                           "artifact": deltaArtifact]
+    }
+    return try! JSONSerialization.data(withJSONObject: answer)
 }
 
 private func releaseSign(_ object: [String: Any], removing field: String,
@@ -6891,11 +6906,12 @@ struct NativeAPITests {
         // The Hub is scripted; the installer and the staged swap are stubbed, so nothing touches /Applications.
         FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
         FixtureProtocol.currentRole = "agent"
-        func offerDelta(_ build: String) async -> ReleaseDescriptor {
+        func offerDelta(_ build: String, deltaArtifact: Bool? = nil) async -> ReleaseDescriptor {
             let json = makeReleaseDescriptor(version: "0.6.70", build: build, artifact: artifact,
                                              gateway: gatewayKey, controllerSigning: controllerKey,
                                              filesSha256: String(repeating: "d", count: 64))
-            FixtureProtocol.setRelease(identity: identity, body: releaseBody(json), artifact: artifact)
+            FixtureProtocol.setRelease(identity: identity, body: releaseBody(json, deltaArtifact: deltaArtifact),
+                                       artifact: artifact)
             updateStore.currentAppBuild = "currentbuild"
             updateStore.currentAppVersion = "0.6.50"
             await updateStore.refreshRelease()
@@ -6928,24 +6944,74 @@ struct NativeAPITests {
         require(!FileManager.default.fileExists(atPath: deltaStagedHolder.path), "the staging folder must be removed after the swap")
         require(updateStore.connectionNotice?.kind == .success, "the staged install must succeed: \(updateStore.connectionNotice?.text ?? "nil")")
 
-        // 2. The Hub says it cannot (no manifest, a file it could not verify): the disk image, as before.
+        // 2. This release was pushed as files only, so the Hub refusing to build it has nothing else
+        //    to install: no disk image is asked for, and the refusal is reported in the Hub's words.
+        //    (2026-10-25: the app used to download the image here and a member Mac got a hard 404.)
         stagedSwaps = 0
-        _ = await offerDelta("deltabuild")
+        imageInstalls = 0
+        _ = await offerDelta("deltabuild", deltaArtifact: false)
         // (a stale staged_app left in the answer must not be mistaken for a bundle to install)
         FixtureProtocol.setStageScript([["state": "fallback", "code": "corrupt", "message": "a file did not hash",
                                          "staged_app": deltaStagedApp.path]])
         FixtureProtocol.resetArtifactRequests()
         await updateStore.installOfferedRelease()
-        require(stagedSwaps == 0 && imageInstalls == 1 && FixtureProtocol.releaseReads() >= 1,
-                "a fallback must download and install the disk image: \(stagedSwaps) staged, \(imageInstalls) image, \(FixtureProtocol.releaseReads()) reads")
+        require(stagedSwaps == 0 && imageInstalls == 0 && FixtureProtocol.releaseReads() == 0,
+                "a files-only release must never fall back to a disk image: \(imageInstalls) image, \(FixtureProtocol.releaseReads()) reads")
+        require(updateStore.connectionNotice?.kind == .failure
+                    && updateStore.connectionNotice?.text.contains("a file did not hash") == true,
+                "the refusal must name the Hub's own reason: \(updateStore.connectionNotice?.text ?? "nil")")
+        require(updateStore.lastUpdateError?.phase == "staging", "the wrong ending must be reported up the fleet")
 
-        // 3. A Hub that does not know the route (404) is a fallback too, never an error.
+        // 2b. The same refusal on a release the Hub does hold an image for still installs from it.
+        stagedSwaps = 0
         imageInstalls = 0
-        _ = await offerDelta("deltabuild")
+        _ = await offerDelta("deltabuild", deltaArtifact: true)
+        FixtureProtocol.setStageScript([["state": "fallback", "code": "over_threshold", "message": "too much changed"]])
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.installOfferedRelease()
+        require(stagedSwaps == 0 && imageInstalls == 1 && FixtureProtocol.releaseReads() >= 1,
+                "a release that has an image still falls back to it: \(imageInstalls) image, \(FixtureProtocol.releaseReads()) reads")
+
+        // 3. A Hub that cannot answer the stage route keeps waiting: the release is fine, and there
+        //    is no image to install from instead.
+        stagedSwaps = 0
+        imageInstalls = 0
+        _ = await offerDelta("deltabuild", deltaArtifact: false)
         FixtureProtocol.setStageScript(nil)
         FixtureProtocol.resetArtifactRequests()
         await updateStore.installOfferedRelease()
-        require(imageInstalls == 1 && stagedSwaps == 0, "an older Hub falls back to the image: \(imageInstalls) image installs")
+        require(imageInstalls == 0 && stagedSwaps == 0 && FixtureProtocol.releaseReads() == 0,
+                "a stage route this Hub cannot answer must not become a download: \(imageInstalls) image installs")
+        require(updateStore.connectionNotice?.kind == .success,
+                "not ready is not a failure: \(updateStore.connectionNotice?.text ?? "nil")")
+
+        // 3b. A stage still running past the app's own deadline is the next check's problem, not a
+        //     reason to go looking for a disk image that does not exist.
+        stagedSwaps = 0
+        imageInstalls = 0
+        _ = await offerDelta("deltabuild", deltaArtifact: false)
+        NativeWorkspaceStore.deltaStageWait = 0
+        FixtureProtocol.setStageScript([["state": "running", "phase": "downloading", "done_bytes": 1, "total_bytes": 2]])
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.installOfferedRelease()
+        NativeWorkspaceStore.deltaStageWait = 45 * 60
+        require(imageInstalls == 0 && FixtureProtocol.releaseReads() == 0,
+                "a slow stage must not fall back to the image: \(imageInstalls) image, \(FixtureProtocol.releaseReads()) reads")
+        require(updateStore.connectionNotice?.kind == .success,
+                "a slow stage is not a failure: \(updateStore.connectionNotice?.text ?? "nil")")
+
+        // 3c. One unreadable poll is retried, not answered with a download.
+        stagedSwaps = 0
+        imageInstalls = 0
+        _ = await offerDelta("deltabuild", deltaArtifact: false)
+        FixtureProtocol.setStageScript([["state": "running", "phase": "downloading"],
+                                        ["http_status": 500]])
+        FixtureProtocol.resetArtifactRequests()
+        await updateStore.installOfferedRelease()
+        require(imageInstalls == 0 && FixtureProtocol.releaseReads() == 0,
+                "a transient stage-read error must not fall back to the image: \(imageInstalls) image")
+        require(updateStore.connectionNotice?.kind == .success,
+                "a transient stage-read error is not a failure: \(updateStore.connectionNotice?.text ?? "nil")")
 
         // 4. A release with no files_sha256 never even asks the Hub to stage it.
         imageInstalls = 0
