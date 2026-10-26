@@ -77,6 +77,59 @@ enum ViewChecks {
            let models {
             try? models.write(to: URL(fileURLWithPath: path))
         }
+        // The Render page (owner, 2026-10-26: "there's no render tab"). Two things are pinned.
+        //
+        // **Its rows never turn a fact the Hub did not record into a number.** A render accepted
+        // before this build recorded a start has no wall time and no stated length; the row must
+        // show only what it has, and a 0 would read as a measured nothing (AGENTS.md §6).
+        let legacy = NativeRender(
+            id: "c41d0e88-1f52-4c6b-8e27-3a9b5c6d7e1f", state: "output_ready",
+            outcome: "succeeded", purpose: "production", machine: "local",
+            machineName: "This Mac", createdAt: 1_800_000_000, startedAt: nil, finishedAt: nil,
+            wallSeconds: nil, runningSeconds: nil, videoSeconds: nil, width: nil, height: nil,
+            frameRate: nil, container: nil, codec: nil, effort: nil, crf: nil, tier: nil,
+            outputBytes: nil, outputSha256: nil, profileDigest: nil,
+            storyUuid: "6d0b8f2e-8a51-4a63-9f0e-1c2b3a4d5e6f", intentId: "intent-1",
+            attemptNo: 1, gatewayAttemptKey: "gateway-1", dispatchKey: "gateway:1",
+            failure: nil, localFile: nil)
+        let legacyFacts = RenderCopy.facts(legacy)
+        check(legacyFacts.contains("length not recorded") && !legacyFacts.contains("0.0 s"),
+              "a render with no recorded length says so, and never shows a zero: \(legacyFacts)")
+        check(RenderCopy.video(legacy) == "length not recorded",
+              "the detail says the length was not recorded, not that it was none")
+        // A failed attempt produced nothing. The packet's own target must not be drawn as though it
+        // had been rendered, or a failure would read as five minutes of video.
+        let failed = NativeRender(
+            id: "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d", state: "failed", outcome: "failed",
+            purpose: "production", machine: "blue-2", machineName: "Blue Room 2",
+            createdAt: 1_800_000_000, startedAt: 1_799_999_900, finishedAt: 1_799_999_940,
+            wallSeconds: 40, runningSeconds: nil, videoSeconds: 300, width: 1920, height: 1080,
+            frameRate: 30, container: "mp4", codec: "h264", effort: "hardware", crf: 23,
+            tier: "hardware-h264", outputBytes: nil, outputSha256: nil, profileDigest: nil,
+            storyUuid: nil, intentId: nil, attemptNo: 1, gatewayAttemptKey: nil, dispatchKey: nil,
+            failure: "ffmpeg exited with code 1.", localFile: nil)
+        check(!RenderCopy.facts(failed).contains("5 min 0 s"),
+              "a failed attempt does not show the packet's target as produced video")
+        check(RenderCopy.video(failed).hasPrefix("none produced"),
+              "a failed attempt's detail says nothing was produced")
+        check(legacyFacts.contains("6d0b8f2e") == false,
+              "the Story instance belongs in the detail, not in the one-line facts")
+        check(RenderCopy.title(legacy).hasSuffix("c41d0e88"),
+              "a render with no channel or episode name is titled by its own job id")
+        check(RenderCopy.facts(legacy).contains("This Mac"),
+              "the row names the Mac that rendered it")
+        check(RenderCopy.status(legacy) == .ok && RenderCopy.outcomeLabel(legacy) == "Done",
+              "a published output reads as done")
+
+        // And the page itself draws offscreen with nothing read yet: it says it is reading, rather
+        // than drawing an empty list that would claim this Hub has rendered nothing.
+        studio.selection = .renders
+        let renders = draw()
+        check(renders != nil, "the Render page draws offscreen")
+        if let path = ProcessInfo.processInfo.environment["STUDIOHUB_VIEW_CHECKS_RENDERS_PNG"],
+           let renders {
+            try? renders.write(to: URL(fileURLWithPath: path))
+        }
         window.orderOut(nil)
 
         if failures > 0 { exit(1) }

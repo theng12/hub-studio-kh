@@ -58,6 +58,7 @@ class PageTests(unittest.TestCase):
         "overview": "overview", "audioWorkspace": "audio", "imageWorkspace": "image", "musicWorkspace": "music",
         "videoWorkspace": "video", "chatWorkspace": "chat", "transcriptionWorkspace": "transcription",
         "modelsWorkspace": "models", "voicesWorkspace": "voices", "jobsWorkspace": "jobs",
+        "rendersWorkspace": "renders",
         "connections": "connections", "whatsNew": "whatsNew", "settings": "settings",
     }
 

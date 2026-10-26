@@ -671,6 +671,12 @@ FLEET_ALLOWED = (
     # The Gateway allows the delete only from the owner's own app window. Not in `NODE_ALLOWED`.
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/trash$"),
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/trash/(move-to-macos-trash|delete)$"),
+    # **The Render tab's one cross-Mac read (owner, 2026-10-26).** A controller asks each joined
+    # Mac for the final renders it ran, which that Mac already recorded, and this is that read.
+    # Read-only, bounded, and it grants nothing: the rows are the render lane's own history, the
+    # same facts the Mac publishes in its fleet row. Not in `NODE_ALLOWED` - a leaf Mac's own
+    # credential cannot read another Mac's history.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/renders$"),
     # **macOS's own Trash setting, turned on from the Gateway (owner request 2026-10-19, Studio Hub
     # 0.6.187).** Finder > Settings > Advanced > "Remove items from the Trash after 30 days". Every
     # retirement the Hub makes ends in macOS Trash, so a Mac without it fills its disk. One way only:

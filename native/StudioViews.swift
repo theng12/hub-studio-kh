@@ -277,6 +277,215 @@ private struct VideoPreviewSheet: View {
     }
 }
 
+/// How one final render is named and drawn, in the one place both the row and the detail use it.
+///
+/// **It names nothing the Hub did not record.** The packet Story sends carries the Story instance,
+/// the intent, the attempt and the gateway's own keys — no channel and no episode — so a render is
+/// titled by its Hub job id and the detail says which Story instance it belongs to. A name invented
+/// here would be a name the customer cannot match to anything.
+enum RenderCopy {
+    static func title(_ render: NativeRender) -> String {
+        let kind = render.purpose == "qualification" ? "Qualification render" : "Final render"
+        return "\(kind) \(String(render.id.prefix(8)))"
+    }
+
+    /// The one line under the title: only the parts the render actually states.
+    static func facts(_ render: NativeRender) -> String {
+        var parts: [String] = []
+        // A failed or cancelled attempt produced no video, so the packet's length is not shown as
+        // though it had. A finished render with no stated length says so, rather than leaving a gap
+        // a reader would fill with "0" (AGENTS.md §6).
+        if render.outcome == "succeeded" {
+            parts.append(render.videoSeconds.map { NativeJob.clock($0) } ?? "length not recorded")
+        }
+        if let width = render.width, let height = render.height {
+            parts.append("\(Int(width))×\(Int(height))")
+        }
+        if let fps = render.frameRate { parts.append("\(Int(fps)) fps") }
+        if let wall = render.wallSeconds {
+            parts.append("\(NativeJob.clock(wall)) to render")
+        } else if let running = render.runningSeconds {
+            parts.append("running \(NativeJob.clock(running))")
+        }
+        if let bytes = render.outputBytes {
+            parts.append(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
+        }
+        parts.append(machineName(render))
+        if let created = render.createdAt {
+            parts.append(Date(timeIntervalSince1970: created).formatted(date: .abbreviated, time: .shortened))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    static func machineName(_ render: NativeRender) -> String {
+        if let name = render.machineName, !name.isEmpty { return name }
+        let machine = render.machine ?? "local"
+        return machine == "local" ? "This Mac" : machine
+    }
+
+    static func status(_ render: NativeRender) -> HubStatus {
+        switch render.outcome {
+        case "succeeded": return .ok
+        case "failed": return .bad
+        case "cancelled": return .off
+        default: return .info
+        }
+    }
+
+    static func outcomeLabel(_ render: NativeRender) -> String {
+        switch render.outcome {
+        case "succeeded": return "Done"
+        case "failed": return "Failed"
+        case "cancelled": return "Cancelled"
+        default: return "Rendering"
+        }
+    }
+
+    static func symbol(_ render: NativeRender) -> String {
+        switch render.outcome {
+        case "succeeded": return "checkmark.circle.fill"
+        case "failed": return "xmark.octagon.fill"
+        case "cancelled": return "slash.circle.fill"
+        default: return "bolt.fill"
+        }
+    }
+
+    /// The encode the packet asked for, in the packet's own words.
+    static func profile(_ render: NativeRender) -> String? {
+        var parts: [String] = []
+        if let codec = render.codec { parts.append(codec.uppercased()) }
+        if let effort = render.effort { parts.append(effort) }
+        if let crf = render.crf { parts.append("CRF \(Int(crf))") }
+        if let container = render.container { parts.append(container.uppercased()) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The produced length, and — for an attempt that produced nothing — what the packet asked for,
+    /// said as what it is.
+    static func video(_ render: NativeRender) -> String {
+        if render.outcome == "succeeded" {
+            return render.videoSeconds.map { NativeJob.clock($0) } ?? "length not recorded"
+        }
+        guard let planned = render.videoSeconds else { return "none produced" }
+        return "none produced (the packet asked for \(NativeJob.clock(planned)))"
+    }
+
+    static func when(_ seconds: Double?) -> String {
+        guard let seconds else { return "not recorded" }
+        return Date(timeIntervalSince1970: seconds).formatted(date: .abbreviated, time: .standard)
+    }
+}
+
+/// One render in full: the numbers, the profile, the hash, why it failed, and the video itself when
+/// this Mac still holds it.
+///
+/// The file is played from disk rather than streamed through the Hub: it lives on this Mac, and the
+/// Hub deletes nothing here — an accepted output is returned to Story Studio and its attempt folder
+/// is retired after Story acknowledges it. When it is gone the page says exactly that instead of
+/// offering a Play button that would fail.
+private struct RenderDetailSheet: View {
+    let render: NativeRender
+    let dismiss: () -> Void
+
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HubSpace.l) {
+            HStack(alignment: .top, spacing: HubSpace.m) {
+                VStack(alignment: .leading, spacing: HubSpace.xs) {
+                    Text(RenderCopy.title(render)).font(HubType.rowTitle)
+                    Text(RenderCopy.facts(render)).font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: HubSpace.m)
+                StatusBadge(text: RenderCopy.outcomeLabel(render), status: RenderCopy.status(render))
+                Button("Done") { dismiss() }
+            }
+            if let failure = render.failure {
+                HubBanner(status: .bad, symbol: "xmark.octagon.fill", message: failure)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: HubSpace.s) {
+                    Group {
+                        ValueRow("Video", value: RenderCopy.video(render))
+                        ValueRow("Canvas", value: render.width.flatMap { width in
+                            render.height.map { "\(Int(width))×\(Int($0))" } } ?? "not recorded")
+                        ValueRow("Frame rate", value: render.frameRate.map { "\(Int($0)) fps" } ?? "not recorded")
+                        ValueRow("Encode", value: RenderCopy.profile(render) ?? "not recorded")
+                        ValueRow("Render time", value: render.wallSeconds.map { NativeJob.clock($0) }
+                            ?? (render.runningSeconds.map { "running \(NativeJob.clock($0))" } ?? "not recorded"))
+                        ValueRow("Output size", value: render.outputBytes.map {
+                            ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) } ?? "not recorded")
+                        ValueRow("Encoder", value: render.tier ?? "not recorded")
+                    }
+                    Divider()
+                    Group {
+                        ValueRow("Rendered on", value: RenderCopy.machineName(render))
+                        ValueRow("When", value: RenderCopy.when(render.createdAt))
+                        ValueRow("Finished", value: render.finishedAt == nil ? "not recorded" : RenderCopy.when(render.finishedAt))
+                        ValueRow("Hub job id") {
+                            Text(render.id).font(HubType.monoCaption).textSelection(.enabled)
+                        }
+                        if let hash = render.outputSha256 {
+                            ValueRow("File hash (SHA-256)") {
+                                Text(hash).font(HubType.monoCaption).textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        if let profile = render.profileDigest {
+                            ValueRow("Profile") {
+                                Text(profile).font(HubType.monoCaption).textSelection(.enabled)
+                                    .lineLimit(1).truncationMode(.middle)
+                            }
+                        }
+                    }
+                    Divider()
+                    Group {
+                        ValueRow("Story instance", value: render.storyUuid ?? "not recorded")
+                        ValueRow("Intent", value: render.intentId ?? "not recorded")
+                        ValueRow("Attempt", value: render.attemptNo.map(String.init) ?? "not recorded")
+                        ValueRow("Gateway attempt", value: render.gatewayAttemptKey ?? "not recorded")
+                        if let key = render.dispatchKey {
+                            ValueRow("Dispatch key") {
+                                Text(key).font(HubType.monoCaption).textSelection(.enabled)
+                                    .lineLimit(1).truncationMode(.middle)
+                            }
+                        }
+                    }
+                    Divider()
+                    media
+                }
+            }
+        }
+        .padding(HubSpace.xl)
+        .frame(minWidth: 720, minHeight: 480)
+        .task(id: render.id) {
+            guard let path = render.localFile, FileManager.default.fileExists(atPath: path) else { return }
+            player = AVPlayer(url: URL(fileURLWithPath: path))
+        }
+        .onDisappear { player?.pause() }
+    }
+
+    /// The video, or where it went. **Inside the same scroll as the facts**, never pinned below a
+    /// fixed-height list: a player under a block that has its own height is the part that gets cut
+    /// off on a short window, and the one thing the owner asked to be able to see.
+    @ViewBuilder private var media: some View {
+        if let player {
+            VideoPlayer(player: player).frame(height: 320)
+        } else if render.localFile != nil {
+            HStack(spacing: HubSpace.m) {
+                ProgressView().controlSize(.small)
+                Text("Loading the video…").foregroundStyle(.secondary)
+            }
+            .frame(height: 60, alignment: .center)
+        } else {
+            HubBanner(status: .off, symbol: "arrow.up.forward.square",
+                      title: "The video is not on this Mac any more",
+                      message: "An accepted render is returned to Story Studio and its files are retired here once Story acknowledges them, so this Hub no longer holds a copy. Story has the finished video.")
+        }
+    }
+}
+
 /// One low-cost still from a completed video. Same contract as `JobThumbnail`: a placeholder until
 /// the frame arrives, and nothing else in the row waits on it.
 private struct VideoThumbnail: View {
@@ -1055,6 +1264,8 @@ struct StudioContent: View {
     @State private var historyTab = HistoryTab.all
     /// Which Macs the Jobs page lists. Offered only where more than one Mac's work can land.
     @State private var jobMachineFilter = JobMachineFilter.all
+    /// The render whose detail is open on the Render page. Nil shows the list as it was.
+    @State private var openRender: NativeRender?
     @State private var loadingImage = false
     @State private var connectionNote: String?
     @State private var controllerDraft = ""
@@ -1547,6 +1758,7 @@ struct StudioContent: View {
                 case .models: modelsWorkspace
                 case .voices: voicesWorkspace
                 case .jobs: jobsWorkspace
+                case .renders: rendersWorkspace
                 case .connections: connections
                 case .whatsNew: whatsNew
                 case .settings: settings
@@ -4534,6 +4746,138 @@ struct StudioContent: View {
         // A draft belongs to the model it was typed for, and to the answer it was typed against.
         .onChange(of: selectedModel) { _, _ in modelDefaultDraft = [:] }
         .onChange(of: workspace.modelDefaultsRevision) { _, _ in modelDefaultDraft = [:] }
+    }
+
+    // MARK: - Renders (owner, 2026-10-26)
+
+    /// The final videos this Hub rendered for Story Studio.
+    ///
+    /// The owner, 2026-10-26: *"there's no render tab so there's no way to see the resulting video
+    /// and how many has been processed, and the duration records etc..."* Every field here is one
+    /// the Hub's render lane already recorded; nothing is computed on this page and nothing is
+    /// named that the packet did not name. The packet Story sends carries the Story instance, the
+    /// intent and the attempt, and **no channel or episode name**, so a row is titled by its job id
+    /// and says which Story instance it belongs to. Guessing a name would be inventing one.
+    private var rendersWorkspace: some View {
+        PageScaffold(title: pageTitle(.renders), subtitle: "Final videos rendered for Story Studio, newest first: what came out, how long it took, and which Mac made it.", scrolls: true,
+                     trailing: {
+                         // The list is read when the page opens, not on the poll: a render finishing
+                         // while the page is open is one click away rather than two seconds away.
+                         Button("Refresh") { Task { await workspace.refreshRenders() } }
+                             .hubRowControl().disabled(!connected)
+                     }) {
+            if let history = workspace.renderHistory {
+                renderTotals(history)
+                if history.renders.isEmpty {
+                    HubCard {
+                        EmptyState(
+                            title: "No renders recorded yet",
+                            detail: "A final render appears here the moment this Hub finishes one. Renders made before the build that added this page are not listed, because nothing recorded them. From here on this page lists the last " +
+                                "\(history.retentionDays ?? 90) days.",
+                            symbol: "play.rectangle.on.rectangle")
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: HubSpace.m) {
+                        sectionTitle("Renders")
+                        // Lazy so a long history does not build every row before the first is drawn.
+                        LazyVStack(alignment: .leading, spacing: HubSpace.m) {
+                            ForEach(history.renders) { render in
+                                renderRow(render)
+                                Divider()
+                            }
+                        }
+                    }
+                }
+            } else if let problem = workspace.renderHistoryError {
+                HubBanner(status: .warn, symbol: "exclamationmark.triangle.fill",
+                          title: "This Hub cannot list its renders",
+                          message: problem)
+            } else {
+                HStack(spacing: HubSpace.m) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading this Hub's renders…").font(HubType.secondary).foregroundStyle(.secondary)
+                }
+            }
+        }
+        // Read when the page opens and when the connection changes, not on the two-second poll: the
+        // list changes only when a render finishes, and on a controller the read asks every Mac.
+        .task(id: connected) { if connected { await workspace.refreshRenders() } }
+        .sheet(item: $openRender) { render in
+            RenderDetailSheet(render: render) { openRender = nil }
+        }
+    }
+
+    /// The four numbers the owner asked for, each either measured or absent — never a 0 standing in
+    /// for "the Hub does not know".
+    private func renderTotals(_ history: NativeRenderHistory) -> some View {
+        let totals = history.totals
+        var counts = ["\(totals.succeeded) done", "\(totals.failed) failed"]
+        if totals.running > 0 { counts.append("\(totals.running) running") }
+        if totals.cancelled > 0 { counts.append("\(totals.cancelled) cancelled") }
+        // The same formatter every other duration in the app uses: one duration voice, and a
+        // total is a duration too.
+        let output = totals.outputSeconds.map { NativeJob.clock($0) }
+            ?? (totals.succeeded == 0 ? "none yet" : "unknown")
+        return HubCard {
+            VStack(alignment: .leading, spacing: HubSpace.m) {
+                HStack(alignment: .top, spacing: HubSpace.xl) {
+                    renderStat("Renders", "\(totals.processed)", counts.joined(separator: " · "))
+                    renderStat("Output video", output,
+                               totals.unknownDuration > 0
+                                 ? "\(totals.unknownDuration) with no recorded length"
+                                 : "of finished video")
+                    renderStat("Average render",
+                               totals.averageWallSeconds.map { NativeJob.clock($0) } ?? "not measured",
+                               totals.measuredRenders > 0
+                                 ? "over \(totals.measuredRenders) timed render\(totals.measuredRenders == 1 ? "" : "s")"
+                                 : "no render timed yet")
+                    renderStat("Speed",
+                               totals.speed.map { String(format: "%.1f× real time", $0) } ?? "not measured",
+                               "video seconds per second of rendering")
+                }
+                // Only where the list came from more than one Mac: a node's page is its own.
+                if let machines = history.machines, machines.count > 1 {
+                    Divider()
+                    Text(machines.map { machine in
+                        let name = machine.machineName ?? (machine.machine == "local" ? "This Mac" : machine.machine)
+                        return machine.ok ? "\(name) \(machine.renders)" : "\(name) did not answer"
+                    }.joined(separator: "   ·   "))
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func renderStat(_ title: String, _ value: String, _ detail: String) -> some View {
+        VStack(alignment: .leading, spacing: HubSpace.xs) {
+            Text(title).font(HubType.caption).foregroundStyle(.secondary)
+            Text(value).font(HubType.figure)
+            Text(detail).font(HubType.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func renderRow(_ render: NativeRender) -> some View {
+        ActionRow {
+            Image(systemName: RenderCopy.symbol(render))
+                .foregroundStyle(RenderCopy.status(render).color)
+            VStack(alignment: .leading, spacing: HubSpace.tight) {
+                Text(RenderCopy.title(render)).font(HubType.rowTitle).lineLimit(1)
+                Text(RenderCopy.facts(render)).font(HubType.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let failure = render.failure {
+                    Text(failure).font(HubType.caption)
+                        .foregroundStyle(HubStatus.bad.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            RowActions {
+                StatusBadge(text: RenderCopy.outcomeLabel(render), status: RenderCopy.status(render))
+                Button("Details") { openRender = render }.hubRowControl()
+            }
+        }
     }
 
     private var jobsWorkspace: some View {

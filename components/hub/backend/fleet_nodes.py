@@ -2478,6 +2478,54 @@ async def relay_model(node_id: str, method: str, path: str, *, payload: Any = No
     return {**body, "node": wanted}
 
 
+async def read_node(node_id: str, path: str, *, limit_bytes: int = 4 * 1024 * 1024,
+                    timeout: httpx.Timeout = PROBE_TIMEOUT,
+                    client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """One bounded, **read-only** GET of a joined node's own fleet path. **Never queued.**
+
+    `relay_model` is the route for work and for settings: a request it cannot deliver is held
+    for the Mac's next check-in, and something is waiting for its answer. A history page is
+    neither. Its rows are a snapshot of what already happened, so a Mac that cannot be dialled
+    right now is reported as not answering — a page that queued one request per Mac per open
+    would fill the check-in queue with reads nobody is waiting for.
+
+    Returns `{"ok": True, "body": <the node's JSON>}`, or `{"ok": False, "reason": ...,
+    "detail": ...}` with the same vocabulary `_unreachable_reason` gives a probe.
+    """
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        return {"ok": False, "reason": "unknown_node",
+                "detail": f"this controller has no joined Mac {node_id!r}"}
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        response = await client.get(
+            f"{node.get('address') or ''}/api/hub/fleet/nodes/local{path}",
+            timeout=_dial_timeout(node, timeout))
+        if not response.is_success:
+            return {"ok": False, "reason": f"http_{response.status_code}",
+                    "detail": f"that Mac answered HTTP {response.status_code}"}
+        if len(response.content) > limit_bytes:
+            return {"ok": False, "reason": "answer_too_large",
+                    "detail": "that Mac's answer was larger than this read accepts"}
+        body = response.json()
+    except httpx.HTTPError as exc:
+        return {"ok": False, "reason": _unreachable_reason(exc),
+                "detail": "that Mac did not answer"}
+    except ValueError:
+        return {"ok": False, "reason": "invalid_answer",
+                "detail": "that Mac did not answer with JSON"}
+    finally:
+        if owned:
+            await client.aclose()
+    if not isinstance(body, dict):
+        return {"ok": False, "reason": "invalid_answer",
+                "detail": "that Mac's answer was not an object"}
+    return {"ok": True, "body": body}
+
+
 async def pool(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """Every machine in the group this Mac belongs to, from whichever end of it this Mac is.
 

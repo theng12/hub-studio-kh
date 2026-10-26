@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS render_jobs (
   recovery_note TEXT,
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL,
+  -- When the render process was bound. `updated_at` is the other end (the row's last
+  -- lifecycle write, which for a terminal row is its settlement), so the two give the Render
+  -- tab a measured wall time. Null for a row accepted before this column existed: that render
+  -- reports no wall time rather than an invented one.
+  started_at REAL,
   UNIQUE(owner_scope, dispatch_key)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_render_one_compute_per_machine
@@ -412,6 +417,11 @@ class RenderJobRuntime:
                 connection.execute(
                     "ALTER TABLE render_jobs ADD COLUMN validation_pending "
                     "INTEGER NOT NULL DEFAULT 0")
+            if "started_at" not in columns:
+                # Added for the Render tab (owner, 2026-10-26). An existing row keeps NULL: the
+                # fact was never recorded, so the history reports it as unknown, not as zero.
+                connection.execute(
+                    "ALTER TABLE render_jobs ADD COLUMN started_at REAL")
             for row in connection.execute(
                     "SELECT id,owner_scope,dispatch_key,body_sha256,"
                     "qualification_permit_json,created_at FROM render_jobs "
@@ -792,11 +802,13 @@ class RenderJobRuntime:
                     or row["process_pid"] is not None):
                 raise RenderJobConflict("render job cannot bind another process")
             state = "cancel_requested" if row["state"] == "cancel_requested" else "rendering"
+            now = time.time()
             connection.execute(
                 """UPDATE render_jobs SET state=?, process_pid=?, process_group_id=?,
-                   process_start_token=?, updated_at=? WHERE id=? AND owner_scope=?""",
+                   process_start_token=?, started_at=COALESCE(started_at, ?), updated_at=?
+                   WHERE id=? AND owner_scope=?""",
                 (state, process.pid, process.process_group_id, process.start_token,
-                 time.time(), job_id, owner_scope),
+                 now, now, job_id, owner_scope),
             )
             return self._public(connection, self._owned(connection, owner_scope, job_id))
 

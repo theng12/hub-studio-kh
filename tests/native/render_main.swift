@@ -89,6 +89,7 @@ struct PageRenderHarness {
         if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" {
             seedFixtures(studio.workspace, scratch: scratch)
             seedLibrary(studio.workspace)
+            seedRenders(studio.workspace)
             // Running services and both tokens, so Connections draws its (masked) credential rows.
             studio.readyURL = URL(string: "http://127.0.0.1:47873")
             studio.connectionToken = "render-fixture-hub-token-0123456789"
@@ -293,6 +294,87 @@ struct PageRenderHarness {
                 {"role":"standalone","nodes":[],"summary":{"total":0,"reachable":0,"unreachable":0,"error":0}}
                 """)
         }
+    }
+
+    /// The Render page's own list, in the shapes the lane really publishes: a finished render with
+    /// its file still here, one from a node, one accepted before this build recorded a start (so no
+    /// length and no wall time — the row must say "unknown", not 0), a failed one, a cancelled one
+    /// and one still rendering. Only in the throwaway copy render-page.sh builds; no Hub is
+    /// contacted and no real state is read.
+    @MainActor private static func seedRenders(_ workspace: NativeWorkspaceStore) {
+        let now = Date().timeIntervalSince1970
+        let hash = String(repeating: "4f", count: 32)
+        let profile = String(repeating: "9c", count: 32)
+        // Small helpers rather than closures inside the template: a nested interpolation with a
+        // closure in it is more than the type checker can be asked to prove.
+        func text(_ value: String?) -> String { value.map { "\"\($0)\"" } ?? "null" }
+        func number(_ value: Double?) -> String { value.map { "\($0)" } ?? "null" }
+        func render(_ id: String, _ state: String, _ outcome: String, machine: String,
+                    machineName: String?, created: Double, started: Double?, finished: Double?,
+                    wall: Double?, running: Double?, video: Double?, width: Double?,
+                    height: Double?, fps: Double?, bytes: Double?, failure: String?,
+                    file: String?) -> String {
+            """
+            {"id":"\(id)","state":"\(state)","outcome":"\(outcome)","purpose":"production",
+             "machine":"\(machine)","machine_name":\(text(machineName)),
+             "created_at":\(created),"started_at":\(number(started)),
+             "finished_at":\(number(finished)),"wall_seconds":\(number(wall)),
+             "running_seconds":\(number(running)),"video_seconds":\(number(video)),
+             "width":\(number(width)),"height":\(number(height)),"frame_rate":\(number(fps)),
+             "container":"mp4","codec":"h264","effort":"hardware","crf":23,"tier":"hardware-h264",
+             "output_bytes":\(number(bytes)),"output_sha256":\(text(bytes == nil ? nil : hash)),
+             "profile_digest":"\(profile)",
+             "story_uuid":"6d0b8f2e-8a51-4a63-9f0e-1c2b3a4d5e6f","intent_id":"intent-\(id.prefix(8))",
+             "attempt_no":1,"gateway_attempt_key":"gateway-\(id.prefix(8))",
+             "dispatch_key":"gateway:\(id.prefix(8))","failure":\(text(failure)),
+             "local_file":\(text(file))}
+            """
+        }
+        let rows = [
+            render("9e1f2c7a-4b3d-4a1e-9c44-2a7ee1b93d51", "output_ready", "succeeded",
+                   machine: "local", machineName: "This Mac", created: now - 3_900,
+                   started: now - 3_780, finished: now - 3_640, wall: 140, running: nil,
+                   video: 312, width: 1920, height: 1080, fps: 30, bytes: 24_800_000,
+                   failure: nil, file: "/tmp/studiohub-render-fixture.mp4"),
+            render("2b7c5d33-77a1-45e2-9a10-6f4c1d2e3b8a", "output_ready", "succeeded",
+                   machine: "blue-1", machineName: "Blue Room 1", created: now - 9_000,
+                   started: now - 8_950, finished: now - 8_889, wall: 61, running: nil,
+                   video: 94, width: 1080, height: 1920, fps: 60, bytes: 8_400_000,
+                   failure: nil, file: nil),
+            // Accepted before this build recorded a start: the Hub states no length and no wall
+            // time for it, and the page has to say so rather than print a 0.
+            render("c41d0e88-1f52-4c6b-8e27-3a9b5c6d7e1f", "output_ready", "succeeded",
+                   machine: "blue-1", machineName: "Blue Room 1", created: now - 40 * 3_600,
+                   started: nil, finished: nil, wall: nil, running: nil, video: nil,
+                   width: 1920, height: 1080, fps: 30, bytes: 21_300_000, failure: nil, file: nil),
+            render("5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d", "failed", "failed",
+                   machine: "blue-2", machineName: "Blue Room 2", created: now - 7_200,
+                   started: now - 7_150, finished: now - 7_120, wall: 30, running: nil,
+                   video: 300, width: 1920, height: 1080, fps: 30, bytes: nil,
+                   failure: "ffmpeg exited with code 1.", file: nil),
+            render("7f8e9d0c-1b2a-4c3d-8e4f-5a6b7c8d9e0f", "cancelled", "cancelled",
+                   machine: "local", machineName: "This Mac", created: now - 15_000,
+                   started: now - 14_940, finished: now - 14_900, wall: 40, running: nil,
+                   video: 240, width: 1920, height: 1080, fps: 30, bytes: nil,
+                   failure: "Cancelled before the output was accepted.", file: nil),
+            render("1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f", "rendering", "running",
+                   machine: "local", machineName: "This Mac", created: now - 95,
+                   started: now - 95, finished: nil, wall: nil, running: 95, video: 480,
+                   width: 1920, height: 1080, fps: 30, bytes: nil, failure: nil, file: nil),
+        ]
+        workspace.renderHistory = decode(NativeRenderHistory.self, """
+            {"role":"controller","retention_days":90,
+             "renders":[\(rows.joined(separator: ","))],
+             "totals":{"processed":6,"succeeded":3,"failed":1,"cancelled":1,"running":1,
+                       "output_seconds":406,"output_minutes":6.766666666666667,"unknown_duration":1,
+                       "measured_renders":2,"measured_output_seconds":406,
+                       "measured_wall_seconds":201,"average_wall_seconds":100.5,
+                       "speed":2.019900497512438},
+             "machines":[{"machine":"local","machine_name":"This Mac","renders":4,"ok":true,"error":null},
+                         {"machine":"blue-1","machine_name":"Blue Room 1","renders":3,"ok":true,"error":null},
+                         {"machine":"blue-2","machine_name":"Blue Room 2","renders":1,"ok":false,
+                          "error":"that Mac did not answer"}]}
+            """)
     }
 
     /// The Models, Voices and Connections fixtures: a small library, five saved voices and a controller

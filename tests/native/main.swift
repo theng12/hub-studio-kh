@@ -273,7 +273,11 @@ require(StudioFunction.allCases.filter { $0.hasEngine }.count == StudioPage.crea
 // lands in a section — this asserts the display order, not membership.
 require(StudioPage.create == [.image, .audio, .transcription, .music, .chat, .video],
         "Create's order is the owner's; Video joined it when the lane shipped")
-require(StudioPage.library == [.models, .voices, .jobs], "Library holds the things the operator maintains")
+// Renders joined Library on 2026-10-26 with the owner's own request ("there's no render tab"): it is a
+// list of finished work beside Jobs, not a fleet setting, and it is the same page on a node and on
+// a controller. The order is a display decision, which is why it is written here and pinned.
+require(StudioPage.library == [.models, .voices, .jobs, .renders],
+        "Library holds the things the operator maintains")
 require(StudioPage.fleet == [.connections], "Fleet holds the connection surface")
 require(StudioPage.app == [.whatsNew, .settings], "App holds What's New and Settings")
 require(StudioPage.comingLater.isEmpty,
