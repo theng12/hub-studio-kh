@@ -42,7 +42,7 @@ RENDER_AUTHORITY_MODES: tuple[RenderAuthorityMode, ...] = (
 # A version string would not have caught it - both trees contain an `mflux` package and both accept
 # the same commands. The content digest is what distinguishes them, and refusing here is what makes
 # the mistake impossible rather than merely documented.
-IMAGE_RUNTIME_SHA256 = 'fde2221191817bb6d3ecfd1208f32ce2ddd7e05cbc5e5d9bdd842759b4a6332b'
+IMAGE_RUNTIME_SHA256 = 'b720c5bc473aaf13179c70bb1c1faa5715bfd87e0fa7e26fa43dc1d3f1794fef'
 # Kept so the refusal can name what it was handed and where that tree came from.
 IMAGE_RUNTIME_SUPERSEDED = {
     'c5ac478f85d5687e0bd6df715eec5d55a3a59e36aae4f14da352f45ea546923a':

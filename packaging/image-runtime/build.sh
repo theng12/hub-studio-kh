@@ -57,7 +57,7 @@ if [[ ! -f "$PYTHON_ARCHIVE" ]]; then
   exit 1
 fi
 printf '%s  %s\n' "$PYTHON_ARCHIVE_SHA256" "$PYTHON_ARCHIVE" | shasum -a 256 -c -
-printf '%s  %s\n' 'a732f134731b66525d132efa87ea4122a4fc08549ff31289f2af660d1349f447' \
+printf '%s  %s\n' '8c202deb37e259092fda6a358606ad1938df23f78f18471a2662adcc7140dfb3' \
   "$SCRIPT_DIR/requirements.lock.txt" | shasum -a 256 -c -
 STAGE="$(mktemp -d "$BUILD_ROOT/image-runtime-stage.XXXXXX")"
 RELOCATION_PARENT="$BUILD_ROOT/Relocation Check $$"

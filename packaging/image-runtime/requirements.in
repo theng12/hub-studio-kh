@@ -11,3 +11,8 @@ urllib3>=2.8.0
 # Pinned, not floated: pillow 13.0.0 imports a symbol that exists only on Python 3.14 and
 # takes mflux down on the 3.12 runtime this package ships (owner evidence, QWEN-PROOF.md).
 pillow==12.3.0
+# FastAPI's `Form`/`File` parameters need python-multipart at import time, and the Image
+# worker gained them with the Reference-to-Image route (`POST /api/generate/edit`). Without it
+# `create_app` raises inside route registration, so the packaged worker never starts. The test
+# environment already had it; the packaged runtime did not until 0.6.202.
+python-multipart==0.0.32

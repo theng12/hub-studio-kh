@@ -287,3 +287,27 @@ class ImageLaneContractTests(unittest.TestCase):
                     in self.generation.lane_contract(self.generation.Z_IMAGE_TURBO)['parameters']
                     if item['name'] == 'guidance')
         self.assertIn('ignored', note)
+
+
+class ImageRuntimeFormSupportTests(unittest.TestCase):
+    """The Image runtime ships what the worker's own routes need to start.
+
+    `/api/generate/edit` declares FastAPI `Form` / `File` parameters, and FastAPI raises while
+    registering the routes when `python-multipart` is absent - so `create_app` fails and the
+    packaged worker never starts. Every gate passed without it in 0.6.202 because the test
+    environment already had the package and the shipped runtime did not; only starting the
+    packaged worker showed it. These assertions are the cheap half of that proof: the worker
+    still declares form parameters, and the runtime lock still carries the package that
+    supports them.
+    """
+
+    def test_the_image_worker_declares_form_parameters(self):
+        source = (ROOT / 'components/image/app/backend/main.py').read_text(encoding='utf-8')
+        self.assertIn('File(', source)
+        self.assertIn('Form(', source)
+
+    def test_the_runtime_lock_carries_python_multipart(self):
+        declared = (ROOT / 'packaging/image-runtime/requirements.in').read_text(encoding='utf-8')
+        self.assertIn('python-multipart==', declared)
+        lock = (ROOT / 'packaging/image-runtime/requirements.lock.txt').read_text(encoding='utf-8')
+        self.assertRegex(lock, r'(?m)^python-multipart==\d')
