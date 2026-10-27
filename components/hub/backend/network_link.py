@@ -248,13 +248,23 @@ def collect() -> dict:
 
 
 def _refresh() -> None:
-    """Re-read once, then stand down. A failure is cached too, so a broken read cannot spin."""
+    """Re-read once, then stand down. A failure is cached too, so a broken read cannot spin.
+
+    `reading` is cleared in a `finally`: a read that dies on something other than an `Exception`
+    (a signal, a thread being torn down) must not leave the flag set, or this Mac would answer
+    `unmeasured` for ever with no reason to show.
+    """
     try:
-        value = collect()
-    except Exception as exc:  # noqa: BLE001 - a network reading never takes the Hub down with it
-        value = unmeasured(f"This Mac's network connection could not be read ({type(exc).__name__}).")
-    with _state_lock:
-        _state["value"], _state["read_at"], _state["reading"] = value, clock(), False
+        try:
+            value = collect()
+        except Exception as exc:  # noqa: BLE001 - a network reading never takes the Hub down with it
+            value = unmeasured(
+                f"This Mac's network connection could not be read ({type(exc).__name__}).")
+        with _state_lock:
+            _state["value"], _state["read_at"] = value, clock()
+    finally:
+        with _state_lock:
+            _state["reading"] = False
 
 
 def status() -> dict:

@@ -329,6 +329,21 @@ class CachingTests(unittest.TestCase):
             network_link.status()
         self.assertFalse(thread.called, "a cached failure started another read")
 
+    def test_a_read_that_dies_leaves_the_refresh_flag_clear(self):
+        """A flag stuck set would answer `unmeasured` for ever with no reason to show."""
+        class Killed(BaseException):
+            pass
+
+        def die():
+            raise Killed()
+
+        with mock.patch.object(network_link, "collect", die):
+            with self.assertRaises(Killed):
+                network_link._refresh()
+        with mock.patch.object(network_link.threading, "Thread") as thread:
+            network_link.status()
+        self.assertTrue(thread.called, "the refresh flag was left set")
+
     def test_the_wifi_rate_is_read_on_its_own_slower_timer(self):
         clock = [500.0]
         calls: list[int] = []
