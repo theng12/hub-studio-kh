@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.205 — 2026-10-27
+
+### More models available on capable Macs
+
+Every model can now be installed based on how much memory the Mac has, rather than being blocked by name.
+
+Qwen 3.6 35B and Nemotron-Lightning are now available for 24 GB+ Macs (and copyable during kit setup), and Gemma 3 12B Instruct is added as an installable Chat model for 16 GB+ Macs.
+
 ## 0.6.204 — 2026-10-27
 
 ### A Mac that has fallen far behind can still update
