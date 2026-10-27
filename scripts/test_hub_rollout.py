@@ -83,6 +83,7 @@ class FakeGateway:
                  identity=None):
         self.sites = {site.id: site for site in sites}
         self.posts: list[tuple[str, float]] = []
+        self.full_flags: list[bool] = []
         self.pause_value = pause
         self.pause_reader = pause_reader
         self.pause_reads = 0
@@ -110,9 +111,10 @@ class FakeGateway:
         return self.pause_value
 
     # -- the one write -------------------------------------------------
-    def publish(self, artifact, version, build, controller_ids):
+    def publish(self, artifact, version, build, controller_ids, force_full=False):
         site_id = controller_ids[0]
         self.posts.append((site_id, time.monotonic()))
+        self.full_flags.append(force_full)
         site = self.sites[site_id]
         if site.publish_mode == 'unreachable':
             return 200, {'locations': {site_id: {'ok': False, 'code': 'LOCATION_UNREACHABLE',
@@ -462,12 +464,14 @@ class MainTests(unittest.TestCase):
     def tearDown(self):
         hub.Gateway, hub.accept_artifact, hub.Rollout = self.originals
 
-    def run_main(self, *sites, only=None):
+    def run_main(self, *sites, only=None, full=False):
         self.gateway = FakeGateway(list(sites), identity=self.identity)
         argv = ['--artifact', str(self.artifact), '--version', VERSION,
                 '--build', BUILD, '--evidence', str(self.evidence)]
         if only:
             argv += ['--only-sites', only]
+        if full:
+            argv += ['--full']
         return hub.main(argv), self.gateway
 
     def test_writes_the_receipt_and_a_table_and_exits_clean(self):
@@ -498,6 +502,21 @@ class MainTests(unittest.TestCase):
                                       FakeSite('1100', ['1100']), only='This Mac')
         self.assertEqual(code, 0)
         self.assertEqual([site for site, _ in gateway.posts], ['local'])
+
+    def test_full_asks_the_gateway_for_the_whole_image_and_records_it(self):
+        # A 0.6.201 controller advertises delta but refuses a delta over half the image
+        # (`MAX_DELTA_FRACTION` 0.5); `--full` is the path that works for it.
+        code, gateway = self.run_main(FakeSite('1100', ['1100']), full=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(gateway.full_flags, [True])
+        receipt = json.loads(self.evidence.read_text())
+        self.assertIs(receipt['force_full'], True)
+
+    def test_an_ordinary_run_sends_no_force_full(self):
+        code, gateway = self.run_main(FakeSite('1100', ['1100']))
+        self.assertEqual(code, 0)
+        self.assertEqual(gateway.full_flags, [False])
+        self.assertIs(json.loads(self.evidence.read_text())['force_full'], False)
 
     def test_an_existing_evidence_file_is_refused_before_anything_is_touched(self):
         self.evidence.write_text('{}')
