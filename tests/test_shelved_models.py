@@ -57,14 +57,15 @@ class ListTests(unittest.TestCase):
                   for dep in (m.get("requires_packages") or [])}
         self.assertFalse(needed & set(SEEDS), "a kept model requires a shelved one, which would be moved away")
 
-    def test_gemma_is_retired_not_shelved_so_no_mac_and_no_kit_carries_it(self):
-        # Owner 2026-10-02: Gemma 3 12B is retired everywhere (it was shelved in 0.6.127). Its manifest is parked
-        # beside LTX's, out of the catalog.
-        parked = json.loads((ROOT / "components/video/retired/gemma-3-12b-it-4bit.json").read_text())
-        self.assertTrue(retired_models.manifest_retired(parked))
-        self.assertTrue(retired_models.is_retired("mlx-community/Gemma-3-12B-IT-4bit"))
-        self.assertFalse(shelved_models.manifest_shelved(parked))
-        self.assertFalse((MANIFESTS / "gemma-3-12b-it-4bit.json").exists())
+    def test_gemma_is_neither_shelved_nor_retired_any_more(self):
+        # Gemma 3 12B was retired on 2026-10-02 and left BOTH lists on 2026-10-27 with the owner's
+        # "We no longer block or lock any model." It now ships in the catalog as an installable
+        # chat-mlx package with a published provisional RAM floor.
+        manifest = json.loads((MANIFESTS / "gemma-3-12b-it-4bit.json").read_text())
+        self.assertFalse(retired_models.manifest_retired(manifest))
+        self.assertFalse(retired_models.is_retired("mlx-community/Gemma-3-12B-IT-4bit"))
+        self.assertFalse(shelved_models.manifest_shelved(manifest))
+        self.assertTrue((MANIFESTS / "gemma-3-12b-it-4bit.json").exists())
 
     def test_shelved_and_retired_are_different_lists(self):
         self.assertFalse(shelved_models.is_shelved(*retired_models.RETIRED_MODELS))
@@ -146,7 +147,10 @@ class CopyStepTests(unittest.TestCase):
             self.assertTrue((kit.library / "whisper-base").is_dir(), "the SSD must keep the shelved weights")
             self.assertIn("Shelved, not copied (1): whisper-base", output)
 
-    def test_gemma_is_retired_so_even_a_keep_all_mac_is_not_given_it(self):
+    def test_gemma_is_carried_now_that_the_name_block_is_gone(self):
+        # Inverse of the retired assertion this replaced: from 2026-10-27 nothing refuses a model
+        # by name, so a kit carries Gemma like any other package. Whether it can RUN is the RAM
+        # floor's question, not a list's.
         with TemporaryDirectory() as tmp:
             kit = self._kit(Path(tmp))
             kit.ship("gemma-3-12b-it-4bit", floor=1)
@@ -157,7 +161,7 @@ class CopyStepTests(unittest.TestCase):
             settings.write_text('{"keep_all_models": true}')
             code, output, _prompt = kit.run()
             self.assertEqual(code, 0, output)
-            self.assertFalse((kit.home / "gemma-3-12b-it-4bit").exists(), output)
+            self.assertTrue((kit.home / "gemma-3-12b-it-4bit").is_dir(), output)
             self.assertTrue((kit.home / "plain-model").is_dir(), output)
 
     def test_a_keep_all_mac_copies_it(self):
