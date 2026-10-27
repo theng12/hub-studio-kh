@@ -522,6 +522,24 @@ class ChatEngine:
         except Exception:
             return None
 
+    def _prompt_tokens(self, messages: list[dict], *, thinking: bool = False) -> int | None:
+        """The prompt's size in tokens, including what each image expands to.
+
+        The rendered prompt carries one `<|image|>` placeholder per picture, and the processor
+        replaces it with the checkpoint's own soft-token count (`vision_soft_tokens_per_image`,
+        280 on Gemma 4). Counting only the placeholder would let a request that is over the
+        context through to the model, so the expansion is added from the checkpoint's own number.
+        """
+        counted = self._count_tokens_unlocked(self._prompt(messages, thinking=thinking))
+        if counted is None or not self._processor:
+            return counted
+        images = _extract_images_from_messages(messages)
+        if not images:
+            return counted
+        declared = self._config.get("vision_soft_tokens_per_image")
+        per_image = declared if isinstance(declared, int) and not isinstance(declared, bool) and declared > 0 else None
+        return counted + per_image * len(images) if per_image else None
+
     def count_tokens(self, text: str) -> int | None:
         """Tokenizer count for the loaded model, or ``None`` when nothing is loaded."""
         with self._lock:
@@ -531,7 +549,7 @@ class ChatEngine:
         with self._lock:
             if self._tokenizer is None:
                 return None
-            return self._count_tokens_unlocked(self._prompt(messages))
+            return self._prompt_tokens(messages)
 
     def _budget(self, max_tokens: int | None) -> int:
         return min(int(max_tokens or self.max_output_tokens), self.max_output_tokens)
@@ -603,7 +621,7 @@ class ChatEngine:
             self._load_locked()
             working = self._with_instruction(messages, self.json_instruction(response_format))
             budget = self._budget(max_tokens)
-            prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
+            prompt_tokens = self._prompt_tokens(working, thinking=thinking)
             # Nothing is generated here, so the allowance this returns is not kept: the check
             # only has to agree with the generation path that this request would be accepted.
             asked = self._named_a_figure_of_its_own(max_tokens)
@@ -769,7 +787,7 @@ class ChatEngine:
             budget = self._budget(max_tokens)
             instruction = self.json_instruction(response_format)
             working = self._with_instruction(messages, instruction)
-            prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
+            prompt_tokens = self._prompt_tokens(working, thinking=thinking)
             budget = self._refuse_over_context(prompt_tokens, budget, asked=self._named_a_figure_of_its_own(max_tokens))
             self._generating = True
             started = time.time()
@@ -910,7 +928,7 @@ class ChatEngine:
             model, tokenizer = self._load_locked()
             budget = self._budget(max_tokens)
             working = self._with_instruction(messages, self.json_instruction(response_format))
-            prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
+            prompt_tokens = self._prompt_tokens(working, thinking=thinking)
             budget = self._refuse_over_context(prompt_tokens, budget, asked=self._named_a_figure_of_its_own(max_tokens))
             self._generating = True
             self._last_activity_at = time.time()

@@ -2072,6 +2072,36 @@ class ModelDefaultsRouteTests(unittest.TestCase):
 
 
 class ChatVisionWorkerTests(unittest.TestCase):
+    def test_an_image_is_counted_at_the_checkpoints_own_soft_tokens(self) -> None:
+        """The placeholder is one token; the picture is 280. Counting only the placeholder
+        would let a prompt that is really over the context reach the model."""
+        import base64
+        import io
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (1, 1), "red").save(buf, format="JPEG")
+        uri = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": "hi"},
+            {"type": "image_url", "image_url": {"url": uri}}]}]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp) / "model"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(json.dumps({
+                "vision_config": {"model_type": "gemma4_vision"},
+                "vision_soft_tokens_per_image": 280}))
+            (model_dir / "model.safetensors").write_bytes(b"weights")
+            (model_dir / "tokenizer.json").write_text("{}")
+            engine = ChatEngine(model_dir=model_dir, model_id="m", revision="r" * 40)
+            engine._model = object()
+            engine._processor = _StubTokenizer()
+            engine._tokenizer = _StubTokenizer()
+            placeholder_only = engine._count_tokens_unlocked(engine._prompt(messages))
+            self.assertEqual(engine._prompt_tokens(messages), placeholder_only + 280,
+                             "the picture was counted as one placeholder token")
+
     def test_a_multimodal_checkpoint_is_detected_from_its_own_config(self) -> None:
         """The checkpoint states it, so a curated manifest cannot go stale behind the weights."""
         with tempfile.TemporaryDirectory() as tmp:
