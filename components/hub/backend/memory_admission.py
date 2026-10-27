@@ -6,10 +6,15 @@ below it is not a candidate for that model, and the scheduler counts it out of t
 *pool* (`broker.pool_machines`). The requirement is, in order:
 
 1. the operator's override for the model, else
-2. the **measured** peak the fleet has proven (`_FLEET_DEFAULTS` - FLUX.2 Klein 4-bit runs on
-   the owner's 8 GB Macs, so its requirement is 8 GB whatever the catalog says), else
+2. a **measured** peak the fleet has proven (``_FLEET_DEFAULTS`` - a per-model measurement, empty
+   today, for a run that proves a tier lower than the manifest states), else
 3. the model manifest's ``qualification.minimum_unified_memory_gb``, else
 4. the worker's own catalog row (``min_unified_memory_gb`` / ``min_total_memory_gb``).
+
+**The manifest is the number for a shipped model (2026-10-28).** FLUX.2 Klein 4-bit and Breeze
+TTS 2 4-bit used to state 16 GB there while this table carried the fleet's measured 8, so the same
+model had two floors and a re-capture could not correct the one being enforced. Both manifests now
+state 8 with the measurement in their own ``memory_evidence``, and the table is empty.
 
 A model that publishes nothing has no floor, and a Mac whose RAM is unknown is still eligible:
 the worker's own MemoryGuard stays the final authority.
@@ -53,24 +58,21 @@ DEFAULT_MIN_FREE_MEMORY_GB = 2.0
 # one home (`components/image/app/backend/generation.py` carries 2.8 for FLUX.2 Klein 4-bit,
 # `components/voice/app/backend/catalog.py` carries 3.2 for Breeze TTS 2 4-bit), the operator's
 # override is the only other number, and `min_free_source` says which of the two is in force.
-_FLEET_DEFAULTS = {
-    "aitrader/flux2-klein-4b-mlx-4bit": {
-        "min_total_memory_gb": 8.0,
-        "reason": "Fleet-qualified on 8 GB Apple-silicon Macs",
-    },
-    # Breeze TTS 2 4-bit (owner decision 2026-10-04): its manifest still said 16 GB, which 0 of the
-    # 33 8 GB Macs ever have. Measured 2026-10-04 on an 8 GB M1 (Hub 0.6.143,
-    # `_orchestra/audit-20261001/breeze-8gb/results/TTS 8GB Run 20261004-230549`): 2/2 S2 clips
-    # completed, every section accepted, worker peak 4.69 GB, Mac max used 5.2-5.3 GB, min free
-    # 1.19-1.32 GB, pressure warning (never critical), swap <= +0.54 GB, RTF 4.1 (a 16 GB M1 runs
-    # 4.9-5.1), max stall 0.6 s. The row and the manifest disagree, and the manifest is read before
-    # the row, so the 8 GB total stays here; the 3.2 GB free-before-start figure is the row's own
-    # (`min_free_memory_gb`), measured on the same run: each clip started with 3.31-3.46 GB free.
-    "mlx-community/breeze-tts-2-mlx-4bit": {
-        "min_total_memory_gb": 8.0,
-        "reason": "Measured on an 8 GB M1 (2026-10-04): peak 4.69 GB, never critical",
-    },
-}
+# **Empty as of 2026-10-28, and kept as the shape a future measurement needs.** This table held
+# the two models the fleet had proven below their published tier - FLUX.2 Klein 4-bit and Breeze
+# TTS 2 4-bit, both 8 GB against a manifest that said 16. Those two numbers now live in the
+# models' own manifests (`qualification.minimum_unified_memory_gb`, with the measurement in
+# `memory_evidence`), which `_manifest_tiers()` below already reads and which the enumeration
+# order here already prefers. Keeping a third copy meant an edit to the manifest could be
+# outranked by a table nobody had touched since the day it was measured - the exact defect the
+# live-free floor had (owner rule: one home per number).
+#
+# The mechanism stays because a measurement is a different *claim* from a manifest's tier: a
+# manifest states what a model needs to be offered at all, while this table records what the
+# fleet proved it needs on a smaller Mac than that. A future measurement that a manifest cannot
+# express - a tier lowered below what the manifest says *because* of a fleet run - is one entry
+# here, and `describe` reports it as `fleet_default` with its reason.
+_FLEET_DEFAULTS: dict[str, dict] = {}
 
 _cache: dict[str, dict] | None = None
 
@@ -274,13 +276,15 @@ def describe(model: str, catalog_entry: dict, mode: str | None = None) -> dict:
     ``DEFAULT_MIN_FREE_MEMORY_GB`` applies). Two states, never one sentence for both: a model
     enforcing the generic floor must not read as though its own row had stated it.
 
-    ``_FLEET_DEFAULTS`` is a per-model *measurement* of the **total** tier — the models the owner
-    has proven below their published tier — so it cannot be derived from anything, and a model
-    nobody has measured keeps what its row, manifest or catalog states. That absence used to be
-    invisible: the row said ``source: "catalog"`` and nothing said whether a measurement existed.
-    Every row carries ``fleet_default_measured`` plus a ``default_reason`` that names the absence,
-    so the Models screen can show "nobody has measured this one yet". It deliberately does not
-    carry the live-free floor: that number has one home, the model's own row.
+    ``_FLEET_DEFAULTS`` is a per-model *measurement* of the **total** tier — a run that proved a
+    model needs less than its manifest states — so it cannot be derived from anything, and a model
+    nobody has measured keeps what its row, manifest or catalog states. ``fleet_default_measured``
+    says which of the two is in force and ``default_reason`` names the absence, so the Models
+    screen can show "nobody has measured this one yet". The table is empty today because the two
+    numbers it held (FLUX.2 Klein 4-bit, Breeze TTS 2 4-bit) are now in their manifests; a row that
+    is below the manifest's own tier still reports ``fleet_default``/``measured`` through
+    ``workload_default`` below, so the screen loses nothing. It deliberately does not carry the
+    live-free floor: that number has one home, the model's own row.
     """
     key = _normalized(model or catalog_entry.get("repo"))
     catalog_total = _published_total_memory_gb(catalog_entry)

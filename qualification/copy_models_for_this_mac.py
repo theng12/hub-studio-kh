@@ -58,43 +58,20 @@ def shared_resolver():
         return None
     return resolve_library
 
-# Some models are shipped with a conservative figure in their manifest, and the owner has run
-# them on smaller Macs many times. Raising a model's floor here is a deliberate, reviewable act;
-# lowering one is not, so there is no way to say "needs less than the manifest says" - only
-# "the owner has proven this one runs smaller".
+# **No floor table lives here any more (owner decision 2026-10-28, "collapse duplicated floor
+# tables into manifests and delete the old tables").** This file used to carry `PROVEN_SMALLER`
+# (the owner had run a model on a smaller Mac) and `CARRY_BELOW_TIER` (he had asked to try it
+# there, unmeasured). Both contained exactly the numbers their models' own manifests now state:
+# FLUX.2 Klein 4-bit and Breeze TTS 2 4-bit moved 16 -> 8 in `model-manifests/` on 2026-10-28,
+# carrying the evidence sentence with them, and Z-Image-Turbo 4-bit's manifest already said 8.
+# A model's floor is its `qualification.minimum_unified_memory_gb` and nothing else, so a
+# re-capture (`packaging/capture_model_manifests.py`) cannot leave a second copy behind to
+# disagree with it.
 #
-# Two tables, and they are not the same claim:
-#   PROVEN_SMALLER   the owner has run this model on the smaller Mac. Measured.
-#   CARRY_BELOW_TIER the owner has asked for this model on a smaller Mac than its manifest
-#                    declares, and the run that would prove it does not exist yet. It is carried
-#                    on his request, not on evidence, and the app still publishes the model's
-#                    below-tier warning - so he is told what he is trading. Move a model to
-#                    PROVEN_SMALLER once it has actually run there.
-PROVEN_SMALLER = {
-    # FLUX.2 Klein 4B: the manifest says 16 GB, the owner has produced tens of thousands of
-    # images on 8 GB Macs. The 16 GB figure is a qualification tier, not a requirement.
-    "flux2-klein-4b-mlx-4bit": 8,
-    # Z-Image-Turbo 6B MLX 4-bit: **measured** on an 8 GB Apple M1 Mac mini (`Macmini9,1`,
-    # macOS 26.6.2) with mflux 0.20.0 on 2026-09-26. Low-RAM completed 1024x1024 in 392 s and
-    # 1280x720 in 336 s at 5.70 GB peak MLX / 5.85 GB footprint. The manifest's own floor moved
-    # 16 -> 8 on that evidence, so this is a result rather than a request to try.
-    "z-image-turbo-mflux-4bit": 8,
-    # Breeze TTS 2 4-bit: the manifest says 16 GB. **Measured** on an 8 GB M1 (Hub 0.6.143) on 2026-10-04:
-    # 2/2 clips completed from 3.31-3.46 GB free, worker peak 4.69 GB, never critical memory pressure
-    # (owner decision 2026-10-04; the Hub reads the same 8 GB total from `memory_admission._FLEET_DEFAULTS` and the 3.2 GB free floor from this
-    # model's own catalog row, which is where that number lives).
-    "breeze-tts-2-mlx-4bit": 8,
-}
-
-CARRY_BELOW_TIER = {
-    # **Empty as of 2026-09-26, and kept deliberately.** Its one entry (Z-Image-Turbo 6B MLX
-    # 4-bit) graduated to PROVEN_SMALLER above when the 8 GB run came back QUALIFIED. The table
-    # stays because the mechanism is still needed: carrying a model below its own declared floor
-    # to *try* it is a real thing this project does, and it must keep saying so out loud rather
-    # than being quietly folded into the proven set. Nothing in here is proof of anything.
-    # Breeze TTS 2 4-bit was carried here for one day (0.6.129) and withdrawn (2026-10-02); the 8 GB run
-    # of 2026-10-04 then measured it, so it is in PROVEN_SMALLER now.
-}
+# Where the two claims went: a measured run is recorded in the manifest's `memory_evidence` and
+# `status`, which is the artefact the capture tool already preserves; there is no longer a place
+# to record "carried on his request, still unmeasured" as distinct from "proven", so that
+# distinction is made by writing the evidence above the number rather than by choosing a table.
 
 # Offered but not stocked (owner decision 2026-10-08): the model stays on the SSD, in the catalog and
 # installable on request (the Gateway's "Install a model..." / `POST /admin/api/fleet/model-installs`),
@@ -120,40 +97,28 @@ def machine_memory_gb() -> int:
 
 
 def required_gb(manifest: dict) -> int:
+    """This model's memory floor, from its own manifest and nowhere else.
+
+    `0` means the manifest published no floor, which the caller reads as "fits anywhere" - the
+    same answer it gave before, and the honest one: an absent figure is a missing measurement, not
+    a small requirement.
+    """
     qualification = manifest.get("qualification") or {}
     floor = qualification.get("minimum_unified_memory_gb")
-    floor = int(floor) if isinstance(floor, (int, float)) and floor > 0 else 0
-    package_id = manifest["package_id"]
-    # A measured run outranks a request to try it, so `PROVEN_SMALLER` is asked first.
-    if package_id in PROVEN_SMALLER:
-        return PROVEN_SMALLER[package_id]
-    return CARRY_BELOW_TIER.get(package_id, floor)
+    return int(floor) if isinstance(floor, (int, float)) and not isinstance(floor, bool) and floor > 0 else 0
 
 
 def floor_origin(manifest: dict) -> str:
     """Where this model's memory requirement came from, so a wrong skip can be traced.
 
-    There are exactly three sources: the `PROVEN_SMALLER` table (the owner has run the model on a
-    smaller Mac than its manifest claims), the `CARRY_BELOW_TIER` table (the owner has asked for it
-    there and it is still unmeasured), and the manifest's own
-    `qualification.minimum_unified_memory_gb`. The skip *is* printed, but it printed only the
-    number - so a new model the owner had proven on a small Mac looked like a model that did not
-    fit, and nothing said which of the three places to change. All three are named here, and the
-    two tables are named apart from each other: a wrong skip has to stay traceable to the exact
-    table that caused it, and "carried because he asked" must not read as "proven".
+    One source now: the manifest's own `qualification.minimum_unified_memory_gb`. The sentence
+    names the file to edit, because the skip *is* printed and a number with no origin leaves the
+    operator guessing which of several possible places to change. See the comment above for where
+    the two former tables went.
     """
-    package_id = manifest["package_id"]
-    if package_id in PROVEN_SMALLER:
-        return (f"floor {PROVEN_SMALLER[package_id]} GB from PROVEN_SMALLER in "
-                f"qualification/copy_models_for_this_mac.py (the owner has run it on that Mac)")
-    if package_id in CARRY_BELOW_TIER:
-        return (f"floor {CARRY_BELOW_TIER[package_id]} GB from CARRY_BELOW_TIER in "
-                f"qualification/copy_models_for_this_mac.py (the owner asked to carry it there; "
-                f"the run that would prove it is still unmeasured)")
-    return ("floor from qualification.minimum_unified_memory_gb in its manifest (raise it there, "
-            "or add the model to PROVEN_SMALLER in qualification/copy_models_for_this_mac.py if "
-            "the owner has run it on a smaller Mac, or to CARRY_BELOW_TIER there if he has asked "
-            "for it there and it is still unmeasured)")
+    return (f"floor from qualification.minimum_unified_memory_gb in "
+            f"model-manifests/{manifest.get('package_id', '?')}.json (raise it there; the evidence "
+            f"for the number belongs in that block's memory_evidence)")
 
 
 def size_gb(manifest: dict) -> float:
