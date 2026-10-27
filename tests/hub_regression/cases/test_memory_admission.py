@@ -230,7 +230,12 @@ def test_operator_override_persists_and_reset_restores_default(reset):
     ] == 7.5
 
     reset_policy = memory_admission.reset_override(FLUX_REPO, entry)
-    assert reset_policy["source"] == "fleet_default"
+    # `source` is the published-compatibility spelling of where the enforced total came from. It
+    # used to read `fleet_default` because the Hub's own table held this number; the table is empty
+    # since 2026-10-28 and the manifest states the same 8 GB, so `min_total_source` is the precise
+    # answer ("manifest") and `source` says "catalog" as it does for any number the catalog states.
+    assert reset_policy["source"] == "catalog"
+    assert reset_policy["min_total_source"] == "manifest"
     # Back to the measured 8 GB requirement. This used to assert 0.0 ("no floor in force: only an
     # explicit override can put one back"); the requirement is always in force now and the
     # override is only the operator's way to change the number.

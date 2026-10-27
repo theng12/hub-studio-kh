@@ -125,10 +125,10 @@ class LiveRouterTests(unittest.TestCase):
                       for version in ("", " 0.4.0"))
     # NEVER point this probe at a real model library (~/StudioHubModels, a kit's model-library). The
     # installed app's Hub runs here with a throwaway data directory, and an installed build older than
-    # components/library_ownership.py shelves and retires whatever library it is given into that
-    # throwaway directory's Trash Folder - deleting the directory then destroys the real weights
-    # (2026-10-01: Gemma, LTX and Whisper base/small). Routing needs no models, so the library is an
-    # empty fake inside the same temp folder.
+    # components/library_ownership.py retires (and, before 2026-10-28, also shelved) whatever library it
+    # is given into that throwaway directory's Trash Folder - deleting the directory then destroys the
+    # real weights (2026-10-01: Gemma, LTX and Whisper base/small). Routing needs no models, so the
+    # library is an empty fake inside the same temp folder.
 
     def _bundle(self):
         for candidate in self.INSTALLED:

@@ -3,7 +3,8 @@
 The Gateway holds only the Fleet token. It asks a controller to start a model download on one of its
 Macs - a joined node (relayed to the node's own ``local`` route) or the controller itself - and reads
 how the download is going. The same refusals as the Model library's button, plus the memory class:
-a Mac is never made to download a model it could never run. Nothing here downloads anything.
+a Mac is never made to download a model it could never run. **RAM is the only gate** (owner decision
+2026-10-28): no model is refused by name. Nothing here downloads anything.
 """
 from __future__ import annotations
 
@@ -127,15 +128,19 @@ def test_an_unknown_package_is_a_404(hub):
     assert hub.started == []
 
 
-def test_a_shelved_model_is_refused(hub, monkeypatch):
-    from components import shelved_models
-    from components.hub import standalone
-    monkeypatch.setattr(shelved_models, "manifest_shelved", lambda manifest: True)
-    monkeypatch.setattr(standalone, "_keep_all_models", lambda: False)
-    answer = hub.client.post(f"/api/hub/fleet/nodes/local/model-packages/{FISH}/download")
-    assert answer.status_code == 409
-    assert "shelved model" in answer.json()["detail"]
-    assert hub.started == []
+def test_a_model_nothing_refuses_is_installed_by_ram_alone(hub, monkeypatch):
+    """The inverse of the shelved refusal this replaced (owner decision 2026-10-28).
+
+    Fish S2 Pro bf16 used to be refused because a name was on a list. Now the only gate is the
+    Mac's memory: on a Mac that can run it, the same request starts a download. This pins the
+    mechanism that replaced it rather than leaving the old refusal's absence untested - a model
+    refused by name is exactly what the owner's "RAM is the only gate" rule forbids.
+    """
+    with mock.patch("psutil.virtual_memory", lambda: SimpleNamespace(total=64 * GIB)):
+        answer = hub.client.post(f"/api/hub/fleet/nodes/local/model-packages/{FISH}/download")
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["ok"] is True
+    assert hub.started
 
 
 def test_a_model_this_mac_cannot_run_is_refused_in_the_hubs_words(hub):

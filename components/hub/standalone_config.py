@@ -23,7 +23,6 @@ DEFAULT_CLEANUP_INTERVAL_SECONDS = 300
 DEFAULT_MINIMUM_FREE_BYTES = 5_000_000_000
 DEFAULT_TRASH_HANDOFF_DAYS = 7              # items older than this in the Trash Folder go to macOS Trash
 DEFAULT_TRASH_HANDOFF_GB = 20               # ...or the Trash Folder holds more than this (every root)
-DEFAULT_KEEP_ALL_MODELS = False             # True: this Mac keeps shelved models (components/shelved_models.py)
 # `_REQUIRED_WORKERS` (worker id -> modality) is the inverse of the Hub's modality vocabulary,
 # derived in `backend/vocabulary.py` rather than restated here. It is kept as a module attribute
 # because it is the inverse table, but `_worker()` no longer looks a descriptor's id up in it:
@@ -190,7 +189,7 @@ def cleanup_interval_seconds() -> float:
 log = logging.getLogger("studiohub.settings")
 # Read-modify-write of device_settings.json comes from threadpool routes (PUT, restore-defaults) and
 # the background cleanup loop: serialised so one writer cannot overwrite another's field with the
-# value it read before the other wrote (a toggled keep_all_models was the one at risk).
+# value it read before the other wrote (a toggled retention was the one at risk).
 _SETTINGS_LOCK = threading.RLock()
 _logged_problem: str | None = None
 
@@ -199,8 +198,8 @@ def _read_settings() -> tuple[dict, str | None]:
     """The saved settings and, when the file exists but is damaged, what is wrong with it.
 
     An absent file is not a problem (defaults). A file that is unreadable, not JSON or not an object
-    is: the values fall back to defaults, **except keep_all_models, which fails safe to true** (see
-    `_settings`), and the problem is logged loudly once and surfaced by `settings_warnings`.
+    is a problem: the values fall back to defaults and the problem is logged loudly once and surfaced
+    by `settings_warnings`, so a Mac on defaults never reads as though someone chose them.
     """
     global _logged_problem
     problem: str | None = None
@@ -215,21 +214,18 @@ def _read_settings() -> tuple[dict, str | None]:
         value, problem = {}, "device_settings.json is not valid JSON"
     if problem is None and not isinstance(value, dict):
         value, problem = {}, "device_settings.json is not a JSON object"
-    if problem is None and "keep_all_models" in value and not isinstance(value["keep_all_models"], bool):
-        problem = "keep_all_models in device_settings.json is neither true nor false"
     if problem != _logged_problem:
         _logged_problem = problem
         if problem:
-            log.error("%s: this Mac keeps ALL models until the file is fixed (nothing is shelved or "
-                      "moved to the Trash Folder), and other settings use their defaults", problem)
+            log.error("%s: this Mac uses the default settings until the file is fixed", problem)
     return value, problem
 
 
 def settings_warnings() -> list[str]:
     """Plain-language warnings about this Mac's settings file, for the Hub's settings route."""
     problem = _read_settings()[1]
-    return [f"{problem}. This Mac is keeping all models and using default storage limits until it "
-            f"is repaired (save the settings again to rewrite it)."] if problem else []
+    return [f"{problem}. This Mac is using the default storage limits until the file is repaired "
+            f"(save the settings again to rewrite it)."] if problem else []
 
 
 def _settings() -> dict[str, int | bool]:
@@ -253,8 +249,6 @@ def _settings() -> dict[str, int | bool]:
     minimum_free = value.get("minimum_free_bytes", DEFAULT_MINIMUM_FREE_BYTES) if isinstance(value, dict) else DEFAULT_MINIMUM_FREE_BYTES
     trash_handoff = value.get("trash_handoff_days", DEFAULT_TRASH_HANDOFF_DAYS) if isinstance(value, dict) else DEFAULT_TRASH_HANDOFF_DAYS
     trash_gb = value.get("trash_handoff_gb", DEFAULT_TRASH_HANDOFF_GB) if isinstance(value, dict) else DEFAULT_TRASH_HANDOFF_GB
-    # Damage never reads as "not keep-all": that would move a keep-all Mac's shelved models away.
-    keep_all = True if problem else value.get("keep_all_models", DEFAULT_KEEP_ALL_MODELS)
     return {
         "max_bytes": max_bytes if isinstance(max_bytes, int) and max_bytes > 0 else DEFAULT_MAX_BYTES,
         "retention_days": retention_days if isinstance(retention_days, int) and retention_days > 0 else DEFAULT_RETENTION_DAYS,
@@ -263,7 +257,6 @@ def _settings() -> dict[str, int | bool]:
         "minimum_free_bytes": minimum_free if isinstance(minimum_free, int) and minimum_free >= 0 else DEFAULT_MINIMUM_FREE_BYTES,
         "trash_handoff_days": trash_handoff if isinstance(trash_handoff, int) and trash_handoff > 0 else DEFAULT_TRASH_HANDOFF_DAYS,
         "trash_handoff_gb": trash_gb if isinstance(trash_gb, int) and trash_gb > 0 else DEFAULT_TRASH_HANDOFF_GB,
-        "keep_all_models": keep_all,
     }
 
 
@@ -274,8 +267,7 @@ def load_device_settings() -> dict[str, dict[str, int | bool]]:
                      "cleanup_interval_seconds": DEFAULT_CLEANUP_INTERVAL_SECONDS,
                      "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
                      "trash_handoff_days": DEFAULT_TRASH_HANDOFF_DAYS,
-                     "trash_handoff_gb": DEFAULT_TRASH_HANDOFF_GB,
-                     "keep_all_models": DEFAULT_KEEP_ALL_MODELS},
+                     "trash_handoff_gb": DEFAULT_TRASH_HANDOFF_GB},
         "effective": _settings(),
     }
 
@@ -301,8 +293,6 @@ def preview_device_settings(**changes: object) -> dict[str, int | bool]:
     handoff_gb = value["trash_handoff_gb"]
     if isinstance(handoff_gb, bool) or not isinstance(handoff_gb, int) or handoff_gb <= 0:
         raise ValueError("trash_handoff_gb must be a positive integer")
-    if not isinstance(value["keep_all_models"], bool):
-        raise ValueError("keep_all_models must be a boolean")
     return value
 
 
@@ -323,13 +313,13 @@ def save_device_settings(*, max_bytes: int, retention_days: int, cleanup_enabled
                          minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES,
                          trash_handoff_days: int | None = None,
                          trash_handoff_gb: int | None = None,
-                         keep_all_models: bool | None = None) -> dict[str, dict[str, int | bool]]:
+                         ) -> dict[str, dict[str, int | bool]]:
     return update_device_settings(
         max_bytes=max_bytes, retention_days=retention_days, cleanup_enabled=cleanup_enabled,
         cleanup_interval_seconds=cleanup_interval_seconds, minimum_free_bytes=minimum_free_bytes,
         **({} if trash_handoff_days is None else {"trash_handoff_days": trash_handoff_days}),
         **({} if trash_handoff_gb is None else {"trash_handoff_gb": trash_handoff_gb}),
-        **({} if keep_all_models is None else {"keep_all_models": keep_all_models}))
+        )
 
 
 def restore_device_defaults() -> dict[str, dict[str, int]]:
@@ -342,7 +332,6 @@ def restore_device_defaults() -> dict[str, dict[str, int]]:
             "minimum_free_bytes": DEFAULT_MINIMUM_FREE_BYTES,
             "trash_handoff_days": DEFAULT_TRASH_HANDOFF_DAYS,
             "trash_handoff_gb": DEFAULT_TRASH_HANDOFF_GB,
-            "keep_all_models": _settings()["keep_all_models"],   # about models, not output limits: not reset here
             "defaults_version": _DEFAULTS_VERSION,
         })
         return load_device_settings()

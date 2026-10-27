@@ -1,9 +1,11 @@
-"""Only the Hub that owns a model library may shelve, retire or move packages out of it.
+"""Only the Hub that owns a model library may retire or move packages out of it.
 
 The incident (2026-10-01/02): a Hub started with a throwaway --data-dir over the REAL library
-(~/StudioHubModels) found keep_all_models false in the empty data directory, shelved Whisper base/small
-and retired LTX/Gemma into that directory's Trash Folder, and deleting the directory destroyed the
-weights. `components/library_ownership.py` is the fix; the replay below fails on the old code.
+(~/StudioHubModels) found "keep all models" false in the empty data directory, moved Whisper base/small
+out (shelving, since retired, 2026-10-28) and LTX/Gemma out (retirement) into that directory's Trash
+Folder, and deleting the directory destroyed the weights. `components/library_ownership.py` is the
+fix; the replay below fails on the old code. Shelving is gone, so the guard now stands on retirement -
+the one remaining path that moves real weights - and the tests below assert it there.
 """
 import json
 import os
@@ -16,7 +18,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from components import library_ownership, retired_models, shelved_models  # noqa: E402
+from components import library_ownership, retired_models  # noqa: E402
 
 SHELVED, RETIRED, KEPT = "whisper-base", "ltx-2-3-22b-ram-12gb-mlx", "whisper-turbo"
 
@@ -109,14 +111,12 @@ class OwnershipRules(unittest.TestCase):
 
     def test_weights_never_move_from_a_real_library_into_a_temp_trash(self):
         trash = self.scratch / "trash"
-        catalog = [{"package_id": SHELVED, "model_id": "mlx-community/whisper-base-mlx"}]
-        self.assertEqual(shelved_models.shelve_installed(self.library, catalog, trash, keep_all=False), [])
         self.assertEqual(retired_models.retire_installed(self.library, trash), [])
         self.assertTrue(weights_intact(self.library))
         self.assertFalse(trash.exists())
 
     def test_a_library_in_temp_may_still_use_a_trash_in_temp(self):
-        """The unit tests (and a kit scratch copy) shelve inside one temp tree; that is not "across"."""
+        """The unit tests (and a kit scratch copy) retire inside one temp tree; that is not "across"."""
         with mock.patch.object(library_ownership, "temp_roots", lambda: [self.base]):
             moved = retired_models.retire_installed(self.library, self.base / "trash")
         self.assertEqual(moved, [RETIRED])
@@ -130,8 +130,7 @@ sys.path.insert(0, os.environ["PROJECT_ROOT"])
 from components import library_ownership
 library_ownership.temp_roots = lambda: [Path(p) for p in json.loads(os.environ["PRETEND_TEMP"])]
 from components.hub import standalone
-print(json.dumps({"shelved": standalone.shelve_installed_models(),
-                  "retired": standalone.retire_installed_models()}))
+print(json.dumps({"retired": standalone.retire_installed_models()}))
 '''
 
 
@@ -144,10 +143,8 @@ class IncidentReplay(unittest.TestCase):
         self.scratch = self.base / "scratch"
         self.scratch.mkdir()
 
-    def start(self, data_dir: Path, keep_all=None) -> dict:
+    def start(self, data_dir: Path) -> dict:
         data_dir.mkdir(parents=True, exist_ok=True)
-        if keep_all is not None:
-            (data_dir / "device_settings.json").write_text(json.dumps({"keep_all_models": keep_all}))
         env = {**os.environ, "PROJECT_ROOT": str(ROOT), "STUDIOHUB_DATA_DIR": str(data_dir),
                "STUDIOHUB_MODELS_DIR": str(self.library), "PRETEND_TEMP": json.dumps([str(self.scratch)]),
                "STUDIOHUB_MODEL_MANIFESTS": str(ROOT / "model-manifests")}
@@ -157,8 +154,8 @@ class IncidentReplay(unittest.TestCase):
         return json.loads(result.stdout.strip().splitlines()[-1]), result.stdout
 
     def test_a_throwaway_data_dir_over_the_real_library_moves_nothing(self):
-        (moved, out) = self.start(self.scratch / "hub")        # a fresh data dir reads keep_all_models false
-        self.assertEqual(moved, {"shelved": [], "retired": []}, out)
+        (moved, out) = self.start(self.scratch / "hub")
+        self.assertEqual(moved, {"retired": []}, out)
         self.assertTrue(weights_intact(self.library), "the real weights were moved into the throwaway Trash Folder")
         self.assertFalse((self.scratch / "hub" / "trash").exists())
         self.assertIn("read-only", out)
@@ -167,26 +164,27 @@ class IncidentReplay(unittest.TestCase):
         owner = self.base / "app-data" / "hub"
         stranger = self.base / "other-data" / "hub"
         (moved, _) = self.start(owner)                         # first real Hub claims, then sheds
-        self.assertEqual((moved["shelved"], moved["retired"]), ([SHELVED], [RETIRED]))
+        self.assertEqual(moved["retired"], [RETIRED])
         self.assertTrue((self.library / KEPT / "rev" / "weights.bin").is_file())
-        self.assertEqual(len(list((owner / "trash").glob("*/shelved-models/*"))), 1)
-        # restore the two packages by hand, then start a different (non-temp) data dir
-        for kind, name in (("shelved-models", SHELVED), ("retired-models", RETIRED)):
-            source = next((owner / "trash").glob(f"*/{kind}/{name}-*"))
-            os.rename(source, self.library / name)
+        # The one remaining mover is retirement; shelving is gone, so a package nothing retires and
+        # nothing shelves (the old `whisper-base`) stays exactly where it is on every start.
+        self.assertTrue((self.library / SHELVED / "rev" / "weights.bin").is_file())
+        self.assertEqual(len(list((owner / "trash").glob("*/retired-models/*"))), 1)
+        # restore the retired package by hand, then start a different (non-temp) data dir
+        os.rename(next((owner / "trash").glob(f"*/retired-models/{RETIRED}-*")), self.library / RETIRED)
         (moved, out) = self.start(stranger)
-        self.assertEqual(moved, {"shelved": [], "retired": []}, out)
+        self.assertEqual(moved, {"retired": []}, out)
         self.assertTrue(weights_intact(self.library))
         (moved, _) = self.start(owner)
-        self.assertEqual((moved["shelved"], moved["retired"]), ([SHELVED], [RETIRED]))
+        self.assertEqual(moved["retired"], [RETIRED])
 
     def test_an_existing_install_migrates_once_and_keeps_cleaning_up(self):
         """A fleet Mac updated to this build has no ownership record: its own app data dir claims the
-        library on first start, and the retire/shelve clean-up then behaves exactly as before."""
+        library on first start, and the retirement clean-up then behaves exactly as before."""
         app_data = self.base / "Library" / "Application Support" / "StudioHub Standalone" / "hub"
         self.assertFalse((self.library / library_ownership.OWNER_FILE).exists())
         (moved, out) = self.start(app_data)
-        self.assertEqual((moved["shelved"], moved["retired"]), ([SHELVED], [RETIRED]), out)
+        self.assertEqual(moved["retired"], [RETIRED], out)
         record = json.loads((self.library / library_ownership.OWNER_FILE).read_text())
         self.assertEqual(record["data_dir"], str(app_data))
         self.assertEqual(len(list((app_data / "trash").glob("*/retired-models/*"))), 1)   # purged by the 15-day Trash Folder rule
@@ -194,11 +192,15 @@ class IncidentReplay(unittest.TestCase):
         (moved, _) = self.start(app_data)                      # the next start: already owned, still cleans up
         self.assertEqual(moved["retired"], [RETIRED])
 
-    def test_keep_all_in_the_owner_still_wins(self):
+    def test_the_old_keep_all_setting_no_longer_changes_anything(self):
+        # A Mac that was marked keep-all keeps every model, and so does every other Mac now: the
+        # setting is gone and the only mover left is retirement.
         owner = self.base / "app-data" / "hub"
-        (moved, _) = self.start(owner, keep_all=True)
-        self.assertEqual(moved["shelved"], [])                 # keep-all keeps shelved models; retired ones still go
+        owner.mkdir(parents=True)
+        (owner / "device_settings.json").write_text(json.dumps({"keep_all_models": True}))
+        (moved, _) = self.start(owner)
         self.assertTrue((self.library / SHELVED / "rev" / "weights.bin").is_file())
+        self.assertEqual(moved["retired"], [RETIRED])
 
 
 if __name__ == "__main__":

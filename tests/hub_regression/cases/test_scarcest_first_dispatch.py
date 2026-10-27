@@ -563,15 +563,24 @@ def test_one_refusal_covers_every_item_aimed_at_that_machine(reset, monkeypatch)
 
 # ─────────────────────────────── requirement: measured -> manifest -> catalog ───────────────────────────────
 
-def test_requirement_order_is_override_then_measured_then_manifest_then_catalog(reset):
+def test_requirement_order_is_override_then_measured_then_manifest_then_catalog(reset, monkeypatch):
     flux = "AITRADER/FLUX2-klein-4B-mlx-4bit"
     row = {"repo": flux, "min_unified_memory_gb": 16}
-    # Measured on the fleet's 8 GB Macs beats the catalog's and the manifest's 16 GB.
-    assert memory_admission.requirement_gb(flux, row) == (8.0, "measured")
+    # The manifest is the number for a shipped model (owner decision 2026-10-28). FLUX.2 Klein
+    # 4-bit's manifest states the measured 8 GB itself, so the fleet table - empty since the same
+    # change - is not needed to lower it. The *rung order* is pinned just below, with a
+    # measurement patched in, so emptying the table did not stop testing the order.
+    assert memory_admission.requirement_gb(flux, row) == (8.0, "manifest")
     # No measurement: the manifest's qualification comes before the worker's catalog row.
     qwen = "mlx-community/Qwen3.5-9B-4bit"
     assert memory_admission.requirement_gb(qwen, {"repo": qwen, "min_total_memory_gb": 8}) == (
         16.0, "manifest")
+    # A Hub-side measurement still outranks the manifest and the catalog, which is the rung that
+    # has no other way to be expressed.
+    with monkeypatch.context() as patch:
+        patch.setitem(memory_admission._FLEET_DEFAULTS, flux.lower(),
+                      {"min_total_memory_gb": 7.0, "reason": "a test measurement"})
+        assert memory_admission.requirement_gb(flux, row) == (7.0, "measured")
     # Not in any manifest: the catalog.
     other = {"repo": "org/unknown", "min_unified_memory_gb": 24}
     assert memory_admission.requirement_gb("org/unknown", other) == (24.0, "catalog")

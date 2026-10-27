@@ -777,18 +777,23 @@ class TheCopyAsksTheAppWhereModelsGoTests(unittest.TestCase):
 
 
 class QwenStockingTests(unittest.TestCase):
-    """Owner decision 2026-10-08: the low-RAM Qwen Image 2.1 is the fleet's stocked Qwen (16 GB and
-    up); the native one is qualified on 24 GB, stays on the SSD and is installed on request only."""
+    """Both Qwen Image 2.1 packs are ordinary packages now (owner decision 2026-10-28).
+
+    There used to be a "stocked vs installed on request only" split: the native mlx-serve pack was
+    still on the SSD but never copied, because the fleet's stocked Qwen was the low-RAM mflux one.
+    With the install-time picker the customer chooses, so no list decides for them any more - RAM
+    does. The low-RAM pack is in the 16 GB preset; the native one is in no preset and is tickable.
+    """
 
     LOW_RAM, NATIVE = "qwen-image-2-1-mflux-q4", "qwen-image-2-1-mlx-serve-4bit"
 
-    def test_low_ram_is_copied_from_16_gb_and_native_never_is(self):
+    def test_each_pack_is_copied_exactly_when_this_mac_has_the_memory_for_it(self):
         floors = {package_id: json.loads((MANIFESTS / f"{package_id}.json").read_text())
                   ["qualification"]["minimum_unified_memory_gb"]
                   for package_id in (self.LOW_RAM, self.NATIVE)}
         self.assertEqual(floors, {self.LOW_RAM: 16, self.NATIVE: 24})
-        self.assertIn(self.NATIVE, COPY.NOT_STOCKED)
-        self.assertNotIn(self.LOW_RAM, COPY.NOT_STOCKED)
+        self.assertFalse(hasattr(COPY, "NOT_STOCKED"),
+                         "the installed-on-request-only list is gone; RAM is the only gate")
         for memory_gb in (8, 16, 24, 32):
             with self.subTest(memory_gb=memory_gb), TemporaryDirectory() as tmp:
                 kit = Harness(Path(tmp))
@@ -799,9 +804,8 @@ class QwenStockingTests(unittest.TestCase):
 
                 self.assertEqual(code, 0, output)
                 self.assertEqual((kit.home / self.LOW_RAM).is_dir(), memory_gb >= 16, output)
-                self.assertFalse((kit.home / self.NATIVE).exists(), output)
-                self.assertTrue((kit.library / self.NATIVE).is_dir(), "it stays on the SSD")
-                self.assertIn("Installed on request only", output)
+                self.assertEqual((kit.home / self.NATIVE).is_dir(), memory_gb >= 24, output)
+                self.assertNotIn("Installed on request only", output)
 
     def test_native_already_on_a_mac_is_offered_and_never_pruned(self):
         with TemporaryDirectory() as tmp:

@@ -646,7 +646,7 @@ FLEET_ALLOWED = (
     ("POST", r"^/api/hub/render-authority$"),
     # **Installing a model from the Gateway (owner decision 2026-10-04: the owner's Gateway may make a
     # Mac install a model).** Only the download and its status, each through the fleet path, which
-    # refuses a shelved model, an unknown package, a full disk and a model this Mac has too little
+    # refuses an unknown package, a full disk and a model this Mac has too little
     # memory to run. Importing, cancelling, verifying and the plain `/api/hub/model-packages/...`
     # routes stay Hub-token only, so the fleet still cannot remove or replace a model.
     # Not in `NODE_ALLOWED`.

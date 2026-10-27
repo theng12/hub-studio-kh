@@ -30,7 +30,6 @@ from starlette.background import BackgroundTask
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from components import shelved_models
 from components.os_metadata import is_os_metadata
 from . import disk_governor, output_storage, standalone_config, workstation
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, resources, routing as routing_rule
@@ -444,20 +443,13 @@ def _contract_for(manifest: dict[str, Any],
     return None
 
 
-def _keep_all_models() -> bool:
-    return standalone_config.load_device_settings()["effective"]["keep_all_models"]
-
-
-def _shelved_reason(manifest: dict[str, Any]) -> str:
-    return (f"Not on this Mac: {manifest['package_id']} is a shelved model, which this Mac does not keep. "
-            f"It stays on the SSD kits and works on a Mac marked \"keep all models\" "
-            f"(Hub setting keep_all_models).")
-
-
-def _shelved_refusal(manifest: dict[str, Any]) -> None:
-    """A shelved model is not brought onto a Mac that does not keep it (it would be moved out again)."""
-    if shelved_models.manifest_shelved(manifest) and not _keep_all_models():
-        raise HTTPException(409, _shelved_reason(manifest))
+# **There is no shelving any more (owner decision 2026-10-28).** "A model is blocked by RAM, never
+# by name": the seven packages that were on `components/shelved_models.SHELVED_MODELS`
+# (whisper-base, whisper-small, voxcpm2-bf16, fish-audio-s2-pro-bf16, chatterbox-4bit,
+# chatterbox-8bit, s3tokenizerv2) are ordinary catalog entries now - listed, tickable, and gated
+# only by their own RAM floor (`_memory_refusal` below). The mechanism went with the list: no
+# start-up move-out, no download refusal, no kit skip. A copy already installed on a Mac stays
+# exactly where it is and works; only `retired_models` still moves anything out.
 
 
 def _memory_refusal(manifest: dict[str, Any]) -> None:
@@ -480,8 +472,8 @@ def _memory_refusal(manifest: dict[str, Any]) -> None:
 def _library_may_be_moved_from(what: str) -> bool:
     """True only when this Hub's data directory owns the model library (components/library_ownership.py).
 
-    A Hub started with a throwaway data directory over a real library used to shelve and retire the
-    real weights into the throwaway directory's Trash Folder; deleting it destroyed them. A Hub that
+    A Hub started with a throwaway data directory over a real library used to retire the real
+    weights into the throwaway directory's Trash Folder; deleting it destroyed them. A Hub that
     does not own the library logs why and moves nothing.
     """
     from components import library_ownership
@@ -490,14 +482,6 @@ def _library_may_be_moved_from(what: str) -> bool:
         print(f"[hub] {problem}", flush=True)
         return False
     return True
-
-
-def shelve_installed_models() -> list[str]:
-    """At start-up, a Mac that is not marked keep-all moves its installed shelved models to the Trash Folder."""
-    if not _keep_all_models() and not _library_may_be_moved_from("shelving models"):
-        return []
-    return shelved_models.shelve_installed(_model_library(), _model_catalog().values(),
-                                           output_storage.trash_root(), _keep_all_models())
 
 
 def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
@@ -561,14 +545,8 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
     # circuit breaker that refuses it. Without this the app showed every gate open and the job was
     # then declined before dispatch, which read as the model silently not working.
     paused = broker.model_block_state(worker_id, manifest["model_id"])
-    shelved = shelved_models.manifest_shelved(manifest)
-    away = shelved and receipt["state"] == "not_installed" and not _keep_all_models()
     return {
         **receipt,
-        # A shelved model is still offered and usable where it is; on a Mac that does not keep it, its
-        # absence is "not on this Mac", not a fault (and it is never downloaded back by itself).
-        "shelved": shelved,
-        **({"reason": _shelved_reason(manifest)} if away else {}),
         **standalone_config.model_readiness({
             "files_state": receipt["state"],
             "minimum_macos": manifest["minimum_macos"],
@@ -1497,12 +1475,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             workstation_watch = _asyncio.create_task(workstation.watch(monitor, held_jobs))
             # A node fetches the release its controller holds; a no-op on any Mac that is not one.
             release_mirror = _asyncio.create_task(release_sync.loop())
-            try:
-                moved = shelve_installed_models()
-                if moved:
-                    print(f"[hub] moved shelved models to the Trash Folder: {', '.join(moved)}", flush=True)
-            except (OSError, ValueError):
-                pass
             try:
                 retired = retire_installed_models()
                 if retired:
@@ -2986,7 +2958,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         try:
             catalog = _model_catalog()
             manifest = catalog[package_id]
-            _shelved_refusal(manifest)
             model_packages.import_folder(manifest, Path(body.get("source_folder", "")), _model_library())
             return _model_state(manifest, catalog, monitor)
         except KeyError as exc:
@@ -3000,7 +2971,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         try:
             catalog = _model_catalog()
             manifest = catalog[package_id]
-            _shelved_refusal(manifest)
             sources = body.get("sources")
             if sources is not None and not isinstance(sources, dict):
                 raise ValueError("sources must be a map of model paths to HTTPS mirrors")
@@ -3082,8 +3052,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         """Install a model on one Mac in this group from the Gateway: a joined node (relayed to the
         node's own copy of this route, ``local``) or this controller itself (its id or ``local``).
 
-        The same download as the Model library's, with the same refusals (unknown package, shelved
-        model, full disk) plus one the local button does not need: a model this Mac has too little
+        The same download as the Model library's, with the same refusals (unknown package, full
+        disk) plus one the local button does not need: a model this Mac has too little
         memory to run. Audited here and, for a node, again on the node.
         """
         from .backend import auth as hub_auth
@@ -3123,7 +3093,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             manifest = _model_catalog().get(package_id)
             if manifest is None or manifest.get(_MANIFEST_ERROR):
                 raise HTTPException(404, "unknown model package")
-            _shelved_refusal(manifest)
             _memory_refusal(manifest)
             run = download_model_package(package_id, {"source": source, "peer_only": peer_only})
         except (OSError, ValueError) as exc:

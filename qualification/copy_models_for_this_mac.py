@@ -50,7 +50,7 @@ def shared_resolver():
     """The app's own library resolver, or None on an app that predates it.
 
     Imported lazily: the app's `components/` folder is only on `sys.path` once the bundle has been
-    found in `main()`, exactly as `retired_models` and `shelved_models` are.
+    found in `main()`, exactly as `retired_models` is.
     """
     try:
         from model_library import resolve_library  # type: ignore
@@ -73,16 +73,10 @@ def shared_resolver():
 # to record "carried on his request, still unmeasured" as distinct from "proven", so that
 # distinction is made by writing the evidence above the number rather than by choosing a table.
 
-# Offered but not stocked (owner decision 2026-10-08): the model stays on the SSD, in the catalog and
-# installable on request (the Gateway's "Install a model..." / `POST /admin/api/fleet/model-installs`),
-# but this step does not copy it to a Mac. Unlike a shelved model (`components/shelved_models.py`) the
-# Hub neither moves it out nor refuses to download it. A Mac marked keep-all copies it like any other.
-NOT_STOCKED = {
-    # Qwen Image 2.1 (native mlx-serve 4-bit), qualified on 24 GB; the fleet's stocked Qwen is the
-    # low-RAM `qwen-image-2-1-mflux-q4` (16 GB and up).
-    "qwen-image-2-1-mlx-serve-4bit",
-}
-
+# **There is no "offered but not stocked" list any more (owner decision 2026-10-28).** Its one
+# entry, Qwen Image 2.1 (native mlx-serve 4-bit), was left off this step because the fleet's stocked
+# Qwen was the low-RAM mflux pack. With the install-time picker the customer chooses, so it is an
+# ordinary package: copied when it fits, and in no preset. RAM is the only gate.
 
 def machine_memory_gb() -> int:
     """Installed memory in whole GiB, the way the machine is sold."""
@@ -234,9 +228,6 @@ def prune_old_revisions(target: Path, keep: str) -> int:
 #: Where a package this kit no longer offers is moved. A move, not a delete: the folder is still
 #: the operator's, `_trash` is his to empty, and a model reinstated in a later kit is still there.
 TRASH_FOLDER = "_trash"
-
-#: The Hub's device settings, relative to the home folder: where a Mac is marked "keep all models".
-HUB_SETTINGS_RELATIVE = Path("Library/Application Support/StudioHub Standalone/hub/device_settings.json")
 
 #: The app's receipt log, relative to the library it belongs to.
 INDEX_RELATIVE = Path(".studiohub") / "installed.json"
@@ -541,15 +532,10 @@ def main() -> int:
         from retired_models import manifest_retired  # type: ignore
     except ImportError:
         manifest_retired = lambda manifest, stem=None: False  # noqa: E731
-    # The shelved-models list (`components/shelved_models.py`) ships there too. A shelved model stays
-    # in the kit - this step just does not copy it - unless this Mac is marked "keep all models" in the
-    # Hub's device settings. An app that predates the list shelves nothing.
-    try:
-        from shelved_models import keep_all_models, manifest_shelved  # type: ignore
-    except ImportError:
-        manifest_shelved = lambda manifest, stem=None: False  # noqa: E731
-        keep_all_models = lambda settings_file: False  # noqa: E731
-    keep_all = keep_all_models(Path.home() / HUB_SETTINGS_RELATIVE)
+    # **No shelving (owner decision 2026-10-28).** This step used to skip a list of packages
+    # (`components/shelved_models.py`) unless the Mac was marked "keep all models". Blocking a model
+    # by name is gone: every model this Mac's memory can run is copied, and everything else is left
+    # on the SSD by the RAM floor alone.
     # **Lite Mode models only (owner 2026-10-03/04)**: the 8 GB-class models a Lite Mode Mac runs
     # (`components/workstation_models.py`, ~15 GB). The kit's `2 - Copy the Lite Mode models.command`
     # sets STUDIOHUB_WORKSTATION=1; it is the only difference from `2 - Copy the models`.
@@ -582,19 +568,13 @@ def main() -> int:
     print(f"  This Mac has {memory} GB of memory.")
     print()
 
-    chosen, skipped, shelved, not_for_shop, pending, not_stocked = [], [], [], [], [], []
+    chosen, skipped, not_for_shop, pending = [], [], [], []
     for package_id, manifest in sorted(manifests.items()):
         if admission_check is not None and not admission_check(manifest):
             pending.append((package_id, manifest))
             continue
         if shop_mac and not manifest_allowed(manifest):
             not_for_shop.append(package_id)
-            continue
-        if not keep_all and manifest_shelved(manifest):
-            shelved.append(package_id)
-            continue
-        if not keep_all and package_id in NOT_STOCKED:
-            not_stocked.append(package_id)
             continue
         needs = required_gb(manifest)
         (chosen if needs <= memory else skipped).append((package_id, needs, manifest))
@@ -710,17 +690,8 @@ def main() -> int:
         names = ", ".join(package_id for package_id, _n, _m, _how in absent)
         print(f"  Not on this SSD, so not copied ({len(absent)}): {names}")
         print()
-    if shelved:
-        print(f"  Shelved, not copied ({len(shelved)}): {', '.join(shelved)}")
-        print("  They stay on the SSD. To keep them on this Mac, set keep_all_models in the Hub's "
-              "settings (see the release notes), then run this again.")
-        print()
     if not_for_shop:
         print(f"  Lite Mode models only: {len(not_for_shop)} other model(s) stay on the SSD.")
-        print()
-    if not_stocked:
-        print(f"  Installed on request only, not copied ({len(not_stocked)}): {', '.join(not_stocked)}")
-        print("  They stay on the SSD; install one from the Gateway's Install a model... menu.")
         print()
     if pending:
         print(f"  Pending models ({len(pending)}): not yet qualified; retained on SSD")

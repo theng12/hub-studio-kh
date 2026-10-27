@@ -125,6 +125,58 @@ class PresetDataTests(unittest.TestCase):
                         f"{package_id} needs more memory than the {preset['name']} preset's own tier")
 
 
+class NoModelIsBlockedByNameTests(unittest.TestCase):
+    """RAM is the only gate - the inverse test of the shelving and not-stocked lists deleted 2026-10-28.
+
+    The seven packages that were on `SHELVED_MODELS` and the one that was on `NOT_STOCKED` have to
+    be *selectable* now: present as manifests, in the catalog, and in no preset (a preset is a
+    starting set, and the owner's four lists do not name them). A future list that hides a model by
+    name fails here, which is the shape the owner's rule forbids.
+    """
+
+    FORMERLY_SHELVED = ("whisper-base", "whisper-small", "voxcpm2-bf16", "fish-audio-s2-pro-bf16",
+                        "chatterbox-4bit", "chatterbox-8bit", "s3tokenizerv2")
+    FORMERLY_NOT_STOCKED = ("qwen-image-2-1-mlx-serve-4bit",)
+
+    def test_the_mechanisms_are_gone_rather_than_emptied(self) -> None:
+        import ast
+        for name in ("components/shelved_models.py",):
+            with self.subTest(file=name):
+                self.assertFalse((ROOT / name).exists(), f"{name} is back; RAM is the only gate")
+        kit = ast.parse((ROOT / "qualification" / "copy_models_for_this_mac.py").read_text())
+        assigned = {target.id for node in ast.walk(kit) if isinstance(node, ast.Assign)
+                    for target in node.targets if isinstance(target, ast.Name)}
+        self.assertNotIn("NOT_STOCKED", assigned)
+        hub = (ROOT / "components" / "hub" / "standalone.py").read_text()
+        self.assertNotIn("shelve_installed_models", hub)
+        self.assertNotIn("_shelved_refusal", hub)
+        # The device setting went with them: it existed only to exempt a Mac from the list.
+        settings = (ROOT / "components" / "hub" / "standalone_config.py").read_text()
+        self.assertNotIn("keep_all_models", settings)
+
+    def test_every_formerly_blocked_package_is_a_real_selectable_manifest(self) -> None:
+        manifests = _manifests()
+        for package_id in self.FORMERLY_SHELVED + self.FORMERLY_NOT_STOCKED:
+            with self.subTest(package=package_id):
+                self.assertIn(package_id, manifests, f"{package_id} has no manifest, so it cannot be ticked")
+                self.assertTrue(model_presets.floor_gb(package_id, manifests[package_id]),
+                                "a selectable model still needs its own published RAM floor")
+
+    def test_none_of_them_is_in_a_preset(self) -> None:
+        listed = {package for preset in model_presets.load() for package in preset["packages"]}
+        for package_id in self.FORMERLY_SHELVED + self.FORMERLY_NOT_STOCKED:
+            with self.subTest(package=package_id):
+                self.assertNotIn(package_id, listed,
+                                 "the owner's four presets do not name it; it is chosen by hand")
+
+    def test_none_of_them_is_refused_by_name_anywhere(self) -> None:
+        # The one list that may still refuse a model is retirement, and none of these is on it.
+        from components import retired_models
+        for package_id in self.FORMERLY_SHELVED + self.FORMERLY_NOT_STOCKED:
+            with self.subTest(package=package_id):
+                self.assertFalse(retired_models.manifest_retired({"package_id": package_id}, package_id))
+
+
 class StartingPresetTests(unittest.TestCase):
     def test_the_offered_preset_rounds_down_so_it_always_fits(self) -> None:
         # Down, never up: the marked preset must be one this Mac can run in full, or the screen

@@ -967,7 +967,7 @@ def _write_index(root, index):
 def forget_packages(library, package_ids):
     """Drop the receipts of packages whose folders are gone; return the package ids dropped.
 
-    Used when the Hub moves a retired or shelved package into the Trash Folder: the receipt is then a
+    Used when the Hub moves a retired package into the Trash Folder: the receipt is then a
     line for bytes nobody will find (the verify-kit check and the kit manifest read the whole index and
     count every one as missing files). Takes the same import lock and writes the same format as
     `_register`. A receipt whose folder is still on disk is kept; a busy lock or an unreadable index
