@@ -228,7 +228,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertTrue(any("production_allowed" in problem and "boolean" in problem
                             for problem in problems), problems)
 
-    def test_pending_nemotron_capture_reproduces_runtime_manifest_offline(self):
+    def test_nemotron_capture_reproduces_runtime_manifest_offline(self):
         manifest = self.manifests["nemotron-lightning-4bit"]
         choice = next(item for item in CAPTURE.CHOICES
                       if item["package_id"] == "nemotron-lightning-4bit")
@@ -250,7 +250,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
             captured = CAPTURE.capture(choice)
         self.assertEqual(captured, manifest)
 
-    def test_pending_qwen36_capture_reproduces_verified_runtime_manifest_offline(self):
+    def test_qwen36_capture_reproduces_verified_runtime_manifest_offline(self):
         manifest = self.manifests["qwen36-35b-4bit"]
         choice = next(item for item in CAPTURE.CHOICES
                       if item["package_id"] == "qwen36-35b-4bit")
@@ -287,12 +287,16 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertEqual(manifest["minimum_macos"], "14.0")
         self.assertEqual(manifest["quantization"], "MLX 4-bit")
         self.assertIn("per-tensor 8-bit gate overrides", manifest["quantization_source"])
-        self.assertIs(manifest["production_allowed"], False)
+        self.assertIs(manifest["production_allowed"], True)
         self.assertNotIn("default", manifest)
         qualification = manifest["qualification"]
         self.assertEqual(qualification["status"], "unqualified")
-        self.assertIsNone(qualification["minimum_unified_memory_gb"])
-        self.assertIsNone(qualification["recommended_unified_memory_gb"])
+        # Installable and dispatchable from 2026-10-27 (owner: "We no longer block or lock any
+        # model."), so the RAM floor is the only gate and it must be published rather than left
+        # null - null reads as "copies everywhere", which neither of these weights can honour.
+        self.assertEqual(qualification["minimum_unified_memory_gb"], 24)
+        self.assertEqual(qualification["recommended_unified_memory_gb"], 32)
+        self.assertIn("PROVISIONAL, NOT MEASURED", qualification["memory_evidence"])
         self.assertIsNone(qualification["tested_usable_context_tokens"])
 
     def test_qualified_gemma4_capture_reproduces_verified_runtime_manifest_offline(self):
@@ -353,15 +357,26 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertIn("262,144", qualification["reason"])
         self.assertIn("model-declared", qualification["reason"])
 
-    def test_only_gemma4_is_admitted_from_the_three_moe_candidates(self):
+    def test_all_three_moe_candidates_are_admitted_and_each_publishes_a_ram_floor(self):
+        """No MoE candidate is withheld by name; being too big is the RAM floor's job.
+
+        Until 2026-10-27 `production_allowed: false` carried two facts at once - "not measured"
+        and "not offered" - so a Mac could not install one even where it fit. The owner removed
+        the name lock ("They are models we can run so we should have them installable. Able to
+        run on the machine or not is based off its RAM. We no longer block or lock any model."),
+        which makes a published floor mandatory: a null floor reads as "fits every Mac" to the
+        kit copy and to dispatch.
+        """
         gemma = self.manifests["gemma4-26b-a4b-qat-4bit"]
         self.assertIs(gemma["production_allowed"], True)
         self.assertEqual(gemma["qualification"]["status"], "qualified")
         for package_id in ("nemotron-lightning-4bit", "qwen36-35b-4bit"):
             with self.subTest(package=package_id):
                 manifest = self.manifests[package_id]
-                self.assertIs(manifest["production_allowed"], False)
+                self.assertIs(manifest["production_allowed"], True)
                 self.assertEqual(manifest["qualification"]["status"], "unqualified")
+                self.assertGreaterEqual(
+                    manifest["qualification"]["minimum_unified_memory_gb"], 24)
                 self.assertIsNone(
                     manifest["qualification"]["tested_usable_context_tokens"])
         self.assertIs(self.manifests["qwen3-5-9b-4bit"]["default"], True)
@@ -429,11 +444,16 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # Nemotron 3.5 Lightning 30B-A3B MLX 4-bit: ten runtime files / 17,792,581,692
             # bytes. The independently verified full stock package has an eleventh file,
             # README.md; runtime capture excludes it by the catalog's established policy.
-            "nemotron-lightning-4bit": "e74e501418a94a3bae52a33aa1f924c8d7d67a068586952deb55af834389568a",
+            # Digest moved 2026-10-27: `production_allowed` became true and a PROVISIONAL 24/32 GB
+            # weight-size floor was published, so the name lock is gone and RAM is the only gate.
+            # No publisher file, revision or byte count changed.
+            "nemotron-lightning-4bit": "a29b23f3a6a76e1d09966583ea20811204ae5f82301f0a03311688ac9ab7ee5e",
             # Qwen 3.6 35B-A3B MLX 4-bit: 15 runtime files / 20,429,166,969 bytes.
             # The independently verified full 16-file SSD stock also carries README.md;
             # runtime capture excludes only that 724-byte publisher file.
-            "qwen36-35b-4bit": "6134192255dc69ea481c97f777b0369016a1c06755f7b6d04ab8c7e7ce135ce9",
+            # Digest moved on 2026-10-27 for the same reason as Nemotron: admitted by name, RAM
+            # floor published at a PROVISIONAL 24/32 GB (the package is 19.03 GiB of weights).
+            "qwen36-35b-4bit": "348569723abbba433f4fd5089081f1da0e0a802a9f3113c8ee6d2c3fe5d5a4f1",
             # Gemma 4 26B-A4B QAT MLX 4-bit: 10 runtime files / 15,641,239,295 bytes.
             # The independently verified 11-file SSD stock remains whole; runtime capture
             # excludes only its 363-byte README.md. Only the 32 GiB qualification metadata

@@ -6,7 +6,7 @@ built on.
 
 - **App:** `Studio Hub.app` — its version and build are in `focused-release-manifest.json`,
   written beside it when the kit was staged (a pinned version here goes stale the next build)
-- **Models:** `model-library/` is described by a 39-package source catalog (~169.0 GB). Normal setup copies **37 production-allowed packages** (about 130.7 GB); the **2 pending packages** (2 Chat MLX 4-bit packages) are not copied until qualification. Qwen Image 2.1 Turbo MLX 4-bit is production-eligible on 16 GB and larger Macs; eligibility does not claim this SSD or any Mac already has its weights, which remains a kit-receipt fact.
+- **Models:** `model-library/` is described by a 39-package source catalog (~169.0 GB). Normal setup copies **39 production-allowed packages** (about 169.0 GB). No package is withheld pending qualification any more (owner, 2026-10-27: "We no longer block or lock any model."); the Mac's own memory is what decides which of them it copies and runs. Qwen Image 2.1 Turbo MLX 4-bit is production-eligible on 16 GB and larger Macs; eligibility does not claim this SSD or any Mac already has its weights, which remains a kit-receipt fact.
 - **Receipts:** `focused-release-manifest.json`, `Studio Hub.app.tree-sha256`
 **Layout:** the app and `model-library/` sit side by side at the top of the kit folder — no nested folders to hunt through.
 - **Guide:** `INSTALL-AND-TEST.md` (the long-form operator guide)

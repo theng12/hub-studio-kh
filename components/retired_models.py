@@ -17,9 +17,12 @@ RETIRED_MODELS = [
     "lance-3b-processor-qwen2-5-vl", "Qwen/Qwen2.5-VL-3B-Instruct",   # its processor companion
     # The local video pack, retired 0.6.127.
     "ltx-2-3-22b-ram-12gb-mlx", "baa-ai/LTX-2.3-22B-RAM-12GB-MLX",
-    # Its text encoder, retired 0.6.128: owner 2026-10-02, "it's bad ... remove it all over".
-    # Not shelved: every Mac, keep-all-models Macs included, sheds it, and the kit never carries it.
-    "gemma-3-12b-it-4bit", "mlx-community/gemma-3-12b-it-4bit",
+    # Gemma 3 12B 4-bit was LTX's text encoder and left this list on 2026-10-27: the owner
+    # removed the family block ("They are models we can run so we should have them installable.
+    # Able to run on the machine or not is based off its RAM. We no longer block or lock any
+    # model."). It is not installable today because the catalog ships no manifest for it - the
+    # parked one under components/video/retired/ targets the retired video engine - so re-adding
+    # it is a catalog decision, not a retirement one. Do not put the name back here.
 ]
 
 

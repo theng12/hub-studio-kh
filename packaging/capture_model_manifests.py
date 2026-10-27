@@ -151,24 +151,29 @@ CHOICES: tuple[dict[str, Any], ...] = (
      "display_name": "Gemma 4 26B-A4B QAT MLX 4-bit",
      "quantization": "QAT MLX 4-bit",
      "quantization_source": "model/config.json quantization: affine 4-bit, group size 64; preserved publisher per-tensor precision overrides"},
-    # Pending Qwen3.6 MoE candidate. The full verified SSD stock has sixteen canonical files;
-    # runtime capture omits only README.md. The checkpoint config identifies qwen3_5_moe and
-    # keeps its per-tensor 8-bit gate overrides; no hardware tier is inferred from its bytes.
+    # Qwen3.6 MoE. The full verified SSD stock has sixteen canonical files; runtime capture omits
+    # only README.md. The checkpoint config identifies qwen3_5_moe and keeps its per-tensor 8-bit
+    # gate overrides. Admitted 2026-10-27 with the rest of the name blocks removed (owner: "We no
+    # longer block or lock any model"), so its memory floor is the only gate - and it is
+    # PROVISIONAL: 24 GB is the next published fleet tier above the 19.03 GiB this package
+    # actually ships, not a measured peak. Replace it with a measurement before calling it
+    # qualified.
     {"package_id": "qwen36-35b-4bit",
      "model_id": "mlx-community/Qwen3.6-35B-A3B-4bit",
      "revision": "38740b847e4cb78f352aba30aa41c76e08e6eb46", "engine": "chat-mlx",
-     "captured_at": "2026-10-07", "production_allowed": False,
+     "captured_at": "2026-10-07", "production_allowed": True,
      "display_name": "Qwen 3.6 35B-A3B MLX 4-bit",
      "quantization": "MLX 4-bit",
      "quantization_source": "model/config.json quantization; preserved per-tensor 8-bit gate overrides"},
-    # Pending owner-selected MoE candidate. The full stock package keeps all eleven publisher-
-    # verified files; the runtime manifest follows the established capture policy and omits the
-    # README, leaving ten inference files. No RAM tier or usable context is inferred before the
-    # owner-authorized physical qualification.
+    # Owner-selected MoE. The full stock package keeps all eleven publisher-verified files; the
+    # runtime manifest follows the established capture policy and omits the README, leaving ten
+    # inference files. Admitted 2026-10-27 like qwen36. Its usable context is still unknown, and
+    # its memory floor is PROVISIONAL: 24 GB is the next published fleet tier above the 16.57 GiB
+    # this package ships, not a measured peak.
     {"package_id": "nemotron-lightning-4bit",
      "model_id": "mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit",
      "revision": "55ac8c89261109b36c04371cd3f479a4594208c8", "engine": "chat-mlx",
-     "captured_at": "2026-10-07", "production_allowed": False,
+     "captured_at": "2026-10-07", "production_allowed": True,
      "display_name": "Nemotron 3.5 Lightning 30B-A3B MLX 4-bit",
      "quantization": "MLX 4-bit affine",
      "quantization_source": "model/config.json quantization; preserved checkpoint tensor overrides"},
@@ -356,19 +361,19 @@ DETAILS: dict[str, dict[str, Any]] = {
     },
     "qwen36-35b-4bit": {
         "defaults": {"parameters_source": "model/generation_config.json"},
-        "memory": (None, None, None),
+        "memory": (24, 32, "PROVISIONAL, NOT MEASURED. Derived from the package this manifest ships: its fifteen runtime files total 20,429,166,969 bytes (19.03 GiB), so the smallest published fleet tier that can hold the weights at all is 24 GB; 16 GB cannot. 32 GB is recommended because a sparse 35B-A3B checkpoint's resident footprint exceeds its weight bytes and no peak has been observed on any Mac. This is a weight-size floor, not a measured tier, and no inference, TPS, script or scene-quality run has happened. Replace it with a measurement (qualification/model-readings.json) before treating the model as qualified."),
         "qualification": {
             "status": "unqualified",
-            "reason": "Downloaded and publisher-hash verified only. English import, inference, TPS, script/scene quality, usable context and RAM-tier qualification have not yet been run.",
+            "reason": 'Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). English import, inference, TPS, script/scene quality, usable context and a MEASURED RAM tier have not yet been run.',
             "tested_usable_context_tokens": None,
         },
     },
     "nemotron-lightning-4bit": {
         "defaults": {"parameters_source": "model/generation_config.json"},
-        "memory": (None, None, None),
+        "memory": (24, 32, "PROVISIONAL, NOT MEASURED. Derived from the package this manifest ships: its ten runtime files total 17,792,581,692 bytes (16.57 GiB), so the smallest published fleet tier that can hold the weights at all is 24 GB; 16 GB cannot. 32 GB is recommended because a sparse 30B-A3B checkpoint's resident footprint exceeds its weight bytes and no peak has been observed on any Mac. This is a weight-size floor, not a measured tier. Replace it with a measurement (qualification/model-readings.json) before treating the model as qualified."),
         "qualification": {
             "status": "unqualified",
-            "reason": "Downloaded and publisher-hash verified only. Owner has held inference until restart and explicit permission; no RAM tier, TPS or script/scene quality has been qualified.",
+            "reason": 'Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). No inference, TPS, script/scene quality or MEASURED RAM tier has been qualified.',
             "tested_usable_context_tokens": None,
         },
     },

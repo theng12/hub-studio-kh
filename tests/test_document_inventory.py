@@ -127,9 +127,11 @@ class KitDocumentNumbersTests(unittest.TestCase):
 
     `packaging/kit-readmes/Studio Hub KH.md` goes onto every SSD and
     `qualification/SSD-KIT-README.md` is the "read this first" beside it, so the numbers there
-    are what the owner checks the drive against. Pending packages stay on the SSD, so they count as
-    stock, while ordinary setup refuses to copy them. Retyping today's numbers would only reset the
-    clock; these derive both inventories from the manifests.
+    are what the owner checks the drive against. A `production_allowed: false` package stays on
+    the SSD as stock while ordinary setup refuses to copy it — a set that has been empty since
+    2026-10-27, when the owner removed the last name-based hold ("We no longer block or lock any
+    model."). Retyping today's numbers would only reset the clock; these derive both inventories
+    from the manifests.
     """
 
     KIT_README = ROOT / "packaging" / "kit-readmes" / "Studio Hub KH.md"
@@ -147,16 +149,19 @@ class KitDocumentNumbersTests(unittest.TestCase):
         match = self._match(
             text,
             r"Normal setup copies \*\*(\d+) production-allowed packages\*\*\s+"
-            r"\(about ([\d.]+) GB\); the \*\*(\d+) pending packages\*\* \(([^)]+)\)",
-            "Normal setup copies **<n> production-allowed packages** (about <gb> GB); "
-            "the **<n> pending packages** (<composition>)")
+            r"\(about ([\d.]+) GB\)\. No package is withheld pending qualification any more",
+            "Normal setup copies **<n> production-allowed packages** (about <gb> GB). "
+            "No package is withheld pending qualification any more")
         self.assertEqual(int(match.group(1)), measured_kit_packages())
         self.assertEqual(float(match.group(2)), round(measured_kit_bytes() / 1e9, 1))
-        self.assertEqual(int(match.group(3)), measured_packages() - measured_kit_packages())
-        self.assertRegex(match.group(4), r"2 Chat MLX 4-bit",
-                         "the pending-package breakdown must name the two remaining Chat candidates")
-        self.assertNotIn("Qwen Image 2.1 Turbo", match.group(4),
-                         "owner-adopted Turbo is production-allowed, not pending")
+        # Total and copyable now name the same set: the owner removed the last name-based hold on
+        # 2026-10-27 ("We no longer block or lock any model."), so RAM - not a manifest flag -
+        # decides what a Mac copies and runs. This assertion is the alarm if a pending flag or a
+        # withheld-name list ever comes back without its documents.
+        self.assertEqual(measured_kit_packages(), measured_packages(),
+                         "some shipped package is withheld from ordinary setup again; if that is "
+                         "deliberate, restore the pending-package sentence to these documents and "
+                         "to this test")
 
     def test_the_kit_readme_states_the_measured_package_count_and_size(self) -> None:
         text = self.KIT_README.read_text(encoding="utf-8")
