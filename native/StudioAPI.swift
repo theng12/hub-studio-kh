@@ -9568,8 +9568,18 @@ final class NativeWorkspaceStore: ObservableObject {
         return parts.joined(separator: " ")
     }
 
+    /// Remove one downloaded model from the Models page (owner decision 2026-10-28).
+    ///
+    /// This was a stub that refused every time: "unavailable until it can protect models with
+    /// active readers". The Hub can protect them now - it moves the package into that library's
+    /// `_trash` and refuses while a job, a paused model or a dependent package is using it - so the
+    /// button calls the same route the Set up page's Remove does, and shows the Hub's own sentence.
     func removeModel(_ model: NativeModel) async {
-        error = "Hub model removal is unavailable until it can protect models with active readers."
+        guard let package = modelPackages[model.repo] else {
+            error = "This model has no approved Hub package, so the Hub cannot remove it."
+            return
+        }
+        await removePackage(package.packageId)
     }
 
     /// Take on the cluster credential, so this Mac accepts work from its controller.

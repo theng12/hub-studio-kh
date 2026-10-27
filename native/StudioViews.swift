@@ -7998,7 +7998,7 @@ struct StudioContent: View {
         }
     }
     private func confirmRemove(_ model: NativeModel) {
-        let alert = NSAlert(); alert.messageText = "Remove downloaded model?"; alert.informativeText = "Remove \(model.label) from this library. Existing generated files are kept. Models in use or required by another installed model cannot be removed."
+        let alert = NSAlert(); alert.messageText = "Remove downloaded model?"; alert.informativeText = "Move \(model.label) into this library's trash. Nothing is deleted: it can be restored for 30 days, then it goes to the Mac's Trash. Generated files are kept. A model a job is using, or one another installed model needs, is refused and says which."
         alert.addButton(withTitle: "Keep Model"); alert.addButton(withTitle: "Remove Download")
         if alert.runModal() == .alertSecondButtonReturn { Task { await workspace.removeModel(model) } }
     }
