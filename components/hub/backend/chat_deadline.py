@@ -274,6 +274,9 @@ def input_tokens(request_body: bytes) -> int:
         if isinstance(content, str):
             chars += len(content)
         elif isinstance(content, list):
+            # Parts: the text is counted, the image's data URI is not text and is not counted.
+            # shortcut: an image's own soft tokens (Gemma 4: 280) are left out, ~1% of a
+            # 32,768-token prompt — upgrade to per-part counts if a caller ever sends many images.
             chars += sum(len(part.get("text") or "") for part in content
                          if isinstance(part, dict) and isinstance(part.get("text"), str))
     return int(math.ceil(chars / CHARS_PER_TOKEN)) if chars else 0

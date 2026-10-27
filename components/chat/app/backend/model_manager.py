@@ -73,6 +73,10 @@ def read_chat_manifests(catalog: Path) -> list[tuple[Path, dict]]:
             raise ManifestCatalogError(
                 f"Chat manifest {path.name} has a non-boolean default: "
                 f"{manifest['default']!r}")
+        if "vision" in manifest and type(manifest["vision"]) is not bool:
+            raise ManifestCatalogError(
+                f"Chat manifest {path.name} has a non-boolean vision: "
+                f"{manifest['vision']!r}")
         if package_id in package_ids:
             raise ManifestCatalogError(
                 f"duplicate package_id {package_id!r} in {package_ids[package_id]} and {path.name}")
@@ -123,6 +127,10 @@ class ChatModelProxy:
         self.manifest_path = manifest_path
         self.production_allowed = model_packages.production_allowed(manifest)
         self.production_refusal = None if self.production_allowed else _pending_reason(manifest)
+        # The checkpoint's own answer (a `vision_config` in its `config.json`), via the engine
+        # that read that file — not a hand-written manifest flag. `__getattr__` would forward
+        # this too; it is spelled out so a reader can see where the capability comes from.
+        self.supports_vision = bool(getattr(engine, "supports_vision", False))
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._engine, name)

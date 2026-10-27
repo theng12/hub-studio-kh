@@ -351,7 +351,11 @@ def _parameter_surface(engine) -> list[dict]:
     context_value = context.get("value")
     context_source = context.get("source")
 
-    prompt_note = "OpenAI-shaped messages, each with a string content field"
+    supports_vision = getattr(engine, "supports_vision", False)
+    if supports_vision:
+        prompt_note = "OpenAI-shaped messages, each with a string content field or content parts (text and image_url)"
+    else:
+        prompt_note = "OpenAI-shaped messages, each with a string content field"
     if isinstance(context_value, int) and not isinstance(context_value, bool) and context_value > 0:
         prompt_note += (
             f"; the rendered prompt is measured before anything is streamed. A figure the request "
@@ -604,6 +608,10 @@ def create_app(engine: ChatEngine | ChatModelManager, policy: memory_policy_modu
             qualification = (getattr(selected, "manifest", {}) or {}).get("qualification") or {}
             inference_evidence = qualification.get("reason") or (
                 "Production allowed by bundled policy; no model-specific inference evidence is declared.")
+            supports_vision = bool(getattr(selected, "supports_vision", False))
+            capabilities = ["chat.completion"]
+            if supports_vision:
+                capabilities.append("vision")
             row = {
             # The model's own label, read from its manifest/repo id - never a literal here, so
             # a second chat model cannot be published under the first one's name. It carries the
@@ -611,7 +619,8 @@ def create_app(engine: ChatEngine | ChatModelManager, policy: memory_policy_modu
             "label": _model_label(selected), "name": _model_label(selected),
             "repo": selected.model_id, "model_id": selected.model_id,
             "family": getattr(selected, "family", None), "modality": "chat",
-            "capabilities": ["chat.completion"], "hub_operation": "chat.completion",
+            "capabilities": capabilities, "hub_operation": "chat.completion",
+            "supports_vision": supports_vision,
             "model_revision": selected.revision,
             "qualified_revision": selected.revision if allowed else None,
             "qualified_revision_match": True if allowed else False,
@@ -648,7 +657,9 @@ def create_app(engine: ChatEngine | ChatModelManager, policy: memory_policy_modu
             # passes it through verbatim and adds its own `deadline_seconds`.
             "lane_contract": _lane_contract(selected, parameters),
             "qualification": {
-                "owner_decision": f"{_model_label(selected)}, MLX, text-only",
+                "owner_decision": (f"{_model_label(selected)}, MLX, vision-capable"
+                                   if supports_vision else
+                                   f"{_model_label(selected)}, MLX, text-only"),
                 "packaged_inference": (inference_evidence if allowed else
                                        "pending: production inference is blocked until qualification"),
             },
@@ -841,9 +852,43 @@ def create_app(engine: ChatEngine | ChatModelManager, policy: memory_policy_modu
         messages = body.get("messages")
         if not isinstance(messages, list) or not messages:
             raise HTTPException(422, "messages must be a non-empty list")
+        # Whether this *runtime* can read a picture, which is not the same question as whether
+        # the checkpoint could: a Mac whose Chat runtime predates mlx-vlm loads such a model for
+        # text and must say so by name rather than accept the image and answer about nothing.
+        vision_here = bool(getattr(selected, "supports_vision", False))
+        vision_reason = getattr(selected, "vision_unavailable_reason", None)
+        wants_image = any(isinstance(m.get("content"), list) and any(
+            isinstance(part, dict) and part.get("type") == "image_url"
+            for part in m["content"]) for m in messages if isinstance(m, dict))
+        if wants_image and not vision_here:
+            raise HTTPException(422, (
+                f"{_model_label(selected)}: images cannot be read here — {vision_reason}"
+                if vision_reason else
+                f"{_model_label(selected)} does not accept images; this lane's messages carry "
+                f"string content only"))
         for message in messages:
-            if not isinstance(message, dict) or not isinstance(message.get("content"), str):
-                raise HTTPException(422, "every message needs string content")
+            if not isinstance(message, dict):
+                raise HTTPException(422, "every message must be an object")
+            content = message.get("content")
+            if isinstance(content, str):
+                continue
+            if isinstance(content, list) and vision_here:
+                valid_parts = True
+                for part in content:
+                    if not isinstance(part, dict):
+                        valid_parts = False
+                        break
+                    ptype = part.get("type")
+                    if ptype == "text" and isinstance(part.get("text"), str):
+                        continue
+                    if ptype == "image_url" and isinstance(part.get("image_url"), (dict, str)):
+                        continue
+                    valid_parts = False
+                    break
+                if valid_parts:
+                    continue
+                raise HTTPException(422, "messages need string content or text/image_url parts")
+            raise HTTPException(422, "every message needs string content")
         # The same `resolved()` call the catalog publishes its `default` fields from: a parameter
         # the request omits takes the value in force here, and one the request supplies wins.
         _published, defaults = _resolved_parameters(settings_dir, selected)

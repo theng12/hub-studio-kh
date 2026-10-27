@@ -1119,6 +1119,45 @@ class ChatPageUsageEvidenceTests(unittest.TestCase):
                           "the page path recorded a usage the validator never approved")
 
 
+class ChatMessagePartsTests(unittest.TestCase):
+    """A vision turn is a list of parts; the Hub passes it through and refuses only nonsense.
+
+    The Hub is deliberately not the authority on *whether* a model reads images — the worker
+    owns that, and one Hubs serves Macs that differ. Its job here is the text lane's old job
+    (non-empty, bounded) applied to the two part types the lane publishes.
+    """
+
+    def _messages(self, value):
+        from components.hub.backend.chat_jobs import _messages
+        return _messages(value)
+
+    def test_a_text_turn_is_unchanged(self) -> None:
+        self.assertEqual(self._messages([{"role": "user", "content": "hi"}]),
+                         [{"role": "user", "content": "hi"}])
+
+    def test_text_and_image_parts_survive_whole(self) -> None:
+        parts = [{"type": "text", "text": "describe this"},
+                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAA"}}]
+        kept = self._messages([{"role": "user", "content": parts}])
+        self.assertEqual(kept, [{"role": "user", "content": parts}],
+                         "a part the lane publishes was rewritten or dropped")
+
+    def test_nonsense_parts_are_refused_by_name(self) -> None:
+        from fastapi import HTTPException
+        for parts in ([], [{"type": "audio", "audio": "x"}], [{"type": "text"}],
+                      [{"type": "image_url", "image_url": {}}], ["string part"]):
+            with self.subTest(parts=parts):
+                with self.assertRaises(HTTPException):
+                    self._messages([{"role": "user", "content": parts}])
+
+    def test_the_size_cap_still_counts_part_text_and_image_urls(self) -> None:
+        from fastapi import HTTPException
+        from components.hub.backend import chat_jobs
+        huge = [{"type": "image_url", "image_url": {"url": "x" * (chat_jobs.MAX_MESSAGE_CHARS + 1)}}]
+        with self.assertRaises(HTTPException):
+            self._messages([{"role": "user", "content": huge}])
+
+
 class ChatPackTimingTests(unittest.TestCase):
     """A dispatched pack carries the worker's generation time beside the Hub's round trip.
 
