@@ -257,11 +257,20 @@ class Gateway:
         return int(done.stdout.strip() or 0)
 
     def publish(self, artifact: Path, version: str, build: str,
-                controller_ids: list[str]) -> tuple[int, object]:
-        """One POST. `controller_ids` names exactly the site(s) this call offers the file to."""
-        return self.call('POST', '/admin/api/release/publish',
-                         {'artifact_path': str(artifact), 'version': version, 'build': build,
-                          'controller_ids': controller_ids},
+                controller_ids: list[str], force_full: bool = False) -> tuple[int, object]:
+        """One POST. `controller_ids` names exactly the site(s) this call offers the file to.
+
+        `force_full` asks the Gateway for the whole image even where a controller advertises the
+        delta capability. A Hub older than the release can take the capability marker and still
+        refuse the stage (0.6.201 refuses a delta over `MAX_DELTA_FRACTION` 0.5), then asks for a
+        disk image a files-only release never had. The field is sent only when asked for, so an
+        ordinary publish's body is unchanged.
+        """
+        payload = {'artifact_path': str(artifact), 'version': version, 'build': build,
+                   'controller_ids': controller_ids}
+        if force_full:
+            payload['force_full'] = True
+        return self.call('POST', '/admin/api/release/publish', payload,
                          timeout=PUBLISH_TIMEOUT_S)
 
     def pause(self) -> object:
@@ -336,13 +345,14 @@ class Rollout:
 
     def __init__(self, gateway, accepted: dict, artifact: Path, version: str, build: str,
                  receipts: Path, *, window_s: float = DEFAULT_WINDOW_S, poll_s: float = POLL_S,
-                 now=time.monotonic, sleep=time.sleep) -> None:
+                 now=time.monotonic, sleep=time.sleep, force_full: bool = False) -> None:
         self.gateway = gateway
         self.accepted = accepted
         self.artifact = Path(artifact)
         self.version = version
         self.build = build
         self.receipts = Path(receipts)
+        self.force_full = force_full
         self.window_s = window_s
         self.poll_s = poll_s
         self.now = now
@@ -522,7 +532,8 @@ class Rollout:
             note(f'{label}: receipt from an earlier run; not reposting')
             return 'reused'
         row['post_count'] += 1
-        status, reply = self.gateway.publish(self.artifact, self.version, self.build, [site_id])
+        status, reply = self.gateway.publish(self.artifact, self.version, self.build, [site_id],
+                                             force_full=self.force_full)
         locations = reply.get('locations') if isinstance(reply, dict) else None
         outcome = (locations or {}).get(site_id) if isinstance(locations, dict) else None
         if not isinstance(outcome, dict):
@@ -683,6 +694,11 @@ def main(argv: list[str] | None = None) -> int:
                         help='receipt JSON to write; refused when it already exists')
     parser.add_argument('--only-sites', default=None,
                         help='comma-separated site ids or labels; default: every site')
+    parser.add_argument('--full', action='store_true',
+                        help='send the whole image to every site, even one that advertises the '
+                             'delta capability (a Hub older than the release can refuse a delta '
+                             'over half the image and then ask for a disk image a files-only '
+                             'release never had)')
     args = parser.parse_args(argv)
 
     evidence = Path(args.evidence)
@@ -696,7 +712,8 @@ def main(argv: list[str] | None = None) -> int:
 
     gateway = Gateway()
     rollout = Rollout(gateway, accepted, artifact, args.version, args.build,
-                      receipts=evidence.parent / 'hub-rollout-site-receipts')
+                      receipts=evidence.parent / 'hub-rollout-site-receipts',
+                      force_full=args.full)
     try:
         fleet = gateway.fleet(force=True)
     except Exception as exc:  # noqa: BLE001 - no roster is no publish
@@ -719,6 +736,9 @@ def main(argv: list[str] | None = None) -> int:
         'schema': SCHEMA, 'tool': 'scripts/hub_rollout.py',
         'generated_at': utc_now(), 'version': args.version, 'build': args.build,
         'artifact': accepted,
+        # Which shape was offered: a full push is the only one an older Hub can take when its
+        # delta refusal (MAX_DELTA_FRACTION) covers this release.
+        'force_full': args.full,
         'window_s': DEFAULT_WINDOW_S, 'poll_s': POLL_S,
         'sites': rows,
         'pause': {
