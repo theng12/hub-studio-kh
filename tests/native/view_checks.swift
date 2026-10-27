@@ -151,6 +151,53 @@ enum ViewChecks {
            let renders {
             try? renders.write(to: URL(fileURLWithPath: path))
         }
+        // The install screen (owner decision 2026-10-28). This gate has no Hub, so the app has read
+        // no plan: the page must draw its "reading" state rather than an empty preset list, which
+        // would claim this Hub offers no presets. The populated page is shown by
+        // `native/render-page.sh` against a fixture.
+        //
+        // The three promises that are pure app logic and can be checked without a Hub are pinned
+        // here too, because they are the ones a refactor breaks silently: a preset's count comes
+        // from the Hub and is never recomputed, a model too big here says so and stays listed, and
+        // a job heading this app has no word for is still a heading.
+        let emptyPlan = NativeInstallPlan(
+            memoryGB: 16, library: "/Volumes/KH-STUDIO-ATLAS/model-target",
+            diskPath: "/Volumes/KH-STUDIO-ATLAS/model-target", freeBytes: 380_000_000_000,
+            diskMeasured: true, stopBytes: 5_000_000_000, kits: ["/Volumes/KH-STUDIO-ATLAS/model-library"],
+            presets: [NativePreset(id: "creator-16", name: "Creator · 16 GB", tierGB: 16,
+                                   summary: "Adds the larger image model.", installedCount: 9,
+                                   packageCount: 10, complete: false, fitsThisMac: true,
+                                   toCopyBytes: 1_500_000_000, freeAfterBytes: 378_500_000_000,
+                                   refused: nil,
+                                   packageIDs: Array(repeating: "p", count: 10))],
+            startingPreset: "creator-16",
+            groups: [NativeInstallGroup(job: "a-job-this-app-does-not-know", models: [
+                NativeInstallModel(id: "big", label: "A model", job: "a-job-this-app-does-not-know",
+                                   purpose: "Does a thing.", quantization: "MLX 4-bit",
+                                   bytes: 9_000_000_000, floorGB: 32, installed: false,
+                                   reason: "Needs a Mac with at least 32 GB of memory; this one has 16 GB.",
+                                   sources: ["internet"])])],
+            problems: [])
+        check(emptyPlan.presets.first?.complete == false && emptyPlan.presets.first?.installedCount == 9,
+              "9 of 10 is not complete")
+        let bigModel = emptyPlan.allModels.first
+        check(bigModel?.refusedHere == true, "a model too big for this Mac is marked refused here")
+        check(bigModel?.reason?.contains("32 GB") == true && bigModel?.reason?.contains("16 GB") == true,
+              "the refusal names the floor and this Mac's memory")
+        check(emptyPlan.allModels.count == 1, "a refused model is still listed, never hidden")
+        check(emptyPlan.groups.first?.title == "a-job-this-app-does-not-know",
+              "a job this app has no word for is shown verbatim rather than dropped")
+        check(StudioPage.library.first == .setup, "Setup leads the Library section")
+        check(StudioPage.setup.title == "Set up this Mac",
+              "the page reads as the thing the operator is doing")
+
+        studio.selection = .setup
+        let setupPage = draw()
+        check(setupPage != nil, "the install screen draws offscreen with no Hub")
+        if let path = ProcessInfo.processInfo.environment["STUDIOHUB_VIEW_CHECKS_SETUP_PNG"],
+           let setupPage {
+            try? setupPage.write(to: URL(fileURLWithPath: path))
+        }
         window.orderOut(nil)
 
         if failures > 0 { exit(1) }

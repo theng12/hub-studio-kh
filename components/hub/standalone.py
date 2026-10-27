@@ -3125,6 +3125,218 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except model_removal.RemoveRefused as exc:
             raise _removal_refusal(exc) from exc
 
+    # ── The install screen from the Gateway (owner decision 2026-10-28) ────────────────────────
+    # The same answers the Mac's own screen reads, and the same write the Mac's own screen makes.
+    # A joined node's answer is relayed to the node, so the Gateway never computes a projection of
+    # its own: a preset's count is the count that Mac's Hub built from its own receipts.
+    @app.get("/api/hub/fleet/nodes/{node_id}/model-presets")
+    async def fleet_node_model_presets(node_id: str) -> JSONResponse:
+        """One Mac's install screen, from the Gateway: relayed to a node, answered locally here."""
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            try:
+                return JSONResponse(await fleet.relay_model(wanted, "GET", "/model-presets"))
+            except fleet.StartupRelayError as error:
+                # An offline Mac is a reported state: the Fleet page shows it and keeps the rest.
+                return JSONResponse(error.body, status_code=error.status)
+        return JSONResponse({**model_presets_screen(), "node": wanted, "hub_version": _app_version()})
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/model-preset")
+    async def fleet_node_set_model_preset(node_id: str, request: Request) -> JSONResponse:
+        """Set one Mac's preset from the Gateway. Body `{"preset_id": str, "requested_by": str}`.
+
+        `requested_by` is recorded on the Mac beside the choice, the same way the unqualified-render
+        grant records who asked: a preset decides what a Mac installs and what its one-time cleanup
+        moves. An unknown preset id is refused by name - never swapped for another.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "code": "BAD_BODY", "detail":
+                                 "The body must be a JSON object."}, status_code=400)
+        requested_by = str(body.get("requested_by") or "").strip()
+        if not requested_by:
+            return JSONResponse({"ok": False, "code": "APPROVER_REQUIRED", "detail":
+                                 "Name who set this preset."}, status_code=400)
+        preset_id = str(body.get("preset_id") or "").strip()
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            startup_control.audit("model_preset_relay", {"node": wanted, "preset": preset_id,
+                                                         "actor": actor, "requested_by": requested_by})
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "POST", "/model-preset",
+                    payload={"preset_id": preset_id, "requested_by": requested_by},
+                    feature=f"setting a model preset from the Gateway (Studio Hub {_app_version()})"))
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+        from components import model_presets
+        try:
+            saved = standalone_config.set_preset_choice(preset_id or None)
+        except model_presets.PresetError as exc:
+            startup_control.audit("model_preset", {"node": wanted, "preset": preset_id,
+                                                   "actor": actor, "refused": str(exc)})
+            return JSONResponse({"ok": False, "code": "UNKNOWN_PRESET", "detail": str(exc)},
+                                status_code=409)
+        startup_control.audit("model_preset", {"node": wanted, "preset": saved, "actor": actor,
+                                               "requested_by": requested_by})
+        return JSONResponse({"ok": True, "node": wanted, "preset_id": saved,
+                             "requested_by": requested_by, "hub_version": _app_version()})
+
+    # ── The one-time preset cleanup (owner decision 2026-10-28) ────────────────────────────────
+    # A Mac set up before the install screen exists carries whatever the kit copied. This reports
+    # what is outside its preset, and - only when told to - moves those packages into the library's
+    # trash. Dry run first, per Mac, and an apply that records that it ran.
+    PRESET_CLEANUP = "0.6.205"
+
+    def _this_machine_id() -> str:
+        """This Mac's fleet key, lower-cased: the one name the cleanup state is filed under."""
+        from .backend import fleet_nodes as fleet
+        return str(fleet.this_machine()["id"]).lower()
+
+    def _preset_cleanup_inputs() -> dict[str, Any]:
+        """Everything a cleanup or its dry run needs, resolved once.
+
+        The preset is the owner's recorded choice for this Mac, else the starter for its memory;
+        the "keep" set is the models this Mac's owner has said must stay. Both come from the Hub's
+        own state, never from what the library happens to hold - a target derived from the diff
+        would move depending on itself.
+        """
+        from components import model_presets
+        import psutil
+        library, catalog, index = _removal_state()
+        memory_gb = round(psutil.virtual_memory().total / (1024 ** 3))
+        chosen = standalone_config.preset_choice()
+        keep = standalone_config.preset_cleanup_keep()
+        paused = {}
+        for package_id, manifest in catalog.items():
+            if manifest.get(_MANIFEST_ERROR):
+                continue
+            state = _paused_for(manifest)
+            if state:
+                paused[package_id] = state
+        return {"library": library, "catalog": catalog, "index": index, "memory_gb": memory_gb,
+                "preset_id": preset_cleanup_preset(memory_gb, chosen, catalog),
+                "keep": set(keep) if isinstance(keep, list) else set(),
+                "running_jobs": _running_model_jobs(), "paused": paused,
+                "chosen": chosen}
+
+    def preset_cleanup_preset(memory_gb: float | None, chosen: str | None,
+                              catalog: dict[str, dict[str, Any]]) -> str | None:
+        from .backend import preset_cleanup
+        try:
+            return preset_cleanup.preset_for(memory_gb, chosen)
+        except Exception:  # noqa: BLE001 - a preset file that cannot be read is reported, not a 500
+            return None
+
+    @app.get("/api/hub/preset-cleanup")
+    def preset_cleanup_report() -> dict[str, Any]:
+        """The **dry run**: what this Mac's one-time cleanup would move, and what it would keep.
+
+        Moves nothing and writes nothing. `ran` says whether it has already run here, so the
+        screen can show the report of a Mac it has already tidied rather than offering it again.
+        """
+        from .backend import preset_cleanup
+        inputs = _preset_cleanup_inputs()
+        machine = _this_machine_id()
+        already = preset_cleanup.has_run(ledger.DATA_DIR, machine)
+        try:
+            report = preset_cleanup.plan(
+                library=inputs["library"], manifests=inputs["catalog"], catalog=inputs["catalog"],
+                records=inputs["index"], preset_id=inputs["preset_id"],
+                memory_gb=inputs["memory_gb"], running_jobs=inputs["running_jobs"],
+                paused=inputs["paused"], keep=inputs["keep"])
+        except preset_cleanup.CleanupRefused as exc:
+            raise HTTPException(exc.status, exc.body) from exc
+        return {**report, "machine": machine, "already_ran": already,
+                "chosen_preset": inputs["chosen"], "keep": sorted(inputs["keep"]),
+                "hub_version": _app_version()}
+
+    @app.post("/api/hub/preset-cleanup")
+    def preset_cleanup_apply(body: dict[str, Any]) -> dict[str, Any]:
+        """Run it once. Body `{"approved_by": str, "keep"?: [ids], "preset_id"?: str}`.
+
+        `approved_by` is required and recorded: the owner approves a report, and the record says
+        who did. A second call is a no-op that says when it already ran.
+        """
+        from .backend import preset_cleanup
+        approved_by = str(body.get("approved_by") or "").strip()
+        if not approved_by:
+            raise HTTPException(400, "Name who approved this cleanup.")
+        inputs = _preset_cleanup_inputs()
+        keep = body.get("keep")
+        if keep is not None:
+            if not isinstance(keep, list) or not all(isinstance(item, str) for item in keep):
+                raise HTTPException(400, "keep must be a list of package ids.")
+            inputs["keep"] = set(keep)
+        preset_id = str(body.get("preset_id") or inputs["preset_id"] or "")
+        owned = _library_may_be_moved_from("cleaning up this Mac's models")
+        try:
+            return preset_cleanup.apply(
+                data_dir=ledger.DATA_DIR, machine=_this_machine_id(), library=inputs["library"],
+                manifests=inputs["catalog"], catalog=inputs["catalog"], records=inputs["index"],
+                may_move=owned, preset_id=preset_id, memory_gb=inputs["memory_gb"],
+                approved_by=approved_by, running_jobs=inputs["running_jobs"],
+                paused=inputs["paused"], keep=inputs["keep"])
+        except preset_cleanup.CleanupRefused as exc:
+            raise HTTPException(exc.status, exc.body) from exc
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/preset-cleanup")
+    async def fleet_preset_cleanup_report(node_id: str, request: Request) -> JSONResponse:
+        """One Mac's dry run, from the Gateway: relayed to that Mac, or answered for this one."""
+        return await _fleet_preset_cleanup(node_id, request, None)
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/preset-cleanup")
+    async def fleet_preset_cleanup_apply(node_id: str, request: Request) -> JSONResponse:
+        """Run one Mac's cleanup, from the Gateway. An offline Mac is reported, not failed."""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or not str(body.get("approved_by") or "").strip():
+            return JSONResponse({"ok": False, "code": "APPROVAL_REQUIRED", "detail":
+                                 "Name who approved this cleanup."}, status_code=400)
+        return await _fleet_preset_cleanup(node_id, request, body)
+
+    async def _fleet_preset_cleanup(node_id: str, request: Request,
+                                    body: dict[str, Any] | None) -> JSONResponse:
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            if body is not None:
+                startup_control.audit("preset_cleanup_relay", {"node": wanted, "actor": actor,
+                                                               "approved_by": body.get("approved_by")})
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "GET" if body is None else "POST", "/preset-cleanup",
+                    payload=body if body is not None else None))
+            except fleet.StartupRelayError as error:
+                # An offline Mac is a reported state, not a failure of the owner's request: the
+                # cleanup is a tidy-up, and a Mac that is asleep has nothing to lose by waiting.
+                return JSONResponse(error.body, status_code=error.status)
+        try:
+            if body is None:
+                answer = await run_in_threadpool(preset_cleanup_report)
+            else:
+                answer = await run_in_threadpool(preset_cleanup_apply, body)
+        except HTTPException as exc:
+            return JSONResponse({"ok": False, "detail": exc.detail}, status_code=exc.status_code)
+        return JSONResponse({**answer, "node": wanted, "hub_version": _app_version()})
+
     @app.get("/api/hub/model-removals")
     def list_model_removals() -> dict[str, Any]:
         """What is in the library's `_trash`, newest first: the restore-within-30-days surface."""

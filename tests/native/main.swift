@@ -276,8 +276,13 @@ require(StudioPage.create == [.image, .audio, .transcription, .music, .chat, .vi
 // Renders joined Library on 2026-10-26 with the owner's own request ("there's no render tab"): it is a
 // list of finished work beside Jobs, not a fleet setting, and it is the same page on a node and on
 // a controller. The order is a display decision, which is why it is written here and pinned.
-require(StudioPage.library == [.models, .voices, .jobs, .renders],
-        "Library holds the things the operator maintains")
+// Setup leads Library from 2026-10-28: the install-time model picker is the first thing an operator
+// does with a new Mac, and it belongs beside Models rather than inside it (Models lists what is
+// installed; Setup chooses what to install). It is the same page on a new Mac and an old one - on
+// a Mac that is already set up it opens showing every preset's count and all installed models, so
+// nothing about the "first launch only" question is baked into a second entry point.
+require(StudioPage.library == [.setup, .models, .voices, .jobs, .renders],
+        "Library holds the things the operator maintains, starting with Setup")
 require(StudioPage.fleet == [.connections], "Fleet holds the connection surface")
 require(StudioPage.app == [.whatsNew, .settings], "App holds What's New and Settings")
 require(StudioPage.comingLater.isEmpty,

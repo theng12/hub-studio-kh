@@ -260,6 +260,47 @@ def _settings() -> dict[str, int | bool]:
     }
 
 
+def preset_choice() -> str | None:
+    """The preset this Mac's owner chose, or None for "the one its memory implies".
+
+    Its own reader because it is the one **string** device setting: `_settings()` is typed
+    int|bool throughout and validating a preset id as a number would be the wrong shape. A file
+    with no `model_preset` is unset, which is a real answer - the installer offers the starter for
+    the Mac's tier and nobody has overridden it.
+    """
+    value, problem = _read_settings()
+    if problem is not None or not isinstance(value, dict):
+        return None
+    chosen = value.get("model_preset")
+    return chosen.strip() if isinstance(chosen, str) and chosen.strip() else None
+
+
+def preset_cleanup_keep() -> list[str]:
+    """Package ids this Mac's owner has said the one-time cleanup must leave alone."""
+    value, problem = _read_settings()
+    if problem is not None or not isinstance(value, dict):
+        return []
+    kept = value.get("preset_cleanup_keep")
+    return [item for item in kept if isinstance(item, str)] if isinstance(kept, list) else []
+
+
+def set_preset_choice(preset_id: str | None) -> str | None:
+    """Save (or clear) this Mac's preset. The id is checked against the shipped presets."""
+    from components import model_presets
+    if preset_id:
+        model_presets.by_id(preset_id)          # raises PresetError naming an unknown id
+    with _SETTINGS_LOCK:
+        value, _problem = _read_settings()
+        value = dict(value) if isinstance(value, dict) else {}
+        value["defaults_version"] = _DEFAULTS_VERSION
+        if preset_id:
+            value["model_preset"] = preset_id
+        else:
+            value.pop("model_preset", None)
+        _atomic_write(_settings_path(), value)
+    return preset_choice()
+
+
 def load_device_settings() -> dict[str, dict[str, int | bool]]:
     return {
         "defaults": {"max_bytes": DEFAULT_MAX_BYTES, "retention_days": DEFAULT_RETENTION_DAYS,
@@ -304,7 +345,17 @@ def update_device_settings(**changes: object) -> dict[str, dict[str, int | bool]
     """
     with _SETTINGS_LOCK:
         value = preview_device_settings(**changes)
-        _atomic_write(_settings_path(), value | {"defaults_version": _DEFAULTS_VERSION})
+        # **The settings this function does not name are carried over, not dropped.** It writes the
+        # whole file, and `preview_device_settings` returns only the fields it validates - so a save
+        # of the storage limits used to erase `model_preset` and `preset_cleanup_keep`, which are
+        # strings and a list and have their own readers below. The alternative, widening `value`
+        # into this function's typed return, would make every caller handle two shapes it does not
+        # use; carrying the file's own untouched keys is the smaller and safer statement.
+        existing, _problem = _read_settings()
+        carried = {key: item for key, item in (existing or {}).items()
+                   if key not in value and key != "defaults_version"}
+        _atomic_write(_settings_path(),
+                      {**carried, **value, "defaults_version": _DEFAULTS_VERSION})
         return load_device_settings()
 
 

@@ -153,6 +153,7 @@ struct PageRenderHarness {
         if let appearance { app.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua) }
         for role in (roles.isEmpty ? [nil] : roles) {
         if let role { applyRole(role, to: studio.workspace) }
+        Self.applyInstallPlan(studio.workspace)
         for page in pages {
         studio.selection = page
         for size in sizes {
@@ -241,6 +242,80 @@ struct PageRenderHarness {
     /// `controller`, `node`, `node-offline` or `standalone`: the Hub's identity and the fleet answers a
     /// Mac in that role would have. A controller has four joined Macs in four different conditions
     /// (working, low on disk and memory, off, refusing the credential) so every state is on screen.
+    /// The install screen with a real answer on it, for the screenshot: this Mac's memory and
+    /// free space, the four presets with counts, and models in every state - installed, to copy,
+    /// missing from the SSD (the 2026-10-28 `florence-2-large-ft` case) and too big for this Mac.
+    ///
+    /// A fixture, and labelled as one by its path (`/Volumes/KH-STUDIO-ATLAS/...`); the numbers are
+    /// this Mac's real ones where they are cheap to borrow and made up where they are not.
+    @MainActor static func applyInstallPlan(_ workspace: NativeWorkspaceStore) {
+        func model(_ package: String, _ label: String, _ job: String, _ purpose: String,
+                   _ bits: String?, _ gb: Double, _ floor: Int, installed: Bool = false,
+                   reason: String? = nil, sources: [String] = ["kit", "internet"]) -> NativeInstallModel {
+            NativeInstallModel(id: package, label: label, job: job, purpose: purpose,
+                               quantization: bits, bytes: Int64(gb * 1e9), floorGB: floor,
+                               installed: installed, reason: reason, sources: sources)
+        }
+        let presets = [
+            NativePreset(id: "essentials-8", name: "Essentials · 8 GB", tierGB: 8,
+                         summary: "What an 8 GB Mac needs to write, draw, narrate, transcribe, read pictures, search meaning and score.",
+                         installedCount: 9, packageCount: 9, complete: true, fitsThisMac: true,
+                         toCopyBytes: 0, freeAfterBytes: 380_200_000_000, refused: nil,
+                         packageIDs: ["whisper-turbo"]),
+            NativePreset(id: "creator-16", name: "Creator · 16 GB", tierGB: 16,
+                         summary: "Adds the larger image model, the writing model, a better captioner, the second voice and the 16 GB voice tier.",
+                         installedCount: 9, packageCount: 14, complete: false, fitsThisMac: true,
+                         toCopyBytes: 22_500_000_000, freeAfterBytes: 357_700_000_000, refused: nil,
+                         packageIDs: ["whisper-turbo"]),
+            NativePreset(id: "creator-plus-24", name: "Creator Plus · 24 GB", tierGB: 24,
+                         summary: "Adds music generation and Gemma 3 12B for longer writing.",
+                         installedCount: 0, packageCount: 16, complete: false, fitsThisMac: false,
+                         toCopyBytes: 64_200_000_000, freeAfterBytes: 316_000_000_000, refused: nil,
+                         packageIDs: []),
+            NativePreset(id: "studio-pro-32", name: "Studio Pro · 32 GB+", tierGB: 32,
+                         summary: "Adds the largest writing models: Qwen3.6 35B and Gemma 4 26B.",
+                         installedCount: 0, packageCount: 18, complete: false, fitsThisMac: true,
+                         toCopyBytes: 100_300_000_000, freeAfterBytes: 284_000_000_000,
+                         refused: "Not enough free space on /Volumes/KH-STUDIO-ATLAS/model-target: copying 100.3 GB would leave 284.0 GB, and this Mac keeps 5.0 GB free for working room.",
+                         packageIDs: [])
+        ]
+        let groups = [
+            NativeInstallGroup(job: "image", models: [
+                model("z-image-turbo-mflux-4bit", "Z-Image-Turbo 6B", "image",
+                      "Fast pictures from words; the everyday image model on a small Mac.",
+                      "MLX 4-bit", 5.9, 8, installed: true),
+                model("qwen-image-2-1-turbo-mflux-q4", "Qwen Image 2.1 Turbo Low-RAM", "image",
+                      "Higher-fidelity pictures in eight steps.", "MLX 4-bit", 10.0, 16),
+                model("qwen-image-2-1-mlx-serve-4bit", "Qwen Image 2.1 (native MLX server)", "image",
+                      "Qwen Image 2.1 through its native MLX server; 24 GB and up.",
+                      "MLX 4-bit", 10.7, 24)]),
+            NativeInstallGroup(job: "voice", models: [
+                model("qwen3-tts-12hz-0-6b-base-4bit", "Qwen3-TTS 0.6B Base", "voice",
+                      "Narration that clones a voice from a short clip.", "MLX 4-bit", 1.7, 8,
+                      installed: true),
+                model("breeze-tts-2-mlx-4bit", "Breeze TTS 2", "voice",
+                      "A 16 GB-tier voice with a long-form section policy.", "MLX 4-bit", 3.0, 8)]),
+            NativeInstallGroup(job: "writing", models: [
+                model("qwen36-35b-4bit", "Qwen 3.6 35B-A3B", "writing",
+                      "The largest writing model; 32 GB and up.", "MLX 4-bit", 20.4, 24,
+                      reason: "Needs a Mac with at least 24 GB of memory; this one has 16 GB. Everything else installs; this model is left out.")]),
+            NativeInstallGroup(job: "vision", models: [
+                model("florence-2-large-ft", "Florence-2 large (ft)", "vision",
+                      "Reads a picture with more detail.", "bf16", 1.6, 16,
+                      sources: ["internet"])]),
+            NativeInstallGroup(job: "transcription", models: [
+                model("whisper-turbo", "Whisper turbo", "transcription",
+                      "Transcribes audio and video; the default subtitle model.", nil, 1.6, 8,
+                      installed: true)])
+        ]
+        workspace.seedInstallPlanForRendering(NativeInstallPlan(
+            memoryGB: 16, library: "/Volumes/KH-STUDIO-ATLAS/model-target",
+            diskPath: "/Volumes/KH-STUDIO-ATLAS/model-target", freeBytes: 380_200_000_000,
+            diskMeasured: true, stopBytes: 5_000_000_000,
+            kits: ["/Volumes/KH-STUDIO-ATLAS/model-library"], presets: presets,
+            startingPreset: "creator-16", groups: groups, problems: []))
+    }
+
     @MainActor private static func applyRole(_ role: String, to workspace: NativeWorkspaceStore) {
         let wire = role.hasPrefix("node") ? "agent" : role
         let now = Date().timeIntervalSince1970
@@ -518,6 +593,8 @@ struct PageRenderHarness {
     private static func pageNamed(_ name: String) -> StudioPage {
         let wanted = name.lowercased()
         if wanted == "subtitle" { return .transcription }
+        // The Set up page's raw value is "Set up this Mac"; `setup` is what a command line reads.
+        if wanted == "setup" || wanted == "set-up" || wanted == "set-up-this-mac" { return .setup }
         if wanted == "whatsnew" || wanted == "whats-new" { return .whatsNew }
         return StudioPage.allCases.first { $0.rawValue.lowercased() == wanted } ?? .overview
     }

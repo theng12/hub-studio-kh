@@ -462,6 +462,10 @@ FLEET_ALLOWED = (
     # node's screen answer so the Gateway's Fleet page can show and set a Mac's preset; it grants
     # nothing that installs, because the only write is the download route below.
     ("GET", r"^/api/hub/model-presets$"),
+    # **This Mac's preset and its one-time cleanup (owner decision 2026-10-28).** The dry run is a
+    # read, so a controller can show the owner what a Mac would move before anything does; the
+    # apply names who approved it in its body and is `POST` only through the fleet node route below.
+    ("GET", r"^/api/hub/preset-cleanup$"),
     # Model health is a read a controller needs to decide where work can go.
     ("GET", r"^/api/hub/model-health$"),
     ("GET", r"^/api/hub/memory/policy$"),
@@ -666,6 +670,17 @@ FLEET_ALLOWED = (
     # the same refusals, including "a job is using it". Not in `NODE_ALLOWED`: a leaf Mac's own
     # credential cannot strip another Mac's library.
     ("DELETE", r"^/api/hub/fleet/nodes/[^/]+/model-packages/[^/]+$"),
+    # **One Mac's one-time preset cleanup from the Gateway (owner decision 2026-10-28).** The dry
+    # run (`GET`) and the approved run (`POST`, whose body names who approved it). Relayed to the
+    # Mac, and a Mac that is offline is reported `NODE_UNREACHABLE` rather than failed - a cleanup
+    # can wait for a Mac that is asleep. Not in `NODE_ALLOWED`: a leaf cannot tidy another Mac.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/preset-cleanup$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/preset-cleanup$"),
+    # **One Mac's install screen and its preset, from the Gateway (owner decision 2026-10-28).** The
+    # read is the Mac's own projection relayed unchanged; the write records who asked. Not in
+    # `NODE_ALLOWED`: a leaf Mac cannot set another Mac's preset.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/model-presets$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/model-preset$"),
     # **A test transcription on one chosen Mac (0.6.147, model qualification from the Gateway).** The
     # same Subtitle work `POST /studio/subtitle/api/transcribe` already lets the fleet send, pinned to
     # one Mac and answered with its per-word timings. Not in `NODE_ALLOWED`.
