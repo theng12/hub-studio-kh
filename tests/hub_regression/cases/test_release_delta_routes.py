@@ -43,6 +43,7 @@ def _clean(reset, monkeypatch):
     release_delta._installed_cache.clear()
     release_sync._job.clear()
     release_sync._job["state"] = "idle"
+    release_sync._controller_image.clear()
     monkeypatch.delenv("STUDIOHUB_RELEASE_MANIFEST", raising=False)
     yield
     fleet_nodes.store_path().unlink(missing_ok=True)
@@ -574,6 +575,80 @@ def test_the_stage_job_builds_the_release_from_the_installed_app_and_the_stored_
         os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
 
 
+def test_a_files_only_release_stages_a_delta_bigger_than_the_size_cap(hub, tmp_path):
+    """The delta size cap picks a whole download over an even bigger delta, so it can only apply
+    where an image exists to download. A manifest push leaves none on a controller
+    (`store_release` deletes it), and judging the cap against the descriptor's `bytes` anyway
+    refused this stage `over_threshold` (0.6.203) - which the app reads as the disk-image fallback
+    that can only answer 404, stranding a Mac that had fallen far behind."""
+    from components.hub.backend import app_release, release_delta
+    seed = _seed()
+    _trust(hub, seed)
+    image_bytes = 1024
+    changed = secrets.token_bytes(int(image_bytes * release_delta.MAX_DELTA_FRACTION) + 4096)
+    new_files = {**FILES_A, R + "components/hub/backend/broker.py": changed}
+    _d, body, _e, blobs = _release(seed, new_files, tmp_path, build="new0000", bytes=image_bytes)
+    _installed_app(tmp_path, FILES_A)
+    try:
+        need = _push(hub, body).json()["need"]
+        _send_all(hub, blobs, need)
+        assert not app_release.ARTIFACT_FILE.is_file(), "a manifest push leaves no image to fall back to"
+        assert len(changed) > image_bytes * release_delta.MAX_DELTA_FRACTION
+        hub.post("/api/hub/release/stage", headers=_hub_headers())
+        status = _wait_for_stage(hub)
+        assert status["state"] == "staged", status
+        assert Path(status["staged_app"], R, "components/hub/backend/broker.py").read_bytes() == changed
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
+
+
+def test_a_release_with_a_disk_image_still_refuses_a_delta_bigger_than_the_cap(hub, tmp_path):
+    """The other half: where an image IS installable, the cap still sends the app to it rather than
+    fetch a delta that is most of a full download."""
+    from components.hub.backend import app_release, release_delta
+    seed = _seed()
+    _trust(hub, seed)
+    image = secrets.token_bytes(1024)
+    changed = secrets.token_bytes(int(len(image) * release_delta.MAX_DELTA_FRACTION) + 4096)
+    new_files = {**FILES_A, R + "components/hub/backend/broker.py": changed}
+    _d, body, _e, _b = _release(seed, new_files, tmp_path, build="new0000",
+                                bytes=len(image), sha256=hashlib.sha256(image).hexdigest())
+    body["artifact_base64"] = base64.b64encode(image).decode()
+    _installed_app(tmp_path, FILES_A)
+    try:
+        assert _push(hub, body).status_code == 200
+        assert app_release.ARTIFACT_FILE.is_file(), "the pushed image is held as the fallback"
+        hub.post("/api/hub/release/stage", headers=_hub_headers())
+        status = _wait_for_stage(hub)
+        assert status["state"] == "fallback" and status["code"] == "over_threshold", status
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
+
+
+def test_a_node_whose_controller_holds_a_files_only_release_stages_a_big_delta(hub, tmp_path, monkeypatch):
+    """A node's own disk image is never local: its only fallback is a relay to its controller, and a
+    controller that took the release as files holds none to relay. The cap is judged on what the
+    controller answered (`delta.artifact`), not on the relay merely existing."""
+    from components.hub.backend import file_manifest as fm, release_delta, release_sync
+    image_bytes = 1024
+    changed = secrets.token_bytes(int(image_bytes * release_delta.MAX_DELTA_FRACTION) + 4096)
+    new_files = {**FILES_A, R + "components/hub/backend/broker.py": changed}
+    entries, blobs = _node_holding(hub, tmp_path, new_files, bytes=image_bytes)
+
+    def controller_blob(sha, destination, size, _deadline):
+        destination.write_bytes(blobs[sha])
+    monkeypatch.setattr(release_sync, "_remote_blob", controller_blob)
+    _installed_app(tmp_path, FILES_A)
+    try:
+        assert len(changed) > image_bytes * release_delta.MAX_DELTA_FRACTION
+        hub.post("/api/hub/release/stage", headers=_hub_headers())
+        status = _wait_for_stage(hub)
+        assert status["state"] == "staged", status
+        assert fm.scan(Path(status["staged_app"])) == entries
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
+
+
 def test_the_stage_job_says_fallback_when_it_cannot_prove_the_release(hub, tmp_path, monkeypatch):
     from components.hub.backend import release_sync
     monkeypatch.setattr(release_sync, "BLOB_WAIT_S", 0.3)
@@ -629,11 +704,11 @@ def test_a_controller_stage_waits_for_blobs_still_being_pushed_then_builds(hub, 
         os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
 
 
-def _node_holding(hub, tmp_path, new_files):
+def _node_holding(hub, tmp_path, new_files, **over):
     """This Hub as a node that mirrored a manifest-only release of ``new_files``; returns its blobs."""
     from components.hub.backend import app_release, release_sync
     seed = _seed()
-    _d, body, entries, blobs = _release(seed, new_files, tmp_path)
+    _d, body, entries, blobs = _release(seed, new_files, tmp_path, **over)
     _trust(hub, seed)
     _push(hub, body)
     answers = {"/api/version": {"version": "0.6.99", "build": "abc1234"},

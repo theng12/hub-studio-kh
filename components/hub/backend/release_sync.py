@@ -49,6 +49,10 @@ BLOB_WAIT_POLL_S = 5.0
 
 # What the last poll concluded, for an operator asking why a node has not updated.
 last_sync: dict[str, Any] = {"at": None, "result": None, "error": None}
+# What this node's controller said about the release it mirrored: whether a disk image can be
+# installed from it (``delta.artifact``), by release signature. Only the controller knows, and a
+# node's only fallback is a relay to it.
+_controller_image: dict[str, bool] = {}
 
 
 def last_sync_report() -> dict[str, Any]:
@@ -137,6 +141,8 @@ async def sync_once(client: httpx.AsyncClient | None = None) -> str:
         if wants_files and (answer.get("delta") or {}).get("manifest"):
             files = await _mirror_manifest(client, base, headers, release)
         await asyncio.to_thread(app_release.store_release, release, manifest=files)
+        _controller_image.clear()
+        _controller_image[str(release.get("signature"))] = bool((answer.get("delta") or {}).get("artifact"))
         return f"mirrored {release['version']} ({release['build']})" + ("" if files else " without a manifest")
     finally:
         if owned:
@@ -254,6 +260,21 @@ def start_stage() -> dict[str, Any]:
     return stage_status()
 
 
+def _delta_cap_bytes(descriptor: Mapping[str, Any]) -> int | None:
+    """The disk image size a delta is judged against, or None where no image can be installed.
+    The cap prefers a whole download over an even bigger delta, so it only means something when
+    there is a download to prefer: this Mac's own held image, or - on a node - its controller's,
+    which is its only relay and says on its own ``/api/hub/release`` whether it holds one
+    (``delta.artifact``). A release taken as files leaves no image anywhere in the chain, and
+    judging the cap against one refused a stage that could have been built, `over_threshold`, on
+    every check: a Mac far behind was stranded (0.6.203, 2026-10-27)."""
+    if app_release.ARTIFACT_FILE.is_file():
+        return descriptor.get("bytes")
+    if controller_target() is not None and _controller_image.get(str(descriptor.get("signature"))):
+        return descriptor.get("bytes")
+    return None
+
+
 def _await_blobs(descriptor: Mapping[str, Any], deadline: float) -> None:
     """A gateway pushes the manifest first and the blobs after it, and the release is advertised as
     soon as the manifest lands. A controller's own app that checks inside that window would find a
@@ -294,7 +315,7 @@ def _run_stage(descriptor: Mapping[str, Any]) -> None:
         staged, summary = release_delta.stage(
             app, fm.flatten(held[1]), descriptor["files_sha256"],
             lambda sha, destination, size: get_blob(sha, destination, size, deadline),
-            artifact_bytes=descriptor.get("bytes"), progress=progress)
+            artifact_bytes=_delta_cap_bytes(descriptor), progress=progress)
         _set(state="staged", phase="staged", staged_app=str(staged), summary=summary)
     except release_delta.DeltaRefused as exc:
         log.info("delta update refused (%s): %s", exc.code, exc.message)

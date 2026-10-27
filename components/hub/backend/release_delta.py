@@ -339,6 +339,8 @@ def stage(installed: Path, new: Mapping[str, fm.Entry], files_sha256: str, get_b
     wanted = fetch_bytes(plan, new, have)
     total = sum(wanted.values())
     if artifact_bytes and total > artifact_bytes * MAX_DELTA_FRACTION:
+        # The caller passes ``artifact_bytes`` only where a disk image can actually be installed:
+        # a files-only release has none, so a refusal here would send the app to a 404.
         raise DeltaRefused("over_threshold",
                            f"{total} bytes changed against a {artifact_bytes}-byte disk image")
 

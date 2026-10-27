@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.204 — 2026-10-27
+
+### A Mac that has fallen far behind can still update
+
+An update can arrive as a list of the files that changed instead of a whole installer. There is a rule that gives up on that kind of update when the changed files add up to more than half the size of the full installer, and fetches the full one instead. Fine where a full installer exists — but a list of changed files leaves none anywhere, so for those the rule could only end the update for good. A Mac that had fallen far enough behind that more than half of the app had changed was refused on every check, and all the app could say was that the update could not be built.
+
+That rule now applies only where a full installer really exists to download. A Mac far behind builds the update from the files it was sent, and a Mac only a little behind is unaffected either way.
+
 ## 0.6.203 — 2026-10-27
 
 ### Updates install again on a slow Mac
