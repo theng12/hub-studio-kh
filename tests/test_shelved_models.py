@@ -59,14 +59,13 @@ class ListTests(unittest.TestCase):
 
     def test_gemma_is_neither_shelved_nor_retired_any_more(self):
         # Gemma 3 12B was retired on 2026-10-02 and left BOTH lists on 2026-10-27 with the owner's
-        # "We no longer block or lock any model." It is still absent from the catalog because no
-        # manifest ships for it - the parked one targets the retired video engine - so it is
-        # absent for a catalog reason, not a name block. Do not move this assertion back.
-        parked = json.loads((ROOT / "components/video/retired/gemma-3-12b-it-4bit.json").read_text())
-        self.assertFalse(retired_models.manifest_retired(parked))
+        # "We no longer block or lock any model." It now ships in the catalog as an installable
+        # chat-mlx package with a published provisional RAM floor.
+        manifest = json.loads((MANIFESTS / "gemma-3-12b-it-4bit.json").read_text())
+        self.assertFalse(retired_models.manifest_retired(manifest))
         self.assertFalse(retired_models.is_retired("mlx-community/Gemma-3-12B-IT-4bit"))
-        self.assertFalse(shelved_models.manifest_shelved(parked))
-        self.assertFalse((MANIFESTS / "gemma-3-12b-it-4bit.json").exists())
+        self.assertFalse(shelved_models.manifest_shelved(manifest))
+        self.assertTrue((MANIFESTS / "gemma-3-12b-it-4bit.json").exists())
 
     def test_shelved_and_retired_are_different_lists(self):
         self.assertFalse(shelved_models.is_shelved(*retired_models.RETIRED_MODELS))

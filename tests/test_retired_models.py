@@ -68,10 +68,9 @@ for package_id, model_id in RETIRED.items():
     assert standalone._retired_refusal(model_id)['code'] == 'MODEL_RETIRED'
 assert standalone._retired_refusal('whisper-base') is None
 # Gemma 3 12B 4-bit left the retired list on 2026-10-27 with the rest of the name-based blocks
-# (owner: "We no longer block or lock any model."). Its real manifest is still not in the catalog
-# folder, so it is absent from every place above for the catalog's own reason, not by name - and
-# an old manifest for it now reaches the catalog like any other package instead of being skipped.
-assert not (ROOT / 'model-manifests' / 'gemma-3-12b-it-4bit.json').exists()
+# (owner: "We no longer block or lock any model."). Its real manifest is now in the catalog
+# folder, so it is offered in every place a live package is listed and not refused by name.
+assert (ROOT / 'model-manifests' / 'gemma-3-12b-it-4bit.json').exists()
 assert not retired_models.is_retired('gemma-3-12b-it-4bit', 'mlx-community/gemma-3-12b-it-4bit')
 gemma_now = offered()
 assert 'gemma-3-12b-it-4bit' in gemma_now['catalog'], gemma_now['catalog']

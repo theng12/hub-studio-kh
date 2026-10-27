@@ -299,6 +299,48 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertIn("PROVISIONAL, NOT MEASURED", qualification["memory_evidence"])
         self.assertIsNone(qualification["tested_usable_context_tokens"])
 
+    def test_gemma3_12b_capture_reproduces_runtime_manifest_offline(self):
+        manifest = self.manifests["gemma-3-12b-it-4bit"]
+        choice = next(item for item in CAPTURE.CHOICES
+                      if item["package_id"] == "gemma-3-12b-it-4bit")
+        publisher_tree = {
+            entry["source_path"]: {
+                "size": entry["size"], "lfs": {"oid": entry["sha256"]},
+            }
+            for entry in manifest["files"]
+        }
+        publisher_tree["README.md"] = {
+            "size": 945,
+            "lfs": {"oid": None},
+        }
+        publisher_tree[".gitattributes"] = {
+            "size": 1570,
+            "lfs": {"oid": None},
+        }
+        with mock.patch.object(CAPTURE, "snapshot", return_value=publisher_tree), \
+                mock.patch.object(CAPTURE, "request",
+                                  side_effect=AssertionError("capture fetched a file body")):
+            captured = CAPTURE.capture(choice)
+        self.assertEqual(captured, manifest)
+        paths = {entry["source_path"] for entry in manifest["files"]}
+        self.assertEqual(len(paths), 13)
+        self.assertEqual(sum(entry["size"] for entry in manifest["files"]), 8_068_018_787)
+        self.assertNotIn("README.md", paths)
+        self.assertNotIn(".gitattributes", paths)
+        self.assertEqual(manifest["revision"],
+                         "86cc6a8dedbc456dd0e4af01a9d09f396f77e558")
+        self.assertEqual(manifest["engine"], "chat-mlx")
+        self.assertEqual(manifest["minimum_macos"], "14.0")
+        self.assertEqual(manifest["quantization"], "MLX 4-bit")
+        self.assertIs(manifest["production_allowed"], True)
+        self.assertNotIn("default", manifest)
+        qualification = manifest["qualification"]
+        self.assertEqual(qualification["status"], "unqualified")
+        self.assertEqual(qualification["minimum_unified_memory_gb"], 16)
+        self.assertEqual(qualification["recommended_unified_memory_gb"], 24)
+        self.assertIn("PROVISIONAL, NOT MEASURED", qualification["memory_evidence"])
+        self.assertIsNone(qualification["tested_usable_context_tokens"])
+
     def test_qualified_gemma4_capture_reproduces_verified_runtime_manifest_offline(self):
         manifest = self.manifests["gemma4-26b-a4b-qat-4bit"]
         choice = next(item for item in CAPTURE.CHOICES
@@ -379,8 +421,16 @@ class ModelManifestCatalogTests(unittest.TestCase):
                     manifest["qualification"]["minimum_unified_memory_gb"], 24)
                 self.assertIsNone(
                     manifest["qualification"]["tested_usable_context_tokens"])
+        gemma3 = self.manifests["gemma-3-12b-it-4bit"]
+        self.assertIs(gemma3["production_allowed"], True)
+        self.assertEqual(gemma3["qualification"]["status"], "unqualified")
+        self.assertEqual(gemma3["qualification"]["minimum_unified_memory_gb"], 16)
+        self.assertEqual(gemma3["qualification"]["recommended_unified_memory_gb"], 24)
+        self.assertIn("PROVISIONAL, NOT MEASURED", gemma3["qualification"]["memory_evidence"])
+        self.assertIsNone(gemma3["qualification"]["tested_usable_context_tokens"])
         self.assertIs(self.manifests["qwen3-5-9b-4bit"]["default"], True)
         self.assertNotIn("default", gemma)
+        self.assertNotIn("default", gemma3)
 
     def test_two_default_packages_are_refused(self):
         manifests = [{"package_id": "one", "default": True}, {"package_id": "two", "default": True}]
@@ -459,6 +509,11 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # excludes only its 363-byte README.md. Only the 32 GiB qualification metadata
             # changed here; the pinned revision and every publisher file hash stayed fixed.
             "gemma4-26b-a4b-qat-4bit": "962823f4d412465351316da5241c7c11915ff52bae1c3e55c6c94a1a86c94e92",
+            # Gemma 3 12B Instruct MLX 4-bit: 13 runtime files / 8,068,018,787 bytes.
+            # Admitted 2026-10-27 as chat-mlx package with a PROVISIONAL 16/24 GB weight-size floor
+            # (7.51 GiB of weights cannot fit 8 GB). The pinned revision and verified file hashes
+            # are identical to the former text-encoder capture.
+            "gemma-3-12b-it-4bit": "0740468a03143c9e80aec876875e3ab26ade0ec0b27953def5872bef7ca1081c",
             # Qwen Image 2.1 Turbo MLX 4-bit: 19 files / 9,963,443,598 bytes, captured
             # 2026-10-12 from the pinned public mflux-community checkpoint. Owner-adopted for
             # normal 16 GB+ production on 2026-10-13; Turbo measurements remain unpublished.

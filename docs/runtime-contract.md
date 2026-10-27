@@ -121,7 +121,7 @@ construction). Older clients that do not read the new fields are unaffected.
 ## Files and callers
 
 - [model_packages.py](../components/model_packages.py): standard-library runtime helper.
-- [Model catalog](../model-manifests/): 39 exact packages; no moving model revisions.
+- [Model catalog](../model-manifests/): 40 exact packages; no moving model revisions.
 - [Runtime input records](../research/st01-runtime-contracts.json): engine families,
   lock hashes, source provenance and limits of the import/audit evidence.
 - [Model package tests](../tests/test_model_packages.py): filesystem, download and receipt behavior.

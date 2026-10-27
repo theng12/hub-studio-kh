@@ -177,6 +177,19 @@ CHOICES: tuple[dict[str, Any], ...] = (
      "display_name": "Nemotron 3.5 Lightning 30B-A3B MLX 4-bit",
      "quantization": "MLX 4-bit affine",
      "quantization_source": "model/config.json quantization; preserved checkpoint tensor overrides"},
+    # Gemma 3 12B Instruct. Formerly LTX's text encoder under retired video; admitted 2026-10-27
+    # as an independent chat-mlx model with the rest of the name blocks lifted (owner: "We no
+    # longer block or lock any model"). Multimodal checkpoint whose vision tower/processor
+    # is preserved, but chat worker currently serves text-only. Memory floor is PROVISIONAL:
+    # 16 GB is the next published fleet tier above the 7.51 GiB (8.07 GB) weights this package
+    # ships (8 GB cannot hold them); 24 GB is recommended.
+    {"package_id": "gemma-3-12b-it-4bit",
+     "model_id": "mlx-community/gemma-3-12b-it-4bit",
+     "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558", "engine": "chat-mlx",
+     "captured_at": "2026-09-15", "production_allowed": True,
+     "display_name": "Gemma 3 12B Instruct MLX 4-bit",
+     "quantization": "MLX 4-bit",
+     "quantization_source": "the publisher's model id states it: mlx-community/gemma-3-12b-it-4bit"},
     # ── ST-13.A: Kyutai Pocket TTS 4-bit, the English cloning engine ──
     # The 4-bit MLX conversion is the whole executable model: 4-bit weights, the flow-LM
     # config and the mimi codec live in one 89 MB safetensors file. It carries no tokenizer
@@ -374,6 +387,15 @@ DETAILS: dict[str, dict[str, Any]] = {
         "qualification": {
             "status": "unqualified",
             "reason": 'Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). No inference, TPS, script/scene quality or MEASURED RAM tier has been qualified.',
+            "tested_usable_context_tokens": None,
+        },
+    },
+    "gemma-3-12b-it-4bit": {
+        "defaults": {"parameters_source": "model/generation_config.json"},
+        "memory": (16, 24, "PROVISIONAL, NOT MEASURED. Derived from the package this manifest ships: its thirteen runtime files total 8,068,018,787 bytes (7.51 GiB), so the smallest published fleet tier that can hold the weights at all is 16 GB; 8 GB cannot. 24 GB is recommended because a 12B checkpoint's resident footprint and KV cache can exceed the available memory on a 16 GB Mac and no peak has been observed on any Mac. This is a weight-size floor, not a measured tier, and no inference, TPS, script or scene-quality run has happened. Replace it with a measurement (qualification/model-readings.json) before treating the model as qualified."),
+        "qualification": {
+            "status": "unqualified",
+            "reason": 'Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). English import, inference, TPS, script/scene quality, usable context and a MEASURED RAM tier have not yet been run.',
             "tested_usable_context_tokens": None,
         },
     },
