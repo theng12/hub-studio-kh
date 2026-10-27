@@ -96,6 +96,19 @@ class ConnectionPayloadRouteTests(unittest.TestCase):
         self.assertTrue(rows, "no fleet overview row carried the connection block")
         self.assertEqual(rows[0]["connection"]["speed_mbps"], 1000)
 
+    def test_a_nodes_check_in_carries_the_link_inside_its_host_snapshot(self):
+        """A Mac behind one-way node sharing is never dialled: its block must survive the check-in
+        trim, or a Shops Mac would be the one Mac whose link is never visible."""
+        from components.hub.backend import fleet_nodes
+        block = {"status": "measured", "interface": "en0", "kind": "ethernet",
+                 "speed_mbps": 100, "duplex": "full", "media": "autoselect (100baseTX <full-duplex>)"}
+        snapshot = {"machine": {"id": "1301"}, "host": {"chip": "Apple M4", "connection": block},
+                    "studios": {}, "version": "0.6.206"}
+        trimmed = fleet_nodes._resources_of(snapshot, "1301")
+        self.assertEqual(trimmed["host"]["connection"], block)
+        self.assertEqual(fleet_nodes._checkin_reported({"checkin_resources": trimmed})
+                         ["host"]["connection"], block)
+
     def test_an_unmeasured_link_travels_with_its_reason(self):
         from components.hub.backend import network_link
         with ExitStack() as stack, patch.object(
