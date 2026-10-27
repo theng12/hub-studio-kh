@@ -661,6 +661,11 @@ FLEET_ALLOWED = (
     # from (`GET /api/hub/model-share/<token>/files/...`, authorised by the token itself - see the
     # middleware). Not in `NODE_ALLOWED`.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/model-packages/[^/]+/share$"),
+    # **Removing a model from one Mac, from the Gateway (owner decision 2026-10-28).** The same
+    # move the Mac's own Models screen makes - into that library's `_trash`, never a delete - and
+    # the same refusals, including "a job is using it". Not in `NODE_ALLOWED`: a leaf Mac's own
+    # credential cannot strip another Mac's library.
+    ("DELETE", r"^/api/hub/fleet/nodes/[^/]+/model-packages/[^/]+$"),
     # **A test transcription on one chosen Mac (0.6.147, model qualification from the Gateway).** The
     # same Subtitle work `POST /studio/subtitle/api/transcribe` already lets the fleet send, pinned to
     # one Mac and answered with its per-word timings. Not in `NODE_ALLOWED`.

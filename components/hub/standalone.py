@@ -1543,6 +1543,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 standalone_config.load_device_settings,
                 # Render retirement rides the same pass: no second cleanup service.
                 after_sweep=after_cleanup,
+                # So does the 30-day handoff of models removed from the library (owner decision
+                # 2026-10-28). `handoff()` resolves the library itself, so a Hub without one says
+                # so and does nothing.
+                removed_models=True,
             )
             monitor.start()
             # Mint the fleet credential at startup, rather than lazily on the first request that
@@ -3051,6 +3055,104 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except (OSError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
 
+    # ── Real model removal (owner decision 2026-10-28) ──────────────────────────────────────────
+    # The Models screen's Remove was a stub that said it was unavailable "until it can protect
+    # models with active readers". It can now, and it moves rather than deletes:
+    # `<library>/_trash/<package>-<stamp>/` with a receipt, refused while anything is using it.
+    def _removal_refusal(exc: Exception) -> HTTPException:
+        from .backend import model_removal
+        return HTTPException(exc.status, {"ok": False, "code": exc.code, **exc.body})
+
+    def _removal_state() -> tuple[Path, dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        from components import model_packages
+        catalog = _model_catalog()
+        try:
+            library = _model_library()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        records: dict[str, dict[str, Any]] = {}
+        index = model_packages._index(model_packages._library(library))
+        return library, catalog, index
+
+    def _paused_for(manifest: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            worker_id = _worker_for_engine(str(manifest.get("engine") or ""))
+        except ValueError:
+            return None
+        return broker.model_block_state(worker_id, manifest["model_id"])
+
+    def _running_model_jobs() -> list[tuple[str, str]]:
+        """Every job this queue is running, as (studio, **model name**), so removal can match it.
+
+        `broker.local_running_jobs()` answers (studio, worker job id), and a job id is not a model
+        name; the batch record carries the model beside its items. The two are joined here rather
+        than teaching the removal module to guess: a removal that cannot tell whether a model is in
+        use must refuse, and the other direction unloads 9 GB under a running generation.
+        """
+        models_by_studio: dict[str, str] = {}
+        for batch in list(broker.batches.values()):
+            model = str(batch.get("model") or batch.get("model_id") or "")
+            for item in batch.get("items") or []:
+                studio = str(item.get("studio") or "")
+                if studio and model:
+                    models_by_studio.setdefault(studio, model)
+        return [(studio, models_by_studio.get(studio, "")) for studio, _job in broker.local_running_jobs()
+                if models_by_studio.get(studio)]
+
+    @app.delete("/api/hub/model-packages/{package_id}")
+    def remove_model_package(package_id: str) -> dict[str, Any]:
+        """Move one installed model out of the library into its own `_trash`. Never a delete.
+
+        Refused while anything is reading it: a running job on the model, a paused model whose
+        Studio still holds its weights, or another installed package that requires it. The refusal
+        names which, because "the model is in use" is the kind of message that gets clicked again.
+        """
+        from .backend import model_removal
+        library, catalog, index = _removal_state()
+        manifest = catalog.get(package_id)
+        if manifest is None or manifest.get(_MANIFEST_ERROR):
+            raise HTTPException(404, "unknown model package")
+        refusal = None
+        try:
+            owned = _library_may_be_moved_from("removing a model")
+            if not owned:
+                from components import library_ownership
+                refusal = library_ownership.refusal(library, ledger.DATA_DIR, "removing a model")
+            return model_removal.remove(
+                library=library, manifest=manifest, catalog=catalog, records=index,
+                may_move=owned, refusal=refusal, running_jobs=_running_model_jobs(),
+                paused=_paused_for(manifest))
+        except model_removal.RemoveRefused as exc:
+            raise _removal_refusal(exc) from exc
+
+    @app.get("/api/hub/model-removals")
+    def list_model_removals() -> dict[str, Any]:
+        """What is in the library's `_trash`, newest first: the restore-within-30-days surface."""
+        from .backend import model_removal
+        try:
+            library = _model_library()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {"removed": model_removal.listing(library),
+                "restore_days": model_removal.REMOVED_MODEL_DAYS}
+
+    @app.post("/api/hub/model-removals/restore")
+    def restore_model_removal(body: dict[str, Any]) -> dict[str, Any]:
+        """Body `{"folder": "<name in _trash>", "package_id"?: str}`: put it back in the library."""
+        from .backend import model_removal
+        try:
+            library = _model_library()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        name = str(body.get("folder") or "").strip()
+        if not name or Path(name).name != name:
+            raise HTTPException(400, "Name the folder inside the library's _trash.")
+        try:
+            return model_removal.restore(library, library / "_trash" / name,
+                                         body.get("package_id"))
+        except model_removal.RemoveRefused as exc:
+            raise _removal_refusal(exc) from exc
+
     @app.post("/api/hub/model-packages/{package_id}/download")
     def download_model_package(package_id: str, body: dict[str, Any]) -> dict[str, Any]:
         from . import model_downloads
@@ -3422,6 +3524,45 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "package": share["package_id"], "file": path,
                 "peer": request.client.host if request.client else None})
         return _ShareTransfer(target, token=token, media_type="application/octet-stream")
+
+    @app.delete("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}")
+    async def fleet_node_model_remove(node_id: str, package_id: str, request: Request) -> JSONResponse:
+        """Remove one model from one Mac in this group, from the Gateway (owner decision 2026-10-28).
+
+        The same move the Mac's own Models screen makes: the package folder goes to **that Mac's**
+        library `_trash` with a receipt, and nothing is deleted. Refused in the same cases - a
+        running job on the model, a paused model still holding its weights, a package another
+        installed package requires - and, for a joined Mac, again on the Mac itself.
+
+        A Mac that is offline is **reported, not failed**: the relay answers `NODE_UNREACHABLE` in
+        the Mac's own words and this returns it unchanged, exactly as the install relay does.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            startup_control.audit("model_removal_relay", {"node": wanted, "package": package_id,
+                                                          "actor": actor})
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "DELETE", f"/model-packages/{package_id}"))
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+        try:
+            answer = await run_in_threadpool(remove_model_package, package_id)
+        except HTTPException as exc:
+            startup_control.audit("model_removal", {"node": wanted, "package": package_id,
+                                                    "actor": actor, "refused": str(exc.detail)[:200]})
+            return JSONResponse({"ok": False, "node": wanted,
+                                 "detail": exc.detail if isinstance(exc.detail, str) else exc.detail},
+                                status_code=exc.status_code)
+        startup_control.audit("model_removal", {"node": wanted, "package": package_id,
+                                                "actor": actor, "ok": True,
+                                                "bytes": answer.get("bytes")})
+        return JSONResponse({**answer, "node": wanted})
 
     @app.get("/api/hub/fleet/nodes/{node_id}/model-downloads/{run_id}")
     async def fleet_node_model_download_status(node_id: str, run_id: str) -> JSONResponse:
