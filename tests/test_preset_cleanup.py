@@ -149,6 +149,47 @@ class PlanTests(unittest.TestCase):
         self.assertIn("no preset", caught.exception.body["detail"])
 
 
+class OwnerListTests(unittest.TestCase):
+    """The owner's own 32 GB case: Gemma 4 is IN the Studio Pro preset, so it must not be moved.
+
+    The coordinator's note is explicit - Gemma 4 26B is in no other preset and on a 32 GB Mac it is
+    wanted for a local test, so a dry run that listed it as "would move" would be proposing to
+    remove the model the owner just asked for. Nothing here special-cases the package: it is in the
+    preset file, and the cleanup reads the same file.
+    """
+
+    def setUp(self) -> None:
+        self.manifests = manifests()
+        self.temp = Path(tempfile.mkdtemp(prefix="cleanup-owner-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.temp, True))
+        self.library = make_library(self.temp / "library",
+                                    ["gemma4-26b-a4b-qat-4bit", "qwen36-35b-4bit",
+                                     "nemotron-lightning-4bit"], self.manifests)
+        self.records = json.loads((self.library / ".studiohub" / "installed.json").read_text())
+
+    def test_gemma_four_is_kept_on_a_thirty_two_gb_mac(self) -> None:
+        report = preset_cleanup.plan(
+            library=self.library, manifests=self.manifests, catalog=self.manifests,
+            records=self.records, preset_id="studio-pro-32", memory_gb=32)
+        self.assertIn("gemma4-26b-a4b-qat-4bit",
+                      [row["package_id"] for row in report["in_preset"]])
+        self.assertNotIn("gemma4-26b-a4b-qat-4bit",
+                         [row["package_id"] for row in report["would_move"]])
+        # And the one writing model that is in no preset at all is proposed, which is the point of
+        # the dry run: the owner sees it and decides.
+        self.assertIn("nemotron-lightning-4bit",
+                      [row["package_id"] for row in report["would_move"]])
+
+    def test_the_preset_choice_is_what_decides_not_this_app(self) -> None:
+        # The same library against the 8 GB preset: Gemma 4 is outside it, so it IS proposed. One
+        # input changed and the answer changed with it - no special case anywhere.
+        report = preset_cleanup.plan(
+            library=self.library, manifests=self.manifests, catalog=self.manifests,
+            records=self.records, preset_id="essentials-8", memory_gb=8)
+        self.assertIn("gemma4-26b-a4b-qat-4bit",
+                      [row["package_id"] for row in report["would_move"]])
+
+
 class ApplyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifests = manifests()
