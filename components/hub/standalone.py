@@ -2077,6 +2077,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 # Gateway can tell a worker on the same local network from one reached over
                 # Tailscale. None from a Mac whose Hub predates it - never guessed from `address`.
                 "network": host.get("network"),
+                # Which interface carries this Mac's default route, what kind of link it is and the
+                # media its Ethernet port negotiated - so a Mac thinned to 100 Mb/s by a bad cable
+                # is visible on the fleet instead of reading "online". None from a Hub older than
+                # 0.6.206; never guessed from anything else in this row.
+                "connection": host.get("connection"),
                 "jobs": stats.get("count", 0),
                 "average_seconds": stats.get("avg_s"),
                 "modalities": stats.get("modalities") or {},
@@ -2123,6 +2128,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 # Gateway can tell a worker on the same local network from one reached over
                 # Tailscale. None from a Mac whose Hub predates it - never guessed from `address`.
                 "network": host.get("network"),
+                # See the member row above: the same reading, from the same `host` snapshot.
+                "connection": host.get("connection"),
                 "jobs": (measured.get(machine) or {}).get("count", 0),
                 "average_seconds": (measured.get(machine) or {}).get("avg_s"),
                 "modalities": modalities,
