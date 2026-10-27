@@ -84,6 +84,7 @@ class FakeGateway:
         self.sites = {site.id: site for site in sites}
         self.posts: list[tuple[str, float]] = []
         self.full_flags: list[bool] = []
+        self.timeouts: list[int | None] = []
         self.pause_value = pause
         self.pause_reader = pause_reader
         self.pause_reads = 0
@@ -111,10 +112,11 @@ class FakeGateway:
         return self.pause_value
 
     # -- the one write -------------------------------------------------
-    def publish(self, artifact, version, build, controller_ids, force_full=False):
+    def publish(self, artifact, version, build, controller_ids, force_full=False, timeout=None):
         site_id = controller_ids[0]
         self.posts.append((site_id, time.monotonic()))
         self.full_flags.append(force_full)
+        self.timeouts.append(timeout)
         site = self.sites[site_id]
         if site.publish_mode == 'unreachable':
             return 200, {'locations': {site_id: {'ok': False, 'code': 'LOCATION_UNREACHABLE',
@@ -517,6 +519,58 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(gateway.full_flags, [False])
         self.assertIs(json.loads(self.evidence.read_text())['force_full'], False)
+
+    def test_publish_timeout_is_forwarded_and_recorded(self):
+        self.gateway = FakeGateway([FakeSite('1100', ['1100'])], identity=self.identity)
+        argv = ['--artifact', str(self.artifact), '--version', VERSION,
+                '--build', BUILD, '--evidence', str(self.evidence),
+                '--publish-timeout', '3600']
+        code = hub.main(argv)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.gateway.timeouts, [3600])
+        receipt = json.loads(self.evidence.read_text())
+        self.assertEqual(receipt['publish_timeout_s'], 3600)
+
+    def test_publish_recovers_if_controller_holds_release_after_timeout(self):
+        # If the gateway publish call times out or fails with an error, but the controller
+        # has stored the release, rollout recovers and verifies the site.
+        site = FakeSite('1100', ['1100'])
+        self.gateway = FakeGateway([site], identity=self.identity)
+        # Simulate gateway publish timing out or returning error
+        def fail_publish(*args, **kwargs):
+            self.gateway.posts.append(('1100', time.monotonic()))
+            # But the controller now holds the release
+            site.release = dict(self.identity)
+            return 0, {'error': 'TimeoutError: timed out'}
+        self.gateway.publish = fail_publish
+
+        argv = ['--artifact', str(self.artifact), '--version', VERSION,
+                '--build', BUILD, '--evidence', str(self.evidence)]
+        code = hub.main(argv)
+        self.assertEqual(code, 0)
+        receipt = json.loads(self.evidence.read_text())
+        self.assertEqual(receipt['sites'][0]['state'], 'verified')
+        site_receipt = json.loads((self.evidence.parent / f'hub-rollout-site-receipts/1100-{VERSION}.json').read_text())
+        self.assertEqual(site_receipt['code'], 'RECOVERED_HELD')
+
+    def test_a_timed_out_publish_says_it_may_still_be_pushing(self):
+        # A timeout is not proof the Gateway stopped: it keeps pushing after the caller leaves,
+        # so the row must warn against rerunning straight away.
+        site = FakeSite('1100', ['1100'])
+        self.gateway = FakeGateway([site], identity=self.identity)
+
+        def fail_publish(*args, **kwargs):
+            self.gateway.posts.append(('1100', time.monotonic()))
+            return 0, {'error': 'TimeoutError: timed out'}
+        self.gateway.publish = fail_publish
+
+        code = hub.main(['--artifact', str(self.artifact), '--version', VERSION,
+                         '--build', BUILD, '--evidence', str(self.evidence)])
+        self.assertEqual(code, 1)
+        row = json.loads(self.evidence.read_text())['sites'][0]
+        self.assertEqual(row['state'], 'publish failed')
+        self.assertIn('TimeoutError: timed out', row['warnings'][0])
+        self.assertIn('may still be pushing', row['warnings'][0])
 
     def test_an_existing_evidence_file_is_refused_before_anything_is_touched(self):
         self.evidence.write_text('{}')

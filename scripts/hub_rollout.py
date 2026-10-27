@@ -84,7 +84,14 @@ TERMINAL_STATES = ('succeeded', 'failed', 'cancelled')
 #: long enough that a site merely mid-install is not called a failure.
 DEFAULT_WINDOW_S = 2 * 60 * 60
 POLL_S = 60
-PUBLISH_TIMEOUT_S = 30 * 60
+#: How long one site's POST may take. Measured 2026-10-27: a 1.42 GB full push took 36 min on a
+#: ~1 MB/s link, which is past the 30 min this used to be — the tool then reported the site as
+#: *deferred: unreadable* while the Gateway went on to finish the push and the controller held it.
+#: It is the site's own window because the Gateway signs one push at a time: sites queued behind
+#: another's transfer are waiting, not failing.
+#: shortcut: a `--full` run over many slow sites serialises behind the Gateway's push lock, so
+#: the last site's wait could still exceed this; raise --publish-timeout for such a run.
+PUBLISH_TIMEOUT_S = 2 * 60 * 60
 
 _print_lock = threading.Lock()
 
@@ -236,6 +243,8 @@ class Gateway:
                 return answer.status, json.loads(answer.read() or b'null')
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()[:500].decode(errors='replace')
+        except (urllib.error.URLError, TimeoutError) as exc:
+            return 0, {'error': f'{type(exc).__name__}: {exc}'}
 
     def fleet(self, force: bool = True) -> dict:
         status, reply = self.call('GET', '/admin/api/fleet' + ('?force=true' if force else ''))
@@ -257,7 +266,8 @@ class Gateway:
         return int(done.stdout.strip() or 0)
 
     def publish(self, artifact: Path, version: str, build: str,
-                controller_ids: list[str], force_full: bool = False) -> tuple[int, object]:
+                controller_ids: list[str], force_full: bool = False,
+                timeout: int = PUBLISH_TIMEOUT_S) -> tuple[int, object]:
         """One POST. `controller_ids` names exactly the site(s) this call offers the file to.
 
         `force_full` asks the Gateway for the whole image even where a controller advertises the
@@ -271,7 +281,7 @@ class Gateway:
         if force_full:
             payload['force_full'] = True
         return self.call('POST', '/admin/api/release/publish', payload,
-                         timeout=PUBLISH_TIMEOUT_S)
+                         timeout=timeout)
 
     def pause(self) -> object:
         """This Mac's owner-set generation pause, **read only**.
@@ -345,7 +355,8 @@ class Rollout:
 
     def __init__(self, gateway, accepted: dict, artifact: Path, version: str, build: str,
                  receipts: Path, *, window_s: float = DEFAULT_WINDOW_S, poll_s: float = POLL_S,
-                 now=time.monotonic, sleep=time.sleep, force_full: bool = False) -> None:
+                 now=time.monotonic, sleep=time.sleep, force_full: bool = False,
+                 publish_timeout_s: float = PUBLISH_TIMEOUT_S) -> None:
         self.gateway = gateway
         self.accepted = accepted
         self.artifact = Path(artifact)
@@ -355,6 +366,7 @@ class Rollout:
         self.force_full = force_full
         self.window_s = window_s
         self.poll_s = poll_s
+        self.publish_timeout_s = publish_timeout_s
         self.now = now
         self.sleep = sleep
         self.pause_reads: list[dict] = []
@@ -533,15 +545,36 @@ class Rollout:
             return 'reused'
         row['post_count'] += 1
         status, reply = self.gateway.publish(self.artifact, self.version, self.build, [site_id],
-                                             force_full=self.force_full)
+                                             force_full=self.force_full,
+                                             timeout=int(self.publish_timeout_s))
         locations = reply.get('locations') if isinstance(reply, dict) else None
         outcome = (locations or {}).get(site_id) if isinstance(locations, dict) else None
         if not isinstance(outcome, dict):
+            # The POST did not return an outcome directly. Check if the controller actually
+            # stored the release (e.g. Gateway finished the push but the client timed out
+            # or the connection dropped).
+            read = self._try_read(site_id)
+            if read is not None and holds_release(read, self.version, self.build,
+                                                  self.accepted['sha256'],
+                                                  self.accepted['bytes']):
+                row['published_at'] = utc_now()
+                self.write_receipt(site_id, {'outcome': 'accepted', 'code': 'RECOVERED_HELD',
+                                             'release': read['controller_release'], 'gate': row.get('gate')})
+                note(f'{label}: publish returned {status}, but controller already holds {self.version}')
+                self.read_pause(f'after the POST to {label}')
+                return 'accepted'
+
             row['attempts'].append({'at': utc_now(), 'http': status,
                                     'reply': str(reply)[:300]})
             row['state'] = 'publish failed'
-            row['warnings'].append(f'the Gateway answered http {status} without an outcome')
-            note(f'{label}: the Gateway answered http {status} without an outcome')
+            err_detail = (reply or {}).get('error') if isinstance(reply, dict) else None
+            # A timed-out POST does not say the Gateway stopped: it keeps pushing after the
+            # caller leaves. A rerun after that finishes finds the release held and verifies.
+            warning = (f'the Gateway publish timed out or dropped ({err_detail}); '
+                       f'it may still be pushing, so rerun after it settles'
+                       if err_detail else f'the Gateway answered http {status} without an outcome')
+            row['warnings'].append(warning)
+            note(f'{label}: {warning}')
             return 'failed'
         release = outcome.get('release') if isinstance(outcome.get('release'), dict) else {}
         row['attempts'].append({'at': utc_now(), 'http': status, 'ok': outcome.get('ok'),
@@ -699,6 +732,9 @@ def main(argv: list[str] | None = None) -> int:
                              'delta capability (a Hub older than the release can refuse a delta '
                              'over half the image and then ask for a disk image a files-only '
                              'release never had)')
+    parser.add_argument('--publish-timeout', type=int, default=int(PUBLISH_TIMEOUT_S),
+                        help=f'max seconds to wait for Gateway POST /admin/api/release/publish '
+                             f'(default: {int(PUBLISH_TIMEOUT_S)}s / 2h)')
     args = parser.parse_args(argv)
 
     evidence = Path(args.evidence)
@@ -713,7 +749,7 @@ def main(argv: list[str] | None = None) -> int:
     gateway = Gateway()
     rollout = Rollout(gateway, accepted, artifact, args.version, args.build,
                       receipts=evidence.parent / 'hub-rollout-site-receipts',
-                      force_full=args.full)
+                      force_full=args.full, publish_timeout_s=args.publish_timeout)
     try:
         fleet = gateway.fleet(force=True)
     except Exception as exc:  # noqa: BLE001 - no roster is no publish
@@ -739,6 +775,7 @@ def main(argv: list[str] | None = None) -> int:
         # Which shape was offered: a full push is the only one an older Hub can take when its
         # delta refusal (MAX_DELTA_FRACTION) covers this release.
         'force_full': args.full,
+        'publish_timeout_s': args.publish_timeout,
         'window_s': DEFAULT_WINDOW_S, 'poll_s': POLL_S,
         'sites': rows,
         'pause': {
