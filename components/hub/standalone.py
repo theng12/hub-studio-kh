@@ -38,7 +38,7 @@ from .backend import render_executor as render_executor_module, render_service
 from .backend.render_assets import RenderAssetStore
 from .backend.render_executor import InstalledRenderAuthorityLoader, RenderExecutor
 from .backend.render_jobs import RenderJobRuntime
-from .backend.monitor import StudioMonitor
+from .backend.monitor import StudioMonitor, is_cached
 
 # The key one unusable manifest carries into the catalog so its row can say what is wrong
 # without taking the other packages down. Private to this module: it is an implementation
@@ -482,6 +482,44 @@ def _library_may_be_moved_from(what: str) -> bool:
         print(f"[hub] {problem}", flush=True)
         return False
     return True
+
+
+def _lan_sources(catalog: dict[str, dict[str, Any]], library: Path,
+                 monitor: StudioMonitor) -> dict[str, str]:
+    """Package id -> another Mac's address that has it installed, from this Hub's own registry.
+
+    The picker's source order is "another Mac on the LAN, then the SSD, then the internet". This
+    answers only the **first**: which packages some *other* machine in this Hub's group is running
+    with a model cached, so the screen can say "from <machine>" instead of silently offering an
+    internet download of 9 GB that a Mac two desks away already holds. It is a hint for the
+    download: `POST /api/hub/model-packages/{id}/download` still takes its own `source` share and
+    verifies every byte, and a package with no entry here simply falls through to the next source.
+
+    A machine's row is read from the same aggregate the fleet rows come from, so a Mac that is
+    asleep contributes nothing rather than a stale claim.
+    """
+    found: dict[str, str] = {}
+    try:
+        models = monitor.cached_aggregate_catalog().get("models") or []
+        local = monitor.status
+    except Exception:  # noqa: BLE001 - a source hint must never fail the screen
+        return found
+    for row in models:
+        if not isinstance(row, dict):
+            continue
+        studio_id = str(row.get("hub_studio") or "")
+        machine = str(row.get("hub_machine") or "local")
+        if machine == "local" or (local.get(studio_id) or {}).get("status") != "up":
+            continue
+        if not is_cached(row):
+            continue
+        package_id = str((row.get("cache") or {}).get("package_id")
+                         or row.get("package_id") or "")
+        if package_id and package_id not in catalog:
+            continue
+        if package_id:
+            found.setdefault(package_id, machine)
+    return found
 
 
 def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
@@ -1792,6 +1830,54 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         contracts = _lane_contracts(monitor)
         return {"models": [_model_row(manifest, catalog, monitor, contracts)
                            for manifest in catalog.values()]}
+
+    @app.get("/api/hub/model-presets")
+    def model_presets_screen() -> dict[str, Any]:
+        """The install screen's whole answer: this Mac, four presets, and every model by job.
+
+        Owner decision 2026-10-28. One read, computed fresh every time - a projection cached past a
+        model switch, an install or a disk change is a number the screen shows that is no longer
+        true. It is a **read**: the screen's Apply is the existing
+        `POST /api/hub/model-packages/{id}/download`, one request per package, so there is no
+        second copy path and no batch endpoint to keep in step.
+
+        Four things reach the screen that the catalogue route cannot answer:
+
+        * the free space on the **model library's** volume (the catalogue reports the data
+          directory's, which on a kit setup is a different disk);
+        * which packages are **really** on this Mac, from the receipts, so "complete" means
+          installed and verified and never a byte count;
+        * how each missing package would arrive - another Mac's LAN share, the SSD kit that is
+          mounted, or the pinned internet URLs - per package, because a kit can ship a manifest
+          without its weights (`florence-2-large-ft`, `phonon-2-mlx` on the 2026-10-28 write);
+        * what copying a set costs, and whether it would take this Mac below the floor it already
+          stops work at.
+        """
+        from .backend import model_install_plan
+        try:
+            catalog = _model_catalog()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        try:
+            library = _model_library()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        import psutil
+        from components import model_packages
+        receipts: dict[str, dict[str, Any]] = {}
+        for package_id, manifest in catalog.items():
+            if manifest.get(_MANIFEST_ERROR):
+                continue
+            try:
+                receipts[package_id] = model_packages.preflight(manifest, library, catalog=catalog)
+            except Exception as exc:  # noqa: BLE001 - one package must not blank the screen
+                receipts[package_id] = {"package_id": package_id, "state": "invalid",
+                                        "reason": f"The Hub could not read this package's receipt: {exc}"}
+        memory_gb = round(psutil.virtual_memory().total / (1024 ** 3))
+        return model_install_plan.snapshot(
+            manifests=catalog, receipts=receipts, library=library, memory_gb=memory_gb,
+            stop_bytes=disk_governor.STOP_BYTES, modality_of=_modality_for_engine,
+            lan_source=_lan_sources(catalog, library, monitor))
 
     @app.get("/api/hub/catalog")
     @app.get("/api/hub/models")

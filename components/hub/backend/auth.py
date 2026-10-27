@@ -458,6 +458,10 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/models$"),
     ("GET", r"^/api/hub/stats$"),
     ("GET", r"^/api/hub/model-packages$"),
+    # The install-time picker's one read (owner decision 2026-10-28). The controller reads each
+    # node's screen answer so the Gateway's Fleet page can show and set a Mac's preset; it grants
+    # nothing that installs, because the only write is the download route below.
+    ("GET", r"^/api/hub/model-presets$"),
     # Model health is a read a controller needs to decide where work can go.
     ("GET", r"^/api/hub/model-health$"),
     ("GET", r"^/api/hub/memory/policy$"),
