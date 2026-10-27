@@ -327,7 +327,13 @@ class EndToEndTests(unittest.TestCase):
         argv = sys.argv
         home = os.environ.get("HOME")
         app_root = os.environ.get("STUDIOHUB_APP_ROOT")
+        kit_copy = os.environ.get("STUDIOHUB_KIT_COPY")
         os.environ["HOME"] = str(root)          # the script writes to ~/StudioHubModels
+        # These cases are about what the COPY does (twice-run safety, changed vs unchanged, a
+        # model too big, a retired one). Since 2026-10-28 the step's default is to choose nothing
+        # at all and point at the app's screen, so every case here asks for the copy path it was
+        # written for; `test_copy_models_for_this_mac.KitNoLongerChoosesTests` pins the default.
+        os.environ["STUDIOHUB_KIT_COPY"] = "1"
         # **Point the helper at this fixture's app bundle.** It prefers an *installed*
         # `/Applications/Studio Hub.app` now, and without this it read the owner's real thirty
         # manifests against this fixture's library — every model came back "not on this SSD". The
@@ -346,6 +352,10 @@ class EndToEndTests(unittest.TestCase):
                 os.environ.pop("STUDIOHUB_APP_ROOT", None)
             else:
                 os.environ["STUDIOHUB_APP_ROOT"] = app_root
+            if kit_copy is None:
+                os.environ.pop("STUDIOHUB_KIT_COPY", None)
+            else:
+                os.environ["STUDIOHUB_KIT_COPY"] = kit_copy
         return code, out.getvalue()
 
     def _receipt(self, destination: Path, package_id: str):
@@ -570,8 +580,8 @@ class LauncherTests(unittest.TestCase):
     to working from either place, and to naming the files the owner actually sees.
     """
 
-    LAUNCHERS = ("copy-models.command", "copy-lite-models.command", "install_app.command",
-                 "Update this Mac.command")
+    LAUNCHERS = ("copy-models.command", "copy-all-models.command", "copy-lite-models.command",
+                 "install_app.command", "Update this Mac.command")
 
     def test_each_launcher_is_a_valid_shell_script(self):
         for name in self.LAUNCHERS:
@@ -639,12 +649,24 @@ class KitManifestTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def test_operator_steps_describe_the_launchers_not_a_manual_copy(self):
+    def test_operator_steps_describe_the_real_way_to_set_a_mac_up(self):
+        """The steps a kit prints are the ones that exist (owner decision 2026-10-28).
+
+        The install launcher, then the app's own **Set up this Mac** screen, which is where the
+        models are now chosen. The everything-launcher is named only for the Mac with no internet
+        and no peer. The Lite Mode set is retired, so its launcher is *not* advertised - a step
+        naming a file that no longer does what it says is the failure this test exists for.
+        """
         text = (ROOT / "packaging" / "release_kit.py").read_text()
         self.assertIn("1 - Install the app.command", text)
-        self.assertIn("2 - Copy the models.command", text)
-        self.assertIn("2 - Copy the Lite Mode models.command", text)
+        self.assertIn("Set up this Mac", text)
+        self.assertIn("Essentials 8 GB", text)
+        self.assertIn("2 - Copy the models (everything).command", text)
+        self.assertNotIn("2 - Copy the Lite Mode models.command", text)
         self.assertNotIn('"Copy the app and the model library folder to the target Mac."', text)
+        # Every launcher a step names has to be a file the kit really carries.
+        self.assertTrue((ROOT / "copy-all-models.command").is_file())
+        self.assertTrue((ROOT / "copy-models.command").is_file())
 
     def test_the_kit_records_the_commit_that_built_it(self):
         kit = self._kit()

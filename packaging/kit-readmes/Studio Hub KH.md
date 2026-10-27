@@ -27,12 +27,19 @@ If the preferred Mac is busy the job goes to another; nothing waits.
 Two double-clicks, then open it. `START-HERE.md` has the long version with pictures of
 what you should see.
 
-1. **`2 - Copy the models.command`** — reads how much memory this Mac has and copies only
-   the models it can run, plus your saved voices. Give it several minutes the first time.
-   It is safe to run again: it adds what is missing and leaves the rest alone.
-   **A Lite Mode Mac:** set it up like any Mac; use **`2 - Copy the Lite Mode models.command`**
-   instead of this one if you want only the Lite models (about 15 GB); then tick **Lite Mode**
-   in Studio Hub > Settings.
+1. **Choose the models in Studio Hub.** After step 2, open the app and use its
+   **Set up this Mac** screen. It shows this Mac's memory and the free space on the models'
+   drive, offers four presets by size — **Essentials 8 GB**, **Creator 16 GB**,
+   **Creator Plus 24 GB**, **Studio Pro 32 GB+** — and copies from this drive. Anything not in
+   the preset is ticked by hand. Give it several minutes the first time; running it again only
+   copies what is missing.
+   **A Lite Mode Mac:** set it up like any Mac and take **Essentials 8 GB**, then tick
+   **Lite Mode** in Studio Hub > Settings. Lite Mode still runs only its own eight short-lane
+   models, whatever the Mac holds.
+   **No internet and no other Mac to copy from?** Run
+   **`2 - Copy the models (everything).command`** instead — it copies every model the Mac can run,
+   the way earlier kits did. `2 - Copy the models.command` itself no longer chooses: it shows what
+   the drive holds and stops.
 2. **`1 - Install the app.command`** — puts the app in **Applications**. It will ask for
    your password once. It closes and replaces any older copy for you, then **opens the app
    in fleet mode** (`--fleet-mode`): the Mac starts Studio Hub's services now, at every login

@@ -182,10 +182,15 @@ class Harness:
                 sys.modules[spec.name] = previous
 
     # ---- running the real thing ---------------------------------------------
-    def run(self, answer: str = "\n", memory_gb: int = 8):
+    def run(self, answer: str = "\n", memory_gb: int = 8, copy_everything: bool = True):
         """Run the script from inside the kit, as the launcher does.
 
         Returns (exit code, everything it printed, the confirmation prompt itself).
+
+        `copy_everything=True` by default **for the tests that predate the 2026-10-28 change**, so
+        they keep testing the copy mechanism they were written for. The step's own default is the
+        opposite - it copies nothing and points at the app's screen - and `KitNoLongerChoosesTests`
+        is where that default is pinned.
         """
         helper = self.kit / "Technical" / "copy_models_for_this_mac.py"
         write(helper, (ROOT / "qualification" / "copy_models_for_this_mac.py").read_text())
@@ -198,7 +203,12 @@ class Harness:
         out = io.StringIO()
         previous_home = os.environ.get("HOME")
         previous_app = os.environ.get("STUDIOHUB_APP_ROOT")
+        previous_copy = os.environ.get("STUDIOHUB_KIT_COPY")
         os.environ["HOME"] = str(self.root)
+        if copy_everything:
+            os.environ["STUDIOHUB_KIT_COPY"] = "1"
+        else:
+            os.environ.pop("STUDIOHUB_KIT_COPY", None)
         # **Point the helper at this fixture's app bundle.** Without this it finds the owner's real
         # `/Applications/Studio Hub.app`, reads *its* manifests and tests a different computer than
         # the one it built — which is what happened the moment the search order changed to prefer an
@@ -222,6 +232,10 @@ class Harness:
                 os.environ.pop("STUDIOHUB_APP_ROOT", None)
             else:
                 os.environ["STUDIOHUB_APP_ROOT"] = previous_app
+            if previous_copy is None:
+                os.environ.pop("STUDIOHUB_KIT_COPY", None)
+            else:
+                os.environ["STUDIOHUB_KIT_COPY"] = previous_copy
         return code, out.getvalue(), prompt
 
 
@@ -440,6 +454,69 @@ class BelowTierPackagesAreNeverPrunedTests(unittest.TestCase):
             # a number. Since 2026-10-28 there is one source: the model's own manifest.
             self.assertIn(f"floor from qualification.minimum_unified_memory_gb in "
                           f"model-manifests/{package_id}.json", output)
+
+
+class KitNoLongerChoosesTests(unittest.TestCase):
+    """The step's default: copy nothing, move nothing, and point at the app's screen.
+
+    Owner decision 2026-10-28. The SSD is a source now, not a decision - the app's install screen
+    shows this Mac's memory, the library volume's free space and the four presets, and does the
+    choosing. This is the half that has to hold when someone double-clicks the kit file out of
+    habit on a Mac that took an hour to set up: it must not reorganise anything.
+    """
+
+    def test_the_default_copies_nothing_and_says_where_the_choosing_happens(self):
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.ship("b-model", floor=1)
+            code, output, _prompt = kit.run(copy_everything=False)
+            self.assertEqual(code, 0, output)
+            self.assertFalse((kit.home / "a-model").exists(), output)
+            self.assertFalse((kit.home / "b-model").exists(), output)
+            self.assertTrue((kit.library / "a-model").is_dir(), "the drive keeps its weights")
+            self.assertIn("no longer chooses", output)
+            self.assertIn("Set up this Mac", output)
+            self.assertIn("Nothing was copied or moved", output)
+            self.assertIn("STUDIOHUB_KIT_COPY=1", output)
+
+    def test_the_default_moves_nothing_a_mac_already_has(self):
+        # The migration promise, from the other side: a library set up months ago keeps every
+        # model it has, including ones this kit does not ship at all, when the kit file is run.
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.receive("a-model")
+            kit.receive_raw("not-in-this-kit/rev/weights.bin", "an older model")
+            code, output, _prompt = kit.run(copy_everything=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue((kit.home / "a-model" / Harness.REVISION / "model/a-model.bin").is_file())
+            self.assertTrue((kit.home / "not-in-this-kit/rev/weights.bin").is_file())
+            self.assertEqual(kit.trash(), [])
+
+    def test_the_opt_in_still_copies_everything_that_fits(self):
+        # The one reason the old path survives: a Mac with no internet and no reachable peer.
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.ship("too-big", floor=64)
+            code, output, _prompt = kit.run(memory_gb=8, copy_everything=True)
+            self.assertEqual(code, 0, output)
+            self.assertTrue((kit.home / "a-model").is_dir(), output)
+            self.assertFalse((kit.home / "too-big").exists())
+            self.assertIn("this Mac is too small", output)
+
+    def test_the_opt_in_still_prunes_what_the_kit_no_longer_offers(self):
+        # The prune is part of *copying*, not part of being run: with the opt-in, its behaviour is
+        # exactly what it always was.
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.receive("gone-model")
+            kit.record("gone-model")
+            code, output, _prompt = kit.run(answer="y\n", copy_everything=True)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(len(kit.trash()), 1, output)
 
 
 class FittingPackageTests(unittest.TestCase):

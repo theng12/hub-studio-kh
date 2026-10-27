@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Copy the models this Mac can run into your Downloads folder, and update them later.
+"""Copy the models this Mac's owner chose into the model library, and keep them current.
 
 Double-click **copy-models.command** instead of running this directly.
 
-It reads how much memory this Mac has, looks at what each model needs, and copies only the ones
-that fit - so a small Mac does not carry 29 GB it can never use.
+**Owner decision 2026-10-28: this step no longer chooses.** By default it copies nothing and lists
+what the kit holds, so the app's install screen ("Set up this Mac") does the choosing - one preset
+or a hand-ticked list, with the free space and the cost shown before anything moves. The SSD is a
+*source* now, not a decision. Nothing an earlier kit copied is removed by that default: a Mac that
+is already set up keeps everything it has until its owner chooses otherwise in the app.
+
+`STUDIOHUB_KIT_COPY=1` restores the previous behaviour for one run - every model this Mac's memory
+can run - which the kit readme still offers for a Mac with no internet and no reachable peer. That
+is the one reason the old path survives, and it is opt-in so it can never quietly decide for a Mac
+whose owner is about to use the screen.
 
 Running it again is safe and is the normal thing to do after the SSD is refreshed with new
 models. It compares each model folder against the copy already here and:
@@ -113,6 +121,27 @@ def floor_origin(manifest: dict) -> str:
     return (f"floor from qualification.minimum_unified_memory_gb in "
             f"model-manifests/{manifest.get('package_id', '?')}.json (raise it there; the evidence "
             f"for the number belongs in that block's memory_evidence)")
+
+
+def size_of_kit_gb(library: Path, manifests: dict) -> float:
+    """How many bytes the kit's own library holds for these manifests, as far as it is there.
+
+    Read from the folders on the drive, not from the manifests' stated sizes: a drive that never
+    shipped a package's weights (the 2026-10-28 write left two behind) must not be described as
+    holding them. A missing folder contributes nothing.
+    """
+    total = 0
+    for package_id in manifests:
+        folder = library / package_id
+        if folder.is_symlink() or not folder.is_dir():
+            continue
+        for path in folder.rglob("*"):
+            try:
+                if path.is_file() and not path.is_symlink():
+                    total += path.stat().st_size
+            except OSError:
+                continue
+    return total / 1e9
 
 
 def size_gb(manifest: dict) -> float:
@@ -536,6 +565,9 @@ def main() -> int:
     # (`components/shelved_models.py`) unless the Mac was marked "keep all models". Blocking a model
     # by name is gone: every model this Mac's memory can run is copied, and everything else is left
     # on the SSD by the RAM floor alone.
+    # **Copy everything this Mac can run** (the pre-2026-10-28 behaviour), only when asked for
+    # explicitly. The picker is the decision; this step is a source. See the module docstring.
+    copy_everything = os.environ.get("STUDIOHUB_KIT_COPY", "").strip() == "1"
     # **Lite Mode models only (owner 2026-10-03/04)**: the 8 GB-class models a Lite Mode Mac runs
     # (`components/workstation_models.py`, ~15 GB). The kit's `2 - Copy the Lite Mode models.command`
     # sets STUDIOHUB_WORKSTATION=1; it is the only difference from `2 - Copy the models`.
@@ -570,6 +602,8 @@ def main() -> int:
 
     chosen, skipped, not_for_shop, pending = [], [], [], []
     for package_id, manifest in sorted(manifests.items()):
+        if not copy_everything:
+            break                       # nothing is chosen by this step unless it was asked to choose
         if admission_check is not None and not admission_check(manifest):
             pending.append((package_id, manifest))
             continue
@@ -653,7 +687,15 @@ def main() -> int:
     # What this Mac holds that the kit no longer offers. Read before anything is copied, so the
     # operator sees it in the plan and agrees to it with the same answer as the copy - nothing is
     # moved that he was not shown first.
-    prune, stale_receipts = plan_prune(read_index(destination), destination, set(manifests))
+    #
+    # **Only when this run is copying at all (owner decision 2026-10-28).** A run that copies
+    # nothing must move nothing: "the kit no longer offers this" and "the owner did not tick it"
+    # are different claims, and a Mac set up from the app's screen - which is the normal way now -
+    # would otherwise have its untouched library reorganised by a drive plugged in for a source.
+    if copy_everything:
+        prune, stale_receipts = plan_prune(read_index(destination), destination, set(manifests))
+    else:
+        prune, stale_receipts = [], []
 
     # Sort every model this Mac should have into: new, changed, or already identical.
     plan: list[tuple[str, int, dict, str]] = []
@@ -672,6 +714,27 @@ def main() -> int:
     update = [row for row in plan if row[3] == "update"]
     current = [row for row in plan if row[3] == "current"]
     absent = [row for row in plan if row[3] == "missing-from-kit"]
+
+    if not copy_everything:
+        # **The default: this step chose nothing (owner decision 2026-10-28).** It says what the
+        # kit holds, how many are already on this Mac, and where the choosing happens - and it
+        # copies and moves nothing. A run that reorganised a library it did not fill would be the
+        # kit deciding for a Mac whose owner is about to use the screen.
+        print(f"  This drive holds {len(manifests)} model package(s): "
+              f"{size_of_kit_gb(library, manifests):.1f} GB in total.")
+        already = sum(1 for package_id in manifests
+                      if (destination / package_id).is_dir())
+        print(f"  {already} of them are already in {destination}.")
+        print()
+        print("  This step no longer chooses which models to copy. Open Studio Hub and use")
+        print("  \"Set up this Mac\" - it shows this Mac's memory and free space, offers the four")
+        print("  presets by size, and copies from this drive. Nothing was copied or moved by")
+        print("  this run.")
+        print()
+        print("  To copy every model this Mac's memory can run, as earlier kits did, run this")
+        print("  with STUDIOHUB_KIT_COPY=1 (the kit readme names the launcher for it).")
+        print()
+        return 0
 
     for label, rows in (("New models", new), ("Changed models", update)):
         if rows:
