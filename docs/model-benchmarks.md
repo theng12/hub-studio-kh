@@ -28,9 +28,10 @@ may still run there, and one at or below may still not (see the peak-memory note
 | Model | Engine | RAM floor | 8 GB | 16 GB | 24 GB | 32 GB |
 | --- | --- | --- | --- | --- | --- | --- |
 | **Chat (LLM)** | | | | | | |
-| Nemotron 3.5 Lightning 30B-A3B MLX 4-bit | MLX (text) | not stated | — | — | — | — |
-| Qwen 3.6 35B-A3B MLX 4-bit | MLX (text) | not stated | — | — | — | — |
+| Gemma 3 12B Instruct MLX 4-bit | MLX (text) | 16 GB (recommended 24 GB) | no | yes | yes | yes |
 | Qwen3.5-9B 4-bit | MLX (text) | 16 GB | no | yes | yes | yes |
+| Nemotron 3.5 Lightning 30B-A3B MLX 4-bit | MLX (text) | 24 GB (recommended 32 GB) | no | no | yes | yes |
+| Qwen 3.6 35B-A3B MLX 4-bit | MLX (text) | 24 GB (recommended 32 GB) | no | no | yes | yes |
 | Gemma 4 26B-A4B QAT MLX 4-bit | MLX (text) | 32 GB | no | no | no | yes |
 | **Voice (TTS)** | | | | | | |
 | Breeze TTS 2 4-bit (MLX) | MLX (speech) | 8 GB (recommended 16 GB) | yes | yes | yes | yes |
@@ -128,12 +129,12 @@ One rule for every voice model, so a chapter sounds the same whichever model or 
 
 ## What is NOT measured
 
-31 of 39 packages have no run behind them — their floor is
+31 of 40 packages have no run behind them — their floor is
 catalog metadata, which is a starting point rather than proof. That is not a defect in any
 one of them; it is the honest state of the record, and it is the list of what a test would
 settle:
 
-`bge-small-en-v1-5-bf16`, `breeze-tts-2-mlx-4bit`, `chatterbox-4bit`, `chatterbox-8bit`, `depth-anything-v2-small`, `fish-audio-s2-pro-4bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `florence-2-base-ft`, `florence-2-large-ft`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `nemotron-lightning-4bit`, `omnivoice-bfloat16`, `phonon-2-mlx`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen-image-2-1-turbo-mflux-q4`, `qwen3-tts-12hz-0-6b-base-4bit`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `qwen36-35b-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
+`bge-small-en-v1-5-bf16`, `chatterbox-4bit`, `chatterbox-8bit`, `depth-anything-v2-small`, `fish-audio-s2-pro-4bit`, `fish-audio-s2-pro-8bit`, `fish-audio-s2-pro-bf16`, `florence-2-base-ft`, `florence-2-large-ft`, `gemma-3-12b-it-4bit`, `khmer-tts-female-onnx`, `khmer-tts-mms`, `nemotron-lightning-4bit`, `omnivoice-bfloat16`, `phonon-2-mlx`, `pocket-tts-4bit`, `pocket-tts-preset-voices`, `pocket-tts-tokenizer`, `qwen-image-2-1-turbo-mflux-q4`, `qwen3-tts-12hz-0-6b-base-4bit`, `qwen3-tts-12hz-0-6b-base-8bit`, `qwen3-tts-12hz-1-7b-base-4bit`, `qwen36-35b-4bit`, `s3tokenizerv2`, `stable-audio-3-medium`, `voxcpm2-4bit`, `voxcpm2-8bit`, `voxcpm2-bf16`, `whisper-base`, `whisper-small`, `whisper-turbo`
 
 ## Two things that surprise people reading this
 
@@ -166,4 +167,4 @@ So that a future test does not become the thing you cannot remember:
 
 ---
 
-Generated from 39 manifests, 11 recorded readings and 5 voice runtime rows.
+Generated from 40 manifests, 11 recorded readings and 5 voice runtime rows.

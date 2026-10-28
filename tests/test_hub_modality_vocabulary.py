@@ -181,11 +181,24 @@ class MemoryPolicyVocabularyTests(unittest.TestCase):
             "a model that publishes no floor must still get the generic default")
 
     def test_a_measured_fleet_override_is_visible_and_its_absence_is_named(self) -> None:
-        measured = memory_admission.describe(
-            "aitrader/flux2-klein-4b-mlx-4bit",
-            {"repo": "aitrader/flux2-klein-4b-mlx-4bit", "min_unified_memory_gb": 16})
+        """The mechanism, proven with a measurement rather than with the shipped table.
+
+        `_FLEET_DEFAULTS` is empty since 2026-10-28 (its two numbers live in their manifests now),
+        so this patches one in: what is pinned is that a Hub-side measurement still *wins* over the
+        catalog and is *visible*, so a future run that proves a lower tier than a manifest states
+        has somewhere to go and a screen that shows it. Asserting against the shipped table would
+        have stopped testing the mechanism the day the table was emptied.
+        """
+        repo = "aitrader/flux2-klein-4b-mlx-4bit"
+        with mock.patch.dict(memory_admission._FLEET_DEFAULTS,
+                             {repo: {"min_total_memory_gb": 4.0, "reason": "a test measurement"}}):
+            memory_admission.reset_for_tests()
+            measured = memory_admission.describe(
+                repo, {"repo": repo, "min_unified_memory_gb": 16})
         self.assertTrue(measured["fleet_default_measured"])
         self.assertEqual(measured["source"], "fleet_default")
+        self.assertEqual(measured["effective_min_total_memory_gb"], 4.0)
+        self.assertIn("a test measurement", measured["default_reason"])
 
         unmeasured = memory_admission.describe("org/new-model", {"repo": "org/new-model"})
         self.assertFalse(unmeasured["fleet_default_measured"])

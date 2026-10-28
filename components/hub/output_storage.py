@@ -1297,12 +1297,18 @@ def acquire_transfer(*, batch_id: str, item_index: int):
     return _acquire_lease(batch_id=batch_id, item_index=item_index, column="transfer_leases")
 
 
-def start_background(machine_provider, settings_provider, after_sweep=None) -> None:
+def start_background(machine_provider, settings_provider, after_sweep=None,
+                     removed_models=None) -> None:
     """Run the shared sweep inside the Hub process; no second service is created.
 
     `after_sweep(first)` is the disk governor's turn, once per pass (`first` is True for the start-up
     pass, which runs immediately): it reads free space and reclaims, so a Mac that is filling is
-    handled on this timer and not only when a job is submitted."""
+    handled on this timer and not only when a job is submitted.
+
+    `removed_models()` returns the folders removed from the model library (`model_removal.listing`),
+    and the same pass hands the ones older than `REMOVED_MODEL_DAYS` to **macOS Trash** through this
+    module's own `_macos_trash` - one deleter, one place to empty, no second service (owner decision
+    2026-10-28). A pass that fails leaves them where they are and tries again next time."""
     global _STARTED
     with _START_LOCK:
         if _STARTED:
@@ -1331,6 +1337,15 @@ def start_background(machine_provider, settings_provider, after_sweep=None) -> N
                     trash_handoff(days, cap)
                 except Exception:
                     log.exception("automatic Trash Folder handoff failed (continuing)")
+            # Removed models reach macOS Trash on the same timer (owner decision 2026-10-28): the
+            # library's `_trash` is where a removal puts a package, and this is the one thing that
+            # moves it from there. `model_removal.handoff` owns the age rule; this only calls it.
+            if removed_models is not None:
+                try:
+                    from .backend import model_removal
+                    model_removal.handoff()
+                except Exception:
+                    log.exception("removed-model handoff failed (continuing)")
             if after_sweep is not None:
                 try:
                     after_sweep(first)

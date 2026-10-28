@@ -228,7 +228,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertTrue(any("production_allowed" in problem and "boolean" in problem
                             for problem in problems), problems)
 
-    def test_pending_nemotron_capture_reproduces_runtime_manifest_offline(self):
+    def test_nemotron_capture_reproduces_runtime_manifest_offline(self):
         manifest = self.manifests["nemotron-lightning-4bit"]
         choice = next(item for item in CAPTURE.CHOICES
                       if item["package_id"] == "nemotron-lightning-4bit")
@@ -250,7 +250,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
             captured = CAPTURE.capture(choice)
         self.assertEqual(captured, manifest)
 
-    def test_pending_qwen36_capture_reproduces_verified_runtime_manifest_offline(self):
+    def test_qwen36_capture_reproduces_verified_runtime_manifest_offline(self):
         manifest = self.manifests["qwen36-35b-4bit"]
         choice = next(item for item in CAPTURE.CHOICES
                       if item["package_id"] == "qwen36-35b-4bit")
@@ -287,12 +287,58 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertEqual(manifest["minimum_macos"], "14.0")
         self.assertEqual(manifest["quantization"], "MLX 4-bit")
         self.assertIn("per-tensor 8-bit gate overrides", manifest["quantization_source"])
-        self.assertIs(manifest["production_allowed"], False)
+        self.assertIs(manifest["production_allowed"], True)
         self.assertNotIn("default", manifest)
         qualification = manifest["qualification"]
         self.assertEqual(qualification["status"], "unqualified")
-        self.assertIsNone(qualification["minimum_unified_memory_gb"])
-        self.assertIsNone(qualification["recommended_unified_memory_gb"])
+        # Installable and dispatchable from 2026-10-27 (owner: "We no longer block or lock any
+        # model."), so the RAM floor is the only gate and it must be published rather than left
+        # null - null reads as "copies everywhere", which neither of these weights can honour.
+        self.assertEqual(qualification["minimum_unified_memory_gb"], 24)
+        self.assertEqual(qualification["recommended_unified_memory_gb"], 32)
+        self.assertIn("PROVISIONAL, NOT MEASURED", qualification["memory_evidence"])
+        self.assertIsNone(qualification["tested_usable_context_tokens"])
+
+    def test_gemma3_12b_capture_reproduces_runtime_manifest_offline(self):
+        manifest = self.manifests["gemma-3-12b-it-4bit"]
+        choice = next(item for item in CAPTURE.CHOICES
+                      if item["package_id"] == "gemma-3-12b-it-4bit")
+        publisher_tree = {
+            entry["source_path"]: {
+                "size": entry["size"], "lfs": {"oid": entry["sha256"]},
+            }
+            for entry in manifest["files"]
+        }
+        publisher_tree["README.md"] = {
+            "size": 945,
+            "lfs": {"oid": None},
+        }
+        publisher_tree[".gitattributes"] = {
+            "size": 1570,
+            "lfs": {"oid": None},
+        }
+        with mock.patch.object(CAPTURE, "snapshot", return_value=publisher_tree), \
+                mock.patch.object(CAPTURE, "request",
+                                  side_effect=AssertionError("capture fetched a file body")):
+            captured = CAPTURE.capture(choice)
+        self.assertEqual(captured, manifest)
+        paths = {entry["source_path"] for entry in manifest["files"]}
+        self.assertEqual(len(paths), 13)
+        self.assertEqual(sum(entry["size"] for entry in manifest["files"]), 8_068_018_787)
+        self.assertNotIn("README.md", paths)
+        self.assertNotIn(".gitattributes", paths)
+        self.assertEqual(manifest["revision"],
+                         "86cc6a8dedbc456dd0e4af01a9d09f396f77e558")
+        self.assertEqual(manifest["engine"], "chat-mlx")
+        self.assertEqual(manifest["minimum_macos"], "14.0")
+        self.assertEqual(manifest["quantization"], "MLX 4-bit")
+        self.assertIs(manifest["production_allowed"], True)
+        self.assertNotIn("default", manifest)
+        qualification = manifest["qualification"]
+        self.assertEqual(qualification["status"], "unqualified")
+        self.assertEqual(qualification["minimum_unified_memory_gb"], 16)
+        self.assertEqual(qualification["recommended_unified_memory_gb"], 24)
+        self.assertIn("PROVISIONAL, NOT MEASURED", qualification["memory_evidence"])
         self.assertIsNone(qualification["tested_usable_context_tokens"])
 
     def test_qualified_gemma4_capture_reproduces_verified_runtime_manifest_offline(self):
@@ -353,19 +399,38 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertIn("262,144", qualification["reason"])
         self.assertIn("model-declared", qualification["reason"])
 
-    def test_only_gemma4_is_admitted_from_the_three_moe_candidates(self):
+    def test_all_three_moe_candidates_are_admitted_and_each_publishes_a_ram_floor(self):
+        """No MoE candidate is withheld by name; being too big is the RAM floor's job.
+
+        Until 2026-10-27 `production_allowed: false` carried two facts at once - "not measured"
+        and "not offered" - so a Mac could not install one even where it fit. The owner removed
+        the name lock ("They are models we can run so we should have them installable. Able to
+        run on the machine or not is based off its RAM. We no longer block or lock any model."),
+        which makes a published floor mandatory: a null floor reads as "fits every Mac" to the
+        kit copy and to dispatch.
+        """
         gemma = self.manifests["gemma4-26b-a4b-qat-4bit"]
         self.assertIs(gemma["production_allowed"], True)
         self.assertEqual(gemma["qualification"]["status"], "qualified")
         for package_id in ("nemotron-lightning-4bit", "qwen36-35b-4bit"):
             with self.subTest(package=package_id):
                 manifest = self.manifests[package_id]
-                self.assertIs(manifest["production_allowed"], False)
+                self.assertIs(manifest["production_allowed"], True)
                 self.assertEqual(manifest["qualification"]["status"], "unqualified")
+                self.assertGreaterEqual(
+                    manifest["qualification"]["minimum_unified_memory_gb"], 24)
                 self.assertIsNone(
                     manifest["qualification"]["tested_usable_context_tokens"])
+        gemma3 = self.manifests["gemma-3-12b-it-4bit"]
+        self.assertIs(gemma3["production_allowed"], True)
+        self.assertEqual(gemma3["qualification"]["status"], "unqualified")
+        self.assertEqual(gemma3["qualification"]["minimum_unified_memory_gb"], 16)
+        self.assertEqual(gemma3["qualification"]["recommended_unified_memory_gb"], 24)
+        self.assertIn("PROVISIONAL, NOT MEASURED", gemma3["qualification"]["memory_evidence"])
+        self.assertIsNone(gemma3["qualification"]["tested_usable_context_tokens"])
         self.assertIs(self.manifests["qwen3-5-9b-4bit"]["default"], True)
         self.assertNotIn("default", gemma)
+        self.assertNotIn("default", gemma3)
 
     def test_two_default_packages_are_refused(self):
         manifests = [{"package_id": "one", "default": True}, {"package_id": "two", "default": True}]
@@ -413,7 +478,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # one field changed every manifest's canonical bytes.
             #
             # The three Video packages were captured in the same pass.
-            "flux2-klein-4b-mlx-4bit": "32825a10e1812bef71a546560dc69c5d83dde8cc09f52a76f79eb538ca6a35dc",
+            # Digest moved 2026-10-28: the floor moved 16 -> 8 GB so the fleet's measured tier
+            # lives in the manifest rather than in the kit's and the Hub's own copies of it. The
+            # pinned revision and the file inventory are unchanged.
+            "flux2-klein-4b-mlx-4bit": "179f8b79f5b29506ea30e12c13b86f062d2e63525ed7231daba4b71e2cbab2d9",
             # ST-16: captured 2026-09-24 from the pinned revision. 15 model-data files,
             # 5,907,438,792 bytes; the publisher's dotfiles, README and three example
             # images are excluded, so this total is not the 5,911,138,787-byte snapshot.
@@ -429,16 +497,26 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # Nemotron 3.5 Lightning 30B-A3B MLX 4-bit: ten runtime files / 17,792,581,692
             # bytes. The independently verified full stock package has an eleventh file,
             # README.md; runtime capture excludes it by the catalog's established policy.
-            "nemotron-lightning-4bit": "e74e501418a94a3bae52a33aa1f924c8d7d67a068586952deb55af834389568a",
+            # Digest moved 2026-10-27: `production_allowed` became true and a PROVISIONAL 24/32 GB
+            # weight-size floor was published, so the name lock is gone and RAM is the only gate.
+            # No publisher file, revision or byte count changed.
+            "nemotron-lightning-4bit": "a29b23f3a6a76e1d09966583ea20811204ae5f82301f0a03311688ac9ab7ee5e",
             # Qwen 3.6 35B-A3B MLX 4-bit: 15 runtime files / 20,429,166,969 bytes.
             # The independently verified full 16-file SSD stock also carries README.md;
             # runtime capture excludes only that 724-byte publisher file.
-            "qwen36-35b-4bit": "6134192255dc69ea481c97f777b0369016a1c06755f7b6d04ab8c7e7ce135ce9",
+            # Digest moved on 2026-10-27 for the same reason as Nemotron: admitted by name, RAM
+            # floor published at a PROVISIONAL 24/32 GB (the package is 19.03 GiB of weights).
+            "qwen36-35b-4bit": "348569723abbba433f4fd5089081f1da0e0a802a9f3113c8ee6d2c3fe5d5a4f1",
             # Gemma 4 26B-A4B QAT MLX 4-bit: 10 runtime files / 15,641,239,295 bytes.
             # The independently verified 11-file SSD stock remains whole; runtime capture
             # excludes only its 363-byte README.md. Only the 32 GiB qualification metadata
             # changed here; the pinned revision and every publisher file hash stayed fixed.
             "gemma4-26b-a4b-qat-4bit": "962823f4d412465351316da5241c7c11915ff52bae1c3e55c6c94a1a86c94e92",
+            # Gemma 3 12B Instruct MLX 4-bit: 13 runtime files / 8,068,018,787 bytes.
+            # Admitted 2026-10-27 as chat-mlx package with a PROVISIONAL 16/24 GB weight-size floor
+            # (7.51 GiB of weights cannot fit 8 GB). The pinned revision and verified file hashes
+            # are identical to the former text-encoder capture.
+            "gemma-3-12b-it-4bit": "0740468a03143c9e80aec876875e3ab26ade0ec0b27953def5872bef7ca1081c",
             # Qwen Image 2.1 Turbo MLX 4-bit: 19 files / 9,963,443,598 bytes, captured
             # 2026-10-12 from the pinned public mflux-community checkpoint. Owner-adopted for
             # normal 16 GB+ production on 2026-10-13; Turbo measurements remain unpublished.
@@ -488,7 +566,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # excludes `.gitattributes`, the publisher's `README.md` and a demo video — none of
             # which is inference data. `LICENSE` and `NOTICE` are kept: a pack's licence travels
             # with it.
-            "breeze-tts-2-mlx-4bit": "34c94035fdeffa72f8dd6be7351b8d3acd29a07a02e850df324771735a25b2df",
+            # Digest moved 2026-10-28 for the same reason as FLUX.2 Klein 4-bit above: the floor
+            # moved 16 -> 8 GB and the measurement moved into `memory_evidence`. The pinned
+            # revision and the file inventory are unchanged.
+            "breeze-tts-2-mlx-4bit": "32b1bfec5e8bd05fdc489b7ace2c84937bacf268afc1e7b332bea2af1b153e1a",
             # Qwen3-TTS 0.6B Base 4-bit, added 2026-10-02 (owner: keep both 0.6B builds) at revision
             # 0d6bb6fe: 12 files, hashed from the local snapshot (its speech_tokenizer files are
             # byte-identical to the 8-bit package's).

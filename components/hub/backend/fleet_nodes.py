@@ -2510,7 +2510,7 @@ async def relay_model(node_id: str, method: str, path: str, *, payload: Any = No
 
     ``path`` is the part after ``/api/hub/fleet/nodes/local``. ``payload`` travels as JSON;
     ``content`` (with its ``content_type``) travels as-is, which is how a multipart upload is relayed.
-    The node checks and audits the request itself; its refusal (unknown package, shelved, disk,
+    The node checks and audits the request itself; its refusal (unknown package, disk,
     memory, a model it cannot run) comes back with its own status and sentence. Raises
     `StartupRelayError`.
     """

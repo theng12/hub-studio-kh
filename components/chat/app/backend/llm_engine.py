@@ -145,6 +145,72 @@ def _read_json(path: Path) -> dict:
         return {}
 
 
+def _decode_image_url(url: str) -> Any:
+    """Decode a base64 data URI into a PIL Image."""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    if url.startswith("data:"):
+        comma = url.find(",")
+        if comma != -1:
+            try:
+                import base64
+                import io
+                from PIL import Image
+
+                raw = base64.b64decode(url[comma + 1:])
+                img = Image.open(io.BytesIO(raw))
+                img.load()
+                return img
+            except Exception:
+                return None
+    return None
+
+
+def _extract_images_from_messages(messages: list[dict]) -> list[Any]:
+    """Extract PIL images from OpenAI-style message content parts."""
+    images = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    image_url = part.get("image_url")
+                    url = image_url.get("url") if isinstance(image_url, dict) else str(image_url or "")
+                    img = _decode_image_url(url)
+                    if img is not None:
+                        images.append(img)
+    return images
+
+
+def _clean_content_for_template(content: Any) -> Any:
+    """Ensure message content is consumable by apply_chat_template."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            ptype = part.get("type")
+            if ptype == "text":
+                parts.append({"type": "text", "text": str(part.get("text") or "")})
+            elif ptype in ("image_url", "image"):
+                parts.append({"type": "image"})
+        return parts
+    return str(content or "")
+
+
+def _text_content_fallback(content: Any) -> str:
+    """Convert content (string or parts list) to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = [str(part.get("text") or "") for part in content
+                 if isinstance(part, dict) and part.get("type") == "text"]
+        return " ".join(texts)
+    return str(content or "")
+
+
 class ChatEngine:
     def __init__(self, *, model_dir: Path, model_id: str, revision: str,
                  max_output_tokens: int | None = None,
@@ -161,6 +227,22 @@ class ChatEngine:
         # manifest cannot publish the previous model's name.
         self.manifest = dict(manifest or {})
         self.manifest_path = Path(manifest_path) if manifest_path else None
+        self._config = _read_json(self.model_dir / "config.json")
+        # **What this checkpoint itself is**, and therefore what can drive it. A multimodal
+        # checkpoint (Gemma 4 26B-A4B, and every other VLM) ships a `vision_config` and a vision
+        # tower in its own `config.json`/weights; mlx-lm silently drops those tensors, so such a
+        # model must be loaded by `mlx_vlm`. Read from the checkpoint's own file rather than from
+        # a curated list — a flag a human typed can go stale while the weights on disk cannot.
+        # A manifest may still *withhold* the capability: `vision: false` there is honoured.
+        vision_config = self._config.get("vision_config")
+        self.vision_checkpoint = (
+            isinstance(vision_config, dict) and bool(vision_config)
+            and self.manifest.get("vision") is not False
+        )
+        self.supports_vision = self.vision_checkpoint
+        # Why images cannot be read here, when the checkpoint could read them but this runtime
+        # cannot (`None` until a load proves it either way).
+        self.vision_unavailable_reason: str | None = None
         # The tier the model's own manifest qualifies it at, under either spelling. `None` when
         # the manifest publishes none: the worker must not invent a memory tier.
         self.minimum_unified_memory_gb = (
@@ -176,6 +258,7 @@ class ChatEngine:
         self._lock = threading.Lock()
         self._model = None
         self._tokenizer = None
+        self._processor = None
         self._loaded_at: float | None = None
         self._last_release_at: float | None = None
         self._last_release_reason: str | None = None
@@ -188,10 +271,9 @@ class ChatEngine:
         self._streams_started = 0
         self._streams_finished = 0
 
-        config = _read_json(self.model_dir / "config.json")
+        config = self._config
         generation_path = self.model_dir / "generation_config.json"
         generation = _read_json(generation_path)
-        self._config = config
         # Qwen3.5-style checkpoints nest the language model under ``text_config``; a
         # top-level field is also accepted for simpler repos.
         nested = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
@@ -359,15 +441,36 @@ class ChatEngine:
         if not self.files_present():
             raise ChatModelUnavailable(f"model files are not installed at {self.model_dir}")
         _bound_mlx_cache()
-        from mlx_lm import load
-
         started = time.time()
+        if self.supports_vision:
+            try:
+                from mlx_vlm import load
+            except ImportError as exc:
+                # **A runtime without mlx-vlm still serves text, and says which half is missing.**
+                # The one chat checkpoint on the fleet is multimodal, so refusing to load it at
+                # all would take plain chat down on every Mac until this release reaches it.
+                # mlx-lm loads its language tower (its `sanitize` drops the vision tensors); the
+                # *image* lane is what is unavailable, and the request path says so by name.
+                self.vision_unavailable_reason = (
+                    f"this Mac's Chat runtime has no mlx-vlm ({exc}), so images cannot be read "
+                    f"here; text still is")
+                self.supports_vision = False
+            else:
+                model, processor = load(str(self.model_dir))
+                self._model = model
+                self._processor = processor
+                self._tokenizer = getattr(processor, "tokenizer", processor)
+                self._loaded_at = time.time()
+                self._last_release_reason = None
+                self.last_load_seconds = round(self._loaded_at - started, 3)
+                return self._model, self._tokenizer
+        from mlx_lm import load
         model, tokenizer = load(str(self.model_dir))
         self._model, self._tokenizer = model, tokenizer
         self._loaded_at = time.time()
         self._last_release_reason = None
         self.last_load_seconds = round(self._loaded_at - started, 3)
-        return model, tokenizer
+        return self._model, self._tokenizer
 
     def release(self, *, reason: str = "requested", force: bool = False) -> dict:
         with self._lock:
@@ -376,6 +479,7 @@ class ChatEngine:
             was_loaded = self._model is not None
             self._model = None
             self._tokenizer = None
+            self._processor = None
             self._loaded_at = None
             if was_loaded:
                 try:
@@ -392,6 +496,7 @@ class ChatEngine:
             "model_id": self.model_id,
             "revision": self.revision,
             "loaded": loaded,
+            "supports_vision": self.supports_vision,
             "busy": self._generating,
             "loaded_at": self._loaded_at,
             "active_memory_bytes": _active_memory_bytes() if loaded else None,
@@ -417,6 +522,24 @@ class ChatEngine:
         except Exception:
             return None
 
+    def _prompt_tokens(self, messages: list[dict], *, thinking: bool = False) -> int | None:
+        """The prompt's size in tokens, including what each image expands to.
+
+        The rendered prompt carries one `<|image|>` placeholder per picture, and the processor
+        replaces it with the checkpoint's own soft-token count (`vision_soft_tokens_per_image`,
+        280 on Gemma 4). Counting only the placeholder would let a request that is over the
+        context through to the model, so the expansion is added from the checkpoint's own number.
+        """
+        counted = self._count_tokens_unlocked(self._prompt(messages, thinking=thinking))
+        if counted is None or not self._processor:
+            return counted
+        images = _extract_images_from_messages(messages)
+        if not images:
+            return counted
+        declared = self._config.get("vision_soft_tokens_per_image")
+        per_image = declared if isinstance(declared, int) and not isinstance(declared, bool) and declared > 0 else None
+        return counted + per_image * len(images) if per_image else None
+
     def count_tokens(self, text: str) -> int | None:
         """Tokenizer count for the loaded model, or ``None`` when nothing is loaded."""
         with self._lock:
@@ -426,7 +549,7 @@ class ChatEngine:
         with self._lock:
             if self._tokenizer is None:
                 return None
-            return self._count_tokens_unlocked(self._prompt(messages))
+            return self._prompt_tokens(messages)
 
     def _budget(self, max_tokens: int | None) -> int:
         return min(int(max_tokens or self.max_output_tokens), self.max_output_tokens)
@@ -498,7 +621,7 @@ class ChatEngine:
             self._load_locked()
             working = self._with_instruction(messages, self.json_instruction(response_format))
             budget = self._budget(max_tokens)
-            prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
+            prompt_tokens = self._prompt_tokens(working, thinking=thinking)
             # Nothing is generated here, so the allowance this returns is not kept: the check
             # only has to agree with the generation path that this request would be accepted.
             asked = self._named_a_figure_of_its_own(max_tokens)
@@ -506,29 +629,38 @@ class ChatEngine:
             return prompt_tokens
 
     def _prompt(self, messages: list[dict], *, thinking: bool = False) -> str:
-        tokenizer = self._tokenizer
+        tokenizer = getattr(self, "_processor", None) or self._tokenizer
         apply = getattr(tokenizer, "apply_chat_template", None)
         messages = self._with_instruction(messages, None)
         if callable(apply):
-            try:
+            cleaned = [
+                {"role": m.get("role", "user"), "content": _clean_content_for_template(m.get("content", ""))}
+                for m in messages
+            ]
+            text_only = [
+                {"role": m.get("role", "user"), "content": _text_content_fallback(m.get("content", ""))}
+                for m in messages
+            ]
+            for candidate in (cleaned, text_only):
                 try:
-                    # Qwen3.5-9B emits a long "Thinking Process:" trace before the answer when the
-                    # template's default is left on, which also breaks JSON mode. Thinking is off
-                    # by default and can be requested per call.
-                    return apply(messages, tokenize=False, add_generation_prompt=True,
-                                 enable_thinking=thinking)
-                except TypeError:
-                    # A tokenizer whose chat template takes no `enable_thinking` kwarg.
-                    return apply(messages, tokenize=False, add_generation_prompt=True)
-            except Exception as exc:
-                # jinja2.TemplateError, matched by name so this module needs no jinja2 import.
-                if any(cls.__name__ == "TemplateError" for cls in type(exc).__mro__):
-                    raise ChatTemplateError(
-                        f"messages: this model's chat template refused the conversation: {exc}"
-                    ) from exc
-                raise
+                    try:
+                        # Qwen3.5-9B emits a long "Thinking Process:" trace before the answer when the
+                        # template's default is left on, which also breaks JSON mode. Thinking is off
+                        # by default and can be requested per call.
+                        return apply(candidate, tokenize=False, add_generation_prompt=True,
+                                     enable_thinking=thinking)
+                    except TypeError:
+                        # A tokenizer whose chat template takes no `enable_thinking` kwarg.
+                        return apply(candidate, tokenize=False, add_generation_prompt=True)
+                except Exception as exc:
+                    if candidate is text_only:
+                        if any(cls.__name__ == "TemplateError" for cls in type(exc).__mro__):
+                            raise ChatTemplateError(
+                                f"messages: this model's chat template refused the conversation: {exc}"
+                            ) from exc
+                        raise
         # Deterministic fallback for a tokenizer without a chat template.
-        lines = [f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages]
+        lines = [f"{m.get('role', 'user')}: {_text_content_fallback(m.get('content', ''))}" for m in messages]
         lines.append("assistant:")
         return "\n".join(lines)
 
@@ -567,7 +699,7 @@ class ChatEngine:
         system = [m for m in messages if m.get("role") == "system"]
         if not instruction and (not system or (len(system) == 1 and messages[0] is system[0])):
             return messages
-        text = [str(m.get("content") or "").strip() for m in system]
+        text = [_text_content_fallback(m.get("content") or "").strip() for m in system]
         merged = "\n\n".join(part for part in [*text, instruction or ""] if part)
         rest = [m for m in messages if m.get("role") != "system"]
         return [{"role": "system", "content": merged}, *rest] if merged else rest
@@ -655,34 +787,65 @@ class ChatEngine:
             budget = self._budget(max_tokens)
             instruction = self.json_instruction(response_format)
             working = self._with_instruction(messages, instruction)
-            prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
+            prompt_tokens = self._prompt_tokens(working, thinking=thinking)
             budget = self._refuse_over_context(prompt_tokens, budget, asked=self._named_a_figure_of_its_own(max_tokens))
             self._generating = True
             started = time.time()
             try:
-                from mlx_lm import stream_generate
-                from mlx_lm.sample_utils import make_sampler
+                # A vision model is loaded by `mlx_vlm`, whose model object `mlx_lm.generate`
+                # cannot drive — so a text-only request to it takes the same path, with no image.
+                images = _extract_images_from_messages(working) if self.supports_vision else []
+                if self.supports_vision:
+                    try:
+                        from mlx_vlm import stream_generate
+                    except ImportError as exc:
+                        raise ChatModelUnavailable(f"vision inference requires mlx_vlm: {exc}") from exc
+                    from mlx_lm.sample_utils import make_sampler
 
-                # mlx-lm 0.31 asks for a sampler, not raw `temp`/`top_p`: its
-                # `generate_step` has no such parameters and would raise TypeError.
-                sampler = make_sampler(temp=temperature, top_p=top_p)
-                self._apply_seed(seed)
-                attempts: list[dict] = []
+                    sampler = make_sampler(temp=temperature, top_p=top_p)
+                    self._apply_seed(seed)
+                    attempts: list[dict] = []
+                    # mlx-vlm takes the **processor** (it needs `processor.image_processor`), and
+                    # the prompt must already be the rendered string: the template writes the
+                    # `<|image|>` placeholders the processor then expands per image.
+                    processor = self._processor or tokenizer
 
-                def generate(prompt: str, attempt: int) -> str:
-                    text_parts: list[str] = []
-                    attempt_metrics = {"attempt": attempt}
-                    for response in stream_generate(
-                            model, tokenizer, prompt=prompt, max_tokens=budget,
-                            sampler=sampler,
-                            prompt_progress_callback=self._prompt_progress(
-                                on_progress, attempt)):
-                        text_parts.append(getattr(response, "text", ""))
-                        metrics = self._response_metrics(response)
-                        attempt_metrics.update(metrics)
-                        self._emit_progress(on_progress, "generating", attempt, **metrics)
-                    attempts.append(attempt_metrics)
-                    return "".join(text_parts)
+                    def generate(prompt: str, attempt: int) -> str:
+                        text_parts: list[str] = []
+                        attempt_metrics = {"attempt": attempt}
+                        for response in stream_generate(
+                                model, processor, prompt=prompt, image=images or None,
+                                max_tokens=budget, sampler=sampler):
+                            text_parts.append(getattr(response, "text", ""))
+                            metrics = self._response_metrics(response)
+                            attempt_metrics.update(metrics)
+                            self._emit_progress(on_progress, "generating", attempt, **metrics)
+                        attempts.append(attempt_metrics)
+                        return "".join(text_parts)
+                else:
+                    from mlx_lm import stream_generate
+                    from mlx_lm.sample_utils import make_sampler
+
+                    # mlx-lm 0.31 asks for a sampler, not raw `temp`/`top_p`: its
+                    # `generate_step` has no such parameters and would raise TypeError.
+                    sampler = make_sampler(temp=temperature, top_p=top_p)
+                    self._apply_seed(seed)
+                    attempts: list[dict] = []
+
+                    def generate(prompt: str, attempt: int) -> str:
+                        text_parts: list[str] = []
+                        attempt_metrics = {"attempt": attempt}
+                        for response in stream_generate(
+                                model, tokenizer, prompt=prompt, max_tokens=budget,
+                                sampler=sampler,
+                                prompt_progress_callback=self._prompt_progress(
+                                    on_progress, attempt)):
+                            text_parts.append(getattr(response, "text", ""))
+                            metrics = self._response_metrics(response)
+                            attempt_metrics.update(metrics)
+                            self._emit_progress(on_progress, "generating", attempt, **metrics)
+                        attempts.append(attempt_metrics)
+                        return "".join(text_parts)
 
                 text = generate(self._prompt(working, thinking=thinking), 1)
                 json_valid = None
@@ -765,7 +928,7 @@ class ChatEngine:
             model, tokenizer = self._load_locked()
             budget = self._budget(max_tokens)
             working = self._with_instruction(messages, self.json_instruction(response_format))
-            prompt_tokens = self._count_tokens_unlocked(self._prompt(working, thinking=thinking))
+            prompt_tokens = self._prompt_tokens(working, thinking=thinking)
             budget = self._refuse_over_context(prompt_tokens, budget, asked=self._named_a_figure_of_its_own(max_tokens))
             self._generating = True
             self._last_activity_at = time.time()
@@ -773,24 +936,48 @@ class ChatEngine:
             # model load is not counted as generation.
             generation_started = time.time()
             try:
-                from mlx_lm import stream_generate
-                from mlx_lm.sample_utils import make_sampler
+                images = _extract_images_from_messages(working) if self.supports_vision else []
+                if self.supports_vision:
+                    try:
+                        from mlx_vlm import stream_generate
+                    except ImportError as exc:
+                        raise ChatModelUnavailable(f"vision inference requires mlx_vlm: {exc}") from exc
+                    from mlx_lm.sample_utils import make_sampler
 
-                sampler = make_sampler(temp=temperature, top_p=top_p)
-                self._apply_seed(seed)
-                attempt_metrics = {"attempt": 1}
-                text_parts: list[str] = []
-                for response in stream_generate(model, tokenizer, prompt=self._prompt(working, thinking=thinking),
-                                                max_tokens=budget, sampler=sampler,
-                                                prompt_progress_callback=self._prompt_progress(
-                                                    on_progress, 1)):
-                    self._last_activity_at = time.time()
-                    metrics = self._response_metrics(response)
-                    attempt_metrics.update(metrics)
-                    self._emit_progress(on_progress, "generating", 1, **metrics)
-                    piece = getattr(response, "text", "")
-                    text_parts.append(piece)
-                    yield piece
+                    processor = self._processor or tokenizer
+                    sampler = make_sampler(temp=temperature, top_p=top_p)
+                    self._apply_seed(seed)
+                    attempt_metrics = {"attempt": 1}
+                    text_parts: list[str] = []
+                    for response in stream_generate(
+                            model, processor, prompt=self._prompt(working, thinking=thinking),
+                            image=images or None, max_tokens=budget, sampler=sampler):
+                        self._last_activity_at = time.time()
+                        metrics = self._response_metrics(response)
+                        attempt_metrics.update(metrics)
+                        self._emit_progress(on_progress, "generating", 1, **metrics)
+                        piece = getattr(response, "text", "")
+                        text_parts.append(piece)
+                        yield piece
+                else:
+                    from mlx_lm import stream_generate
+                    from mlx_lm.sample_utils import make_sampler
+
+                    sampler = make_sampler(temp=temperature, top_p=top_p)
+                    self._apply_seed(seed)
+                    attempt_metrics = {"attempt": 1}
+                    text_parts: list[str] = []
+                    for response in stream_generate(model, tokenizer, prompt=self._prompt(working, thinking=thinking),
+                                                    max_tokens=budget, sampler=sampler,
+                                                    prompt_progress_callback=self._prompt_progress(
+                                                        on_progress, 1)):
+                        self._last_activity_at = time.time()
+                        metrics = self._response_metrics(response)
+                        attempt_metrics.update(metrics)
+                        self._emit_progress(on_progress, "generating", 1, **metrics)
+                        piece = getattr(response, "text", "")
+                        text_parts.append(piece)
+                        yield piece
             finally:
                 self._generating = False
                 self._last_activity_at = time.time()

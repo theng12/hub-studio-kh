@@ -151,27 +151,45 @@ CHOICES: tuple[dict[str, Any], ...] = (
      "display_name": "Gemma 4 26B-A4B QAT MLX 4-bit",
      "quantization": "QAT MLX 4-bit",
      "quantization_source": "model/config.json quantization: affine 4-bit, group size 64; preserved publisher per-tensor precision overrides"},
-    # Pending Qwen3.6 MoE candidate. The full verified SSD stock has sixteen canonical files;
-    # runtime capture omits only README.md. The checkpoint config identifies qwen3_5_moe and
-    # keeps its per-tensor 8-bit gate overrides; no hardware tier is inferred from its bytes.
+    # Qwen3.6 MoE. The full verified SSD stock has sixteen canonical files; runtime capture omits
+    # only README.md. The checkpoint config identifies qwen3_5_moe and keeps its per-tensor 8-bit
+    # gate overrides. Admitted 2026-10-27 with the rest of the name blocks removed (owner: "We no
+    # longer block or lock any model"), so its memory floor is the only gate - and it is
+    # PROVISIONAL: 24 GB is the next published fleet tier above the 19.03 GiB this package
+    # actually ships, not a measured peak. Replace it with a measurement before calling it
+    # qualified.
     {"package_id": "qwen36-35b-4bit",
      "model_id": "mlx-community/Qwen3.6-35B-A3B-4bit",
      "revision": "38740b847e4cb78f352aba30aa41c76e08e6eb46", "engine": "chat-mlx",
-     "captured_at": "2026-10-07", "production_allowed": False,
+     "captured_at": "2026-10-07", "production_allowed": True,
      "display_name": "Qwen 3.6 35B-A3B MLX 4-bit",
      "quantization": "MLX 4-bit",
      "quantization_source": "model/config.json quantization; preserved per-tensor 8-bit gate overrides"},
-    # Pending owner-selected MoE candidate. The full stock package keeps all eleven publisher-
-    # verified files; the runtime manifest follows the established capture policy and omits the
-    # README, leaving ten inference files. No RAM tier or usable context is inferred before the
-    # owner-authorized physical qualification.
+    # Owner-selected MoE. The full stock package keeps all eleven publisher-verified files; the
+    # runtime manifest follows the established capture policy and omits the README, leaving ten
+    # inference files. Admitted 2026-10-27 like qwen36. Its usable context is still unknown, and
+    # its memory floor is PROVISIONAL: 24 GB is the next published fleet tier above the 16.57 GiB
+    # this package ships, not a measured peak.
     {"package_id": "nemotron-lightning-4bit",
      "model_id": "mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit",
      "revision": "55ac8c89261109b36c04371cd3f479a4594208c8", "engine": "chat-mlx",
-     "captured_at": "2026-10-07", "production_allowed": False,
+     "captured_at": "2026-10-07", "production_allowed": True,
      "display_name": "Nemotron 3.5 Lightning 30B-A3B MLX 4-bit",
      "quantization": "MLX 4-bit affine",
      "quantization_source": "model/config.json quantization; preserved checkpoint tensor overrides"},
+    # Gemma 3 12B Instruct. Formerly LTX's text encoder under retired video; admitted 2026-10-27
+    # as an independent chat-mlx model with the rest of the name blocks lifted (owner: "We no
+    # longer block or lock any model"). Multimodal checkpoint whose vision tower/processor
+    # is preserved, but chat worker currently serves text-only. Memory floor is PROVISIONAL:
+    # 16 GB is the next published fleet tier above the 7.51 GiB (8.07 GB) weights this package
+    # ships (8 GB cannot hold them); 24 GB is recommended.
+    {"package_id": "gemma-3-12b-it-4bit",
+     "model_id": "mlx-community/gemma-3-12b-it-4bit",
+     "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558", "engine": "chat-mlx",
+     "captured_at": "2026-09-15", "production_allowed": True,
+     "display_name": "Gemma 3 12B Instruct MLX 4-bit",
+     "quantization": "MLX 4-bit",
+     "quantization_source": "the publisher's model id states it: mlx-community/gemma-3-12b-it-4bit"},
     # ── ST-13.A: Kyutai Pocket TTS 4-bit, the English cloning engine ──
     # The 4-bit MLX conversion is the whole executable model: 4-bit weights, the flow-LM
     # config and the mimi codec live in one 89 MB safetensors file. It carries no tokenizer
@@ -275,7 +293,7 @@ CHOICES: tuple[dict[str, Any], ...] = (
 )
 
 DETAILS: dict[str, dict[str, Any]] = {
-    "flux2-klein-4b-mlx-4bit": {"defaults": {"size_pixels": 1024, "steps": 4, "guidance": 1.0, "parameters_source": "research/rescope-model-inventory-2026-09-15.md"}, "memory": (16, 16, "Historical 16 GB Apple-Silicon 1K text-to-image receipt; editing, reference-image and 2K are not qualified.")},
+    "flux2-klein-4b-mlx-4bit": {"defaults": {"size_pixels": 1024, "steps": 4, "guidance": 1.0, "parameters_source": "research/rescope-model-inventory-2026-09-15.md"}, "memory": (8, 16, "MEASURED by fleet production use rather than by a stored peak-memory receipt: the owner has produced tens of thousands of images with this pack on his 8 GB Apple-silicon Macs, which is why the fleet's own admission table (components/hub/backend/memory_admission.py, FLUX.2 Klein 4-bit) has enforced an 8 GB total floor since qualification. No peak footprint was recorded for those runs, so `status` stays `unqualified` - the 8 GB is a production-use floor, not a lab receipt - and editing, reference-image and 2K remain unqualified. The floor moved 16 -> 8 in the manifest on 2026-10-28 so the one number the kit and the scheduler both use is published in one place; the kit's PROVEN_SMALLER table that carried it is gone."), "qualification": {"status": "unqualified", "reason": "Runs on the owner's 8 GB Apple-silicon Macs - tens of thousands of images produced there, and the Hub's admission table has enforced 8 GB since the fleet was qualified. No peak-memory receipt was stored for those runs, so this tier is not reported as `qualified`. Editing, reference-image and 2K are not qualified at any tier."}},
     "qwen-image-2-1-mlx-serve-4bit": {
         "defaults": {"width": 1024, "height": 1024, "steps": 20, "guidance": 1.0,
                      "seed": -1,
@@ -356,19 +374,28 @@ DETAILS: dict[str, dict[str, Any]] = {
     },
     "qwen36-35b-4bit": {
         "defaults": {"parameters_source": "model/generation_config.json"},
-        "memory": (None, None, None),
+        "memory": (24, 32, "PROVISIONAL, NOT MEASURED. Derived from the package this manifest ships: its fifteen runtime files total 20,429,166,969 bytes (19.03 GiB), so the smallest published fleet tier that can hold the weights at all is 24 GB; 16 GB cannot. 32 GB is recommended because a sparse 35B-A3B checkpoint's resident footprint exceeds its weight bytes and no peak has been observed on any Mac. This is a weight-size floor, not a measured tier, and no inference, TPS, script or scene-quality run has happened. Replace it with a measurement (qualification/model-readings.json) before treating the model as qualified."),
         "qualification": {
             "status": "unqualified",
-            "reason": "Downloaded and publisher-hash verified only. English import, inference, TPS, script/scene quality, usable context and RAM-tier qualification have not yet been run.",
+            "reason": 'Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). English import, inference, TPS, script/scene quality, usable context and a MEASURED RAM tier have not yet been run.',
             "tested_usable_context_tokens": None,
         },
     },
     "nemotron-lightning-4bit": {
         "defaults": {"parameters_source": "model/generation_config.json"},
-        "memory": (None, None, None),
+        "memory": (24, 32, "PROVISIONAL, NOT MEASURED. Derived from the package this manifest ships: its ten runtime files total 17,792,581,692 bytes (16.57 GiB), so the smallest published fleet tier that can hold the weights at all is 24 GB; 16 GB cannot. 32 GB is recommended because a sparse 30B-A3B checkpoint's resident footprint exceeds its weight bytes and no peak has been observed on any Mac. This is a weight-size floor, not a measured tier. Replace it with a measurement (qualification/model-readings.json) before treating the model as qualified."),
         "qualification": {
             "status": "unqualified",
-            "reason": "Downloaded and publisher-hash verified only. Owner has held inference until restart and explicit permission; no RAM tier, TPS or script/scene quality has been qualified.",
+            "reason": 'Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). No inference, TPS, script/scene quality or MEASURED RAM tier has been qualified.',
+            "tested_usable_context_tokens": None,
+        },
+    },
+    "gemma-3-12b-it-4bit": {
+        "defaults": {"parameters_source": "model/generation_config.json"},
+        "memory": (16, 24, "PROVISIONAL, NOT MEASURED. Derived from the package this manifest ships: its thirteen runtime files total 8,068,018,787 bytes (7.51 GiB), so the smallest published fleet tier that can hold the weights at all is 16 GB; 8 GB cannot. 24 GB is recommended because a 12B checkpoint's resident footprint and KV cache can exceed the available memory on a 16 GB Mac and no peak has been observed on any Mac. This is a weight-size floor, not a measured tier, and no inference, TPS, script or scene-quality run has happened. Replace it with a measurement (qualification/model-readings.json) before treating the model as qualified."),
+        "qualification": {
+            "status": "unqualified",
+            "reason": 'Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). English import, inference, TPS, script/scene quality, usable context and a MEASURED RAM tier have not yet been run.',
             "tested_usable_context_tokens": None,
         },
     },
@@ -382,7 +409,7 @@ DETAILS: dict[str, dict[str, Any]] = {
     # at ~3.3 GB in every mode, which fits 8 GB, while [M] the kernel's peak footprint reading ranged
     # 5.41 to 23.93 GB across runs and was never pinned down. Until the second is settled, 8 GB is
     # plausible and not demonstrated, so the claim is the tier that is not at risk.
-    "breeze-tts-2-mlx-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (16, 16, "Qualified 2026-09-29 on this project's staging Mac. Resident set size held flat at ~3.3 GB in all five modes (design, clone, direction, long-form, vocal events), which fits 8 GB; the kernel peak footprint reading ranged 5.41 to 23.93 GB and was never settled, so 16 GB is the floor this catalogue claims. Throughput measured 0.27x realtime — about 19.8 minutes per 1,000 words — which is the real cost of this model, not memory.")},
+    "breeze-tts-2-mlx-4bit": {"defaults": {"parameters_source": "model/config.json"}, "memory": (8, 16, "MEASURED on an 8 GB Apple M1 (Hub 0.6.143) on 2026-10-04: 2/2 S2 clips completed, every section accepted, worker peak 4.69 GB, Mac max used 5.2-5.3 GB, min free 1.19-1.32 GB, memory pressure warning but never critical, swap <= +0.54 GB, RTF 4.1 against 4.9-5.1 on a 16 GB M1, max stall 0.6 s. Each clip started with 3.31-3.46 GB free; the 3.2 GB free-before-start floor is the model's own catalog row (min_free_memory_gb), measured on that same run. The earlier 2026-09-29 staging run held a flat ~3.3 GB resident set across all five modes, but its kernel peak footprint reading (5.41-23.93 GB) was never settled, which is why the floor is stated from the 2026-10-04 run. The floor moved 16 -> 8 in the manifest on 2026-10-28 so one number is published in one place; the kit's PROVEN_SMALLER table that carried it is gone. Throughput 0.27x realtime - about 19.8 minutes per 1,000 words - which is the real cost of this model, not memory."), "qualification": {"status": "qualified", "reason": "Measured on an 8 GB Apple M1 on 2026-10-04: 2/2 clips completed, worker peak 4.69 GB, swap <= +0.54 GB, memory pressure never critical. The 3.2 GB free-before-start figure is the model's own catalog row, from the same run."}},
     "pocket-tts-tokenizer": {"defaults": {"parameters_source": "model/tokenizer.model"}, "memory": (8, 8, "A 58 KB sentencepiece model with no memory floor of its own; it is carried wherever pocket-tts-4bit is, because every generation loads it.")},
     "pocket-tts-preset-voices": {"defaults": {"parameters_source": "model/embeddings/alba.safetensors"}, "memory": (8, 8, "Eight preset voice prompts totalling about 4.4 MB, used only by the preset/zero-shot path when no reference clip is supplied.")},
     # ── Adopted from the local Voice Studio cache (2026-09-20) ──

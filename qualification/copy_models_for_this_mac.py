@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Copy the models this Mac can run into your Downloads folder, and update them later.
+"""Copy the models this Mac's owner chose into the model library, and keep them current.
 
 Double-click **copy-models.command** instead of running this directly.
 
-It reads how much memory this Mac has, looks at what each model needs, and copies only the ones
-that fit - so a small Mac does not carry 29 GB it can never use.
+**Owner decision 2026-10-28: this step no longer chooses.** By default it copies nothing and lists
+what the kit holds, so the app's install screen ("Set up this Mac") does the choosing - one preset
+or a hand-ticked list, with the free space and the cost shown before anything moves. The SSD is a
+*source* now, not a decision. Nothing an earlier kit copied is removed by that default: a Mac that
+is already set up keeps everything it has until its owner chooses otherwise in the app.
+
+`STUDIOHUB_KIT_COPY=1` restores the previous behaviour for one run - every model this Mac's memory
+can run - which the kit readme still offers for a Mac with no internet and no reachable peer. That
+is the one reason the old path survives, and it is opt-in so it can never quietly decide for a Mac
+whose owner is about to use the screen.
 
 Running it again is safe and is the normal thing to do after the SSD is refreshed with new
 models. It compares each model folder against the copy already here and:
@@ -50,7 +58,7 @@ def shared_resolver():
     """The app's own library resolver, or None on an app that predates it.
 
     Imported lazily: the app's `components/` folder is only on `sys.path` once the bundle has been
-    found in `main()`, exactly as `retired_models` and `shelved_models` are.
+    found in `main()`, exactly as `retired_models` is.
     """
     try:
         from model_library import resolve_library  # type: ignore
@@ -58,54 +66,25 @@ def shared_resolver():
         return None
     return resolve_library
 
-# Some models are shipped with a conservative figure in their manifest, and the owner has run
-# them on smaller Macs many times. Raising a model's floor here is a deliberate, reviewable act;
-# lowering one is not, so there is no way to say "needs less than the manifest says" - only
-# "the owner has proven this one runs smaller".
+# **No floor table lives here any more (owner decision 2026-10-28, "collapse duplicated floor
+# tables into manifests and delete the old tables").** This file used to carry `PROVEN_SMALLER`
+# (the owner had run a model on a smaller Mac) and `CARRY_BELOW_TIER` (he had asked to try it
+# there, unmeasured). Both contained exactly the numbers their models' own manifests now state:
+# FLUX.2 Klein 4-bit and Breeze TTS 2 4-bit moved 16 -> 8 in `model-manifests/` on 2026-10-28,
+# carrying the evidence sentence with them, and Z-Image-Turbo 4-bit's manifest already said 8.
+# A model's floor is its `qualification.minimum_unified_memory_gb` and nothing else, so a
+# re-capture (`packaging/capture_model_manifests.py`) cannot leave a second copy behind to
+# disagree with it.
 #
-# Two tables, and they are not the same claim:
-#   PROVEN_SMALLER   the owner has run this model on the smaller Mac. Measured.
-#   CARRY_BELOW_TIER the owner has asked for this model on a smaller Mac than its manifest
-#                    declares, and the run that would prove it does not exist yet. It is carried
-#                    on his request, not on evidence, and the app still publishes the model's
-#                    below-tier warning - so he is told what he is trading. Move a model to
-#                    PROVEN_SMALLER once it has actually run there.
-PROVEN_SMALLER = {
-    # FLUX.2 Klein 4B: the manifest says 16 GB, the owner has produced tens of thousands of
-    # images on 8 GB Macs. The 16 GB figure is a qualification tier, not a requirement.
-    "flux2-klein-4b-mlx-4bit": 8,
-    # Z-Image-Turbo 6B MLX 4-bit: **measured** on an 8 GB Apple M1 Mac mini (`Macmini9,1`,
-    # macOS 26.6.2) with mflux 0.20.0 on 2026-09-26. Low-RAM completed 1024x1024 in 392 s and
-    # 1280x720 in 336 s at 5.70 GB peak MLX / 5.85 GB footprint. The manifest's own floor moved
-    # 16 -> 8 on that evidence, so this is a result rather than a request to try.
-    "z-image-turbo-mflux-4bit": 8,
-    # Breeze TTS 2 4-bit: the manifest says 16 GB. **Measured** on an 8 GB M1 (Hub 0.6.143) on 2026-10-04:
-    # 2/2 clips completed from 3.31-3.46 GB free, worker peak 4.69 GB, never critical memory pressure
-    # (owner decision 2026-10-04; the Hub reads the same 8 GB total from `memory_admission._FLEET_DEFAULTS` and the 3.2 GB free floor from this
-    # model's own catalog row, which is where that number lives).
-    "breeze-tts-2-mlx-4bit": 8,
-}
+# Where the two claims went: a measured run is recorded in the manifest's `memory_evidence` and
+# `status`, which is the artefact the capture tool already preserves; there is no longer a place
+# to record "carried on his request, still unmeasured" as distinct from "proven", so that
+# distinction is made by writing the evidence above the number rather than by choosing a table.
 
-CARRY_BELOW_TIER = {
-    # **Empty as of 2026-09-26, and kept deliberately.** Its one entry (Z-Image-Turbo 6B MLX
-    # 4-bit) graduated to PROVEN_SMALLER above when the 8 GB run came back QUALIFIED. The table
-    # stays because the mechanism is still needed: carrying a model below its own declared floor
-    # to *try* it is a real thing this project does, and it must keep saying so out loud rather
-    # than being quietly folded into the proven set. Nothing in here is proof of anything.
-    # Breeze TTS 2 4-bit was carried here for one day (0.6.129) and withdrawn (2026-10-02); the 8 GB run
-    # of 2026-10-04 then measured it, so it is in PROVEN_SMALLER now.
-}
-
-# Offered but not stocked (owner decision 2026-10-08): the model stays on the SSD, in the catalog and
-# installable on request (the Gateway's "Install a model..." / `POST /admin/api/fleet/model-installs`),
-# but this step does not copy it to a Mac. Unlike a shelved model (`components/shelved_models.py`) the
-# Hub neither moves it out nor refuses to download it. A Mac marked keep-all copies it like any other.
-NOT_STOCKED = {
-    # Qwen Image 2.1 (native mlx-serve 4-bit), qualified on 24 GB; the fleet's stocked Qwen is the
-    # low-RAM `qwen-image-2-1-mflux-q4` (16 GB and up).
-    "qwen-image-2-1-mlx-serve-4bit",
-}
-
+# **There is no "offered but not stocked" list any more (owner decision 2026-10-28).** Its one
+# entry, Qwen Image 2.1 (native mlx-serve 4-bit), was left off this step because the fleet's stocked
+# Qwen was the low-RAM mflux pack. With the install-time picker the customer chooses, so it is an
+# ordinary package: copied when it fits, and in no preset. RAM is the only gate.
 
 def machine_memory_gb() -> int:
     """Installed memory in whole GiB, the way the machine is sold."""
@@ -120,40 +99,49 @@ def machine_memory_gb() -> int:
 
 
 def required_gb(manifest: dict) -> int:
+    """This model's memory floor, from its own manifest and nowhere else.
+
+    `0` means the manifest published no floor, which the caller reads as "fits anywhere" - the
+    same answer it gave before, and the honest one: an absent figure is a missing measurement, not
+    a small requirement.
+    """
     qualification = manifest.get("qualification") or {}
     floor = qualification.get("minimum_unified_memory_gb")
-    floor = int(floor) if isinstance(floor, (int, float)) and floor > 0 else 0
-    package_id = manifest["package_id"]
-    # A measured run outranks a request to try it, so `PROVEN_SMALLER` is asked first.
-    if package_id in PROVEN_SMALLER:
-        return PROVEN_SMALLER[package_id]
-    return CARRY_BELOW_TIER.get(package_id, floor)
+    return int(floor) if isinstance(floor, (int, float)) and not isinstance(floor, bool) and floor > 0 else 0
 
 
 def floor_origin(manifest: dict) -> str:
     """Where this model's memory requirement came from, so a wrong skip can be traced.
 
-    There are exactly three sources: the `PROVEN_SMALLER` table (the owner has run the model on a
-    smaller Mac than its manifest claims), the `CARRY_BELOW_TIER` table (the owner has asked for it
-    there and it is still unmeasured), and the manifest's own
-    `qualification.minimum_unified_memory_gb`. The skip *is* printed, but it printed only the
-    number - so a new model the owner had proven on a small Mac looked like a model that did not
-    fit, and nothing said which of the three places to change. All three are named here, and the
-    two tables are named apart from each other: a wrong skip has to stay traceable to the exact
-    table that caused it, and "carried because he asked" must not read as "proven".
+    One source now: the manifest's own `qualification.minimum_unified_memory_gb`. The sentence
+    names the file to edit, because the skip *is* printed and a number with no origin leaves the
+    operator guessing which of several possible places to change. See the comment above for where
+    the two former tables went.
     """
-    package_id = manifest["package_id"]
-    if package_id in PROVEN_SMALLER:
-        return (f"floor {PROVEN_SMALLER[package_id]} GB from PROVEN_SMALLER in "
-                f"qualification/copy_models_for_this_mac.py (the owner has run it on that Mac)")
-    if package_id in CARRY_BELOW_TIER:
-        return (f"floor {CARRY_BELOW_TIER[package_id]} GB from CARRY_BELOW_TIER in "
-                f"qualification/copy_models_for_this_mac.py (the owner asked to carry it there; "
-                f"the run that would prove it is still unmeasured)")
-    return ("floor from qualification.minimum_unified_memory_gb in its manifest (raise it there, "
-            "or add the model to PROVEN_SMALLER in qualification/copy_models_for_this_mac.py if "
-            "the owner has run it on a smaller Mac, or to CARRY_BELOW_TIER there if he has asked "
-            "for it there and it is still unmeasured)")
+    return (f"floor from qualification.minimum_unified_memory_gb in "
+            f"model-manifests/{manifest.get('package_id', '?')}.json (raise it there; the evidence "
+            f"for the number belongs in that block's memory_evidence)")
+
+
+def size_of_kit_gb(library: Path, manifests: dict) -> float:
+    """How many bytes the kit's own library holds for these manifests, as far as it is there.
+
+    Read from the folders on the drive, not from the manifests' stated sizes: a drive that never
+    shipped a package's weights (the 2026-10-28 write left two behind) must not be described as
+    holding them. A missing folder contributes nothing.
+    """
+    total = 0
+    for package_id in manifests:
+        folder = library / package_id
+        if folder.is_symlink() or not folder.is_dir():
+            continue
+        for path in folder.rglob("*"):
+            try:
+                if path.is_file() and not path.is_symlink():
+                    total += path.stat().st_size
+            except OSError:
+                continue
+    return total / 1e9
 
 
 def size_gb(manifest: dict) -> float:
@@ -269,9 +257,6 @@ def prune_old_revisions(target: Path, keep: str) -> int:
 #: Where a package this kit no longer offers is moved. A move, not a delete: the folder is still
 #: the operator's, `_trash` is his to empty, and a model reinstated in a later kit is still there.
 TRASH_FOLDER = "_trash"
-
-#: The Hub's device settings, relative to the home folder: where a Mac is marked "keep all models".
-HUB_SETTINGS_RELATIVE = Path("Library/Application Support/StudioHub Standalone/hub/device_settings.json")
 
 #: The app's receipt log, relative to the library it belongs to.
 INDEX_RELATIVE = Path(".studiohub") / "installed.json"
@@ -576,15 +561,13 @@ def main() -> int:
         from retired_models import manifest_retired  # type: ignore
     except ImportError:
         manifest_retired = lambda manifest, stem=None: False  # noqa: E731
-    # The shelved-models list (`components/shelved_models.py`) ships there too. A shelved model stays
-    # in the kit - this step just does not copy it - unless this Mac is marked "keep all models" in the
-    # Hub's device settings. An app that predates the list shelves nothing.
-    try:
-        from shelved_models import keep_all_models, manifest_shelved  # type: ignore
-    except ImportError:
-        manifest_shelved = lambda manifest, stem=None: False  # noqa: E731
-        keep_all_models = lambda settings_file: False  # noqa: E731
-    keep_all = keep_all_models(Path.home() / HUB_SETTINGS_RELATIVE)
+    # **No shelving (owner decision 2026-10-28).** This step used to skip a list of packages
+    # (`components/shelved_models.py`) unless the Mac was marked "keep all models". Blocking a model
+    # by name is gone: every model this Mac's memory can run is copied, and everything else is left
+    # on the SSD by the RAM floor alone.
+    # **Copy everything this Mac can run** (the pre-2026-10-28 behaviour), only when asked for
+    # explicitly. The picker is the decision; this step is a source. See the module docstring.
+    copy_everything = os.environ.get("STUDIOHUB_KIT_COPY", "").strip() == "1"
     # **Lite Mode models only (owner 2026-10-03/04)**: the 8 GB-class models a Lite Mode Mac runs
     # (`components/workstation_models.py`, ~15 GB). The kit's `2 - Copy the Lite Mode models.command`
     # sets STUDIOHUB_WORKSTATION=1; it is the only difference from `2 - Copy the models`.
@@ -617,19 +600,15 @@ def main() -> int:
     print(f"  This Mac has {memory} GB of memory.")
     print()
 
-    chosen, skipped, shelved, not_for_shop, pending, not_stocked = [], [], [], [], [], []
+    chosen, skipped, not_for_shop, pending = [], [], [], []
     for package_id, manifest in sorted(manifests.items()):
+        if not copy_everything:
+            break                       # nothing is chosen by this step unless it was asked to choose
         if admission_check is not None and not admission_check(manifest):
             pending.append((package_id, manifest))
             continue
         if shop_mac and not manifest_allowed(manifest):
             not_for_shop.append(package_id)
-            continue
-        if not keep_all and manifest_shelved(manifest):
-            shelved.append(package_id)
-            continue
-        if not keep_all and package_id in NOT_STOCKED:
-            not_stocked.append(package_id)
             continue
         needs = required_gb(manifest)
         (chosen if needs <= memory else skipped).append((package_id, needs, manifest))
@@ -708,7 +687,15 @@ def main() -> int:
     # What this Mac holds that the kit no longer offers. Read before anything is copied, so the
     # operator sees it in the plan and agrees to it with the same answer as the copy - nothing is
     # moved that he was not shown first.
-    prune, stale_receipts = plan_prune(read_index(destination), destination, set(manifests))
+    #
+    # **Only when this run is copying at all (owner decision 2026-10-28).** A run that copies
+    # nothing must move nothing: "the kit no longer offers this" and "the owner did not tick it"
+    # are different claims, and a Mac set up from the app's screen - which is the normal way now -
+    # would otherwise have its untouched library reorganised by a drive plugged in for a source.
+    if copy_everything:
+        prune, stale_receipts = plan_prune(read_index(destination), destination, set(manifests))
+    else:
+        prune, stale_receipts = [], []
 
     # Sort every model this Mac should have into: new, changed, or already identical.
     plan: list[tuple[str, int, dict, str]] = []
@@ -728,6 +715,27 @@ def main() -> int:
     current = [row for row in plan if row[3] == "current"]
     absent = [row for row in plan if row[3] == "missing-from-kit"]
 
+    if not copy_everything:
+        # **The default: this step chose nothing (owner decision 2026-10-28).** It says what the
+        # kit holds, how many are already on this Mac, and where the choosing happens - and it
+        # copies and moves nothing. A run that reorganised a library it did not fill would be the
+        # kit deciding for a Mac whose owner is about to use the screen.
+        print(f"  This drive holds {len(manifests)} model package(s): "
+              f"{size_of_kit_gb(library, manifests):.1f} GB in total.")
+        already = sum(1 for package_id in manifests
+                      if (destination / package_id).is_dir())
+        print(f"  {already} of them are already in {destination}.")
+        print()
+        print("  This step no longer chooses which models to copy. Open Studio Hub and use")
+        print("  \"Set up this Mac\" - it shows this Mac's memory and free space, offers the four")
+        print("  presets by size, and copies from this drive. Nothing was copied or moved by")
+        print("  this run.")
+        print()
+        print("  To copy every model this Mac's memory can run, as earlier kits did, run this")
+        print("  with STUDIOHUB_KIT_COPY=1 (the kit readme names the launcher for it).")
+        print()
+        return 0
+
     for label, rows in (("New models", new), ("Changed models", update)):
         if rows:
             print(f"  {label} ({len(rows)}):")
@@ -745,17 +753,8 @@ def main() -> int:
         names = ", ".join(package_id for package_id, _n, _m, _how in absent)
         print(f"  Not on this SSD, so not copied ({len(absent)}): {names}")
         print()
-    if shelved:
-        print(f"  Shelved, not copied ({len(shelved)}): {', '.join(shelved)}")
-        print("  They stay on the SSD. To keep them on this Mac, set keep_all_models in the Hub's "
-              "settings (see the release notes), then run this again.")
-        print()
     if not_for_shop:
         print(f"  Lite Mode models only: {len(not_for_shop)} other model(s) stay on the SSD.")
-        print()
-    if not_stocked:
-        print(f"  Installed on request only, not copied ({len(not_stocked)}): {', '.join(not_stocked)}")
-        print("  They stay on the SSD; install one from the Gateway's Install a model... menu.")
         print()
     if pending:
         print(f"  Pending models ({len(pending)}): not yet qualified; retained on SSD")

@@ -30,7 +30,6 @@ from starlette.background import BackgroundTask
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from components import shelved_models
 from components.os_metadata import is_os_metadata
 from . import disk_governor, output_storage, standalone_config, workstation
 from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids, resources, routing as routing_rule
@@ -39,7 +38,7 @@ from .backend import render_executor as render_executor_module, render_service
 from .backend.render_assets import RenderAssetStore
 from .backend.render_executor import InstalledRenderAuthorityLoader, RenderExecutor
 from .backend.render_jobs import RenderJobRuntime
-from .backend.monitor import StudioMonitor
+from .backend.monitor import StudioMonitor, is_cached
 
 # The key one unusable manifest carries into the catalog so its row can say what is wrong
 # without taking the other packages down. Private to this module: it is an implementation
@@ -444,20 +443,13 @@ def _contract_for(manifest: dict[str, Any],
     return None
 
 
-def _keep_all_models() -> bool:
-    return standalone_config.load_device_settings()["effective"]["keep_all_models"]
-
-
-def _shelved_reason(manifest: dict[str, Any]) -> str:
-    return (f"Not on this Mac: {manifest['package_id']} is a shelved model, which this Mac does not keep. "
-            f"It stays on the SSD kits and works on a Mac marked \"keep all models\" "
-            f"(Hub setting keep_all_models).")
-
-
-def _shelved_refusal(manifest: dict[str, Any]) -> None:
-    """A shelved model is not brought onto a Mac that does not keep it (it would be moved out again)."""
-    if shelved_models.manifest_shelved(manifest) and not _keep_all_models():
-        raise HTTPException(409, _shelved_reason(manifest))
+# **There is no shelving any more (owner decision 2026-10-28).** "A model is blocked by RAM, never
+# by name": the seven packages that were on `components/shelved_models.SHELVED_MODELS`
+# (whisper-base, whisper-small, voxcpm2-bf16, fish-audio-s2-pro-bf16, chatterbox-4bit,
+# chatterbox-8bit, s3tokenizerv2) are ordinary catalog entries now - listed, tickable, and gated
+# only by their own RAM floor (`_memory_refusal` below). The mechanism went with the list: no
+# start-up move-out, no download refusal, no kit skip. A copy already installed on a Mac stays
+# exactly where it is and works; only `retired_models` still moves anything out.
 
 
 def _memory_refusal(manifest: dict[str, Any]) -> None:
@@ -480,8 +472,8 @@ def _memory_refusal(manifest: dict[str, Any]) -> None:
 def _library_may_be_moved_from(what: str) -> bool:
     """True only when this Hub's data directory owns the model library (components/library_ownership.py).
 
-    A Hub started with a throwaway data directory over a real library used to shelve and retire the
-    real weights into the throwaway directory's Trash Folder; deleting it destroyed them. A Hub that
+    A Hub started with a throwaway data directory over a real library used to retire the real
+    weights into the throwaway directory's Trash Folder; deleting it destroyed them. A Hub that
     does not own the library logs why and moves nothing.
     """
     from components import library_ownership
@@ -492,12 +484,42 @@ def _library_may_be_moved_from(what: str) -> bool:
     return True
 
 
-def shelve_installed_models() -> list[str]:
-    """At start-up, a Mac that is not marked keep-all moves its installed shelved models to the Trash Folder."""
-    if not _keep_all_models() and not _library_may_be_moved_from("shelving models"):
-        return []
-    return shelved_models.shelve_installed(_model_library(), _model_catalog().values(),
-                                           output_storage.trash_root(), _keep_all_models())
+def _lan_sources(catalog: dict[str, dict[str, Any]], library: Path,
+                 monitor: StudioMonitor) -> dict[str, str]:
+    """Package id -> another Mac's address that has it installed, from this Hub's own registry.
+
+    The picker's source order is "another Mac on the LAN, then the SSD, then the internet". This
+    answers only the **first**: which packages some *other* machine in this Hub's group is running
+    with a model cached, so the screen can say "from <machine>" instead of silently offering an
+    internet download of 9 GB that a Mac two desks away already holds. It is a hint for the
+    download: `POST /api/hub/model-packages/{id}/download` still takes its own `source` share and
+    verifies every byte, and a package with no entry here simply falls through to the next source.
+
+    A machine's row is read from the same aggregate the fleet rows come from, so a Mac that is
+    asleep contributes nothing rather than a stale claim.
+    """
+    found: dict[str, str] = {}
+    try:
+        models = monitor.cached_aggregate_catalog().get("models") or []
+        local = monitor.status
+    except Exception:  # noqa: BLE001 - a source hint must never fail the screen
+        return found
+    for row in models:
+        if not isinstance(row, dict):
+            continue
+        studio_id = str(row.get("hub_studio") or "")
+        machine = str(row.get("hub_machine") or "local")
+        if machine == "local" or (local.get(studio_id) or {}).get("status") != "up":
+            continue
+        if not is_cached(row):
+            continue
+        package_id = str((row.get("cache") or {}).get("package_id")
+                         or row.get("package_id") or "")
+        if package_id and package_id not in catalog:
+            continue
+        if package_id:
+            found.setdefault(package_id, machine)
+    return found
 
 
 def _disk_context(monitor: StudioMonitor) -> disk_governor.Context:
@@ -561,14 +583,8 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
     # circuit breaker that refuses it. Without this the app showed every gate open and the job was
     # then declined before dispatch, which read as the model silently not working.
     paused = broker.model_block_state(worker_id, manifest["model_id"])
-    shelved = shelved_models.manifest_shelved(manifest)
-    away = shelved and receipt["state"] == "not_installed" and not _keep_all_models()
     return {
         **receipt,
-        # A shelved model is still offered and usable where it is; on a Mac that does not keep it, its
-        # absence is "not on this Mac", not a fault (and it is never downloaded back by itself).
-        "shelved": shelved,
-        **({"reason": _shelved_reason(manifest)} if away else {}),
         **standalone_config.model_readiness({
             "files_state": receipt["state"],
             "minimum_macos": manifest["minimum_macos"],
@@ -1498,12 +1514,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             # A node fetches the release its controller holds; a no-op on any Mac that is not one.
             release_mirror = _asyncio.create_task(release_sync.loop())
             try:
-                moved = shelve_installed_models()
-                if moved:
-                    print(f"[hub] moved shelved models to the Trash Folder: {', '.join(moved)}", flush=True)
-            except (OSError, ValueError):
-                pass
-            try:
                 retired = retire_installed_models()
                 if retired:
                     print(f"[hub] moved retired models to the Trash Folder: {', '.join(retired)}", flush=True)
@@ -1533,6 +1543,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 standalone_config.load_device_settings,
                 # Render retirement rides the same pass: no second cleanup service.
                 after_sweep=after_cleanup,
+                # So does the 30-day handoff of models removed from the library (owner decision
+                # 2026-10-28). `handoff()` resolves the library itself, so a Hub without one says
+                # so and does nothing.
+                removed_models=True,
             )
             monitor.start()
             # Mint the fleet credential at startup, rather than lazily on the first request that
@@ -1822,6 +1836,54 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return {"models": [_model_row(manifest, catalog, monitor, contracts)
                            for manifest in catalog.values()]}
 
+    @app.get("/api/hub/model-presets")
+    def model_presets_screen() -> dict[str, Any]:
+        """The install screen's whole answer: this Mac, four presets, and every model by job.
+
+        Owner decision 2026-10-28. One read, computed fresh every time - a projection cached past a
+        model switch, an install or a disk change is a number the screen shows that is no longer
+        true. It is a **read**: the screen's Apply is the existing
+        `POST /api/hub/model-packages/{id}/download`, one request per package, so there is no
+        second copy path and no batch endpoint to keep in step.
+
+        Four things reach the screen that the catalogue route cannot answer:
+
+        * the free space on the **model library's** volume (the catalogue reports the data
+          directory's, which on a kit setup is a different disk);
+        * which packages are **really** on this Mac, from the receipts, so "complete" means
+          installed and verified and never a byte count;
+        * how each missing package would arrive - another Mac's LAN share, the SSD kit that is
+          mounted, or the pinned internet URLs - per package, because a kit can ship a manifest
+          without its weights (`florence-2-large-ft`, `phonon-2-mlx` on the 2026-10-28 write);
+        * what copying a set costs, and whether it would take this Mac below the floor it already
+          stops work at.
+        """
+        from .backend import model_install_plan
+        try:
+            catalog = _model_catalog()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        try:
+            library = _model_library()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        import psutil
+        from components import model_packages
+        receipts: dict[str, dict[str, Any]] = {}
+        for package_id, manifest in catalog.items():
+            if manifest.get(_MANIFEST_ERROR):
+                continue
+            try:
+                receipts[package_id] = model_packages.preflight(manifest, library, catalog=catalog)
+            except Exception as exc:  # noqa: BLE001 - one package must not blank the screen
+                receipts[package_id] = {"package_id": package_id, "state": "invalid",
+                                        "reason": f"The Hub could not read this package's receipt: {exc}"}
+        memory_gb = round(psutil.virtual_memory().total / (1024 ** 3))
+        return model_install_plan.snapshot(
+            manifests=catalog, receipts=receipts, library=library, memory_gb=memory_gb,
+            stop_bytes=disk_governor.STOP_BYTES, modality_of=_modality_for_engine,
+            lan_source=_lan_sources(catalog, library, monitor))
+
     @app.get("/api/hub/catalog")
     @app.get("/api/hub/models")
     async def catalog() -> dict[str, Any]:
@@ -2089,6 +2151,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 # Gateway can tell a worker on the same local network from one reached over
                 # Tailscale. None from a Mac whose Hub predates it - never guessed from `address`.
                 "network": host.get("network"),
+                # Which interface carries this Mac's default route, what kind of link it is and the
+                # media its Ethernet port negotiated - so a Mac thinned to 100 Mb/s by a bad cable
+                # is visible on the fleet instead of reading "online". None from a Hub older than
+                # 0.6.206; never guessed from anything else in this row.
+                "connection": host.get("connection"),
                 "jobs": stats.get("count", 0),
                 "average_seconds": stats.get("avg_s"),
                 "modalities": stats.get("modalities") or {},
@@ -2140,6 +2207,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 # Gateway can tell a worker on the same local network from one reached over
                 # Tailscale. None from a Mac whose Hub predates it - never guessed from `address`.
                 "network": host.get("network"),
+                # See the member row above: the same reading, from the same `host` snapshot.
+                "connection": host.get("connection"),
                 "jobs": (measured.get(machine) or {}).get("count", 0),
                 "average_seconds": (measured.get(machine) or {}).get("avg_s"),
                 "modalities": modalities,
@@ -3003,7 +3072,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         try:
             catalog = _model_catalog()
             manifest = catalog[package_id]
-            _shelved_refusal(manifest)
             model_packages.import_folder(manifest, Path(body.get("source_folder", "")), _model_library())
             return _model_state(manifest, catalog, monitor)
         except KeyError as exc:
@@ -3011,13 +3079,322 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except (OSError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
 
+    # ── Real model removal (owner decision 2026-10-28) ──────────────────────────────────────────
+    # The Models screen's Remove was a stub that said it was unavailable "until it can protect
+    # models with active readers". It can now, and it moves rather than deletes:
+    # `<library>/_trash/<package>-<stamp>/` with a receipt, refused while anything is using it.
+    def _removal_refusal(exc: Exception) -> HTTPException:
+        from .backend import model_removal
+        return HTTPException(exc.status, {"ok": False, "code": exc.code, **exc.body})
+
+    def _removal_state() -> tuple[Path, dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        from components import model_packages
+        catalog = _model_catalog()
+        try:
+            library = _model_library()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        records: dict[str, dict[str, Any]] = {}
+        index = model_packages._index(model_packages._library(library))
+        return library, catalog, index
+
+    def _paused_for(manifest: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            worker_id = _worker_for_engine(str(manifest.get("engine") or ""))
+        except ValueError:
+            return None
+        return broker.model_block_state(worker_id, manifest["model_id"])
+
+    def _running_model_jobs() -> list[tuple[str, str]]:
+        """Every job this queue is running, as (studio, **model name**), so removal can match it.
+
+        `broker.local_running_jobs()` answers (studio, worker job id), and a job id is not a model
+        name; the batch record carries the model beside its items. The two are joined here rather
+        than teaching the removal module to guess: a removal that cannot tell whether a model is in
+        use must refuse, and the other direction unloads 9 GB under a running generation.
+        """
+        models_by_studio: dict[str, str] = {}
+        for batch in list(broker.batches.values()):
+            model = str(batch.get("model") or batch.get("model_id") or "")
+            for item in batch.get("items") or []:
+                studio = str(item.get("studio") or "")
+                if studio and model:
+                    models_by_studio.setdefault(studio, model)
+        return [(studio, models_by_studio.get(studio, "")) for studio, _job in broker.local_running_jobs()
+                if models_by_studio.get(studio)]
+
+    @app.delete("/api/hub/model-packages/{package_id}")
+    def remove_model_package(package_id: str) -> dict[str, Any]:
+        """Move one installed model out of the library into its own `_trash`. Never a delete.
+
+        Refused while anything is reading it: a running job on the model, a paused model whose
+        Studio still holds its weights, or another installed package that requires it. The refusal
+        names which, because "the model is in use" is the kind of message that gets clicked again.
+        """
+        from .backend import model_removal
+        library, catalog, index = _removal_state()
+        manifest = catalog.get(package_id)
+        if manifest is None or manifest.get(_MANIFEST_ERROR):
+            raise HTTPException(404, "unknown model package")
+        refusal = None
+        try:
+            owned = _library_may_be_moved_from("removing a model")
+            if not owned:
+                from components import library_ownership
+                refusal = library_ownership.refusal(library, ledger.DATA_DIR, "removing a model")
+            return model_removal.remove(
+                library=library, manifest=manifest, catalog=catalog, records=index,
+                may_move=owned, refusal=refusal, running_jobs=_running_model_jobs(),
+                paused=_paused_for(manifest))
+        except model_removal.RemoveRefused as exc:
+            raise _removal_refusal(exc) from exc
+
+    # ── The install screen from the Gateway (owner decision 2026-10-28) ────────────────────────
+    # The same answers the Mac's own screen reads, and the same write the Mac's own screen makes.
+    # A joined node's answer is relayed to the node, so the Gateway never computes a projection of
+    # its own: a preset's count is the count that Mac's Hub built from its own receipts.
+    @app.get("/api/hub/fleet/nodes/{node_id}/model-presets")
+    async def fleet_node_model_presets(node_id: str) -> JSONResponse:
+        """One Mac's install screen, from the Gateway: relayed to a node, answered locally here."""
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            try:
+                return JSONResponse(await fleet.relay_model(wanted, "GET", "/model-presets"))
+            except fleet.StartupRelayError as error:
+                # An offline Mac is a reported state: the Fleet page shows it and keeps the rest.
+                return JSONResponse(error.body, status_code=error.status)
+        return JSONResponse({**model_presets_screen(), "node": wanted, "hub_version": _app_version()})
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/model-preset")
+    async def fleet_node_set_model_preset(node_id: str, request: Request) -> JSONResponse:
+        """Set one Mac's preset from the Gateway. Body `{"preset_id": str, "requested_by": str}`.
+
+        `requested_by` is recorded on the Mac beside the choice, the same way the unqualified-render
+        grant records who asked: a preset decides what a Mac installs and what its one-time cleanup
+        moves. An unknown preset id is refused by name - never swapped for another.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "code": "BAD_BODY", "detail":
+                                 "The body must be a JSON object."}, status_code=400)
+        requested_by = str(body.get("requested_by") or "").strip()
+        if not requested_by:
+            return JSONResponse({"ok": False, "code": "APPROVER_REQUIRED", "detail":
+                                 "Name who set this preset."}, status_code=400)
+        preset_id = str(body.get("preset_id") or "").strip()
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            startup_control.audit("model_preset_relay", {"node": wanted, "preset": preset_id,
+                                                         "actor": actor, "requested_by": requested_by})
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "POST", "/model-preset",
+                    payload={"preset_id": preset_id, "requested_by": requested_by},
+                    feature=f"setting a model preset from the Gateway (Studio Hub {_app_version()})"))
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+        from components import model_presets
+        try:
+            saved = standalone_config.set_preset_choice(preset_id or None)
+        except model_presets.PresetError as exc:
+            startup_control.audit("model_preset", {"node": wanted, "preset": preset_id,
+                                                   "actor": actor, "refused": str(exc)})
+            return JSONResponse({"ok": False, "code": "UNKNOWN_PRESET", "detail": str(exc)},
+                                status_code=409)
+        startup_control.audit("model_preset", {"node": wanted, "preset": saved, "actor": actor,
+                                               "requested_by": requested_by})
+        return JSONResponse({"ok": True, "node": wanted, "preset_id": saved,
+                             "requested_by": requested_by, "hub_version": _app_version()})
+
+    # ── The one-time preset cleanup (owner decision 2026-10-28) ────────────────────────────────
+    # A Mac set up before the install screen exists carries whatever the kit copied. This reports
+    # what is outside its preset, and - only when told to - moves those packages into the library's
+    # trash. Dry run first, per Mac, and an apply that records that it ran.
+    PRESET_CLEANUP = "0.6.205"
+
+    def _this_machine_id() -> str:
+        """This Mac's fleet key, lower-cased: the one name the cleanup state is filed under."""
+        from .backend import fleet_nodes as fleet
+        return str(fleet.this_machine()["id"]).lower()
+
+    def _preset_cleanup_inputs() -> dict[str, Any]:
+        """Everything a cleanup or its dry run needs, resolved once.
+
+        The preset is the owner's recorded choice for this Mac, else the starter for its memory;
+        the "keep" set is the models this Mac's owner has said must stay. Both come from the Hub's
+        own state, never from what the library happens to hold - a target derived from the diff
+        would move depending on itself.
+        """
+        from components import model_presets
+        import psutil
+        library, catalog, index = _removal_state()
+        memory_gb = round(psutil.virtual_memory().total / (1024 ** 3))
+        chosen = standalone_config.preset_choice()
+        keep = standalone_config.preset_cleanup_keep()
+        paused = {}
+        for package_id, manifest in catalog.items():
+            if manifest.get(_MANIFEST_ERROR):
+                continue
+            state = _paused_for(manifest)
+            if state:
+                paused[package_id] = state
+        return {"library": library, "catalog": catalog, "index": index, "memory_gb": memory_gb,
+                "preset_id": preset_cleanup_preset(memory_gb, chosen, catalog),
+                "keep": set(keep) if isinstance(keep, list) else set(),
+                "running_jobs": _running_model_jobs(), "paused": paused,
+                "chosen": chosen}
+
+    def preset_cleanup_preset(memory_gb: float | None, chosen: str | None,
+                              catalog: dict[str, dict[str, Any]]) -> str | None:
+        from .backend import preset_cleanup
+        try:
+            return preset_cleanup.preset_for(memory_gb, chosen)
+        except Exception:  # noqa: BLE001 - a preset file that cannot be read is reported, not a 500
+            return None
+
+    @app.get("/api/hub/preset-cleanup")
+    def preset_cleanup_report() -> dict[str, Any]:
+        """The **dry run**: what this Mac's one-time cleanup would move, and what it would keep.
+
+        Moves nothing and writes nothing. `ran` says whether it has already run here, so the
+        screen can show the report of a Mac it has already tidied rather than offering it again.
+        """
+        from .backend import preset_cleanup
+        inputs = _preset_cleanup_inputs()
+        machine = _this_machine_id()
+        already = preset_cleanup.has_run(ledger.DATA_DIR, machine)
+        try:
+            report = preset_cleanup.plan(
+                library=inputs["library"], manifests=inputs["catalog"], catalog=inputs["catalog"],
+                records=inputs["index"], preset_id=inputs["preset_id"],
+                memory_gb=inputs["memory_gb"], running_jobs=inputs["running_jobs"],
+                paused=inputs["paused"], keep=inputs["keep"])
+        except preset_cleanup.CleanupRefused as exc:
+            raise HTTPException(exc.status, exc.body) from exc
+        return {**report, "machine": machine, "already_ran": already,
+                "chosen_preset": inputs["chosen"], "keep": sorted(inputs["keep"]),
+                "hub_version": _app_version()}
+
+    @app.post("/api/hub/preset-cleanup")
+    def preset_cleanup_apply(body: dict[str, Any]) -> dict[str, Any]:
+        """Run it once. Body `{"approved_by": str, "keep"?: [ids], "preset_id"?: str}`.
+
+        `approved_by` is required and recorded: the owner approves a report, and the record says
+        who did. A second call is a no-op that says when it already ran.
+        """
+        from .backend import preset_cleanup
+        approved_by = str(body.get("approved_by") or "").strip()
+        if not approved_by:
+            raise HTTPException(400, "Name who approved this cleanup.")
+        inputs = _preset_cleanup_inputs()
+        keep = body.get("keep")
+        if keep is not None:
+            if not isinstance(keep, list) or not all(isinstance(item, str) for item in keep):
+                raise HTTPException(400, "keep must be a list of package ids.")
+            inputs["keep"] = set(keep)
+        preset_id = str(body.get("preset_id") or inputs["preset_id"] or "")
+        owned = _library_may_be_moved_from("cleaning up this Mac's models")
+        try:
+            return preset_cleanup.apply(
+                data_dir=ledger.DATA_DIR, machine=_this_machine_id(), library=inputs["library"],
+                manifests=inputs["catalog"], catalog=inputs["catalog"], records=inputs["index"],
+                may_move=owned, preset_id=preset_id, memory_gb=inputs["memory_gb"],
+                approved_by=approved_by, running_jobs=inputs["running_jobs"],
+                paused=inputs["paused"], keep=inputs["keep"])
+        except preset_cleanup.CleanupRefused as exc:
+            raise HTTPException(exc.status, exc.body) from exc
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/preset-cleanup")
+    async def fleet_preset_cleanup_report(node_id: str, request: Request) -> JSONResponse:
+        """One Mac's dry run, from the Gateway: relayed to that Mac, or answered for this one."""
+        return await _fleet_preset_cleanup(node_id, request, None)
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/preset-cleanup")
+    async def fleet_preset_cleanup_apply(node_id: str, request: Request) -> JSONResponse:
+        """Run one Mac's cleanup, from the Gateway. An offline Mac is reported, not failed."""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or not str(body.get("approved_by") or "").strip():
+            return JSONResponse({"ok": False, "code": "APPROVAL_REQUIRED", "detail":
+                                 "Name who approved this cleanup."}, status_code=400)
+        return await _fleet_preset_cleanup(node_id, request, body)
+
+    async def _fleet_preset_cleanup(node_id: str, request: Request,
+                                    body: dict[str, Any] | None) -> JSONResponse:
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            if body is not None:
+                startup_control.audit("preset_cleanup_relay", {"node": wanted, "actor": actor,
+                                                               "approved_by": body.get("approved_by")})
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "GET" if body is None else "POST", "/preset-cleanup",
+                    payload=body if body is not None else None))
+            except fleet.StartupRelayError as error:
+                # An offline Mac is a reported state, not a failure of the owner's request: the
+                # cleanup is a tidy-up, and a Mac that is asleep has nothing to lose by waiting.
+                return JSONResponse(error.body, status_code=error.status)
+        try:
+            if body is None:
+                answer = await run_in_threadpool(preset_cleanup_report)
+            else:
+                answer = await run_in_threadpool(preset_cleanup_apply, body)
+        except HTTPException as exc:
+            return JSONResponse({"ok": False, "detail": exc.detail}, status_code=exc.status_code)
+        return JSONResponse({**answer, "node": wanted, "hub_version": _app_version()})
+
+    @app.get("/api/hub/model-removals")
+    def list_model_removals() -> dict[str, Any]:
+        """What is in the library's `_trash`, newest first: the restore-within-30-days surface."""
+        from .backend import model_removal
+        try:
+            library = _model_library()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {"removed": model_removal.listing(library),
+                "restore_days": model_removal.REMOVED_MODEL_DAYS}
+
+    @app.post("/api/hub/model-removals/restore")
+    def restore_model_removal(body: dict[str, Any]) -> dict[str, Any]:
+        """Body `{"folder": "<name in _trash>", "package_id"?: str}`: put it back in the library."""
+        from .backend import model_removal
+        try:
+            library = _model_library()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        name = str(body.get("folder") or "").strip()
+        if not name or Path(name).name != name:
+            raise HTTPException(400, "Name the folder inside the library's _trash.")
+        try:
+            return model_removal.restore(library, library / "_trash" / name,
+                                         body.get("package_id"))
+        except model_removal.RemoveRefused as exc:
+            raise _removal_refusal(exc) from exc
+
     @app.post("/api/hub/model-packages/{package_id}/download")
     def download_model_package(package_id: str, body: dict[str, Any]) -> dict[str, Any]:
         from . import model_downloads
         try:
             catalog = _model_catalog()
             manifest = catalog[package_id]
-            _shelved_refusal(manifest)
             sources = body.get("sources")
             if sources is not None and not isinstance(sources, dict):
                 raise ValueError("sources must be a map of model paths to HTTPS mirrors")
@@ -3099,8 +3476,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         """Install a model on one Mac in this group from the Gateway: a joined node (relayed to the
         node's own copy of this route, ``local``) or this controller itself (its id or ``local``).
 
-        The same download as the Model library's, with the same refusals (unknown package, shelved
-        model, full disk) plus one the local button does not need: a model this Mac has too little
+        The same download as the Model library's, with the same refusals (unknown package, full
+        disk) plus one the local button does not need: a model this Mac has too little
         memory to run. Audited here and, for a node, again on the node.
         """
         from .backend import auth as hub_auth
@@ -3140,7 +3517,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             manifest = _model_catalog().get(package_id)
             if manifest is None or manifest.get(_MANIFEST_ERROR):
                 raise HTTPException(404, "unknown model package")
-            _shelved_refusal(manifest)
             _memory_refusal(manifest)
             run = download_model_package(package_id, {"source": source, "peer_only": peer_only})
         except (OSError, ValueError) as exc:
@@ -3384,6 +3760,45 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "package": share["package_id"], "file": path,
                 "peer": request.client.host if request.client else None})
         return _ShareTransfer(target, token=token, media_type="application/octet-stream")
+
+    @app.delete("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}")
+    async def fleet_node_model_remove(node_id: str, package_id: str, request: Request) -> JSONResponse:
+        """Remove one model from one Mac in this group, from the Gateway (owner decision 2026-10-28).
+
+        The same move the Mac's own Models screen makes: the package folder goes to **that Mac's**
+        library `_trash` with a receipt, and nothing is deleted. Refused in the same cases - a
+        running job on the model, a paused model still holding its weights, a package another
+        installed package requires - and, for a joined Mac, again on the Mac itself.
+
+        A Mac that is offline is **reported, not failed**: the relay answers `NODE_UNREACHABLE` in
+        the Mac's own words and this returns it unchanged, exactly as the install relay does.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        wanted = node_id.strip().lower()
+        if wanted not in ("local", fleet.this_machine()["id"].lower()):
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            startup_control.audit("model_removal_relay", {"node": wanted, "package": package_id,
+                                                          "actor": actor})
+            try:
+                return JSONResponse(await fleet.relay_model(
+                    wanted, "DELETE", f"/model-packages/{package_id}"))
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+        try:
+            answer = await run_in_threadpool(remove_model_package, package_id)
+        except HTTPException as exc:
+            startup_control.audit("model_removal", {"node": wanted, "package": package_id,
+                                                    "actor": actor, "refused": str(exc.detail)[:200]})
+            return JSONResponse({"ok": False, "node": wanted,
+                                 "detail": exc.detail if isinstance(exc.detail, str) else exc.detail},
+                                status_code=exc.status_code)
+        startup_control.audit("model_removal", {"node": wanted, "package": package_id,
+                                                "actor": actor, "ok": True,
+                                                "bytes": answer.get("bytes")})
+        return JSONResponse({**answer, "node": wanted})
 
     @app.get("/api/hub/fleet/nodes/{node_id}/model-downloads/{run_id}")
     async def fleet_node_model_download_status(node_id: str, run_id: str) -> JSONResponse:

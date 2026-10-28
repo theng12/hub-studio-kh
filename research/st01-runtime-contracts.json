@@ -126,7 +126,7 @@
         "torchaudio",
         "transformers"
       ],
-      "runtime_lock_sha256": "52ff4c46536a286841b3d2a870bcf0f7747ba713b5ce0b939f104c885e9d853d"
+      "runtime_lock_sha256": "f384e7ba9a8d0085db1837352012cb67618bfc3e6c3c2b01e406f14f9cded714"
     },
     {
       "contract_subject": {
@@ -156,7 +156,7 @@
         "mlx_audio",
         "transformers"
       ],
-      "runtime_lock_sha256": "52ff4c46536a286841b3d2a870bcf0f7747ba713b5ce0b939f104c885e9d853d"
+      "runtime_lock_sha256": "f384e7ba9a8d0085db1837352012cb67618bfc3e6c3c2b01e406f14f9cded714"
     },
     {
       "build_side_import_proof": {

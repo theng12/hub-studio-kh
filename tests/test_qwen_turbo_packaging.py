@@ -93,7 +93,9 @@ class QwenTurboPackageTests(unittest.TestCase):
         self.assertNotIn("seconds_per_step", manifest["qualification"])
 
         self.assertEqual(COPY_MODELS.required_gb(manifest), 16)
-        self.assertNotIn(PACKAGE_ID, COPY_MODELS.NOT_STOCKED)
+        # No "installed on request only" list any more (owner decision 2026-10-28): this pack is
+        # tickable like any other, in no preset, and gated only by its own 16 GB floor.
+        self.assertFalse(hasattr(COPY_MODELS, "NOT_STOCKED"))
 
         files = {entry["path"]: entry for entry in manifest["files"]}
         for path in (

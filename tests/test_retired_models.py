@@ -21,11 +21,15 @@ old = json.loads((manifests / 'whisper-base.json').read_text())
 RETIRED = {'ace-step-1-5-turbo': 'ACE-Step/Ace-Step1.5',
            'lance-3b-video-bf16': 'mlx-community/Lance-3B-Video-bf16',
            'lance-3b-processor-qwen2-5-vl': 'Qwen/Qwen2.5-VL-3B-Instruct',
-           'ltx-2-3-22b-ram-12gb-mlx': 'baa-ai/LTX-2.3-22B-RAM-12GB-MLX',   # LTX-2.3 video, 0.6.127
-           'gemma-3-12b-it-4bit': 'mlx-community/gemma-3-12b-it-4bit'}      # Gemma 3 12B, 0.6.128
+           'ltx-2-3-22b-ram-12gb-mlx': 'baa-ai/LTX-2.3-22B-RAM-12GB-MLX'}   # LTX-2.3 video, 0.6.127
 for package_id, model_id in RETIRED.items():
     old.update(package_id=package_id, model_id=model_id)
     (manifests / f'{package_id}.json').write_text(json.dumps(old))
+# Gemma 3 12B left the retired list on 2026-10-27, so its old manifest is seeded the same way and
+# must come back into every place a live package is listed.
+gemma = dict(old, package_id='gemma-3-12b-it-4bit',
+             model_id='mlx-community/gemma-3-12b-it-4bit')
+(manifests / 'gemma-3-12b-it-4bit.json').write_text(json.dumps(gemma))
 os.environ['STUDIOHUB_MODEL_MANIFESTS'] = str(manifests)
 
 from components import retired_models
@@ -53,7 +57,7 @@ def offered():
         'staged into kits': {p.stem for p in staged.glob('*.json')},
     }
 
-# The seeds: ACE-Step, Lance (video, 0.6.120), LTX-2.3 (video, 0.6.127) and Gemma 3 12B (0.6.128) stay out even though an old manifest for each is
+# The seeds: ACE-Step, Lance (video, 0.6.120) and LTX-2.3 (video, 0.6.127) stay out even though an old manifest for each is
 # sitting in the catalog folder.
 for package_id, model_id in RETIRED.items():
     assert package_id in retired_models.RETIRED_MODELS and model_id in retired_models.RETIRED_MODELS
@@ -63,9 +67,16 @@ for package_id, model_id in RETIRED.items():
     assert standalone._retired_refusal(package_id)['code'] == 'MODEL_RETIRED'
     assert standalone._retired_refusal(model_id)['code'] == 'MODEL_RETIRED'
 assert standalone._retired_refusal('whisper-base') is None
-# Gemma 3 12B (LTX's text encoder) is retired as well (owner 2026-10-02): its real manifest is no longer in the
-# catalog folder at all, so it is gone from every place above even without the seed copy.
-assert not (ROOT / 'model-manifests' / 'gemma-3-12b-it-4bit.json').exists()
+# Gemma 3 12B 4-bit left the retired list on 2026-10-27 with the rest of the name-based blocks
+# (owner: "We no longer block or lock any model."). Its real manifest is now in the catalog
+# folder, so it is offered in every place a live package is listed and not refused by name.
+assert (ROOT / 'model-manifests' / 'gemma-3-12b-it-4bit.json').exists()
+assert not retired_models.is_retired('gemma-3-12b-it-4bit', 'mlx-community/gemma-3-12b-it-4bit')
+gemma_now = offered()
+assert 'gemma-3-12b-it-4bit' in gemma_now['catalog'], gemma_now['catalog']
+assert 'gemma-3-12b-it-4bit' in gemma_now['identity']
+assert 'gemma-3-12b-it-4bit' in gemma_now['kit listing']
+assert standalone._retired_refusal('mlx-community/gemma-3-12b-it-4bit') is None
 
 # One line in the list removes a live model from the catalog, the identity index, the kit listing
 # and staging, and refuses it by name...

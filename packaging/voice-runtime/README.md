@@ -22,7 +22,18 @@ Refresh the Python hash lock after an intentional input change with:
 packaging/voice-runtime/refresh-lock.sh
 ```
 
-That command uses `.build/voice-runtime-base/bin/python3` as its resolver interpreter. Review `requirements-pilot.txt` before changing scope: F5-TTS is deliberately absent because its TorchCodec dependency requires several shared FFmpeg ABIs that the bounded pilot does not ship.
+That command uses `.build/voice-runtime-base/bin/python3` as its resolver interpreter, and resolves
+every package to its latest release. When the input change is a single added dependency, keep the
+versions already locked and resolve only the newcomer:
+
+```sh
+packaging/voice-runtime/refresh-lock.sh --keep-locked-pins
+```
+
+A plain refresh of a lock that is weeks old also moves every unrelated package, so the addition
+arrives mixed with upstream churn nobody asked for. The first `--keep-locked-pins` run writes the
+new packages without citing the previous lock beside them; a second run adds that citation line
+and is byte-stable, which is the state this lock is committed in. Review `requirements-pilot.txt` before changing scope: F5-TTS is deliberately absent because its TorchCodec dependency requires several shared FFmpeg ABIs that the bounded pilot does not ship.
 
 ## Test-only content is removed
 

@@ -6285,8 +6285,21 @@ struct NativeAPITests {
         let tokenTest = await tokenStore.testHFToken("hf_current")
         require(tokenTest?.name == "Fixture User", "a token test must report who it belongs to: \(String(describing: tokenTest))")
         require(tokenTest?.organizations == ["fixture-org"], "the test must report organisations")
-        await tokenStore.removeModel(supportedSTT[0])
-        require(tokenStore.error?.contains("active readers") == true, "unsafe model removal should be blocked")
+        // **Model removal is real now (owner decision 2026-10-28).** It used to refuse every time
+        // ("unavailable until it can protect models with active readers"); the Hub moves the package
+        // into that library's trash and refuses while a job, a paused model or a dependent package
+        // is using it. The old assertion pinned the stub, so it pinned a button that never worked -
+        // the shape this project keeps finding. It now pins the two facts that replaced it: a model
+        // with no approved package is refused by name rather than silently doing nothing, and the
+        // refusal is the Hub's own sentence, never a number or a bare status.
+        let unmapped = NativeModel(id: "fixture/no-package", repo: "fixture/no-package",
+                                   label: "Unpackaged fixture", family: "flux2-klein",
+                                   function: .image, cached: true, supported: false,
+                                   supportNote: "", sizeGB: 1, capabilities: [], languages: [],
+                                   runtimeReady: false, supportsWordTimestamps: false)
+        await tokenStore.removeModel(unmapped)
+        require(tokenStore.error?.contains("no approved Hub package") == true,
+                "a model the Hub has no package for must say so: \(tokenStore.error ?? "no error")")
         tokenStore.disconnect()
 
         store.audioText = "Persist this draft"

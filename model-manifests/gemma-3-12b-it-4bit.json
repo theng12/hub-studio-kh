@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "package_id": "gemma-3-12b-it-4bit",
+  "model_id": "mlx-community/gemma-3-12b-it-4bit",
+  "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558",
+  "engine": "chat-mlx",
+  "minimum_macos": "14.0",
+  "files": [
+    {
+      "path": "model/added_tokens.json",
+      "size": 35,
+      "sha256": "50b2f405ba56a26d4913fd772089992252d7f942123cc0a034d96424221ba946",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/added_tokens.json"
+      ],
+      "source_path": "added_tokens.json"
+    },
+    {
+      "path": "model/chat_template.json",
+      "size": 1615,
+      "sha256": "fe16baf728db49457cde32802cd7efc0ac8a7a9877dbe22fe3322b2d9dc6ccd9",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/chat_template.json"
+      ],
+      "source_path": "chat_template.json"
+    },
+    {
+      "path": "model/config.json",
+      "size": 1141,
+      "sha256": "73ed96a3f1d596fcf3c07f17ed7e4358fd99be688c97da45f2464fd48dd069ed",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/config.json"
+      ],
+      "source_path": "config.json"
+    },
+    {
+      "path": "model/generation_config.json",
+      "size": 192,
+      "sha256": "e04ecb65db447404710114fb282baaac482d22a95e2244ecaab428b81672ba78",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/generation_config.json"
+      ],
+      "source_path": "generation_config.json"
+    },
+    {
+      "path": "model/model-00001-of-00002.safetensors",
+      "size": 5367455313,
+      "sha256": "995cbd05b7bfd8f5ab5307b476eb5496b5ec3f5256a9dd26366236ce8816c93f",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model-00001-of-00002.safetensors"
+      ],
+      "source_path": "model-00001-of-00002.safetensors"
+    },
+    {
+      "path": "model/model-00002-of-00002.safetensors",
+      "size": 2661219935,
+      "sha256": "8b7af7eb5ff32109fc65cbcd0af5b8016ac0de46df17f40705f043f899495333",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model-00002-of-00002.safetensors"
+      ],
+      "source_path": "model-00002-of-00002.safetensors"
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "size": 108605,
+      "sha256": "788cc42a1a92835df62d9a3791f47105f63504c7c404637a73288e9b11bc7b82",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model.safetensors.index.json"
+      ],
+      "source_path": "model.safetensors.index.json"
+    },
+    {
+      "path": "model/preprocessor_config.json",
+      "size": 570,
+      "sha256": "f688d6bb20c5017601c4011de7ca656da8485b540b05013efdaf986c0fcc918d",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/preprocessor_config.json"
+      ],
+      "source_path": "preprocessor_config.json"
+    },
+    {
+      "path": "model/processor_config.json",
+      "size": 70,
+      "sha256": "3ffd5f11778dc73e2b69b3c00535e4121e1badf7018136263cd17b5b34fbaa53",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/processor_config.json"
+      ],
+      "source_path": "processor_config.json"
+    },
+    {
+      "path": "model/special_tokens_map.json",
+      "size": 662,
+      "sha256": "2f7b0adf4fb469770bb1490e3e35df87b1dc578246c5e7e6fc76ecf33213a397",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/special_tokens_map.json"
+      ],
+      "source_path": "special_tokens_map.json"
+    },
+    {
+      "path": "model/tokenizer.json",
+      "size": 33384568,
+      "sha256": "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/tokenizer.json"
+      ],
+      "source_path": "tokenizer.json"
+    },
+    {
+      "path": "model/tokenizer.model",
+      "size": 4689074,
+      "sha256": "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/tokenizer.model"
+      ],
+      "source_path": "tokenizer.model"
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "size": 1157007,
+      "sha256": "0d95398b39395e5cfb290683a78f3fb0551223c672d8b033333c1a5307473760",
+      "urls": [
+        "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit/resolve/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/tokenizer_config.json"
+      ],
+      "source_path": "tokenizer_config.json"
+    }
+  ],
+  "defaults": {
+    "parameters_source": "model/generation_config.json"
+  },
+  "qualification": {
+    "status": "unqualified",
+    "minimum_unified_memory_gb": 16,
+    "recommended_unified_memory_gb": 24,
+    "memory_evidence": "PROVISIONAL, NOT MEASURED. Derived from the package this manifest ships: its thirteen runtime files total 8,068,018,787 bytes (7.51 GiB), so the smallest published fleet tier that can hold the weights at all is 16 GB; 8 GB cannot. 24 GB is recommended because a 12B checkpoint's resident footprint and KV cache can exceed the available memory on a 16 GB Mac and no peak has been observed on any Mac. This is a weight-size floor, not a measured tier, and no inference, TPS, script or scene-quality run has happened. Replace it with a measurement (qualification/model-readings.json) before treating the model as qualified.",
+    "reason": "Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). English import, inference, TPS, script/scene quality, usable context and a MEASURED RAM tier have not yet been run.",
+    "tested_usable_context_tokens": null
+  },
+  "source": {
+    "provider": "huggingface",
+    "captured_at": "2026-09-15",
+    "sources": [
+      {
+        "role": "model",
+        "repo": "mlx-community/gemma-3-12b-it-4bit",
+        "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558",
+        "snapshot_api_url": "https://huggingface.co/api/models/mlx-community/gemma-3-12b-it-4bit/revision/86cc6a8dedbc456dd0e4af01a9d09f396f77e558",
+        "tree_api_url": "https://huggingface.co/api/models/mlx-community/gemma-3-12b-it-4bit/tree/86cc6a8dedbc456dd0e4af01a9d09f396f77e558?recursive=true&expand=true&limit=100"
+      }
+    ],
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "mlx-community/gemma-3-12b-it-4bit",
+        "revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558"
+      }
+    }
+  },
+  "production_allowed": true,
+  "display_name": "Gemma 3 12B Instruct MLX 4-bit",
+  "quantization": "MLX 4-bit",
+  "quantization_source": "the publisher's model id states it: mlx-community/gemma-3-12b-it-4bit"
+}

@@ -2,6 +2,63 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.206 — 2026-10-28
+
+### Setting up a Mac is a choice, on a screen, with the numbers in front of you
+
+A new Mac used to get whatever the SSD kit decided to copy. Now the app has a **Set up this Mac** page that tells you what the Mac has before it asks you anything: its memory, how much space is free on the drive the models live on, and what each choice will copy and what will be left afterwards.
+
+There are four starting points, one for each size of Mac:
+
+- **Essentials 8 GB** — write, draw, narrate, transcribe, read pictures, search meaning, score.
+- **Creator 16 GB** — adds the larger image model, the writing model, a better captioner and a second voice.
+- **Creator Plus 24 GB** — adds music generation and Gemma 3 12B for longer writing.
+- **Studio Pro 32 GB+** — adds the largest writing models, Qwen3.6 35B and Gemma 4 26B.
+
+A preset reads "9 of 14" rather than "done", and only says installed when every file has been checked. Any model you add by hand sits alongside it.
+
+**A model this Mac cannot run is shown, greyed out, with its floor and your Mac's memory** — never hidden, never quietly swapped for something else. Nothing is refused by name any more. Memory is the only thing that decides.
+
+**The SSD kit no longer chooses.** "2 - Copy the models" now prints what the drive holds and points you at the screen. If you have a Mac with no internet and nothing else to copy from, "2 - Copy the models (everything)" still does the old job.
+
+### Remove a model, and get the space back
+
+The Remove button on the Models page used to refuse every time, so the only way to reclaim 9 GB was Finder — which deletes without a record and without checking whether a job was reading the file.
+
+Remove now **moves** the model into the library's `_trash` with a note saying what it was and when, and takes it out of the app's list of installed models in the same step. It refuses, and says which, while a job is reading that model, while a paused model still holds it in memory, or while another installed model needs it. **Undo** is on the same page: a removed model is listed as recoverable and can be put back. Thirty days later it goes to the Mac's own Trash, where it is still recoverable.
+
+### A one-time tidy-up for Macs that are already set up
+
+If a Mac was set up before this screen existed, it carries whatever the kit copied at the time. **Set up this Mac** now offers to show you exactly which of those models sit outside that Mac's preset and how much space moving them would free — a dry run that changes nothing. Nothing moves until you approve it, the list you approve is the list that gets carried out, a model in use stays where it is and is named, and it only ever runs once.
+
+### Chat can read a picture
+
+The Chat worker loaded every model as a text model, which silently threw away the vision half of a checkpoint that has one. So the fleet's Gemma 4 26B-A4B QAT MLX 4-bit answered as a text model, and nothing could send it an image.
+
+Chat now recognises a checkpoint that carries a vision encoder — from the checkpoint's own files, not from a list — and accepts images alongside text. The model list publishes that a model can read pictures, so the Gateway knows which Mac can do what.
+
+**One thing to know about this build:** the part of the app that loads a picture-capable checkpoint is here, but the Python library it needs (mlx-vlm) is not yet in the helper runtime this release ships. On this build, Chat on a picture-capable model still answers text perfectly well and will tell you plainly that it cannot read the image here yet, rather than failing part-way through. The next release that rebuilds that runtime turns it on.
+
+A picture also now counts for what it actually costs to read: a long prompt that fits on paper but not in the model's memory is caught before anything is generated, instead of being accepted and then truncated.
+
+### See which Macs are on a slow cable
+
+A Mac on a failing cable does not go offline — it **negotiates** a slower link and answers every other question as healthy, while its work crawls. Mac 1301 was linked at 100baseTX on an old cable and nothing in the fleet view could show it.
+
+Every Mac now reports its connection: which interface carries its traffic, whether it is Ethernet or Wi-Fi, and, for Ethernet, the speed and duplex the machine says it negotiated. Wi-Fi reports its rate where the Mac states one. A reading that cannot be made says so, with the reason, rather than showing 0 — a Mac with no cable and a Mac that could not be read are different answers and now look different. The reading is cached and refreshed in the background, so looking at it never slows the Hub down.
+
+### Fixes
+
+- A network-link reading that died part-way left the Hub believing a refresh was still in progress, so that Mac would report its link as unmeasured for ever, with no reason to show. It now clears correctly and starts the next read.
+
+## 0.6.205 — 2026-10-27
+
+### More models available on capable Macs
+
+Every model can now be installed based on how much memory the Mac has, rather than being blocked by name.
+
+Qwen 3.6 35B and Nemotron-Lightning are now available for 24 GB+ Macs (and copyable during kit setup), and Gemma 3 12B Instruct is added as an installable Chat model for 16 GB+ Macs.
+
 ## 0.6.204 — 2026-10-27
 
 ### A Mac that has fallen far behind can still update

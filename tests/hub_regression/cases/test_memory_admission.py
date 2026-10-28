@@ -34,22 +34,27 @@ def test_transcription_is_subject_to_memory_admission(reset):
 
 
 def test_flux_4bit_uses_measured_8gb_fleet_default(reset):
+    """The 8 GB the fleet measured is enforced, and it now comes from the manifest.
+
+    Owner decision 2026-10-28: the floor's one home is the model's own manifest. FLUX.2 Klein 4-bit
+    moved 16 -> 8 there with the measurement in `memory_evidence`, so `_FLEET_DEFAULTS` no longer
+    carries the same number a second time (and cannot outrank an edit to the manifest). This used
+    to assert `min_total_source == "measured"`; it is now "manifest", which is the more honest of
+    the two - the number is one a person can edit, with the evidence beside it.
+    """
     policy = memory_admission.describe(FLUX_REPO, _flux_entry())
 
-    # The catalog says 16 GB and the fleet measured 8 GB. The measurement is the requirement
-    # (it outranks the manifest and the catalog), and it is now enforced: this used to assert an
-    # effective floor of 0.0 because a tier was advice, not a wall.
     assert policy["catalog_min_total_memory_gb"] == 16
     assert policy["default_min_total_memory_gb"] == 8
     assert policy["effective_min_total_memory_gb"] == 8.0
-    assert policy["min_total_source"] == "measured"
+    assert policy["min_total_source"] == "manifest"
     # 2.8 GB of FREE memory before a job starts (not its peak): the owner's choice 2026-10-02, for headroom over the
     # real 8 GB M1+M2 runs, which started cleanly from 3.09 GB free. It is the Image worker's own published floor
     # (`min_free_memory_gb` on its row); the Hub keeps no copy of it any more.
     assert policy["effective_min_free_memory_gb"] == 2.8
     assert policy["default_min_free_memory_gb"] == 2.8
     assert policy["min_free_source"] == "model_default"
-    assert policy["source"] == "fleet_default"
+    assert policy["source"] == "catalog"
     assert policy["overridden"] is False
     requirements = broker._admission_requirements(FLUX_REPO, _flux_entry())
     assert requirements == {"min_total": 8.0, "min_free": 2.8}
@@ -84,13 +89,18 @@ def test_the_free_floor_has_one_home_and_it_is_the_models_own_row(reset):
     them enforced. The owner's rule (2026-09-24, "nothing about models is hardcoded") is one home
     per number, and for the free floor that home is the model's own published row.
     """
-    for repo in ("aitrader/flux2-klein-4b-mlx-4bit", "mlx-community/breeze-tts-2-mlx-4bit"):
-        entry = memory_admission._FLEET_DEFAULTS.get(repo)
-        assert entry is not None, f"{repo} left the fleet table entirely; the total measurement is a different fact"
+    # The table is empty since 2026-10-28 (its two entries are in the models' own manifests now),
+    # and nothing may put a live-free number in it in any case.
+    for repo, entry in memory_admission._FLEET_DEFAULTS.items():
         assert "min_free_memory_gb" not in entry, (
             f"{repo} carries a live-free number in the Hub's own table again. The model's own row "
             "(`components/image/app/backend/generation.py`, `components/voice/app/backend/catalog.py`) "
             "is the one home for it, with the operator's override on top.")
+    for repo in ("aitrader/flux2-klein-4b-mlx-4bit", "mlx-community/breeze-tts-2-mlx-4bit"):
+        assert repo.lower() not in memory_admission._FLEET_DEFAULTS, (
+            f"{repo} is back in the Hub's own total-floor table. Its floor is its manifest's "
+            f"`qualification.minimum_unified_memory_gb`, with the measurement in that block's "
+            f"memory_evidence - one home, so a re-capture is the edit.")
 
     # An edit to the row IS the edit: nothing in the Hub overrides it back.
     edited = dict(_flux_entry(), min_free_memory_gb=3.4)
@@ -142,7 +152,7 @@ def test_the_shipped_flux_and_breeze_rows_publish_the_floors_the_fleet_measured(
 
 def test_breeze_4bit_runs_on_8gb_macs_from_its_measurement(reset):
     """Owner decision 2026-10-04 from the 8 GB M1 run (each clip started with 3.31-3.46 GB free, peak
-    4.69 GB, never critical): 8 GB total and 3.2 GB free to start, where the manifest said 16.
+    4.69 GB, never critical): 8 GB total and 3.2 GB free to start.
 
     The 3.2 GB is the row's own published floor and reaches the Hub through the row
     (`workload_policy.required_free_memory_gb`); the Hub keeps no copy of it. The Voice worker's own
@@ -155,10 +165,14 @@ def test_breeze_4bit_runs_on_8gb_macs_from_its_measurement(reset):
     repo = "mlx-community/Breeze-TTS-2-mlx-4bit"
     row = {"repo": repo, "min_unified_memory_gb": 8, "min_free_memory_gb": 3.2}
     policy = memory_admission.describe(repo, row)
-    assert (policy["effective_min_total_memory_gb"], policy["min_total_source"]) == (8.0, "measured")
+    # The 8 GB total is the manifest's own number since 2026-10-28 (it said 16 before, and the
+    # Hub's `_FLEET_DEFAULTS` carried the measured 8 beside it). One home, so a re-capture of the
+    # manifest is the edit.
+    assert (policy["effective_min_total_memory_gb"], policy["min_total_source"]) == (8.0, "manifest")
     assert policy["effective_min_free_memory_gb"] == 3.2
     assert policy["min_free_source"] == "model_default"
-    assert policy["fleet_default_measured"] is True
+    assert policy["fleet_default_measured"] is False, (
+        "no Hub-side measurement is needed any more: the manifest states the floor dispatch uses")
     requirements = broker._admission_requirements(repo, row)
     assert requirements == {"min_total": 8.0, "min_free": 3.2}
     assert broker._memory_gate(requirements, {"total_gb": 8.59, "available_gb": 3.31})[0] == "run"
@@ -216,7 +230,12 @@ def test_operator_override_persists_and_reset_restores_default(reset):
     ] == 7.5
 
     reset_policy = memory_admission.reset_override(FLUX_REPO, entry)
-    assert reset_policy["source"] == "fleet_default"
+    # `source` is the published-compatibility spelling of where the enforced total came from. It
+    # used to read `fleet_default` because the Hub's own table held this number; the table is empty
+    # since 2026-10-28 and the manifest states the same 8 GB, so `min_total_source` is the precise
+    # answer ("manifest") and `source` says "catalog" as it does for any number the catalog states.
+    assert reset_policy["source"] == "catalog"
+    assert reset_policy["min_total_source"] == "manifest"
     # Back to the measured 8 GB requirement. This used to assert 0.0 ("no floor in force: only an
     # explicit override can put one back"); the requirement is always in force now and the
     # override is only the operator's way to change the number.

@@ -1,10 +1,11 @@
-"""The kit's Lite Mode model copy (owner 2026-10-04), run for real against scratch folders.
+"""The kit's Lite Mode model copy, and what became of it (owner decisions 2026-10-03/04 and 2026-10-28).
 
-A Lite Mode Mac is set up like any Mac (1 - Install the app, copy models, join) and Lite Mode is
-ticked in Studio Hub > Settings. The one kit difference is `2 - Copy the Lite Mode models.command`: the
-regular copy with one switch (`STUDIOHUB_WORKSTATION=1`) that keeps it to `components/workstation_models.py`.
-The launcher is run against a stand-in for the regular copy command; the helper's filter is exercised
-through its real selection with a fixture app. The retired `Set Up a Shop Mac.command` is covered in
+A Lite Mode Mac is set up like any Mac, and since 2026-10-28 it takes the **Essentials 8 GB**
+preset from Studio Hub's install screen rather than a separate Lite-only set: the launcher now says
+so and runs the ordinary copy step, which no longer chooses anything by itself. **Lite Mode itself
+is unchanged** - it still runs only `components/workstation_models.py`, and the Hub still refuses a
+job for any other model at such a Mac's door - so the filter tests below still run the real
+selection against a fixture app. The retired `Set Up a Shop Mac.command` is covered in
 `test_yam_display_install.py` (the prepare-kit-extras script).
 """
 from __future__ import annotations
@@ -21,10 +22,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "components"))
 LITE = ROOT / "copy-lite-models.command"
-FAKE_COPY = '#!/bin/sh\necho "workstation=${STUDIOHUB_WORKSTATION:-}" >> "$FAKE_COPY_LOG"\nexit ${FAKE_COPY_STATUS:-0}\n'
+FAKE_COPY = ('#!/bin/sh\necho "ran" >> "$FAKE_COPY_LOG"\n'
+             'echo "workstation=${STUDIOHUB_WORKSTATION:-}" >> "$FAKE_COPY_LOG"\n'
+             'exit ${FAKE_COPY_STATUS:-0}\n')
 
 
 class LiteLauncher(unittest.TestCase):
+    """The Lite Mode install set is retired (owner decision 2026-10-28); the runtime list is not.
+
+    A Lite Mode Mac is set up like any Mac and takes the **Essentials 8 GB** preset, which a test in
+    `test_model_presets.py` proves carries every model Lite Mode runs. The launcher stays on a
+    drive as a pointer, because a shortcut that silently did nothing is worse than one that
+    explains itself - and it must still never tick Lite Mode or change the Mac.
+    """
+
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="lite-kit-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
@@ -40,32 +51,43 @@ class LiteLauncher(unittest.TestCase):
         return subprocess.run(["/bin/sh", str(self.kit / "2 - Copy the Lite Mode models.command")],
                               input="\n", text=True, capture_output=True, env=env, timeout=60)
 
-    def test_it_runs_the_regular_copy_with_the_lite_switch_and_says_what_is_next(self) -> None:
+    def test_it_points_at_the_preset_instead_of_copying_a_lite_set(self) -> None:
         result = self.run_launcher()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.log.read_text().strip(), "workstation=1")
-        self.assertIn("This copied only the models Lite Mode uses (about 15 GB).", result.stdout)
-        self.assertIn("Next: open Studio Hub > Settings > Lite Mode and tick it.", result.stdout)
+        self.assertIn("Lite Mode no longer has its own model set.", result.stdout)
+        self.assertIn("Essentials 8 GB", result.stdout)
+        self.assertIn("Then tick Lite Mode in Studio Hub > Settings.", result.stdout)
+        # It runs the ordinary copy step, which no longer chooses - so nothing is copied here.
+        self.assertEqual(self.log.read_text().split()[0], "ran")
+        self.assertIn("workstation=\n", self.log.read_text(),
+                      "the launcher must not set the Lite Mode switch any more")
 
-    def test_it_does_not_tick_lite_mode_or_change_anything_else_on_the_mac(self) -> None:
+    def test_it_never_sets_the_lite_switch(self) -> None:
+        # The one behavioural promise that must survive the retirement: this file does not decide
+        # that the Mac is a Lite Mode Mac.
+        self.run_launcher()
+        text = LITE.read_text()
+        self.assertNotIn("STUDIOHUB_WORKSTATION=", text)
+        self.assertIn("LITE MODE IS NOT TICKED HERE", text)
+        self.assertNotIn("workstation.json", text)
+
+    def test_it_does_not_write_into_the_home_folder(self) -> None:
         self.run_launcher()
         self.assertFalse((self.tmp / "home").exists(), "the launcher wrote into the home folder")
-        text = LITE.read_text()
-        self.assertNotIn("workstation.json", text)
-        self.assertIn("does NOT tick Lite Mode", text)
-        self.assertIn("This copies only the models Lite Mode uses (about 15 GB). Next: open Studio Hub > Settings >\n"
-                      "# Lite Mode and tick it.", text)
 
     def test_a_failed_copy_does_not_tell_the_operator_to_move_on(self) -> None:
+        # A non-zero status is the ordinary copy step's; the launcher passes it through rather
+        # than adding a "next step" line over a failure.
         result = self.run_launcher(status=1)
         self.assertEqual(result.returncode, 1)
-        self.assertNotIn("Next: open Studio Hub", result.stdout)
-        self.assertIn("run this file again", result.stdout)
+        self.assertNotIn("Then tick Lite Mode", result.stdout.split("Nothing is ticked")[-1])
 
     def test_it_finds_the_regular_copy_command_by_its_repo_name_too(self) -> None:
         (self.kit / "2 - Copy the models.command").rename(self.kit / "copy-models.command")
         self.assertEqual(self.run_launcher().returncode, 0)
-        self.assertEqual(self.log.read_text().strip(), "workstation=1")
+        self.assertEqual(self.log.read_text().split()[0], "ran")
+        self.assertIn("workstation=\n", self.log.read_text(),
+                      "the launcher must not set the Lite Mode switch any more")
 
     def test_without_the_regular_copy_command_it_says_so(self) -> None:
         (self.kit / "2 - Copy the models.command").unlink()
@@ -80,7 +102,7 @@ class LiteLauncher(unittest.TestCase):
 
     def test_the_set_up_a_shop_mac_command_is_gone_from_the_kit_sources(self) -> None:
         self.assertFalse((ROOT / "packaging" / "kit-extras" / "Set Up a Shop Mac.command").exists())
-        self.assertNotIn("copy_checked \"$HERE/Set Up a Shop Mac",
+        self.assertNotIn('copy_checked "$HERE/Set Up a Shop Mac',
                          (ROOT / "packaging" / "kit-extras" / "prepare-kit-extras.sh").read_text())
 
 

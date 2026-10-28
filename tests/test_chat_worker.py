@@ -51,6 +51,10 @@ def setUpModule() -> None:
     sample_utils = types.ModuleType("mlx_lm.sample_utils")
     sample_utils.make_sampler = lambda **kwargs: ("sampler", kwargs)
     mlx_lm.sample_utils = sample_utils
+    mlx_vlm = types.ModuleType("mlx_vlm")
+    mlx_vlm.__path__ = []
+    mlx_vlm.load = not_stubbed
+    mlx_vlm.stream_generate = not_stubbed
     mlx = types.ModuleType("mlx")
     mlx.__path__ = []
     core = types.ModuleType("mlx.core")
@@ -61,6 +65,7 @@ def setUpModule() -> None:
     replacements = {
         "mlx_lm": mlx_lm,
         "mlx_lm.sample_utils": sample_utils,
+        "mlx_vlm": mlx_vlm,
         "mlx": mlx,
         "mlx.core": core,
     }
@@ -134,9 +139,11 @@ class _FakeEngine:
     # No generation_config, so the worker fallback is this model's ceiling. The attribute and
     # model_limits() must agree, or the fixture contradicts itself.
     max_output_tokens = FALLBACK_MAX_OUTPUT_TOKENS
+    supports_vision = False
 
-    def __init__(self, *, verified: bool = False) -> None:
+    def __init__(self, *, verified: bool = False, supports_vision: bool = False) -> None:
         self._verified = verified
+        self.supports_vision = supports_vision
         self._loaded = False
         self._busy = False
         self._last_activity: float | None = None
@@ -2062,6 +2069,254 @@ class ModelDefaultsRouteTests(unittest.TestCase):
         engine.seen = []
         self.assertEqual(self._post(client, {}).status_code, 200)
         self.assertEqual(engine.seen[-1]["max_tokens"], FALLBACK_MAX_OUTPUT_TOKENS)
+
+
+class ChatVisionWorkerTests(unittest.TestCase):
+    def test_an_image_is_counted_at_the_checkpoints_own_soft_tokens(self) -> None:
+        """The placeholder is one token; the picture is 280. Counting only the placeholder
+        would let a prompt that is really over the context reach the model."""
+        import base64
+        import io
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (1, 1), "red").save(buf, format="JPEG")
+        uri = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": "hi"},
+            {"type": "image_url", "image_url": {"url": uri}}]}]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp) / "model"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(json.dumps({
+                "vision_config": {"model_type": "gemma4_vision"},
+                "vision_soft_tokens_per_image": 280}))
+            (model_dir / "model.safetensors").write_bytes(b"weights")
+            (model_dir / "tokenizer.json").write_text("{}")
+            engine = ChatEngine(model_dir=model_dir, model_id="m", revision="r" * 40)
+            engine._model = object()
+            engine._processor = _StubTokenizer()
+            engine._tokenizer = _StubTokenizer()
+            placeholder_only = engine._count_tokens_unlocked(engine._prompt(messages))
+            self.assertEqual(engine._prompt_tokens(messages), placeholder_only + 280,
+                             "the picture was counted as one placeholder token")
+
+    def test_a_multimodal_checkpoint_is_detected_from_its_own_config(self) -> None:
+        """The checkpoint states it, so a curated manifest cannot go stale behind the weights."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            multimodal = root / "a" / "model"
+            text_only = root / "b" / "model"
+            for model_dir, config in ((multimodal, {"vision_config": {"model_type": "gemma4_vision"}}),
+                                      (text_only, {"text_config": {"hidden_size": 2816}})):
+                model_dir.mkdir(parents=True)
+                (model_dir / "config.json").write_text(json.dumps(config))
+            self.assertTrue(ChatEngine(model_dir=multimodal, model_id="v", revision="r").supports_vision)
+            self.assertFalse(ChatEngine(model_dir=text_only, model_id="t", revision="r").supports_vision)
+
+    def test_a_manifest_may_still_withhold_vision(self) -> None:
+        """The manifest's digest is pinned by install receipts, so it can say no — never yes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp) / "model"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(json.dumps({"vision_config": {"model_type": "gemma4_vision"}}))
+            withheld = ChatEngine(model_dir=model_dir, model_id="v", revision="r",
+                                  manifest={"vision": False})
+        self.assertFalse(withheld.supports_vision)
+
+    def test_catalog_publishes_supports_vision_and_capabilities(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), _FakeEngine(verified=True, supports_vision=True))
+            app = create_app(_FakeEngine(verified=True, supports_vision=True), policy, TOKEN, "a" * 64)
+            with TestClient(app) as client:
+                catalog = client.get("/api/catalog", headers={"x-studio-token": TOKEN}).json()["models"][0]
+            self.assertTrue(catalog["supports_vision"])
+            self.assertIn("vision", catalog["capabilities"])
+            self.assertIn("chat.completion", catalog["capabilities"])
+            self.assertIn("content parts", catalog["lane_contract"]["parameters"][1]["note"])
+
+    def test_catalog_publishes_text_only_when_supports_vision_false(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), _FakeEngine(verified=True, supports_vision=False))
+            app = create_app(_FakeEngine(verified=True, supports_vision=False), policy, TOKEN, "a" * 64)
+            with TestClient(app) as client:
+                catalog = client.get("/api/catalog", headers={"x-studio-token": TOKEN}).json()["models"][0]
+            self.assertFalse(catalog["supports_vision"])
+            self.assertNotIn("vision", catalog["capabilities"])
+            self.assertEqual(catalog["capabilities"], ["chat.completion"])
+
+    def test_completion_accepts_content_parts_on_vision_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), _FakeEngine(verified=True, supports_vision=True))
+            app = create_app(_FakeEngine(verified=True, supports_vision=True), policy, TOKEN, "a" * 64)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                    json={"messages": [
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "describe this image"},
+                            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQSkZJRg=="}},
+                        ]}
+                    ]}
+                )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["choices"][0]["message"]["content"], "Once upon a time.")
+
+    def test_completion_refuses_content_parts_on_text_only_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), _FakeEngine(verified=True, supports_vision=False))
+            app = create_app(_FakeEngine(verified=True, supports_vision=False), policy, TOKEN, "a" * 64)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                    json={"messages": [
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "describe this image"},
+                            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQSkZJRg=="}},
+                        ]}
+                    ]}
+                )
+            self.assertEqual(response.status_code, 422)
+            self.assertIn("does not accept images", response.json()["detail"])
+
+    def test_completion_refuses_unsupported_part_type_on_vision_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = memory_policy_module.MemoryPolicy(Path(tmp), _FakeEngine(verified=True, supports_vision=True))
+            app = create_app(_FakeEngine(verified=True, supports_vision=True), policy, TOKEN, "a" * 64)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                    json={"messages": [
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "hello"},
+                            {"type": "audio", "audio": "data:..."},
+                        ]}
+                    ]}
+                )
+            self.assertEqual(response.status_code, 422)
+            self.assertIn("messages need string content or text/image_url parts", response.json()["detail"])
+
+    def test_a_runtime_without_mlx_vlm_still_serves_text_and_names_what_is_missing(self) -> None:
+        """The fleet's only chat checkpoint is multimodal; losing text chat with it is not an option."""
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp) / "model"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(json.dumps({"vision_config": {"model_type": "gemma4_vision"}}))
+            (model_dir / "model.safetensors").write_bytes(b"weights")
+            (model_dir / "tokenizer.json").write_text("{}")
+            engine = ChatEngine(model_dir=model_dir, model_id="mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+                                revision="r" * 40)
+            self.assertTrue(engine.supports_vision)
+            with mock.patch.dict(sys.modules, {"mlx_vlm": None}), \
+                    mock.patch("mlx_lm.load", lambda *a, **k: (object(), _StubTokenizer())), \
+                    mock.patch("mlx_lm.stream_generate", _stream_text(lambda *a, **k: "text answer")):
+                outcome = engine.complete([{"role": "user", "content": "hi"}], max_tokens=8)
+            self.assertEqual(outcome["text"], "text answer")
+            self.assertFalse(engine.supports_vision)
+            self.assertIn("no mlx-vlm", engine.vision_unavailable_reason)
+
+    def test_text_only_request_on_a_vision_model_uses_the_vision_loader(self) -> None:
+        """A model mlx_vlm loaded cannot be driven by mlx_lm — even when no image is sent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "model"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(json.dumps({"vision_config": {"model_type": "gemma4_vision"}}))
+            (model_dir / "model.safetensors").write_bytes(b"weights")
+            (model_dir / "tokenizer.json").write_text("{}")
+            engine = ChatEngine(model_dir=model_dir, model_id="mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+                                revision="r" * 40, manifest={})
+
+            class _FakeProcessor:
+                tokenizer = None
+
+                def __init__(self):
+                    self.tokenizer = _StubTokenizer()
+
+                def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
+                    return "<|user|>" + messages[-1]["content"] + "<|assistant|>"
+
+            seen = {}
+
+            def fake_vlm_generate(model, processor, prompt=None, image=None, **kwargs):
+                seen["prompt"], seen["image"] = prompt, image
+                yield type("R", (), {"text": "plain answer"})()
+
+            with mock.patch("mlx_vlm.load", lambda *a, **k: (object(), _FakeProcessor())), \
+                    mock.patch("mlx_vlm.stream_generate", fake_vlm_generate), \
+                    mock.patch("mlx_lm.stream_generate",
+                               lambda *a, **k: (_ for _ in ()).throw(AssertionError(
+                                   "a vision model reached mlx_lm's generator"))):
+                outcome = engine.complete([{"role": "user", "content": "hi"}], max_tokens=8)
+
+        self.assertEqual(outcome["text"], "plain answer")
+        self.assertIsNone(seen["image"], "a text-only request must not carry an image")
+
+    def test_real_engine_vision_load_and_stream_generate(self) -> None:
+        import base64
+        import io
+        from PIL import Image
+
+        img = Image.new("RGB", (1, 1), color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        data_uri = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "model"
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(json.dumps({
+                "vision_config": {"model_type": "gemma4_vision"},
+                "text_config": {"max_position_embeddings": 262144}}))
+            (model_dir / "model.safetensors").write_bytes(b"weights")
+            (model_dir / "tokenizer.json").write_text("{}")
+
+            engine = ChatEngine(model_dir=model_dir, model_id="mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+                                revision="r" * 40, manifest={})
+            self.assertTrue(engine.supports_vision)
+
+            loaded_with = []
+            generated_with = []
+
+            class _FakeProcessor:
+                def __init__(self):
+                    self.tokenizer = _StubTokenizer()
+
+                def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
+                    text = " ".join(m["content"] if isinstance(m["content"], str) else
+                                    "".join(p.get("text", "<|image|>") if p.get("type") == "text"
+                                            else "<|image|>" for p in m["content"])
+                                    for m in messages)
+                    return f"<|user|>{text}<|assistant|>"
+
+            def fake_vlm_load(path, **kwargs):
+                loaded_with.append(path)
+                return object(), _FakeProcessor()
+
+            def fake_vlm_generate(model, processor, prompt=None, image=None, **kwargs):
+                generated_with.append({"prompt": prompt, "image": image, "kwargs": kwargs})
+                yield type("R", (), {"text": "A red pixel."})()
+
+            with mock.patch("mlx_vlm.load", fake_vlm_load), \
+                    mock.patch("mlx_vlm.stream_generate", fake_vlm_generate):
+                messages = [
+                    {"role": "user", "content": [
+                        {"type": "text", "text": "What is this?"},
+                        {"type": "image_url", "image_url": {"url": data_uri}},
+                    ]}
+                ]
+                outcome = engine.complete(messages, max_tokens=16)
+
+            self.assertEqual(len(loaded_with), 1)
+            self.assertEqual(loaded_with[0], str(model_dir))
+            self.assertEqual(len(generated_with), 1)
+            self.assertEqual(outcome["text"], "A red pixel.")
+            self.assertEqual(len(generated_with[0]["image"]), 1)
+            self.assertEqual(generated_with[0]["image"][0].size, (1, 1))
+            self.assertIn("<|image|>", generated_with[0]["prompt"],
+                          "the rendered prompt lost the image placeholder the processor expands")
 
 
 if __name__ == "__main__":

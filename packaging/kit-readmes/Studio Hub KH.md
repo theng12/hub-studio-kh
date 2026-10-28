@@ -27,12 +27,19 @@ If the preferred Mac is busy the job goes to another; nothing waits.
 Two double-clicks, then open it. `START-HERE.md` has the long version with pictures of
 what you should see.
 
-1. **`2 - Copy the models.command`** — reads how much memory this Mac has and copies only
-   the models it can run, plus your saved voices. Give it several minutes the first time.
-   It is safe to run again: it adds what is missing and leaves the rest alone.
-   **A Lite Mode Mac:** set it up like any Mac; use **`2 - Copy the Lite Mode models.command`**
-   instead of this one if you want only the Lite models (about 15 GB); then tick **Lite Mode**
-   in Studio Hub > Settings.
+1. **Choose the models in Studio Hub.** After step 2, open the app and use its
+   **Set up this Mac** screen. It shows this Mac's memory and the free space on the models'
+   drive, offers four presets by size — **Essentials 8 GB**, **Creator 16 GB**,
+   **Creator Plus 24 GB**, **Studio Pro 32 GB+** — and copies from this drive. Anything not in
+   the preset is ticked by hand. Give it several minutes the first time; running it again only
+   copies what is missing.
+   **A Lite Mode Mac:** set it up like any Mac and take **Essentials 8 GB**, then tick
+   **Lite Mode** in Studio Hub > Settings. Lite Mode still runs only its own short-lane models,
+   whatever the Mac holds.
+   **No internet and no other Mac to copy from?** Run
+   **`2 - Copy the models (everything).command`** instead — it copies every model the Mac can run,
+   the way earlier kits did. `2 - Copy the models.command` itself no longer chooses: it shows what
+   the drive holds and stops.
 2. **`1 - Install the app.command`** — puts the app in **Applications**. It will ask for
    your password once. It closes and replaces any older copy for you, then **opens the app
    in fleet mode** (`--fleet-mode`): the Mac starts Studio Hub's services now, at every login
@@ -127,16 +134,16 @@ you can read rather than guess.
 
 ## The model library
 
-The source catalog for the next kit build lists **39 model packages** (about 169.0 GB). Normal setup copies **37 production-allowed packages** (about 130.7 GB); the **2 pending packages** (2 Chat MLX 4-bit packages) are not copied until qualification. Qwen Image 2.1 Turbo MLX 4-bit is production-eligible on 16 GB and larger Macs; eligibility does not claim an existing SSD or Mac already has its weights, which remains a kit-receipt fact. `2 - Copy the models.command` copies
+The source catalog for the next kit build lists **40 model packages** (about 177.0 GB). Normal setup copies **40 production-allowed packages** (about 177.0 GB). No package is withheld pending qualification any more (owner, 2026-10-27: "We no longer block or lock any model."); the Mac's own memory is what decides which of them it copies and runs. Qwen Image 2.1 Turbo MLX 4-bit is production-eligible on 16 GB and larger Macs; eligibility does not claim an existing SSD or Mac already has its weights, which remains a kit-receipt fact. The app's **Set up this Mac** screen copies
 only what the Mac's memory can run, so an 8 GB Mac gets the image models and a 16 GB+ Mac
 gets the audio ones too. Voices you have saved are copied at the same time. The library on
 a drive is the library the Mac gets — there is no download step.
 
-The step also keeps the library in step with the kit between releases: a model the kit no
-longer offers is moved into **`_trash`** inside `~/StudioHubModels` (never deleted) and the
-app's record is updated, so a model cut from a release does not sit on the Mac forever. The
-space comes back when you empty that folder — that is your call, and the step says where it
-went. Models the kit *does* ship are never removed, including ones this Mac is too small to
+`2 - Copy the models (everything).command` - the no-internet path - also keeps the library in
+step with the kit between releases: a model the kit no longer offers is moved into **`_trash`**
+inside `~/StudioHubModels` (never deleted) and the app's record is updated, so a model cut from
+a release does not sit on the Mac forever. The space comes back when you empty that folder -
+that is your call, and the step says where it went. Models the kit *does* ship are never removed, including ones this Mac is too small to
 run: those are listed as left behind and stay. **Z-Image-Turbo 6B MLX 4-bit** is carried on
 the 8 GB Macs: it is qualified there (measured on an 8 GB M1 Mac mini, low-RAM mode).
 
@@ -146,7 +153,8 @@ the 8 GB Macs: it is qualified there (measured on an 8 GB M1 Mac mini, low-RAM m
 |---|---|
 | `START-HERE.md` | the plain walk-through for a new Mac |
 | `NODE-SETUP-CHECKLIST.md` | tick list for setting up a node |
-| `2 - Copy the Lite Mode models.command` | the Lite Mode Mac's model copy: the same as `2 - Copy the models`, but only the models Lite Mode uses (about 15 GB). It does not change the Mac's role or tick Lite Mode - see `NODE-SETUP-CHECKLIST.md`, "Shops" |
+| `2 - Copy the Lite Mode models.command` | **retired 2026-10-28.** It copies nothing now: a Lite Mode Mac is set up like any Mac and takes **Essentials 8 GB** on the app's **Set up this Mac** screen, then ticks Lite Mode in Settings. It still never changes the Mac's role and never ticks Lite Mode - see `NODE-SETUP-CHECKLIST.md`, "Shops" |
+| `2 - Copy the models (everything).command` | the older copy-all path, for a Mac with no internet and no other Mac to copy from. Same helper with `STUDIOHUB_KIT_COPY=1`. |
 | `Token and Stuff.md` | a place you have written down this Mac's addresses and tokens |
 | `Technical/verify-kit.sh` | proves this copy installs, starts and answers health |
 

@@ -126,6 +126,27 @@ def _messages(value: object) -> list[dict]:
         if not isinstance(message, dict) or message.get("role") not in {"system", "user", "assistant"}:
             raise HTTPException(400, "message role must be system, user, or assistant")
         content = message.get("content")
+        # A vision model's turn is a list of parts (text + one or more image data URIs). Passed
+        # through whole so the worker — the only party that knows whether its model reads images —
+        # decides. The text-only form stays exactly as it was.
+        if isinstance(content, list):
+            if not content:
+                raise HTTPException(400, "message content must be non-empty text or parts")
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") not in {"text", "image_url"}:
+                    raise HTTPException(400, "message parts must be text or image_url")
+                if part["type"] == "text":
+                    if not isinstance(part.get("text"), str):
+                        raise HTTPException(400, "message text parts carry a string `text`")
+                    total += len(part["text"])
+                else:
+                    url = part.get("image_url")
+                    url = url.get("url") if isinstance(url, dict) else url
+                    if not isinstance(url, str) or not url:
+                        raise HTTPException(400, "message image parts carry a `url`")
+                    total += len(url)
+            out.append({"role": message["role"], "content": content})
+            continue
         if not isinstance(content, str) or not content.strip():
             raise HTTPException(400, "message content must be non-empty text")
         total += len(content)
@@ -1023,10 +1044,19 @@ def _request_facts(request_body: bytes) -> tuple[str, str]:
     model = str(payload.get("model") or "").strip()
     prompt = ""
     for message in reversed(payload.get("messages") or []):
-        if (isinstance(message, dict) and message.get("role") == "user"
-                and isinstance(message.get("content"), str)):
-            prompt = message["content"]
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            prompt = content
             break
+        if isinstance(content, list):
+            # A vision turn: the text parts are the prompt as this record states it. The image
+            # itself is a data URI and never belongs in a job's text record.
+            prompt = " ".join(part.get("text", "") for part in content
+                              if isinstance(part, dict) and part.get("type") == "text").strip()
+            if prompt:
+                break
     return model, prompt
 
 

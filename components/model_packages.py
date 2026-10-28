@@ -266,6 +266,10 @@ def validate_manifest(manifest):
         raise PackageError(
             f"Manifest {manifest.get('package_id')!r} has a non-boolean 'production_allowed': "
             f"{manifest['production_allowed']!r}")
+    if 'vision' in manifest and type(manifest['vision']) is not bool:
+        raise PackageError(
+            f"Manifest {manifest.get('package_id')!r} has a non-boolean 'vision': "
+            f"{manifest['vision']!r}")
     if not re.fullmatch(r'[0-9a-f]{40}', str(manifest.get('revision', ''))):
         raise PackageError('A full immutable model revision is required')
     # Name the engine that has no worker, and both files that carry the vocabulary. A bare
@@ -967,7 +971,7 @@ def _write_index(root, index):
 def forget_packages(library, package_ids):
     """Drop the receipts of packages whose folders are gone; return the package ids dropped.
 
-    Used when the Hub moves a retired or shelved package into the Trash Folder: the receipt is then a
+    Used when the Hub moves a retired package into the Trash Folder: the receipt is then a
     line for bytes nobody will find (the verify-kit check and the kit manifest read the whole index and
     count every one as missing files). Takes the same import lock and writes the same format as
     `_register`. A receipt whose folder is still on disk is kept; a busy lock or an unreadable index

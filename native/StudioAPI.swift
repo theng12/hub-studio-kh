@@ -3946,6 +3946,25 @@ final class NativeWorkspaceStore: ObservableObject {
     /// indistinguishable from a model this build's form cannot drive, so the Models page says which
     /// of the two it is.
     @Published private(set) var modelPackagesUnread = false
+    /// The install screen's last read (`/api/hub/model-presets`). Nil until it has been read, and
+    /// left at its last good value through a failed read, exactly as the package rows are: a blip
+    /// must not empty a screen that was showing a real answer a moment earlier.
+    @Published private(set) var installPlan: NativeInstallPlan? = nil
+    /// Whether the Hub answered the install route at all. False on a Hub older than 0.6.2xx, and
+    /// the screen then says it needs an update rather than drawing an empty preset list.
+    @Published private(set) var installPlanSupported = true
+    /// Package ids with an install or a removal in flight, so a row's button can say so.
+    @Published private(set) var installBusy: Set<String> = []
+    /// The install screen's state, as the offscreen renderer seeds it.
+    ///
+    /// `internal`, not `private(set)`: the renderer compiles into this same module and renders the
+    /// page that ships, so it needs the same seam `workspace.models`, `fleetOverview` and
+    /// `controllerIdentity` already give it. Nothing outside a render uses it - the app's own value
+    /// always comes from `refresh()`.
+    func seedInstallPlanForRendering(_ plan: NativeInstallPlan?) {
+        installPlan = plan
+        installPlanSupported = plan != nil
+    }
     private var hubDownloadRuns: [String: String] = [:]
     /// The last row read for each running Hub download, kept through a failed read; and the runs
     /// that ended this session, which are no longer polled but stay listed with their reason.
@@ -4255,6 +4274,10 @@ final class NativeWorkspaceStore: ObservableObject {
             // the package rows costs install state, not the catalog.
             async let catalog: CatalogResponse = get(["api", "hub", "catalog"])
             async let packages: HubModelPackagesResponse? = try? get(["api", "hub", "model-packages"])
+            // The install screen's own read. Deliberately separate from the package rows above and
+            // equally soft: a Hub that predates the route answers 404 and the screen says so, and a
+            // failure here must never blank the model pickers the package read keeps alive.
+            async let installPresets: HubModelPresetsWire? = try? get(["api", "hub", "model-presets"])
             async let transcription: TranscriptionAvailability? = try? get(["studio", "transcription", "api", "transcribe", "availability"])
             async let generation: GenerationAvailability? = try? get(["studio", "voice", "api", "generate", "availability"])
             async let jobs: HubJobsResponse? = try? get(["api", "hub", "jobs"])
@@ -4263,8 +4286,8 @@ final class NativeWorkspaceStore: ObservableObject {
             async let subtitleHistory: HubTranscriptionList? = try? get(["api", "hub", "transcription", "jobs"])
             // Every download run on this Hub, whoever started it (a Gateway fleet install, a LAN copy).
             async let hubRuns: HubModelDownloads? = try? get(["api", "hub", "model-downloads"])
-            let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue, hubRunsValue) =
-                try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory, hubRuns)
+            let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue, hubRunsValue, installPresetsValue) =
+                try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory, hubRuns, installPresets)
             // Torn down while reading. The child reads that use `try?` come back nil rather than
             // throwing, so without this a cancelled refresh would publish "a studio did not answer"
             // and count its missing jobs — reporting a fault that never happened.
@@ -4289,6 +4312,15 @@ final class NativeWorkspaceStore: ObservableObject {
             // poll, with the install state already known a moment earlier.
             modelPackages = packagesValue?.models.reduce(into: [:]) { $0[$1.modelId] = $1 } ?? modelPackages
             modelPackagesUnread = packagesValue == nil && modelPackages.isEmpty
+            // The install screen's read, kept at its last good value through a failure. A Hub that
+            // answers nothing at all is "not supported" (an older build); one that answers with an
+            // empty preset list is a real, wrong answer and the screen shows it as empty.
+            if let wire = installPresetsValue {
+                installPlan = Self.installPlan(from: wire)
+                installPlanSupported = true
+            } else if installPlan == nil {
+                installPlanSupported = false
+            }
             // Every preset roster the Voice runtime publishes, under the key the runtime itself
             // names it (`qwen3_preset_speakers` today, `<family>_preset_speakers` for the next
             // family). Decoding one fixed key was what left a second preset family with an empty
@@ -6353,6 +6385,107 @@ final class NativeWorkspaceStore: ObservableObject {
             if wait { try? await Task.sleep(for: .seconds(2)) }
         }
         if wait { throw NativeAPIError.message("The Hub transcription job is still pending. Its identity was saved for recovery.") }
+    }
+
+    // MARK: - The install screen (owner decision 2026-10-28)
+
+    /// The Hub's install answer as the app keeps it. Every value comes from the Hub; nothing is
+    /// derived here that the Hub did not say, so a preset's count is the Hub's count of its own
+    /// verified receipts and a model's floor is the manifest's.
+    fileprivate static func installPlan(from wire: HubModelPresetsWire) -> NativeInstallPlan {
+        func model(_ row: HubInstallModelWire) -> NativeInstallModel {
+            NativeInstallModel(id: row.packageId, label: row.label ?? row.packageId,
+                               job: row.job ?? "other", purpose: row.purpose ?? "",
+                               quantization: row.quantization, bytes: row.bytes,
+                               floorGB: row.floorGb, installed: row.installed ?? false,
+                               reason: row.reason, sources: row.sources ?? [])
+        }
+        return NativeInstallPlan(
+            memoryGB: wire.memoryGb,
+            library: wire.library ?? "",
+            diskPath: wire.disk?.path ?? wire.library ?? "",
+            freeBytes: wire.disk?.freeBytes,
+            diskMeasured: wire.disk?.measured ?? false,
+            stopBytes: wire.stopBytes ?? 0,
+            kits: wire.kits ?? [],
+            presets: wire.presets.map { preset in
+                NativePreset(id: preset.presetId, name: preset.name, tierGB: preset.memoryTierGb,
+                             summary: preset.summary,
+                             installedCount: preset.installedCount ?? 0,
+                             packageCount: preset.packageCount ?? (preset.packages?.count ?? 0),
+                             complete: preset.complete ?? false,
+                             fitsThisMac: preset.fitsThisMac ?? false,
+                             toCopyBytes: preset.projection?.toCopyBytes ?? 0,
+                             freeAfterBytes: preset.projection?.freeAfterBytes,
+                             refused: preset.projection?.refused,
+                             packageIDs: preset.packages ?? [])
+            },
+            startingPreset: wire.startingPreset,
+            groups: wire.groups.map { NativeInstallGroup(job: $0.job, models: $0.models.map(model)) },
+            problems: wire.problems ?? [])
+    }
+
+    /// Install one package through the route the Models page already uses.
+    ///
+    /// One request per package, deliberately: there is no batch endpoint to keep in step with the
+    /// single one, and a set that fails on its fourth package has installed three rather than
+    /// reported a set as failed. The Hub answers "already downloading" as a reused run, so a
+    /// double click is harmless.
+    func installPackage(_ packageID: String) async {
+        guard let requestConnection = connectionID else { return }
+        installBusy.insert(packageID)
+        defer { if connectionID == requestConnection { installBusy.remove(packageID) } }
+        do {
+            let run: HubModelDownload = try await sendHubJSON(
+                ["api", "hub", "model-packages", packageID, "download"], body: EmptyBody())
+            guard connectionID == requestConnection else { return }
+            hubDownloadRuns[run.id] = packageID
+            try saveHubDownloadRuns()
+            await refresh()
+        } catch {
+            if connectionID == requestConnection {
+                self.error = Self.actionable(error, action: "Start the model download")
+            }
+        }
+    }
+
+    /// Install every package in a preset that is not already installed and verified.
+    ///
+    /// Started package by package, on purpose: the Hub's downloader already runs each package on
+    /// its own and refuses one that does not fit, so a preset that names a model this Mac cannot
+    /// run installs the rest and says which was left out. A model the SSD never shipped falls back
+    /// to the internet by itself - the Hub's source order - and the screen says so before the click.
+    func installPreset(_ preset: NativePreset) async {
+        guard let requestConnection = connectionID, let plan = installPlan else { return }
+        let wanted = preset.packageIDs.filter { id in
+            (plan.model(id)?.installed ?? false) == false && (plan.model(id)?.refusedHere ?? false) == false
+        }
+        for id in wanted {
+            guard connectionID == requestConnection else { return }
+            await installPackage(id)
+        }
+    }
+
+    /// Remove one installed package: the Hub moves it into that library's `_trash`, never deletes.
+    ///
+    /// Unlike the old stub this really moves, so the refusal is shown in the Hub's own words - a
+    /// model in use says which job, and a package the Hub does not own says so.
+    func removePackage(_ packageID: String) async {
+        guard let requestConnection = connectionID else { return }
+        installBusy.insert(packageID)
+        defer { if connectionID == requestConnection { installBusy.remove(packageID) } }
+        do {
+            struct Removed: Decodable { let ok: Bool; let detail: String? }
+            let answer: Removed = try await sendEmpty(["api", "hub", "model-packages", packageID],
+                                                      method: "DELETE")
+            guard connectionID == requestConnection else { return }
+            if answer.detail != nil { modelNote = answer.detail; modelNoteRepo = packageID }
+            await refresh()
+        } catch {
+            if connectionID == requestConnection {
+                self.error = Self.actionable(error, action: "Remove the model")
+            }
+        }
     }
 
     func startDownload(_ model: NativeModel) async {
@@ -9484,8 +9617,18 @@ final class NativeWorkspaceStore: ObservableObject {
         return parts.joined(separator: " ")
     }
 
+    /// Remove one downloaded model from the Models page (owner decision 2026-10-28).
+    ///
+    /// This was a stub that refused every time: "unavailable until it can protect models with
+    /// active readers". The Hub can protect them now - it moves the package into that library's
+    /// `_trash` and refuses while a job, a paused model or a dependent package is using it - so the
+    /// button calls the same route the Set up page's Remove does, and shows the Hub's own sentence.
     func removeModel(_ model: NativeModel) async {
-        error = "Hub model removal is unavailable until it can protect models with active readers."
+        guard let package = modelPackages[model.repo] else {
+            error = "This model has no approved Hub package, so the Hub cannot remove it."
+            return
+        }
+        await removePackage(package.packageId)
     }
 
     /// Take on the cluster credential, so this Mac accepts work from its controller.
@@ -10967,6 +11110,143 @@ private struct HubModelPackage: Decodable {
     let paused: Bool?
     let pausedReason: String?
     let pausedStudio: String?
+}
+// ── The install screen (owner decision 2026-10-28) ─────────────────────────────────────────────
+// `GET /api/hub/model-presets` is the Hub's whole answer for this screen: this Mac's memory, the
+// free space on the models' own volume, the four presets, and every model grouped by its job.
+// Every field is optional or defaulted where the Hub can honestly omit it, so an older Hub that
+// answers 404 leaves the screen saying so rather than showing an invented preset.
+private struct HubModelPresetWire: Decodable {
+    let presetId: String
+    let name: String
+    let memoryTierGb: Int
+    let summary: String?
+    let packages: [String]?
+    let installedCount: Int?
+    let packageCount: Int?
+    let complete: Bool?
+    let fitsThisMac: Bool?
+    let refusedModels: [String]?
+    let projection: HubProjectionWire?
+}
+private struct HubProjectionWire: Decodable {
+    let toCopyBytes: Int64?
+    let freeAfterBytes: Int64?
+    let refused: String?
+    let unknownPackages: [String]?
+}
+private struct HubDiskWire: Decodable { let path: String?; let freeBytes: Int64?; let totalBytes: Int64?; let measured: Bool? }
+private struct HubInstallModelWire: Decodable {
+    let packageId: String
+    let label: String?
+    let job: String?
+    let purpose: String?
+    let quantization: String?
+    let bytes: Int64?
+    let floorGb: Int?
+    let installed: Bool?
+    let state: String?
+    let reason: String?
+    let sources: [String]?
+}
+private struct HubInstallGroupWire: Decodable { let job: String; let models: [HubInstallModelWire] }
+private struct HubModelPresetsWire: Decodable {
+    let memoryGb: Double?
+    let disk: HubDiskWire?
+    let library: String?
+    let stopBytes: Int64?
+    let kits: [String]?
+    let presets: [HubModelPresetWire]
+    let startingPreset: String?
+    let groups: [HubInstallGroupWire]
+    let problems: [String]?
+}
+/// The install screen's whole read, as the app keeps it between polls.
+struct NativeInstallPlan: Equatable {
+    let memoryGB: Double?
+    let library: String
+    let diskPath: String
+    let freeBytes: Int64?
+    let diskMeasured: Bool
+    let stopBytes: Int64
+    let kits: [String]
+    let presets: [NativePreset]
+    let startingPreset: String?
+    let groups: [NativeInstallGroup]
+    /// A preset id naming a package the catalog does not ship. Shown, never swallowed: a typo in a
+    /// preset file is otherwise discovered when an install "finishes" with a lane missing.
+    let problems: [String]
+
+    /// Every model on the screen, whichever group it is in - the one list a search or a count reads.
+    var allModels: [NativeInstallModel] { groups.flatMap(\.models) }
+    func model(_ id: String) -> NativeInstallModel? { allModels.first { $0.id == id } }
+    /// The preset this Mac is offered: the Hub's own answer, rounded down so its models fit.
+    var starting: NativePreset? { presets.first { $0.id == startingPreset } }
+}
+
+/// One job heading on the manual side of the screen.
+struct NativeInstallGroup: Identifiable, Equatable {
+    let job: String
+    let models: [NativeInstallModel]
+    var id: String { job }
+    /// The owner-facing heading for a job, with an unknown future job shown verbatim rather than
+    /// dropped - a group this app has no word for is still a group.
+    var title: String {
+        switch job {
+        case "image": return "Image"
+        case "voice": return "Voice"
+        case "writing": return "Writing"
+        case "vision": return "Vision"
+        case "music": return "Music"
+        case "transcription": return "Transcription"
+        case "embeddings": return "Embeddings"
+        case "video": return "Video"
+        case "other": return "Other"
+        default: return job
+        }
+    }
+}
+
+/// One model on the install screen, flattened from the Hub's row with nothing invented.
+struct NativeInstallModel: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let job: String
+    let purpose: String
+    let quantization: String?
+    let bytes: Int64?
+    let floorGB: Int?
+    let installed: Bool
+    let reason: String?
+    let sources: [String]
+    /// A model too big for this Mac. Shown, greyed out and with its reason - never hidden.
+    var refusedHere: Bool { reason != nil }
+}
+/// One preset, with the counts the Hub built from its own receipts.
+struct NativePreset: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let tierGB: Int
+    let summary: String?
+    let installedCount: Int
+    let packageCount: Int
+    let complete: Bool
+    let fitsThisMac: Bool
+    let toCopyBytes: Int64
+    let freeAfterBytes: Int64?
+    let refused: String?
+    let packageIDs: [String]
+}
+/// How a package's bytes would arrive, in the Hub's words, as the screen words it.
+enum NativeInstallSource: String {
+    case lan, kit, internet
+    var text: String {
+        switch self {
+        case .lan: return "from another Mac"
+        case .kit: return "from the SSD"
+        case .internet: return "from the internet"
+        }
+    }
 }
 /// How the Voice worker groups its cached files, and the memory each family's model declares.
 private struct HubStorageGroups: Decodable { let groups: [HubStorageGroup] }

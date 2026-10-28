@@ -94,7 +94,6 @@ class ReadinessProductionPolicyTests(unittest.TestCase):
         with mock.patch.object(model_packages, "preflight", return_value=receipt), \
              mock.patch.object(standalone, "_model_library", return_value=ROOT), \
              mock.patch.object(standalone.broker, "model_block_state", return_value=None), \
-             mock.patch.object(standalone.shelved_models, "manifest_shelved", return_value=False), \
              mock.patch.object(standalone.standalone_config, "model_readiness",
                                wraps=standalone_config.model_readiness) as readiness:
             standalone._model_state(candidate, {candidate["package_id"]: candidate}, monitor, {})

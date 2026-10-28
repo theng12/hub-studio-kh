@@ -169,7 +169,7 @@ class VerifyLaunchTests(unittest.TestCase):
         self.assertNotIn("Traceback", result.stdout + result.stderr)
 
     def test_never_hands_the_service_a_real_library(self):
-        """A throwaway data dir over a real library shelved and retired real weights (2026-10-02)."""
+        """A throwaway data dir over a real library retired real weights (2026-10-02; shelving since deleted)."""
         (self.library / "whisper-base" / "rev").mkdir(parents=True)
         (self.library / "whisper-base" / "rev" / "weights.bin").write_text("weights")
         result = self._run()
