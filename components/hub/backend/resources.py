@@ -21,6 +21,7 @@ import time
 import psutil
 
 from components import host_memory
+from . import network_link
 from .registry import DATA_DIR
 
 _proc_cache: dict[int, psutil.Process] = {}
@@ -162,6 +163,13 @@ def host_stats() -> dict:
         stats["disk"] = disk_governor.snapshot(DATA_DIR)
     except Exception:
         stats["disk"] = None
+    try:
+        # Which interface carries the default route, what kind of link it is and — for Ethernet —
+        # the media the OS says it negotiated, so a bad cable thinning the fleet to 100 Mb/s is
+        # visible instead of reading as "online". Cached: this never shells out on a request.
+        stats["connection"] = network_link.status()
+    except Exception:
+        stats["connection"] = None
     return stats
 
 
