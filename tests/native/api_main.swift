@@ -405,6 +405,14 @@ final class FixtureProtocol: URLProtocol {
     /// When true, `/api/hub/model-packages` answers the way the Hub does when one manifest is
     /// malformed: a 503 for the whole route, not a partial list.
     static var packagesUnavailable = false
+    /// Whether the Hub's job list carries a batch for a modality this build has never heard of.
+    /// Off, a refresh has nothing to report at all - which is what lets the banner's clear be
+    /// asserted as "the note is gone", not merely "the sentence changed".
+    static var unknownModalityBatch = true
+    static func setUnknownModalityBatch(_ value: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        unknownModalityBatch = value
+    }
     /// How many more availability reads to refuse, per Studio. The footer's line names a Studio
     /// only after several polls in a row miss, so a blip and a real silence have to be distinguishable.
     static var transcriptionAvailabilityFailures = 0
@@ -1491,8 +1499,9 @@ final class FixtureProtocol: URLProtocol {
                 // startup note: the old filter skipped anything not on its list before the loop,
                 // so it was neither shown, counted nor reported.
                 ["id": "video-job", "modality": "video"],
-                ["id": "hologram-job", "modality": "hologram"],
             ]
+            Self.lock.lock(); let unknownModality = Self.unknownModalityBatch; Self.lock.unlock()
+            if unknownModality { batches.append(["id": "hologram-job", "modality": "hologram"]) }
             if pendingImage { batches.append(["id": "image-uncertain", "modality": "image"]) }
             if pendingMusic { batches.append(["id": "music-uncertain", "modality": "music"]) }
             Self.lock.lock()
@@ -2627,6 +2636,12 @@ struct NativeAPITests {
                 "and it must say so, got: \(recoveredStore.startupNote ?? "nil")")
         require(FileManager.default.fileExists(atPath: corruptState.path + ".corrupt"),
                 "the unreadable file must be kept, not deleted")
+        // A note about the app's own files is not a refresh's to clear. Clearing `startupNote` when
+        // a refresh has nothing to report must not take the "set aside" sentence with it: it is
+        // kept apart precisely so a Hub read cannot erase a fact about this Mac's own disk.
+        await recoveredStore.refresh()
+        require(recoveredStore.startupNote?.contains("set aside") == true,
+                "a successful refresh must not erase the file it set aside, got: \(recoveredStore.startupNote ?? "nil")")
 
         // One batch whose detail will not load is one row, not the whole page. This used to abort
         // the refresh and mark the Hub unreachable, so a pruned job blanked the models and the jobs.
@@ -4445,6 +4460,23 @@ struct NativeAPITests {
                 "the model list must recover once the Hub answers again")
         require(store.models.count == modelsBeforePackageFailure,
                 "recovering must not duplicate or drop models")
+        // **And the note the failed read left goes with it.** The banner used to keep the sentence
+        // until somebody pressed Dismiss, hours after the read had answered again - the same latch
+        // that kept "A studio did not answer" on every page (owner, 2026-10-28). Pinned as a pair
+        // on a Hub with nothing else to report, so the note's own absence is the assertion: the
+        // sentence appears while the read fails, and the next successful refresh clears it.
+        FixtureProtocol.setUnknownModalityBatch(false)
+        store.clearStartupNote()
+        FixtureProtocol.setPackagesUnavailable(true)
+        await store.refresh()
+        require(store.startupNote?.contains("package list") == true,
+                "the failed read must show its reason first, got: \(store.startupNote ?? "nil")")
+        FixtureProtocol.setPackagesUnavailable(false)
+        await store.refresh()
+        require(store.startupNote == nil,
+                "a refresh with nothing to report must clear the note the last one left, got: \(store.startupNote ?? "nil")")
+        FixtureProtocol.setUnknownModalityBatch(true)
+        await store.refresh()
 
         // **A Studio that stops answering is a line in the sidebar footer, not the banner.**
         //

@@ -4500,7 +4500,14 @@ final class NativeWorkspaceStore: ObservableObject {
             // Appended, not assigned: a degraded read and an unplaceable batch are different
             // facts, and the second must not erase the first.
             refreshNotes.append(contentsOf: jobNotes)
-            if !refreshNotes.isEmpty { startupNote = refreshNotes.joined(separator: " ") }
+            // **A refresh with nothing to report clears the note the last one left.** It used to
+            // assign only when there was something to say, so one failed read stayed on the banner
+            // until somebody pressed Dismiss - hours after the read had answered again. That is the
+            // latch that kept "A studio did not answer" on every page (owner, 2026-10-28), and it
+            // is the same fault for the package list. `recoveryNote` is not lost by this: it is
+            // composed into `refreshNotes` above, so a file set aside at startup stays on the
+            // banner until it is dismissed; only what this refresh actually found decides.
+            startupNote = refreshNotes.isEmpty ? nil : refreshNotes.joined(separator: " ")
             // Only what the Hub still lists is remembered; anything it forgets leaves with it.
             finishedJobCache = finished
             audioJobs = history.map(namingVoice).sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) }

@@ -10,6 +10,10 @@ A notice used to appear across the top of every page saying "A studio did not an
 
 That notice is gone. If a Studio this Mac is meant to serve really does stop answering — not one missed poll, but several in a row — a small line now appears in the sidebar next to "Local services ready", naming it: "Voice Studio not answering", or "Subtitle Studio still starting" while it is coming up. Hover over it, or click it, for the whole story. It clears itself the moment the Studio answers. A Studio you have switched off, or one this Mac does not run, stays silent.
 
+### The other notices clear themselves too
+
+A note at the top of the page about something the Hub could not read — its list of model packages, say — used to sit there until you pressed Dismiss, even after it had been reading fine for hours. It now goes away by itself on the next refresh that has nothing to report. A note about a file of your own that the app had to set aside still waits for you to dismiss it, because that one is not going to fix itself.
+
 ## 0.6.207 — 2026-10-28
 
 ### A render takes its place in the queue you set
