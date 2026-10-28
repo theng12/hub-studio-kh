@@ -4048,6 +4048,17 @@ struct NativeAPITests {
         let legacyPolicy = try rankedPolicyDecoder.decode(NativeWorkPolicy.self, from: legacyPolicyJSON)
         require(legacyPolicy.priorityOrder == ["chat"] && !legacyPolicy.supportsFunctionPriority,
                 "an old Hub's Chat-first choice is readable without pretending ranked edits are supported")
+        // **Final render is rankable and has no Studio row** (owner, 2026-10-28). The Hub lists it
+        // only when this Mac can render, so "no Studio claims it" must read as enabled - reading it
+        // as off hid the one function the owner asked to be able to rank.
+        let renderPolicyJSON = Data(#"{"machine_enabled":false,"priority_order":["chat","render"],"priority_functions":[{"id":"chat","title":"Chat Studio"},{"id":"render","title":"Final render"}],"studios":[{"id":"chat@local","title":"Chat Studio","modality":"chat","enabled":true}]}"#.utf8)
+        let renderPolicy = try rankedPolicyDecoder.decode(NativeWorkPolicy.self, from: renderPolicyJSON)
+        require(renderPolicy.enabledPriorityFunctions.map(\.id) == ["chat", "render"],
+                "final render must be rankable even though no Studio row claims it")
+        require(renderPolicy.enabledPriorityFunctions.last?.title == "Final render",
+                "the Hub's own plain name for render must be shown, not a capitalised id")
+        require(renderPolicy.priorityOrder(moving: "render", by: -1) == ["render", "chat"],
+                "render must be movable in the order like any other function")
 
         // Local work choices must preserve manual pause and arbitrary registered functions.
         await store.refreshWorkPolicy()

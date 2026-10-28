@@ -1059,9 +1059,10 @@ def _is_local_machine(machine: str) -> bool:
 def _saved_priority_order(machine: str) -> list[str]:
     """One Mac's saved order, exactly as stored — no read-time default applied.
 
-    `work_policy` displays this and `chat_priority` projects it; arbitration reads
-    `priority_order` below, which adds the read-time render default. Keeping the two apart is
-    what lets render be rankable without rewriting a single stored order (owner, 2026-10-28).
+    `work_policy` displays this and `chat_priority` projects it (through `priority_order`, which
+    is this function); arbitration reads `ranked_priority_order`, which adds the read-time render
+    default. Keeping the two apart is what lets render be rankable without rewriting a single
+    stored order (owner, 2026-10-28).
     """
     from . import registry
     if _is_local_machine(machine):
@@ -1073,18 +1074,28 @@ def _saved_priority_order(machine: str) -> list[str]:
 
 
 def priority_order(machine: str) -> list[str]:
+    """One Mac's saved order, exactly as stored — no read-time default applied.
+
+    This is the function the work-policy API, the fleet rows and the compatibility projections
+    read, so it keeps the meaning it has always had: what the owner saved, nothing more.
+    Arbitration reads `ranked_priority_order` below, which adds final render's read-time default.
+    """
+    return _saved_priority_order(machine)
+
+
+def ranked_priority_order(machine: str) -> list[str]:
     """The order arbitration uses, with `render`'s read-time default applied.
 
     A Mac whose saved order names no final render ranks it first, which is what
     `acquire_external_machine` used to reserve unconditionally; a Mac that names it in its order
     gets the owner's ranking (owner, 2026-10-28). Nothing stored is rewritten.
 
-    The default itself is applied by `registry.effective_priority_order`, so the scheduler, the
-    Fleet row and the work-policy API cannot each answer it differently.
+    The default itself is applied by `registry.with_render_default`, so the scheduler, the
+    controller's render gate and the work-policy API cannot each answer it differently.
     """
     from . import registry
     if _is_local_machine(machine):
-        return registry.effective_priority_order("local")
+        return registry.effective_priority_order(machine)
     return registry.with_render_default(_saved_priority_order(machine))
 
 
@@ -1281,7 +1292,7 @@ async def priority_chat_waiting(machine: str) -> bool:
 
 def _priority_key(machine: str, modality: str, created_at: float,
                   identity: str) -> tuple[int, float, str]:
-    order = priority_order(machine)
+    order = ranked_priority_order(machine)
     try:
         rank = order.index(modality)
     except ValueError:
@@ -2536,9 +2547,9 @@ def render_wins_next_free(machine: str, lane: str) -> bool:
         return False   # the render lane itself is the one being let in
     if not _pending_render_for_machine(machine):
         return False
-    order = priority_order(machine)
+    order = ranked_priority_order(machine)
     # A lane the order does not name sorts behind every function it does name, and render is
-    # always named here (`priority_order` supplies the read-time default), so render wins.
+    # always named here (`ranked_priority_order` supplies the read-time default), so render wins.
     return order.index(RENDER_MODALITY) < order.index(lane) if lane in order else True
 
 
