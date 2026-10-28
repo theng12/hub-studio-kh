@@ -15,6 +15,11 @@ MODULES = (
     "fastapi",
     "mlx.core",
     "mlx_audio",
+    # The Chat lane's only multimodal loader. It was named in requirements-pilot.txt while the
+    # lock did not carry it, so a built runtime shipped without it and the Chat worker refused
+    # images naming the missing module (0.6.206). Importing it here is what makes that omission
+    # a build failure instead of a runtime degradation.
+    "mlx_vlm",
     "pyopenjtalk",
     "torch",
     "torchaudio",
@@ -54,6 +59,7 @@ payload = {
             "fastapi",
             "mlx",
             "mlx-audio",
+            "mlx-vlm",
             "pyopenjtalk",
             "torch",
             "torchaudio",
