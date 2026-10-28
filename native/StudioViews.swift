@@ -1747,6 +1747,10 @@ struct StudioContent: View {
                         Text(updating).font(HubType.caption).foregroundStyle(HubStatus.info.textColor)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    // A Studio that has stopped answering, beside the status it belongs to - not
+                    // across the top of every page (owner, 2026-10-28). It names the Studio and
+                    // clears itself the moment the Studio answers.
+                    StudioTroubleNote(trouble: workspace.studioTrouble)
                     // MERGE POINT (feat/remote-startup): one self-contained line. Keep it, and the
                     // `StartupSidebarNote` struct at the end of this file, when merging the footer.
                     StartupSidebarNote(studio: studio)
@@ -8029,6 +8033,49 @@ struct StartupSidebarNote: View {
             .buttonStyle(.plain).foregroundStyle(HubStatus.warn.textColor)
             .help("This Mac belongs to a fleet but \"Start services on startup\" is off. Click to turn it on.")
             .accessibilityLabel("Services will not start after a restart. Turn on Start services on startup.")
+        }
+    }
+}
+
+/// One small line in the sidebar footer per Studio that has stopped answering.
+///
+/// **This is where the old top-of-page banner went.** The banner said *"A studio did not answer"*
+/// without naming it, appeared for Studios the owner had switched off, and never cleared. Owner,
+/// 2026-10-28: *"can we have it like in a notification icon somewhere instead?"* A warning icon and
+/// a short line sit where "Local services ready" lives; the hover and the click carry the detail,
+/// and the line leaves by itself as soon as the Studio answers.
+struct StudioTroubleNote: View {
+    let trouble: [StudioTrouble]
+    @State private var showing: String?
+
+    var body: some View {
+        ForEach(trouble) { line in
+            Button {
+                showing = showing == line.id ? nil : line.id
+            } label: {
+                HStack(alignment: .top, spacing: HubSpace.tight) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(HubStatus.warn.textColor)
+                    Text(line.headline)
+                        .font(HubType.caption)
+                        .foregroundStyle(HubStatus.warn.textColor)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+            }
+            .buttonStyle(.plain)
+            .help(line.detail)
+            .accessibilityLabel("\(line.headline). \(line.detail)")
+            .popover(isPresented: Binding(get: { showing == line.id },
+                                          set: { if !$0 { showing = nil } })) {
+                Text(line.detail)
+                    .font(HubType.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 320, alignment: .leading)
+                    .padding(HubSpace.m)
+            }
         }
     }
 }

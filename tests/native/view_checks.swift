@@ -200,6 +200,49 @@ enum ViewChecks {
         }
         window.orderOut(nil)
 
+        // **The Studio line is a sidebar-footer item, not the top-of-page banner** (owner,
+        // 2026-10-28: "can we have it like in a notification icon somewhere instead?"). What the
+        // view has to be able to do: draw nothing when no Studio is missing, draw a line naming the
+        // Studio when one is, and carry the detail in words the operator can read.
+        //
+        // The name is checked in pixels rather than in the type's own string: two notes that differ
+        // only in the Studio's name must not render identically, which is what fails if the line
+        // stops drawing its name and leaves a bare warning icon. A string check cannot see that.
+        func noteHost(_ trouble: [StudioTrouble]) -> NSHostingView<StudioTroubleNote> {
+            let host = NSHostingView(rootView: StudioTroubleNote(trouble: trouble))
+            host.frame = NSRect(x: 0, y: 0, width: 240, height: 80)
+            host.layoutSubtreeIfNeeded()
+            return host
+        }
+        func pixels(_ view: NSView) -> Data? {
+            view.layoutSubtreeIfNeeded()
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            return rep.representation(using: .png, properties: [:])
+        }
+        let stopping = StudioTrouble(studio: "Voice Studio", misses: 5, starting: false)
+        let otherStudio = StudioTrouble(studio: "Subtitle Studio", misses: 5, starting: false)
+        let startingLine = StudioTrouble(studio: "Subtitle Studio", misses: 3, starting: true)
+        check(stopping.headline == "Voice Studio not answering",
+              "the short line names the Studio, got: \(stopping.headline)")
+        check(startingLine.headline == "Subtitle Studio still starting",
+              "a Studio that has never answered reads as starting, got: \(startingLine.headline)")
+        check(stopping.detail.contains("5 reads") && stopping.detail.contains("clears itself"),
+              "the detail says how long and that it clears itself, got: \(stopping.detail)")
+        check(!stopping.detail.contains("A studio did not answer"),
+              "the vague banner sentence is gone, not reworded into the footer")
+        let noLine = noteHost([])
+        let voiceLine = noteHost([stopping])
+        let subtitleLine = noteHost([otherStudio])
+        check(noLine.fittingSize.height <= 1, "no Studio missing draws no footer line")
+        check(pixels(noLine) != nil, "the footer's Studio note draws offscreen")
+        check(pixels(noLine) != pixels(voiceLine),
+              "a Studio that stopped answering adds a line to the footer")
+        check(pixels(voiceLine) != pixels(subtitleLine),
+              "the line draws the Studio's own name, not a bare warning icon")
+        check(noteHost([stopping, startingLine]).fittingSize.height > noLine.fittingSize.height,
+              "two Studios down grow the footer rather than burying the second line")
+
         if failures > 0 { exit(1) }
         print("Native view checks passed")
     }

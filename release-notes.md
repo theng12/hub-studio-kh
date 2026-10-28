@@ -2,6 +2,14 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.208 — 2026-10-28
+
+### A Studio that stops answering says so quietly — and only when it matters
+
+A notice used to appear across the top of every page saying "A studio did not answer", without saying which one. It stayed there until you dismissed it, even after the Studio had answered again, and it appeared for Studios you had switched off, which were never going to answer anything.
+
+That notice is gone. If a Studio this Mac is meant to serve really does stop answering — not one missed poll, but several in a row — a small line now appears in the sidebar next to "Local services ready", naming it: "Voice Studio not answering", or "Subtitle Studio still starting" while it is coming up. Hover over it, or click it, for the whole story. It clears itself the moment the Studio answers. A Studio you have switched off, or one this Mac does not run, stays silent.
+
 ## 0.6.207 — 2026-10-28
 
 ### A render takes its place in the queue you set

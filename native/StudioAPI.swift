@@ -1468,6 +1468,42 @@ struct ConnectionNotice: Identifiable, Equatable {
     let text: String
 }
 
+/// One Studio this Mac is meant to be serving that has stopped answering.
+///
+/// **This used to be a sentence in the top-of-page banner** - *"A studio did not answer; the rest
+/// of this page is up to date."* - which named no Studio, said nothing about why, appeared for a
+/// Studio the owner had switched off, and, because nothing ever cleared `startupNote` once it was
+/// set, stayed on screen for ever after a single missed poll. The owner, 2026-10-28: *"what is it
+/// and should we get rid of it. or make it disappear or sth? or can we have it like in a
+/// notification icon somewhere instead?"* It is now a small line in the sidebar footer beside
+/// "Local services ready", naming the Studio the Hub itself calls it, gone the moment it answers.
+struct StudioTrouble: Equatable, Identifiable {
+    /// The Hub's own title for the Studio ("Subtitle Studio", "Voice Studio"), never one the app
+    /// invents from a modality id.
+    let studio: String
+    /// How many polls in a row the availability read has missed.
+    let misses: Int
+    /// Nothing has answered yet on this connection, and the services have only just started:
+    /// "still starting" rather than "not answering". Saying the wrong one of these is how a Mac
+    /// coming up reads as broken.
+    let starting: Bool
+
+    var id: String { studio }
+    /// The one line the footer can afford.
+    var headline: String { starting ? "\(studio) still starting" : "\(studio) not answering" }
+    /// What the click or the hover says: which Studio, how long, and that it clears itself.
+    var detail: String {
+        let reads = misses == 1 ? "1 read" : "\(misses) reads"
+        return starting
+            ? "The \(studio) has not answered yet on this connection, and its availability read has"
+                + " failed \(reads) in a row. It may still be coming up. Everything else on this"
+                + " page is up to date, and this line clears itself as soon as the Studio answers."
+            : "The \(studio) has not answered its availability read \(reads) in a row. Work that"
+                + " needs it waits; everything else on this page is up to date. This line clears"
+                + " itself as soon as the Studio answers."
+    }
+}
+
 /// This Mac's saved function choices, dispatch priority and separate manual pause state.
 struct NativeWorkPolicy: Decodable, Equatable {
     struct Function: Decodable, Equatable, Identifiable {
@@ -3900,6 +3936,24 @@ final class NativeWorkspaceStore: ObservableObject {
     /// A local file the app could not read and set aside. Kept apart from `startupNote` so a Hub
     /// refresh cannot erase it, and composed with the refresh's own notes when the banner is built.
     private var recoveryNote: String?
+    /// The Studios this Mac is meant to be serving whose availability read has stopped answering.
+    ///
+    /// A line in the sidebar footer, not the banner: see `StudioTrouble`. Empty is the ordinary
+    /// case, and it empties itself the moment the Studio answers again.
+    @Published private(set) var studioTrouble: [StudioTrouble] = []
+    /// One availability read's history on this connection: how many polls in a row it has missed,
+    /// and whether it has ever answered - which is what tells "still starting" from "not answering".
+    private struct AvailabilityWatch { var misses = 0; var answered = false }
+    private var transcriptionWatch = AvailabilityWatch()
+    private var voiceWatch = AvailabilityWatch()
+    /// The Hub's own answer on which Studios this Mac runs and whether the owner left them on.
+    /// `workPolicy` is normally nil here - only the pages that show the switches read it - so it is
+    /// read on each missed poll, with a short timeout, and only while something is actually missing:
+    /// a note must never name a Studio the owner switched off or one this Mac does not run, and the
+    /// owner switching one off has to take the line away on the next poll rather than at reload.
+    private var availabilitySwitches: (studios: [NativeWorkPolicy.Studio], machineEnabled: Bool)?
+    /// When this connection began, so "still starting" can mean something and not just "unlucky".
+    private var connectedAt = Date()
     @Published private(set) var joiningFleet = false
     @Published private(set) var tokenStatus = NativeTokenStatus(isSet: false, masked: "")
 
@@ -3996,6 +4050,13 @@ final class NativeWorkspaceStore: ObservableObject {
             connectionGeneration += 1
             voicesLoaded = false
             self.dataDirectory = dataDirectory.standardizedFileURL
+            // A new connection has seen nothing yet: no Studio has answered, no read has missed,
+            // and "still starting" is true again for the first couple of minutes.
+            transcriptionWatch = AvailabilityWatch()
+            voiceWatch = AvailabilityWatch()
+            availabilitySwitches = nil
+            studioTrouble = []
+            connectedAt = Date()
             try FileManager.default.createDirectory(
                 at: dataDirectory,
                 withIntermediateDirectories: true,
@@ -4083,6 +4144,12 @@ final class NativeWorkspaceStore: ObservableObject {
         workPolicy = nil
         workPolicyNote = nil
         savingWorkPolicy = false
+        // The footer's Studio line belongs to the connection that raised it, and so does what the
+        // Hub said about which Studios this Mac runs.
+        transcriptionWatch = AvailabilityWatch()
+        voiceWatch = AvailabilityWatch()
+        availabilitySwitches = nil
+        studioTrouble = []
         workPolicyReadFailed = false
         workPolicyRevision += 1
         workPolicyReadID = nil
@@ -4299,9 +4366,11 @@ final class NativeWorkspaceStore: ObservableObject {
             if packagesValue == nil {
                 startupNotes.append("The Hub's model package list could not be read; models are listed without their install state until it answers again.")
             }
-            if transcriptionValue == nil || generationValue == nil {
-                startupNotes.append("A studio did not answer; the rest of this page is up to date.")
-            }
+            // A Studio that has stopped answering is **not** a banner: it is one small line in the
+            // sidebar footer, it names the Studio, and it clears itself. See `noteStudioAvailability`.
+            await noteStudioAvailability(transcription: transcriptionValue != nil,
+                                         voice: generationValue != nil,
+                                         requestConnection: requestConnection)
             var refreshNotes = startupNotes
             if let recoveryNote { refreshNotes.insert(recoveryNote, at: 0) }
             guard connectionID == requestConnection else { return }
@@ -7086,6 +7155,58 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Change this Hub's role. Standalone creates locally; Controller serves other Macs and
     /// reports their work; Node does local work only and defers customer jobs to a controller.
     func clearStartupNote() { startupNote = nil; recoveryNote = nil }
+
+    /// How many polls in a row an availability read may miss before the footer says so.
+    ///
+    /// **Three, because one is a blip and the poll is two seconds.** A worker being restarted, or a
+    /// poll that left while the Hub was busy with a batch, answers again before the next tick - on
+    /// 2026-10-28 this Mac logged exactly one 502 on the Subtitle availability read in a whole
+    /// evening of polling. Three in a row is at least six seconds at the visible two-second rate and
+    /// half a minute at the idle ten-second rate: long enough to be a real silence, short enough
+    /// that the owner is not left waiting a minute after a Studio actually falls over.
+    private static let studioMissLimit = 3
+    /// How long a Studio that has never answered still reads as "starting". The private workers
+    /// are spawned before the Hub publishes its ready file, so a Studio that is merely coming up has
+    /// answered before this window closes; after it, silence is a fault and is named as one.
+    private static let studioStartingWindow: TimeInterval = 120
+
+    /// Account one poll's availability reads and say which Studio, if any, has stopped answering.
+    ///
+    /// The Hub's own registry decides whether a broken read is worth a word: a Studio the owner
+    /// switched OFF, or one this Mac does not run at all, is *supposed* to be quiet, and a Mac whose
+    /// work is paused is not serving anything either. Only a Studio this Mac is meant to be serving
+    /// can raise the line, and it is named by the title the Hub publishes for it.
+    private func noteStudioAvailability(transcription answered: Bool, voice answeredVoice: Bool,
+                                        requestConnection: UUID) async {
+        if answered { transcriptionWatch.answered = true; transcriptionWatch.misses = 0 }
+        else { transcriptionWatch.misses += 1 }
+        if answeredVoice { voiceWatch.answered = true; voiceWatch.misses = 0 }
+        else { voiceWatch.misses += 1 }
+        // Read the switches on a missed poll, so the line follows the owner rather than a snapshot.
+        // Bounded at five seconds and never fatal: this happens only while a Studio is silent, and a
+        // Hub that cannot answer this read tells us nothing, so the last known switches stand and
+        // no line is invented from a failure.
+        if (!answered || !answeredVoice),
+           let policy: NativeWorkPolicy = try? await perform(
+               makeRequest(["api", "hub", "work-policy"], timeout: 5)) {
+            availabilitySwitches = (policy.studios, policy.machineEnabled)
+        }
+        guard connectionID == requestConnection else { return }
+        let switches = availabilitySwitches
+        let now = Date()
+        func trouble(_ watch: AvailabilityWatch, _ modality: String) -> StudioTrouble? {
+            guard watch.misses >= Self.studioMissLimit,
+                  let switches, switches.machineEnabled,
+                  let studio = switches.studios.first(where: { $0.modality == modality }),
+                  studio.enabled else { return nil }
+            let starting = !watch.answered && now.timeIntervalSince(connectedAt) < Self.studioStartingWindow
+            return StudioTrouble(studio: studio.title, misses: watch.misses, starting: starting)
+        }
+        let lines = [trouble(transcriptionWatch, "transcription"),
+                     trouble(voiceWatch, "voice")].compactMap { $0 }
+        guard connectionID == requestConnection else { return }
+        if lines != studioTrouble { studioTrouble = lines }
+    }
 
     /// Run one file load, and never let a damaged file stop the app.
     ///

@@ -405,6 +405,10 @@ final class FixtureProtocol: URLProtocol {
     /// When true, `/api/hub/model-packages` answers the way the Hub does when one manifest is
     /// malformed: a 503 for the whole route, not a partial list.
     static var packagesUnavailable = false
+    /// How many more availability reads to refuse, per Studio. The footer's line names a Studio
+    /// only after several polls in a row miss, so a blip and a real silence have to be distinguishable.
+    static var transcriptionAvailabilityFailures = 0
+    static var voiceAvailabilityFailures = 0
     /// Remote app-update fixture: the controller's identity, the descriptor it holds, and the
     /// artifact bytes its route returns. `releaseArtifactOverride` exists so a signed descriptor
     /// can be paired with different bytes to exercise the SHA-256 refusal.
@@ -532,6 +536,45 @@ final class FixtureProtocol: URLProtocol {
         lock.lock(); defer { lock.unlock() }; chatJobWithoutStatedTime = value
     }
     static func setPackagesUnavailable(_ value: Bool) { lock.lock(); defer { lock.unlock() }; packagesUnavailable = value }
+    /// Force the next availability reads to fail, one per read, so the footer's "this Studio has
+    /// stopped answering" line can be driven without a real worker. `nil`-style zero is off.
+    static func setAvailabilityFailures(transcription: Int, voice: Int) {
+        lock.lock(); defer { lock.unlock() }
+        transcriptionAvailabilityFailures = transcription
+        voiceAvailabilityFailures = voice
+    }
+    static func takeTranscriptionAvailabilityFailure() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard transcriptionAvailabilityFailures > 0 else { return false }
+        transcriptionAvailabilityFailures -= 1
+        return true
+    }
+    static func takeVoiceAvailabilityFailure() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard voiceAvailabilityFailures > 0 else { return false }
+        voiceAvailabilityFailures -= 1
+        return true
+    }
+    static func setMachineEnabled(_ value: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        workPolicy["machine_enabled"] = value
+    }
+    /// Whether the Hub lists a Studio for a modality, and whether the owner left it on - the two
+    /// facts the footer's line may never invent. Mutated in place, so the fixture's existing rows
+    /// (and the order a save route indexes into) are untouched.
+    static func setStudioEnabled(modality: String, enabled: Bool, listed: Bool = true) {
+        lock.lock(); defer { lock.unlock() }
+        var studios = (workPolicy["studios"] as? [[String: Any]]) ?? []
+        if let index = studios.firstIndex(where: { ($0["modality"] as? String) == modality }) {
+            if listed { studios[index]["enabled"] = enabled } else { studios.remove(at: index) }
+        } else if listed {
+            studios.append([
+                "id": modality == "transcription" ? "subtitle" : modality,
+                "title": modality == "transcription" ? "Subtitle Studio" : "\(modality.capitalized) Studio",
+                "modality": modality, "enabled": enabled])
+        }
+        workPolicy["studios"] = studios
+    }
     static func setRelease(identity: Data?, body: Data?, artifact: Data, override: Data? = nil,
                            trustedPublisher: [String: Any]? = nil) {
         lock.lock(); defer { lock.unlock() }
@@ -1320,12 +1363,18 @@ final class FixtureProtocol: URLProtocol {
             // One Studio frees its model, one is mid-job and must be left alone.
             result = (200, "application/json", Data(#"{"ok":false,"action":"release","selected":2,"succeeded":1,"failed":1,"mode":null,"results":[{"id":"subtitle","ok":true,"result":"released","detail":null},{"id":"voice","ok":false,"result":"busy","detail":"Voice generation or transcription is active; memory was not released"}]}"#.utf8))
         case ("GET", "/studio/voice/api/transcribe/availability"):
-            result = (200, "application/json", Self.transcriptionFixture(on: request.url?.port ?? -1))
+            result = Self.takeTranscriptionAvailabilityFailure()
+                ? (502, "application/json", Data(#"{"detail":"worker request failed"}"#.utf8))
+                : (200, "application/json", Self.transcriptionFixture(on: request.url?.port ?? -1))
         case ("GET", "/studio/transcription/api/transcribe/availability"):
             // The Subtitle studio reads its availability from the subtitle worker, not Voice.
-            result = (200, "application/json", Self.transcriptionFixture(on: request.url?.port ?? -1))
+            result = Self.takeTranscriptionAvailabilityFailure()
+                ? (502, "application/json", Data(#"{"detail":"Subtitle worker request failed"}"#.utf8))
+                : (200, "application/json", Self.transcriptionFixture(on: request.url?.port ?? -1))
         case ("GET", "/studio/voice/api/generate/availability"):
-            result = (200, "application/json", Data(#"{"qwen3_preset_speakers":[{"id":"Ryan","lang":"en","gender":"male","description":"Warm"},{"id":"Aiden","lang":"en","gender":"male","description":"Clear"}],"secondvoice_preset_speakers":[{"id":"Sophea","lang":"km","gender":"female","description":"Clear"},{"id":"Dara","lang":"km","gender":"male","description":"Warm"}]}"#.utf8))
+            result = Self.takeVoiceAvailabilityFailure()
+                ? (502, "application/json", Data(#"{"detail":"Voice worker request failed"}"#.utf8))
+                : (200, "application/json", Data(#"{"qwen3_preset_speakers":[{"id":"Ryan","lang":"en","gender":"male","description":"Warm"},{"id":"Aiden","lang":"en","gender":"male","description":"Clear"}],"secondvoice_preset_speakers":[{"id":"Sophea","lang":"km","gender":"female","description":"Clear"},{"id":"Dara","lang":"km","gender":"male","description":"Warm"}]}"#.utf8))
         case ("GET", "/studio/image/api/loading-mode"):
             // The Image worker's own per-machine loading-size setting, reached through the Hub's
             // generic studio proxy exactly like its other routes.
@@ -4396,6 +4445,74 @@ struct NativeAPITests {
                 "the model list must recover once the Hub answers again")
         require(store.models.count == modelsBeforePackageFailure,
                 "recovering must not duplicate or drop models")
+
+        // **A Studio that stops answering is a line in the sidebar footer, not the banner.**
+        //
+        // Owner, 2026-10-28: "what is it and should we get rid of it. or make it disappear or sth?
+        // or can we have it like in a notification icon somewhere instead?" The old sentence said
+        // "A studio did not answer", named nothing, appeared for Studios this Mac was not even
+        // serving, and - because nothing ever cleared `startupNote` - stayed on screen for ever
+        // after a single missed poll. Four facts are pinned here.
+        let backupSentence = "A studio did not answer"
+        FixtureProtocol.setMachineEnabled(true)
+        FixtureProtocol.setStudioEnabled(modality: "voice", enabled: true)
+        FixtureProtocol.setStudioEnabled(modality: "transcription", enabled: false)
+        store.clearStartupNote()
+
+        // 1. One missed poll is a blip - a worker restarting, or a read that left while the Hub was
+        // busy with a batch - and must show nothing at all.
+        FixtureProtocol.setAvailabilityFailures(transcription: 1, voice: 1)
+        await store.refresh()
+        require(store.studioTrouble.isEmpty,
+                "one missed poll is a blip and must show nothing, got: \(store.studioTrouble)")
+        require(store.startupNote?.contains(backupSentence) != true,
+                "a missed availability read must never reach the banner, got: \(store.startupNote ?? "nil")")
+
+        // 2. A Studio the owner switched OFF is *supposed* to be quiet: it may never raise the line,
+        // however long it stays silent. This is the case that made the banner appear on a healthy Mac.
+        FixtureProtocol.setAvailabilityFailures(transcription: 40, voice: 0)
+        for _ in 0..<4 { await store.refresh() }
+        require(store.studioTrouble.isEmpty,
+                "a Studio the owner switched off must never raise the line, got: \(store.studioTrouble)")
+        FixtureProtocol.setAvailabilityFailures(transcription: 0, voice: 0)
+        await store.refresh()
+
+        // 3. A Mac whose work is paused is serving nothing, so a silent Studio is not news either.
+        FixtureProtocol.setMachineEnabled(false)
+        FixtureProtocol.setAvailabilityFailures(transcription: 0, voice: 40)
+        for _ in 0..<4 { await store.refresh() }
+        require(store.studioTrouble.isEmpty,
+                "a paused Mac must not report a Studio down, got: \(store.studioTrouble)")
+        FixtureProtocol.setAvailabilityFailures(transcription: 0, voice: 0)
+        FixtureProtocol.setMachineEnabled(true)
+        await store.refresh()
+
+        // 4. A real silence on a Studio this Mac is meant to serve names the Studio, in the footer,
+        // and never in the banner.
+        FixtureProtocol.setAvailabilityFailures(transcription: 0, voice: 40)
+        for _ in 0..<3 { await store.refresh() }
+        require(store.studioTrouble.count == 1,
+                "one Studio down is one line, got: \(store.studioTrouble)")
+        require(store.studioTrouble.first?.studio == "Voice Studio",
+                "the line must name the Studio by the Hub's own title, got: \(store.studioTrouble.first?.studio ?? "nil")")
+        require(store.studioTrouble.first?.headline.contains("Voice") == true,
+                "the short line must name the Studio, got: \(store.studioTrouble.first?.headline ?? "nil")")
+        require(store.studioTrouble.first?.detail.contains("clears itself") == true,
+                "the detail must say the line clears itself, got: \(store.studioTrouble.first?.detail ?? "nil")")
+        require(store.startupNote?.contains(backupSentence) != true,
+                "the Studio line belongs in the footer, never in the banner, got: \(store.startupNote ?? "nil")")
+
+        // 5. It clears itself the moment the Studio answers - no Dismiss, no reload.
+        FixtureProtocol.setAvailabilityFailures(transcription: 0, voice: 0)
+        await store.refresh()
+        require(store.studioTrouble.isEmpty,
+                "the line must clear itself as soon as the Studio answers, got: \(store.studioTrouble)")
+
+        // The fixture is restored so every later check reads the same Hub it was written against.
+        FixtureProtocol.setMachineEnabled(false)
+        FixtureProtocol.setStudioEnabled(modality: "voice", enabled: true)
+        FixtureProtocol.setStudioEnabled(modality: "transcription", enabled: false)
+        await store.refresh()
 
         let supportedAudio = store.models.filter { $0.function == .audio && $0.supported }
         let supportedSTT = store.models.filter { $0.function == .transcription && $0.supported }
