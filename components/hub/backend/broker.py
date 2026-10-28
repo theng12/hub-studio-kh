@@ -900,9 +900,10 @@ def _wait_for_faster_mac(batch: dict, item: dict, studio: dict) -> bool:
         if machine == here or (other["id"] not in _busy and machine not in leased):
             continue
         # The *saved* order: this asks whether the owner put another function above this one on
-        # that Mac, which is what makes waiting for it worthwhile. The read-time render default
-        # is an arbitration rule, not a preference the owner stated, so it is not read here.
-        order = _saved_priority_order(machine)
+        # that Mac, which is what makes waiting for it worthwhile. The read-time render default is
+        # an arbitration rule, not a preference the owner stated, so it is not read here - and
+        # `priority_order` is the function a caller may override to say what a Mac saved.
+        order = priority_order(machine)
         if order and order[0] != modality:
             continue
         own = seconds(machine)
@@ -1056,13 +1057,14 @@ def _is_local_machine(machine: str) -> bool:
                for s in _monitor().registry)
 
 
-def _saved_priority_order(machine: str) -> list[str]:
+def priority_order(machine: str) -> list[str]:
     """One Mac's saved order, exactly as stored — no read-time default applied.
 
-    `work_policy` displays this and `chat_priority` projects it (through `priority_order`, which
-    is this function); arbitration reads `ranked_priority_order`, which adds the read-time render
-    default. Keeping the two apart is what lets render be rankable without rewriting a single
-    stored order (owner, 2026-10-28).
+    This is the function the work-policy API, the fleet rows, the compatibility projections and
+    `_wait_for_faster_mac` read, so it keeps the meaning it has always had: what the owner saved,
+    nothing more. Arbitration reads `ranked_priority_order` below, which adds final render's
+    read-time default. Keeping the two apart is what lets render be rankable without rewriting a
+    single stored order (owner, 2026-10-28).
     """
     from . import registry
     if _is_local_machine(machine):
@@ -1071,16 +1073,6 @@ def _saved_priority_order(machine: str) -> list[str]:
     if "priority_order" in snapshot:
         return registry.normalize_priority_order(snapshot.get("priority_order"))
     return ["chat"] if snapshot.get("chat_priority") is True else []
-
-
-def priority_order(machine: str) -> list[str]:
-    """One Mac's saved order, exactly as stored — no read-time default applied.
-
-    This is the function the work-policy API, the fleet rows and the compatibility projections
-    read, so it keeps the meaning it has always had: what the owner saved, nothing more.
-    Arbitration reads `ranked_priority_order` below, which adds final render's read-time default.
-    """
-    return _saved_priority_order(machine)
 
 
 def ranked_priority_order(machine: str) -> list[str]:
@@ -1281,7 +1273,7 @@ def chat_priority_enabled(machine: str) -> bool:
     render first on every Mac that never mentioned render, and this compatibility flag would then
     answer False on all of them (owner, 2026-10-28).
     """
-    order = _saved_priority_order(machine)
+    order = priority_order(machine)
     return bool(order and order[0] == "chat")
 
 
