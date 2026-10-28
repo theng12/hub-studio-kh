@@ -266,6 +266,10 @@ def validate_manifest(manifest):
         raise PackageError(
             f"Manifest {manifest.get('package_id')!r} has a non-boolean 'production_allowed': "
             f"{manifest['production_allowed']!r}")
+    if 'vision' in manifest and type(manifest['vision']) is not bool:
+        raise PackageError(
+            f"Manifest {manifest.get('package_id')!r} has a non-boolean 'vision': "
+            f"{manifest['vision']!r}")
     if not re.fullmatch(r'[0-9a-f]{40}', str(manifest.get('revision', ''))):
         raise PackageError('A full immutable model revision is required')
     # Name the engine that has no worker, and both files that carry the vocabulary. A bare
