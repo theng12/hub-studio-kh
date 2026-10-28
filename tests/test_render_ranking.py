@@ -138,6 +138,12 @@ class VocabularyTests(unittest.TestCase):
     def test_the_plain_name_is_owned_by_one_place(self) -> None:
         self.assertEqual(vocabulary.PRIORITY_TITLES[vocabulary.RENDER_MODALITY], "Final render")
 
+    def test_there_is_one_named_default_order(self) -> None:
+        """One constant in the vocabulary owns the default order `with_render_default` applies."""
+        self.assertEqual(vocabulary.DEFAULT_PRIORITY_ORDER, (vocabulary.RENDER_MODALITY,))
+        self.assertEqual(registry.with_render_default(["chat"]),
+                         [*vocabulary.DEFAULT_PRIORITY_ORDER, "chat"])
+
 
 class RankingTests(Fixture):
     async def test_a_saved_order_that_names_render_is_authoritative(self) -> None:
@@ -427,6 +433,124 @@ class WorkPolicyTests(Fixture):
                 operator_controls.save_work_policy(self.monitor, {
                     "priority_order": ["chat", "music"]})
         self.assertEqual(caught.exception.status_code, 400)
+
+
+class FunctionSwitchTests(Fixture):
+    """Per-kind on/off switch in the work order, ON by default, for every function including render.
+
+    Owner, 2026-10-28: "each generation should actually have a cross to switch them on or off.
+    but defaults to on."
+    """
+
+    def test_every_function_defaults_to_on_with_nothing_stored(self) -> None:
+        for kind in vocabulary.PRIORITY_MODALITIES:
+            self.assertTrue(registry.function_enabled("local", kind),
+                            f"{kind} must default to on")
+            self.assertTrue(broker.function_enabled("local", kind))
+        self.assertEqual(registry.function_switches("local"), {})
+
+    def test_absent_and_malformed_values_read_as_on(self) -> None:
+        """Strict reader: only a real boolean `false` turns a function off."""
+        path = Path(self.data.name) / "machine_flags.json"
+        for bad in (0, 1, "false", "no", None, [], {}, {"chat": 0, "image": "false", "render": None}):
+            path.write_text(json.dumps({"local": {"function_enabled": bad}}))
+            registry._flags_cache = None
+            for kind in ("chat", "image", "render"):
+                self.assertTrue(registry.function_enabled("local", kind),
+                                f"{bad!r} must read as on for {kind}")
+        path.write_text(json.dumps({"local": {"function_enabled": {"chat": False, "image": 0}}}))
+        registry._flags_cache = None
+        self.assertFalse(registry.function_enabled("local", "chat"))
+        self.assertTrue(registry.function_enabled("local", "image"),
+                        "a non-boolean sibling is dropped rather than read as off")
+
+    async def test_a_switched_off_function_is_skipped_by_arbitration_and_lease(self) -> None:
+        """Rank decides *when*; the switch decides *whether*."""
+        self.executor()
+        registry.set_priority_order("local", ["chat", "render", "transcription"])
+        registry.set_function_enabled("local", "chat", False)
+        # Chat is still ranked first, and has work waiting, and is skipped because it is off:
+        # render (ranked second) wins instead.
+        self.assertEqual((await self.winner(lanes=("chat", "transcription")))[3], "render")
+        self.assertFalse(broker.acquire_external_machine("local", "chat:b:0"),
+                         "a switched-off lane cannot take the Mac's lease either")
+        self.assertFalse(broker.acquire_external_machine("local", "direct-chat:abc"))
+        self.assertFalse(broker.acquire_external_machine("local", "relay:chat:abc"))
+        # Turning it back on restores its first-place rank, because the order never moved.
+        registry.set_function_enabled("local", "chat", True)
+        self.assertEqual((await self.winner(lanes=("chat", "transcription")))[3], "chat")
+
+    async def test_switching_render_off_skips_it_and_stops_reserving_the_mac(self) -> None:
+        self.executor()
+        registry.set_priority_order("local", ["render", "chat"])
+        registry.set_function_enabled("local", "render", False)
+        self.assertEqual((await self.winner(lanes=("chat",)))[3], "chat",
+                         "a switched-off render does not win even when ranked first")
+        self.assertFalse(broker.render_dispatch_allowed("local"),
+                         "render's own admission gate refuses it when switched off")
+        self.assertFalse(broker.acquire_external_machine("local", "render:job-a"),
+                         "render cannot take the lease while switched off")
+        self.assertTrue(broker.acquire_external_machine("local", "chat:b:0"),
+                        "a waiting switched-off render no longer holds the Mac against Chat")
+
+    def test_switching_a_broker_modality_off_excludes_its_studio_without_touching_studio_enabled(self) -> None:
+        """The work-order switch and `studio_enabled` stay independent."""
+        self.assertEqual([s["id"] for s in broker._eligible_studios("image", "pool")], ["image"])
+        registry.set_function_enabled("local", "image", False)
+        trace: list[dict] = []
+        self.assertEqual(broker._eligible_studios("image", "pool", trace=trace), [])
+        self.assertEqual(trace[0]["gate"], "function_switched_off")
+        self.assertTrue(registry.studio_enabled("local", "image"),
+                        "the Studio checkbox is untouched")
+        self.assertFalse(broker.acquire_external_machine("local", "peer:image:abc"))
+
+    def test_a_joined_peer_publishes_its_switches_to_the_controller(self) -> None:
+        from components.hub.backend import fleet_nodes, peers
+        self.monitor.registry.append({
+            "id": "image@node-b", "title": "Image", "modality": "image",
+            "machine": "node-b", "local": False,
+        })
+        with mock.patch.object(peers, "cached", return_value={
+                "function_enabled": {"image": False, "voice": "not-a-bool"}}):
+            self.assertFalse(broker.function_enabled("node-b", "image"))
+            self.assertTrue(broker.function_enabled("node-b", "voice"))
+        self.assertEqual(fleet_nodes._function_enabled_of(
+            {"function_enabled": {"render": False, " bogus ": False, "chat": 0}}),
+            {"render": False})
+
+    def test_work_policy_exposes_and_validates_the_switches_while_keeping_rows_and_order(self) -> None:
+        from fastapi import HTTPException
+        from components.hub import operator_controls
+        registry.set_priority_order("local", ["chat", "render", "image"])
+        with mock.patch("components.hub.backend.render_executor.capability",
+                        return_value={"physical_machine_id": "local"}), \
+                mock.patch.object(operator_controls, "_wake_dispatchers"):
+            initial = operator_controls.work_policy(self.monitor)
+            self.assertTrue(all(row["enabled"] is True for row in initial["priority_functions"]))
+            saved = operator_controls.save_work_policy(
+                self.monitor, {"function_enabled": {"render": False, "image": False}})
+            by_id = {row["id"]: row["enabled"] for row in saved["priority_functions"]}
+            self.assertEqual(by_id["render"], False)
+            self.assertEqual(by_id["image"], False)
+            self.assertEqual(by_id["chat"], True)
+            # Still in the list, and the saved order and Studio checkboxes are untouched.
+            self.assertIn("render", by_id)
+            self.assertIn("image", by_id)
+            self.assertEqual(saved["priority_order"], ["chat", "render", "image"])
+            self.assertTrue(all(row["enabled"] is True for row in saved["studios"]))
+            for bad in ({"function_enabled": {}},
+                        {"function_enabled": "chat"},
+                        {"function_enabled": {"music": False}},
+                        {"function_enabled": {"chat": 0}},
+                        {"function_enabled": {"chat": "false"}}):
+                with self.assertRaises(HTTPException) as caught:
+                    operator_controls.save_work_policy(self.monitor, bad)
+                self.assertEqual(caught.exception.status_code, 400, f"{bad!r} must be refused")
+            # A refused batch leaves the earlier switches standing.
+            with self.assertRaises(HTTPException):
+                operator_controls.save_work_policy(
+                    self.monitor, {"function_enabled": {"chat": False, "music": False}})
+            self.assertTrue(registry.function_enabled("local", "chat"))
 
 
 def sqlite3_error() -> Exception:

@@ -1473,6 +1473,25 @@ struct NativeWorkPolicy: Decodable, Equatable {
     struct Function: Decodable, Equatable, Identifiable {
         let id: String
         let title: String
+        /// **One on/off switch per function, ON by default** (owner, 2026-10-28: "each generation
+        /// should actually have a cross to switch them on or off. but defaults to on."). Absent on
+        /// an older Hub, which then reads as on.
+        let enabled: Bool
+
+        private enum CodingKeys: String, CodingKey { case id, title, enabled }
+
+        init(id: String, title: String, enabled: Bool = true) {
+            self.id = id
+            self.title = title
+            self.enabled = enabled
+        }
+
+        init(from decoder: Decoder) throws {
+            let fields = try decoder.container(keyedBy: CodingKeys.self)
+            id = try fields.decode(String.self, forKey: .id)
+            title = try fields.decode(String.self, forKey: .title)
+            enabled = (try? fields.decodeIfPresent(Bool.self, forKey: .enabled)) ?? true
+        }
     }
     struct Studio: Decodable, Equatable, Identifiable {
         let id: String
@@ -6578,6 +6597,30 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch {
             if connectionID == requestConnection {
                 workPolicyNote = Self.actionable(error, action: "Save job priority")
+            }
+            return false
+        }
+    }
+
+    func saveWorkFunction(_ functionID: String, enabled: Bool) async -> Bool {
+        guard let requestConnection = connectionID, isReachable,
+              workPolicy?.priorityFunctions.contains(where: { $0.id == functionID }) == true,
+              !savingWorkPolicy else { return false }
+        savingWorkPolicy = true
+        workPolicyRevision += 1
+        workPolicyNote = nil
+        workPolicyReadFailed = false
+        defer { if connectionID == requestConnection { savingWorkPolicy = false } }
+        do {
+            let answer: NativeWorkPolicy = try await sendJSON(
+                ["api", "hub", "work-policy"], method: "POST",
+                body: ["function_enabled": [functionID: enabled]])
+            guard connectionID == requestConnection else { return false }
+            workPolicy = answer
+            return true
+        } catch {
+            if connectionID == requestConnection {
+                workPolicyNote = Self.actionable(error, action: "Save work choice")
             }
             return false
         }

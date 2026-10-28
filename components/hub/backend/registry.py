@@ -90,7 +90,7 @@ def priority_order(machine: str) -> list[str]:
 
 
 def with_render_default(order: list[str]) -> list[str]:
-    """One saved order with `render`'s read-time default applied — to a **non-empty** order.
+    """One saved order with `vocabulary.DEFAULT_PRIORITY_ORDER` applied — to a **non-empty** order.
 
     The single place that rule is written. A joined peer's order arrives as a list rather than
     from this Mac's flags (`broker.priority_order`), and it must read the same way.
@@ -104,10 +104,11 @@ def with_render_default(order: list[str]) -> list[str]:
     default is for: its old behaviour was render first (`broker._pending_render_for_machine`
     reserved the Mac for it), so it keeps that behaviour without anything being rewritten.
     """
-    from .vocabulary import RENDER_MODALITY
-    if not order or RENDER_MODALITY in order:
+    from .vocabulary import DEFAULT_PRIORITY_ORDER
+    missing = [kind for kind in DEFAULT_PRIORITY_ORDER if kind not in order]
+    if not order or not missing:
         return list(order)
-    return [RENDER_MODALITY, *order]
+    return [*missing, *order]
 
 
 def chat_priority(machine: str) -> bool:
@@ -152,6 +153,57 @@ def set_priority_order(machine: str, order: list[str]) -> None:
 def set_chat_priority(machine: str, enabled: bool) -> None:
     """Legacy bool-only write adapter."""
     set_priority_order(machine, ["chat"] if enabled else [])
+
+
+# **One on/off switch per function, ON by default** (owner, 2026-10-28: "each generation should
+# actually have a cross to switch them on or off. but defaults to on.").
+#
+# Stored per Mac beside `priority_order`, as `{kind: bool}` under one key. It says whether this Mac
+# takes that kind of work at all — a rank decides *when*, this decides *whether* — and it is not the
+# per-Studio switch (`studio_enabled`, the Studios list): a Studio row is a worker's own pause, this
+# is the work order's own list, and they answer different questions.
+#
+# **Absent = on, and only a real boolean `false` is off.** Every existing `machine_flags.json` row,
+# every Mac that never opened this control, and a hand-edited or half-written value all keep taking
+# work exactly as they did, and a malformed row can only ever keep the safe (previous) answer.
+FUNCTION_ENABLED_KEY = "function_enabled"
+
+
+def normalize_function_enabled(value: object) -> dict[str, bool]:
+    """One saved switch map, cut to real booleans on real rankable functions."""
+    if not isinstance(value, dict):
+        return {}
+    from .vocabulary import PRIORITY_MODALITIES
+    return {kind: on for kind, on in value.items()
+            if isinstance(kind, str) and kind in PRIORITY_MODALITIES and type(on) is bool}
+
+
+def function_switches(machine: str) -> dict[str, bool]:
+    """This Mac's saved switches, exactly as stored (nothing filled in)."""
+    row = load_flags().get(machine, {})
+    return normalize_function_enabled(row.get(FUNCTION_ENABLED_KEY)) if isinstance(row, dict) else {}
+
+
+def function_enabled(machine: str, kind: str) -> bool:
+    """Whether this Mac takes `kind` at all. Absent, malformed or non-boolean reads as ON."""
+    return function_switches(machine).get(kind) is not False
+
+
+def set_function_enabled(machine: str, kind: str, enabled: bool) -> None:
+    """Record the owner's switch for one function on one Mac (the same atomic write as the rest)."""
+    from .vocabulary import PRIORITY_MODALITIES
+    if kind not in PRIORITY_MODALITIES:
+        raise ValueError("function must be a rankable function")
+    if type(enabled) is not bool:
+        raise ValueError("enabled must be true or false")
+    flags = dict(load_flags())
+    saved = flags.get(machine, {})
+    row = dict(saved) if isinstance(saved, dict) else {}
+    switches = normalize_function_enabled(row.get(FUNCTION_ENABLED_KEY))
+    switches[kind] = enabled
+    row[FUNCTION_ENABLED_KEY] = switches
+    flags[machine] = row
+    _write_flags(flags)
 
 
 # **Render while paused — the owner's per-Mac exemption (owner, 2026-10-28).**

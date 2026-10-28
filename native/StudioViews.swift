@@ -870,7 +870,12 @@ private struct WorkPolicySettings: View {
                             Text(policy.priorityOrder.contains(function.id) ? "\(index + 1)." : "Equal")
                                 .font(HubType.secondary).foregroundStyle(.secondary)
                                 .frame(width: 44, alignment: .leading)
-                            Text(function.title).fixedSize(horizontal: false, vertical: true)
+                            Toggle(function.title, isOn: Binding(
+                                get: { function.enabled },
+                                set: { enabled in Task { _ = await workspace.saveWorkFunction(function.id, enabled: enabled) } }))
+                                .toggleStyle(.checkbox)
+                                .foregroundStyle(function.enabled ? .primary : .secondary)
+                                .accessibilityHint("Accept \(function.title) on this Mac")
                             Spacer(minLength: HubSpace.s)
                             Button {
                                 if let order = policy.priorityOrder(moving: function.id, by: -1) {
@@ -888,6 +893,11 @@ private struct WorkPolicySettings: View {
                                 .disabled(index == policy.enabledPriorityFunctions.count - 1)
                                 .accessibilityLabel("Move \(function.title) down")
                                 .help("Move \(function.title) down")
+                            Button {
+                                Task { _ = await workspace.saveWorkFunction(function.id, enabled: !function.enabled) }
+                            } label: { Image(systemName: function.enabled ? "xmark" : "plus") }
+                                .accessibilityLabel(function.enabled ? "Switch \(function.title) off" : "Switch \(function.title) on")
+                                .help(function.enabled ? "Switch \(function.title) off on this Mac" : "Switch \(function.title) on on this Mac")
                         }
                         .buttonStyle(.bordered).controlSize(.small)
                     }

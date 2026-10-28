@@ -64,6 +64,17 @@ PRIORITY_MODALITIES = NODE_MODALITIES | {RENDER_MODALITY}
 # capitalising the id into "Render".
 PRIORITY_TITLES: dict[str, str] = {RENDER_MODALITY: "Final render"}
 
+# **The one default order** (owner, 2026-10-28: "we shouldn't have a hardcode but instead a
+# default one ... arrange-able to match what we wanted").
+#
+# It is what a saved order that names none of these reads for them, and it is written **once**,
+# here — `registry.with_render_default` is the only reader, and the lease rule reads the same
+# tuple instead of repeating `True`. Today it holds the one behaviour render had before it was
+# rankable: a Mac whose saved order does not mention it ranked it first. An empty saved order is
+# *not* given this default (see `with_render_default`): "no preference" is a deliberate state
+# where every enabled function is equal, and it is also every Mac that never saved anything.
+DEFAULT_PRIORITY_ORDER: tuple[str, ...] = (RENDER_MODALITY,)
+
 # The worker ids the packaged Hub must find, derived as the inverse of the same table.
 REQUIRED_WORKERS = {
     worker: modality for modality, worker in WORKER_FOR_MODALITY.items()

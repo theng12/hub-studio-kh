@@ -315,7 +315,7 @@ _CHECKIN_KEYS = ("last_checkin_at", "checkin_version", "checkin_workstation",
 #: dispatch decision actually use travel — the same rule `_current_job_of` and `_workstation_of`
 #: already follow.
 _RESOURCE_KEYS = ("host", "studios", "version", "startup", "current_job", "last_stop",
-                  "workstation", "priority_order", "chat_priority", "source")
+                  "workstation", "priority_order", "chat_priority", "function_enabled", "source")
 
 
 def _resources_of(value: object, node_id: str) -> dict[str, Any] | None:
@@ -1335,6 +1335,17 @@ def _priority_order_of(snapshot: dict[str, Any]) -> list[str]:
     return ["chat"] if snapshot.get("chat_priority") is True else []
 
 
+def _function_enabled_of(snapshot: dict[str, Any]) -> dict[str, bool]:
+    """A node's own work-order switches, cut to real booleans on real functions.
+
+    Beside `priority_order` because it is the other half of the same Mac's work order (owner,
+    2026-10-28): the order says *when*, this says *whether*. A node that never published it (an
+    older Hub) contributes nothing, and every kind therefore reads as ON, which is what that
+    build does.
+    """
+    return registry.normalize_function_enabled(snapshot.get(registry.FUNCTION_ENABLED_KEY))
+
+
 def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     """A probe result derived from a peer poll's snapshot.
 
@@ -1352,6 +1363,7 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
                "workstation": _workstation_of(snapshot.get("workstation")),
                "priority_order": order,
                "chat_priority": bool(order and order[0] == "chat"),
+               "function_enabled": _function_enabled_of(snapshot),
                "preferred_work": (snapshot.get("preferred_work")
                                   if isinstance(snapshot.get("preferred_work"), dict) else None),
                "preferred_hold_remaining_s": (
@@ -1616,7 +1628,8 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
                 "last_stop": last_stop_of(body.get("last_stop")) or _last_known_stop(row),
                 "workstation": _workstation_of(body.get("workstation")),
                 "priority_order": order,
-                "chat_priority": bool(order and order[0] == "chat")}
+                "chat_priority": bool(order and order[0] == "chat"),
+                "function_enabled": _function_enabled_of(body)}
     except (httpx.HTTPError, OSError) as exc:
         # **A Mac this controller cannot dial is not a Mac that is gone.** Sharing a Tailscale node
         # works one way, so three Shops Macs could never be dialled at all — while each of them
@@ -1857,6 +1870,8 @@ def _member(row: dict[str, Any], *, role: str) -> dict[str, Any]:
         "workstation": row.get("workstation") if isinstance(row.get("workstation"), dict) else None,
         "priority_order": order,
         "chat_priority": bool(order and order[0] == "chat"),
+        # The other half of that Mac's work order: the kinds it switched off (owner, 2026-10-28).
+        "function_enabled": _function_enabled_of(row),
         # The Mac's own idle-hold preference and remaining window, carried from its snapshot.
         # None/0.0 from an older Hub, which then arbitrates exactly as before.
         "preferred_work": row.get("preferred_work") if isinstance(row.get("preferred_work"), dict) else None,

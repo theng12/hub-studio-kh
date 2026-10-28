@@ -37,7 +37,7 @@ with TestClient(app) as client:
  assert answer.json()['chat_priority'] is False
  assert answer.json()['priority_order']==[]
  assert answer.json()['priority_functions']==[
-  {'id':'chat','title':'Chat'}, {'id':'voice','title':'Voice'}]
+  {'id':'chat','title':'Chat','enabled':True}, {'id':'voice','title':'Voice','enabled':True}]
  assert [s['id'] for s in answer.json()['studios']]==['chat','voice']
  registry.set_studio_enabled('local','voice',False)
  assert client.post('/api/hub/work-policy',json={'chat_priority':True}).status_code==200

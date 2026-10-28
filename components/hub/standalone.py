@@ -1758,7 +1758,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 # Workstation mode: whether this Mac takes new work right now, and why not.
                 "workstation": workstation.status(),
                 "priority_order": registry_view.priority_order("local"),
-                "chat_priority": registry_view.chat_priority("local")}
+                "chat_priority": registry_view.chat_priority("local"),
+                "function_enabled": registry_view.function_switches("local")}
         # The Mac's own idle-hold truth, read by its controller for group arbitration: the saved
         # preference and the bounded remaining window. An older reader ignores both fields.
         if _policy_pref:
@@ -2017,6 +2018,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 }
                 row["priority_order"] = registry_view.priority_order("local")
                 row["chat_priority"] = registry_view.chat_priority("local")
+                row["function_enabled"] = registry_view.function_switches("local")
                 row["assigned_image_model"] = registry_view.assigned_image_model("local")
             else:
                 snapshot = peers.cached(machine) or {}
@@ -2067,6 +2069,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 )
                 row["priority_order"] = remote_order
                 row["chat_priority"] = bool(remote_order and remote_order[0] == "chat")
+                switches_source = member if isinstance(member, dict) and (
+                    "function_enabled" in member) else snapshot
+                row["function_enabled"] = fleet._function_enabled_of(switches_source)
                 # Kept on this controller, which is the one that dispatches (registry flags).
                 row["assigned_image_model"] = registry_view.assigned_image_model(machine)
             stats = measured.get(machine) or {}
@@ -2125,6 +2130,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "priority_order": fleet._priority_order_of(member),
                 "chat_priority": bool(fleet._priority_order_of(member)
                                       and fleet._priority_order_of(member)[0] == "chat"),
+                "function_enabled": fleet._function_enabled_of(member),
                 "memory_gb": host.get("total_gb"), "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"), "disk": host.get("disk"),

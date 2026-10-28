@@ -1057,6 +1057,27 @@ def _is_local_machine(machine: str) -> bool:
                for s in _monitor().registry)
 
 
+def function_enabled(machine: str, modality: str) -> bool:
+    """Whether this Mac takes ``modality`` at all — its work order's own on/off switch.
+
+    **Rank decides *when*; this decides *whether*** (owner, 2026-10-28: "each generation should
+    actually have a cross to switch them on or off. but defaults to on."). A switched-off kind is
+    not taken by that Mac at all: not scheduled (`next_work`), not offered a Studio row
+    (`_eligible_studios`), and not leased by any lane (`acquire_external_machine`).
+
+    Read where it is owned: this Mac's own registry for a Mac this Hub runs, and the switch map a
+    joined Mac publishes on its peer snapshot for one it does not. Absent, malformed or a
+    non-boolean value reads as ON in both places — every Mac that never opened the control, and
+    every Hub old enough not to publish it, takes work exactly as it did before.
+    """
+    from . import registry
+    if _is_local_machine(machine):
+        return registry.function_enabled("local", modality)
+    snapshot = peers.cached(machine) or {}
+    return (registry.normalize_function_enabled(snapshot.get(registry.FUNCTION_ENABLED_KEY))
+            .get(modality) is not False)
+
+
 def priority_order(machine: str) -> list[str]:
     """One Mac's saved order, exactly as stored — no read-time default applied.
 
@@ -1327,6 +1348,11 @@ async def next_work(machine: str) -> tuple[int, float, str, str] | None:
     if render is not None:
         candidates.append((*_priority_key(
             machine, "render", render[0], f"render:{render[1]}"), "render"))
+    # **A kind switched off is not a candidate at all** (owner, 2026-10-28), whichever lane it
+    # came from — broker, direct Chat, either queue or render. This is the scheduler half; the
+    # lease half is `acquire_external_machine`, so a lane cannot slip past this by asking first.
+    candidates = [candidate for candidate in candidates
+                  if function_enabled(machine, candidate[3])]
     policy = preferred_policy(machine)
     if policy:
         preferred = [c for c in candidates if c[3] == policy["modality"]]
@@ -1767,7 +1793,9 @@ def render_dispatch_allowed(machine: str, owner: str | None = None) -> bool:
     not a quarantine. Off by default, so a Mac that never sets it behaves as it always has.
     """
     from . import registry
-    if (not machine_enabled(machine) and not registry.render_while_paused(machine)
+    from .vocabulary import RENDER_MODALITY
+    if (not registry.function_enabled(machine, RENDER_MODALITY)
+            or (not machine_enabled(machine) and not registry.render_while_paused(machine))
             or not studio_enabled(machine, "hub-final-render")
             or "hub-final-render" in _maintenance
             or _machine_blocked(machine)
@@ -2535,7 +2563,7 @@ def render_wins_next_free(machine: str, lane: str) -> bool:
     render now gives the free moment to Chat. A Mac whose saved order does not mention render
     still reads render first (`registry.with_render_default`), so nothing changes for it.
     """
-    from .vocabulary import RENDER_MODALITY
+    from .vocabulary import DEFAULT_PRIORITY_ORDER, RENDER_MODALITY
     if lane == RENDER_MODALITY:
         return False   # the render lane itself is the one being let in
     if not _pending_render_for_machine(machine):
@@ -2547,8 +2575,9 @@ def render_wins_next_free(machine: str, lane: str) -> bool:
     # the next free moment for a waiting render (`tests/test_render_physical_admission.py` pins
     # it). Both facts are today's behaviour, and the owner asked for today's behaviour unchanged
     # where the saved order does not mention render - so nothing moves here for an empty order.
+    # Read from the one default order, not a bare `True`: the default is not repeated here.
     if not order:
-        return True
+        return RENDER_MODALITY in DEFAULT_PRIORITY_ORDER
     # A lane the order does not name sorts behind every function it does name, and render is named
     # here for every non-empty order (`ranked_priority_order` supplies the read-time default), so
     # an unlisted lane has render ahead of it.
@@ -2561,10 +2590,17 @@ def acquire_external_machine(machine: str, owner: str) -> bool:
     Never interrupts a running job. Between two waiting functions it is the Mac's ranked order
     that decides, which is why a waiting render only wins the next free moment where the order
     actually puts it above the lane asking (`render_wins_next_free`).
+
+    **A lane whose kind this Mac switched off never gets the lease** (owner, 2026-10-28): the
+    switch decides *whether*, the rank decides *when*, and a lane that may not run here at all
+    cannot take the Mac for a moment either.
     """
+    lane = lease_lane(owner)
+    if lane and not function_enabled(machine, lane):
+        return False
     if machine in busy_machines():
         return False
-    if render_wins_next_free(machine, lease_lane(owner)):
+    if render_wins_next_free(machine, lane):
         return False
     _external_machine_leases[machine] = owner
     _wakeup.set()
@@ -2602,6 +2638,11 @@ def note_external_memory_block(machine: str, lane: str) -> None:
 
 
 def _pending_render_for_machine(machine: str) -> bool:
+    from .vocabulary import RENDER_MODALITY
+    # A Mac that switched final render off in its own work order has no pending render, so a
+    # waiting one neither reserves its next free moment nor outranks another lane there.
+    if not function_enabled(machine, RENDER_MODALITY):
+        return False
     if (_render_executor is not None
             and _render_executor.pending_for_machine(machine)):
         return True
@@ -4494,6 +4535,7 @@ _DISPATCH_TRACE_GATES = frozenset({
     "catalog_missing",
     "execution_lease_expired",
     "faster_machine_preferred",
+    "function_switched_off",
     "higher_priority_work",
     "item_no_longer_queued",
     "item_temporarily_ineligible",
@@ -4643,6 +4685,13 @@ def _eligible_studios(modality: str, routing: str,
         if not machine_enabled(s.get("machine", "local")):
             if trace is not None:
                 _record_dispatch_gate(trace, s, "machine_disabled")
+            continue
+        # **The work order's own on/off switch** (owner, 2026-10-28): a kind this Mac switched off
+        # is not taken by it, whatever its rank. It is not the Studio's own pause above — that one
+        # hides a worker, this one drops the kind from the order — and both still apply.
+        if not function_enabled(machine, s["modality"]):
+            if trace is not None:
+                _record_dispatch_gate(trace, s, "function_switched_off")
             continue
         # App-specific pauses are scheduler-only: current work finishes and the
         # Studio remains online for monitoring, lifecycle control, and updates.

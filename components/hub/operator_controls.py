@@ -44,6 +44,11 @@ def work_policy(monitor) -> dict:
         functions.append({"id": vocabulary.RENDER_MODALITY,
                           "title": vocabulary.PRIORITY_TITLES[vocabulary.RENDER_MODALITY]})
         seen.add(vocabulary.RENDER_MODALITY)
+    # **Every listed function carries its own on/off switch** (owner, 2026-10-28), ON unless the
+    # owner turned that kind off for this Mac. A switched-off function still appears here — it is in
+    # the list precisely so its switch can be found and turned back on.
+    for row in functions:
+        row["enabled"] = registry.function_enabled("local", row["id"])
     order = registry.priority_order("local")
     saved = registry.preferred_work("local")
     hold = registry.preferred_hold("local")
@@ -93,6 +98,24 @@ def _validate_priority_order(monitor, order: object) -> list[str]:
     return order
 
 
+def _validate_function_enabled(monitor, value: object) -> dict[str, bool]:
+    """The validated on/off switch map, or HTTP 400 (owner, 2026-10-28).
+
+    Whole-body: a mapping of function id to a real boolean, every id one this Mac actually lists.
+    Nothing is filled in — an omitted function keeps its saved answer, which for one that was never
+    switched is ON.
+    """
+    if not isinstance(value, dict) or not value:
+        raise HTTPException(400, "function_enabled must be an object of function: true or false")
+    allowed = {row["id"] for row in work_policy(monitor)["priority_functions"]}
+    for kind, on in value.items():
+        if kind not in allowed:
+            raise HTTPException(400, "function_enabled must name a function this Mac serves")
+        if type(on) is not bool:
+            raise HTTPException(400, "function_enabled values must be true or false")
+    return dict(value)
+
+
 def save_work_policy(monitor, body: dict) -> dict:
     if set(body) == {"chat_priority"} and isinstance(body.get("chat_priority"), bool):
         order = ["chat"] if body["chat_priority"] else []
@@ -100,6 +123,10 @@ def save_work_policy(monitor, body: dict) -> dict:
     elif set(body) == {"priority_order"} and isinstance(body.get("priority_order"), list):
         registry.set_priority_order("local", _validate_priority_order(
             monitor, body["priority_order"]))
+    elif set(body) == {"function_enabled"}:
+        # Every pair validates before the first write, so a bad one cannot half-apply a batch.
+        for kind, on in _validate_function_enabled(monitor, body["function_enabled"]).items():
+            registry.set_function_enabled("local", kind, on)
     elif set(body) == {"preferred_work"}:
         _save_preferred_work(body["preferred_work"])
     elif set(body) == {"priority_order", "preferred_work"}:
@@ -114,8 +141,8 @@ def save_work_policy(monitor, body: dict) -> dict:
         _save_preferred_work(payload)
         registry.set_priority_order("local", order)
     else:
-        raise HTTPException(400, "provide only priority_order, preferred_work, both, "
-                                 "or the legacy chat_priority boolean")
+        raise HTTPException(400, "provide only priority_order, function_enabled, preferred_work, "
+                                 "both, or the legacy chat_priority boolean")
     _wake_dispatchers()
     return work_policy(monitor)
 

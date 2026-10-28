@@ -977,10 +977,20 @@ final class FixtureProtocol: URLProtocol {
             let rejects = Self.workPolicyRejects
             if !rejects {
                 if path.hasSuffix("work-policy") {
-                    let order = Self.workPolicyNextReturnedOrder ?? body["priority_order"] as? [String] ?? []
-                    Self.workPolicyNextReturnedOrder = nil
-                    Self.workPolicy["priority_order"] = order
-                    Self.workPolicy["chat_priority"] = order.first == "chat"
+                    if let switches = body["function_enabled"] as? [String: Bool] {
+                        var functions = Self.workPolicy["priority_functions"] as! [[String: Any]]
+                        for index in functions.indices {
+                            if let id = functions[index]["id"] as? String, let on = switches[id] {
+                                functions[index]["enabled"] = on
+                            }
+                        }
+                        Self.workPolicy["priority_functions"] = functions
+                    } else {
+                        let order = Self.workPolicyNextReturnedOrder ?? body["priority_order"] as? [String] ?? []
+                        Self.workPolicyNextReturnedOrder = nil
+                        Self.workPolicy["priority_order"] = order
+                        Self.workPolicy["chat_priority"] = order.first == "chat"
+                    }
                 }
                 else {
                     var studios = Self.workPolicy["studios"] as! [[String: Any]]
@@ -4059,6 +4069,17 @@ struct NativeAPITests {
                 "the Hub's own plain name for render must be shown, not a capitalised id")
         require(renderPolicy.priorityOrder(moving: "render", by: -1) == ["render", "chat"],
                 "render must be movable in the order like any other function")
+        // **One on/off switch per function, ON by default, and a switched-off row stays in the list**
+        // (owner, 2026-10-28: "each generation should actually have a cross to switch them on or
+        // off. but defaults to on."). Absent reads as on; false stays in `enabledPriorityFunctions`
+        // so its switch can be turned back on and its rank is preserved.
+        require(renderPolicy.priorityFunctions.allSatisfy(\.enabled),
+                "a Hub that omits the per-function switch reads as ON for every function")
+        let switchedPolicyJSON = Data(#"{"machine_enabled":false,"priority_order":["chat","render"],"priority_functions":[{"id":"chat","title":"Chat Studio","enabled":true},{"id":"render","title":"Final render","enabled":false}],"studios":[{"id":"chat@local","title":"Chat Studio","modality":"chat","enabled":true}]}"#.utf8)
+        let switchedPolicy = try rankedPolicyDecoder.decode(NativeWorkPolicy.self, from: switchedPolicyJSON)
+        require(switchedPolicy.enabledPriorityFunctions.map(\.id) == ["chat", "render"]
+                && switchedPolicy.enabledPriorityFunctions.last?.enabled == false,
+                "a switched-off function stays in the list with its switch off")
 
         // Local work choices must preserve manual pause and arbitrary registered functions.
         await store.refreshWorkPolicy()
@@ -4089,6 +4110,15 @@ struct NativeAPITests {
                 "a function save must preserve pause and refresh the registry")
         require(Set(FixtureProtocol.workPolicyPosts.last?.keys.map { $0 } ?? []) == ["enabled"],
                 "function POST must contain only that function's enabled flag")
+        let functionSwitched = await store.saveWorkFunction("image", enabled: false)
+        require(functionSwitched
+                && store.workPolicy?.priorityFunctions.first(where: { $0.id == "image" })?.enabled == false
+                && store.workPolicy?.priorityOrder == ["chat", "image", "voice"]
+                && store.workPolicy?.machineEnabled == false,
+                "switching a function off in the work order must keep the saved order and pause intact")
+        require(Set(FixtureProtocol.workPolicyPosts.last?.keys.map { $0 } ?? []) == ["function_enabled"]
+                && (FixtureProtocol.workPolicyPosts.last?["function_enabled"] as? [String: Bool]) == ["image": false],
+                "a work-order switch POST must send only function_enabled for that function")
         FixtureProtocol.mutate { FixtureProtocol.workPolicyRejects = true }
         let priorityRefused = await store.saveWorkPriority([])
         require(!priorityRefused && store.workPolicy?.priorityOrder == ["chat", "image", "voice"] && store.workPolicyNote?.contains("fixture refused") == true,

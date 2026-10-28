@@ -450,6 +450,12 @@ async def _refresh_stale(machines, stale, client, now):
                 "workstation": data.get("workstation") if isinstance(data.get("workstation"), dict) else None,
                 "priority_order": order,
                 "chat_priority": bool(order and order[0] == "chat"),
+                # **The work order's on/off switches, as that Mac saved them** (owner, 2026-10-28).
+                # A controller dispatches to a joined Mac's Studios, so it must know a kind that
+                # Mac switched off or it would keep sending that kind there. Absent from an older
+                # Hub, which then reads as all-on — exactly what that build does.
+                "function_enabled": registry.normalize_function_enabled(
+                    data.get("function_enabled")),
                 # The Mac's own idle-hold preference and its bounded remaining window
                 # (the node owns the clock; only the remaining seconds cross the wire).
                 # Absent (or None) from an older Hub, which then reads as OFF.
