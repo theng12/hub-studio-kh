@@ -297,7 +297,7 @@ def retry_class(modality: object) -> str:
 # Final render is one of the ranked functions (owner, 2026-10-28): it takes its
 # place in the same saved order as every other, through `_priority_key`, and a Mac
 # whose saved order never mentioned it still reads it first
-# (`registry.effective_priority_order`). `render_wins_next_free` applies the same
+# (`registry.with_render_default`). `render_wins_next_free` applies the same
 # rank at the lease, so the two halves of arbitration cannot disagree.
 MAX_TRIES = 3
 MAX_INFRA_TRIES = 8
@@ -1090,13 +1090,14 @@ def ranked_priority_order(machine: str) -> list[str]:
     `acquire_external_machine` used to reserve unconditionally; a Mac that names it in its order
     gets the owner's ranking (owner, 2026-10-28). Nothing stored is rewritten.
 
-    The default itself is applied by `registry.with_render_default`, so the scheduler, the
-    controller's render gate and the work-policy API cannot each answer it differently.
+    It is derived from `priority_order` rather than reading the flags again, and the one written
+    copy of the rule is `registry.with_render_default`. Deriving rather than re-reading matters:
+    arbitration and the API must agree about the *saved* half too, and a caller that overrides
+    `priority_order` (the tests do, for a Mac whose flags they cannot write) must move the
+    scheduler with it.
     """
     from . import registry
-    if _is_local_machine(machine):
-        return registry.effective_priority_order(machine)
-    return registry.with_render_default(_saved_priority_order(machine))
+    return registry.with_render_default(priority_order(machine))
 
 
 def preferred_policy(machine: str) -> dict | None:
@@ -2540,7 +2541,7 @@ def render_wins_next_free(machine: str, lane: str) -> bool:
     Before 2026-10-28 a waiting render won here unconditionally. The owner made render a rankable
     item on 2026-10-28 ("LLM, render, audio, transcript, image"), so a Mac that ranks Chat above
     render now gives the free moment to Chat. A Mac whose saved order does not mention render
-    still reads render first (`registry.effective_priority_order`), so nothing changes for it.
+    still reads render first (`registry.with_render_default`), so nothing changes for it.
     """
     from .vocabulary import RENDER_MODALITY
     if lane == RENDER_MODALITY:

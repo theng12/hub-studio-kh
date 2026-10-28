@@ -53,7 +53,7 @@ NODE_MODALITIES = frozenset(WORKER_FOR_MODALITY)
 # Until 2026-10-28 the broker hardcoded it ahead of everything, so an owner whose saved order
 # named Chat first still had the Mac reserved for a waiting render. Now it is an ordinary
 # entry in the same list. A Mac whose saved order does not mention it keeps that behaviour
-# exactly: `registry.effective_priority_order` reads render first for it, so neither a stored
+# exactly: `registry.with_render_default` reads render first for it, so neither a stored
 # order nor an older build has to change.
 RENDER_MODALITY = "render"
 PRIORITY_MODALITIES = NODE_MODALITIES | {RENDER_MODALITY}

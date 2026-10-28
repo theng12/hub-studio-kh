@@ -89,27 +89,6 @@ def priority_order(machine: str) -> list[str]:
     return ["chat"] if row.get("chat_priority") is True else []
 
 
-def effective_priority_order(machine: str) -> list[str]:
-    """The saved order as *arbitration* must read it, with `render`'s read-time default applied.
-
-    **Owner, 2026-10-28: a Mac whose saved order does not mention final render keeps today's
-    behaviour exactly — render first.** Before this change the broker enforced that with a
-    reservation that outranked every function regardless of the saved order
-    (`broker._pending_render_for_machine`), so an owner who ranked Chat first still had the Mac
-    held for a waiting render. Now render is an ordinary entry in the same list.
-
-    Nothing on disk is rewritten: this is the read-time default, and it is applied by *reading*
-    the saved order, so a stored order never has to be migrated and an older build still sees
-    exactly what it saved.
-
-    * A saved order that **names** render is authoritative — the owner ranked it, wherever.
-    * A saved order that **does not mention** it reads as render first, which is the behaviour it
-      had before render was rankable. That covers the empty order too: "no preference" ranked
-      every function equal by age, but a waiting render still took the Mac first.
-    """
-    return with_render_default(priority_order(machine))
-
-
 def with_render_default(order: list[str]) -> list[str]:
     """One saved order with `render`'s read-time default applied.
 
