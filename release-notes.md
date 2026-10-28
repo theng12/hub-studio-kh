@@ -2,6 +2,20 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.207 — 2026-10-28
+
+### A render takes its place in the queue you set
+
+Rendering used to jump ahead of everything else on a Mac that renders, whatever order you had arranged. A render is now one entry in that Mac's own work order, so the order you set is the order that runs — put it where you want it. A Mac that has never saved an order keeps exactly the order it has today, so nothing changes there by itself. Each Hub also reports how fast it renders, so the Gateway can send renders to the fastest Mac first.
+
+### Every kind of work has its own switch
+
+Each row of the work order now has an on/off switch, on by default. Switch a kind off and the Mac keeps it in the list but stops taking that kind of work; the Studio's own on/off switch works as before. A Mac whose settings were saved before this version reads as "on" for every kind, which is what it was doing.
+
+### Chat can read a picture
+
+The last version brought the part of Chat that reads an image, but the helper library it needs was not in the runtime the app ships, so a picture-capable model could only answer text. The runtime now carries it, and a build whose runtime lacks it fails instead of quietly shipping. You can send a picture with your question as before.
+
 ## 0.6.206 — 2026-10-28
 
 ### Setting up a Mac is a choice, on a screen, with the numbers in front of you
