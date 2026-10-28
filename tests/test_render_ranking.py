@@ -199,6 +199,24 @@ class RankingTests(Fixture):
         self.executor(created_at=99.0)
         self.assertEqual((await self.winner())[3], "render")
 
+    def test_the_public_order_and_the_arbitration_order_are_different_functions(self) -> None:
+        """The work-policy API and the fleet rows keep showing what the owner saved.
+
+        `broker.priority_order` answers "what did this Mac save" and `ranked_priority_order`
+        answers "what does arbitration take first". Collapsing them would have reported a saved
+        order the Mac never saved, on every Mac that never mentioned render.
+        """
+        registry.set_priority_order("local", ["image"])
+        self.assertEqual(broker.priority_order("local"), ["image"])
+        self.assertEqual(broker.ranked_priority_order("local"), ["render", "image"])
+        self.assertFalse(broker.chat_priority_enabled("local"),
+                         "the legacy Chat projection reads the saved order")
+        registry.set_priority_order("local", ["chat"])
+        self.assertEqual(broker.priority_order("local"), ["chat"])
+        self.assertEqual(broker.ranked_priority_order("local"), ["render", "chat"])
+        self.assertTrue(broker.chat_priority_enabled("local"),
+                        "Chat first is still Chat first, even with render read ahead of it")
+
     def test_a_saved_order_may_name_render_and_nothing_else_may(self) -> None:
         registry.set_priority_order("local", ["render", "chat"])
         self.assertEqual(registry.priority_order("local"), ["render", "chat"])
