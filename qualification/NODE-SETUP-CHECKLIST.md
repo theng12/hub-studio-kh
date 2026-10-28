@@ -12,17 +12,16 @@ failure here means the machine differs, not that the step is wrong.
 
 | # | Step | What "good" looks like |
 |---|---|---|
-| 1 | Double-click **2 - Copy the models** | It prints the Mac's memory, lists the models that fit, copies them and all 10 voices. ~2–5 minutes. |
-| 2 | Double-click **1 - Install the app** | Asks for the password once. Installs to `/Applications`. |
-| 3 | Open Studio Hub, press **Use the Models Already on This Mac** | The button appears only because step 1 filled `~/StudioHubModels`. |
+| 1 | Double-click **1 - Install the app** | Asks for the password once. Installs to `/Applications`. |
+| 2 | Open Studio Hub, then **Set up this Mac** | It shows this Mac's memory and the free space on the models' drive first, then the four presets by size. Pick the one for this Mac and copy from the drive - its card reads "9 of 14" and rises as files arrive, and only says installed when every file is verified. ~2–5 minutes. (**`2 - Copy the models`** no longer chooses: it prints what the drive holds and stops. Use **`2 - Copy the models (everything)`** only on a Mac with no internet and no other Mac to copy from.) |
+| 3 | **Models** page | Every model the preset copied reads as installed |
 | 4 | Allow the two pop-ups | Local network, incoming connections. |
 | 5 | Status line bottom-left | **Local services ready** |
 | 6 | **Settings → Model library** | Shows `/Users/<you>/StudioHubModels` |
-| 7 | **Models** page | Every model the copy step listed reads as installed |
-| 8 | **Audio → Clone a Voice** | The ten voices are in the dropdown |
-| 9 | Generate one clip | A playable WAV. **Play** works on an MP3 voice too (try Vincent or Aiden). |
-| 10 | **Subtitle**, choose the WAV just made, **Transcribe** | A transcript appears; **Open Transcript** from Jobs loads it too |
-| 11 | **Image**, generate one image | An image appears |
+| 7 | **Audio → Clone a Voice** | The ten voices are in the dropdown |
+| 8 | Generate one clip | A playable WAV. **Play** works on an MP3 voice too (try Vincent or Aiden). |
+| 9 | **Subtitle**, choose the WAV just made, **Transcribe** | A transcript appears; **Open Transcript** from Jobs loads it too |
+| 10 | **Image**, generate one image | An image appears |
 
 Yam Display installs automatically with **1 - Install the app** (or run `Extras/Install Yam Display.command`). It is the virtual display a headless Mac mini needs.
 
@@ -51,16 +50,17 @@ every generation job the Mac runs itself is governed, whether a controller sent 
 queue, or it is a controller's own share of its group's work (a controller standing by keeps routing
 and sends its group's work to its nodes; a standalone Mac's work just waits).
 
-**Lite Mode Mac: set it up like any Mac; use "2 - Copy the Lite Mode models" instead of "2 - Copy the
-models" if you want only the Lite models; then tick Lite Mode in Settings.** The Lite Mode copy is the
-same step with one switch (about 15 GB; safe to run again; voices copied the same way). It does not
-change the Mac's role and does not tick Lite Mode.
+**Lite Mode Mac: set it up like any Mac and take the Essentials 8 GB preset on the app's "Set up this
+Mac" screen, then tick Lite Mode in Settings.** "2 - Copy the Lite Mode models" is retired as a
+separate install option (2026-10-28) and copies nothing now; the 8 GB preset carries every model Lite
+Mode runs. Lite Mode still refuses a job for any other model at its door, so the runtime allowlist in
+`components/workstation_models.py` is what makes a shop Mac a shop Mac - not an install set.
 
 | # | Where | Step | What "good" looks like |
 |---|---|---|---|
 | 1 | the always-on Mac mini | The usual install (app, Yam Display, models, services started), like any Mac; tick **Lite Mode** in Studio Hub > Settings if it is also a work Mac | The usual "good" for an update. It is a regular controller: it also generates. |
 | 2 | the Mac mini | Studio Hub > **Connections**: role **Controller**, Tailscale address on, restart services, **Copy Fleet Token** | The Gateway's Fleet page shows the group with this Mac **Working**. |
-| 3 | each cashier Mac | The usual install (**1 - Install the app**), then **2 - Copy the Lite Mode models** (or **2 - Copy the models**), then tick **Lite Mode** in Studio Hub > Settings | "Lite Mode: ON"; the Lite Mode copy brings only the six Lite Mode models (FLUX.2 Klein 4B 4-bit, Z-Image-Turbo 4-bit, Qwen3-TTS 0.6B 4-bit, VoxCPM2 4-bit, Whisper large-v3 turbo, Stable Audio 3 Medium; ~15 GB). |
+| 3 | each cashier Mac | The usual install (**1 - Install the app**), then the **Essentials 8 GB** preset on **Set up this Mac**, then tick **Lite Mode** in Studio Hub > Settings | "Lite Mode: ON"; the 8 GB preset carries every Lite Mode model (FLUX.2 Klein 4B 4-bit, Z-Image-Turbo 4-bit, Qwen3-TTS 0.6B 4-bit, VoxCPM2 4-bit, Whisper large-v3 turbo, Stable Audio 3 Medium), and anything else it copies simply waits unused. |
 | 4 | each cashier Mac | Studio Hub > **Connections**: Tailscale address on, restart services, **Join** with the controller's address and Fleet token | The Mac appears under the Shops group as **Working**. |
 | 5 | the cashier Mac, or the Gateway | Studio Hub > **Settings > Lite Mode** on the Mac itself, or Fleet > the Mac's **…** menu on the Gateway | Only when idle (default off, 3 min), Step aside when someone uses it (default off, resume after 2 min), free memory needed to start a job (default: each model's own, ~2.8 GB), quiet hours, hide the menu-bar icon. |
 
