@@ -73,8 +73,8 @@ def normalize_priority_order(value: object) -> list[str]:
     """Read one canonical priority list; damaged explicit state is neutral."""
     if not isinstance(value, list):
         return []
-    from .vocabulary import NODE_MODALITIES
-    if (any(not isinstance(item, str) or item not in NODE_MODALITIES for item in value)
+    from .vocabulary import PRIORITY_MODALITIES
+    if (any(not isinstance(item, str) or item not in PRIORITY_MODALITIES for item in value)
             or len(value) != len(set(value))):
         return []
     return list(value)
@@ -89,6 +89,37 @@ def priority_order(machine: str) -> list[str]:
     return ["chat"] if row.get("chat_priority") is True else []
 
 
+def effective_priority_order(machine: str) -> list[str]:
+    """The saved order as *arbitration* must read it, with `render`'s read-time default applied.
+
+    **Owner, 2026-10-28: a Mac whose saved order does not mention final render keeps today's
+    behaviour exactly — render first.** Before this change the broker enforced that with a
+    reservation that outranked every function regardless of the saved order
+    (`broker._pending_render_for_machine`), so an owner who ranked Chat first still had the Mac
+    held for a waiting render. Now render is an ordinary entry in the same list.
+
+    Nothing on disk is rewritten: this is the read-time default, and it is applied by *reading*
+    the saved order, so a stored order never has to be migrated and an older build still sees
+    exactly what it saved.
+
+    * A saved order that **names** render is authoritative — the owner ranked it, wherever.
+    * A saved order that **does not mention** it reads as render first, which is the behaviour it
+      had before render was rankable. That covers the empty order too: "no preference" ranked
+      every function equal by age, but a waiting render still took the Mac first.
+    """
+    return with_render_default(priority_order(machine))
+
+
+def with_render_default(order: list[str]) -> list[str]:
+    """One saved order with `render`'s read-time default applied.
+
+    The single place that rule is written. A joined peer's order arrives as a list rather than
+    from this Mac's flags (`broker.priority_order`), and it must read the same way.
+    """
+    from .vocabulary import RENDER_MODALITY
+    return order if RENDER_MODALITY in order else [RENDER_MODALITY, *order]
+
+
 def chat_priority(machine: str) -> bool:
     """Compatibility projection for clients that only understand LLM-first."""
     order = priority_order(machine)
@@ -96,9 +127,9 @@ def chat_priority(machine: str) -> bool:
 
 
 def set_priority_order(machine: str, order: list[str]) -> None:
-    from .vocabulary import NODE_MODALITIES
+    from .vocabulary import PRIORITY_MODALITIES
     if (not isinstance(order, list)
-            or any(not isinstance(item, str) or item not in NODE_MODALITIES for item in order)
+            or any(not isinstance(item, str) or item not in PRIORITY_MODALITIES for item in order)
             or len(order) != len(set(order))):
         raise ValueError("priority_order must contain unique canonical modalities")
     global _flags_cache
@@ -131,6 +162,54 @@ def set_priority_order(machine: str, order: list[str]) -> None:
 def set_chat_priority(machine: str, enabled: bool) -> None:
     """Legacy bool-only write adapter."""
     set_priority_order(machine, ["chat"] if enabled else [])
+
+
+# **Render while paused — the owner's per-Mac exemption (owner, 2026-10-28).**
+#
+# A paused Mac gets no new work of any kind, which is the rule and stays the rule. The owner's
+# own question was narrower: may a Mac he paused *for generation* still assemble the final
+# videos it is opted in to render? Yes, but only where he says so, per Mac, and never by
+# inference.
+#
+# OFF by default, and off is byte-identical to before: a paused Mac takes no render either. A
+# strict reader — absent, malformed, or not a real boolean `true` is **off** — so a hand-edited
+# or half-written row can only ever keep the safe answer.
+RENDER_WHILE_PAUSED_KEY = "render_while_paused"
+
+
+def render_while_paused(machine: str) -> bool:
+    """Whether this Mac's own pause exempts the final-render lane."""
+    row = load_flags().get(machine, {})
+    if not isinstance(row, dict):
+        return False
+    return row.get(RENDER_WHILE_PAUSED_KEY) is True
+
+
+def set_render_while_paused(machine: str, enabled: bool) -> None:
+    """Record the owner's choice for one Mac (the same atomic write as every other flag)."""
+    if type(enabled) is not bool:
+        raise ValueError("render_while_paused must be true or false")
+    global _flags_cache
+    flags = dict(load_flags())
+    saved = flags.get(machine, {})
+    row = dict(saved) if isinstance(saved, dict) else {}
+    row[RENDER_WHILE_PAUSED_KEY] = enabled
+    flags[machine] = row
+    descriptor, name = tempfile.mkstemp(prefix=f".{FLAGS_FILE.name}-", dir=FLAGS_FILE.parent)
+    temporary = Path(name)
+    try:
+        with _os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(flags, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            _os.fsync(handle.fileno())
+        temporary.replace(FLAGS_FILE)
+    except BaseException:
+        if temporary.exists():
+            from .. import output_storage
+            output_storage.retire(temporary, "failed-write")
+        raise
+    _flags_cache = flags
 
 
 # Preferred-work idle hold (owner request, 2026-10-17): one optional per-Mac choice of a

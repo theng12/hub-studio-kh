@@ -30,6 +30,20 @@ def work_policy(monitor) -> dict:
         seen.add(modality)
         functions.append({"id": modality,
                           "title": worker.get("title") or worker["id"]})
+    # **Final render is rankable and has no registry row** (owner, 2026-10-28). It is this Mac's
+    # own FFmpeg lane rather than a worker, so it is listed from the vocabulary whenever this Mac
+    # can render at all — the title comes from the one place that owns it, never from
+    # capitalising the id into "Render".
+    render_authority = None
+    try:
+        from .backend import render_executor
+        render_authority = render_executor.capability()
+    except Exception:  # noqa: BLE001 - a Hub with no render lane is a Hub that never lists it
+        render_authority = None
+    if render_authority is not None:
+        functions.append({"id": vocabulary.RENDER_MODALITY,
+                          "title": vocabulary.PRIORITY_TITLES[vocabulary.RENDER_MODALITY]})
+        seen.add(vocabulary.RENDER_MODALITY)
     order = registry.priority_order("local")
     saved = registry.preferred_work("local")
     hold = registry.preferred_hold("local")

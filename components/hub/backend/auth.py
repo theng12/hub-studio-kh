@@ -644,6 +644,13 @@ FLEET_ALLOWED = (
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/render-authority$"),
     ("GET", r"^/api/hub/render-authority$"),
     ("POST", r"^/api/hub/render-authority$"),
+    # **Does this Mac's pause exempt final render? (owner, 2026-10-28.)** Its own setting, kept on
+    # the Mac that renders and relayed the same way the opt-in is. Closed body, and a leaf's own
+    # credential cannot change another Mac's answer - not in `NODE_ALLOWED`.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/render-while-paused$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/render-while-paused$"),
+    ("GET", r"^/api/hub/render-while-paused$"),
+    ("POST", r"^/api/hub/render-while-paused$"),
     # **Installing a model from the Gateway (owner decision 2026-10-04: the owner's Gateway may make a
     # Mac install a model).** Only the download and its status, each through the fleet path, which
     # refuses a shelved model, an unknown package, a full disk and a model this Mac has too little

@@ -294,8 +294,11 @@ def retry_class(modality: object) -> str:
 # passes its ordinary routing, catalog, qualification, memory, and pause gates
 # competes, so an ineligible preference never holds the Mac idle. Running work is
 # not preempted.
-# Episode renders stay ahead of everything (they are the Hub Mac's own assembly step, and
-# `acquire_external_machine` already reserves a render Mac for them).
+# Final render is one of the ranked functions (owner, 2026-10-28): it takes its
+# place in the same saved order as every other, through `_priority_key`, and a Mac
+# whose saved order never mentioned it still reads it first
+# (`registry.effective_priority_order`). `render_wins_next_free` applies the same
+# rank at the lease, so the two halves of arbitration cannot disagree.
 MAX_TRIES = 3
 MAX_INFRA_TRIES = 8
 INFRA_RETRY_WINDOW_S = 30 * 60
@@ -896,7 +899,10 @@ def _wait_for_faster_mac(batch: dict, item: dict, studio: dict) -> bool:
             _batch_mode(batch)).items():
         if machine == here or (other["id"] not in _busy and machine not in leased):
             continue
-        order = priority_order(machine)
+        # The *saved* order: this asks whether the owner put another function above this one on
+        # that Mac, which is what makes waiting for it worthwhile. The read-time render default
+        # is an arbitration rule, not a preference the owner stated, so it is not read here.
+        order = _saved_priority_order(machine)
         if order and order[0] != modality:
             continue
         own = seconds(machine)
@@ -1044,17 +1050,42 @@ def _broker_dispatchable_work(machine: str) -> list[tuple[str, float, str]]:
     return found
 
 
-def priority_order(machine: str) -> list[str]:
-    """One Mac's canonical preference, with old peers mapped to Chat-first."""
+def _is_local_machine(machine: str) -> bool:
+    """Whether `machine` is one of this Hub's own Macs (its registry), not a joined peer."""
+    return any(s.get("machine", "local") == machine and peers.is_local_studio(s)
+               for s in _monitor().registry)
+
+
+def _saved_priority_order(machine: str) -> list[str]:
+    """One Mac's saved order, exactly as stored — no read-time default applied.
+
+    `work_policy` displays this and `chat_priority` projects it; arbitration reads
+    `priority_order` below, which adds the read-time render default. Keeping the two apart is
+    what lets render be rankable without rewriting a single stored order (owner, 2026-10-28).
+    """
     from . import registry
-    local = any(s.get("machine", "local") == machine and peers.is_local_studio(s)
-                for s in _monitor().registry)
-    if local:
+    if _is_local_machine(machine):
         return registry.priority_order("local")
     snapshot = peers.cached(machine) or {}
     if "priority_order" in snapshot:
         return registry.normalize_priority_order(snapshot.get("priority_order"))
     return ["chat"] if snapshot.get("chat_priority") is True else []
+
+
+def priority_order(machine: str) -> list[str]:
+    """The order arbitration uses, with `render`'s read-time default applied.
+
+    A Mac whose saved order names no final render ranks it first, which is what
+    `acquire_external_machine` used to reserve unconditionally; a Mac that names it in its order
+    gets the owner's ranking (owner, 2026-10-28). Nothing stored is rewritten.
+
+    The default itself is applied by `registry.effective_priority_order`, so the scheduler, the
+    Fleet row and the work-policy API cannot each answer it differently.
+    """
+    from . import registry
+    if _is_local_machine(machine):
+        return registry.effective_priority_order("local")
+    return registry.with_render_default(_saved_priority_order(machine))
 
 
 def preferred_policy(machine: str) -> dict | None:
@@ -1232,7 +1263,13 @@ def _extend_preferred_reservation(studio: dict, modality: str, owner: str | None
 
 
 def chat_priority_enabled(machine: str) -> bool:
-    order = priority_order(machine)
+    """The legacy projection: whether Chat is the first function **the owner** ranked.
+
+    Reads the saved order, never the arbitration order: the read-time render default would put
+    render first on every Mac that never mentioned render, and this compatibility flag would then
+    answer False on all of them (owner, 2026-10-28).
+    """
+    order = _saved_priority_order(machine)
     return bool(order and order[0] == "chat")
 
 
@@ -1304,8 +1341,10 @@ async def higher_priority_work_waiting(machine: str, modality: str,
     if winner[:3] < _priority_key(machine, modality, created_at, identity):
         return True
     # The idle hold: a different generation function may not take this Mac while the preferred
-    # function wins. Render never reaches this gate (its dispatch skips it), and a preferred
-    # candidate itself is never gated — it is the winner being reserved for.
+    # function wins. Render never reaches this gate — the broker's own loop skips it for the
+    # render lane (a batch loop, not this one), and `RenderExecutor.dispatch_ready` asks it only
+    # for a *render* candidate, which the check above has already ranked. A preferred candidate
+    # itself is never gated: it is the winner being reserved for.
     if modality in preferred_hold.GENERATION_CHOICES \
             and candidate_loses_hold(machine, modality, winner[3]):
         return True
@@ -1715,8 +1754,16 @@ def configure_render_executor(executor) -> None:
 
 
 def render_dispatch_allowed(machine: str, owner: str | None = None) -> bool:
-    """Apply this broker's existing pause, Lite, drain, and quarantine gates to render."""
-    if (not machine_enabled(machine)
+    """Apply this broker's existing pause, Lite, drain, and quarantine gates to render.
+
+    **The pause is the one gate an owner can exempt, and only this gate** (owner, 2026-10-28).
+    A paused Mac means "run no generation here". Where the owner switches
+    `registry.render_while_paused` on for that Mac, final render is the one function its pause no
+    longer refuses. The exemption is exactly the pause: not Lite mode, not drain, not maintenance,
+    not a quarantine. Off by default, so a Mac that never sets it behaves as it always has.
+    """
+    from . import registry
+    if (not machine_enabled(machine) and not registry.render_while_paused(machine)
             or not studio_enabled(machine, "hub-final-render")
             or "hub-final-render" in _maintenance
             or _machine_blocked(machine)
@@ -2442,14 +2489,69 @@ def busy_machines() -> set[str]:
     return occupied
 
 
+def lease_lane(owner: str) -> str:
+    """The generation function a lease owner belongs to, or `""` when it does not say.
+
+    Each lane mints its own owner string through `acquire_external_machine`, and the shapes are
+    the ones already in this file, not a second vocabulary to keep in step:
+
+    * `render:<job>` / `chat:<batch>:<i>` / `transcription:<batch>:<i>` — the lane, then identity;
+    * `direct-chat:<id>` and `relay:chat:<uuid>` — Chat under two older spellings;
+    * `peer:<worker>:<uuid>` — the peer door, whose worker id names the modality
+      (`vocabulary.WORKER_FOR_MODALITY`'s inverse is `REQUIRED_WORKERS`), and a worker that names
+      no modality is a lane this rule does not arbitrate.
+
+    `""` means "this lease did not say", and the caller then keeps the old answer: a waiting
+    render wins the next free moment. A lease that cannot be placed never loses priority to a
+    render it does not outrank — the safe direction, because it is the behaviour this replaces.
+    """
+    from .vocabulary import PRIORITY_MODALITIES, RENDER_MODALITY, REQUIRED_WORKERS
+    text = str(owner or "")
+    for lane in (RENDER_MODALITY, "transcription"):
+        if text.startswith(f"{lane}:"):
+            return lane
+    if text.startswith(("chat:", "direct-chat:", "relay:chat:")):
+        return "chat"
+    if text.startswith("peer:"):
+        pieces = text.split(":", 2)
+        return REQUIRED_WORKERS.get(pieces[1], "") if len(pieces) > 1 else ""
+    head = text.partition(":")[0]
+    return head if head in PRIORITY_MODALITIES else ""
+
+
+def render_wins_next_free(machine: str, lane: str) -> bool:
+    """Whether a waiting final render outranks `lane` for this Mac's next free moment.
+
+    **Never interrupts:** a running job finishes regardless; this only decides who may take the
+    Mac the moment it frees. The answer is one comparison of the two functions' ranks in this
+    Mac's order (`_priority_key`), so render and every other lane obey the same saved preference.
+
+    Before 2026-10-28 a waiting render won here unconditionally. The owner made render a rankable
+    item on 2026-10-28 ("LLM, render, audio, transcript, image"), so a Mac that ranks Chat above
+    render now gives the free moment to Chat. A Mac whose saved order does not mention render
+    still reads render first (`registry.effective_priority_order`), so nothing changes for it.
+    """
+    from .vocabulary import RENDER_MODALITY
+    if lane == RENDER_MODALITY:
+        return False   # the render lane itself is the one being let in
+    if not _pending_render_for_machine(machine):
+        return False
+    order = priority_order(machine)
+    # A lane the order does not name sorts behind every function it does name, and render is
+    # always named here (`priority_order` supplies the read-time default), so render wins.
+    return order.index(RENDER_MODALITY) < order.index(lane) if lane in order else True
+
+
 def acquire_external_machine(machine: str, owner: str) -> bool:
-    """Atomically reserve a physical machine for another heavy-work queue."""
+    """Atomically reserve a physical machine for another heavy-work queue.
+
+    Never interrupts a running job. Between two waiting functions it is the Mac's ranked order
+    that decides, which is why a waiting render only wins the next free moment where the order
+    actually puts it above the lane asking (`render_wins_next_free`).
+    """
     if machine in busy_machines():
         return False
-    # Episode renders are the fleet's highest-priority queued work. Never
-    # interrupt a running job, but once a render is waiting, reserve an eligible
-    # render Mac so a Chat/transcription poller cannot win the next-free race.
-    if not owner.startswith("render:") and _pending_render_for_machine(machine):
+    if render_wins_next_free(machine, lease_lane(owner)):
         return False
     _external_machine_leases[machine] = owner
     _wakeup.set()

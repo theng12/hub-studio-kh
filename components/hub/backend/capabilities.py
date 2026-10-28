@@ -1012,6 +1012,12 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
     for node_id, capability in sorted(fleet_nodes.render_capabilities().items()):
         busy = node_id in busy_machines
         paused = not machine_enabled(node_id) or peers.standing_by(node_id)
+        # **The leaf's own pause exemption, and only the pause** (owner, 2026-10-28): a Mac the
+        # owner paused here but switched `render_while_paused` on at its own Hub still offers its
+        # render slot. Lite Mode standing by is not exempted - that is the person using the Mac.
+        if paused and not peers.standing_by(node_id) and \
+                capability.get("render_while_paused") is True:
+            paused = False
         slots = 0 if busy or paused else _render_slots(capability)
         workers.append({
             **capability,

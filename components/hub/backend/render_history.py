@@ -259,6 +259,39 @@ def merge_totals(parts: list[dict[str, Any]]) -> dict[str, Any]:
     return _derive(raw)
 
 
+def speed_by_machine(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Output seconds rendered per wall second, per Mac, from renders this Hub actually timed.
+
+    **The Gateway's fastest-first render choice reads this** (owner, 2026-10-28: "prefer the
+    fastest render Mac"). It is derived from exactly the evidence `totals` counts — a succeeded
+    render with both a stated length and a stated wall time — but split per `machine`, so one
+    Mac's ratio is never borrowed for another's.
+
+    A Mac with no timed render is **absent**, never present as `0`. "This Mac has not been
+    measured" and "this Mac renders at zero speed" are different facts, and the fallback the
+    Gateway uses (hardware tier) is only honest while that absence stays visible. `renders`
+    counts the timed rows behind the ratio so a reader can weigh one render against forty.
+    """
+    wall: dict[str, float] = {}
+    output: dict[str, float] = {}
+    count: dict[str, int] = {}
+    for item in entries:
+        if item.get("outcome") != "succeeded":
+            continue
+        machine = item.get("machine")
+        seconds, elapsed = item.get("video_seconds"), item.get("wall_seconds")
+        if (not isinstance(machine, str) or not machine
+                or not isinstance(seconds, (int, float)) or isinstance(seconds, bool)
+                or not isinstance(elapsed, (int, float)) or isinstance(elapsed, bool)
+                or seconds <= 0 or elapsed <= 0):
+            continue
+        wall[machine] = wall.get(machine, 0.0) + float(elapsed)
+        output[machine] = output.get(machine, 0.0) + float(seconds)
+        count[machine] = count.get(machine, 0) + 1
+    return {machine: {"speed": output[machine] / wall[machine], "renders": count[machine]}
+            for machine in sorted(wall) if wall[machine] > 0}
+
+
 def read(database_path: str | Path, *, limit: int = 200,
          now: float | None = None) -> dict[str, Any]:
     """The newest `limit` renders in the retained window, plus totals over the whole window.
@@ -274,6 +307,9 @@ def read(database_path: str | Path, *, limit: int = 200,
     every = [entry(row, now=now) for row in rows]
     answer["renders"] = every[:limit]
     answer["totals"] = totals(every)
+    # Per-Mac measured speed, over the whole retained window rather than the page's `limit`:
+    # a routing decision must not change because a page asked for fewer rows.
+    answer["by_machine"] = speed_by_machine(every)
     return answer
 
 

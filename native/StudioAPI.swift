@@ -1547,9 +1547,15 @@ struct NativeWorkPolicy: Decodable, Equatable {
     }
 
     /// The producer owns function vocabulary; unknown Studio checkboxes remain independent.
+    ///
+    /// **A function no Studio claims is enabled, because the Hub only lists it when it applies**
+    /// (owner, 2026-10-28). Final render has no registry row — it is this Mac's own FFmpeg lane —
+    /// so the Hub names it in `priorityFunctions` precisely because this Mac can render. Reading
+    /// "no matching Studio" as "off" hid the one rankable function the owner asked to rank.
     var enabledPriorityFunctions: [Function] {
         let enabled = priorityFunctions.filter { function in
-            studios.contains { $0.modality == function.id && $0.enabled }
+            let claiming = studios.filter { $0.modality == function.id }
+            return claiming.isEmpty || claiming.contains { $0.enabled }
         }
         return priorityOrder.compactMap { id in enabled.first { $0.id == id } }
             + enabled.filter { !priorityOrder.contains($0.id) }

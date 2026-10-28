@@ -1861,4 +1861,18 @@ class RenderExecutor:
             # The one extra key, present only while the owner's opt-in is the authority. A Mac
             # with the setting off publishes exactly the row an unmodified Hub does.
             row["accepted_unqualified"] = dict(authority.opt_in)
+        # **The one optional key this build adds, and only while the owner switched it on**
+        # (owner, 2026-10-28). It follows the `accepted_unqualified` rule exactly: absent is the
+        # old row, byte for byte, so a Mac that never set it publishes what it always did.
+        #
+        # Measured render speed is deliberately **not** here. The row's key set is the mixed-fleet
+        # contract (`fleet_nodes._render_capability`), and an older controller drops a row that
+        # carries a key it does not know — which for `accepted_unqualified` is the documented
+        # trade for a Mac the owner opted in, but for a *measurement* would silently remove every
+        # Mac that has ever rendered from an older controller's roster. The speed is published on
+        # the read-only Render view instead (`render_history.read` `by_machine`), and the Gateway
+        # orders by the timings in its own render journal.
+        from . import registry
+        if registry.render_while_paused(self.machine):
+            row["render_while_paused"] = True
         return row

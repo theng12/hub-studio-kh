@@ -75,6 +75,17 @@ _RENDER_CAPABILITY_KEYS = frozenset((
 # before the opt-in existed.
 _RENDER_OPT_IN_KEY = "accepted_unqualified"
 _RENDER_OPT_IN_EVIDENCE_KEYS = frozenset(("provenance", "accepted_by", "accepted_at"))
+#: The one further key a leaf may add: its owner let its own pause exempt final render
+#: (owner, 2026-10-28). Optional and dropped rather than guessed - a row carrying it in a shape
+#: this controller cannot read is treated as a row without it, exactly as an older leaf's row is.
+#:
+#: A measured render speed is deliberately NOT a key here. `_RENDER_CAPABILITY_KEYS` is the
+#: mixed-fleet contract, and an older controller drops a row carrying a key it does not know; for
+#: the owner's opt-in that is a documented trade, but for a *measurement* it would silently remove
+#: every Mac that has ever rendered from an older controller's roster. The speed travels on the
+#: machine row instead (`standalone.fleet_overview` -> `machines[].render_speed`).
+_RENDER_WHILE_PAUSED_KEY = "render_while_paused"
+_OPTIONAL_RENDER_KEYS = frozenset((_RENDER_OPT_IN_KEY, _RENDER_WHILE_PAUSED_KEY))
 _RENDER_CANDIDATE_KEYS = frozenset((
     "vector_id", "hardware_class", "profile_digest", "tools_digest", "compiler_digest",
     "qualification_digest", "selected_tier", "exact_encoder", "font_support", "bounds",
@@ -1373,9 +1384,10 @@ def _render_capability(value: object) -> dict[str, Any] | None:
     """
     if not isinstance(value, dict):
         return None
-    opted_in = set(value) == _RENDER_CAPABILITY_KEYS | {_RENDER_OPT_IN_KEY}
-    if not opted_in and set(value) != _RENDER_CAPABILITY_KEYS:
+    extra = set(value) - _RENDER_CAPABILITY_KEYS
+    if not extra <= _OPTIONAL_RENDER_KEYS:
         return None
+    opted_in = _RENDER_OPT_IN_KEY in extra
     if value.get("operation") != "video.final_render":
         return None
     if opted_in:
@@ -1434,6 +1446,12 @@ def _render_capability(value: object) -> dict[str, Any] | None:
                 or type(slot["slots"]) is not int or type(slot["slots_total"]) is not int
                 or slot["slots"] not in (0, 1) or slot["slots_total"] != 1):
             return None
+    # The optional exemption, validated where it is read rather than trusted. A value that is not
+    # exactly `True` is removed from the row rather than used to refuse the whole worker: the
+    # row's capacity is a separate fact, and losing a render Mac because one flag was malformed
+    # would be the worse answer.
+    if _RENDER_WHILE_PAUSED_KEY in value and value[_RENDER_WHILE_PAUSED_KEY] is not True:
+        value = {key: item for key, item in value.items() if key != _RENDER_WHILE_PAUSED_KEY}
     return value
 
 
@@ -2224,6 +2242,65 @@ async def relay_render_authority(node_id: str, method: str, body: object = None,
         # answer for the rest of its refresh interval.
         await _refresh_render_capability(node)
     return {"ok": True, "node": wanted, "render_authority": answer.get("render_authority")}
+
+
+async def relay_render_while_paused(node_id: str, method: str, body: object = None, *,
+                                    client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Read or change one joined Mac's "my own pause exempts final render" switch **on that Mac**.
+
+    The setting belongs to the Mac that renders, so it is kept there and reached the same way the
+    render opt-in is: this controller's Fleet token, a dial, and the check-in queue when a Mac
+    cannot be dialled. Never a file written on the Mac from here.
+    """
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        raise StartupRelayError(404, {"ok": False, "code": "UNKNOWN_NODE",
+                                      "detail": f"this controller has no joined Mac {node_id!r}"})
+    if method not in {"GET", "POST"}:
+        raise ValueError("render-while-paused relay supports GET or POST")
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        response = await client.request(
+            method, f"{node.get('address') or ''}/api/hub/render-while-paused",
+            json=body if method == "POST" else None, timeout=PROBE_TIMEOUT)
+    except httpx.HTTPError as exc:
+        held = await _queue_for_unreachable(wanted, method, "/api/hub/render-while-paused",
+                                            payload=body if method == "POST" else None,
+                                            kind="render_while_paused")
+        if isinstance(held, StartupRelayError):
+            raise held from exc
+        if held is not None:
+            return {**held, "node": wanted}
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_UNREACHABLE",
+                                      "reason": _unreachable_reason(exc),
+                                      "detail": "that Mac did not answer, so whether its pause "
+                                                "exempts final render did not change"}) from exc
+    finally:
+        if owned:
+            await client.aclose()
+    try:
+        answer = response.json()
+    except ValueError:
+        answer = {}
+    if response.status_code == 400 and isinstance(answer, dict):
+        raise StartupRelayError(400, answer)
+    if response.status_code in (401, 403, 404, 405):
+        raise StartupRelayError(409, {
+            "ok": False, "code": "RENDER_WHILE_PAUSED_UNSUPPORTED",
+            "detail": "that Mac must update and restart Studio Hub before its pause can exempt "
+                      "final render"})
+    if not response.is_success or not isinstance(answer, dict):
+        raise StartupRelayError(502, {"ok": False, "code": "NODE_ERROR",
+                                      "detail": f"that Mac answered HTTP {response.status_code}"})
+    if method == "POST":
+        # Its render row carries the switch, so read it again rather than advertising the old
+        # answer for the rest of this refresh interval.
+        await _refresh_render_capability(node)
+    return {"ok": True, "node": wanted,
+            "render_while_paused": answer.get("render_while_paused")}
 
 
 #: A relayed test transcription waits for the node's answer: the node's own Subtitle deadline

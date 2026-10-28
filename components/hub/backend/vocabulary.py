@@ -45,6 +45,25 @@ WORKER_FOR_MODALITY: dict[str, str] = {
 # Every modality a node may offer, derived so it cannot drift from the routing table.
 NODE_MODALITIES = frozenset(WORKER_FOR_MODALITY)
 
+# **The functions one Mac's saved work order may rank (owner, 2026-10-28).**
+#
+# Every node modality is rankable, plus one that is *not* a worker: `render`, final video
+# assembly. It has no row here because it is not a peer route — it is this Mac's own FFmpeg
+# lane (`render_executor`), dispatched by the broker's own `next_work` beside the others.
+# Until 2026-10-28 the broker hardcoded it ahead of everything, so an owner whose saved order
+# named Chat first still had the Mac reserved for a waiting render. Now it is an ordinary
+# entry in the same list. A Mac whose saved order does not mention it keeps that behaviour
+# exactly: `registry.effective_priority_order` reads render first for it, so neither a stored
+# order nor an older build has to change.
+RENDER_MODALITY = "render"
+PRIORITY_MODALITIES = NODE_MODALITIES | {RENDER_MODALITY}
+
+# What each rankable function is called where the order is edited. `render` is *not* a
+# worker, so it has no registry row to take a title from — this is its name, and the only
+# one: the Hub app and the Gateway register both read it from here rather than each
+# capitalising the id into "Render".
+PRIORITY_TITLES: dict[str, str] = {RENDER_MODALITY: "Final render"}
+
 # The worker ids the packaged Hub must find, derived as the inverse of the same table.
 REQUIRED_WORKERS = {
     worker: modality for modality, worker in WORKER_FOR_MODALITY.items()

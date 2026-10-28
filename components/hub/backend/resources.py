@@ -162,7 +162,49 @@ def host_stats() -> dict:
         stats["disk"] = disk_governor.snapshot(DATA_DIR)
     except Exception:
         stats["disk"] = None
+    speed = measured_render_speed()
+    if speed is not None:
+        stats["render_speed"] = speed
     return stats
+
+
+#: How long a measured render speed is reused before the history is read again. This route is the
+#: peer probe, read every few seconds by every controller and by the Gateway; the number itself only
+#: moves when a render finishes, so a short cache costs nothing and keeps a probe cheap.
+_RENDER_SPEED_TTL_S = 30.0
+_render_speed_cache: tuple[float, dict | None] = (0.0, None)
+
+
+def measured_render_speed(*, now: float | None = None) -> dict | None:
+    """This Mac's own measured final-render speed, or `None` when its history states none.
+
+    `{"speed": output_seconds_per_wall_second, "renders": N}`, from `render_history.speed_by_machine`
+    — succeeded renders this Hub actually timed, for **this** machine only. `None` (the key absent
+    from the host stats) means "not measured yet"; it is never `0`, which would be the claim that
+    this Mac renders at no speed at all and would make a routing choice treat absence as a number.
+
+    Published here, on the host stats every peer probe and fleet row carries, because that is how a
+    joined Mac's own measurement reaches its controller and the Gateway. It is deliberately not a
+    key on the render worker row: that row's key set is the mixed-fleet contract, and an older
+    controller drops a row carrying one it does not know.
+    """
+    global _render_speed_cache
+    at = time.monotonic() if now is None else now
+    stamped, cached = _render_speed_cache
+    if stamped and at - stamped < _RENDER_SPEED_TTL_S:
+        return dict(cached) if isinstance(cached, dict) else None
+    value: dict | None = None
+    try:
+        from components.hub.backend import ledger, render_history
+        found = (render_history.read(ledger.DB_FILE, limit=1000).get("by_machine") or {}).get("local")
+        if (isinstance(found, dict) and isinstance(found.get("speed"), (int, float))
+                and not isinstance(found.get("speed"), bool) and found["speed"] > 0
+                and isinstance(found.get("renders"), int) and found["renders"] > 0):
+            value = {"speed": round(float(found["speed"]), 4), "renders": int(found["renders"])}
+    except Exception:  # noqa: BLE001 - an unreadable history is an absent measurement, never an error
+        value = None
+    _render_speed_cache = (at, value)
+    return dict(value) if value is not None else None
 
 
 def _listening_pids(port: int) -> list[int]:

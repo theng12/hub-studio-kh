@@ -1954,6 +1954,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         from .backend import resources as resource_stats
         from .backend import activity as activity_view
         measured = ledger.stats().get("by_machine") or {}
+        # **This Mac's measured final-render speed** (owner, 2026-10-28: "prefer the fastest render
+        # Mac", "from measured evidence first"). `resources.host_stats` already publishes it on
+        # every host snapshot this Hub serves, which is how a joined Mac's own figure reaches its
+        # controller and the Gateway; here it is added to this Mac's machine row in this overview,
+        # from the same function so the two cannot disagree. A Mac with no timed render simply has
+        # no such key - never 0.
+        local_render_speed = resource_stats.measured_render_speed()
         local_role = str(control_plane.load_settings().get("role") or "standalone")
         # The job each machine is on right now, from the activity this Hub already holds for every
         # registered studio, local or remote. A machine absent here is not working (or not known to
@@ -2080,6 +2087,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "jobs": stats.get("count", 0),
                 "average_seconds": stats.get("avg_s"),
                 "modalities": stats.get("modalities") or {},
+                # This Mac's own measured final-render speed, or absent when it has not rendered.
+                # Only this Mac: another machine's figure arrives on its own host snapshot.
+                **({"render_speed": local_render_speed}
+                   if machine == "local" and local_render_speed is not None else {}),
             })
 
         # A member this Mac runs no studio for. A node with no worker started, or a controller in a
@@ -3621,7 +3632,75 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     @app.get("/api/hub/render-authority")
     def render_authority_read() -> dict[str, Any]:
         """This Mac's remote-rendering opt-in: the choice, who made it, and whether it can act."""
-        return {"ok": True, "render_authority": installed_authority.opt_in_state()}
+        from .backend import registry
+        return {"ok": True, "render_authority": installed_authority.opt_in_state(),
+                # The other half of "this Mac renders": whether its own pause exempts render.
+                # Read here, beside the opt-in, because the Fleet page shows them together.
+                "render_while_paused": registry.render_while_paused("local")}
+
+    # **Does this Mac's own pause exempt final render? (owner, 2026-10-28.)** A separate route from
+    # the opt-in above, because it answers a different question and is off by default: a Mac may
+    # be paused for generation and still be the one that assembles videos. Nothing here widens
+    # any other gate — Lite Mode, drain, maintenance and quarantine still refuse a render.
+    _RENDER_WHILE_PAUSED_BODY = {"render_while_paused", "requested_by"}
+
+    def _render_while_paused_change(body: dict[str, Any]) -> JSONResponse:
+        if (not isinstance(body, dict) or set(body) != _RENDER_WHILE_PAUSED_BODY
+                or type(body.get("render_while_paused")) is not bool
+                or not isinstance(body.get("requested_by"), str) or not body["requested_by"]):
+            return JSONResponse({"ok": False, "code": "BAD_SETTING", "detail":
+                                 "send render_while_paused (true or false) and requested_by"},
+                                status_code=400)
+        from .backend import registry
+        try:
+            registry.set_render_while_paused("local", body["render_while_paused"])
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "code": "BAD_SETTING", "detail": str(exc)},
+                                status_code=400)
+        broker.wake_dispatcher()
+        return JSONResponse({"ok": True,
+                             "render_while_paused": registry.render_while_paused("local")})
+
+    @app.get("/api/hub/render-while-paused")
+    def render_while_paused_read() -> dict[str, Any]:
+        """Whether this Mac's pause exempts final render (off unless the owner switched it on)."""
+        from .backend import registry
+        return {"ok": True, "render_while_paused": registry.render_while_paused("local")}
+
+    @app.post("/api/hub/render-while-paused")
+    def render_while_paused_write(body: dict[str, Any]) -> JSONResponse:
+        return _render_while_paused_change(body)
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/render-while-paused")
+    async def fleet_node_render_while_paused_read(node_id: str) -> JSONResponse:
+        from .backend import fleet_nodes as fleet
+        from .backend import registry
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            return JSONResponse({"ok": True, "node": wanted,
+                                 "render_while_paused": registry.render_while_paused("local")})
+        try:
+            answer = await fleet.relay_render_while_paused(wanted, "GET")
+        except fleet.StartupRelayError as error:
+            return JSONResponse(error.body, status_code=error.status)
+        return JSONResponse(answer)
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/render-while-paused")
+    async def fleet_node_render_while_paused_write(
+        node_id: str, body: dict[str, Any]
+    ) -> JSONResponse:
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            answer = await run_in_threadpool(_render_while_paused_change, body)
+            if answer.status_code == 200:
+                return JSONResponse({**json.loads(answer.body), "node": wanted})
+            return answer
+        try:
+            answer = await fleet.relay_render_while_paused(wanted, "POST", body)
+        except fleet.StartupRelayError as error:
+            return JSONResponse(error.body, status_code=error.status)
+        return JSONResponse(answer)
 
     @app.post("/api/hub/render-authority")
     def render_authority_write(body: dict[str, Any]) -> JSONResponse:
