@@ -117,11 +117,11 @@
   "model_id": "mlx-community/Breeze-TTS-2-mlx-4bit",
   "package_id": "breeze-tts-2-mlx-4bit",
   "qualification": {
-    "memory_evidence": "Qualified 2026-09-29 on this project's staging Mac. Resident set size held flat at ~3.3 GB in all five modes (design, clone, direction, long-form, vocal events), which fits 8 GB; the kernel peak footprint reading ranged 5.41 to 23.93 GB and was never settled, so 16 GB is the floor this catalogue claims. Throughput measured 0.27x realtime \u2014 about 19.8 minutes per 1,000 words \u2014 which is the real cost of this model, not memory.",
-    "minimum_unified_memory_gb": 16,
-    "reason": "Catalog metadata records expected bytes; local import and inference qualification remain required.",
+    "memory_evidence": "MEASURED on an 8 GB Apple M1 (Hub 0.6.143) on 2026-10-04: 2/2 S2 clips completed, every section accepted, worker peak 4.69 GB, Mac max used 5.2-5.3 GB, min free 1.19-1.32 GB, memory pressure warning but never critical, swap <= +0.54 GB, RTF 4.1 against 4.9-5.1 on a 16 GB M1, max stall 0.6 s. Each clip started with 3.31-3.46 GB free; the 3.2 GB free-before-start floor is the model's own catalog row (min_free_memory_gb), measured on that same run. The earlier 2026-09-29 staging run held a flat ~3.3 GB resident set across all five modes, but its kernel peak footprint reading (5.41-23.93 GB) was never settled, which is why the floor is stated from the 2026-10-04 run. The floor moved 16 -> 8 in the manifest on 2026-10-28 so one number is published in one place; the kit's PROVEN_SMALLER table that carried it is gone. Throughput 0.27x realtime - about 19.8 minutes per 1,000 words - which is the real cost of this model, not memory.",
+    "minimum_unified_memory_gb": 8,
+    "reason": "Measured on an 8 GB Apple M1 on 2026-10-04: 2/2 clips completed, worker peak 4.69 GB, swap <= +0.54 GB, memory pressure never critical. The 3.2 GB free-before-start figure is the model's own catalog row, from the same run.",
     "recommended_unified_memory_gb": 16,
-    "status": "unqualified"
+    "status": "qualified"
   },
   "revision": "3a06d26b172ea4ae1da2f42d708383e9c79d5526",
   "schema_version": 1,

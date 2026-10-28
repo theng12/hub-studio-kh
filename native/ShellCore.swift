@@ -57,6 +57,9 @@ enum StudioFunction: String, CaseIterable, Identifiable {
 enum StudioPage: String, CaseIterable, Identifiable {
     case overview = "Overview", audio = "Audio", transcription = "Transcription", image = "Image"
     case music = "Music", video = "Video", chat = "Chat"
+    /// The install screen (owner decision 2026-10-28): choose a preset for this Mac's memory, or
+    /// tick models by hand, and see the free space and the cost before anything is copied.
+    case setup = "Set up this Mac"
     case models = "Models", voices = "Voices", jobs = "Jobs", connections = "Connections"
     /// The final renders this Hub has run (owner, 2026-10-26: *"there's no render tab"*). Not a
     /// Studio: no lane generates into it, the render service records into it.
@@ -85,7 +88,7 @@ enum StudioPage: String, CaseIterable, Identifiable {
         let unplaced = available.filter { !createOrder.contains($0) }
         return (placed + unplaced).compactMap { Self(rawValue: $0.rawValue) }
     }()
-    static let library: [Self] = [.models, .voices, .jobs, .renders]
+    static let library: [Self] = [.setup, .models, .voices, .jobs, .renders]
     static let fleet: [Self] = [.connections]
     static let app: [Self] = [.whatsNew, .settings]
     static let comingLater: [Self] = StudioFunction.allCases
@@ -106,6 +109,7 @@ enum StudioPage: String, CaseIterable, Identifiable {
         if let function { return function.symbol }
         switch self {
         case .overview: return "square.grid.2x2"
+        case .setup: return "wand.and.stars"
         case .models: return "externaldrive"
         case .voices: return "person.wave.2"
         case .jobs: return "list.bullet.rectangle"

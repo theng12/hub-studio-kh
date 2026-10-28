@@ -1,8 +1,8 @@
 """No test or qualification script may start a Hub over a real model library.
 
-The incident (2026-10-01/02): a Hub started with a throwaway --data-dir over the REAL library shelved and
-retired real weights into the throwaway directory's Trash Folder, and deleting the directory destroyed
-them (Gemma, LTX, Whisper base/small). tests/test_peer_path_contract.py and qualification/verify-launch.sh
+The incident (2026-10-01/02): a Hub started with a throwaway --data-dir over the REAL library moved
+retired (and, before shelving was deleted on 2026-10-28, shelved) real weights into the throwaway
+directory's Trash Folder, and deleting the directory destroyed them (Gemma, LTX, Whisper base/small). tests/test_peer_path_contract.py and qualification/verify-launch.sh
 did exactly that. The Hub itself now refuses (tests/test_library_ownership.py), but an installed app older
 than that check does not, so what these scripts hand a Hub as its library has to be disposable.
 

@@ -1,7 +1,7 @@
 """Who owns a model library: only the Hub that owns one may move packages out of it.
 
 Why this exists (data loss, 2026-10-01/02): a Hub started with a throwaway ``--data-dir`` but the
-REAL model library shelved and retired the real weights into the throwaway directory's Trash Folder,
+REAL model library retired the real weights into the throwaway directory's Trash Folder,
 and deleting that directory destroyed them. Shelving, retiring and every other move out of a library
 are therefore allowed only to the Hub that owns it.
 
@@ -12,7 +12,7 @@ The owner is recorded in ``<library>/.studiohub/owner.json`` (the data directory
 * a library is **owned** by the Hub whose data directory is the recorded one, on the recorded machine;
 * anything else - a different data directory, another machine, a damaged record, a data directory in a
   temp folder (``/tmp``, ``/var/folders``, ``$TMPDIR``) - treats the library as READ-ONLY: nothing is
-  shelved, retired, trashed or pruned, and the reason is logged. The one exception is a record whose
+  retired, trashed or pruned, and the reason is logged. The one exception is a record whose
   data directory no longer exists on this same machine (the app was reinstalled elsewhere): a real
   (non-temp) data directory takes it over.
 
@@ -155,9 +155,9 @@ def resolve(library: str | os.PathLike[str], data_dir: str | os.PathLike[str]) -
 
 
 def refusal(library: str | os.PathLike[str], data_dir: str | os.PathLike[str], what: str) -> str | None:
-    """None when allowed; otherwise the sentence to log for why `what` (e.g. 'shelving') was skipped."""
+    """None when allowed; otherwise the sentence to log for why `what` (e.g. 'retiring') was skipped."""
     state = resolve(library, data_dir)
     if state.owned:
         return None
     return (f"not {what}: {state.reason}. This Hub treats {library} as read-only "
-            f"(nothing is shelved, retired or moved).")
+            f"(nothing is retired or moved).")

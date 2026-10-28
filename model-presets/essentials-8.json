@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "preset_id": "essentials-8",
+  "name": "Essentials \u00b7 8 GB",
+  "memory_tier_gb": 8,
+  "summary": "What an 8 GB Mac needs to write, draw, narrate, transcribe, read pictures, search meaning and score.",
+  "packages": [
+    "z-image-turbo-mflux-4bit",
+    "flux2-klein-4b-mlx-4bit",
+    "qwen3-tts-12hz-0-6b-base-4bit",
+    "voxcpm2-4bit",
+    "whisper-turbo",
+    "florence-2-base-ft",
+    "depth-anything-v2-small",
+    "bge-small-en-v1-5-bf16",
+    "stable-audio-3-medium"
+  ]
+}

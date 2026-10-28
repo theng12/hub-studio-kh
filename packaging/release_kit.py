@@ -163,11 +163,13 @@ def build(app: Path, library: Path) -> dict:
         },
         "operator_steps": [
             "Double-click '1 - Install the app.command' in the kit folder.",
-            "Double-click '2 - Copy the models.command' - it copies the models this Mac "
-            "can run into ~/StudioHubModels. (A Lite Mode Mac that should carry only the Lite Mode models: "
-            "'2 - Copy the Lite Mode models.command' instead, then tick Lite Mode in Studio Hub > Settings.)",
-            "Open Studio Hub from Applications; it offers that library as 'Use the Models Already "
-            "on This Mac'.",
+            "Open Studio Hub from Applications and use its 'Set up this Mac' screen: it shows this "
+            "Mac's memory and the free space on the models' drive, offers the four presets by size "
+            "(Essentials 8 GB, Creator 16 GB, Creator Plus 24 GB, Studio Pro 32 GB+) and copies from "
+            "this drive. A Lite Mode Mac takes Essentials 8 GB, then Lite Mode is ticked in Settings.",
+            "If this Mac has no internet and no other Mac to copy a model from, run "
+            "'2 - Copy the models (everything).command' from the kit instead - it copies every model "
+            "the Mac's memory can run.",
             "Allow the local-network and incoming-connection prompts.",
             "Wait for the status line to read 'Local services ready'.",
             "Run one generation per model to record that machine's speed and memory.",

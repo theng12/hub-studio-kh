@@ -1232,6 +1232,11 @@ struct StudioContent: View {
     @ObservedObject var workspace: NativeWorkspaceStore
     @StateObject private var player = PreviewPlayer()
     @State private var modelSearch = ""
+    /// The install screen's own search and the preset the operator last picked. Local view state on
+    /// purpose: which card is highlighted is not a decision about the Mac until its button is
+    /// pressed, so it must not be published, persisted or shared with the Gateway.
+    @State private var setupSearch = ""
+    @State private var setupSelectedPreset: String? = nil
     @State private var modelFilter = "All functions"
     @State private var installedOnly = false
     @State private var selectedModel: String?
@@ -1765,6 +1770,7 @@ struct StudioContent: View {
                 case .video: videoWorkspace
                 case .chat: chatWorkspace
                 case .transcription: transcriptionWorkspace
+                case .setup: setupWorkspace
                 case .models: modelsWorkspace
                 case .voices: voicesWorkspace
                 case .jobs: jobsWorkspace
@@ -4530,6 +4536,273 @@ struct StudioContent: View {
             ?? control.value?.stringValue ?? control.stated?.stringValue
         guard let current, !options.contains(current) else { return options }
         return [current] + options
+    }
+
+    // MARK: - Set up this Mac: the install-time model picker (owner decision 2026-10-28)
+
+    /// The choice a new Mac makes once, and the same screen for add/remove later.
+    ///
+    /// Three things are true on it at all times, because each is a promise the owner made:
+    /// **this Mac's memory and the free space on the models' own drive** are stated before
+    /// anything is chosen; **a model too big for this Mac is shown greyed out with its floor and
+    /// this Mac's memory**, never hidden and never swapped; and **"complete" means installed and
+    /// verified**, counted from the Hub's receipts, so a preset at 9 of 10 says 9 of 10.
+    ///
+    /// The four presets are the Hub's, read from `model-presets/` as data - this view names no
+    /// preset and no package, so a fifth preset or a changed list needs no build of this app.
+    private var setupWorkspace: some View {
+        PageScaffold(title: pageTitle(.setup),
+                     subtitle: "Choose what this Mac installs. It shows the memory this Mac has, the space on the models' drive, and what each choice will copy - before anything is copied.",
+                     scrolls: true) {
+            if !connected { setup }
+            if !workspace.installPlanSupported && workspace.installPlan == nil {
+                HubCard {
+                    VStack(alignment: .leading, spacing: HubSpace.s) {
+                        Text("This Studio Hub does not offer the install screen yet").font(HubType.rowTitle)
+                        Text("Update Studio Hub on this Mac, then reopen this page. The Models page still works for everything else.")
+                            .font(HubType.secondary).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } else if let plan = workspace.installPlan {
+                setupSummary(plan)
+                if !plan.problems.isEmpty {
+                    HubCard {
+                        VStack(alignment: .leading, spacing: HubSpace.xs) {
+                            Text("This Mac's preset list needs fixing").font(HubType.rowTitle)
+                            ForEach(plan.problems, id: \.self) { problem in
+                                Text(problem).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+                setupPresets(plan)
+                setupManual(plan)
+            } else {
+                HubCard {
+                    HStack(spacing: HubSpace.m) {
+                        ProgressView().controlSize(.small)
+                        Text("Reading this Mac's models…").font(HubType.body).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    /// What this Mac is and what it has, before any choice: memory, the drive, and where the models
+    /// come from. The free figure is the **library's** volume - the Hub measures that one, and on a
+    /// kit setup it is an external drive, not the startup disk.
+    private func setupSummary(_ plan: NativeInstallPlan) -> some View {
+        HubCard {
+            VStack(alignment: .leading, spacing: HubSpace.m) {
+                HStack(alignment: .firstTextBaseline, spacing: HubSpace.l) {
+                    Label(plan.memoryGB.map { "\(Int($0)) GB of memory" } ?? "Memory not reported",
+                          systemImage: "memorychip")
+                        .font(HubType.rowTitle)
+                    Spacer(minLength: HubSpace.m)
+                    if plan.diskMeasured, let free = plan.freeBytes {
+                        // Free space on the **models'** volume, which is the number that decides
+                        // whether a set fits - not the startup disk's.
+                        Label("\(Self.gigabytes(free)) free on the models' drive",
+                              systemImage: "internaldrive")
+                            .font(HubType.body)
+                    } else {
+                        Label("Free space not measured", systemImage: "internaldrive")
+                            .font(HubType.body).foregroundStyle(HubStatus.warn.textColor)
+                    }
+                }
+                if !plan.library.isEmpty {
+                    Label("Models live in \(plan.library)", systemImage: "folder")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if !plan.diskMeasured {
+                    Text("The Hub could not read the free space on that drive, so it cannot say whether a set fits. Open Models to check the drive is mounted.")
+                        .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if plan.kits.isEmpty {
+                    Text("No SSD kit is mounted, so models download from the internet (or copy from another Mac on the network).")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Copying from \(plan.kits.joined(separator: ", ")) where it has them; anything the drive does not carry comes from another Mac or the internet.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private static func gigabytes(_ bytes: Int64) -> String {
+        String(format: "%.1f GB", Double(bytes) / 1e9)
+    }
+
+    /// The four presets, each with its own count, cost and refusal. Selecting one marks it; nothing
+    /// is copied until the button on that card is pressed.
+    private func setupPresets(_ plan: NativeInstallPlan) -> some View {
+        VStack(alignment: .leading, spacing: HubSpace.m) {
+            HStack(alignment: .firstTextBaseline) {
+                sectionTitle("Presets")
+                Spacer(minLength: HubSpace.m)
+                if let starting = plan.starting {
+                    Text("This Mac suits \(starting.name)").font(HubType.caption).foregroundStyle(.secondary)
+                }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: HubSpace.m)], spacing: HubSpace.m) {
+                ForEach(plan.presets) { preset in setupPresetCard(preset) }
+            }
+            if let preset = plan.presets.first(where: { $0.id == setupSelectedPreset }) {
+                HStack(spacing: HubSpace.m) {
+                    Button(preset.complete ? "Install anything missing" : "Install \(preset.name)") {
+                        Task { await workspace.installPreset(preset) }
+                    }
+                    .hubPrimary()
+                    .disabled(!connected || preset.refused != nil || !workspace.installBusy.isEmpty)
+                    if preset.refused != nil {
+                        Text("Not enough space on the models' drive for this set.")
+                            .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private func setupPresetCard(_ preset: NativePreset) -> some View {
+        let chosen = setupSelectedPreset == preset.id
+        return Button {
+            setupSelectedPreset = preset.id
+        } label: {
+            VStack(alignment: .leading, spacing: HubSpace.s) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(preset.name).font(HubType.rowTitle)
+                    Spacer(minLength: HubSpace.s)
+                    if preset.complete {
+                        StatusBadge(text: "Installed", status: .ok, symbol: "checkmark.circle.fill")
+                    } else if preset.installedCount > 0 {
+                        StatusBadge(text: "\(preset.installedCount) of \(preset.packageCount)",
+                                    status: .warn, symbol: "circle.dashed")
+                    }
+                    if chosen { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
+                }
+                if let summary = preset.summary {
+                    Text(summary).font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(setupPresetCost(preset)).font(HubType.caption)
+                    .foregroundStyle(preset.refused == nil ? .secondary : HubStatus.warn.textColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let refused = preset.refused {
+                    Text(refused).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !preset.fitsThisMac {
+                    Text("Sized for a bigger Mac than this one; its models are checked against this Mac's memory individually.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(HubSpace.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: HubRadius.card))
+            .overlay(RoundedRectangle(cornerRadius: HubRadius.card)
+                .stroke(chosen ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: chosen ? 2 : 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.name), \(preset.installedCount) of \(preset.packageCount) installed")
+        .contextMenu {
+            Button(preset.complete ? "Re-check Files" : "Install \(preset.name)") {
+                Task { await workspace.installPreset(preset) }
+            }
+            .disabled(!connected || preset.refused != nil)
+        }
+    }
+
+    /// What a preset will copy, in the Hub's own numbers. The sentence names the disk state the Hub
+    /// measured, so "62 GB to copy" and "380 GB free after" are one claim, not two guesses.
+    private func setupPresetCost(_ preset: NativePreset) -> String {
+        if preset.complete { return "Every model in this preset is installed and verified." }
+        var parts: [String] = []
+        parts.append(preset.installedCount == 0
+                     ? "Copies \(Self.gigabytes(preset.toCopyBytes))"
+                     : "\(preset.installedCount) of \(preset.packageCount) installed; copies \(Self.gigabytes(preset.toCopyBytes)) more")
+        if let after = preset.freeAfterBytes {
+            parts.append("\(Self.gigabytes(after)) free after")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Everything outside the four presets, grouped by the job it does - and every model is here,
+    /// including the ones too big for this Mac, greyed out with their floor and this Mac's memory.
+    private func setupManual(_ plan: NativeInstallPlan) -> some View {
+        VStack(alignment: .leading, spacing: HubSpace.m) {
+            HStack(alignment: .firstTextBaseline) {
+                sectionTitle("Every other model")
+                Spacer(minLength: HubSpace.m)
+                TextField("Search models", text: $setupSearch).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+            }
+            ForEach(plan.groups) { group in
+                let rows = group.models.filter { setupSearch.isEmpty || $0.label.localizedCaseInsensitiveContains(setupSearch) || $0.id.localizedCaseInsensitiveContains(setupSearch) }
+                if !rows.isEmpty {
+                    VStack(alignment: .leading, spacing: HubSpace.s) {
+                        Text(group.title).font(HubType.section)
+                        HubCard(padding: 0) {
+                            VStack(spacing: 0) {
+                                ForEach(rows) { model in setupModelRow(model) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func setupModelRow(_ model: NativeInstallModel) -> some View {
+        HStack(alignment: .top, spacing: HubSpace.m) {
+            VStack(alignment: .leading, spacing: HubSpace.xs) {
+                HStack(spacing: HubSpace.s) {
+                    Text(model.label).font(HubType.rowTitle)
+                    if let quantization = model.quantization {
+                        // The standing rule: every mention of a model names its quantization.
+                        Text(quantization).font(HubType.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text(model.purpose).font(HubType.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: HubSpace.s) {
+                    if let bytes = model.bytes { Text(Self.gigabytes(bytes)).font(HubType.caption).foregroundStyle(.tertiary) }
+                    if let floor = model.floorGB { Text("needs \(floor) GB").font(HubType.caption).foregroundStyle(.tertiary) }
+                    if !model.sources.isEmpty {
+                        Text(model.sources.compactMap { NativeInstallSource(rawValue: $0)?.text }.joined(separator: ", "))
+                            .font(HubType.caption).foregroundStyle(.tertiary)
+                    }
+                }
+                if let reason = model.reason {
+                    Text(reason).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: HubSpace.m)
+            if workspace.installBusy.contains(model.id) {
+                ProgressView().controlSize(.small)
+            } else if model.installed {
+                Button("Remove") { Task { await workspace.removePackage(model.id) } }
+                    .hubRowControl().disabled(!connected)
+                    .help("Move it into the model library's trash. Nothing is deleted.")
+                StatusBadge(text: "Installed", status: .ok)
+            } else {
+                Button("Install") { Task { await workspace.installPackage(model.id) } }
+                    .hubRowControl().disabled(!connected || model.refusedHere || model.sources.isEmpty)
+                    .help(model.refusedHere ? (model.reason ?? "") : "Copy it onto this Mac")
+                if model.refusedHere { StatusBadge(text: "Too big here", status: .off) }
+            }
+        }
+        .padding(.horizontal, HubSpace.l).padding(.vertical, HubSpace.m)
+        .opacity(model.refusedHere ? 0.55 : 1)
+        .id(model.id)
     }
 
     private var modelsWorkspace: some View {
@@ -7725,7 +7998,7 @@ struct StudioContent: View {
         }
     }
     private func confirmRemove(_ model: NativeModel) {
-        let alert = NSAlert(); alert.messageText = "Remove downloaded model?"; alert.informativeText = "Remove \(model.label) from this library. Existing generated files are kept. Models in use or required by another installed model cannot be removed."
+        let alert = NSAlert(); alert.messageText = "Remove downloaded model?"; alert.informativeText = "Move \(model.label) into this library's trash. Nothing is deleted: it can be restored for 30 days, then it goes to the Mac's Trash. Generated files are kept. A model a job is using, or one another installed model needs, is refused and says which."
         alert.addButton(withTitle: "Keep Model"); alert.addButton(withTitle: "Remove Download")
         if alert.runModal() == .alertSecondButtonReturn { Task { await workspace.removeModel(model) } }
     }

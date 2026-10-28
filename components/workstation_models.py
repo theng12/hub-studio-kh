@@ -1,4 +1,4 @@
-"""The one list of models a Mac in workstation mode runs (beside ``shelved_models.py``).
+"""The one list of models a Mac in workstation mode runs.
 
 A workstation is a shop's cashier Mac (8 GB, Chrome, Telegram, a PDF viewer) that lends its idle
 time to the fleet. It carries and runs only the 8 GB-class lanes the owner chose (2026-10-03), so a

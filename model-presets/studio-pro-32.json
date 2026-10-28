@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "preset_id": "studio-pro-32",
+  "name": "Studio Pro \u00b7 32 GB+",
+  "memory_tier_gb": 32,
+  "summary": "Adds the largest writing models: Qwen3.6 35B and Gemma 4 26B.",
+  "packages": [
+    "z-image-turbo-mflux-4bit",
+    "flux2-klein-4b-mlx-4bit",
+    "qwen3-tts-12hz-0-6b-base-4bit",
+    "voxcpm2-4bit",
+    "whisper-turbo",
+    "florence-2-base-ft",
+    "depth-anything-v2-small",
+    "bge-small-en-v1-5-bf16",
+    "stable-audio-3-medium",
+    "qwen-image-2-1-turbo-mflux-q4",
+    "qwen3-5-9b-4bit",
+    "florence-2-large-ft",
+    "omnivoice-bfloat16",
+    "breeze-tts-2-mlx-4bit",
+    "yue2-3b-mlx",
+    "gemma-3-12b-it-4bit",
+    "qwen36-35b-4bit",
+    "gemma4-26b-a4b-qat-4bit"
+  ]
+}

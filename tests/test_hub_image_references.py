@@ -168,10 +168,11 @@ class EditMemoryAdmissionTests(unittest.TestCase):
         row = image_row()
         text = memory_admission.describe(MODEL, row)
         edit = memory_admission.describe(MODEL, row, mode="edit")
-        # FLUX.2 Klein 4-bit's measured fleet tier is 8 GB; this row's reference lane (the
-        # default configuration, as a large Mac would publish it) asks for 24.
+        # FLUX.2 Klein 4-bit's tier is 8 GB, stated by its own manifest since 2026-10-28 (it used
+        # to arrive from the Hub's `_FLEET_DEFAULTS` copy of the same measurement); this row's
+        # reference lane (the default configuration, as a large Mac would publish it) asks for 24.
         self.assertEqual((text["effective_min_total_memory_gb"], text["min_total_source"]),
-                         (8.0, "measured"))
+                         (8.0, "manifest"))
         self.assertEqual(text["effective_min_free_memory_gb"], 2.8)
         self.assertEqual((edit["effective_min_total_memory_gb"], edit["min_total_source"]),
                          (24.0, "reference_lane"))

@@ -478,7 +478,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # one field changed every manifest's canonical bytes.
             #
             # The three Video packages were captured in the same pass.
-            "flux2-klein-4b-mlx-4bit": "32825a10e1812bef71a546560dc69c5d83dde8cc09f52a76f79eb538ca6a35dc",
+            # Digest moved 2026-10-28: the floor moved 16 -> 8 GB so the fleet's measured tier
+            # lives in the manifest rather than in the kit's and the Hub's own copies of it. The
+            # pinned revision and the file inventory are unchanged.
+            "flux2-klein-4b-mlx-4bit": "179f8b79f5b29506ea30e12c13b86f062d2e63525ed7231daba4b71e2cbab2d9",
             # ST-16: captured 2026-09-24 from the pinned revision. 15 model-data files,
             # 5,907,438,792 bytes; the publisher's dotfiles, README and three example
             # images are excluded, so this total is not the 5,911,138,787-byte snapshot.
@@ -563,7 +566,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # excludes `.gitattributes`, the publisher's `README.md` and a demo video — none of
             # which is inference data. `LICENSE` and `NOTICE` are kept: a pack's licence travels
             # with it.
-            "breeze-tts-2-mlx-4bit": "34c94035fdeffa72f8dd6be7351b8d3acd29a07a02e850df324771735a25b2df",
+            # Digest moved 2026-10-28 for the same reason as FLUX.2 Klein 4-bit above: the floor
+            # moved 16 -> 8 GB and the measurement moved into `memory_evidence`. The pinned
+            # revision and the file inventory are unchanged.
+            "breeze-tts-2-mlx-4bit": "32b1bfec5e8bd05fdc489b7ace2c84937bacf268afc1e7b332bea2af1b153e1a",
             # Qwen3-TTS 0.6B Base 4-bit, added 2026-10-02 (owner: keep both 0.6B builds) at revision
             # 0d6bb6fe: 12 files, hashed from the local snapshot (its speech_tokenizer files are
             # byte-identical to the 8-bit package's).

@@ -12,9 +12,10 @@ none of them is a key, and the looser rule - "anything no manifest ships" - woul
 to `_trash`. The record is also a historical receipt log (42 receipts, 15 folders on his Mac), so
 a candidate has to be confirmed against the disk as a directory, and never the other way round.
 
-The second half of this file pins the Z-Image-Turbo 6B MLX 4-bit carry: the owner asked for it on
-the 8 GB Macs, its 8 GB run is still unmeasured, and the table that carries it says so in its name.
-`PROVEN_SMALLER` means he has run it there; `CARRY_BELOW_TIER` means he has asked to try it there.
+The second half pins where a model's memory floor comes from. It is its own manifest's
+`qualification.minimum_unified_memory_gb` and nowhere else: the two hand-kept tables this file
+used to carry (`PROVEN_SMALLER`, `CARRY_BELOW_TIER`) are gone, and their numbers are in the
+manifests with the measurements beside them (owner decision 2026-10-28).
 
 Every test builds its own kit and its own library under a temporary folder and runs the real script
 over them the way `copy-models.command` does. The owner's library and the real app are not touched.
@@ -181,10 +182,15 @@ class Harness:
                 sys.modules[spec.name] = previous
 
     # ---- running the real thing ---------------------------------------------
-    def run(self, answer: str = "\n", memory_gb: int = 8):
+    def run(self, answer: str = "\n", memory_gb: int = 8, copy_everything: bool = True):
         """Run the script from inside the kit, as the launcher does.
 
         Returns (exit code, everything it printed, the confirmation prompt itself).
+
+        `copy_everything=True` by default **for the tests that predate the 2026-10-28 change**, so
+        they keep testing the copy mechanism they were written for. The step's own default is the
+        opposite - it copies nothing and points at the app's screen - and `KitNoLongerChoosesTests`
+        is where that default is pinned.
         """
         helper = self.kit / "Technical" / "copy_models_for_this_mac.py"
         write(helper, (ROOT / "qualification" / "copy_models_for_this_mac.py").read_text())
@@ -197,7 +203,12 @@ class Harness:
         out = io.StringIO()
         previous_home = os.environ.get("HOME")
         previous_app = os.environ.get("STUDIOHUB_APP_ROOT")
+        previous_copy = os.environ.get("STUDIOHUB_KIT_COPY")
         os.environ["HOME"] = str(self.root)
+        if copy_everything:
+            os.environ["STUDIOHUB_KIT_COPY"] = "1"
+        else:
+            os.environ.pop("STUDIOHUB_KIT_COPY", None)
         # **Point the helper at this fixture's app bundle.** Without this it finds the owner's real
         # `/Applications/Studio Hub.app`, reads *its* manifests and tests a different computer than
         # the one it built — which is what happened the moment the search order changed to prefer an
@@ -221,6 +232,10 @@ class Harness:
                 os.environ.pop("STUDIOHUB_APP_ROOT", None)
             else:
                 os.environ["STUDIOHUB_APP_ROOT"] = previous_app
+            if previous_copy is None:
+                os.environ.pop("STUDIOHUB_KIT_COPY", None)
+            else:
+                os.environ["STUDIOHUB_KIT_COPY"] = previous_copy
         return code, out.getvalue(), prompt
 
 
@@ -435,13 +450,73 @@ class BelowTierPackagesAreNeverPrunedTests(unittest.TestCase):
             self.assertEqual(kit.trash(), [])
             self.assertIn(package_id, kit.index())
             self.assertIn("this Mac is too small", output)
-            # The skip has to name the table that lowered the floor, not just mention the table
-            # somewhere in its guidance text.
-            # PROVEN_SMALLER, not CARRY_BELOW_TIER: the owner's 8 GB run graduated this model on
-            # 2026-09-26, so its floor is now a measurement rather than a request to try. The
-            # 4 GB machine is below that floor either way, which is what this test is about.
-            self.assertIn(f"floor {COPY.PROVEN_SMALLER[package_id]} GB from PROVEN_SMALLER",
-                          output)
+            # The skip has to name where the floor came from and the file to edit, not just print
+            # a number. Since 2026-10-28 there is one source: the model's own manifest.
+            self.assertIn(f"floor from qualification.minimum_unified_memory_gb in "
+                          f"model-manifests/{package_id}.json", output)
+
+
+class KitNoLongerChoosesTests(unittest.TestCase):
+    """The step's default: copy nothing, move nothing, and point at the app's screen.
+
+    Owner decision 2026-10-28. The SSD is a source now, not a decision - the app's install screen
+    shows this Mac's memory, the library volume's free space and the four presets, and does the
+    choosing. This is the half that has to hold when someone double-clicks the kit file out of
+    habit on a Mac that took an hour to set up: it must not reorganise anything.
+    """
+
+    def test_the_default_copies_nothing_and_says_where_the_choosing_happens(self):
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.ship("b-model", floor=1)
+            code, output, _prompt = kit.run(copy_everything=False)
+            self.assertEqual(code, 0, output)
+            self.assertFalse((kit.home / "a-model").exists(), output)
+            self.assertFalse((kit.home / "b-model").exists(), output)
+            self.assertTrue((kit.library / "a-model").is_dir(), "the drive keeps its weights")
+            self.assertIn("no longer chooses", output)
+            self.assertIn("Set up this Mac", output)
+            self.assertIn("Nothing was copied or moved", output)
+            self.assertIn("STUDIOHUB_KIT_COPY=1", output)
+
+    def test_the_default_moves_nothing_a_mac_already_has(self):
+        # The migration promise, from the other side: a library set up months ago keeps every
+        # model it has, including ones this kit does not ship at all, when the kit file is run.
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.receive("a-model")
+            kit.receive_raw("not-in-this-kit/rev/weights.bin", "an older model")
+            code, output, _prompt = kit.run(copy_everything=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue((kit.home / "a-model" / Harness.REVISION / "model/a-model.bin").is_file())
+            self.assertTrue((kit.home / "not-in-this-kit/rev/weights.bin").is_file())
+            self.assertEqual(kit.trash(), [])
+
+    def test_the_opt_in_still_copies_everything_that_fits(self):
+        # The one reason the old path survives: a Mac with no internet and no reachable peer.
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.ship("too-big", floor=64)
+            code, output, _prompt = kit.run(memory_gb=8, copy_everything=True)
+            self.assertEqual(code, 0, output)
+            self.assertTrue((kit.home / "a-model").is_dir(), output)
+            self.assertFalse((kit.home / "too-big").exists())
+            self.assertIn("this Mac is too small", output)
+
+    def test_the_opt_in_still_prunes_what_the_kit_no_longer_offers(self):
+        # The prune is part of *copying*, not part of being run: with the opt-in, its behaviour is
+        # exactly what it always was.
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.receive("gone-model")
+            kit.record("gone-model")
+            code, output, _prompt = kit.run(answer="y\n", copy_everything=True)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(len(kit.trash()), 1, output)
 
 
 class FittingPackageTests(unittest.TestCase):
@@ -543,68 +618,55 @@ class PendingAdmissionTests(unittest.TestCase):
             self.assertIn("not yet qualified; retained on SSD", output)
 
 
-class CarryBelowTierTests(unittest.TestCase):
-    """`CARRY_BELOW_TIER` is a request to try, and it must never read as a proven result.
+class FloorComesFromTheManifestTests(unittest.TestCase):
+    """A model's floor is its manifest's, and nothing else (owner decision 2026-10-28).
 
-    The table is **empty as of 2026-09-26** — its one entry graduated to `PROVEN_SMALLER` when the
-    owner's 8 GB run came back QUALIFIED — but the rule it enforces is still the rule, so the tests
-    now check both directions: a measured model resolves to `PROVEN_SMALLER`, and a request to try
-    never does.
+    This file used to carry two tables — `PROVEN_SMALLER` (the owner had run the model on a
+    smaller Mac) and `CARRY_BELOW_TIER` (he had asked to try it there, unmeasured) — and every one
+    of their numbers was already in the model's own manifest or should have been. The owner's
+    instruction was to *delete* them, not deprecate them, so the tests now pin the absence as well
+    as the behaviour: the numbers still resolve, and there is nowhere else for a second copy to
+    live.
     """
 
-    def test_z_image_is_now_carried_on_an_8_gb_mac_by_measurement(self):
-        """It was a request to try; the owner's run made it a result.
+    def test_the_tables_are_gone_rather_than_emptied(self):
+        for name in ("PROVEN_SMALLER", "CARRY_BELOW_TIER"):
+            with self.subTest(table=name):
+                self.assertFalse(hasattr(COPY, name),
+                                 f"{name} is still in the kit; its numbers belong in the manifests")
 
-        This replaces a test that asserted the opposite — that the carry sat *below* the manifest's
-        own floor and named `CARRY_BELOW_TIER` as its origin. When the 8 GB run returned QUALIFIED
-        the manifest's floor moved 16 -> 8, so the only way to keep that assertion green would have
-        been to pin the model to a floor the measurement had already disproved.
-        """
-        manifest = read_json(MANIFESTS / "z-image-turbo-mflux-4bit.json")
-        declared = manifest["qualification"]["minimum_unified_memory_gb"]
+    def test_the_measured_8_gb_models_still_resolve_to_8(self):
+        # The behaviour the tables delivered, now from one source. A regression here would put
+        # FLUX.2 Klein 4-bit and Breeze TTS 2 4-bit back out of reach of every 8 GB Mac.
+        for package_id in ("z-image-turbo-mflux-4bit", "breeze-tts-2-mlx-4bit",
+                           "flux2-klein-4b-mlx-4bit"):
+            with self.subTest(package=package_id):
+                manifest = read_json(MANIFESTS / f"{package_id}.json")
+                self.assertEqual(COPY.required_gb(manifest), 8)
+                self.assertEqual(manifest["qualification"]["minimum_unified_memory_gb"], 8,
+                                 "the manifest has to state the floor the kit enforces")
+                # FLUX.2 Klein 4-bit's 8 GB is a production-use floor with no stored peak receipt,
+                # so it is honestly `unqualified`; the other two carry a measured status. What
+                # matters here is that the FLOOR the kit enforces is the manifest's own number.
+                self.assertIn(manifest["qualification"]["status"], ("qualified", "unqualified"))
+                self.assertTrue(manifest["qualification"]["memory_evidence"],
+                                "the floor has to say where it came from")
+                origin = COPY.floor_origin(manifest)
+                self.assertIn("minimum_unified_memory_gb", origin)
+                self.assertIn(package_id, origin, "the sentence must name the file to edit")
 
-        self.assertEqual(declared, 8, "the measured floor for this model is 8 GB")
-        self.assertEqual(COPY.required_gb(manifest), 8)
-        self.assertEqual(manifest["qualification"]["status"], "qualified",
-                         "the manifest has to carry the measurement, not just the floor")
-        origin = COPY.floor_origin(manifest)
-        self.assertIn("PROVEN_SMALLER", origin,
-                      "a measured result has to come from the proven table")
-        self.assertNotIn("CARRY_BELOW_TIER", origin,
-                         "it is no longer a request to try")
-
-    def test_breeze_is_copied_to_8_gb_macs_on_its_measurement(self):
-        """Owner decision 2026-10-04: measured on an 8 GB M1, so "2 - Copy the models" carries it there."""
-        manifest = read_json(MANIFESTS / "breeze-tts-2-mlx-4bit.json")
-        self.assertEqual(COPY.required_gb(manifest), 8)
-        self.assertIn("PROVEN_SMALLER", COPY.floor_origin(manifest))
-        self.assertNotIn("breeze-tts-2-mlx-4bit", COPY.CARRY_BELOW_TIER)
-
-    def test_a_proven_model_still_takes_its_floor_from_the_proven_table(self):
-        manifest = read_json(MANIFESTS / "flux2-klein-4b-mlx-4bit.json")
-        self.assertEqual(COPY.required_gb(manifest), 8)
-        origin = COPY.floor_origin(manifest)
-        self.assertIn("PROVEN_SMALLER", origin)
-        self.assertNotIn("CARRY_BELOW_TIER", origin)
-
-    def test_the_proven_table_wins_when_a_package_is_in_both(self):
-        manifest = {"package_id": "in-both-tables",
-                    "qualification": {"minimum_unified_memory_gb": 64}}
-        with mock.patch.dict(COPY.PROVEN_SMALLER, {"in-both-tables": 24}), \
-                mock.patch.dict(COPY.CARRY_BELOW_TIER, {"in-both-tables": 8}):
-            self.assertEqual(COPY.required_gb(manifest), 24,
-                             "a measured run outranks a request to try")
-            self.assertIn("PROVEN_SMALLER", COPY.floor_origin(manifest))
-
-    def test_a_model_in_neither_table_keeps_its_own_manifest_floor(self):
-        manifest = {"package_id": "in-neither-table",
+    def test_a_model_keeps_its_own_manifest_floor(self):
+        manifest = {"package_id": "an-ordinary-model",
                     "qualification": {"minimum_unified_memory_gb": 32}}
         self.assertEqual(COPY.required_gb(manifest), 32)
-        origin = COPY.floor_origin(manifest)
-        self.assertIn("minimum_unified_memory_gb", origin)
-        # The guidance text may name the tables; the floor must not be attributed to either.
-        self.assertNotIn("from CARRY_BELOW_TIER", origin)
-        self.assertNotIn("from PROVEN_SMALLER", origin)
+        self.assertIn("model-manifests/an-ordinary-model.json", COPY.floor_origin(manifest))
+
+    def test_a_manifest_with_no_floor_is_not_a_zero_requirement(self):
+        # `required_gb` answers 0 for "no figure published", which the caller reads as "fits" -
+        # the same answer it gave before. What must not happen is the *origin* claiming a number.
+        manifest = {"package_id": "unstated", "qualification": {}}
+        self.assertEqual(COPY.required_gb(manifest), 0)
+        self.assertIn("minimum_unified_memory_gb", COPY.floor_origin(manifest))
 
     def test_an_8_gb_mac_selects_z_image_end_to_end(self):
         with TemporaryDirectory() as tmp:
@@ -792,18 +854,23 @@ class TheCopyAsksTheAppWhereModelsGoTests(unittest.TestCase):
 
 
 class QwenStockingTests(unittest.TestCase):
-    """Owner decision 2026-10-08: the low-RAM Qwen Image 2.1 is the fleet's stocked Qwen (16 GB and
-    up); the native one is qualified on 24 GB, stays on the SSD and is installed on request only."""
+    """Both Qwen Image 2.1 packs are ordinary packages now (owner decision 2026-10-28).
+
+    There used to be a "stocked vs installed on request only" split: the native mlx-serve pack was
+    still on the SSD but never copied, because the fleet's stocked Qwen was the low-RAM mflux one.
+    With the install-time picker the customer chooses, so no list decides for them any more - RAM
+    does. The low-RAM pack is in the 16 GB preset; the native one is in no preset and is tickable.
+    """
 
     LOW_RAM, NATIVE = "qwen-image-2-1-mflux-q4", "qwen-image-2-1-mlx-serve-4bit"
 
-    def test_low_ram_is_copied_from_16_gb_and_native_never_is(self):
+    def test_each_pack_is_copied_exactly_when_this_mac_has_the_memory_for_it(self):
         floors = {package_id: json.loads((MANIFESTS / f"{package_id}.json").read_text())
                   ["qualification"]["minimum_unified_memory_gb"]
                   for package_id in (self.LOW_RAM, self.NATIVE)}
         self.assertEqual(floors, {self.LOW_RAM: 16, self.NATIVE: 24})
-        self.assertIn(self.NATIVE, COPY.NOT_STOCKED)
-        self.assertNotIn(self.LOW_RAM, COPY.NOT_STOCKED)
+        self.assertFalse(hasattr(COPY, "NOT_STOCKED"),
+                         "the installed-on-request-only list is gone; RAM is the only gate")
         for memory_gb in (8, 16, 24, 32):
             with self.subTest(memory_gb=memory_gb), TemporaryDirectory() as tmp:
                 kit = Harness(Path(tmp))
@@ -814,9 +881,8 @@ class QwenStockingTests(unittest.TestCase):
 
                 self.assertEqual(code, 0, output)
                 self.assertEqual((kit.home / self.LOW_RAM).is_dir(), memory_gb >= 16, output)
-                self.assertFalse((kit.home / self.NATIVE).exists(), output)
-                self.assertTrue((kit.library / self.NATIVE).is_dir(), "it stays on the SSD")
-                self.assertIn("Installed on request only", output)
+                self.assertEqual((kit.home / self.NATIVE).is_dir(), memory_gb >= 24, output)
+                self.assertNotIn("Installed on request only", output)
 
     def test_native_already_on_a_mac_is_offered_and_never_pruned(self):
         with TemporaryDirectory() as tmp:

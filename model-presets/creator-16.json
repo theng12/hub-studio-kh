@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "preset_id": "creator-16",
+  "name": "Creator \u00b7 16 GB",
+  "memory_tier_gb": 16,
+  "summary": "Adds the larger image model, the writing model, a better captioner, the second voice and the 16 GB voice tier.",
+  "packages": [
+    "z-image-turbo-mflux-4bit",
+    "flux2-klein-4b-mlx-4bit",
+    "qwen3-tts-12hz-0-6b-base-4bit",
+    "voxcpm2-4bit",
+    "whisper-turbo",
+    "florence-2-base-ft",
+    "depth-anything-v2-small",
+    "bge-small-en-v1-5-bf16",
+    "stable-audio-3-medium",
+    "qwen-image-2-1-turbo-mflux-q4",
+    "qwen3-5-9b-4bit",
+    "florence-2-large-ft",
+    "omnivoice-bfloat16",
+    "breeze-tts-2-mlx-4bit"
+  ]
+}

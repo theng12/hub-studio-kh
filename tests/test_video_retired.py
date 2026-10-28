@@ -228,8 +228,11 @@ class InstalledRetiredModelsTests(unittest.TestCase):
             self.assertTrue(elsewhere.is_dir())
 
     def test_the_hub_runs_it_at_start_up(self) -> None:
+        # Retirement is the only list that still moves an installed package out, so it has to be
+        # the one start-up passes (shelving was deleted on 2026-10-28, and is asserted absent).
         source = (WORKTREE / "components/hub/standalone.py").read_text()
-        self.assertIn("retire_installed_models()", source.split("shelve_installed_models()")[-1])
+        self.assertIn("retire_installed_models()", source)
+        self.assertNotIn("shelve_installed_models", source)
 
 
 class ReleaseWithoutVideoTests(unittest.TestCase):
