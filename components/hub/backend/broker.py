@@ -2233,9 +2233,15 @@ def _shared_params_with_local_reference(envelope: dict) -> dict:
     cloning needs a reference voice or private reference upload" - a message
     about the reference, for a voice the operator had just selected from a list.
     Anything the app can put in one of these two slots belongs in this map.
+
+    ``delivery_instruction`` (owner 2026-10-29) is lifted for the same reason: a
+    per-request direction is one string for the whole batch, and a caller that
+    puts it beside ``model`` must not have it silently dropped while the job
+    still renders. Its name is unchanged on the way to the worker - the Hub
+    renames nothing a worker states.
     """
     shared = dict(envelope.get("sharedParams") or {})
-    for key in ("voice_reference_asset_id", "voice_library_id"):
+    for key in ("voice_reference_asset_id", "voice_library_id", "delivery_instruction"):
         value = str(envelope.get(key) or "").strip()
         if value and not str(shared.get(key) or "").strip():
             shared[key] = value
@@ -3317,6 +3323,10 @@ def terminal_result(b: dict, item: dict) -> dict | None:
     # and fails an item that differs, instead of accepting a text-to-image render as success.
     if item.get("reference_count") is not None:
         result["reference_count"] = item.get("reference_count")
+    # The delivery direction this render actually ran with, when there was one: the caller's own
+    # text, what the engine received, and the guidance strength applied.
+    if isinstance(item.get("delivery_instruction"), dict):
+        result["delivery_instruction"] = item["delivery_instruction"]
     return result
 
 
@@ -3668,6 +3678,11 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     if b["modality"] == "voice":
         item["voice_library_id"] = body.get("voice_library_id")
         item["preset_speaker"] = body.get("preset_speaker")
+        # What the worker made of a per-request delivery direction: the caller's text, what the
+        # engine received, and the guidance strength used. Only present when the worker stated
+        # it, so a job without one writes nothing and an older worker's item is unchanged.
+        if isinstance(job.get("delivery_instruction"), dict):
+            item["delivery_instruction"] = job["delivery_instruction"]
         for field in (
             "reference_audio_sha256", "reference_source_sha256",
             "reference_preparation_revision", "reference_duration_s",

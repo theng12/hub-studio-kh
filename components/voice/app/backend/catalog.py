@@ -16,6 +16,7 @@ Capability vocabulary:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
@@ -108,6 +109,147 @@ class PresetRoster:
 
 
 @dataclass(frozen=True)
+class InlineVocalEvent:
+    """One vocal event an engine performs when it appears inline in the **text**.
+
+    ``syntax`` is exactly what the caller writes (``"(sigh)"``), and ``event`` is what it means.
+    The list is the model card's, not an invention: an event tag the engine does not know is read
+    aloud as a word, which is worse than offering no tag at all.
+    """
+    syntax: str
+    event: str
+
+
+@dataclass(frozen=True)
+class DeliveryInstruction:
+    """How one family's engine takes a per-request performance direction ("read it sadly").
+
+    The form is the engine's, and it differs per family, so a caller must be told which one it is
+    rather than left to guess that every model does the same thing:
+
+    ``engine_form``
+        ``"instruct"`` — the instruction goes to the engine's ``instruct`` argument, beside the
+        reference clip when there is one (Breeze TTS 2 "Voice Direction").
+        ``"text_prefix"`` — the instruction goes in front of the text as a parenthesised style
+        prefix, ``"(sad and quiet)Hello."``, exactly as that engine documents (VoxCPM2
+        "Controllable Cloning").
+    ``directed_cfg_scale`` / ``directed_cfg_parameter``
+        The guidance value the model card recommends *for a directed request*, and the request
+        field it belongs to. It is data here because it is the card's number, not this app's
+        policy: a caller that supplies that field still wins, and every job records the value it
+        ran with. ``None`` for an engine whose card recommends nothing extra.
+
+    Everything else is published as guidance for a person or a scheduler: examples the card
+    gives, the card's own language rule (``None`` when the card states none, never an invented
+    one), the inline vocal events the card documents, and where all of it came from.
+    """
+    engine_form: str
+    source_url: str
+    examples: tuple[str, ...] = ()
+    language_rule: Optional[str] = None
+    inline_events: tuple[InlineVocalEvent, ...] = ()
+    directed_cfg_scale: Optional[float] = None
+    directed_cfg_parameter: Optional[str] = None
+    note: str = ""
+
+
+#: The capability token a model publishes when its engine really takes a delivery instruction.
+#: Derived from the family above, never written into a catalogue row: a new checkpoint of a family
+#: that supports it gets the capability the day it lands.
+DELIVERY_INSTRUCTION_CAPABILITY = "delivery-instruction"
+#: The engine forms a family may state, named by the way the instruction reaches the engine.
+DELIVERY_INSTRUCTION_FORMS = frozenset({"instruct", "text_prefix"})
+
+# Parentheses are the style prefix's own delimiter, so an instruction carrying one could close the
+# prefix early and turn the rest of it into script text. Removed for the prefix form only.
+_DELIVERY_PARENTHESES = re.compile(r"[()（）]")
+
+
+def delivery_instruction_for(family_id: str) -> Optional["DeliveryInstruction"]:
+    """The delivery-instruction contract one family's engine publishes, or None."""
+    family = FAMILIES.get(family_id)
+    return family.delivery_instruction if family is not None else None
+
+
+def delivery_instruction_guidance(model: "ModelEntry") -> Optional[dict]:
+    """The published guidance for one model, or None when its engine takes no instruction."""
+    guidance = delivery_instruction_for(model.family)
+    if guidance is None:
+        return None
+    return {
+        "kind": "free_text",
+        "engine_form": guidance.engine_form,
+        "max_characters": lane_contract.DELIVERY_INSTRUCTION_MAX_CHARACTERS,
+        "examples": list(guidance.examples[:3]),
+        "language_rule": guidance.language_rule,
+        "inline_events": [
+            {"syntax": event.syntax, "event": event.event, "where": "text"}
+            for event in guidance.inline_events
+        ],
+        "directed_cfg_scale": guidance.directed_cfg_scale,
+        "directed_cfg_parameter": guidance.directed_cfg_parameter,
+        "source_url": guidance.source_url,
+        "note": guidance.note,
+    }
+
+
+def delivery_instruction_for_engine(model: "ModelEntry", value: object) -> str:
+    """The instruction as this model's engine receives it, or ``""``.
+
+    Whitespace is collapsed for every form. The prefix form additionally loses its parentheses —
+    that is the only form where a bracket in the caller's words could break the construct they
+    were written into. The caller's original text is what the job records under
+    ``delivery_instruction``, so nothing is lost from the record.
+    """
+    guidance = delivery_instruction_for(model.family)
+    text = " ".join(str(value or "").split())
+    if guidance is not None and guidance.engine_form == "text_prefix":
+        text = " ".join(_DELIVERY_PARENTHESES.sub(" ", text).split())
+    return text[:lane_contract.DELIVERY_INSTRUCTION_MAX_CHARACTERS]
+
+
+def delivery_instruction_refusal(model: "ModelEntry", value: object) -> Optional[str]:
+    """Why this model cannot take ``value`` as a delivery instruction, or None when it can.
+
+    An engine that has no instruction input must say so. Accepting the field and dropping it is
+    the silent-ignore shape: the caller sees a successful generation that ignored what it asked
+    for, and has no way to tell that from a model that carried it out badly.
+    """
+    text = " ".join(str(value or "").split())
+    if not text:
+        return None
+    guidance = delivery_instruction_for(model.family)
+    if guidance is None:
+        return (
+            f"{model.label} has no delivery-instruction input, so it cannot take a delivery "
+            "instruction. Remove the instruction, or choose a model that publishes the "
+            f"'{DELIVERY_INSTRUCTION_CAPABILITY}' capability."
+        )
+    leftover = delivery_instruction_for_engine(model, text)
+    if not leftover:
+        return (
+            "The delivery instruction is empty once its parentheses are removed. Write the "
+            "direction in plain words, for example 'speak slowly and sadly'."
+        )
+    if len(text) > lane_contract.DELIVERY_INSTRUCTION_MAX_CHARACTERS:
+        return (
+            f"The delivery instruction is {len(text)} characters; the limit is "
+            f"{lane_contract.DELIVERY_INSTRUCTION_MAX_CHARACTERS}."
+        )
+    return None
+
+
+def capabilities_for(model: "ModelEntry") -> tuple[str, ...]:
+    """A model's declared capabilities plus the ones its family's engine supplies."""
+    declared = tuple(model.capabilities or ())
+    if delivery_instruction_for(model.family) is None:
+        return declared
+    if DELIVERY_INSTRUCTION_CAPABILITY in declared:
+        return declared
+    return declared + (DELIVERY_INSTRUCTION_CAPABILITY,)
+
+
+@dataclass(frozen=True)
 class Family:
     id: str
     label: str
@@ -172,6 +314,10 @@ class Family:
     # applies no multiplier and gets one pitch-preserving tempo pass on the
     # finished artifact instead (long_form_policy.speed_policy_for).
     native_speed: bool = False
+    # The engine's own way of taking a per-request performance direction, where it has one. This
+    # is the fact the `delivery-instruction` capability is derived from, so it is set only on a
+    # family whose engine really reads one - a family that leaves it None refuses the field.
+    delivery_instruction: Optional[DeliveryInstruction] = None
 
 
 # The exact tag set mlx-audio's OmniVoice treats as atomic non-verbal tokens
@@ -241,7 +387,25 @@ FAMILIES: dict[str, Family] = {
             "Keeps each synthesis pass inside the practical voice-fidelity window "
             "while preserving the selected clone controls."
         ),
-        lane_parameters=("voice_design_prompt", "instruct", "ref_transcript"),
+        lane_parameters=("voice_design_prompt", "instruct", "ref_transcript",
+                         "delivery_instruction"),
+        # VoxCPM2 "Controllable Cloning": the style goes in parentheses at the START of the text
+        # sent to the engine, immediately followed by the words to read. The card states no rule
+        # for the style text's language, so none is published, and it documents no inline vocal
+        # event syntax, so none is offered - an invented tag would be read aloud as a word.
+        delivery_instruction=DeliveryInstruction(
+            engine_form="text_prefix",
+            examples=("slightly faster, cheerful tone",),
+            language_rule=None,
+            source_url="https://huggingface.co/openbmb/VoxCPM2",
+            note=(
+                "The card's own example is `(slightly faster, cheerful tone)This is a cloned "
+                "voice with style control.` — the parenthetical style, then the words, with no "
+                "space between them. Each section of a long script carries it, so the style does "
+                "not fade after the first one; parentheses inside the instruction are removed "
+                "because they are the prefix's own delimiter."
+            ),
+        ),
         summary=(
             "OpenBMB's VoxCPM2 ported to MLX for native Apple Silicon inference "
             "(via Prince Canuma's mlx-audio). 2B parameters, 30 languages, 48 kHz "
@@ -572,7 +736,35 @@ FAMILIES: dict[str, Family] = {
             "more often (fleet, 7 days: 6% at one sentence, 25% at four). Sections are levelled "
             "to one loudness before the join."
         ),
-        lane_parameters=("voice_design_prompt", "normalize_text"),
+        lane_parameters=("voice_design_prompt", "normalize_text", "delivery_instruction"),
+        # Breeze TTS 2 "Voice Direction": the instruction is the engine's `instruct` argument and
+        # is passed BESIDE the reference clip, so a cloned voice can be directed without changing
+        # who it is. The card recommends `cfg_scale` 4 to strengthen instruction-following; that
+        # is the model's own published number for a directed request, not this app's policy.
+        delivery_instruction=DeliveryInstruction(
+            engine_form="instruct",
+            examples=(
+                "Speak slowly with a restrained, serious tone.",
+                "Speak slowly and sadly, voice close to breaking, full of longing.",
+                "Speak warmly with a gentle smile, tender and comforting.",
+            ),
+            language_rule="Match the instruction language to the target text.",
+            inline_events=(
+                InlineVocalEvent(syntax="(sigh)", event="a sigh"),
+                InlineVocalEvent(syntax="(laugh)", event="a laugh"),
+                InlineVocalEvent(syntax="(cough)", event="a cough"),
+                InlineVocalEvent(syntax="(clears throat)", event="clearing the throat"),
+            ),
+            directed_cfg_scale=4.0,
+            directed_cfg_parameter="breeze_cfg_scale",
+            source_url="https://huggingface.co/BreezeBlue/Breeze-TTS-2",
+            note=(
+                "The card's own direction example is the first above; the other two were carried "
+                "by the Breeze engine on this Mac (2026-10-29). Inline vocal events go in the "
+                "TEXT, not the instruction — they are performed, not read aloud. The card also "
+                "documents Chinese forms: [笑] [咳嗽] [清嗓子] [叹气]."
+            ),
+        ),
         summary=(
             "A 4-bit MLX text-to-speech model that designs a voice from a written description, "
             "clones one from a reference clip and its transcript, or takes a direction for how a "
@@ -1777,6 +1969,41 @@ def _validate_registry() -> None:
                 "- or a scheduler cannot choose from - is a picker that never fills and a "
                 "contract that lies (components/voice/app/backend/catalog.py)"
             )
+        guidance = family.delivery_instruction
+        if guidance is None:
+            continue
+        if guidance.engine_form not in DELIVERY_INSTRUCTION_FORMS:
+            raise RegistryError(
+                f"family {family_id!r} states delivery-instruction engine_form "
+                f"{guidance.engine_form!r}, which is not one of "
+                f"{sorted(DELIVERY_INSTRUCTION_FORMS)}; the worker applies the form by name in "
+                "components/voice/app/backend/generation.py"
+            )
+        if not guidance.source_url.startswith("https://"):
+            raise RegistryError(
+                f"family {family_id!r} publishes a delivery-instruction guidance with no https "
+                "source_url; guidance a caller cannot check against the model card is an "
+                "unattributed claim (components/voice/app/backend/catalog.py)"
+            )
+        if guidance.directed_cfg_scale is not None:
+            lever = SAMPLING_LEVERS.get(family_id, {}).get(
+                str(guidance.directed_cfg_parameter))
+            if lever is None:
+                raise RegistryError(
+                    f"family {family_id!r} states directed_cfg_scale "
+                    f"{guidance.directed_cfg_scale} for request field "
+                    f"{guidance.directed_cfg_parameter!r}, which is not one of that family's "
+                    "sampling levers in SAMPLING_LEVERS; the directed default would be applied "
+                    "to a field the lane does not read "
+                    "(components/voice/app/backend/catalog.py)"
+                )
+            if not (lever["minimum"] <= guidance.directed_cfg_scale <= lever["maximum"]):
+                raise RegistryError(
+                    f"family {family_id!r} states directed_cfg_scale "
+                    f"{guidance.directed_cfg_scale}, outside its own lever's "
+                    f"{lever['minimum']}-{lever['maximum']} bound "
+                    "(components/voice/app/backend/catalog.py)"
+                )
 
 
 # The three ways this app can be told what a voice should sound like, in the
@@ -1857,6 +2084,7 @@ def serialize_model(m: ModelEntry, defaults: Mapping[str, object] | None = None)
     if not isinstance(reference_profile, dict):
         reference_profile = {}
     family_guidance = family.text_guidance
+    delivery_guidance = delivery_instruction_guidance(m)
     audited_text_max = audited_input_limits.get("text_max_characters")
     try:
         audited_text_max = int(audited_text_max) if audited_text_max is not None else None
@@ -1896,7 +2124,10 @@ def serialize_model(m: ModelEntry, defaults: Mapping[str, object] | None = None)
         **({"min_free_memory_gb": float(m.min_free_memory_gb)}
            if m.min_free_memory_gb is not None else {}),
         "recommended_hardware": m.recommended_hardware,
-        "capabilities": list(m.capabilities),
+        # The row's declared capabilities plus the ones its family's engine supplies
+        # (`capabilities_for`): `delivery-instruction` is a fact about the engine, so it is derived
+        # rather than copied into every checkpoint's row and kept in step by hand.
+        "capabilities": list(capabilities_for(m)),
         # Which of `cloning` / `preset` / `design` this model offers, derived from the
         # capabilities above and the family's own declared request fields (see
         # `voice_modes`). A consumer offers the model in each mode listed here and in no
@@ -1938,6 +2169,11 @@ def serialize_model(m: ModelEntry, defaults: Mapping[str, object] | None = None)
             "quality_guardrails": qwen_clone_guardrails,
         },
         "long_form_delivery": effective_long_form_policy,
+        # Present only for a model whose engine really takes a per-request direction. Absent means
+        # the field is refused, so nothing has to guess from the family label - and a row for a
+        # model without it is unchanged from before this lane existed.
+        **({"delivery_instruction": delivery_guidance}
+           if delivery_guidance is not None else {}),
         "reference_audio": {
             # ``declared`` is the family capability claim; ``profile_source``
             # says whether the exact limits below are audit-grounded or the

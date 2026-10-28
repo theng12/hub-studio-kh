@@ -3791,6 +3791,8 @@ function studio() {
         expressive: "expressive",
         "voice-mixing": "voice mixing",
         streaming: "streaming",
+        // A model whose engine takes a per-request performance direction (owner 2026-10-29).
+        "delivery-instruction": "delivery direction",
       }[c] || c;
     },
 

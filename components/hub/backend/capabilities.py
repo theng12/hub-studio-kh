@@ -184,6 +184,74 @@ def _voice_modes(model: dict) -> list[str] | None:
     return controls
 
 
+#: The two engine forms a Voice model may publish for a delivery instruction. Named here as well
+#: as in the producer because this module re-publishes the shape to the Gateway: a form the Hub
+#: has not been taught is dropped by name (see `_delivery_instruction`), never passed on as if the
+#: Gateway could act on it.
+DELIVERY_INSTRUCTION_FORMS = ("instruct", "text_prefix")
+
+
+def _delivery_instruction(model: dict) -> dict | None:
+    """The guidance one Voice model publishes for a per-request delivery instruction.
+
+    ``None`` when the row publishes none - a model whose engine has no such input - so nothing
+    has to infer capability from a family name. The shape is exactly what the Voice worker
+    published, with every value re-bounded: this snapshot is read by the Gateway, and a guidance
+    blob is not a place to forward an unbounded string.
+
+    * ``engine_form`` - ``"instruct"`` (the instruction is the engine's own instruct argument,
+      passed beside a reference clip) or ``"text_prefix"`` (a ``(style)`` prefix in front of the
+      text). Anything else is not republished.
+    * ``max_characters``, ``examples`` (at most 3), ``language_rule``, ``inline_events``,
+      ``directed_cfg_scale`` / ``directed_cfg_parameter`` (the value a *directed* request uses,
+      and the field it belongs to), ``source_url`` (the model card it came from) and ``note``.
+    """
+    published = model.get("delivery_instruction")
+    if not isinstance(published, dict):
+        return None
+    form = published.get("engine_form")
+    source = published.get("source_url")
+    maximum = published.get("max_characters")
+    if (form not in DELIVERY_INSTRUCTION_FORMS or not isinstance(source, str) or not source
+            or not isinstance(maximum, int) or isinstance(maximum, bool) or maximum <= 0):
+        # The bound is the one number a caller must have before writing an instruction, so a row
+        # that does not state it is not republished at all. Nothing here invents one: the
+        # producer's own value is the only one this Hub has.
+        return None
+    guidance = {
+        "kind": str(published.get("kind") or "free_text")[:40],
+        "engine_form": form,
+        "max_characters": maximum,
+        "examples": _string_list(published.get("examples"))[:3],
+        "language_rule": (str(published["language_rule"])[:500]
+                          if isinstance(published.get("language_rule"), str) else None),
+        "inline_events": [],
+        "directed_cfg_scale": None,
+        "directed_cfg_parameter": None,
+        "source_url": source[:500],
+        "note": str(published.get("note") or "")[:1000],
+    }
+    for event in (published.get("inline_events") or [])[:12]:
+        if not isinstance(event, dict):
+            continue
+        syntax = event.get("syntax")
+        if not isinstance(syntax, str) or not syntax.strip():
+            continue
+        guidance["inline_events"].append({
+            "syntax": syntax[:80],
+            "event": str(event.get("event") or "")[:160],
+            # Where the tag goes: the card documents these in the TEXT, not in the instruction.
+            "where": str(event.get("where") or "text")[:20],
+        })
+    scale = published.get("directed_cfg_scale")
+    if isinstance(scale, (int, float)) and not isinstance(scale, bool):
+        parameter = published.get("directed_cfg_parameter")
+        if isinstance(parameter, str) and parameter.strip():
+            guidance["directed_cfg_scale"] = float(scale)
+            guidance["directed_cfg_parameter"] = parameter[:80]
+    return guidance
+
+
 def _controls(model: dict, modality: str) -> dict:
     controls = {
         "capabilities": _string_list(model.get("capabilities")),
@@ -240,6 +308,13 @@ def _controls(model: dict, modality: str) -> dict:
         voice_modes = _voice_modes(model)
         if voice_modes is not None:
             controls["voice_modes"] = voice_modes
+        # How this model takes a per-request delivery direction, where its engine takes one. The
+        # `delivery-instruction` capability travels in `capabilities` above; this is the guidance a
+        # caller reads to write one - the form, the card's examples, its language rule, the inline
+        # vocal events it documents and where all of that came from.
+        guidance = _delivery_instruction(model)
+        if guidance is not None:
+            controls["delivery_instruction"] = guidance
     if modality == "chat" and model.get("verified_token_usage") is True:
         controls["verified_token_usage"] = True
     return controls

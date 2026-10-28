@@ -419,9 +419,26 @@ def _job_parameters(body: "Txt2SpeechBody", model: catalog.ModelEntry) -> dict:
     # request recorded before the levers existed still compares equal; the worker applies the
     # model's default from the table.
     levers = [name for levers in catalog.SAMPLING_LEVERS.values() for name in levers]
+    # A directed request takes the guidance value the model card publishes for exactly that case
+    # (Breeze TTS 2's "cfg_scale 4" for voice direction). It is data from the catalogue - the
+    # card's number, not this app's - and it applies only while an instruction is present. A
+    # number the request itself supplies wins, as every supplied field does; an explicit null is
+    # the same as omitting the field, because that is what null means everywhere else here.
+    guidance = catalog.delivery_instruction_for(model.family)
+    if (
+        guidance is not None
+        and guidance.directed_cfg_scale is not None
+        and str(params.get("delivery_instruction") or "").strip()
+        and params.get(str(guidance.directed_cfg_parameter)) is None
+    ):
+        params[str(guidance.directed_cfg_parameter)] = guidance.directed_cfg_scale
     for name in ("output_format", "paragraph_pause_sec", "sentence_pause_sec", *levers):
         if params.get(name) is None:
             params.pop(name, None)
+    # An omitted (or blank) instruction is not recorded, so an older caller's retried
+    # `client_request_id` still compares equal to its stored request.
+    if not str(params.get("delivery_instruction") or "").strip():
+        params.pop("delivery_instruction", None)
     return params
 
 
@@ -475,6 +492,18 @@ class Txt2SpeechBody(BaseModel):
     # ── Voice cloning (Qwen3-TTS Base, VoxCPM2, and other engines) ──
     voice_library_id: Optional[str] = None  # id of a voice in app/voices/
     ref_transcript: Optional[str] = None    # enables VoxCPM2 ultimate cloning; required by F5-TTS
+    # ── Per-request performance direction (owner 2026-10-29) ──
+    # "Read this line slowly and sadly." Every engine takes it in its OWN documented form - Breeze
+    # TTS 2 as its `instruct` beside the reference clip, VoxCPM2 as a `(style)` prefix in front of
+    # the text - and both forms are published as the model row's `delivery_instruction` guidance.
+    # A model whose engine has no such input refuses a non-empty value rather than dropping it.
+    delivery_instruction: Optional[str] = Field(
+        default=None, max_length=lane_contract.DELIVERY_INSTRUCTION_MAX_CHARACTERS,
+        description=(
+            "Per-request performance direction the engine applies; the model row's "
+            "`delivery_instruction` guidance states how that model takes it."
+        ),
+    )
     # ── VoxCPM2 MLX controls ──
     cfg_value: float = 2.0
     inference_timesteps: int = 7
@@ -1424,6 +1453,18 @@ def add_seed_voice(body: AddSeedBody) -> dict:
     return {"voice": _serialize_voice(v)}
 
 
+def _refuse_unsupported_delivery_instruction(body: "Txt2SpeechBody", model) -> None:
+    """400 when this model's engine cannot take the request's delivery instruction.
+
+    The refusal names the limit or the model and says what to do about it. Accepting the field
+    and dropping it is the one outcome this must never have: the caller would get a successful
+    generation that ignored what it asked for, indistinguishable from a poor one.
+    """
+    refusal = catalog.delivery_instruction_refusal(model, body.delivery_instruction)
+    if refusal is not None:
+        raise HTTPException(status_code=400, detail=refusal)
+
+
 @app.post("/api/generate/txt2speech")
 def start_txt2speech(body: Txt2SpeechBody, request: Request) -> dict:
     if not body.text.strip():
@@ -1438,6 +1479,7 @@ def start_txt2speech(body: Txt2SpeechBody, request: Request) -> dict:
             status_code=400,
             detail=f"Model {body.repo} doesn't support text-to-speech.",
         )
+    _refuse_unsupported_delivery_instruction(body, model)
     # The request's own fields, with this model's stored defaults filling the ones it omitted.
     params = _job_parameters(body, model)
     section_budget = _resolve_section_budget(params, model)
@@ -1501,6 +1543,9 @@ async def start_txt2speech_with_reference(
                 "detail": f"Model {body.repo} does not support reference-audio cloning.",
             },
         )
+    # A direction rides BESIDE the reference (Breeze TTS 2's Voice Direction form), so this route
+    # checks the same rule as the plain one: a model whose engine has no such input refuses it.
+    _refuse_unsupported_delivery_instruction(body, model)
     # As on the plain route: the request's own fields, then this model's stored defaults for the
     # ones it omitted, before the section budget is canonicalized.
     params = _job_parameters(body, model)

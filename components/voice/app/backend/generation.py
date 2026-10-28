@@ -812,6 +812,57 @@ MLX_AUDIO_FAMILIES: dict[str, dict] = {
 }
 
 
+# ───────────── per-request delivery direction ─────────────
+#
+# One request field, and each engine's own documented form for it (catalogue: `Family.
+# delivery_instruction`, published per model as `delivery_instruction`). These helpers are the
+# whole application: what the job records, and what one engine call receives. They are
+# module-level because a test can call them without a loaded model - these families' weights are
+# not on every Mac, so the contract is the part that can be proved here.
+
+
+def _delivery_applied(model_entry, params: dict, gen_kwargs: dict) -> dict | None:
+    """The record of this job's delivery instruction, or None when there was none to apply.
+
+    ``text`` is exactly what the caller wrote - the job's own record of the request is never
+    rewritten - and ``sent_text`` is what the engine received, which differs for the prefix form
+    because its parentheses are removed. ``cfg_scale`` is the guidance strength the run actually
+    used, recorded so a caller can tell a directed render from an undirected one.
+    """
+    guidance = catalog.delivery_instruction_for(model_entry.family)
+    requested = str(params.get("delivery_instruction") or "").strip()
+    if guidance is None or not requested:
+        return None
+    sent = catalog.delivery_instruction_for_engine(model_entry, requested)
+    if not sent:
+        return None
+    return {
+        "text": requested,
+        "sent_text": sent,
+        "engine_form": guidance.engine_form,
+        "engine_argument": "instruct" if guidance.engine_form == "instruct" else None,
+        "text_prefix": f"({sent})" if guidance.engine_form == "text_prefix" else None,
+        "cfg_parameter": guidance.directed_cfg_parameter,
+        "cfg_scale": (gen_kwargs.get("cfg_scale")
+                      if guidance.directed_cfg_parameter else None),
+    }
+
+
+def _delivery_engine_text(model_entry, params: dict, text: str) -> str:
+    """The words one engine call receives: the script, behind the model's own style prefix.
+
+    Only the prefix form touches the text. Every other form sends the script byte-for-byte, and a
+    model with no delivery-instruction contract is untouched. The caller's script and the job's
+    recorded ``text`` never change - this is the copy handed to the engine, per section.
+    """
+    guidance = catalog.delivery_instruction_for(model_entry.family)
+    if guidance is None or guidance.engine_form != "text_prefix":
+        return text
+    sent = catalog.delivery_instruction_for_engine(
+        model_entry, params.get("delivery_instruction"))
+    return f"({sent}){text}" if sent else text
+
+
 def engine_for_family(family: str) -> str:
     """The engine a family runs on, or a failure that names both files to edit."""
     entry = catalog.FAMILIES.get(family)
@@ -2214,6 +2265,12 @@ class GenerationJob:
             result["delivery"] = self.delivery
             if self.delivery_fallback_reason:
                 result["delivery_fallback_reason"] = self.delivery_fallback_reason
+        # What a per-request delivery direction became on this job: the caller's text, what the
+        # engine received, and the guidance strength applied. Absent for a job that asked for
+        # none, so an undirected job's result is unchanged from before this field existed.
+        applied_delivery = self.params.get("_delivery_instruction_applied")
+        if isinstance(applied_delivery, dict):
+            result["delivery_instruction"] = applied_delivery
         return {
             **result,
             **final_tts_result(
@@ -2635,6 +2692,12 @@ class GenerationManager:
         model = catalog.get_model(repo)
         if model is None:
             raise ValueError(f"Unknown repo: {repo}")
+        # The routes refuse this with a 400 before a job exists; this is the same rule for any
+        # other caller. An engine with no instruction input must say so, never accept and drop it.
+        refusal = catalog.delivery_instruction_refusal(
+            model, params.get("delivery_instruction"))
+        if refusal is not None:
+            raise ValueError(refusal)
         requested_budget = params.get("section_max_characters")
         resolved_budget = params.get("_resolved_section_max_characters")
         qwen_06b_base = (
@@ -4121,6 +4184,13 @@ class GenerationManager:
         # value or the model's default from the one table, `catalog.SAMPLING_LEVERS`.
         gen_kwargs.update(catalog.sampling_kwargs(family, model_entry.repo, params))
 
+        # What a per-request delivery direction became on this job, recorded in its parameters so
+        # the job result states the instruction the engine ran with and the guidance value it
+        # used. Written before any engine call, so a failed render still shows what it was asked.
+        delivery_applied = _delivery_applied(model_entry, params, gen_kwargs)
+        if delivery_applied is not None:
+            params["_delivery_instruction_applied"] = delivery_applied
+
         # MLX models sample through mlx.core.random. Apply the recorded seed
         # immediately before inference so history reuse is genuinely repeatable.
         seed = params.get("_qwen_attempt_seed", params.get("seed"))
@@ -4166,6 +4236,7 @@ class GenerationManager:
                 self._generate_mlx_long_form_sections(
                     job, family, model, gen_kwargs, internal_chunks, temp_dir,
                     output_path, generate_audio, model_entry.repo,
+                    model_entry=model_entry,
                 )
                 if not job.cancel_event.is_set():
                     print(
@@ -4177,7 +4248,8 @@ class GenerationManager:
                     model=model,
                     output_path=str(temp_dir),
                     join_audio=True,
-                    **gen_kwargs,
+                    **{**gen_kwargs,
+                       "text": _delivery_engine_text(model_entry, params, text)},
                 )
 
                 produced = temp_dir / "audio.wav"
@@ -4239,7 +4311,8 @@ class GenerationManager:
     def _generate_mlx_long_form_sections(self, job: GenerationJob, family: str, model,
                                          gen_kwargs: dict, chunks: list[str], temp_dir: Path,
                                          output_path: Path, generate_audio,
-                                         model_repo: str = "") -> None:
+                                         model_repo: str = "",
+                                         *, model_entry=None) -> None:
         """Render independently verified sections, then join them into one WAV."""
         segment_paths: list[Path] = []
         job.chunk_total = len(chunks)
@@ -4261,7 +4334,12 @@ class GenerationManager:
                 join_audio=True,
                 **{
                     **gen_kwargs,
-                    "text": chunk,
+                    # The style prefix (where the family has one) is added per section, so the
+                    # script and every word-count/quality check stay on the caller's own text.
+                    "text": (
+                        _delivery_engine_text(model_entry, job.params, chunk)
+                        if model_entry is not None else chunk
+                    ),
                     **(
                         {
                             "max_tokens": qwen_quality.max_tokens_for_text(
@@ -4491,6 +4569,7 @@ class GenerationManager:
         """VoxCPM2 MLX: zero-shot, voice design, reference cloning, or
         transcript-aware continuation cloning with optional style control."""
         design_prompt = (params.get("voice_design_prompt") or params.get("instruct") or "").strip()
+        delivery = str(params.get("delivery_instruction") or "").strip()
         if design_prompt:
             if len(design_prompt) > 500:
                 raise ValueError("VoxCPM2 voice design instructions must be 500 characters or fewer")
@@ -4524,16 +4603,18 @@ class GenerationManager:
                 gen_kwargs["ref_text"] = ""
 
         if "prompt_audio" in gen_kwargs and "instruct" in gen_kwargs:
-            return "ultimate clone + style"
+            label = "ultimate clone + style"
+            return f"{label} + direction" if delivery else label
         if "prompt_audio" in gen_kwargs:
-            return "ultimate clone (transcript-aware)"
+            label = "ultimate clone (transcript-aware)"
+            return f"{label} + direction" if delivery else label
         if "ref_audio" in gen_kwargs and "instruct" in gen_kwargs:
-            return "reference clone + style"
+            return "reference clone + style + direction" if delivery else "reference clone + style"
         if "ref_audio" in gen_kwargs:
-            return "reference clone"
+            return "reference clone + direction" if delivery else "reference clone"
         if "instruct" in gen_kwargs:
-            return "voice-design"
-        return "zero-shot"
+            return "voice-design + direction" if delivery else "voice-design"
+        return "direction" if delivery else "zero-shot"
 
     def _mlx_kwargs_clone_with_intensity(self, model_entry, params, gen_kwargs, voices_module) -> str:
         """Chatterbox (MLX): requires a reference audio for voice cloning,
@@ -4666,7 +4747,16 @@ class GenerationManager:
         request for a different one. With no reference, an instruction is the voice: Breeze designs
         one from a description, or takes a direction for how the line is read. With neither, the
         engine's own default voice is used, and that is a real mode it was measured in.
+
+        **A delivery instruction rides beside the reference** (the card's Voice Direction form,
+        owner 2026-10-29): with a clone it is passed as `instruct` together with `ref_audio` and
+        `ref_text`, so the voice is cloned and the line is directed. Breeze has ONE `instruct`
+        argument, so with no reference a design prompt and a delivery instruction compete for it:
+        **the delivery instruction wins**. It is the more specific, per-request direction, and the
+        design prompt is still in the job's recorded parameters, so the request that lost is
+        visible in the record rather than silently dropped.
         """
+        delivery = str(params.get("delivery_instruction") or "").strip()
         voice_id = (params.get("voice_library_id") or "").strip() or None
         if voice_id or params.get("_reference_audio_path"):
             # No fallback transcript here, unlike Pocket TTS. Breeze builds its clone prompt from
@@ -4684,7 +4774,17 @@ class GenerationManager:
                     "transcript**, and this voice has no transcript saved. Add the transcript on "
                     "the Voices page, or choose a voice that has one."
                 )
+            if delivery:
+                gen_kwargs["instruct"] = delivery
+                return (f"clone + direction (voice={voice_id or 'private-reference'}, "
+                        f"{len(delivery)} char prompt)")
             return f"clone (voice={voice_id or 'private-reference'})"
+
+        if delivery:
+            # The delivery instruction wins over a design prompt: one engine key, one value, and
+            # the per-request direction is the more specific of the two.
+            gen_kwargs["instruct"] = delivery
+            return f"direction ({len(delivery)} char prompt)"
 
         instruct = (params.get("voice_design_prompt") or params.get("instruct") or "").strip()
         if instruct:

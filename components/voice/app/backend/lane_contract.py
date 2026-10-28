@@ -120,6 +120,10 @@ CANCEL = {
 # The API's own ceiling on `text` (`main.Txt2SpeechBody.text`). A model whose
 # audit states a smaller ceiling publishes the audit's number instead.
 API_TEXT_MAX_CHARACTERS = 40_000
+#: The API's bound on a per-request delivery instruction (`main.Txt2SpeechBody`), published here
+#: because this module states the lane's enforced bounds and the catalogue's guidance quotes it.
+#: It lives here rather than in `catalog` because `catalog` imports this module.
+DELIVERY_INSTRUCTION_MAX_CHARACTERS = 500
 
 # Shapes for the optional per-family fields the voice resolvers read. Each name
 # is an API field; the type and any bound match what the worker enforces.
@@ -143,6 +147,19 @@ _PARAMETER_SHAPES: dict[str, dict[str, Any]] = {
     "instruct": {
         "type": "string",
         "note": "delivery or style instruction",
+    },
+    "delivery_instruction": {
+        "type": "string",
+        "required": False,
+        "max_characters": DELIVERY_INSTRUCTION_MAX_CHARACTERS,
+        # A per-job direction for THIS line, never an operator default: a stored one would
+        # silently colour every request that omits the field.
+        "request_only": True,
+        "note": (
+            "per-request performance direction, e.g. 'Speak slowly and sadly, voice close to "
+            "breaking.' How this model's engine takes it is published as the row's "
+            "`delivery_instruction` guidance; a model without that guidance refuses the field."
+        ),
     },
     "ref_transcript": {
         "type": "string",
