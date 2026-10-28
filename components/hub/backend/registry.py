@@ -90,13 +90,24 @@ def priority_order(machine: str) -> list[str]:
 
 
 def with_render_default(order: list[str]) -> list[str]:
-    """One saved order with `render`'s read-time default applied.
+    """One saved order with `render`'s read-time default applied — to a **non-empty** order.
 
     The single place that rule is written. A joined peer's order arrives as a list rather than
     from this Mac's flags (`broker.priority_order`), and it must read the same way.
+
+    **An empty order stays empty.** "No preference" is a distinct, deliberate state with its own
+    meaning, spelled out in the app: every enabled function is equal and the oldest eligible
+    queued work runs. It is not a Mac that preferred something and did not know render existed, so
+    it is not a place to insert a rank the owner never gave — and `tests/
+    test_render_physical_admission.py` pins exactly that (a newer render does not jump older
+    equal-priority work). A Mac that *did* state a preference but omitted render is the case the
+    default is for: its old behaviour was render first (`broker._pending_render_for_machine`
+    reserved the Mac for it), so it keeps that behaviour without anything being rewritten.
     """
     from .vocabulary import RENDER_MODALITY
-    return order if RENDER_MODALITY in order else [RENDER_MODALITY, *order]
+    if not order or RENDER_MODALITY in order:
+        return list(order)
+    return [RENDER_MODALITY, *order]
 
 
 def chat_priority(machine: str) -> bool:

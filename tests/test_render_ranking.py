@@ -161,13 +161,24 @@ class RankingTests(Fixture):
         registry.set_priority_order("local", ["image"])
         self.assertEqual((await self.winner(lanes=("chat",)))[3], "render")
 
-    async def test_a_mac_ranking_chat_first_gives_transcription_the_second_moment(self) -> None:
+    async def test_a_ranked_order_takes_turns_in_its_own_sequence(self) -> None:
+        """Whichever ranked function has work waiting wins, not whichever is oldest."""
         self.executor()
-        registry.set_priority_order("local", ["chat", "render", "transcription"])
-        self.assertEqual(
-            (await self.winner(lanes=("chat", "transcription")))[3], "chat")
-        self.assertEqual(
-            (await self.winner(lanes=("transcription",)))[3], "transcription")
+        registry.set_priority_order(
+            "local", ["chat", "render", "transcription", "voice", "image"])
+        self.assertEqual((await self.winner(lanes=("chat", "transcription")))[3], "chat",
+                         "Chat is ranked first and has work")
+        # With Chat quiet, render is still ranked above transcription and is waiting, so it is the
+        # next eligible work. That is the owner's order being obeyed, not a regression.
+        self.assertEqual((await self.winner(lanes=("transcription",)))[3], "render")
+        # Take the render out of the waiting set and transcription is next.
+        broker.configure_render_executor(None)
+        self.assertEqual((await self.winner(lanes=("transcription",)))[3], "transcription")
+
+    async def test_an_order_that_ranks_transcription_above_render_gives_it_the_turn(self) -> None:
+        self.executor()
+        registry.set_priority_order("local", ["chat", "transcription", "render"])
+        self.assertEqual((await self.winner(lanes=("transcription",)))[3], "transcription")
 
     async def test_render_first_when_the_saved_order_puts_it_first(self) -> None:
         self.executor(created_at=99.0)
@@ -185,10 +196,20 @@ class RankingTests(Fixture):
         stored = json.loads((Path(self.data.name) / "machine_flags.json").read_text())
         self.assertEqual(stored["local"]["priority_order"], ["image"])
 
-    async def test_an_empty_order_still_lets_a_waiting_render_lead(self) -> None:
+    async def test_an_empty_order_means_no_preference_and_stays_equal(self) -> None:
+        """`[]` is a deliberate "all enabled functions are equal", not a Mac that forgot render.
+
+        It is pinned by `test_render_physical_admission`: a newer render must not jump older
+        equal-priority work. Inserting a rank the owner never gave would break that.
+        """
         self.executor(created_at=99.0)
         registry.set_priority_order("local", [])
-        self.assertEqual((await self.winner())[3], "render")
+        self.assertEqual(registry.with_render_default([]), [],
+                         "no preference is not a place to insert a rank the owner never gave")
+        # The lease half keeps the answer it has always given for "no preference": a waiting
+        # render takes the next free moment, which is today's behaviour and is pinned by
+        # tests/test_render_physical_admission.py. Only ranking treats the order as empty.
+        self.assertTrue(broker.render_wins_next_free("local", "chat"))
 
     async def test_an_older_flags_row_reads_the_same_way(self) -> None:
         """A row written before render was rankable: `chat_priority` true, no `priority_order`."""
@@ -254,6 +275,12 @@ class ReservationTests(Fixture):
         self.assertFalse(broker.acquire_external_machine("local", "chat:b:0"))
         self.assertFalse(broker.acquire_external_machine("local", "transcription:b:0"))
 
+    def test_an_empty_order_keeps_the_old_reservation(self) -> None:
+        """Today's behaviour for a Mac that never saved an order, at the lease, unchanged."""
+        self.executor()
+        registry.set_priority_order("local", [])
+        self.assertFalse(broker.acquire_external_machine("local", "chat:b:0"))
+
     def test_a_mac_that_ranks_transcription_above_render_gives_it_the_free_moment(self) -> None:
         self.executor()
         registry.set_priority_order("local", ["transcription", "render"])
@@ -287,7 +314,7 @@ class PauseExemptionTests(Fixture):
     def gate(self, **patches):
         """`render_dispatch_allowed` with every gate open except the one under test."""
         defaults = dict(machine_enabled=True, studio_enabled=True, blocked=False,
-                        standing_by=False, busy=set())
+                        standing_by=False, busy=set(), owner=None)
         defaults.update(patches)
         patches = (
             mock.patch.object(broker, "machine_enabled",
@@ -302,7 +329,7 @@ class PauseExemptionTests(Fixture):
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
-        return broker.render_dispatch_allowed("local")
+        return broker.render_dispatch_allowed("local", defaults["owner"])
 
     def test_a_paused_mac_takes_no_render_by_default(self) -> None:
         self.assertFalse(self.gate(machine_enabled=False))
@@ -322,7 +349,13 @@ class PauseExemptionTests(Fixture):
                          "a quarantine still refuses")
         self.assertFalse(self.gate(machine_enabled=False, studio_enabled=False),
                          "the render studio switched off still refuses")
-        self.assertFalse(self.gate(machine_enabled=False, busy={"local"}),
+        # A running job is never interrupted: with the Mac leased to another render, this one is
+        # refused, exemption or not. (Queried with no owner the comparison reads "no lease" on
+        # both sides, which is the pre-existing shape of this gate and not something the exemption
+        # changes, so the assertion names the owner it is about.)
+        broker._external_machine_leases["local"] = "render:other"
+        self.addCleanup(broker._external_machine_leases.pop, "local", None)
+        self.assertFalse(self.gate(machine_enabled=False, busy={"local"}, owner="render:job-a"),
                          "a busy Mac is still busy")
 
     def test_an_unpaused_mac_is_unaffected_either_way(self) -> None:

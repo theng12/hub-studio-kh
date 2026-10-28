@@ -297,7 +297,7 @@ def retry_class(modality: object) -> str:
 # Final render is one of the ranked functions (owner, 2026-10-28): it takes its
 # place in the same saved order as every other, through `_priority_key`, and a Mac
 # whose saved order never mentioned it still reads it first
-# (`registry.with_render_default`). `render_wins_next_free` applies the same
+# (`registry.with_render_default`, to a non-empty order). `render_wins_next_free` applies the same
 # rank at the lease, so the two halves of arbitration cannot disagree.
 MAX_TRIES = 3
 MAX_INFRA_TRIES = 8
@@ -2541,8 +2541,17 @@ def render_wins_next_free(machine: str, lane: str) -> bool:
     if not _pending_render_for_machine(machine):
         return False
     order = ranked_priority_order(machine)
-    # A lane the order does not name sorts behind every function it does name, and render is
-    # always named here (`ranked_priority_order` supplies the read-time default), so render wins.
+    # **An empty order keeps the old answer, and that is deliberate.** `[]` means "no preference",
+    # where every function is equal and the oldest eligible work runs; it is also the state of a
+    # Mac that has never saved anything, and before render was rankable such a Mac *did* reserve
+    # the next free moment for a waiting render (`tests/test_render_physical_admission.py` pins
+    # it). Both facts are today's behaviour, and the owner asked for today's behaviour unchanged
+    # where the saved order does not mention render - so nothing moves here for an empty order.
+    if not order:
+        return True
+    # A lane the order does not name sorts behind every function it does name, and render is named
+    # here for every non-empty order (`ranked_priority_order` supplies the read-time default), so
+    # an unlisted lane has render ahead of it.
     return order.index(RENDER_MODALITY) < order.index(lane) if lane in order else True
 
 
