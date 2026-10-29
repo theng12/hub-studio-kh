@@ -1,12 +1,11 @@
 # Start here
 
-This folder has the Studio Hub app, the models, and your saved voices.
+This folder holds the Studio Hub app, the models, and your saved voices.
 
-Three things do the whole job. You never need to open anything else.
+Two things, then the app chooses the models with you.
 
 - **1 - Install the app.command** — puts the app on your Mac
-- **2 - Copy the models.command** — puts the models and your voices on your Mac
-- **Studio Hub.app** — the app itself
+- **Studio Hub.app** — the app itself, which copies the models you choose
 
 If a double-click does nothing, or says the file cannot be opened, right-click it
 and choose **Open**, then **Open** again. That is normal for a file that is not
@@ -14,44 +13,50 @@ signed, and you only do it the first time.
 
 ---
 
-## The whole job, in four steps
+## The whole job, in three steps
 
-### 1. Double-click **2 - Copy the models**
-
-It reads how much memory your Mac has and copies only the models this Mac can run,
-plus all ten of your voices. On a 16 GB Mac that is about 34 GB, so give it several
-minutes. Leave it alone until it says it is done.
-
-It can be run again any time. It is built for it: models and voices you do not have
-are added, ones that changed are updated, and ones that are already correct are left
-alone. A second run takes about a second.
-
-**A Lite Mode Mac:** set it up like any Mac; use **2 - Copy the Lite Mode models** instead of
-**2 - Copy the models** if you want only the Lite models (about 15 GB); then open Studio Hub >
-Settings > Lite Mode and tick it.
-
-### 2. Double-click **1 - Install the app**
+### 1. Double-click **1 - Install the app**
 
 It asks for your password, because putting an app in **Applications** needs it. That
-is the only time you will be asked.
+is the only time you will be asked. It closes and replaces any older copy for you.
 
-Yam Display installs automatically with **1 - Install the app** (or run `Extras/Install Yam Display.command`).
+Yam Display installs automatically with **1 - Install the app** (or run
+`Extras/Install Yam Display.command`).
 
-### 3. Open Studio Hub from Applications
+### 2. Open Studio Hub from Applications
 
-Right-click it and choose **Open**, then **Open** again the first time.
+Right-click it and choose **Open**, then **Open** again the first time. Allow the
+local-network and incoming-connection pop-ups.
 
-It will say **Choose where your models live** and offer a button:
+Then open **Set up this Mac** in the sidebar. It shows how much memory this Mac has,
+how much space the models' drive has, and four sets sized for that memory:
 
-> **Use the Models Already on This Mac**
+- **Essentials · 8 GB**
+- **Creator · 16 GB**
+- **Creator Plus · 24 GB**
+- **Studio Pro · 32 GB+**
 
-Press it. That is the folder step 1 filled in, and it is where your models and voices
-are. The app remembers, so you never do this again.
+Take the one that matches, or tick models by hand. Press Install and give it several
+minutes the first time. Running it again copies only what is missing.
 
-### 4. Say yes to the two pop-ups
+**A Lite Mode Mac:** set it up like any Mac and take **Essentials · 8 GB**, then tick
+**Lite Mode** in Studio Hub › Settings. There is no separate Lite Mode copy step any
+more; the model set is the same.
+
+**No internet and no other Mac to copy from?** Close the app, double-click
+**2 - Copy the models (everything).command**, then open the app again. It copies every
+model this Mac can run. **2 - Copy the models.command** itself no longer copies: it
+shows what the drive holds and points you at the screen.
+
+### 3. Say yes to the two pop-ups, and to Removable Volumes
 
 - **"wants to find devices on your local network"** → **Allow**
 - **a firewall question about incoming connections** → **Allow**
+- **"wants to access files on a removable volume"** → **Allow**
+
+That last one is how Studio Hub reads the model drive. If it is not answered, the app
+says **needs permission (Removable Volumes)** and still runs, but it cannot list the
+SSD kit. Click Allow and restart the services.
 
 Then look at the bottom left. When it says **Local services ready**, everything is
 running and you are done.
@@ -61,7 +66,7 @@ running and you are done.
 ## Where things end up
 
 - the app: `Applications/Studio Hub.app`
-- the models: `StudioHubModels`
+- the models: `StudioHubModels` (or the folder you chose)
 - your voices: inside the app's own folder, in your user library
 
 ---
@@ -71,8 +76,7 @@ running and you are done.
 Everything on that Mac comes from this drive, so the drive has to be there for it.
 
 1. Plug the drive into that Mac.
-2. Double-click **2 - Copy the models**, then **1 - Install the app**, then open the
-   app and press **Use the Models Already on This Mac**.
+2. Double-click **1 - Install the app**, open the app, and use **Set up this Mac**.
 
 The app and the models are copied onto that Mac. After that the drive can be
 unplugged and that Mac keeps working — but the next time you want to copy anything to
@@ -82,9 +86,18 @@ it, the drive has to be plugged in again.
 
 ## When there are new models
 
-Double-click **2 - Copy the models** again. It adds what is new, updates what
-changed, leaves what is already correct alone, removes an older copy of a model it
-just updated, and repairs the app's record as it goes.
+Open **Set up this Mac** again. It shows what is missing and copies only that. The
+no-internet step, **2 - Copy the models (everything).command**, also does it, and it
+moves a model the kit no longer offers into `_trash` inside the models folder rather
+than deleting it.
+
+---
+
+## Checking for an update
+
+A Mac updates itself from its controller; nobody has to press anything. To ask right
+away, press **Check for update now** beside the version in the sidebar. If work is
+running it says it will update when that work finishes — it never restarts mid-job.
 
 ---
 
@@ -114,12 +127,13 @@ there yet.
 
 ## If something goes wrong
 
-**The copy step says it cannot find Studio Hub.**
-Run **1 - Install the app** first, then the copy step again.
+**Set up this Mac says no SSD kit.** Look for **needs permission (Removable Volumes)**
+and click Allow on the macOS prompt, then restart the services. The drive must also be
+plugged in.
 
 **A model says "not installed" when you know it is there.**
-Run **2 - Copy the models** again — it repairs the record. If it still says that, open
-**Models** and press **Verify**.
+Open **Set up this Mac** again — it copies what is missing and repairs the record. If it
+still says that, open **Models** and press **Verify**.
 
 **The app will not start the services.**
 Quit the app and open it again. If that does not fix it, tell me.

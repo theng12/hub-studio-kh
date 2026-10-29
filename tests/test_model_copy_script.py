@@ -871,7 +871,13 @@ class TheUpdateCommandSkipsAnUnchangedAppTest(unittest.TestCase):
         self.assertIn("already this exact build", self.text)
 
     def test_the_kit_ships_it(self):
-        prepare = (ROOT / ".build" / "prepare-kit.sh").read_text()
+        # The tracked copy: `.build/prepare-kit.sh` was a per-release link, so a fresh worktree
+        # without the link used to fail this test with FileNotFoundError - and the script's ROOT
+        # was hard-coded to the primary checkout, so a release worktree prepared drives from the
+        # wrong sources. Both are fixed by the tracked script deriving ROOT from its own path.
+        prepare = (ROOT / "packaging" / "prepare-kit.sh").read_text()
+        self.assertIn('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"', prepare,
+                      "prepare-kit.sh must follow the checkout it is run from")
         self.assertIn('cp -f "$ROOT/Update this Mac.command"', prepare,
                       "the command exists but never reaches a drive")
         # The chmod is written with line continuations, so the assertion joins them first rather

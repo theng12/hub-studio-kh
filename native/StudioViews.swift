@@ -1758,6 +1758,25 @@ struct StudioContent: View {
                         .font(HubType.caption).foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .accessibilityLabel("Studio Hub version \(appVersion)")
+                    // The owner asked for this where the version is read: a Mac away from the
+                    // controller should not have to wait ten minutes for the next silent check.
+                    Button {
+                        Task { await workspace.checkForUpdateNow() }
+                    } label: {
+                        if workspace.manualUpdateChecking {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Text("Check for update now")
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .font(HubType.caption)
+                    .disabled(!connected || workspace.manualUpdateChecking || workspace.installingRelease)
+                    .help("Ask the controller now whether a newer release is held. With work running, it updates when that work finishes.")
+                    if let note = workspace.manualUpdateNote {
+                        Text(note).font(HubType.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
             }
             .padding(HubSpace.l)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -4569,7 +4588,26 @@ struct StudioContent: View {
                      subtitle: "Choose what this Mac installs. It shows the memory this Mac has, the space on the models' drive, and what each choice will copy - before anything is copied.",
                      scrolls: true) {
             if !connected { setup }
-            if !workspace.installPlanSupported && workspace.installPlan == nil {
+            // This read is **on demand**, deliberately: it is not part of the two-second poll.
+            // The Hub's version of it used to walk /Volumes and could freeze the Mac on an
+            // unanswered macOS permission prompt (0.6.206-0.6.209).
+            if workspace.installPlanLoading && workspace.installPlan == nil {
+                HubCard {
+                    HStack(spacing: HubSpace.m) {
+                        ProgressView().controlSize(.small)
+                        Text("Reading this Mac's models…").font(HubType.body).foregroundStyle(.secondary)
+                    }
+                }
+            } else if let error = workspace.installPlanError, workspace.installPlan == nil {
+                HubCard {
+                    VStack(alignment: .leading, spacing: HubSpace.s) {
+                        Text("This Mac's models could not be read").font(HubType.rowTitle)
+                        Text(error).font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Try Again") { Task { await workspace.loadInstallPlan() } }
+                    }
+                }
+            } else if !workspace.installPlanSupported && workspace.installPlan == nil {
                 HubCard {
                     VStack(alignment: .leading, spacing: HubSpace.s) {
                         Text("This Studio Hub does not offer the install screen yet").font(HubType.rowTitle)
@@ -4602,6 +4640,7 @@ struct StudioContent: View {
                 }
             }
         }
+        .task { if connected { await workspace.loadInstallPlan() } }
     }
 
     /// What this Mac is and what it has, before any choice: memory, the drive, and where the models
@@ -4637,9 +4676,18 @@ struct StudioContent: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if plan.kits.isEmpty {
-                    Text("No SSD kit is mounted, so models download from the internet (or copy from another Mac on the network).")
-                        .font(HubType.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if plan.kitsState?.needsPermission == true {
+                        Label("Needs permission (Removable Volumes) to see the SSD kit drives", systemImage: "lock.trianglebadge.exclamationmark")
+                            .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Click Allow on the macOS prompt, then restart the services. Models can still download from another Mac or the internet in the meantime.")
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("No SSD kit is mounted, so models download from the internet (or copy from another Mac on the network).")
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     Text("Copying from \(plan.kits.joined(separator: ", ")) where it has them; anything the drive does not carry comes from another Mac or the internet.")
                         .font(HubType.caption).foregroundStyle(.secondary)
@@ -6054,6 +6102,17 @@ struct StudioContent: View {
     /// update this Mac, so the button confirms first and says what a wrong key costs.
     @ViewBuilder private var appUpdatesSection: some View {
         HubSection("App updates") {
+            HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
+                Button(workspace.manualUpdateChecking ? "Checking…" : "Check for update now") {
+                    Task { await workspace.checkForUpdateNow() }
+                }
+                .disabled(!connected || workspace.manualUpdateChecking || workspace.installingRelease)
+                if let note = workspace.manualUpdateNote {
+                    Text(note).font(HubType.secondary).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Divider()
             publisherIdentityRow
             Divider()
             trustedPublisherRow
@@ -7143,6 +7202,10 @@ struct StudioContent: View {
             }
             if let readiness = workspace.fleetReadiness[row.id], readiness.cannotRunAnything {
                 Text(readiness.summary).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+            }
+            if let volumes = row.volumesNote {
+                Text(volumes).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if row.node?.hasCredential == false {
                 Text("No credential is held for this Mac, so it has to prove itself on its next join.")

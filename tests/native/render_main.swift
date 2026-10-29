@@ -312,7 +312,9 @@ struct PageRenderHarness {
             memoryGB: 16, library: "/Volumes/KH-STUDIO-ATLAS/model-target",
             diskPath: "/Volumes/KH-STUDIO-ATLAS/model-target", freeBytes: 380_200_000_000,
             diskMeasured: true, stopBytes: 5_000_000_000,
-            kits: ["/Volumes/KH-STUDIO-ATLAS/model-library"], presets: presets,
+            kits: ["/Volumes/KH-STUDIO-ATLAS/model-library"],
+            kitsState: NativeRemovableVolumes(state: "ready", path: "/Volumes", reason: nil),
+            presets: presets,
             startingPreset: "creator-16", groups: groups, problems: []))
     }
 

@@ -176,9 +176,9 @@ class PresetScreenTests(unittest.TestCase):
     def _snapshot(self, *, verified=(), library=None, free=10 ** 12):
         state = {"path": str(library or "/tmp/lib"), "free_bytes": free, "total_bytes": free * 2,
                  "measured": True}
-        with mock.patch.object(plan, "disk", return_value=state), \
-                mock.patch.object(plan, "kit_libraries", return_value=[]):
-            return plan.snapshot(manifests=self.manifests,
+        with mock.patch.object(plan, "disk", return_value=state):
+            return plan.snapshot(kits=[],
+                                 manifests=self.manifests,
                                  receipts=receipts(*verified), library=Path(str(library or "/tmp/lib")),
                                  memory_gb=32, stop_bytes=5_000_000_000, modality_of=modality_of)
 
@@ -259,9 +259,8 @@ class PresetScreenTests(unittest.TestCase):
     def test_a_model_too_big_for_this_mac_is_shown_with_its_reason(self) -> None:
         with mock.patch.object(plan, "disk", return_value={"path": "/tmp", "free_bytes": 10 ** 12,
                                                            "total_bytes": 2 * 10 ** 12,
-                                                           "measured": True}), \
-                mock.patch.object(plan, "kit_libraries", return_value=[]):
-            screen = plan.snapshot(manifests=self.manifests, receipts={}, library=Path("/tmp"),
+                                                           "measured": True}):
+            screen = plan.snapshot(kits=[], manifests=self.manifests, receipts={}, library=Path("/tmp"),
                                    memory_gb=8, stop_bytes=5_000_000_000, modality_of=modality_of)
         big = next(r for r in screen["models"] if r["package_id"] == "qwen36-35b-4bit")
         self.assertIn(big["floor_gb"], (24,))

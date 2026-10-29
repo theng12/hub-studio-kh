@@ -1,6 +1,6 @@
 # Story Studio KH — where you work
 
-**Version 1.4.235.** Installer: `Story Studio KH 1.4.235-arm64.dmg`
+**Version 1.4.367.** Installer: `Story Studio KH 1.4.367-arm64.dmg`
 
 ## What it is for
 
@@ -24,7 +24,7 @@ that needs a model goes to GatewayKH.
 
 ## Install
 
-1. Open `Story Studio KH 1.4.235-arm64.dmg`.
+1. Open `Story Studio KH 1.4.367-arm64.dmg`.
 2. Drag **Story Studio KH** into **Applications**.
 3. It is ad-hoc signed, so clear the quarantine once:
    `xattr -cr "/Applications/Story Studio KH.app"`

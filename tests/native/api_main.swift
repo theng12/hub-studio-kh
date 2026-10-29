@@ -354,6 +354,16 @@ final class FixtureProtocol: URLProtocol {
     static let releaseCatalog = DispatchSemaphore(value: 0)
     static var fleetNodesStatus: Int?
     static var fleetNodesEmpty = false
+    /// What `/api/health` says about removable volumes (`nil` = an older Hub with no such key).
+    static var removableVolumesState: String?
+    /// How many times `/api/hub/model-presets` has been read. The poll must not add to this.
+    static var modelPresetsReads = 0
+    static func setRemovableVolumesState(_ value: String?) {
+        lock.lock(); defer { lock.unlock() }; removableVolumesState = value
+    }
+    static func takeModelPresetsReads() -> Int {
+        lock.lock(); defer { lock.unlock() }; let value = modelPresetsReads; modelPresetsReads = 0; return value
+    }
     static var heldFleetRosterPort: Int?
     static var fleetRosterStarted = DispatchSemaphore(value: 0)
     static var releaseFleetRoster = DispatchSemaphore(value: 0)
@@ -1194,7 +1204,28 @@ final class FixtureProtocol: URLProtocol {
                 result = (200, "application/json", Data(#"{"host":{"chip":"Apple M4","memory_gb":16.0},"version":"0.4.0","source":"local","workstation":{"enabled":true,"state":"idle"},"studios":{"image":{"id":"image","status":"up"}}}"#.utf8))
             }
         case ("GET", "/api/health"):
-            result = (200, "application/json", Data(#"{"ok":true,"busy":false}"#.utf8))
+            Self.lock.lock(); let volumes = Self.removableVolumesState; Self.lock.unlock()
+            var health: [String: Any] = ["ok": true, "busy": false]
+            if let volumes {
+                health["removable_volumes"] = ["state": volumes, "path": "/Volumes",
+                                               "reason": volumes == "needs_permission"
+                                                   ? "The check for removable volumes needs permission."
+                                                   : NSNull()]
+            }
+            result = (200, "application/json",
+                      (try? JSONSerialization.data(withJSONObject: health)) ?? Data(#"{"ok":true}"#.utf8))
+        case ("GET", "/api/hub/model-presets"):
+            Self.lock.lock(); Self.modelPresetsReads += 1; Self.lock.unlock()
+            let answer: [String: Any] = [
+                "memory_gb": 16,
+                "disk": ["path": "/tmp", "free_bytes": 1_000_000_000_000, "measured": true],
+                "library": "/tmp", "stop_bytes": 5_000_000_000,
+                "kits": [], "kits_state": ["state": "ready", "path": "/Volumes"],
+                "presets": [], "starting_preset": NSNull(),
+                "groups": [], "models": [], "problems": [],
+            ]
+            result = (200, "application/json",
+                      (try? JSONSerialization.data(withJSONObject: answer)) ?? Data(#"{"presets":[]}"#.utf8))
         case ("POST", "/api/hub/fleet"):
             // The rotation, with the Hub token: the operator's own action on this Mac.
             let body = requestBody()
@@ -7012,6 +7043,80 @@ struct NativeAPITests {
         require(!updateStore.updateDraining && FixtureProtocol.drainWants().last == false,
                 "no pending update means no drain")
         FixtureProtocol.setMemoryPolicyOverride(nil)
+
+        // ── "Check for update now": the owner's action on a node ──────────────────────────────
+        // It asks the controller at once and then uses the same verified install path. Nothing
+        // here bypasses a check; the installer is stubbed so /Applications is untouched.
+        updateStore.currentAppBuild = "currentbuild"
+        updateStore.currentAppVersion = "0.6.50"
+        // A reachable controller holding no release: "Up to date", not a failure.
+        FixtureProtocol.setRelease(identity: identity, body: nil, artifact: Data())
+        await updateStore.checkForUpdateNow()
+        require(updateStore.manualUpdateNote?.contains("Up to date (0.6.50)") == true,
+                "no release must read as up to date: \(updateStore.manualUpdateNote ?? "nil")")
+
+        // The controller cannot be asked: a node says so in those words, not "up to date".
+        FixtureProtocol.setRelease(identity: nil, body: nil, artifact: Data())
+        await updateStore.checkForUpdateNow()
+        require(updateStore.manualUpdateNote?.contains("Can't reach the controller") == true,
+                "an unreachable controller must be named: \(updateStore.manualUpdateNote ?? "nil")")
+
+        // A newer release with work running: it waits for the work, and does not install now.
+        let manualDescriptor = makeReleaseDescriptor(version: "0.6.63", build: "manualbuild",
+                                                     artifact: artifact, gateway: gatewayKey,
+                                                     controllerSigning: controllerKey)
+        FixtureProtocol.setRelease(identity: identity, body: releaseBody(manualDescriptor), artifact: artifact)
+        updateStore.currentAppBuild = "currentbuild"
+        updateStore.currentAppVersion = "0.6.50"
+        var manualSwaps = 0
+        var manualRelaunches = 0
+        updateStore.installVerifiedArtifact = { _, _ in manualSwaps += 1; return "manualbuild" }
+        updateStore.onReleaseRestartRequested = { manualRelaunches += 1 }
+        FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = false }   // a download is running
+        FixtureProtocol.setMemoryPolicyOverride(nil)                            // and the voice Studio is busy
+        await updateStore.checkForUpdateNow()
+        require(updateStore.manualUpdateNote?.contains("Will update when the current work finishes") == true,
+                "work in progress must make the check wait, not restart the Mac: \(updateStore.manualUpdateNote ?? "nil")")
+        require(updateStore.updateWaiting && manualSwaps == 0 && manualRelaunches == 0,
+                "a busy Mac must not install during the check")
+
+        // The same check on an idle Mac takes the update through the normal verified path.
+        FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = true }
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
+        await updateStore.checkForUpdateNow()
+        require(manualSwaps == 1 && manualRelaunches == 1,
+                "an idle Mac must install from the manual check: \(manualSwaps) swaps, \(manualRelaunches) relaunches")
+        require(updateStore.manualUpdateNote?.contains("Updating to 0.6.63") == true,
+                "the result must say what it is doing: \(updateStore.manualUpdateNote ?? "nil")")
+        FixtureProtocol.setMemoryPolicyOverride(nil)
+        FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = true }   // as the section found it
+
+        // ── The install screen is read on demand, never by the poll ─────────────────────────
+        // 0.6.206-0.6.209 read /api/hub/model-presets from every connect and poll; that route
+        // walked /Volumes and could freeze the Hub. The poll must not ask for it at all.
+        _ = FixtureProtocol.takeModelPresetsReads()
+        await updateStore.refresh()
+        require(FixtureProtocol.takeModelPresetsReads() == 0,
+                "the refresh poll must not read the install screen")
+        await updateStore.loadInstallPlan()
+        require(FixtureProtocol.takeModelPresetsReads() == 1,
+                "opening the install screen must read it exactly once")
+        require(updateStore.installPlan != nil && updateStore.installPlanSupported,
+                "the on-demand read must publish the plan")
+
+        // ── A Mac waiting on the Removable Volumes prompt is serving, and says so ────────────
+        FixtureProtocol.setUnknownModalityBatch(false)   // no other note in the same banner
+        FixtureProtocol.setRemovableVolumesState("needs_permission")
+        await updateStore.refresh()
+        require(updateStore.startupNote?.contains("needs permission (Removable Volumes)") == true,
+                "the prompt must be named in the banner: \(updateStore.startupNote ?? "nil")")
+        require(updateStore.isReachable,
+                "a Mac waiting on the volumes prompt is reachable, not offline")
+        FixtureProtocol.setRemovableVolumesState(nil)
+        await updateStore.refresh()
+        require(updateStore.startupNote == nil,
+                "the note must clear when the state is gone: \(updateStore.startupNote ?? "nil")")
+        FixtureProtocol.setUnknownModalityBatch(true)
 
         // ── Startup settings: reported to the Hub on every poll, requests from the fleet applied ──
         let startupStore = NativeWorkspaceStore(sessionConfiguration: configuration)

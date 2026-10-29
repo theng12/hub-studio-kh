@@ -641,7 +641,14 @@ struct ShellConfiguration {
     }
 
     /// Folders macOS protects from the app and the services it starts.
+    ///
+    /// `/Volumes` is here for the same reason as the home folders: reading removable volumes is
+    /// gated by macOS, and on an ad-hoc signed build that permission is lost on every update. A
+    /// library there can block the service inside `open()` exactly as `~/Downloads` did, so the
+    /// warning names it before a person chooses it. (The Hub's own `/Volumes` probe is a separate,
+    /// timed child process - see `components/hub/backend/removable_volumes.py`.)
     static let protectedLibraryFolders = ["Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures"]
+    static let protectedVolumeRoots = ["/Volumes"]
 
     /// Why a library in this folder will not work, or nil when the folder is safe.
     ///
@@ -658,7 +665,17 @@ struct ShellConfiguration {
         let homePath = home.standardizedFileURL.resolvingSymlinksInPath().path
         guard let name = protectedLibraryFolders.first(where: { folder in
             path == homePath + "/" + folder || path.hasPrefix(homePath + "/" + folder + "/")
-        }) else { return nil }
+        }) else {
+            // An external drive, or a folder on one: macOS asks for permission to read removable
+            // volumes, and a refused or unanswered prompt blocks a read the same way.
+            if protectedVolumeRoots.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+                return "macOS asks for permission before an app may read removable volumes, and an "
+                    + "unanswered prompt blocks the read - the services can then wait for ever on a "
+                    + "library on this drive. That is expected on a kit drive: click Allow when macOS "
+                    + "asks for \u{201C}Removable Volumes\u{201D}, then choose this folder again."
+            }
+            return nil
+        }
         return "macOS privacy protection covers \(name), and the local services can be blocked from "
             + "reading a library inside it - the app then waits for services that never become ready. "
             + "Move the folder out of \(name) (for example to ~/\(libraryFolderName)) and choose it again."

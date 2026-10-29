@@ -2,6 +2,26 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.210 — 2026-10-30
+
+### A Mac no longer freezes when macOS asks about the model drive
+
+Some Macs stopped answering — the app looked frozen and every screen waited — and came back the moment somebody clicked **Allow** on a macOS prompt about removable drives. That prompt was the cause. macOS asks every copy of Studio Hub whether it may read a removable volume, and an unsigned app is asked again after every update. One read of the drive list waited on that unanswered prompt and held the Hub up.
+
+Studio Hub now checks the drives **once, in the background, with a time limit**, and every screen reads only that answer. A Mac waiting on the prompt keeps serving work; it simply cannot see the SSD kit until you click Allow.
+
+### It says what is waiting
+
+When the permission is missing, the app now says **needs permission (Removable Volumes)** — in the banner, on the **Set up this Mac** screen, and on that Mac's row in the fleet — instead of looking busy or offline. Click **Allow** when macOS asks, then restart the services. Nothing else is affected: models can still come from another Mac or the internet.
+
+### Check for update now
+
+There is a **Check for update now** button beside the version in the sidebar (and on **Connections → App updates**). On any Mac — controller or node — it asks the controller straight away whether a newer release is held. If work is running it says it will update when that work finishes; it never restarts in the middle of a job. The answer is one plain line: up to date, updating, or why it could not check.
+
+### The kit instructions match what the app does
+
+**START-HERE.md** now describes the real setup: install the app, then choose models in **Set up this Mac**. It covers the no-internet copy step, the retired Lite Mode copy step, and the Removable Volumes prompt.
+
 ## 0.6.209 — 2026-10-29
 
 ### A direction for how a line is read — and the voice you cloned stays itself

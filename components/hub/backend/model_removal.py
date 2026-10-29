@@ -41,6 +41,55 @@ IN_USE = "IN_USE"
 #: folder - which `remove` would then move, taking every other removed package with it.
 RESERVED = frozenset((".studiohub", "_trash"))
 
+#: Whether this process has moved a package out, or a removal is still waiting for its 30-day
+#: handoff. The periodic cleanup asks this **before** it reads the library: a Mac that has never
+#: removed anything must not touch the model library at all, because that library is on a removable
+#: volume and reading it can wait on a macOS permission prompt (the 0.6.210 freeze).
+_REMOVAL_HAPPENED = False
+_PENDING_FILE = "model-removal-pending.json"
+
+
+def _pending_path() -> Path:
+    """A marker in the Hub's own data folder - never inside the model library."""
+    from . import ledger
+    return ledger.DATA_DIR / _PENDING_FILE
+
+
+def removal_happened() -> bool:
+    """True only when a removal is worth reading the library for.
+
+    Either this process moved a package out, or a marker says a removal is still waiting for its
+    handoff (so a Hub that restarted before the 30 days were up still finishes the job). With no
+    removal of either kind this is False and the cleanup pass reads nothing.
+    """
+    if _REMOVAL_HAPPENED:
+        return True
+    try:
+        return _pending_path().is_file()
+    except OSError:
+        return False
+
+
+def _mark_pending() -> None:
+    global _REMOVAL_HAPPENED
+    _REMOVAL_HAPPENED = True
+    try:
+        path = _pending_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"since": time.time()}), encoding="utf-8")
+    except OSError:
+        # The move itself succeeded; the marker only decides whether a later pass looks again.
+        pass
+
+
+def _clear_pending() -> None:
+    global _REMOVAL_HAPPENED
+    _REMOVAL_HAPPENED = False
+    try:
+        _pending_path().unlink()
+    except OSError:
+        pass
+
 
 class RemoveRefused(PermissionError):
     """The package cannot be moved out, and this says which of the reasons it is."""
@@ -215,6 +264,7 @@ def remove(*, library: Path, manifest: dict, catalog: dict[str, dict], records: 
             f"{package_id} could not be moved to {trash}: {exc}. Nothing was changed and nothing "
             f"was deleted.")) from exc
     receipt = _write_receipt(target, manifest, size, reason, now)
+    _mark_pending()
     from components import model_packages
     forgotten: list[str] = []
     try:
@@ -401,6 +451,11 @@ def handoff(library: Path | None = None, days: int = REMOVED_MODEL_DAYS,
         return {"ok": True, "moved": [], "kept": [row["name"] for row in listing(library)],
                 "failed": [], "cutoff_seconds": None}
     entries = listing(library)
+    if not entries:
+        # Nothing is waiting any more: stop the cleanup pass from reading this library on every
+        # tick until the next real removal.
+        _clear_pending()
+        return {"ok": True, "moved": [], "kept": [], "failed": [], "cutoff_seconds": cutoff}
     old = [row for row in entries if row.get("removed_at") and moment - float(row["removed_at"]) >= cutoff]
     kept = [row["name"] for row in entries if row not in old]
     if not old:

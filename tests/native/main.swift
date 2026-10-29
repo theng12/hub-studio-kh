@@ -238,8 +238,16 @@ for protected in ["Downloads/model-library", "Documents/models", "Desktop/models
 require(ShellConfiguration.protectedFolderWarning(
             for: fakeHome.appendingPathComponent(homeLibrary), home: fakeHome) == nil,
         "the home-folder library must not warn")
-require(ShellConfiguration.protectedFolderWarning(for: URL(fileURLWithPath: "/Volumes/SomeDrive/models")) == nil,
-        "an external drive is not one of the protected home folders")
+// A removable volume is the owner's normal kit drive, and macOS still asks for permission to read
+// one: an unanswered prompt blocks the same way, so the warning must name Removable Volumes.
+require(ShellConfiguration.protectedFolderWarning(
+            for: URL(fileURLWithPath: "/Volumes/SomeDrive/models"))?.contains("Removable Volumes") == true,
+        "an external drive must warn about the Removable Volumes permission")
+require(ShellConfiguration.protectedFolderWarning(for: URL(fileURLWithPath: "/Volumes"))?.contains("Removable Volumes") == true,
+        "the /Volumes root is covered by the same permission")
+require(ShellConfiguration.protectedFolderWarning(
+            for: URL(fileURLWithPath: "/Users/someone/StudioHubModels")) == nil,
+        "an ordinary folder outside a protected one and outside /Volumes must not warn")
 try? FileManager.default.removeItem(at: fakeHome)
 // An empty home must not invent one.
 require(ShellConfiguration.preparedLibrary(

@@ -6,8 +6,8 @@ and the order to set them up.
 
 | Folder | App | Version | What it does |
 |---|---|---|---|
-| `Story Studio/` | Story Studio KH | 1.4.235 | Writes and produces the episode: ideas, script, prompts, thumbnails, final video |
-| `GatewayKH/` | GatewayKH | 0.2.67 | The middle man: one address, one model catalogue, routes work to your Macs |
+| `Story Studio/` | Story Studio KH | 1.4.367 | Writes and produces the episode: ideas, script, prompts, thumbnails, final video |
+| `GatewayKH/` | GatewayKH | 0.2.205 | The middle man: one address, one model catalogue, routes work to your Macs |
 | `Studio Hub KH/` | Studio Hub | its `focused-release-manifest.json` | Runs the models themselves — images, voice, subtitles, music |
 | `KH Updater/` | KH Updater | its `khu-agent/VERSION` | Keeps the three apps up to date on every Mac, from the publisher's signed releases |
 

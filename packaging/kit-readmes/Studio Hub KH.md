@@ -1,6 +1,6 @@
 # Studio Hub KH — the Macs that run the models
 
-**Version 0.6.90** (build `20d1795`).
+**Version 0.6.210.** The build is shown beside it in the app.
 
 This folder is the whole Studio Hub kit: the app, the model library, your saved voices,
 and the two installers. Everything here is meant to be copied to each Mac as-is.
@@ -56,7 +56,19 @@ what you should see.
    **Local services ready**.
 
 The app shows its mode, what it offers, its services and its version and build under the sidebar — for example
-`0.6.90 · 20d1795`. That is how you tell whether an update landed.
+`0.6.210` and the build beside it. That is how you tell whether an update landed.
+
+## Keeping this Mac current
+
+A Mac updates itself from its controller; nobody has to press anything. To ask right away, press
+**Check for update now** beside the version in the sidebar (it is also on **Connections → App
+updates**). With work running it says it will update when that work finishes and never restarts
+mid-job.
+
+If the app says **needs permission (Removable Volumes)**, click **Allow** on the macOS prompt. macOS
+asks every copy of an unsigned app for permission to read a removable drive, and until that is
+answered the Hub cannot see the SSD kit. The Mac keeps serving work meanwhile; only the kit
+listing is missing.
 
 ## Setting up a controller
 

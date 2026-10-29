@@ -21,21 +21,23 @@ Four rules this module holds, each of them a defect this project has already pai
 * **Everything is computed on the way out and nothing is remembered.** A projection cached past a
   model switch, a disk change or an install is a number the screen shows that is no longer true.
 
-Read-only: this module reads manifests, receipts, the disk and (optionally) the kit drive. It never
-copies, moves or deletes anything - the screen's Apply is the existing ``model-packages/{id}/download``
-route, one request per package.
+Read-only: this module reads manifests, receipts, the disk and the kit folders **it is given**. It
+never copies, moves or deletes anything - the screen's Apply is the existing
+``model-packages/{id}/download`` route, one request per package.
+
+**The kit folders are an argument, never a walk.** `snapshot(kits=...)` takes the cached answer
+from `removable_volumes`; this module does not touch ``/Volumes`` at all. The walk used to run
+here, inside a request, and on an ad-hoc signed build it could wait for ever on an unanswered
+macOS permission prompt (see `removable_volumes`). A route that walks removable volumes is the
+defect, not a detail of this one.
 """
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
 
 from components import model_presets
-
-#: The folders a kit drive mounts under, in the order the kit's own probes look.
-VOLUME_ROOT = Path("/Volumes")
-KIT_FOLDER = "model-library"
+from . import removable_volumes
 
 #: One-line purpose and job group per package, for the manual picker. **A model with no entry here
 #: still appears** - it is filed under the job its engine serves and its purpose line is its
@@ -148,21 +150,13 @@ def dependency_ids(manifests: dict[str, dict], presets: list[dict] | None = None
 
 
 def kit_libraries() -> list[Path]:
-    """Every mounted kit drive that carries a ``model-library``, in the kit's own mount order.
+    """The kit libraries this process has already found, from the cached probe.
 
-    The kit's probes are kept beside this because a screen that says "from the SSD" has to be
-    looking at the same folders the copy step reads. Read-only: a listing, never a write.
+    **This does not look at ``/Volumes``.** It reads `removable_volumes.status()`, so it is safe
+    to call from anywhere - and it is deliberately not called by `snapshot()`, which takes the
+    list as an argument so a caller cannot accidentally reintroduce a walk on a request path.
     """
-    found: list[Path] = []
-    try:
-        volumes = sorted(p for p in VOLUME_ROOT.iterdir() if p.is_dir())
-    except OSError:
-        return found
-    for volume in volumes:
-        for candidate in (volume / KIT_FOLDER, *sorted(volume.glob(f"*/{KIT_FOLDER}"))):
-            if candidate.is_dir() and candidate not in found:
-                found.append(candidate)
-    return found
+    return removable_volumes.kits()
 
 
 def in_kit(library: Path, manifest: dict) -> bool:
@@ -362,15 +356,20 @@ def preset_rows(*, presets: list[dict], rows: dict[str, dict], manifests: dict[s
     return out
 
 
-def snapshot(*, manifests: dict[str, dict], receipts: dict[str, dict], library: Path,
-             memory_gb: float | None, stop_bytes: int, modality_of,
-             lan_source: dict[str, str] | None = None) -> dict:
+def snapshot(*, kits: list[Path], manifests: dict[str, dict], receipts: dict[str, dict],
+             library: Path, memory_gb: float | None, stop_bytes: int, modality_of,
+             lan_source: dict[str, str] | None = None,
+             kits_state: dict | None = None) -> dict:
     """The whole screen: this Mac, four presets, and every model grouped by its job.
 
-    One read, computed fresh: a cached projection is a number the screen shows that a model switch,
-    an install or a disk change has already made wrong.
+    `kits` is **required and never derived here**: the caller passes the cached answer from
+    `removable_volumes.kits()`, so no request can trigger a walk of ``/Volumes``. `kits_state` is
+    that module's honest state (`ready` / `needs_permission` / `not_checked` / `checking`), so a
+    screen with no kit folders can tell "none is mounted" from "I was not allowed to look".
+
+    One read, computed fresh: a cached projection is a number the screen shows that a model
+    switch, an install or a disk change has already made wrong.
     """
-    kits = kit_libraries()
     disk_state = disk(library)
     shipped = model_presets.load()
     rows = model_rows(manifests=manifests, receipts=receipts, memory_gb=memory_gb, kits=kits,
@@ -392,6 +391,8 @@ def snapshot(*, manifests: dict[str, dict], receipts: dict[str, dict], library: 
         "library": str(library),
         "stop_bytes": stop_bytes,
         "kits": [str(kit) for kit in kits],
+        # Why that list is empty, when it is: none mounted is not the same as not allowed to look.
+        "kits_state": kits_state or {"state": "not_checked", "path": str(removable_volumes.VOLUME_ROOT)},
         "presets": presets,
         "starting_preset": chosen,
         "groups": groups,

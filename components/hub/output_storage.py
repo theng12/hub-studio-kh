@@ -1297,6 +1297,18 @@ def acquire_transfer(*, batch_id: str, item_index: int):
     return _acquire_lease(batch_id=batch_id, item_index=item_index, column="transfer_leases")
 
 
+def removed_model_pass() -> None:
+    """The one library read this timer may make, and only when it has something to do.
+
+    `model_removal.removal_happened()` answers from memory plus a small marker file in the Hub's own
+    data folder; it never reads the library. So an idle Mac reads nothing at all here, and a Mac
+    that *has* removed something finishes its 30-day handoff - including one that restarted.
+    """
+    from .backend import model_removal
+    if model_removal.removal_happened():
+        model_removal.handoff()
+
+
 def start_background(machine_provider, settings_provider, after_sweep=None,
                      removed_models=None) -> None:
     """Run the shared sweep inside the Hub process; no second service is created.
@@ -1339,11 +1351,12 @@ def start_background(machine_provider, settings_provider, after_sweep=None,
                     log.exception("automatic Trash Folder handoff failed (continuing)")
             # Removed models reach macOS Trash on the same timer (owner decision 2026-10-28): the
             # library's `_trash` is where a removal puts a package, and this is the one thing that
-            # moves it from there. `model_removal.handoff` owns the age rule; this only calls it.
+            # moves it from there. **Only when a removal actually happened** (this process, or a
+            # marker left by one): the model library is on a removable volume, and reading it on an
+            # idle Mac is the protected access that froze the Hub in 0.6.206-0.6.209.
             if removed_models is not None:
                 try:
-                    from .backend import model_removal
-                    model_removal.handoff()
+                    removed_model_pass()
                 except Exception:
                     log.exception("removed-model handoff failed (continuing)")
             if after_sweep is not None:

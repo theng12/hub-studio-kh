@@ -1,6 +1,6 @@
 # GatewayKH — the coordinator
 
-**Version 0.2.67.** Installer: `installers/gateway-kh-0.2.67.dmg`
+**Version 0.2.205.** Installer: `installers/gateway-kh-0.2.205.dmg`
 
 ## What it is for
 
@@ -25,7 +25,7 @@ and it cannot join or unjoin a Mac.
 
 ## Install
 
-1. Open `installers/gateway-kh-0.2.67.dmg`.
+1. Open `installers/gateway-kh-0.2.205.dmg`.
 2. Drag **gateway-kh** into **Applications**.
 3. It is ad-hoc signed, so the first launch needs **right-click → Open**, or:
    `xattr -dr com.apple.quarantine /Applications/gateway-kh.app`

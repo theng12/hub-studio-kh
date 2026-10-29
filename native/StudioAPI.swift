@@ -2008,6 +2008,28 @@ struct FleetOperationReport: Equatable {
     }
 }
 
+/// Whether a Mac may read its removable volumes (the SSD kit drives), as the Hub reports it.
+///
+/// `needs_permission` is the state that used to be invisible: the Mac is serving work perfectly,
+/// but an unanswered macOS permission prompt means it cannot see the drives. It is deliberately
+/// distinct from busy and from unreachable, because an operator who sees "offline" goes to look at
+/// the network instead of clicking Allow. Absent from a Hub older than 0.6.210.
+struct NativeRemovableVolumes: Decodable, Equatable {
+    let state: String
+    let path: String?
+    let reason: String?
+
+    var needsPermission: Bool { state == "needs_permission" }
+    /// The one line the app shows, in the owner's words.
+    var summary: String {
+        "needs permission (Removable Volumes)"
+    }
+}
+
+struct NativeHealthWire: Decodable {
+    let removableVolumes: NativeRemovableVolumes?
+}
+
 /// One Mac in the fleet, with everything needed to judge whether to send it work.
 ///
 /// A machine that has not reported in shows what is known - that it is absent - rather than
@@ -2041,6 +2063,9 @@ struct NativeFleetMachine: Decodable, Equatable, Identifiable {
     let startup: NativeFleetStartup?
     /// The job that Mac is working on right now. Absent while it is idle and from an older Hub.
     let currentJob: NativeCurrentJob?
+    /// Whether that Mac may read its removable volumes (the SSD kits), or is waiting on an
+    /// unanswered macOS permission prompt. Absent from a Hub older than 0.6.210.
+    let removableVolumes: NativeRemovableVolumes?
 
     var id: String { machine }
     var isLocal: Bool { machine == "local" }
@@ -2178,6 +2203,10 @@ struct NativeFleetRow: Identifiable, Equatable {
     var version: String? { node?.version ?? machine?.version }
     var address: String? { isLocal ? nil : (node?.address ?? machine?.address) }
     var currentJob: NativeCurrentJob? { machine?.currentJob }
+    /// The Mac serves fine but cannot read its removable volumes, so it cannot see an SSD kit.
+    /// Shown as its own line, never folded into "offline" or "working".
+    var volumesNeedsPermission: Bool { machine?.removableVolumes?.needsPermission == true }
+    var volumesNote: String? { volumesNeedsPermission ? "Needs permission (Removable Volumes)" : nil }
 
     func state(readiness: NativeMachineReadiness?) -> NativeFleetRowState {
         if let node {
@@ -3858,6 +3887,11 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var releaseProgress: String?
     /// A verified update is waiting for this Mac to finish its work (unattended install).
     @Published private(set) var updateWaiting = false
+    /// True while "Check for update now" is asking the controller and reading the answer.
+    @Published private(set) var manualUpdateChecking = false
+    /// The plain-words result of the last manual check: "Up to date (0.6.210)", "Updating to …",
+    /// "Will update when the current work finishes", or why it could not check.
+    @Published private(set) var manualUpdateNote: String?
     /// This Mac's Hub is refusing NEW work so the running work can finish and the update install:
     /// the grace period for a natural idle ran out. Running work is never stopped.
     @Published private(set) var updateDraining = false
@@ -4004,6 +4038,11 @@ final class NativeWorkspaceStore: ObservableObject {
     /// left at its last good value through a failed read, exactly as the package rows are: a blip
     /// must not empty a screen that was showing a real answer a moment earlier.
     @Published private(set) var installPlan: NativeInstallPlan? = nil
+    /// Whether the install screen is being read right now. The read happens when the page is
+    /// opened, not on the poll (see `loadInstallPlan`).
+    @Published private(set) var installPlanLoading = false
+    /// Why the last on-demand read failed, in the Hub's own words. Nil after a good read.
+    @Published private(set) var installPlanError: String?
     /// Whether the Hub answered the install route at all. False on a Hub older than 0.6.2xx, and
     /// the screen then says it needs an update rather than drawing an empty preset list.
     @Published private(set) var installPlanSupported = true
@@ -4341,10 +4380,12 @@ final class NativeWorkspaceStore: ObservableObject {
             // the package rows costs install state, not the catalog.
             async let catalog: CatalogResponse = get(["api", "hub", "catalog"])
             async let packages: HubModelPackagesResponse? = try? get(["api", "hub", "model-packages"])
-            // The install screen's own read. Deliberately separate from the package rows above and
-            // equally soft: a Hub that predates the route answers 404 and the screen says so, and a
-            // failure here must never blank the model pickers the package read keeps alive.
-            async let installPresets: HubModelPresetsWire? = try? get(["api", "hub", "model-presets"])
+            // **Not the install screen's read.** `/api/hub/model-presets` is read on demand when
+            // Setup this Mac is opened (`loadInstallPlan`), never from this poll: on 0.6.206-0.6.209
+            // that route walked /Volumes, and an unanswered macOS permission prompt there filled
+            // the Hub's threadpool and froze the whole Mac. A poll must never ask for it.
+            // The Hub's own health carries the one state an operator needs about those drives.
+            async let health: NativeHealthWire? = try? get(["api", "health"])
             async let transcription: TranscriptionAvailability? = try? get(["studio", "transcription", "api", "transcribe", "availability"])
             async let generation: GenerationAvailability? = try? get(["studio", "voice", "api", "generate", "availability"])
             async let jobs: HubJobsResponse? = try? get(["api", "hub", "jobs"])
@@ -4353,8 +4394,8 @@ final class NativeWorkspaceStore: ObservableObject {
             async let subtitleHistory: HubTranscriptionList? = try? get(["api", "hub", "transcription", "jobs"])
             // Every download run on this Hub, whoever started it (a Gateway fleet install, a LAN copy).
             async let hubRuns: HubModelDownloads? = try? get(["api", "hub", "model-downloads"])
-            let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue, hubRunsValue, installPresetsValue) =
-                try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory, hubRuns, installPresets)
+            let (catalogValue, packagesValue, healthValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue, hubRunsValue) =
+                try await (catalog, packages, health, transcription, generation, jobs, transfers, settings, subtitleHistory, hubRuns)
             // Torn down while reading. The child reads that use `try?` come back nil rather than
             // throwing, so without this a cancelled refresh would publish "a studio did not answer"
             // and count its missing jobs — reporting a fault that never happened.
@@ -4365,6 +4406,11 @@ final class NativeWorkspaceStore: ObservableObject {
             var startupNotes: [String] = []
             if packagesValue == nil {
                 startupNotes.append("The Hub's model package list could not be read; models are listed without their install state until it answers again.")
+            }
+            // A Mac waiting on an unanswered macOS prompt for its removable volumes is still
+            // serving: the note says what to click, and never reads as "offline" or "busy".
+            if let volumes = healthValue?.removableVolumes, volumes.needsPermission {
+                startupNotes.append("Studio Hub needs permission (Removable Volumes) to see the SSD kit drives. Click Allow on the macOS prompt, then restart the services.")
             }
             // A Studio that has stopped answering is **not** a banner: it is one small line in the
             // sidebar footer, it names the Studio, and it clears itself. See `noteStudioAvailability`.
@@ -4381,15 +4427,9 @@ final class NativeWorkspaceStore: ObservableObject {
             // poll, with the install state already known a moment earlier.
             modelPackages = packagesValue?.models.reduce(into: [:]) { $0[$1.modelId] = $1 } ?? modelPackages
             modelPackagesUnread = packagesValue == nil && modelPackages.isEmpty
-            // The install screen's read, kept at its last good value through a failure. A Hub that
-            // answers nothing at all is "not supported" (an older build); one that answers with an
-            // empty preset list is a real, wrong answer and the screen shows it as empty.
-            if let wire = installPresetsValue {
-                installPlan = Self.installPlan(from: wire)
-                installPlanSupported = true
-            } else if installPlan == nil {
-                installPlanSupported = false
-            }
+            // The install screen's data is **not** refreshed here - see `loadInstallPlan`. This poll
+            // keeps whatever the screen last read so a visit to Setup still shows it, but never
+            // asks the Hub for it.
             // Every preset roster the Voice runtime publishes, under the key the runtime itself
             // names it (`qwen3_preset_speakers` today, `<family>_preset_speakers` for the next
             // family). Decoding one fixed key was what left a second preset family with an empty
@@ -6484,6 +6524,7 @@ final class NativeWorkspaceStore: ObservableObject {
             diskMeasured: wire.disk?.measured ?? false,
             stopBytes: wire.stopBytes ?? 0,
             kits: wire.kits ?? [],
+            kitsState: wire.kitsState,
             presets: wire.presets.map { preset in
                 NativePreset(id: preset.presetId, name: preset.name, tierGB: preset.memoryTierGb,
                              summary: preset.summary,
@@ -6499,6 +6540,30 @@ final class NativeWorkspaceStore: ObservableObject {
             startingPreset: wire.startingPreset,
             groups: wire.groups.map { NativeInstallGroup(job: $0.job, models: $0.models.map(model)) },
             problems: wire.problems ?? [])
+    }
+
+    /// Read the install screen's answer **now**, because somebody opened the page (or pressed
+    /// Refresh). Deliberately not part of `refresh()`: that poll runs every two to ten seconds on
+    /// every Mac, and this route used to walk `/Volumes` - which on an ad-hoc signed build can wait
+    /// for ever on an unanswered macOS permission prompt and froze the whole Hub (0.6.206-0.6.209).
+    ///
+    /// A failed read keeps the last good answer on screen and reports the reason; an older Hub that
+    /// has no such route sets `installPlanSupported = false` so the page says to update.
+    func loadInstallPlan() async {
+        guard let requestConnection = connectionID, !installPlanLoading else { return }
+        installPlanLoading = true
+        defer { if connectionID == requestConnection { installPlanLoading = false } }
+        do {
+            let wire: HubModelPresetsWire = try await get(["api", "hub", "model-presets"])
+            guard connectionID == requestConnection else { return }
+            installPlan = Self.installPlan(from: wire)
+            installPlanSupported = true
+            installPlanError = nil
+        } catch {
+            guard connectionID == requestConnection else { return }
+            if installPlan == nil { installPlanSupported = false }
+            installPlanError = Self.actionable(error, action: "Read the models this Mac can install")
+        }
     }
 
     /// Install one package through the route the Models page already uses.
@@ -6518,6 +6583,7 @@ final class NativeWorkspaceStore: ObservableObject {
             hubDownloadRuns[run.id] = packageID
             try saveHubDownloadRuns()
             await refresh()
+            await loadInstallPlan()
         } catch {
             if connectionID == requestConnection {
                 self.error = Self.actionable(error, action: "Start the model download")
@@ -6557,6 +6623,7 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             if answer.detail != nil { modelNote = answer.detail; modelNoteRepo = packageID }
             await refresh()
+            await loadInstallPlan()
         } catch {
             if connectionID == requestConnection {
                 self.error = Self.actionable(error, action: "Remove the model")
@@ -7403,6 +7470,15 @@ final class NativeWorkspaceStore: ObservableObject {
         }
         // Only a roster read this time is evidence of who is in the fleet.
         if rosterRead { clearRoutingPinIfItsMachineLeft() }
+        // A Mac whose removable-volume check is waiting on an unanswered macOS permission prompt
+        // is still serving: it is neither busy nor unreachable, and an operator who saw "offline"
+        // went to look at the network instead of clicking Allow. Name the Macs here so the group
+        // screen says what is actually waiting.
+        let waitingForVolumes = (fleetOverview?.machines ?? []).filter { $0.removableVolumes?.needsPermission == true }
+        if !waitingForVolumes.isEmpty, fleetNote == nil {
+            let names = waitingForVolumes.map { $0.isLocal ? "This Mac" : $0.label }.joined(separator: ", ")
+            fleetNote = "\(names): needs permission (Removable Volumes) — click Allow on the macOS prompt so Studio Hub can see the SSD kit drives."
+        }
     }
 
     /// Per machine, how many models are ready, need a download or are blocked (paused, no
@@ -9099,6 +9175,77 @@ final class NativeWorkspaceStore: ObservableObject {
             updateOffered = false
             offeredReleaseIsOlder = false
             releaseRefusal = Self.actionable(error, action: "Read the update offer")
+        }
+    }
+
+    /// Ask the controller **now** whether a newer release is held, and start the same update path
+    /// the automatic check uses.
+    ///
+    /// The owner asked for this on the node itself: *"add a way to probe for update when I'm on the
+    /// node machine."* It is the existing release read plus `installOfferedRelease` - no second
+    /// update mechanism, no shortened verification, and nothing is restarted under running work:
+    /// with work active it says so and lets the normal drain finish it.
+    ///
+    /// The result is one plain sentence in `manualUpdateNote`.
+    func checkForUpdateNow() async {
+        guard !manualUpdateChecking, !installingRelease else { return }
+        guard connectionID != nil else {
+            manualUpdateNote = "Can't reach the local Hub. Start the services, then check again."
+            return
+        }
+        manualUpdateChecking = true
+        manualUpdateNote = nil
+        defer { manualUpdateChecking = false }
+        // The next tick would otherwise wait up to ten minutes to look again.
+        lastReleaseCheck = nil
+        await refreshRelease()
+        // The very first read on a Mac pins the controller's key and deliberately does not verify
+        // the release in the same pass. A person who just pressed a button gets the second read,
+        // rather than being told to press it again.
+        if let refusal = releaseRefusal,
+           (refusal.localizedCaseInsensitiveContains("pinned")
+            || refusal.localizedCaseInsensitiveContains("check again")) {
+            await refreshRelease()
+        }
+        guard connectionID != nil else {
+            manualUpdateNote = "Can't reach the local Hub. Start the services, then check again."
+            return
+        }
+        if let refusal = releaseRefusal {
+            // A **node** asks its controller through its own Hub, so the controller is the thing
+            // that could not be reached. A controller or a standalone Mac reads its own Hub.
+            let role = controllerIdentity?.settings.role
+            let isNode = role != nil && role != "controller"
+            manualUpdateNote = isNode
+                ? "Can't reach the controller: \(refusal)"
+                : "Could not check for an update: \(refusal)"
+            return
+        }
+        guard updateOffered, let release = offeredRelease else {
+            if offeredReleaseIsOlder, let held = offeredRelease {
+                manualUpdateNote = "Up to date (\(currentAppVersion ?? "this build")). The controller holds an older release (\(held.version))."
+            } else {
+                manualUpdateNote = "Up to date (\(currentAppVersion ?? "this build"))."
+            }
+            return
+        }
+        // The same fresh evidence the automatic path reads before it decides anything.
+        await refresh(reportErrors: false)
+        await refreshMemoryPolicy()
+        if activeWorkCount == 0 {
+            manualUpdateNote = "Updating to \(release.version)…"
+            // Exactly the automatic install: the same signature check, the same byte check, the
+            // same delta-or-image choice.
+            await installOfferedRelease(automatic: true)
+            // A failed install leaves the offer in place and records why; say so here too rather
+            // than leaving "Updating to …" on a screen where nothing is happening.
+            if updateOffered, let failure = lastUpdateError {
+                manualUpdateNote = "Could not update to \(release.version): \(failure.reason)"
+            }
+        } else {
+            updateWaiting = true
+            updatePendingSince = updatePendingSince ?? Date()
+            manualUpdateNote = "Update \(release.version) is ready. Will update when the current work finishes."
         }
     }
 
@@ -11284,6 +11431,8 @@ private struct HubModelPresetsWire: Decodable {
     let library: String?
     let stopBytes: Int64?
     let kits: [String]?
+    /// Why `kits` is empty: the same `state`/`reason` the Hub's health reports.
+    let kitsState: NativeRemovableVolumes?
     let presets: [HubModelPresetWire]
     let startingPreset: String?
     let groups: [HubInstallGroupWire]
@@ -11298,6 +11447,9 @@ struct NativeInstallPlan: Equatable {
     let diskMeasured: Bool
     let stopBytes: Int64
     let kits: [String]
+    /// Why `kits` is empty when it is: `ready` (none mounted) or `needs_permission` (macOS did not
+    /// let the Hub look). Absent from a Hub older than 0.6.210.
+    let kitsState: NativeRemovableVolumes?
     let presets: [NativePreset]
     let startingPreset: String?
     let groups: [NativeInstallGroup]
