@@ -283,6 +283,10 @@ class RelayTests(unittest.TestCase):
             "sharedParams": {"delivery_instruction": SAD},
             "items": [{"text": "one"}],
         })
+        # The queue is module-level and the gate runs every test in one process: a batch left
+        # here is a row `/api/hub/jobs` shows to the next module (`test_hub_jobs` asserts the
+        # listing holds exactly its own two completions).
+        self.addCleanup(broker.batches.pop, submitted["batch_id"], None)
         self.assertIn("batch_id", submitted, submitted)
         batch = broker.batches[submitted["batch_id"]]
         self.assertEqual(SAD, batch["shared_params"]["delivery_instruction"],
@@ -315,6 +319,9 @@ class RelayTests(unittest.TestCase):
                 "error": None}
         batch["items"] = [item]
         broker.batches[batch["id"]] = batch
+        # Same rule as `test_admission_keeps_a_shared_instruction`: this process is the whole
+        # unittest gate, so the batch is removed even when an assertion below fails.
+        self.addCleanup(broker.batches.pop, batch["id"], None)
         with mock.patch.object(broker, "_recover_worker_job",
                                mock.AsyncMock(return_value=False)), \
              mock.patch.object(broker.ledger, "save_batch", lambda *a, **k: None), \
