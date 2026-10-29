@@ -4,17 +4,21 @@ Written to be read by the person using the app. Newest first.
 
 ## 0.6.209 — 2026-10-29
 
-### Say how a line should be read, and keep the voice you cloned
+### A direction for how a line is read — and the voice you cloned stays itself
 
-You can now give a voice a direction for one piece of text — "speak slowly and sadly, voice close to breaking", "warm and reassuring", "like you are telling a secret" — and the voice you cloned still sounds like itself. Before this, a cloned voice read the words plainly.
+A voice request can now carry a direction for one piece of text: "speak slowly and sadly, voice close to breaking", "warm and reassuring", "like you are telling a secret". A voice you cloned still sounds like itself while it reads that way; before this, it read the words plainly.
 
-Each voice model takes a direction in its own way, and the app now says which way that is, with the model's own examples beside the box. Breeze TTS 2 reads a direction as a performance note over your reference clip. VoxCPM2 puts it in front of the line as a short style note in brackets, and does that for every section of a long script so the mood does not drift away after the first minute. A voice model that cannot take a direction says so and refuses the request, rather than quietly ignoring it and handing you a render that did not do what you asked.
+Each voice model takes a direction in its own way, and the app now states which way that is, together with the model's own examples, so the direction you write lands the way you meant. Breeze TTS 2 takes it as a performance note over your reference clip. VoxCPM2 takes it as a short style note in brackets in front of the words, and puts it in front of every section of a long script, so the mood does not drift away after the first minute. A voice model that cannot take a direction refuses the request and says why, rather than quietly ignoring it and handing you a render that did not do what you asked.
 
-A direction belongs to that one request. It is never saved as a default, so it cannot colour a later piece of text you did not mean it for. Every finished job also records the direction it ran with and what the engine was actually given, so you can tell two takes apart.
+A direction belongs to that one request and is never saved as a default, so it cannot colour a later piece of text you did not mean it for. Every finished job also records the direction it ran with and what the engine was actually given, so two takes can be told apart.
 
-### A direction does not replace a voice you designed
+### Not on the Voice page yet
 
-Breeze TTS 2 has one place to put a performance note. If you ask for both a described voice and a direction in the same request, the direction is what it performs, and your voice description is still kept in the job's record. Choose one or the other if you want a designed voice read plainly.
+The Voice page still has its older style box, which a cloned voice does not read, and it has no box for the new direction in this build. For now a direction is sent with the request by whatever calls the Hub — the Gateway, a script, or another app — and the Studio's Voice page will get a box for it in a later version. The Voice page does show, on each voice model, that it takes a delivery direction.
+
+### A direction does not replace a voice you described
+
+Breeze TTS 2 has one place to put a performance note. If one request asks for both a described voice and a direction, the direction is what it performs, and your voice description is still kept in the job's record. Choose one or the other if you want a described voice read plainly.
 
 ## 0.6.208 — 2026-10-28
 
