@@ -47,6 +47,23 @@ class OriginTests(unittest.TestCase):
                 "items": [{"index": 0, "item_id": "clip-1", "filename": "clip.wav",
                            "state": "done", "tries": 1}], **extra}
 
+    def test_origin_is_not_part_of_the_batch_fingerprint(self) -> None:
+        """A retry of a batch queued before 0.6.212 must replay, not read as a different batch.
+
+        `request_fingerprint` is taken over the whole envelope except its id; `origin` is added by
+        the door, so an older batch's stored fingerprint has none and a retry carries one.
+        """
+        first = broker.submit_batch({"modality": "image", "model": MODEL,
+                                     "clientRequestId": "origin-fingerprint-1",
+                                     "items": [{"prompt": "one"}]})
+        self.addCleanup(broker.batches.pop, first["batch_id"], None)
+        retry = broker.submit_batch({"modality": "image", "model": MODEL,
+                                     "clientRequestId": "origin-fingerprint-1",
+                                     "origin": "this-mac", "items": [{"prompt": "one"}]})
+        self.assertNotIn("error", retry, retry)
+        self.assertTrue(retry.get("replayed"), retry)
+        self.assertEqual(first["batch_id"], retry["batch_id"])
+
     def test_transcription_publishes_it_too(self) -> None:
         self.assertEqual("this-mac",
                          transcription_jobs.summary(self.subtitle_batch(origin="this-mac"))["origin"])

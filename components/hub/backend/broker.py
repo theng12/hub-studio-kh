@@ -2308,8 +2308,12 @@ def _submit_batch_locked(envelope: dict) -> dict:
             return {
                 "error": "clientRequestId must be 8-160 safe letters, digits, or ._:-"
             }
+        # `origin` is the door's answer to "who asked", not part of the work being asked for:
+        # leaving it in would change the fingerprint of a batch queued before 0.6.212, so a retry
+        # of that batch would be refused as "a different batch". Same rule as the fence below.
         fingerprint_payload = {
-            key: value for key, value in envelope.items() if key != "clientRequestId"
+            key: value for key, value in envelope.items()
+            if key not in ("clientRequestId", "origin")
         }
         # GenStudio may reassign the exact attempt with a newer externally
         # issued fence. Ownership transport is not generation payload, so it
