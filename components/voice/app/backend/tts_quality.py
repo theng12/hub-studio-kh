@@ -260,6 +260,7 @@ def check_section(text: str, family: str, metrics: dict, *, speed: float = 1.0,
         "max_pause_s": max_pause_s(text, speed, requested_pause_s),
     }
     missing_allowed = None
+    fully_heard = False
     if heard is not None:
         matched, total = heard_words(text, heard)
         evidence["words_expected"] = total
@@ -270,7 +271,12 @@ def check_section(text: str, family: str, metrics: dict, *, speed: float = 1.0,
             evidence["text_check"] = "advisory"
         else:
             missing_allowed = max(MAX_MISSING_WORDS, math.floor(total * MAX_MISSING_SHARE))
-    if metrics["voiced_s"] < evidence["min_voiced_s"]:
+            fully_heard = total > 0 and matched >= total
+    # A short section can speak every word inside the voiced-time floor: "People could catch their
+    # breath." (32 characters) has a 1.09 s minimum and measures 0.82-1.04 s voiced on Breeze,
+    # and Whisper hears every word. Real silence, a DC drift, a Khmer section (no transcript) or
+    # any missing word still fails, so the floor keeps its job for audio nobody can read.
+    if metrics["voiced_s"] < evidence["min_voiced_s"] and not fully_heard:
         code, why = "TTS_SECTION_SILENT", "came out (nearly) silent or as a DC drift"
     elif metrics["duration_s"] > evidence["max_duration_s"]:
         code, why = "TTS_SECTION_TOO_LONG", "ran far longer than its text (babble or humming)"

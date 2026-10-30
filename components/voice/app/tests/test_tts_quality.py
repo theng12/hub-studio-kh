@@ -160,6 +160,44 @@ def test_decades_and_split_compounds_are_the_words_the_text_says():
     assert failed.value.code == "TTS_SECTION_TEXT_MISMATCH"
 
 
+def test_a_short_section_that_speaks_every_word_is_not_silent():
+    """EP0098 (Breeze, voice Mark, 2026-10-30): a 32-character sentence has a 1.09 s voiced floor,
+    but it is simply short - it measured 0.82-1.04 s voiced over 1.36-1.44 s, and Whisper heard
+    all five words. 12 renders on several Macs failed TTS_SECTION_SILENT."""
+    text = "People could catch their breath."
+    metrics = {"duration_s": 1.36, "dc_offset": 0.012, "voiced_s": 0.82, "voiced_ratio": 0.60}
+    evidence = tts_quality.check_section(text, "breeze-tts", metrics, heard=text)
+    assert evidence["accepted"] is True
+    assert evidence["voiced_s"] == 0.82 < evidence["min_voiced_s"] == 1.09
+    assert evidence["words_heard"] == evidence["words_expected"] == 5
+    # The upper end of the measured spread, still under the floor.
+    assert tts_quality.check_section(text, "breeze-tts", {**metrics, "voiced_s": 1.04},
+                                     heard=text)["accepted"] is True
+
+
+def test_a_short_section_under_the_floor_still_fails_without_a_whole_transcript():
+    text = "People could catch their breath."
+    metrics = {"duration_s": 1.40, "dc_offset": 0.012, "voiced_s": 0.82, "voiced_ratio": 0.58}
+    # No transcript (Whisper was skipped), an empty one, a missing word, and a hallucination over
+    # near-silence: each is still the silence refusal this floor exists for.
+    for heard, voiced in ((None, 0.82), ("", 0.82), ("People could catch their", 0.82),
+                          ("Thank you for watching.", 0.0)):
+        with pytest.raises(tts_quality.SectionQualityError) as failed:
+            tts_quality.check_section(text, "breeze-tts", {**metrics, "voiced_s": voiced},
+                                      heard=heard)
+        assert failed.value.code == "TTS_SECTION_SILENT", (heard, failed.value.code)
+        assert failed.value.evidence["accepted"] is False
+
+
+def test_a_khmer_section_under_the_floor_is_still_silent_even_if_read_whole():
+    # Khmer is advisory: its transcript is not a whole-text match, so it never waives the floor.
+    text = "ពួកគេអាចដកដង្ហើមបាន។"
+    metrics = {"duration_s": 1.4, "dc_offset": 0.0, "voiced_s": 0.4, "voiced_ratio": 0.29}
+    with pytest.raises(tts_quality.SectionQualityError) as failed:
+        tts_quality.check_section(text, "breeze-tts", metrics, heard=text)
+    assert failed.value.code == "TTS_SECTION_SILENT"
+
+
 def test_breeze_section_token_budget_follows_the_text():
     short = tts_quality.max_tokens_for_section("One quiet clause of about forty chars.", "breeze-tts")
     long = tts_quality.max_tokens_for_section("word " * 100, "breeze-tts")

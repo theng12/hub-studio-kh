@@ -4,6 +4,10 @@ Written to be read by the person using the app. Newest first.
 
 ## 0.6.212 — 2026-10-30
 
+### A short line of narration is no longer refused as silence
+
+A very short sentence can be spoken well and still measure quiet for a moment: "People could catch their breath." takes about a second and a third to say. Voice was refusing it as silent on some Macs, even though the transcribe-back heard every word. When the transcribe-back has run and heard every word of a section, a low voiced time no longer rejects it. A section with no transcript, a Khmer one, or one with a word missing is still refused, so real silence and a drifting signal are still caught.
+
 ### Studio Hub no longer looks at your drives at all
 
 The last update stopped it reading every disk. This one removes the check itself: Studio Hub no longer looks inside any removable or network drive, at startup or later. On a Mac without a Developer ID, macOS asks for permission again after every update, and that prompt was the cause of the frozen Macs and the Macs that stopped answering. There is nothing left to ask about.
