@@ -10817,11 +10817,28 @@ final class NativeWorkspaceStore: ObservableObject {
         return settings == NativeVoiceSettings() ? nil : settings
     }
 
+    /// The state a batch's row reports, from its items: the most active one, not item 0.
+    ///
+    /// A controller's batch can have item 0 done and item 1 still running on a member. Reading
+    /// `items.first` called that batch done, so `countActiveWork` saw no work: the controller
+    /// drained and restarted while the member was still working (a restart marks the member's
+    /// item uncertain, `broker.restore_batches`). The order is the Hub's own item vocabulary,
+    /// most active first, so a batch that is queued *and* running still counts as running while
+    /// the Mac drains - a batch that is only queued may wait in the Hub's saved queue.
+    private static let hubItemPriority = ["running", "cancel_requested", "cancelling",
+                                          "recovery_pending", "uncertain", "paused", "queued"]
+
     private static func mapHubJob(_ wire: HubJobDetail) -> NativeJob {
-        let item = wire.items.first
+        let state = hubItemPriority.first { candidate in
+            wire.items.contains { $0.state == candidate }
+        }
+        let item = wire.items.first { $0.state == state } ?? wire.items.first
+        // A finished item in a batch that is still working keeps its result reachable; the row
+        // itself is no longer "done", so it takes the artifact from the item that has one.
+        let done = wire.items.first { $0.state == "done" }
         return NativeJob(id: wire.id, state: item?.state ?? "queued", progress: item?.progress ?? 0,
             text: item?.prompt ?? "", model: wire.model, createdAt: wire.createdAt,
-            outputURL: item?.state == "done" ? item?.artifactUrl : nil, error: item?.error, bytes: item?.bytes, sha256: item?.sha256,
+            outputURL: done?.artifactUrl, error: item?.error, bytes: done?.bytes ?? item?.bytes, sha256: done?.sha256 ?? item?.sha256,
             mediaType: item?.mediaType,
             imageSettings: item?.params?.imageSettings,
             musicSettings: item?.params?.musicSettings,

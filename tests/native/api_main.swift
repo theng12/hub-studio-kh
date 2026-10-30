@@ -115,6 +115,11 @@ final class FixtureProtocol: URLProtocol {
     /// "off", "settled" (a failed batch with nothing waiting) or "retried" (queued again).
     static var errorBatchMode = "off"
     static var voiceDownloadsIdle = false
+    /// A controller batch whose first item is done and whose second still runs on a member.
+    static var dispatchedMemberJob = false
+    static func setDispatchedMemberJob(_ value: Bool) {
+        lock.lock(); defer { lock.unlock() }; dispatchedMemberJob = value
+    }
     /// What `GET /api/hub/model-downloads/hub-download-1` answers: normal, a transient 500, the
     /// Hub having forgotten the run (404), or a failed run with the downloader's own last words.
     static var hubDownloadMode = "normal"
@@ -1524,6 +1529,13 @@ final class FixtureProtocol: URLProtocol {
             let extraChat = Self.chatJobWithoutStatedTime
             Self.lock.unlock()
             if extraChat { batches.append(["id": "chat-job-nostated", "modality": "chat"]) }
+            Self.lock.lock(); let dispatched = Self.dispatchedMemberJob; Self.lock.unlock()
+            if dispatched {
+                batches.append(["id": "dispatched-job", "modality": "image"])
+                // A batch whose first item only waits while a later one runs: the drain must still
+                // see the running item (a queued one may wait in the Hub's saved queue).
+                batches.append(["id": "dispatched-queued", "modality": "image"])
+            }
             // A failed image batch, when a test asks for one: the Hub's own item counts say whether
             // it is settled (nothing waiting) or was retried (one queued again).
             Self.lock.lock(); let errorBatch = Self.errorBatchMode; Self.lock.unlock()
@@ -1555,6 +1567,12 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/jobs/err-job"):
             Self.lock.lock(); let errorBatch = Self.errorBatchMode; Self.lock.unlock()
             result = (200, "application/json", Data("{\"id\":\"err-job\",\"modality\":\"image\",\"model\":\"fixture/flux\",\"created_at\":1,\"items\":[{\"index\":0,\"state\":\"\(errorBatch == "retried" ? "queued" : "error")\",\"prompt\":\"x\",\"error\":\"worker refused\"}]}".utf8))
+        case ("GET", "/api/hub/jobs/dispatched-job"):
+            result = (200, "application/json", Data(#"{"id":"dispatched-job","modality":"image","model":"fixture/image","created_at":1000,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"First","artifact_url":"/api/hub/jobs/dispatched-job/items/0/artifact","machine":"member-1"},{"index":1,"state":"running","progress":0.4,"prompt":"Second","machine":"member-1"}]}"#.utf8))
+        case ("GET", "/api/hub/jobs/dispatched-job"):
+            result = (200, "application/json", Data(#"{"id":"dispatched-job","modality":"image","model":"fixture/image","created_at":1000,"items":[{"index":0,"state":"done","progress":1.0,"prompt":"First","artifact_url":"/api/hub/jobs/dispatched-job/items/0/artifact","machine":"member-1"},{"index":1,"state":"running","progress":0.4,"prompt":"Second","machine":"member-1"}]}"#.utf8))
+        case ("GET", "/api/hub/jobs/dispatched-queued"):
+            result = (200, "application/json", Data(#"{"id":"dispatched-queued","modality":"image","model":"fixture/image","created_at":1001,"items":[{"index":0,"state":"queued","progress":0.0,"prompt":"Waiting","machine":"member-1"},{"index":1,"state":"running","progress":0.6,"prompt":"Working","machine":"member-1"}]}"#.utf8))
         case ("GET", "/api/hub/jobs/old-job"):
             Self.lock.lock(); let refuse = Self.failJobDetail; Self.lock.unlock()
             if refuse { result = (500, "application/json", Data(#"{"detail":"fixture cannot read this batch"}"#.utf8)); break }
@@ -6821,6 +6839,25 @@ struct NativeAPITests {
         tick += 120
         await updateStore.releaseTick(now: tick)
         require(autoSwaps == 0, "a busy controller must wait, not interrupt its work")
+        // **A member's running item is the controller's work.** The batch's first item is done and
+        // the second still runs on a member; reading only the first item called the batch done and
+        // let the controller restart under the member's job.
+        FixtureProtocol.setDispatchedMemberJob(true)
+        FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
+        tick += 120
+        await updateStore.releaseTick(now: tick)
+        require(updateStore.activeWorkCount >= 1,
+                "a dispatched member item still running is the controller's active work: \(updateStore.activeWorkCount)")
+        require(autoSwaps == 0, "a controller must not restart while a member item runs")
+        let dispatchedRow = updateStore.imageJobs.first { $0.id == "dispatched-job" }
+        require(dispatchedRow?.state == "running",
+                "a batch with one done item and one running on a member is running: \(dispatchedRow?.state ?? "missing")")
+        require(dispatchedRow?.outputURL != nil,
+                "a finished item's artifact stays reachable while the rest of the batch runs")
+        let queuedRow = updateStore.imageJobs.first { $0.id == "dispatched-queued" }
+        require(queuedRow?.state == "running",
+                "the most active item decides the row, not the first one: \(queuedRow?.state ?? "missing")")
+        FixtureProtocol.setDispatchedMemberJob(false)
         FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)   // drained
         tick += 120
         await updateStore.releaseTick(now: tick)
