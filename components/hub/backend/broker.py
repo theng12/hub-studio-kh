@@ -2370,6 +2370,9 @@ def _submit_batch_locked(envelope: dict) -> dict:
         "shared_params": _shared_params_with_local_reference(envelope),
         "routing": routing,
         "label": envelope.get("label"),        # who submitted (e.g. "storystudio")
+        # Who asked, in the Hub's own words: stamped from the credential at the door, never from
+        # the body. Absent on batches written before 0.6.212, and the app shows nothing for those.
+        "origin": envelope.get("origin"),
         "webhook": envelope.get("webhook"),    # POSTed the summary on completion
         "item_webhook": envelope.get("itemWebhook"),  # POSTed per item as each finishes
         "webhook_sent": False,
@@ -2837,6 +2840,7 @@ def batch_summary(b: dict) -> dict:
                                  for state in states) else None),
         "dispatch_trace": b.get("dispatch_trace"),
         "label": b.get("label"),
+        "origin": b.get("origin"),
         "total": len(states),
         "queued": states.count("queued") - len(retrying),
         "retrying": len(retrying),
@@ -3124,17 +3128,32 @@ async def _adopt_abandoned_attempt(client: httpx.AsyncClient, b: dict, item: dic
         _wakeup.set()
 
 
-async def cancel_batch(batch_id: str, client: httpx.AsyncClient | None = None) -> dict | None:
-    """Cancel queued work and immediately signal every known running worker."""
+def cancelled_text(batch: dict) -> str:
+    """What a cancelled item says. Only a credential the Hub saw is named; otherwise it says
+    "Cancelled" and makes no claim about who asked."""
+    return {"this-mac": "Cancelled from this Mac",
+            "gateway": "Cancelled from the Gateway"}.get(
+                str(batch.get("cancelled_by") or ""), "Cancelled")
+
+
+async def cancel_batch(batch_id: str, client: httpx.AsyncClient | None = None,
+                       source: str | None = None) -> dict | None:
+    """Cancel queued work and immediately signal every known running worker.
+
+    `source` is the credential's own answer to "who asked" (`this-mac` or `gateway`), stamped by
+    the route. The four asynchronous paths that write the item's sentence read it back from the
+    batch through `cancelled_text`, so they cannot disagree with the route that started them."""
     b = batches.get(batch_id)
     if b is None:
         return None
     b["cancelled"] = True
+    if source:
+        b["cancelled_by"] = source
     queued_cancelled = 0
     for it in b["items"]:
         if it["state"] == "queued":
             it["state"] = "cancelled"
-            it["error"] = "Cancelled by user"
+            it["error"] = cancelled_text(b)
             it["retry_at"] = None
             queued_cancelled += 1
     ledger.save_batch(b)
@@ -5881,7 +5900,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 item["error"] = (
                     "GenStudio execution lease expired"
                     if b.get("lease_expired")
-                    else "Cancelled by user"
+                    else cancelled_text(b)
                 )
                 return
         # poll the studio's async job until terminal
@@ -5919,7 +5938,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                     item["error"] = (
                         "GenStudio execution lease expired"
                         if b.get("lease_expired")
-                        else "Cancelled by user"
+                        else cancelled_text(b)
                     )
                     return
             url, headers = studio_request(studio, f"/api/generate/jobs/{job['id']}")
@@ -6026,7 +6045,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 _mark_accepted_voice_cancel_uncertain(b, item)
             else:
                 item["state"] = "cancelled"
-                item["error"] = "Cancelled by user"
+                item["error"] = cancelled_text(b)
             return
         recovered = (False if getattr(e, "worker_terminal", False)
                      else await _recover_worker_job(client, b, item, studio, body, t_start))

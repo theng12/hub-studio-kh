@@ -4316,6 +4316,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 return JSONResponse({"error": broker.NO_AVAILABLE_MACHINE_TEXT,
                                      "code": broker.NO_AVAILABLE_MACHINE,
                                      "detail": broker.NO_AVAILABLE_MACHINE_TEXT}, status_code=503)
+        # Who asked: the Hub's own credential check, not a field a caller could set. The Hub
+        # token is this Mac's app; any other credential is the Gateway or the fleet.
+        envelope = {**envelope,
+                    "origin": "this-mac" if auth.presented_owner_token(request, token) else "gateway"}
         result = broker.submit_batch(envelope)
         if result.get("code") == cloud_guard.REFUSAL_CODE:
             raise HTTPException(403, {"code": result["code"], "detail": result["error"]})
@@ -4569,8 +4573,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         )
 
     @app.delete("/api/hub/jobs/{batch_id}")
-    async def cancel_job(batch_id: str) -> dict[str, Any]:
-        result = await broker.cancel_batch(batch_id)
+    async def cancel_job(batch_id: str, request: Request) -> dict[str, Any]:
+        result = await broker.cancel_batch(
+            batch_id, source="this-mac" if auth.presented_owner_token(request, token) else "gateway")
         if result is None:
             raise HTTPException(404, "unknown batch")
         return {"ok": True, **{key: value for key, value in result.items() if key != "batch"}}
@@ -4617,6 +4622,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 episode, genstudio_execution,
                 routing=parsed,
                 admission_guard=admission,
+                origin=("this-mac" if auth.presented_owner_token(request, token) else "gateway"),
             )
         finally:
             for upload in files:

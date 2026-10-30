@@ -300,7 +300,8 @@ async def create_batch(files: list[UploadFile], item_ids: list[str], model: str,
                        project: str | None, episode: str | None,
                        genstudio_execution_json: str | None = None,
                        routing: str = routing_rule.POOL,
-                       deduplicate: bool = True, admission_guard=None) -> tuple[dict, bool]:
+                       deduplicate: bool = True, admission_guard=None,
+                       origin: str | None = None) -> tuple[dict, bool]:
     if not files or len(files) > MAX_FILES:
         raise HTTPException(400, f"files must contain 1 to {MAX_FILES} uploads")
     if len(item_ids) != len(files):
@@ -448,6 +449,8 @@ async def create_batch(files: list[UploadFile], item_ids: list[str], model: str,
         "modality": "transcription",
         "updated_at": now, "finished_at": None, "cancelled": False,
         "label": clean_label, "project": clean_project, "episode": clean_episode,
+        # Who asked, stamped from the credential by the route (absent before 0.6.212).
+        "origin": origin,
         "model": model, "language": language or None,
         "word_timestamps": bool(word_timestamps), "items": items,
         "routing": routing,
@@ -503,6 +506,7 @@ def summary(batch: dict, include_items: bool = True,
         status = "done"
     out = {
         "id": batch["id"], "status": status, "label": batch.get("label"),
+        "origin": batch.get("origin"),
         "project": batch.get("project"), "episode": batch.get("episode"),
         "model": batch["model"],
         # model_id: the canonical manifest id, so /api/hub/models and
