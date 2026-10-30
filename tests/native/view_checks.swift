@@ -243,6 +243,43 @@ enum ViewChecks {
         check(noteHost([stopping, startingLine]).fittingSize.height > noLine.fittingSize.height,
               "two Studios down grow the footer rather than burying the second line")
 
+        // ---- Whose work is whose, and running work first (owner on controller 1400) ----
+        check(JobFacts.stage("running") == .running && JobFacts.stage("cancel_requested") == .running
+              && JobFacts.stage("cancelling") == .running,
+              "running work, and work being stopped, is in Running now")
+        check(JobFacts.stage("queued") == .waiting && JobFacts.stage("paused") == .waiting,
+              "queued work is in the second group, never in history")
+        check(JobFacts.stage("done") == .finished && JobFacts.stage("uncertain") == .finished
+              && JobFacts.stage("error") == .finished,
+              "finished, failed and uncertain rows stay in history")
+        check(JobFacts.whereTag(machine: "local", isActive: true, name: { $0 }) == "This Mac",
+              "a This Mac row carries its own tag, not a blank")
+        check(JobFacts.whereTag(machine: "mini-01", isActive: true, name: { _ in "mini-01" }) == "mini-01",
+              "a node row names the node")
+        check(JobFacts.whereTag(machine: nil, isActive: true, name: { $0 }) == "Mac not reported",
+              "a live row whose Mac the Hub did not name is not claimed for this Mac")
+        check(JobFacts.whereTag(machine: nil, isActive: false, name: { $0 }) == nil,
+              "a finished row whose Mac was never recorded says nothing")
+        check(JobFacts.askedTag(origin: "this-mac") == "asked here"
+              && JobFacts.askedTag(origin: "gateway") == "sent by the Gateway"
+              && JobFacts.askedTag(origin: nil) == nil,
+              "who asked, and nothing for a batch filed before it was recorded")
+        check(NativeWorkspaceStore.cancelText("Cancelled by user") == "Cancelled"
+              && NativeWorkspaceStore.cancelText("Cancelled from the Gateway") == "Cancelled from the Gateway"
+              && NativeWorkspaceStore.cancelText(nil) == nil,
+              "an old 'by user' claim is not repeated; a named source is kept")
+        check(JobMachineFilter.allCases.map(\.rawValue) == ["All", "This Mac", "Nodes"],
+              "Overview's In progress and Jobs offer the same three filters")
+        let unplaced = NativeJob(id: "u", state: "queued", progress: 0, text: "t", model: "m",
+                                 createdAt: 1, outputURL: nil, error: nil, machine: nil)
+        let placed = NativeJob(id: "p", state: "queued", progress: 0, text: "t", model: "m",
+                               createdAt: 1, outputURL: nil, error: nil, machine: "local")
+        let node = NativeJob(id: "n", state: "running", progress: 0.2, text: "t", model: "m",
+                             createdAt: 1, outputURL: nil, error: nil, machine: "mini-01")
+        check(JobMachineFilter.thisMac.includes(unplaced) && JobMachineFilter.thisMac.includes(placed)
+              && !JobMachineFilter.nodes.includes(placed) && JobMachineFilter.nodes.includes(node),
+              "the filters split this Mac's queue from the nodes' work")
+
         if failures > 0 { exit(1) }
         print("Native view checks passed")
     }

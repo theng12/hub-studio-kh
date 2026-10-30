@@ -55,7 +55,7 @@ enum HistoryTab: Hashable, Identifiable {
 /// A node runs work its controller owns, so the two histories meet on the controller and only
 /// there: a job's own `machine` (already on every row) says which Mac made it. That is the one
 /// fact the operator needs to sort finished assets before previewing them.
-private enum JobMachineFilter: String, CaseIterable, Identifiable {
+enum JobMachineFilter: String, CaseIterable, Identifiable {
     case all = "All"
     case thisMac = "This Mac"
     case nodes = "Nodes"
@@ -68,6 +68,37 @@ private enum JobMachineFilter: String, CaseIterable, Identifiable {
         // A row with no machine yet has not been dispatched, so it is this Mac's queue.
         case .thisMac: return job.machine == nil || job.machine == "local"
         case .nodes: return job.machine != nil && job.machine != "local"
+        }
+    }
+}
+
+/// The small facts every job row carries and the order the Jobs page groups them in, as pure
+/// functions so the native view checks pin the words rather than a screenshot.
+enum JobFacts {
+    enum Stage { case running, waiting, finished }
+
+    /// Running first, then what waits: the owner read the Jobs page as having no running work at
+    /// all because it opened on a Studio's finished rows.
+    static func stage(_ state: String) -> Stage {
+        if ["running", "cancel_requested", "cancelling"].contains(state) { return .running }
+        if ["queued", "paused", "recovery_pending"].contains(state) { return .waiting }
+        return .finished
+    }
+
+    /// Which Mac a row runs on. A live row whose Hub reported no Mac says exactly that - it may
+    /// still be waiting to be placed, or running somewhere the Hub did not name, and neither is
+    /// "this Mac". A finished row with no recorded Mac (filed before this build) says nothing.
+    static func whereTag(machine: String?, isActive: Bool, name: (String) -> String) -> String? {
+        if let machine, !machine.isEmpty { return machine == "local" ? "This Mac" : name(machine) }
+        return isActive ? "Mac not reported" : nil
+    }
+
+    /// Who asked. Nil when the Hub did not record it: an older batch makes no claim.
+    static func askedTag(origin: String?) -> String? {
+        switch origin {
+        case "this-mac": return "asked here"
+        case "gateway": return "sent by the Gateway"
+        default: return nil
         }
     }
 }
@@ -1289,6 +1320,9 @@ struct StudioContent: View {
     @State private var historyTab = HistoryTab.all
     /// Which Macs the Jobs page lists. Offered only where more than one Mac's work can land.
     @State private var jobMachineFilter = JobMachineFilter.all
+    /// The same choice on Overview's In progress list, kept separate so narrowing one page does
+    /// not silently narrow the other.
+    @State private var overviewMachineFilter = JobMachineFilter.all
     /// The render whose detail is open on the Render page. Nil shows the list as it was.
     @State private var openRender: NativeRender?
     @State private var loadingImage = false
@@ -1393,6 +1427,33 @@ struct StudioContent: View {
     /// listed twice.
     private var activeSubtitles: [NativeJob] {
         workspace.transcribing ? [] : workspace.subtitleJobs.filter { active($0.state) }
+    }
+
+    /// The All / This Mac / Nodes filter, drawn from one place so Overview's In progress and the
+    /// Jobs page cannot drift apart. `counts` puts each tab's own row count on its label, so a tab
+    /// never offers work its list cannot show.
+    private func machineFilterPicker(_ selection: Binding<JobMachineFilter>,
+                                     counts: [JobMachineFilter: Int]? = nil) -> some View {
+        Picker("Made on", selection: selection) {
+            ForEach(JobMachineFilter.allCases) { filter in
+                let count = counts?[filter]
+                Text(count.map { "\(filter.rawValue) \($0)" } ?? filter.rawValue).tag(filter)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 320, alignment: .leading)
+        .accessibilityLabel("Show jobs made on")
+        .accessibilityHint("Separate this Mac's own work from work its nodes made")
+    }
+
+    /// How many running rows each tab of the Overview filter would show: every Studio's active
+    /// work, counted through the same predicate the list filters with.
+    private var overviewActiveCounts: [JobMachineFilter: Int] {
+        let active = activeAudio + activeImages + activeMusic + activeVideo + activeSubtitles
+        return Dictionary(uniqueKeysWithValues: JobMachineFilter.allCases.map {
+            ($0, active.filter($0.includes).count)
+        })
     }
     /// Running downloads, and a failed one so the reason stays where the operator started it.
     private var activeDownloads: [NativeDownload] {
@@ -1826,6 +1887,17 @@ struct StudioContent: View {
             .overlay { imageLightbox }
         }
         .onChange(of: studio.selection) { _, _ in imageModalID = nil }
+        // **"Controller · fleet not read" was true only until the Fleet page was opened.** The
+        // sidebar read the roster, and the roster was read by that page's own task, so a
+        // controller whose Nodes page nobody visited said "not read" for hours while the Gateway
+        // was already reading the same Macs (1400, 18:49). Read it once per connection instead;
+        // the read is local, and a failure leaves the last good list and its own reason.
+        .task(id: "fleet-line/\(workspace.connectionGeneration)/\(workspace.controllerIdentity?.settings.role ?? "")") {
+            guard localServicesReady,
+                  workspace.controllerIdentity?.settings.role == "controller",
+                  workspace.fleetNodes == nil else { return }
+            await workspace.refreshFleetNodes()
+        }
         // A floor that matches the window's own minimum, not the sum of every column: the
         // columns are allowed to compress below their ideal so nothing has to be cropped.
         .frame(minWidth: 720, minHeight: 520)
@@ -1929,14 +2001,33 @@ struct StudioContent: View {
             VStack(alignment: .leading, spacing: HubSpace.m) {
                 HStack(alignment: .firstTextBaseline) {
                     sectionTitle("In progress")
+                    Spacer(minLength: 0)
                     Button("View All Jobs") { studio.select(.jobs) }.hubRowControl()
                 }
+                // The same All / This Mac / Nodes filter as the Jobs page (owner, on a controller:
+                // *"there's no way to see which job is its own and which is the fleet's"*), with
+                // each tab's own count. Only where more than one Mac's work can land.
+                if workspace.controllerIdentity?.settings.role == "controller" {
+                    machineFilterPicker($overviewMachineFilter, counts: overviewActiveCounts)
+                }
                 HubCard {
-                    if activeAudio.isEmpty && activeImages.isEmpty && activeMusic.isEmpty && activeVideo.isEmpty && activeSubtitles.isEmpty && activeDownloads.isEmpty && !workspace.transcribing {
+                    // A download or a live transcription is this Mac's own work, so neither is
+                    // shown under Nodes: the tabs separate whose jobs ran, not whose disks they use.
+                    let downloadsHere = overviewMachineFilter == .nodes ? [] : activeDownloads
+                    let transcribingHere = overviewMachineFilter == .nodes ? false : workspace.transcribing
+                    let audio = activeAudio.filter(overviewMachineFilter.includes)
+                    let images = activeImages.filter(overviewMachineFilter.includes)
+                    let music = activeMusic.filter(overviewMachineFilter.includes)
+                    let video = activeVideo.filter(overviewMachineFilter.includes)
+                    let subtitles = activeSubtitles.filter(overviewMachineFilter.includes)
+                    if audio.isEmpty && images.isEmpty && music.isEmpty && video.isEmpty
+                        && subtitles.isEmpty && downloadsHere.isEmpty && !transcribingHere {
                         HStack(spacing: HubSpace.m) {
                             Image(systemName: "checkmark.circle").font(HubType.icon).foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: HubSpace.xs) {
-                                Text("No active jobs").font(HubType.rowTitle)
+                                Text(overviewMachineFilter == .all ? "No active jobs"
+                                     : "No active jobs on \(overviewMachineFilter == .thisMac ? "this Mac" : "the nodes")")
+                                    .font(HubType.rowTitle)
                                 Text("Open a workspace to start creating. Completed work stays in Jobs.")
                                     .font(HubType.secondary).foregroundStyle(.secondary)
                             }
@@ -1945,13 +2036,13 @@ struct StudioContent: View {
                         }
                     } else {
                         // One divider between rows, none after the last: the card draws its own edge.
-                        let rows: [AnyView] = activeAudio.map { job in AnyView(jobRow(job, compact: true)) }
-                            + activeImages.map { AnyView(imageJobRow($0)) }
-                            + activeMusic.map { AnyView(musicJobRow($0)) }
-                            + activeVideo.map { AnyView(videoJobRow($0)) }
-                            + activeSubtitles.map { AnyView(subtitleJobRow($0)) }
-                            + (workspace.transcribing ? [AnyView(transcriptionActivity)] : [])
-                            + activeDownloads.map { download in AnyView(downloadRow(download)) }
+                        let rows: [AnyView] = audio.map { job in AnyView(jobRow(job, compact: true)) }
+                            + images.map { AnyView(imageJobRow($0)) }
+                            + music.map { AnyView(musicJobRow($0)) }
+                            + video.map { AnyView(videoJobRow($0)) }
+                            + subtitles.map { AnyView(subtitleJobRow($0)) }
+                            + (transcribingHere ? [AnyView(transcriptionActivity)] : [])
+                            + downloadsHere.map { download in AnyView(downloadRow(download)) }
                         VStack(alignment: .leading, spacing: HubSpace.m) {
                             ForEach(rows.indices, id: \.self) { index in
                                 if index > 0 { Divider() }
@@ -2497,11 +2588,42 @@ struct StudioContent: View {
     private func jobMetaParts(_ job: NativeJob) -> [String] {
         var parts = ["\(modelName(job.model))\(job.generationSuffix)"]
         if let made = job.generatedAtLabel { parts.append(made) }
-        if let machine = job.machine, !machine.isEmpty {
-            parts.append("on \(machine == "local" ? "this Mac" : workspace.fleetMachineName(machine))")
-        }
         if job.state == "error", let tries = job.tries, tries > 1 { parts.append("after \(tries) tries") }
         return parts
+    }
+
+    /// Where a row's work runs, as the small tag every row carries. Owner, on a controller:
+    /// *"there's no way to see which job is its own and which is the fleet's."* A job the Hub has
+    /// not placed yet is said to be unplaced rather than assigned to a Mac it may never run on;
+    /// a finished row whose Hub never recorded a Mac (filed before this build) says nothing.
+    private func jobWhereTag(_ job: NativeJob) -> String? {
+        JobFacts.whereTag(machine: job.machine, isActive: active(job.state),
+                          name: workspace.fleetMachineName)
+    }
+
+    /// Who asked, when the Hub recorded it. Nil for a batch filed before 0.6.212, which is shown
+    /// as nothing rather than guessed.
+    private func jobAskedTag(_ job: NativeJob) -> String? { JobFacts.askedTag(origin: job.origin) }
+
+    /// One small capsule. A tag is read as one fact, so it never wraps.
+    private func jobTag(_ text: String) -> some View {
+        Text(text)
+            .font(HubType.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, HubSpace.s)
+            .padding(.vertical, 1)
+            .background(Color.secondary.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: HubRadius.control, style: .continuous))
+            .accessibilityLabel(text)
+    }
+
+    @ViewBuilder private func jobTags(_ job: NativeJob) -> some View {
+        HStack(spacing: HubSpace.xs) {
+            if let where_ = jobWhereTag(job) { jobTag(where_) }
+            if let asked = jobAskedTag(job) { jobTag(asked) }
+        }
     }
 
     /// The line under a row's prompt: what made it, whether it finished, and when.
@@ -2523,16 +2645,22 @@ struct StudioContent: View {
             ?? parts.joined(separator: ", ")
         // The badge beside the line when the line fits on one, and over it when it does not: a badge
         // with a date wrapped to its right broke "2 Oct 2026" across two lines in the narrow columns.
+        // The where/who tags always share the badge's row: they are the answer to "whose work is
+        // this", so a narrow column may shorten the line, never drop a tag.
         let badge = stateBadge(job.state)
         return ViewThatFits(in: .horizontal) {
             HStack(alignment: .firstTextBaseline, spacing: HubSpace.s) {
                 badge
+                jobTags(job)
                 Text(line).font(HubType.caption).foregroundStyle(.secondary).lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .accessibilityLabel(spoken)
             }
             VStack(alignment: .leading, spacing: HubSpace.xs) {
-                badge
+                HStack(spacing: HubSpace.s) {
+                    badge
+                    jobTags(job)
+                }
                 Text(line).font(HubType.caption).foregroundStyle(.secondary).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel(spoken)
@@ -5211,6 +5339,17 @@ struct StudioContent: View {
         }
     }
 
+    /// Every job the Jobs page's current tab and Mac filter select, across the Studios that have
+    /// a batch history, newest first as each Studio's own list is.
+    private var jobsInScope: [(function: StudioFunction, job: NativeJob)] {
+        workspace.jobHistories
+            .filter { historyTab == .all || historyTab.studio == $0.function }
+            .flatMap { history in
+                history.jobs.filter(jobMachineFilter.includes)
+                    .map { (history.function, $0) }
+            }
+    }
+
     private var jobsWorkspace: some View {
         PageScaffold(title: pageTitle(.jobs), subtitle: "Every local generation in one place, or filtered to a single studio.", scrolls: true) {
                 Picker("History", selection: $historyTab) {
@@ -5227,16 +5366,7 @@ struct StudioContent: View {
                 // else. A node's list is its own machine throughout, so a split there would be
                 // three names for one list.
                 if workspace.controllerIdentity?.settings.role == "controller" {
-                    Picker("Made on", selection: $jobMachineFilter) {
-                        ForEach(JobMachineFilter.allCases) { filter in
-                            Text(filter.rawValue).tag(filter)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: 260, alignment: .leading)
-                    .accessibilityLabel("Show jobs made on")
-                    .accessibilityHint("Separate this Mac's own results from work its nodes made")
+                    machineFilterPicker($jobMachineFilter)
                 }
                 if workspace.transcribing { transcriptionActivity }
                 // A tab for a Studio the Hub files nothing for is not nothing to show: it is the
@@ -5257,12 +5387,42 @@ struct StudioContent: View {
                     }
                     }
                 }
+                // **Running work first** (owner: *"no status of running jobs here either"*). The
+                // page used to open on finished Audio rows because the Studios are listed in their
+                // sidebar order; live work was there, further down. One group per state, each row
+                // drawn by its own Studio, honouring the tab and the Mac filter.
+                let running = jobsInScope.filter { JobFacts.stage($0.job.state) == .running }
+                let waiting = jobsInScope.filter { JobFacts.stage($0.job.state) == .waiting }
+                if !running.isEmpty {
+                    VStack(alignment: .leading, spacing: HubSpace.m) {
+                        sectionTitle("Running now")
+                        LazyVStack(alignment: .leading, spacing: HubSpace.m) {
+                            ForEach(Array(running.enumerated()), id: \.offset) { index, row in
+                                jobRow(row.job, for: row.function)
+                                if index < running.count - 1 { Divider() }
+                            }
+                        }
+                    }
+                }
+                if !waiting.isEmpty {
+                    VStack(alignment: .leading, spacing: HubSpace.m) {
+                        sectionTitle("Queued")
+                        LazyVStack(alignment: .leading, spacing: HubSpace.m) {
+                            ForEach(Array(waiting.enumerated()), id: \.offset) { index, row in
+                                jobRow(row.job, for: row.function)
+                                if index < waiting.count - 1 { Divider() }
+                            }
+                        }
+                    }
+                }
                 // One section per Studio that has a history, derived from the Studio list rather
                 // than written out here: a Studio missing from a hand-written section was simply
-                // absent from Jobs with nothing saying so.
+                // absent from Jobs with nothing saying so. Only finished work: what is running or
+                // waiting is in the two groups above it.
                 ForEach(workspace.jobHistories, id: \.function) { history in
                     if historyTab == .all || historyTab.studio == history.function {
                       let jobs = history.jobs.filter(jobMachineFilter.includes)
+                          .filter { !active($0.state) }
                       VStack(alignment: .leading, spacing: HubSpace.m) {
                         sectionTitle(StudioPage.page(for: history.function)?.title ?? history.function.rawValue)
                         if jobs.isEmpty {
@@ -7633,7 +7793,14 @@ struct StudioContent: View {
     private var groupLine: String {
         switch workspace.controllerIdentity?.settings.role {
         case "controller":
-            guard let nodes = workspace.fleetNodes?.nodes else { return "Controller · fleet not read" }
+            // Once per connection the roster is read (the task on the main view), so "fleet not
+            // read" is a moment, not a state: while it is being read that is what it says, and a
+            // failure says the nodes were not read rather than claiming a count of zero.
+            guard let nodes = workspace.fleetNodes?.nodes else {
+                if workspace.fleetRefreshing { return "Controller · reading nodes…" }
+                if workspace.fleetReadError != nil { return "Controller · nodes not read" }
+                return "Controller"
+            }
             let count = nodes.count
             return "Controller · \(count) \(count == 1 ? "node" : "nodes")"
         case "agent":

@@ -2604,6 +2604,10 @@ struct NativeJob: Identifiable, Equatable {
     /// How many dispatch attempts this item has used, and when the next one is due (epoch seconds).
     var tries: Int? = nil
     var retryAt: Double? = nil
+    /// Who asked, in the Hub's own words: `this-mac` (the app on this Mac) or `gateway` (the
+    /// Gateway or the fleet). Nil on a batch filed before 0.6.212 recorded it, and the row then
+    /// says nothing rather than guessing.
+    var origin: String? = nil
 
     /// The line for a queued row: the Hub's stated reason, else the generic wait, then the retry
     /// clock when the item is in a retry loop (a 30 s MACHINE_BUSY deferral shows as this).
@@ -10828,6 +10832,13 @@ final class NativeWorkspaceStore: ObservableObject {
     private static let hubItemPriority = ["running", "cancel_requested", "cancelling",
                                           "recovery_pending", "uncertain", "paused", "queued"]
 
+    /// A cancelled job's sentence. The Hub names the source when its own credential check saw one
+    /// ("Cancelled from this Mac", "Cancelled from the Gateway"); a batch cancelled before
+    /// 0.6.212 says "Cancelled by user", which is a claim about who - so it reads "Cancelled" here.
+    static func cancelText(_ error: String?) -> String? {
+        error == "Cancelled by user" ? "Cancelled" : error
+    }
+
     private static func mapHubJob(_ wire: HubJobDetail) -> NativeJob {
         let state = hubItemPriority.first { candidate in
             wire.items.contains { $0.state == candidate }
@@ -10838,7 +10849,7 @@ final class NativeWorkspaceStore: ObservableObject {
         let done = wire.items.first { $0.state == "done" }
         return NativeJob(id: wire.id, state: item?.state ?? "queued", progress: item?.progress ?? 0,
             text: item?.prompt ?? "", model: wire.model, createdAt: wire.createdAt,
-            outputURL: done?.artifactUrl, error: item?.error, bytes: done?.bytes ?? item?.bytes, sha256: done?.sha256 ?? item?.sha256,
+            outputURL: done?.artifactUrl, error: Self.cancelText(item?.error), bytes: done?.bytes ?? item?.bytes, sha256: done?.sha256 ?? item?.sha256,
             mediaType: item?.mediaType,
             imageSettings: item?.params?.imageSettings,
             musicSettings: item?.params?.musicSettings,
@@ -10861,7 +10872,7 @@ final class NativeWorkspaceStore: ObservableObject {
             answer: item?.text ?? "",
             itemIndex: item?.index ?? 0,
             governorNote: wire.governorNote, machine: item?.machine,
-            tries: item?.tries, retryAt: item?.retryAt)
+            tries: item?.tries, retryAt: item?.retryAt, origin: wire.origin)
     }
 
     private static func mapHubDownload(_ run: HubModelDownload, repo: String) -> NativeDownload {
@@ -12055,6 +12066,8 @@ private struct HubJobSummary: Decodable {
     let running: Int?
     let cancelRequested: Int?
     let uncertain: Int?
+    /// Who asked: `this-mac` or `gateway`. Absent on a batch filed before 0.6.212 recorded it.
+    let origin: String?
     var settled: Bool {
         guard let queued, let retrying, let running, let cancelRequested, let uncertain else { return false }
         return queued + retrying + running + cancelRequested + uncertain == 0
@@ -12069,6 +12082,7 @@ private struct HubJobDetail: Decodable {
     /// The same field the summary carries: `/api/hub/jobs/{id}` is `_summary(batch)`, so the detail
     /// is the summary plus `items`.
     let stalledSeconds: Double?
+    let origin: String?
     let items: [HubJobItem]
 }
 private struct HubJobVoice: Decodable { let name: String?; let id: String? }
