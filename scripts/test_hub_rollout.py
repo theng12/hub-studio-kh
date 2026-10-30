@@ -206,6 +206,7 @@ class AcceptArtifactTests(unittest.TestCase):
 
     def runner(self, version=VERSION, commit=BUILD + 'deadbeef', fail=False):
         calls = []
+        self.mounts = {}
 
         def run(argv, **kwargs):
             calls.append(list(argv))
@@ -225,10 +226,13 @@ class AcceptArtifactTests(unittest.TestCase):
                     {'CFBundleShortVersionString': '0.0.1' if fail else version}))
                 (app / 'Resources' / 'release-manifest.json').write_text(json.dumps(
                     {'version': version, 'implementation_commit': commit}))
-                return SimpleNamespace(returncode=0, stdout='', stderr='')
+                self.mounts['/dev/disk99'] = mount
+                return SimpleNamespace(returncode=0, stderr='', stdout=plistlib.dumps({'system-entities': [
+                    {'dev-entry': '/dev/disk99s1', 'mount-point': str(mount)},
+                    {'dev-entry': '/dev/disk99'}]}))
             if argv[1] == 'detach':
                 # A real detach unmounts, leaving the (empty) mountpoint behind.
-                mount = Path(argv[2])
+                mount = self.mounts[argv[2]]
                 for child in sorted(mount.rglob('*'), reverse=True):
                     child.rmdir() if child.is_dir() else child.unlink()
                 return SimpleNamespace(returncode=0, stdout='', stderr='')
@@ -246,8 +250,9 @@ class AcceptArtifactTests(unittest.TestCase):
         attach = next(call for call in calls if call[1] == 'attach')
         detach = next(call for call in calls if call[1] == 'detach')
         mount = attach[attach.index('-mountpoint') + 1]
-        self.assertEqual(detach, ['hdiutil', 'detach', mount],
-                         'detach must name only the mountpoint this run created')
+        # A mount-point detach ejected a real SSD on 2026-10-30.
+        self.assertEqual(detach, ['hdiutil', 'detach', '/dev/disk99'],
+                         'detach must name the whole device this run attached, never a path')
         self.assertFalse(Path(mount).exists(), 'the private mountpoint is removed afterwards')
 
     def test_refuses_a_mounted_app_that_is_not_the_named_version_and_still_detaches(self):

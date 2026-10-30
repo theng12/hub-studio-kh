@@ -167,8 +167,9 @@ def accept_artifact(artifact: Path, version: str, build: str, run=subprocess.run
     if str(mount).startswith('/Volumes'):
         raise SystemExit(f'refusing to mount under /Volumes: {mount}')
     try:
-        run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', str(mount),
-             str(artifact)], check=True, capture_output=True, text=True, timeout=600)
+        attached = run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-plist', '-mountpoint', str(mount),
+                        str(artifact)], check=True, capture_output=True, timeout=600)
+        device = min(e['dev-entry'] for e in plistlib.loads(attached.stdout)['system-entities'])
     except Exception as exc:  # noqa: BLE001 - a mount we made is a mount we clean up
         try:
             mount.rmdir()
@@ -195,7 +196,7 @@ def accept_artifact(artifact: Path, version: str, build: str, run=subprocess.run
                 raise SystemExit(f'the manifest was built from {commit[:12]}, not {build}')
     finally:
         # Only this mountpoint, and only after our own attach returned.
-        run(['hdiutil', 'detach', str(mount)], check=False, capture_output=True, timeout=300)
+        run(['hdiutil', 'detach', device], check=False, capture_output=True, timeout=300)
         try:
             mount.rmdir()
         except OSError:
