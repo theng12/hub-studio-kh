@@ -3,16 +3,14 @@
 
 Double-click **copy-models.command** instead of running this directly.
 
-**Owner decision 2026-10-28: this step no longer chooses.** By default it copies nothing and lists
-what the kit holds, so the app's install screen ("Set up this Mac") does the choosing - one preset
-or a hand-ticked list, with the free space and the cost shown before anything moves. The SSD is a
-*source* now, not a decision. Nothing an earlier kit copied is removed by that default: a Mac that
-is already set up keeps everything it has until its owner chooses otherwise in the app.
+**Owner decision 2026-10-30: this step offers the presets, because the Hub no longer reads a drive.**
+It asks which of the four presets to copy from this SSD and copies only what is missing. The Hub
+never scans a mounted volume, so this command is the SSD path and macOS asks its permission in this
+Terminal window, once, because a person started it. Nothing an earlier kit copied is removed by that
+choice: a Mac that is already set up keeps everything it has.
 
-`STUDIOHUB_KIT_COPY=1` restores the previous behaviour for one run - every model this Mac's memory
-can run - which the kit readme still offers for a Mac with no internet and no reachable peer. That
-is the one reason the old path survives, and it is opt-in so it can never quietly decide for a Mac
-whose owner is about to use the screen.
+`STUDIOHUB_KIT_COPY=1` keeps the older behaviour for one run - every model this Mac's memory can
+run - which the kit readme still offers for a Mac with no internet and no reachable peer.
 
 Running it again is safe and is the normal thing to do after the SSD is refreshed with new
 models. It compares each model folder against the copy already here and:
@@ -581,6 +579,32 @@ def main() -> int:
     # resolves it - under either spelling a manifest may carry, and not by a second copy of the
     # rule living here. Loaded before the selection below, which is the first thing that needs it.
     verifier = load_verifier(resources / "components")
+    selected_ids = None
+    if not copy_everything:
+        sys.path.insert(0, str(resources))
+        from components import model_presets
+        os.environ["STUDIOHUB_MODEL_PRESETS"] = str(resources / "model-presets")
+        presets = model_presets.load()
+        print("Choose a model preset to copy from this SSD:")
+        for number, preset in enumerate(presets, 1):
+            print(f"  {number}. {preset['name']}")
+        print("  0. Cancel")
+        try:
+            selection = int(input("Choice: "))
+        except (ValueError, EOFError):
+            print("  No valid choice; nothing copied.")
+            return 2
+        if selection == 0:
+            print("  Cancelled; nothing copied.")
+            return 0
+        if selection < 1 or selection > len(presets):
+            print("  No valid choice; nothing copied.")
+            return 2
+        selected = set(model_presets.install_set(presets[selection - 1], manifests))
+        # A preset never lists a companion, so carry the ones its packages require.
+        selected_ids = set(selected)
+        for package_id in selected:
+            selected_ids.update(companion_packages(verifier, manifests[package_id]))
     admission_check = getattr(verifier, "production_allowed", None)
     if any("production_allowed" in manifest for manifest in manifests.values()) \
             and not callable(admission_check):
@@ -597,8 +621,8 @@ def main() -> int:
 
     chosen, skipped, pending = [], [], []
     for package_id, manifest in sorted(manifests.items()):
-        if not copy_everything:
-            break                       # nothing is chosen by this step unless it was asked to choose
+        if selected_ids is not None and package_id not in selected_ids:
+            continue
         if admission_check is not None and not admission_check(manifest):
             pending.append((package_id, manifest))
             continue
@@ -706,27 +730,6 @@ def main() -> int:
     update = [row for row in plan if row[3] == "update"]
     current = [row for row in plan if row[3] == "current"]
     absent = [row for row in plan if row[3] == "missing-from-kit"]
-
-    if not copy_everything:
-        # **The default: this step chose nothing (owner decision 2026-10-28).** It says what the
-        # kit holds, how many are already on this Mac, and where the choosing happens - and it
-        # copies and moves nothing. A run that reorganised a library it did not fill would be the
-        # kit deciding for a Mac whose owner is about to use the screen.
-        print(f"  This drive holds {len(manifests)} model package(s): "
-              f"{size_of_kit_gb(library, manifests):.1f} GB in total.")
-        already = sum(1 for package_id in manifests
-                      if (destination / package_id).is_dir())
-        print(f"  {already} of them are already in {destination}.")
-        print()
-        print("  This step no longer chooses which models to copy. Open Studio Hub and use")
-        print("  \"Set up this Mac\" - it shows this Mac's memory and free space, offers the four")
-        print("  presets by size, and copies from this drive. Nothing was copied or moved by")
-        print("  this run.")
-        print()
-        print("  To copy every model this Mac's memory can run, as earlier kits did, run this")
-        print("  with STUDIOHUB_KIT_COPY=1 (the kit readme names the launcher for it).")
-        print()
-        return 0
 
     for label, rows in (("New models", new), ("Changed models", update)):
         if rows:

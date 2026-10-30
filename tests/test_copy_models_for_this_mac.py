@@ -81,6 +81,10 @@ class Harness:
         components.mkdir(parents=True)
         write(components / "model_packages.py",
               (ROOT / "components" / "model_packages.py").read_text())
+        write(components / "model_presets.py",
+              (ROOT / "components" / "model_presets.py").read_text())
+        self.presets = self.kit / self.APP / "Contents/Resources/model-presets"
+        self.presets.mkdir(parents=True)
 
     # ---- the kit's SSD -------------------------------------------------------
     @staticmethod
@@ -112,6 +116,13 @@ class Harness:
         text = (MANIFESTS / filename).read_text()
         write(self.manifests / filename, text)
         return json.loads(text)
+
+    def preset(self, packages: list[str], name: str = "Test 8 GB", tier: int = 8) -> None:
+        """One preset file, in the shipped shape, naming the fixture's packages."""
+        write(self.presets / f"test-{tier}.json", json.dumps({
+            "schema_version": 1, "preset_id": f"test-{tier}", "name": name,
+            "memory_tier_gb": tier, "packages": packages,
+        }, indent=2))
 
     # ---- this Mac's library --------------------------------------------------
     def put(self, root: Path, package_id: str, files: dict[str, str]) -> None:
@@ -456,39 +467,53 @@ class BelowTierPackagesAreNeverPrunedTests(unittest.TestCase):
                           f"model-manifests/{package_id}.json", output)
 
 
-class KitNoLongerChoosesTests(unittest.TestCase):
-    """The step's default: copy nothing, move nothing, and point at the app's screen.
+class KitPresetChoiceTests(unittest.TestCase):
+    """The SSD command offers the four presets, because the Hub never reads a mounted drive.
 
-    Owner decision 2026-10-28. The SSD is a source now, not a decision - the app's install screen
-    shows this Mac's memory, the library volume's free space and the four presets, and does the
-    choosing. This is the half that has to hold when someone double-clicks the kit file out of
-    habit on a Mac that took an hour to set up: it must not reorganise anything.
+    Owner decision 2026-10-30. This is the path a person runs in Terminal: macOS may ask its
+    permission there, once, because they started it. A preset copies only its own packages and
+    never reorganises anything the Mac already has.
     """
 
-    def test_the_default_copies_nothing_and_says_where_the_choosing_happens(self):
+    def test_a_preset_copies_only_its_own_models(self):
         with TemporaryDirectory() as tmp:
             kit = Harness(Path(tmp))
             kit.ship("a-model", floor=1)
             kit.ship("b-model", floor=1)
-            code, output, _prompt = kit.run(copy_everything=False)
+            kit.preset(["a-model"])
+            code, output, _prompt = kit.run(answer="1\n", copy_everything=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue((kit.home / "a-model").is_dir(), output)
+            self.assertFalse((kit.home / "b-model").exists(), output)
+            self.assertIn("Choose a model preset", output)
+
+    def test_zero_cancels_and_copies_nothing(self):
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.preset(["a-model"])
+            code, output, _prompt = kit.run(answer="0\n", copy_everything=False)
             self.assertEqual(code, 0, output)
             self.assertFalse((kit.home / "a-model").exists(), output)
-            self.assertFalse((kit.home / "b-model").exists(), output)
-            self.assertTrue((kit.library / "a-model").is_dir(), "the drive keeps its weights")
-            self.assertIn("no longer chooses", output)
-            self.assertIn("Set up this Mac", output)
-            self.assertIn("Nothing was copied or moved", output)
-            self.assertIn("STUDIOHUB_KIT_COPY=1", output)
+            self.assertIn("Cancelled", output)
 
-    def test_the_default_moves_nothing_a_mac_already_has(self):
-        # The migration promise, from the other side: a library set up months ago keeps every
-        # model it has, including ones this kit does not ship at all, when the kit file is run.
+    def test_an_invalid_choice_copies_nothing(self):
+        with TemporaryDirectory() as tmp:
+            kit = Harness(Path(tmp))
+            kit.ship("a-model", floor=1)
+            kit.preset(["a-model"])
+            code, output, _prompt = kit.run(answer="9\n", copy_everything=False)
+            self.assertEqual(code, 2, output)
+            self.assertFalse((kit.home / "a-model").exists(), output)
+
+    def test_a_preset_moves_nothing_a_mac_already_has(self):
         with TemporaryDirectory() as tmp:
             kit = Harness(Path(tmp))
             kit.ship("a-model", floor=1)
             kit.receive("a-model")
             kit.receive_raw("not-in-this-kit/rev/weights.bin", "an older model")
-            code, output, _prompt = kit.run(copy_everything=False)
+            kit.preset(["a-model"])
+            code, output, _prompt = kit.run(answer="1\n", copy_everything=False)
             self.assertEqual(code, 0, output)
             self.assertTrue((kit.home / "a-model" / Harness.REVISION / "model/a-model.bin").is_file())
             self.assertTrue((kit.home / "not-in-this-kit/rev/weights.bin").is_file())

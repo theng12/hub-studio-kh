@@ -11,6 +11,11 @@ What is unchanged is the one thing that protects running work:
     its own `running_jobs` is empty, and this Gateway has no non-terminal job routed to it
     (`provider_id = studio-hub-<controller>`). A queue depth of `None` with nothing running is
     idle, and is recorded as *queue unknown* rather than silently read as zero.
+    **`--allow-busy` is the explicit exception, and it is off by default.** Publishing only
+    stages the release on the controller; it starts no install. Every Mac - the controller
+    included - installs from its own update tick only after its own work finishes, so the offer
+    cannot interrupt a running job. The exception still requires a reachable controller and a
+    readable Gateway gate, and the row says it was published while busy.
   * **The artifact is proved, not quoted.** Size and SHA-256 are recomputed from the bytes on
     disk, `hdiutil verify` must accept the image, and the image is mounted **read-only at a
     private temp mountpoint** (never under `/Volumes`, so a mounted kit SSD at
@@ -328,6 +333,19 @@ def is_idle(read: dict) -> bool:
 def queue_unknown(read: dict) -> bool:
     return read['queue_depth'] is None
 
+def is_publishable_while_busy(read: dict) -> bool:
+    """Reachable and no failed Gateway read: the only site checks a busy publish needs.
+
+    Publishing stages the release on the controller; it never starts an install. Each Mac -
+    the controller included - installs from its own update tick only when its own work is
+    done, so a site with work running is not interrupted by the offer itself. An unreachable
+    controller, or an unreadable Gateway gate, is still not publishable: those are unknowns,
+    not busy.
+    """
+    return read['reachable'] is True and read['gateway_error'] is None
+
+
+
 
 def holds_release(read: dict, version: str, build: str, sha256: str, size: int) -> bool:
     held = read['controller_release']
@@ -356,6 +374,7 @@ class Rollout:
     def __init__(self, gateway, accepted: dict, artifact: Path, version: str, build: str,
                  receipts: Path, *, window_s: float = DEFAULT_WINDOW_S, poll_s: float = POLL_S,
                  now=time.monotonic, sleep=time.sleep, force_full: bool = False,
+                 allow_busy: bool = False,
                  publish_timeout_s: float = PUBLISH_TIMEOUT_S) -> None:
         self.gateway = gateway
         self.accepted = accepted
@@ -364,6 +383,7 @@ class Rollout:
         self.build = build
         self.receipts = Path(receipts)
         self.force_full = force_full
+        self.allow_busy = allow_busy
         self.window_s = window_s
         self.poll_s = poll_s
         self.publish_timeout_s = publish_timeout_s
@@ -500,7 +520,8 @@ class Rollout:
                 self.sleep(self.poll_s)
                 read = self._try_read(site_id)
                 continue
-            if not is_idle(read):
+            busy_ok = self.allow_busy and is_publishable_while_busy(read)
+            if not is_idle(read) and not busy_ok:
                 why = (f"gateway jobs {read['gateway_open_jobs']}, "
                        f"running {read['running_job_ids'] or 'none'}, "
                        f"queue {read['queue_depth']}")
@@ -514,6 +535,10 @@ class Rollout:
                 self.sleep(self.poll_s)
                 read = self._try_read(site_id)
                 continue
+            if busy_ok and not is_idle(read):
+                row['warnings'].append(
+                    'published while the site was busy (--allow-busy): the offer only stages '
+                    'the release, and each Mac installs when its own work finishes')
             if queue_unknown(read):
                 row['warnings'].append('queue unknown (the site published no queue depth); '
                                        'nothing was running, so it was published to')
@@ -732,6 +757,10 @@ def main(argv: list[str] | None = None) -> int:
                              'delta capability (a Hub older than the release can refuse a delta '
                              'over half the image and then ask for a disk image a files-only '
                              'release never had)')
+    parser.add_argument('--allow-busy', action='store_true',
+                        help='publish to a reachable site even while it has work running; the '
+                             'offer only stages the release, and each Mac installs when its own '
+                             'work finishes. Default: wait for a quiet site')
     parser.add_argument('--publish-timeout', type=int, default=int(PUBLISH_TIMEOUT_S),
                         help=f'max seconds to wait for Gateway POST /admin/api/release/publish '
                              f'(default: {int(PUBLISH_TIMEOUT_S)}s / 2h)')
@@ -749,7 +778,8 @@ def main(argv: list[str] | None = None) -> int:
     gateway = Gateway()
     rollout = Rollout(gateway, accepted, artifact, args.version, args.build,
                       receipts=evidence.parent / 'hub-rollout-site-receipts',
-                      force_full=args.full, publish_timeout_s=args.publish_timeout)
+                      force_full=args.full, allow_busy=args.allow_busy,
+                      publish_timeout_s=args.publish_timeout)
     try:
         fleet = gateway.fleet(force=True)
     except Exception as exc:  # noqa: BLE001 - no roster is no publish
@@ -775,6 +805,7 @@ def main(argv: list[str] | None = None) -> int:
         # Which shape was offered: a full push is the only one an older Hub can take when its
         # delta refusal (MAX_DELTA_FRACTION) covers this release.
         'force_full': args.full,
+        'allow_busy': args.allow_busy,
         'publish_timeout_s': args.publish_timeout,
         'window_s': DEFAULT_WINDOW_S, 'poll_s': POLL_S,
         'sites': rows,

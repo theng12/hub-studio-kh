@@ -13,7 +13,7 @@ failure here means the machine differs, not that the step is wrong.
 | # | Step | What "good" looks like |
 |---|---|---|
 | 1 | Double-click **1 - Install the app** | Asks for the password once. Installs to `/Applications`. |
-| 2 | Open Studio Hub, then **Set up this Mac** | It shows this Mac's memory and the free space on the models' drive first, then the four presets by size. Pick the one for this Mac and copy from the drive - its card reads "9 of 14" and rises as files arrive, and only says installed when every file is verified. ~2–5 minutes. (**`2 - Copy the models`** no longer chooses: it prints what the drive holds and stops. Use **`2 - Copy the models (everything)`** only on a Mac with no internet and no other Mac to copy from.) |
+| 2 | Open Studio Hub, then **Set up this Mac** | It shows this Mac's memory and the free space on the models' drive first, then the four presets by size. Pick the one for this Mac and copy from the drive - its card reads "9 of 14" and rises as files arrive, and only says installed when every file is verified. ~2–5 minutes. (Models from the drive are copied by **`2 - Copy the models`**, which offers the same four presets and copies only what is missing. Use **`2 - Copy the models (everything)`** only on a Mac with no internet and no other Mac to copy from. Studio Hub never reads the drive by itself.) |
 | 3 | **Models** page | Every model the preset copied reads as installed |
 | 4 | Allow the two pop-ups | Local network, incoming connections. |
 | 5 | Status line bottom-left | **Local services ready** |

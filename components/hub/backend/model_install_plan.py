@@ -25,11 +25,8 @@ Read-only: this module reads manifests, receipts, the disk and the kit folders *
 never copies, moves or deletes anything - the screen's Apply is the existing
 ``model-packages/{id}/download`` route, one request per package.
 
-**The kit folders are an argument, never a walk.** `snapshot(kits=...)` takes the cached answer
-from `removable_volumes`; this module does not touch ``/Volumes`` at all. The walk used to run
-here, inside a request, and on an ad-hoc signed build it could wait for ever on an unanswered
-macOS permission prompt (see `removable_volumes`). A route that walks removable volumes is the
-defect, not a detail of this one.
+The Hub reads its chosen model library, never a mounted kit. SSD copying is started by the person
+using the kit's Terminal command.
 """
 from __future__ import annotations
 
@@ -37,7 +34,6 @@ import shutil
 from pathlib import Path
 
 from components import model_presets
-from . import removable_volumes
 
 #: One-line purpose and job group per package, for the manual picker. **A model with no entry here
 #: still appears** - it is filed under the job its engine serves and its purpose line is its
@@ -87,10 +83,7 @@ PURPOSES: dict[str, str] = {
 #: model lands in a group without an edit; an engine whose modality is not here falls into "other".
 JOB_ORDER = ("image", "voice", "writing", "vision", "music", "transcription", "embeddings", "video", "other")
 
-#: How a row's package arrives, in the order the downloader tries: another Mac's LAN share first when
-#: one holds it, the SSD kit when it mounted, the pinned internet URLs last. Constants rather than a
-#: list of packages, so nothing here can hide a model.
-SOURCE_KIT = "kit"
+#: Download sources reported by the Hub; SSD copying is a separate person-run command.
 SOURCE_LAN = "lan"
 SOURCE_INTERNET = "internet"
 
@@ -149,38 +142,6 @@ def dependency_ids(manifests: dict[str, dict], presets: list[dict] | None = None
     return needed - chosen
 
 
-def kit_libraries() -> list[Path]:
-    """The kit libraries this process has already found, from the cached probe.
-
-    **This does not look at ``/Volumes``.** It reads `removable_volumes.status()`, so it is safe
-    to call from anywhere - and it is deliberately not called by `snapshot()`, which takes the
-    list as an argument so a caller cannot accidentally reintroduce a walk on a request path.
-    """
-    return removable_volumes.kits()
-
-
-def in_kit(library: Path, manifest: dict) -> bool:
-    """Whether this kit's library actually holds the package's weights.
-
-    The 2026-10-28 SSD write shipped a manifest for ``florence-2-large-ft`` and ``phonon-2-mlx``
-    with **no weights on any of the four drives**. A screen that promised "from the SSD" for those
-    would make the copy step the place the Mac discovers it: a folder that is not there is not a
-    source, however present its manifest is.
-    """
-    package_id = str(manifest.get("package_id") or "")
-    if not package_id or Path(package_id).name != package_id:
-        return False
-    folder = library / package_id
-    if folder.is_symlink() or not folder.is_dir():
-        return False
-    revision = str(manifest.get("revision") or "")
-    # A kit keeps one folder per revision under the package; a package with no revision folder is
-    # not this manifest's bytes.
-    return (folder / revision).is_dir() or any(
-        child.is_dir() and len(child.name) == 40 for child in folder.iterdir()
-        if not child.is_symlink())
-
-
 def library_volume(library: Path) -> Path:
     """The existing folder whose filesystem the library is on, for a free-space reading.
 
@@ -222,7 +183,7 @@ def _installed(receipts: dict[str, dict], package_id: str) -> bool:
 
 
 def model_rows(*, manifests: dict[str, dict], receipts: dict[str, dict], memory_gb: float | None,
-               kits: list[Path], modality_of, presets: list[dict] | None = None,
+               modality_of, presets: list[dict] | None = None,
                lan_source: dict[str, str] | None = None) -> list[dict]:
     """One row per package: what it is, what it costs, whether it is here, and how it would arrive.
 
@@ -249,7 +210,7 @@ def model_rows(*, manifests: dict[str, dict], receipts: dict[str, dict], memory_
             "installed": _installed(receipts, package_id),
             "state": (receipts.get(package_id) or {}).get("state") or "not_installed",
             "reason": _refusal(package_id, manifest, memory_gb),
-            "sources": _sources(package_id, manifest, kits, lan_source),
+            "sources": _sources(package_id, manifest, lan_source),
         })
     return rows
 
@@ -264,20 +225,15 @@ def _refusal(package_id: str, manifest: dict, memory_gb: float | None) -> str | 
     return model_presets.refusal(package_id, manifest, memory_gb)
 
 
-def _sources(package_id: str, manifest: dict, kits: list[Path],
+def _sources(package_id: str, manifest: dict,
              lan_source: dict[str, str] | None) -> list[str]:
     """Where this package's bytes could come from, best first, **as it stands right now**.
 
-    The order is the downloader's own: another Mac's LAN share, then the SSD kit, then the pinned
-    internet URLs every manifest carries. A source that is not there is not listed, so a screen that
-    says "from the SSD" is looking at a folder that exists - which is what the 2026-10-28 write
-    (two manifests, no weights) needed and did not have.
+    The downloader tries another Mac's LAN share before the pinned internet URLs.
     """
     found: list[str] = []
     if lan_source and package_id in lan_source:
         found.append(SOURCE_LAN)
-    if any(in_kit(library, manifest) for library in kits):
-        found.append(SOURCE_KIT)
     if any(entry.get("urls") for entry in manifest.get("files") or []):
         found.append(SOURCE_INTERNET)
     return found
@@ -356,23 +312,17 @@ def preset_rows(*, presets: list[dict], rows: dict[str, dict], manifests: dict[s
     return out
 
 
-def snapshot(*, kits: list[Path], manifests: dict[str, dict], receipts: dict[str, dict],
+def snapshot(*, manifests: dict[str, dict], receipts: dict[str, dict],
              library: Path, memory_gb: float | None, stop_bytes: int, modality_of,
-             lan_source: dict[str, str] | None = None,
-             kits_state: dict | None = None) -> dict:
+             lan_source: dict[str, str] | None = None) -> dict:
     """The whole screen: this Mac, four presets, and every model grouped by its job.
-
-    `kits` is **required and never derived here**: the caller passes the cached answer from
-    `removable_volumes.kits()`, so no request can trigger a walk of ``/Volumes``. `kits_state` is
-    that module's honest state (`ready` / `needs_permission` / `not_checked` / `checking`), so a
-    screen with no kit folders can tell "none is mounted" from "I was not allowed to look".
 
     One read, computed fresh: a cached projection is a number the screen shows that a model
     switch, an install or a disk change has already made wrong.
     """
     disk_state = disk(library)
     shipped = model_presets.load()
-    rows = model_rows(manifests=manifests, receipts=receipts, memory_gb=memory_gb, kits=kits,
+    rows = model_rows(manifests=manifests, receipts=receipts, memory_gb=memory_gb,
                       modality_of=modality_of, presets=shipped, lan_source=lan_source)
     by_id = {row["package_id"]: row for row in rows}
     presets = preset_rows(presets=shipped, rows=by_id, manifests=manifests,
@@ -390,9 +340,6 @@ def snapshot(*, kits: list[Path], manifests: dict[str, dict], receipts: dict[str
         # The folder the free figure belongs to, so the screen can name the drive.
         "library": str(library),
         "stop_bytes": stop_bytes,
-        "kits": [str(kit) for kit in kits],
-        # Why that list is empty, when it is: none mounted is not the same as not allowed to look.
-        "kits_state": kits_state or {"state": "not_checked", "path": str(removable_volumes.VOLUME_ROOT)},
         "presets": presets,
         "starting_preset": chosen,
         "groups": groups,

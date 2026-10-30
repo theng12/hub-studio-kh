@@ -1,15 +1,14 @@
 #!/bin/sh
 # 2 - COPY THE MODELS
 #
-# **This file no longer chooses which models to copy (owner decision 2026-10-28).** By default it
-# prints what this drive holds and stops. Open Studio Hub and use its "Set up this Mac" screen
-# instead: it shows this Mac's memory and the free space on the models' own drive, offers the four
-# presets by size (Essentials 8 GB, Creator 16 GB, Creator Plus 24 GB, Studio Pro 32 GB+), and
-# copies from this drive. A Mac that is already set up keeps every model it has.
+# **This file offers the presets (owner decision 2026-10-30).** Studio Hub never reads a mounted
+# drive by itself, so this command is the SSD path: it asks which of the four presets to copy
+# (Essentials 8 GB, Creator 16 GB, Creator Plus 24 GB, Studio Pro 32 GB+) and copies only what is
+# missing. A Mac that is already set up keeps every model it has.
 #
-# One case still needs this file to do the copying: a Mac with no internet and no other Mac on the
-# network to copy from. For that, run "2 - Copy the models (everything).command" beside this one,
-# which is this same file with STUDIOHUB_KIT_COPY=1.
+# A Mac with no internet and no other Mac on the network to copy from can run
+# "2 - Copy the models (everything).command" beside this one, which copies every model the Mac can
+# run - this same file with STUDIOHUB_KIT_COPY=1.
 #
 # It is safe to run again, and running it again is how you fix a model that reads as "not
 # installed": anything missing, or present at the wrong size, is copied over. Models already

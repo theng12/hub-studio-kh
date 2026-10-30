@@ -1313,21 +1313,6 @@ def _peer_refusal_response(refusal: dict[str, Any]) -> JSONResponse:
     return JSONResponse(body, status_code=status)
 
 
-def _removable_volumes_status() -> dict[str, Any]:
-    """The cached removable-volume answer, or an honest unknown - never a walk.
-
-    `/api/health` is the route an operator and a controller read to answer "is this Mac there".
-    It must keep answering while the one volume check is blocked, so this reads the cache only and
-    a failure to even import the module is reported rather than raised.
-    """
-    try:
-        from .backend import removable_volumes
-        return removable_volumes.status()
-    except Exception as exc:  # noqa: BLE001 - a status route must not fail over this
-        return {"state": "not_checked", "path": "/Volumes",
-                "reason": f"the removable-volume check could not be read: {exc}"}
-
-
 def _bind_facts() -> dict[str, Any]:
     """What this Hub was launched to listen on, in the words a caller can act on.
 
@@ -1512,11 +1497,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         workstation_watch = None
         release_mirror = None
         if start_background:
-            # The removable-volume check runs once, here, in a child process with a hard timeout.
-            # It is started from start-up rather than from a route because a blocked walk held a
-            # threadpool slot and froze the whole Hub (see components/hub/backend/removable_volumes).
-            from .backend import removable_volumes
-            removable_volumes.start()
             # The output size / age limits (device settings), enforced for every studio - not only in
             # development. See job_storage.budget_loop.
             import asyncio as _asyncio
@@ -1670,12 +1650,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # loopback-only instead of discovering it as a timeout.
         return {"ok": True, "workers": len(monitor.registry),
                 "role": control_plane.load_settings()["role"], "bind": _bind_facts(),
-                "update_draining": update_drain.draining(), "disk": disk_governor.snapshot(),
-                # The cached result of this process's one removable-volume check. "needs_permission"
-                # is a real state, not a failure: the Mac is serving fine, it just cannot see the
-                # SSD kits. Read-only and never a walk: this route must answer during the freeze
-                # the 0.6.206-0.6.209 builds died in.
-                "removable_volumes": _removable_volumes_status()}
+                "update_draining": update_drain.draining(), "disk": disk_governor.snapshot()}
 
     @app.get("/api/version")
     def version() -> dict[str, str]:
@@ -1884,7 +1859,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
           stops work at.
         """
         from .backend import model_install_plan
-        from .backend import removable_volumes
         try:
             catalog = _model_catalog()
         except ValueError as exc:
@@ -1905,10 +1879,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 receipts[package_id] = {"package_id": package_id, "state": "invalid",
                                         "reason": f"The Hub could not read this package's receipt: {exc}"}
         memory_gb = round(psutil.virtual_memory().total / (1024 ** 3))
-        # The kit folders come from the one probe this process ran at start-up; this route never
-        # walks /Volumes (see `removable_volumes` for the freeze that rule exists for).
         return model_install_plan.snapshot(
-            kits=removable_volumes.kits(), kits_state=removable_volumes.status(),
             manifests=catalog, receipts=receipts, library=library, memory_gb=memory_gb,
             stop_bytes=disk_governor.STOP_BYTES, modality_of=_modality_for_engine,
             lan_source=_lan_sources(catalog, library, monitor))
@@ -2185,11 +2156,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 # is visible on the fleet instead of reading "online". None from a Hub older than
                 # 0.6.206; never guessed from anything else in this row.
                 "connection": host.get("connection"),
-                # Whether that Mac can read its removable volumes (the SSD kits), or is waiting on
-                # an unanswered macOS permission prompt. Distinct from busy and from unreachable:
-                # the Mac is serving, it just cannot see the drives. None from a Hub older than
-                # 0.6.210.
-                "removable_volumes": host.get("removable_volumes"),
+                # Older peers may still report this optional field.
+                **({"removable_volumes": host["removable_volumes"]}
+                   if "removable_volumes" in host else {}),
                 "jobs": stats.get("count", 0),
                 "average_seconds": stats.get("avg_s"),
                 "modalities": stats.get("modalities") or {},
@@ -2243,7 +2212,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "network": host.get("network"),
                 # See the member row above: the same reading, from the same `host` snapshot.
                 "connection": host.get("connection"),
-                "removable_volumes": host.get("removable_volumes"),
+                **({"removable_volumes": host["removable_volumes"]}
+                   if "removable_volumes" in host else {}),
                 "jobs": (measured.get(machine) or {}).get("count", 0),
                 "average_seconds": (measured.get(machine) or {}).get("avg_s"),
                 "modalities": modalities,

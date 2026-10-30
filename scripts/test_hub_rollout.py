@@ -288,6 +288,34 @@ class FanOutTests(Harness):
         self.assertLess(rows['1200']['elapsed_s'], rows['1100']['elapsed_s'],
                         'the idle site finished without waiting for the busy one')
 
+    def test_allow_busy_publishes_and_says_each_mac_installs_when_its_work_finishes(self):
+        busy = FakeSite('1100', ['1100'], running=['batch-1'])
+        gateway = self.gateway(busy)
+        rollout = hub.Rollout(gateway, self.accepted, self.artifact, VERSION, BUILD,
+                              receipts=self.receipts, window_s=WINDOW, poll_s=POLL,
+                              allow_busy=True)
+        row = self.by_site(rollout.run([{'id': '1100'}]))['1100']
+        self.assertEqual(row['state'], 'verified')
+        self.assertEqual(row['post_count'], 1)
+        self.assertTrue(any('--allow-busy' in warning for warning in row['warnings']), row)
+
+    def test_allow_busy_still_refuses_an_unreachable_or_unreadable_site(self):
+        gone = FakeSite('1400', ['1400'], reachable=False)
+        gateway = self.gateway(gone)
+        rollout = hub.Rollout(gateway, self.accepted, self.artifact, VERSION, BUILD,
+                              receipts=self.receipts, window_s=WINDOW, poll_s=POLL,
+                              allow_busy=True)
+        row = self.by_site(rollout.run([{'id': '1400'}]))['1400']
+        self.assertEqual(row['state'], 'deferred: unreachable')
+        self.assertEqual(row['post_count'], 0)
+
+    def test_allow_busy_is_off_by_default(self):
+        busy = FakeSite('1100', ['1100'], running=['batch-1'])
+        gateway = self.gateway(busy)
+        row = self.by_site(self.rollout(gateway).run([{'id': '1100'}]))['1100']
+        self.assertEqual(row['state'], 'busy')
+        self.assertEqual(row['post_count'], 0)
+
     def test_unknown_queue_with_nothing_running_publishes_and_is_recorded(self):
         gateway = self.gateway(FakeSite('1300', ['1300'], queue=None))
         row = self.by_site(self.rollout(gateway).run([{'id': '1300'}]))['1300']

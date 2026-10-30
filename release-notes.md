@@ -2,6 +2,26 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.212 — 2026-10-30
+
+### Studio Hub no longer looks at your drives at all
+
+The last update stopped it reading every disk. This one removes the check itself: Studio Hub no longer looks inside any removable or network drive, at startup or later. On a Mac without a Developer ID, macOS asks for permission again after every update, and that prompt was the cause of the frozen Macs and the Macs that stopped answering. There is nothing left to ask about.
+
+A model folder you choose yourself under a drive is still read, because you chose it.
+
+### Installing models from an SSD
+
+Open the drive and run **2 - Copy the models.command**. It lists the four sets — **Essentials 8 GB**, **Creator 16 GB**, **Creator Plus 24 GB**, **Studio Pro 32 GB+** — and copies the one you pick, plus anything it needs, and only what is missing. The Terminal may ask once whether it may read the drive; that is your own action, not the app running by itself. **2 - Copy the models (everything).command** still copies every model the Mac can run, for a Mac with no internet and no other Mac to copy from.
+
+### A result that arrives too late is kept out
+
+Sometimes a Mac goes quiet and the Hub cannot tell whether a job finished. After half an hour it releases the Mac so later work can run. Now it also keeps the job's identity and writes down that the attempt was discarded, so a result that turns up later cannot replace the cancelled job or a newer finished one. Nothing is lost quietly.
+
+### Updating the fleet while it is working
+
+Publishing an update only makes it available; each Mac installs it when its own work finishes. A new option lets the rollout publish to a site that is busy instead of waiting for a completely quiet site. It is off unless asked for.
+
 ## 0.6.211 — 2026-10-30
 
 ### No more "Allow" on a Mac that has no kit drive

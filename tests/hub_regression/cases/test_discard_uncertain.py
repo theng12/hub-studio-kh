@@ -48,10 +48,11 @@ def test_discard_cancels_and_releases_the_machine(fixture_monitor, modality):
     assert item["error_code"] == "DISCARDED_UNCERTAIN"
     assert item["error"] and "discard" in item["error"].lower()
     assert item["retry_at"] is None and item["finished_at"]
-    # The worker and recovery identity are gone on purpose: nothing may adopt this attempt back.
-    for gone in ("studio", "studio_job_id", "worker_id", "worker_accepted_params",
-                 "model_revision", "runtime_revision", "machine", "recovery"):
-        assert gone not in item, f"{gone} must be cleared so nothing reconciles the attempt"
+    # The worker identity is kept so a late result can be recognised and discarded; the machine
+    # is released because the item is no longer uncertain.
+    for kept in ("studio", "studio_job_id", "worker_id", "model_revision", "runtime_revision"):
+        assert kept in item, f"{kept} must stay so a late result is identifiable"
+    assert item["recovery"]["phase"] == "discarded"
     assert studio["machine"] not in broker.busy_machines()
     assert broker._wakeup.is_set(), "the dispatcher must be woken so later work can run"
 
@@ -64,7 +65,7 @@ def test_discard_persists_the_terminal_state(fixture_monitor):
     saved = persisted["items"][0]
     assert saved["state"] == "cancelled"
     assert saved["error_code"] == "DISCARDED_UNCERTAIN"
-    assert "studio" not in saved and "studio_job_id" not in saved
+    assert saved["studio_job_id"] == "worker-1", "the identity is kept for a late result"
 
 
 def test_discard_takes_a_discarded_item_out_of_reconciliation(fixture_monitor):
@@ -111,4 +112,73 @@ def test_fresh_uncertain_is_left_for_reconciliation(fixture_monitor):
     assert broker.discard_stale_uncertain() == []
     assert item["state"] == "uncertain"
     assert studio["machine"] in broker.busy_machines()
+
+
+class TestLateResultTests:
+    """A result arriving after automatic cleanup is discarded, never adopted."""
+
+    def _client(self):
+        import httpx
+
+        class Client:
+            async def get(self, *args, **kwargs):
+                return httpx.Response(200, json={"ok": True},
+                                      request=httpx.Request("GET", "http://127.0.0.1/"))
+
+            async def post(self, *args, **kwargs):
+                return httpx.Response(200, json={"ok": True},
+                                      request=httpx.Request("POST", "http://127.0.0.1/"))
+
+        return Client()
+
+    def _job(self, batch):
+        return {"id": "worker-1", "state": "done", "progress": 1.0,
+                "params": {"client_request_id": f"studiohub:{batch['id']}:0"},
+                "output_path": "/nonexistent/late.wav", "generated_at": time.time(),
+                "bytes": 10, "sha256": "a" * 64, "runtime_s": 1.0,
+                "output_url": "/api/generate/jobs/worker-1/audio"}
+
+    def test_a_late_result_after_cleanup_is_not_adopted(self, fixture_monitor, monkeypatch):
+        import asyncio
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+        item["last_progress_at"] = time.time() - broker.UNCERTAIN_AUTO_DISCARD_SECONDS - 60
+        assert broker.discard_stale_uncertain() == [f"{batch['id']}:0"]
+
+        async def cached(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", cached)
+        asyncio.run(broker._record_worker_success(
+            self._client(), batch, item, studio, self._job(batch),
+            {"repo": batch["model"], "client_request_id": f"studiohub:{batch['id']}:0"},
+            time.time(), recovery=True))
+        assert item["state"] == "cancelled"
+        assert item["error_code"] == "DISCARDED_UNCERTAIN"
+        assert "discarded" in item["error"].lower()
+
+    def test_a_newer_accepted_result_is_not_overwritten(self, fixture_monitor, monkeypatch):
+        import asyncio
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+        item["last_progress_at"] = time.time() - broker.UNCERTAIN_AUTO_DISCARD_SECONDS - 60
+        broker.discard_stale_uncertain()
+        item.update(state="done", asset_id="newer-asset", error_code=None)
+        item.pop("error", None)
+
+        async def cached(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", cached)
+        asyncio.run(broker._record_worker_success(
+            self._client(), batch, item, studio, self._job(batch),
+            {"repo": batch["model"], "client_request_id": f"studiohub:{batch['id']}:0"},
+            time.time(), recovery=True))
+        assert item["state"] == "done" and item["asset_id"] == "newer-asset"
+
+    def test_no_late_result_leaves_the_recorded_reason(self, fixture_monitor):
+        batch, item, _ = uncertain_attempt(fixture_monitor)
+        item["last_progress_at"] = time.time() - broker.UNCERTAIN_AUTO_DISCARD_SECONDS - 60
+        broker.discard_stale_uncertain()
+        assert item["state"] == "cancelled"
+        assert item["recovery"]["phase"] == "discarded"
+        assert "late result is discarded" in item["error"].lower()
 

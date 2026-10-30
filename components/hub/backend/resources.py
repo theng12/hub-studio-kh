@@ -173,16 +173,6 @@ def host_stats() -> dict:
         stats["connection"] = network_link.status()
     except Exception:
         stats["connection"] = None
-    try:
-        # Whether this Mac may read its removable volumes (the SSD kits). The check itself ran
-        # once at start-up, in a child process with a timeout; this only reads its answer, so a
-        # Mac waiting on an unanswered macOS permission prompt still answers every route. The
-        # honest `needs_permission` state is here, beside `connection`, rather than in place of
-        # the whole host snapshot.
-        from components.hub.backend import removable_volumes
-        stats["removable_volumes"] = removable_volumes.status()
-    except Exception:
-        stats["removable_volumes"] = None
     return stats
 
 

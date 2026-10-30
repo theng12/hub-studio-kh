@@ -2008,28 +2008,6 @@ struct FleetOperationReport: Equatable {
     }
 }
 
-/// Whether a Mac may read its removable volumes (the SSD kit drives), as the Hub reports it.
-///
-/// `needs_permission` is the state that used to be invisible: the Mac is serving work perfectly,
-/// but an unanswered macOS permission prompt means it cannot see the drives. It is deliberately
-/// distinct from busy and from unreachable, because an operator who sees "offline" goes to look at
-/// the network instead of clicking Allow. Absent from a Hub older than 0.6.210.
-struct NativeRemovableVolumes: Decodable, Equatable {
-    let state: String
-    let path: String?
-    let reason: String?
-
-    var needsPermission: Bool { state == "needs_permission" }
-    /// The one line the app shows, in the owner's words.
-    var summary: String {
-        "needs permission (Removable Volumes)"
-    }
-}
-
-struct NativeHealthWire: Decodable {
-    let removableVolumes: NativeRemovableVolumes?
-}
-
 /// One Mac in the fleet, with everything needed to judge whether to send it work.
 ///
 /// A machine that has not reported in shows what is known - that it is absent - rather than
@@ -2063,9 +2041,6 @@ struct NativeFleetMachine: Decodable, Equatable, Identifiable {
     let startup: NativeFleetStartup?
     /// The job that Mac is working on right now. Absent while it is idle and from an older Hub.
     let currentJob: NativeCurrentJob?
-    /// Whether that Mac may read its removable volumes (the SSD kits), or is waiting on an
-    /// unanswered macOS permission prompt. Absent from a Hub older than 0.6.210.
-    let removableVolumes: NativeRemovableVolumes?
 
     var id: String { machine }
     var isLocal: Bool { machine == "local" }
@@ -2203,10 +2178,6 @@ struct NativeFleetRow: Identifiable, Equatable {
     var version: String? { node?.version ?? machine?.version }
     var address: String? { isLocal ? nil : (node?.address ?? machine?.address) }
     var currentJob: NativeCurrentJob? { machine?.currentJob }
-    /// The Mac serves fine but cannot read its removable volumes, so it cannot see an SSD kit.
-    /// Shown as its own line, never folded into "offline" or "working".
-    var volumesNeedsPermission: Bool { machine?.removableVolumes?.needsPermission == true }
-    var volumesNote: String? { volumesNeedsPermission ? "Needs permission (Removable Volumes)" : nil }
 
     func state(readiness: NativeMachineReadiness?) -> NativeFleetRowState {
         if let node {
@@ -4383,9 +4354,8 @@ final class NativeWorkspaceStore: ObservableObject {
             // **Not the install screen's read.** `/api/hub/model-presets` is read on demand when
             // Setup this Mac is opened (`loadInstallPlan`), never from this poll: on 0.6.206-0.6.209
             // that route walked /Volumes, and an unanswered macOS permission prompt there filled
-            // the Hub's threadpool and froze the whole Mac. A poll must never ask for it.
-            // The Hub's own health carries the one state an operator needs about those drives.
-            async let health: NativeHealthWire? = try? get(["api", "health"])
+            // the Hub's threadpool and froze the whole Mac. A poll must never ask for it, and
+            // since 0.6.212 the Hub reads no drive at all.
             async let transcription: TranscriptionAvailability? = try? get(["studio", "transcription", "api", "transcribe", "availability"])
             async let generation: GenerationAvailability? = try? get(["studio", "voice", "api", "generate", "availability"])
             async let jobs: HubJobsResponse? = try? get(["api", "hub", "jobs"])
@@ -4394,8 +4364,8 @@ final class NativeWorkspaceStore: ObservableObject {
             async let subtitleHistory: HubTranscriptionList? = try? get(["api", "hub", "transcription", "jobs"])
             // Every download run on this Hub, whoever started it (a Gateway fleet install, a LAN copy).
             async let hubRuns: HubModelDownloads? = try? get(["api", "hub", "model-downloads"])
-            let (catalogValue, packagesValue, healthValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue, hubRunsValue) =
-                try await (catalog, packages, health, transcription, generation, jobs, transfers, settings, subtitleHistory, hubRuns)
+            let (catalogValue, packagesValue, transcriptionValue, generationValue, jobsValue, transfersValue, settingsValue, subtitleValue, hubRunsValue) =
+                try await (catalog, packages, transcription, generation, jobs, transfers, settings, subtitleHistory, hubRuns)
             // Torn down while reading. The child reads that use `try?` come back nil rather than
             // throwing, so without this a cancelled refresh would publish "a studio did not answer"
             // and count its missing jobs — reporting a fault that never happened.
@@ -4406,11 +4376,6 @@ final class NativeWorkspaceStore: ObservableObject {
             var startupNotes: [String] = []
             if packagesValue == nil {
                 startupNotes.append("The Hub's model package list could not be read; models are listed without their install state until it answers again.")
-            }
-            // A Mac waiting on an unanswered macOS prompt for its removable volumes is still
-            // serving: the note says what to click, and never reads as "offline" or "busy".
-            if let volumes = healthValue?.removableVolumes, volumes.needsPermission {
-                startupNotes.append("Studio Hub needs permission (Removable Volumes) to see the SSD kit drives. Click Allow on the macOS prompt, then restart the services.")
             }
             // A Studio that has stopped answering is **not** a banner: it is one small line in the
             // sidebar footer, it names the Studio, and it clears itself. See `noteStudioAvailability`.
@@ -6523,8 +6488,6 @@ final class NativeWorkspaceStore: ObservableObject {
             freeBytes: wire.disk?.freeBytes,
             diskMeasured: wire.disk?.measured ?? false,
             stopBytes: wire.stopBytes ?? 0,
-            kits: wire.kits ?? [],
-            kitsState: wire.kitsState,
             presets: wire.presets.map { preset in
                 NativePreset(id: preset.presetId, name: preset.name, tierGB: preset.memoryTierGb,
                              summary: preset.summary,
@@ -7470,15 +7433,6 @@ final class NativeWorkspaceStore: ObservableObject {
         }
         // Only a roster read this time is evidence of who is in the fleet.
         if rosterRead { clearRoutingPinIfItsMachineLeft() }
-        // A Mac whose removable-volume check is waiting on an unanswered macOS permission prompt
-        // is still serving: it is neither busy nor unreachable, and an operator who saw "offline"
-        // went to look at the network instead of clicking Allow. Name the Macs here so the group
-        // screen says what is actually waiting.
-        let waitingForVolumes = (fleetOverview?.machines ?? []).filter { $0.removableVolumes?.needsPermission == true }
-        if !waitingForVolumes.isEmpty, fleetNote == nil {
-            let names = waitingForVolumes.map { $0.isLocal ? "This Mac" : $0.label }.joined(separator: ", ")
-            fleetNote = "\(names): needs permission (Removable Volumes) — click Allow on the macOS prompt so Studio Hub can see the SSD kit drives."
-        }
     }
 
     /// Per machine, how many models are ready, need a download or are blocked (paused, no
@@ -11430,9 +11384,6 @@ private struct HubModelPresetsWire: Decodable {
     let disk: HubDiskWire?
     let library: String?
     let stopBytes: Int64?
-    let kits: [String]?
-    /// Why `kits` is empty: the same `state`/`reason` the Hub's health reports.
-    let kitsState: NativeRemovableVolumes?
     let presets: [HubModelPresetWire]
     let startingPreset: String?
     let groups: [HubInstallGroupWire]
@@ -11446,10 +11397,6 @@ struct NativeInstallPlan: Equatable {
     let freeBytes: Int64?
     let diskMeasured: Bool
     let stopBytes: Int64
-    let kits: [String]
-    /// Why `kits` is empty when it is: `ready` (none mounted) or `needs_permission` (macOS did not
-    /// let the Hub look). Absent from a Hub older than 0.6.210.
-    let kitsState: NativeRemovableVolumes?
     let presets: [NativePreset]
     let startingPreset: String?
     let groups: [NativeInstallGroup]

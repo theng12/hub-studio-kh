@@ -3729,7 +3729,8 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         item["delivery_fallback_reason"] = job["delivery_fallback_reason"][:400]
     # The final metadata await can lose to original adoption or another terminal
     # result. Recheck before writing any asset; the losing candidate stays private.
-    if (_superseded(target) or (target.get("state") == "done" and target.get("asset_id"))
+    if (target.get("error_code") == "DISCARDED_UNCERTAIN"
+            or _superseded(target) or (target.get("state") == "done" and target.get("asset_id"))
             or (adoption_item is not None and (
                 b.get("cancelled") or adoption_item.get("state") not in ("queued", "running")
                 or _superseded(adoption_item)))):
@@ -4355,8 +4356,8 @@ def discard_uncertain_item(batch_id: str, item_index: int, *,
     worker attempt may still be running - and that uncertainty can never resolve by itself when
     the worker is gone. Left alone it pins the machine and every later job waits behind it with
     no reason shown. Discarding is the operator's explicit decision to stop waiting: the attempt
-    is recorded as cancelled and its worker and recovery identity are cleared, so a restart,
-    monitor pass or reconcile cannot adopt it back.
+    is recorded as cancelled, its machine is released, and its recorded identity is kept so a
+    late result is recognisably this attempt's and is discarded rather than adopted.
 
     This is deliberately separate from cancellation and reconciliation, which keep a live worker
     fenced. Only an item that is already uncertain can be discarded.
@@ -4379,12 +4380,7 @@ def discard_uncertain_item(batch_id: str, item_index: int, *,
     item["error"] = reason
     item["retry_at"] = None
     item["finished_at"] = time.time()
-    # The worker attempt and its recovery trail are removed on purpose: nothing may reconcile an
-    # attempt the operator has abandoned.
-    for field in ("studio", "studio_job_id", "worker_id", "worker_artifact_url", "machine",
-                  "recovery", "model_revision", "runtime_revision", "worker_accepted_params",
-                  "cancel_signal_sent_at", "cancel_error"):
-        item.pop(field, None)
+    item["recovery"] = {"phase": "discarded", "reason": reason, "updated_at": time.time()}
     batches[batch_id] = batch
     ledger.save_batch(batch)
     _wakeup.set()
@@ -4474,7 +4470,8 @@ def discard_stale_uncertain(*, now: float | None = None,
             try:
                 discard_uncertain_item(batch["id"], item["index"], reason=(
                     "The attempt stayed uncertain past the automatic reconciliation "
-                    "window, so the machine was released for later work."))
+                    "window, so the machine was released. Any late result is discarded "
+                    "because a newer attempt may already have been accepted."))
             except ValueError:
                 continue
             discarded.append(f"{batch['id']}:{item['index']}")

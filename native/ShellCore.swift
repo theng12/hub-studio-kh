@@ -645,8 +645,8 @@ struct ShellConfiguration {
     /// `/Volumes` is here for the same reason as the home folders: reading removable volumes is
     /// gated by macOS, and on an ad-hoc signed build that permission is lost on every update. A
     /// library there can block the service inside `open()` exactly as `~/Downloads` did, so the
-    /// warning names it before a person chooses it. (The Hub's own `/Volumes` probe is a separate,
-    /// timed child process - see `components/hub/backend/removable_volumes.py`.)
+    /// warning names it before a person chooses it. The Hub itself reads no drive at all (0.6.212);
+    /// only a library the person chose here is read.
     static let protectedLibraryFolders = ["Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures"]
     static let protectedVolumeRoots = ["/Volumes"]
 

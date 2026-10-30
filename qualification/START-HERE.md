@@ -43,20 +43,19 @@ minutes the first time. Running it again copies only what is missing.
 **Lite Mode** in Studio Hub › Settings. There is no separate Lite Mode copy step any
 more; the model set is the same.
 
-**No internet and no other Mac to copy from?** Close the app, double-click
-**2 - Copy the models (everything).command**, then open the app again. It copies every
-model this Mac can run. **2 - Copy the models.command** itself no longer copies: it
-shows what the drive holds and points you at the screen.
+**Installing from this SSD?** Close the app, double-click **2 - Copy the models.command**,
+choose one of the four presets in the Terminal window it opens, then open the app again.
+**2 - Copy the models (everything).command** copies every model this Mac can run, for a Mac
+with no internet and no other Mac to copy from. Studio Hub never reads this drive by itself;
+only these commands do, when you run one.
 
-### 3. Say yes to the two pop-ups, and to Removable Volumes
+### 3. Say yes to the network and connection pop-ups
 
 - **"wants to find devices on your local network"** → **Allow**
 - **a firewall question about incoming connections** → **Allow**
-- **"wants to access files on a removable volume"** → **Allow**
 
-That last one is how Studio Hub reads the model drive. If it is not answered, the app
-says **needs permission (Removable Volumes)** and still runs, but it cannot list the
-SSD kit. Click Allow and restart the services.
+Studio Hub no longer reads a removable drive on its own, so there is no Removable Volumes
+prompt to answer.
 
 Then look at the bottom left. When it says **Local services ready**, everything is
 running and you are done.
@@ -77,6 +76,8 @@ Everything on that Mac comes from this drive, so the drive has to be there for i
 
 1. Plug the drive into that Mac.
 2. Double-click **1 - Install the app**, open the app, and use **Set up this Mac**.
+   For the models from this drive, double-click **2 - Copy the models.command** and choose a
+   preset there.
 
 The app and the models are copied onto that Mac. After that the drive can be
 unplugged and that Mac keeps working — but the next time you want to copy anything to
@@ -86,9 +87,10 @@ it, the drive has to be plugged in again.
 
 ## When there are new models
 
-Open **Set up this Mac** again. It shows what is missing and copies only that. The
-no-internet step, **2 - Copy the models (everything).command**, also does it, and it
-moves a model the kit no longer offers into `_trash` inside the models folder rather
+Open **Set up this Mac** again. It shows what is missing. Models that come from this drive
+are copied by **2 - Copy the models.command**, which shows what is missing and copies only
+that. The no-internet step, **2 - Copy the models (everything).command**, also does it, and
+it moves a model the kit no longer offers into `_trash` inside the models folder rather
 than deleting it.
 
 ---
@@ -127,9 +129,9 @@ there yet.
 
 ## If something goes wrong
 
-**Set up this Mac says no SSD kit.** Look for **needs permission (Removable Volumes)**
-and click Allow on the macOS prompt, then restart the services. The drive must also be
-plugged in.
+**Set up this Mac says the models are not on this Mac.** The app never lists a drive by
+itself: to copy from the SSD, run **2 - Copy the models.command** from the drive and choose
+a preset. The drive must be plugged in for that.
 
 **A model says "not installed" when you know it is there.**
 Open **Set up this Mac** again — it copies what is missing and repairs the record. If it

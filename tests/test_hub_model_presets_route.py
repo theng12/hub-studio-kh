@@ -123,49 +123,12 @@ class DiskTests(unittest.TestCase):
         self.assertGreater(state["free_bytes"], 0)
 
 
-class KitSourceTests(unittest.TestCase):
-    """The 2026-10-28 lesson: a manifest without weights is not a source."""
-
-    def setUp(self) -> None:
-        self.manifest = json.loads((ROOT / "model-manifests" / "florence-2-large-ft.json").read_text())
-
-    def _kit(self, root: Path, with_weights: bool) -> Path:
-        library = root / "model-library"
-        folder = library / self.manifest["package_id"]
-        folder.mkdir(parents=True)
-        if with_weights:
-            (folder / self.manifest["revision"]).mkdir()
-            (folder / self.manifest["revision"] / "w.safetensors").write_bytes(b"x")
-        return library
-
-    def test_a_kit_with_the_weights_is_a_source(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertTrue(plan.in_kit(self._kit(Path(tmp), True), self.manifest))
-
-    def test_a_kit_with_the_manifest_but_no_weights_is_not(self) -> None:
-        # Exactly the state of the four 2026-10-28 drives for this package.
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertFalse(plan.in_kit(self._kit(Path(tmp), False), self.manifest))
-
-    def test_a_kit_with_no_folder_at_all_is_not(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            library = Path(tmp) / "model-library"
-            library.mkdir()
-            self.assertFalse(plan.in_kit(library, self.manifest))
-
-
 class SourceOrderTests(unittest.TestCase):
-    def test_the_order_is_lan_then_kit_then_internet(self) -> None:
+    def test_sources_are_lan_then_internet(self):
         manifest = json.loads((ROOT / "model-manifests" / "whisper-turbo.json").read_text())
-        with tempfile.TemporaryDirectory() as tmp:
-            library = Path(tmp) / "model-library"
-            (library / manifest["package_id"] / manifest["revision"]).mkdir(parents=True)
-            self.assertEqual(
-                plan._sources("whisper-turbo", manifest, [library], {"whisper-turbo": "mac-02"}),
-                [plan.SOURCE_LAN, plan.SOURCE_KIT, plan.SOURCE_INTERNET])
-            # Nothing else present: the pinned internet URLs every manifest carries remain.
-            self.assertEqual(plan._sources("whisper-turbo", manifest, [], None),
-                             [plan.SOURCE_INTERNET])
+        self.assertEqual(plan._sources("whisper-turbo", manifest, {"whisper-turbo": "mac-02"}),
+                         [plan.SOURCE_LAN, plan.SOURCE_INTERNET])
+        self.assertEqual(plan._sources("whisper-turbo", manifest, None), [plan.SOURCE_INTERNET])
 
 
 class PresetScreenTests(unittest.TestCase):
@@ -177,7 +140,7 @@ class PresetScreenTests(unittest.TestCase):
         state = {"path": str(library or "/tmp/lib"), "free_bytes": free, "total_bytes": free * 2,
                  "measured": True}
         with mock.patch.object(plan, "disk", return_value=state):
-            return plan.snapshot(kits=[],
+            return plan.snapshot(
                                  manifests=self.manifests,
                                  receipts=receipts(*verified), library=Path(str(library or "/tmp/lib")),
                                  memory_gb=32, stop_bytes=5_000_000_000, modality_of=modality_of)
@@ -260,7 +223,7 @@ class PresetScreenTests(unittest.TestCase):
         with mock.patch.object(plan, "disk", return_value={"path": "/tmp", "free_bytes": 10 ** 12,
                                                            "total_bytes": 2 * 10 ** 12,
                                                            "measured": True}):
-            screen = plan.snapshot(kits=[], manifests=self.manifests, receipts={}, library=Path("/tmp"),
+            screen = plan.snapshot(manifests=self.manifests, receipts={}, library=Path("/tmp"),
                                    memory_gb=8, stop_bytes=5_000_000_000, modality_of=modality_of)
         big = next(r for r in screen["models"] if r["package_id"] == "qwen36-35b-4bit")
         self.assertIn(big["floor_gb"], (24,))

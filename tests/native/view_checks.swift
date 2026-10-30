@@ -163,8 +163,7 @@ enum ViewChecks {
         let emptyPlan = NativeInstallPlan(
             memoryGB: 16, library: "/Volumes/KH-STUDIO-ATLAS/model-target",
             diskPath: "/Volumes/KH-STUDIO-ATLAS/model-target", freeBytes: 380_000_000_000,
-            diskMeasured: true, stopBytes: 5_000_000_000, kits: ["/Volumes/KH-STUDIO-ATLAS/model-library"],
-            kitsState: NativeRemovableVolumes(state: "ready", path: "/Volumes", reason: nil),
+            diskMeasured: true, stopBytes: 5_000_000_000,
             presets: [NativePreset(id: "creator-16", name: "Creator · 16 GB", tierGB: 16,
                                    summary: "Adds the larger image model.", installedCount: 9,
                                    packageCount: 10, complete: false, fitsThisMac: true,

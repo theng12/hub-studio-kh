@@ -36,10 +36,10 @@ what you should see.
    **A Lite Mode Mac:** set it up like any Mac and take **Essentials 8 GB**, then tick
    **Lite Mode** in Studio Hub > Settings. Lite Mode still runs only its own short-lane models,
    whatever the Mac holds.
-   **No internet and no other Mac to copy from?** Run
-   **`2 - Copy the models (everything).command`** instead — it copies every model the Mac can run,
-   the way earlier kits did. `2 - Copy the models.command` itself no longer chooses: it shows what
-   the drive holds and stops.
+   **Installing from this SSD:** double-click **`2 - Copy the models.command`**. It lists the four
+   presets and copies the one you choose. `2 - Copy the models (everything).command` copies every
+   model the Mac can run, for a Mac with no internet and no other Mac to copy from.
+   Studio Hub never reads this drive by itself; only these commands do, when you run one.
 2. **`1 - Install the app.command`** — puts the app in **Applications**. It will ask for
    your password once. It closes and replaces any older copy for you, then **opens the app
    in fleet mode** (`--fleet-mode`): the Mac starts Studio Hub's services now, at every login
@@ -65,10 +65,8 @@ A Mac updates itself from its controller; nobody has to press anything. To ask r
 updates**). With work running it says it will update when that work finishes and never restarts
 mid-job.
 
-If the app says **needs permission (Removable Volumes)**, click **Allow** on the macOS prompt. macOS
-asks every copy of an unsigned app for permission to read a removable drive, and until that is
-answered the Hub cannot see the SSD kit. The Mac keeps serving work meanwhile; only the kit
-listing is missing.
+Studio Hub no longer reads a removable drive on its own, so macOS has no reason to ask for that
+permission. A model library you choose under a drive in **Models** is read only because you chose it.
 
 ## Setting up a controller
 

@@ -354,13 +354,8 @@ final class FixtureProtocol: URLProtocol {
     static let releaseCatalog = DispatchSemaphore(value: 0)
     static var fleetNodesStatus: Int?
     static var fleetNodesEmpty = false
-    /// What `/api/health` says about removable volumes (`nil` = an older Hub with no such key).
-    static var removableVolumesState: String?
     /// How many times `/api/hub/model-presets` has been read. The poll must not add to this.
     static var modelPresetsReads = 0
-    static func setRemovableVolumesState(_ value: String?) {
-        lock.lock(); defer { lock.unlock() }; removableVolumesState = value
-    }
     static func takeModelPresetsReads() -> Int {
         lock.lock(); defer { lock.unlock() }; let value = modelPresetsReads; modelPresetsReads = 0; return value
     }
@@ -1204,23 +1199,13 @@ final class FixtureProtocol: URLProtocol {
                 result = (200, "application/json", Data(#"{"host":{"chip":"Apple M4","memory_gb":16.0},"version":"0.4.0","source":"local","workstation":{"enabled":true,"state":"idle"},"studios":{"image":{"id":"image","status":"up"}}}"#.utf8))
             }
         case ("GET", "/api/health"):
-            Self.lock.lock(); let volumes = Self.removableVolumesState; Self.lock.unlock()
-            var health: [String: Any] = ["ok": true, "busy": false]
-            if let volumes {
-                health["removable_volumes"] = ["state": volumes, "path": "/Volumes",
-                                               "reason": volumes == "needs_permission"
-                                                   ? "The check for removable volumes needs permission."
-                                                   : NSNull()]
-            }
-            result = (200, "application/json",
-                      (try? JSONSerialization.data(withJSONObject: health)) ?? Data(#"{"ok":true}"#.utf8))
+            result = (200, "application/json", Data(#"{"ok":true,"busy":false}"#.utf8))
         case ("GET", "/api/hub/model-presets"):
             Self.lock.lock(); Self.modelPresetsReads += 1; Self.lock.unlock()
             let answer: [String: Any] = [
                 "memory_gb": 16,
                 "disk": ["path": "/tmp", "free_bytes": 1_000_000_000_000, "measured": true],
                 "library": "/tmp", "stop_bytes": 5_000_000_000,
-                "kits": [], "kits_state": ["state": "ready", "path": "/Volumes"],
                 "presets": [], "starting_preset": NSNull(),
                 "groups": [], "models": [], "problems": [],
             ]
@@ -7104,19 +7089,6 @@ struct NativeAPITests {
         require(updateStore.installPlan != nil && updateStore.installPlanSupported,
                 "the on-demand read must publish the plan")
 
-        // ── A Mac waiting on the Removable Volumes prompt is serving, and says so ────────────
-        FixtureProtocol.setUnknownModalityBatch(false)   // no other note in the same banner
-        FixtureProtocol.setRemovableVolumesState("needs_permission")
-        await updateStore.refresh()
-        require(updateStore.startupNote?.contains("needs permission (Removable Volumes)") == true,
-                "the prompt must be named in the banner: \(updateStore.startupNote ?? "nil")")
-        require(updateStore.isReachable,
-                "a Mac waiting on the volumes prompt is reachable, not offline")
-        FixtureProtocol.setRemovableVolumesState(nil)
-        await updateStore.refresh()
-        require(updateStore.startupNote == nil,
-                "the note must clear when the state is gone: \(updateStore.startupNote ?? "nil")")
-        FixtureProtocol.setUnknownModalityBatch(true)
 
         // ── Startup settings: reported to the Hub on every poll, requests from the fleet applied ──
         let startupStore = NativeWorkspaceStore(sessionConfiguration: configuration)

@@ -314,6 +314,7 @@ def _stage_hub(context: dict) -> dict | None:
     # `Resources/components/*.py` — the shared modules — is already staged by `stage()`, for
     # every bundle, so there is one place that decides what the workers can import.
     copy_model_manifests(resources / 'model-manifests')
+    copy_tracked_tree(ROOT / 'model-presets', resources / 'model-presets', suffix='.json')
     shutil.copyfile(ROOT / 'packaging/hub_worker.py', resources / 'hub_worker.py')
     provenance = context['hub_provenance']
     return {
