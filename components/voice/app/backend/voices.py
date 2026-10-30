@@ -133,6 +133,9 @@ class Voice:
     channels: Optional[int] = None
     fleet_managed: bool = False
     audio_sha256: Optional[str] = None
+    # Short labels the Gateway puts on a voice (it is the one authority for them). Read-only here:
+    # the Voice page shows them and filters by them, and has no editor for them.
+    tags: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
 
     def serialize(self) -> dict:
@@ -263,6 +266,30 @@ class VoiceLibrary:
             )
             return voice
 
+    @staticmethod
+    def clean_tags(value: object) -> list[str]:
+        """A fleet push's tags, trimmed and de-duplicated. Absent is none, and nothing is invented."""
+        items = value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                parsed = text.split(",")
+            items = parsed if isinstance(parsed, list) else [parsed]
+        if not isinstance(items, (list, tuple)):
+            return []
+        out: list[str] = []
+        for item in items:
+            tag = str(item or "").strip()[:48]
+            if tag and tag not in out:
+                out.append(tag)
+            if len(out) >= 12:
+                break
+        return out
+
     def sync_from_hub(
         self,
         voice_id: str,
@@ -279,6 +306,7 @@ class VoiceLibrary:
         transcript: Optional[str] = None,
         transcript_segments: object = None,
         permission_acknowledged: bool = False,
+        tags: object = None,
     ) -> tuple[Voice, str]:
         """Install or refresh one Hub-owned voice under a stable fleet ID.
 
@@ -309,6 +337,7 @@ class VoiceLibrary:
         ext = Path(original_filename).suffix.lower()
         cleaned_transcript = (transcript or "").strip()
         cleaned_segments = _clean_segments(transcript_segments)
+        cleaned_tags = self.clean_tags(tags)
 
         with self._lock:
             VOICES_DIR.mkdir(parents=True, exist_ok=True)
@@ -347,6 +376,7 @@ class VoiceLibrary:
                     channels=current.channels,
                     fleet_managed=True,
                     audio_sha256=audio_sha256,
+                    tags=cleaned_tags,
                     created_at=current.created_at,
                 )
                 transcript_path = target / TRANSCRIPT_FILENAME
@@ -412,6 +442,7 @@ class VoiceLibrary:
                     channels=channels,
                     fleet_managed=True,
                     audio_sha256=audio_sha256,
+                    tags=cleaned_tags,
                 )
                 (temporary / METADATA_FILENAME).write_text(
                     json.dumps(asdict(voice), indent=2, default=str), encoding="utf-8"

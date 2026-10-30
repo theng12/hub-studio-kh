@@ -1323,6 +1323,8 @@ struct StudioContent: View {
     /// The same choice on Overview's In progress list, kept separate so narrowing one page does
     /// not silently narrow the other.
     @State private var overviewMachineFilter = JobMachineFilter.all
+    /// The tag the Voices page is narrowed to. Nil is every voice; the Gateway owns the tags.
+    @State private var voiceTagFilter: String? = nil
     /// The render whose detail is open on the Render page. Nil shows the list as it was.
     @State private var openRender: NativeRender?
     @State private var loadingImage = false
@@ -5716,6 +5718,23 @@ struct StudioContent: View {
     ///
     /// The library lives in the Voice worker and predates this app; the app had a per-job
     /// reference field and no way to keep, name, edit or reuse a clip. This is that screen.
+    /// Every tag in the voice library, with its count, alphabetical. A voice with no tags simply
+    /// contributes none, so a library that predates tags shows no filter at all.
+    private var voiceTagCounts: [(tag: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for voice in workspace.voices {
+            for tag in voice.tagList { counts[tag, default: 0] += 1 }
+        }
+        return counts.keys.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            .map { ($0, counts[$0] ?? 0) }
+    }
+
+    /// The voices the list draws: all of them, or those carrying the chosen tag.
+    private var shownVoices: [NativeVoice] {
+        guard let filter = voiceTagFilter else { return workspace.voices }
+        return workspace.voices.filter { $0.tagList.contains(filter) }
+    }
+
     private var voicesWorkspace: some View {
         PageScaffold(title: pageTitle(.voices),
                      subtitle: "Saved reference clips. Pick one when cloning so the same voice comes back every time.") {
@@ -5731,6 +5750,18 @@ struct StudioContent: View {
                     if workspace.savingVoice { ProgressView().controlSize(.small) }
                     Spacer()
                 }
+                // Tags arrive from the Gateway, which owns them; this row narrows the list and is
+                // the only thing this app does with them.
+                if !voiceTagCounts.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: HubSpace.xs) {
+                            voiceTagButton("All tags", count: workspace.voices.count, tag: nil)
+                            ForEach(voiceTagCounts, id: \.tag) { entry in
+                                voiceTagButton(entry.tag, count: entry.count, tag: entry.tag)
+                            }
+                        }
+                    }
+                }
                 if let note = workspace.voiceNote {
                     Text(note).font(HubType.secondary).foregroundStyle(.secondary)
                 }
@@ -5745,7 +5776,11 @@ struct StudioContent: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: HubSpace.m) {
-                        ForEach(workspace.voices) { voice in
+                        if shownVoices.isEmpty, let filter = voiceTagFilter {
+                            Text("No voice is tagged \(filter).")
+                                .font(HubType.secondary).foregroundStyle(.secondary)
+                        }
+                        ForEach(shownVoices) { voice in
                             voiceRow(voice)
                             Divider()
                         }
@@ -5755,6 +5790,22 @@ struct StudioContent: View {
         }
         .task(id: connected) { if connected { await workspace.refreshVoices() } }
         .sheet(isPresented: $showingVoiceEditor) { voiceEditor }
+    }
+
+    /// One tag filter. Choosing the one already chosen clears it, so "all" is never a dead end.
+    private func voiceTagButton(_ title: String, count: Int, tag: String?) -> some View {
+        Button {
+            voiceTagFilter = (voiceTagFilter == tag) ? nil : tag
+        } label: {
+            Text("\(title) (\(count))").font(HubType.caption)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, HubSpace.s).padding(.vertical, 2)
+        .background(voiceTagFilter == tag ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.10),
+                    in: Capsule())
+        .overlay(Capsule().strokeBorder(voiceTagFilter == tag ? Color.accentColor : Color.secondary.opacity(0.25)))
+        .accessibilityLabel("\(title), \(count) voices")
+        .accessibilityAddTraits(voiceTagFilter == tag ? .isSelected : [])
     }
 
     private func voiceRow(_ voice: NativeVoice) -> some View {
@@ -5770,6 +5821,7 @@ struct StudioContent: View {
                     if voice.fleetManaged {
                         StatusBadge(text: "Fleet", status: .info)
                     }
+                    ForEach(voice.tagList, id: \.self) { tag in jobTag(tag) }
                 }
                 Text(voice.readyForCloning
                      ? "Transcript saved · \(voice.durationLabel)"

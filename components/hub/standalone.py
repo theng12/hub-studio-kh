@@ -4189,6 +4189,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         transcript: str | None = Form(None),
         transcript_segments: str | None = Form(None),
         voice_id: str = Form(""),
+        tags: str = Form(""),
         permission_acknowledged: bool = Form(False),
     ) -> dict[str, Any]:
         """Create or refresh one fleet-wide voice, then fan it out to every joined node.
@@ -4228,6 +4229,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 transcript=transcript, transcript_segments=segments or None,
                 permission_acknowledged=permission_acknowledged,
                 voice_id=voice_id.strip() or None,
+                # The Gateway's own tags, as a JSON array (or a comma-separated list): the Hub
+                # stores and shows them and is never their editor.
+                tags=tags or None,
             )
         except shared_voices.SharedVoiceConflict as exc:
             raise HTTPException(409, {"code": "SHARED_VOICE_CONFLICT", "detail": str(exc)}) from exc

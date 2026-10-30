@@ -4,6 +4,32 @@ Written to be read by the person using the app. Newest first.
 
 ## 0.6.212 — 2026-10-30
 
+### Voices can be tagged
+
+A voice can now carry short tags, and they are set in the Gateway — it is the one place they are edited. The Hub and the Voice page show them on each voice, and a row of tag buttons above the list narrows it to one tag; choose the tag again, or **All tags**, to see everything again. A voice with no tags shows none, and a library from before this update loads unchanged.
+
+### On a controller, you can see whose job is whose
+
+Every job row now has two small tags. The first says where it runs — **This Mac**, the name of the Mac that ran it, or **Mac not reported** while it is live and the Hub has not named one. The second says who asked — **asked here** or **sent by the Gateway** — and is left out for a job filed before this update, rather than guessed.
+
+**Overview** has the same **All / This Mac / Nodes** filter as Jobs, with the number of rows on each, so you can look at just this Mac's work or just the fleet's.
+
+### Jobs opens on what is running
+
+The Jobs page used to open on finished Audio rows and the running work was further down. It now starts with **Running now** — every Studio's live jobs, with their status, progress, the Mac they are on and who asked — then **Queued**, then the history for each Studio. The studio tabs and the All / This Mac / Nodes filter apply to all three.
+
+### Cancelled jobs say so honestly
+
+A cancelled job used to say "Cancelled by user" whoever asked. It now says **Cancelled from this Mac** or **Cancelled from the Gateway** when the Hub saw which one it was, and plain **Cancelled** otherwise. Jobs cancelled before this update show **Cancelled** too, because their record does not say who asked.
+
+### The sidebar stops saying "fleet not read"
+
+A controller's sidebar said **fleet not read** until somebody opened the Nodes page, even when the Mac knew its group perfectly well. It now reads the list when it connects, says **reading nodes…** while it does, and names the count after that.
+
+### A rollout can repair a Mac that is missing the installer
+
+When an update was sent as only the files that changed, the controller never kept the disk image, so an older Mac on that site could not install it. Running the rollout with **`--full`** now sends the whole image to a site that already has the update, which is the repair, and a second run does not send it again.
+
 ### A short line of narration is no longer refused as silence
 
 A very short sentence can be spoken well and still measure quiet for a moment: "People could catch their breath." takes about a second and a third to say. Voice was refusing it as silent on some Macs, even though the transcribe-back heard every word. When the transcribe-back has run and heard every word of a section, a low voiced time no longer rejects it. A section with no transcript, a Khmer one, or one with a word missing is still refused, so real silence and a drifting signal are still caught.

@@ -2886,6 +2886,13 @@ struct NativeVoice: Decodable, Equatable, Identifiable {
     let audioSha256: String?
     let createdAt: Double?
     let audioUrl: String?
+    /// Short labels the Gateway puts on a voice; it is the one authority for them and this app
+    /// never writes one. Nil or empty is a library with no tags, or an older worker that does not
+    /// report them, and the row then shows nothing.
+    let tags: [String]?
+
+    /// The tags as a list, for a view that should not repeat the nil check everywhere.
+    var tagList: [String] { tags ?? [] }
 
     var hasWords: Bool { !(transcript ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     /// A clone cannot align audio without words, so this flag is what decides whether a

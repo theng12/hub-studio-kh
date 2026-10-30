@@ -113,6 +113,50 @@ class SharedVoiceTests(unittest.TestCase):
         self.assertEqual(again["transcript"], "A corrected line.")
         self.assertEqual(self.module.get(voice["id"])["transcript_segments"], corrected)
 
+    # ── the tags (the gateway owns them; the hub keeps and shows them) ────
+
+    def test_tags_are_stored_shown_and_sent_to_every_node(self):
+        voice, _ = self.push(tags=["warm", "Khmer", " warm "])
+        self.assertEqual(voice["tags"], ["warm", "Khmer"], "trimmed and de-duplicated, case kept")
+        self.assertEqual(self.module.get(voice["id"])["tags"], ["warm", "Khmer"])
+        self.assertEqual(self.module.list_voices()[0]["tags"], ["warm", "Khmer"])
+        _, call, _ = self._fan_out(tags=["warm", "Khmer"])
+        self.assertEqual(json.loads(call["data"]["tags"]), ["warm", "Khmer"])
+
+    def test_a_voice_with_no_tags_carries_none(self):
+        voice, _ = self.push()
+        self.assertEqual(voice["tags"], [])
+        _, call, _ = self._fan_out()
+        self.assertEqual(json.loads(call["data"]["tags"]), [])
+
+    def test_an_older_voice_reads_as_no_tags(self):
+        # A voice stored before tags existed has no key at all; it must list and serialize cleanly.
+        voice, _ = self.push()
+        metadata = self.module._voice_dir(voice["id"]) / self.module.METADATA
+        stored = json.loads(metadata.read_text())
+        stored.pop("tags", None)
+        metadata.write_text(json.dumps(stored))
+        self.assertEqual(self.module.list_voices()[0]["tags"], [])
+        self.assertEqual(self.module.serialize(self.module.get(voice["id"]))["tags"], [])
+
+    def test_an_omitted_push_keeps_stored_tags_and_an_empty_list_clears_them(self):
+        self.push(tags=["warm"])
+        kept, _ = self.push()
+        self.assertEqual(kept["tags"], ["warm"], "a push that does not mention tags leaves them")
+        cleared, _ = self.push(tags=[])
+        self.assertEqual(cleared["tags"], [], "an explicit empty list clears them")
+
+    def test_a_malformed_tag_field_is_no_tags_and_never_refuses_the_voice(self):
+        for index, malformed in enumerate(("not json at all", "{\"warm\": true}", "5")):
+            voice, _ = self.push(audio=AUDIO + bytes([index]), tags=malformed)
+            self.assertEqual(voice["tags"], [], malformed)
+
+    def test_a_tag_outside_the_bounds_is_not_shown_and_the_rest_are_kept(self):
+        voice, _ = self.push(tags=["warm", "x" * 40, "Khmer"] + [f"t{i}" for i in range(20)])
+        self.assertEqual(voice["tags"][:2], ["warm", "Khmer"])
+        self.assertNotIn("x" * 40, voice["tags"])
+        self.assertEqual(len(voice["tags"]), 12, "at most twelve tags are kept")
+
     def test_a_voice_pushed_again_after_removal_comes_back(self):
         """A removal must not be permanent. The gateway names a clip by its content hash, so the
         voice it re-pushes has exactly the id the tombstone remembers - and `start_sync` refuses any
@@ -224,9 +268,9 @@ class SharedVoiceTests(unittest.TestCase):
             self.registry = registry
             self.status = {row["id"]: {"status": "up"} for row in registry}
 
-    def _fan_out(self, *, reported_segments="match"):
+    def _fan_out(self, *, reported_segments="match", tags=None):
         """Run one node push against a node that answers with the given stored count."""
-        self.push()
+        self.push(tags=tags)
         voice = self.module.list_voices()[0]
         stored = self.module.get(voice["id"])
         studio = {"id": "voice@node-a", "modality": "voice", "machine": "node-a",

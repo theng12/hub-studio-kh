@@ -31,6 +31,10 @@ MAX_SEGMENTS = 20_000
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac"}
 ALLOWED_LICENSES = {"self-owned", "public-domain", "permission", "unknown"}
 ALLOWED_GENDERS = {"m", "f", "n"}
+# The Gateway is the one authority for a voice's tags; the Hub keeps them and shows them. These
+# bounds only keep a malformed push from filling every voice list with one enormous tag.
+MAX_TAGS = 12
+MAX_TAG_CHARS = 24
 TRANSIENT_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
 _tasks: dict[str, asyncio.Task] = {}
@@ -42,6 +46,39 @@ _sync_lock = asyncio.Lock()
 
 class SharedVoiceConflict(ValueError):
     pass
+
+
+def _tags(value: object) -> list[str]:
+    """The voice's tags as the Gateway sent them: trimmed, de-duplicated, bounded, invented never.
+
+    The Gateway sends a JSON array in the multipart `tags` field. Absent, empty or malformed is no
+    tags - the same as every voice stored before this field - because a tag is a label, not part
+    of the voice: a bad one must never refuse the clip. A tag longer than `MAX_TAG_CHARS`, or any
+    beyond `MAX_TAGS`, is left out of the list this Hub shows rather than shortened, so what is
+    shown is always a word the producer sent.
+    """
+    if value is None:
+        return []
+    items = value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            items = json.loads(text)
+        except ValueError:
+            return []
+    if not isinstance(items, (list, tuple)):
+        return []
+    out: list[str] = []
+    for item in items:
+        tag = str(item or "").strip()
+        if not tag or len(tag) > MAX_TAG_CHARS or tag in out:
+            continue
+        out.append(tag)
+        if len(out) >= MAX_TAGS:
+            break
+    return out
 
 
 def _voice_id(value: str) -> str:
@@ -216,6 +253,7 @@ def create(
     gender: str, license: str, notes: str = "", source_url: str | None = None,
     transcript: str | None = None, transcript_segments: object = None,
     permission_acknowledged: bool = False, voice_id: str | None = None,
+    tags: object = None,
 ) -> dict:
     ext = _validate(
         audio_bytes=audio_bytes, filename=filename, name=name, language=language,
@@ -246,7 +284,7 @@ def create(
         "gender": gender, "license": license, "notes": (notes or "").strip(),
         "source_url": (source_url or "").strip() or None,
         "permission_acknowledged": True, "audio_extension": ext,
-        "audio_sha256": digest, "created_at": now, "updated_at": now,
+        "audio_sha256": digest, "tags": _tags(tags), "created_at": now, "updated_at": now,
         "has_transcript": bool((transcript or "").strip()),
         "segment_count": len(segments),
     }
@@ -270,6 +308,7 @@ def upsert(
     gender: str, license: str, notes: str = "", source_url: str | None = None,
     transcript: str | None = None, transcript_segments: object = None,
     permission_acknowledged: bool = False, voice_id: str | None = None,
+    tags: object = None,
 ) -> tuple[dict, bool]:
     """Create a shared voice, or refresh the one already holding these exact bytes.
 
@@ -293,7 +332,7 @@ def upsert(
             audio_bytes=audio_bytes, filename=filename, name=name, language=language,
             gender=gender, license=license, notes=notes, source_url=source_url,
             transcript=transcript, transcript_segments=transcript_segments,
-            permission_acknowledged=permission_acknowledged, voice_id=voice_id,
+            permission_acknowledged=permission_acknowledged, voice_id=voice_id, tags=tags,
         ), True
     changes = {
         "name": name, "language": language, "gender": gender, "license": license,
@@ -306,6 +345,9 @@ def upsert(
     if transcript is not None:
         changes["transcript"] = transcript
         changes["transcript_segments"] = _segments(transcript_segments)
+    # Same rule as the transcript: an omitted `tags` keeps what is stored, an empty list clears.
+    if tags is not None:
+        changes["tags"] = _tags(tags)
     return update(existing["id"], changes), False
 
 
@@ -314,7 +356,7 @@ def update(voice_id: str, changes: dict) -> dict:
     if not voice:
         raise KeyError(voice_id)
     allowed = {"name", "language", "gender", "license", "notes", "source_url", "transcript",
-               "transcript_segments"}
+               "transcript_segments", "tags"}
     unknown = set(changes) - allowed
     if unknown:
         raise ValueError(f"unsupported fields: {', '.join(sorted(unknown))}")
@@ -513,6 +555,7 @@ def get_deletion(voice_id: str, monitor=None) -> dict | None:
 
 def serialize(voice: dict, monitor=None) -> dict:
     result = dict(voice)
+    result.setdefault("tags", [])      # a voice stored before tags existed carries none
     # The segments are the reference's timings, not a listing field: a hundred voices' worth would
     # dominate every status read. Their presence is what a caller needs to know.
     segments = result.pop("transcript_segments", None) or []
@@ -600,6 +643,7 @@ async def _sync_target(monitor, voice: dict, studio: dict) -> dict:
         "license": voice["license"], "notes": voice.get("notes") or "",
         "source_url": voice.get("source_url") or "",
         "transcript": voice.get("transcript") or "",
+        "tags": json.dumps(voice.get("tags") or []),
         "permission_acknowledged": "true",
     }
     # The aligned timings travel with the transcript. Without them a node installs the voice and

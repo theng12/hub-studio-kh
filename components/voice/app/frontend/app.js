@@ -210,6 +210,9 @@ function studio() {
 
     // ──────── voice library (Phase A) ────────
     voices: [],
+    // The Gateway is the one authority for a voice's tags; this page shows them and narrows the
+    // list by one. Empty means every voice, which is also what a library with no tags shows.
+    voiceTagFilter: "",
     voiceUploader: {
       open: false,
       uploading: false,
@@ -1967,6 +1970,24 @@ function studio() {
         const data = await r.json();
         this.voices = data.voices || [];
       } catch { /* keep last */ }
+    },
+
+    // Every tag in the library, with how many voices carry it, alphabetical.
+    get voiceTags() {
+      const counts = new Map();
+      for (const voice of this.voices) {
+        for (const tag of voice.tags || []) counts.set(tag, (counts.get(tag) || 0) + 1);
+      }
+      return [...counts.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([tag, count]) => ({ tag, count }));
+    },
+
+    // The voices the grid draws: all of them, or the ones carrying the chosen tag. A voice with
+    // no tags simply never matches a tag, which is the honest answer rather than a hidden one.
+    get shownVoices() {
+      if (!this.voiceTagFilter) return this.voices;
+      return this.voices.filter((voice) => (voice.tags || []).includes(this.voiceTagFilter));
     },
 
     get canSubmitVoice() {

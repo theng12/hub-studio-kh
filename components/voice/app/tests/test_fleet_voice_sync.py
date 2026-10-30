@@ -92,3 +92,37 @@ def test_fleet_sync_validates_id_hash_and_permission(tmp_path, monkeypatch):
         _sync(library, audio_sha256="0" * 64)
     with pytest.raises(ValueError, match="permission_acknowledged"):
         _sync(library, permission_acknowledged=False)
+
+
+def test_fleet_sync_keeps_the_gateways_tags_and_shows_them(tmp_path, monkeypatch):
+    monkeypatch.setattr(voices, "VOICES_DIR", tmp_path)
+    library = voices.VoiceLibrary()
+
+    created, status = _sync(library, tags='["warm", "Khmer", "warm"]')
+    assert status == "created"
+    assert created.tags == ["warm", "Khmer"]
+    shown = library.get(created.id).serialize()
+    assert shown["tags"] == ["warm", "Khmer"]
+
+    # A refresh that names tags replaces them; one that does not mention them clears them, because
+    # the Gateway is the authority and this route only carries what it sends.
+    updated, _ = _sync(library, tags='["documentary"]')
+    assert updated.tags == ["documentary"]
+
+
+def test_a_fleet_voice_with_no_tags_reads_as_none_and_an_old_one_loads(tmp_path, monkeypatch):
+    monkeypatch.setattr(voices, "VOICES_DIR", tmp_path)
+    library = voices.VoiceLibrary()
+
+    created, _ = _sync(library)
+    assert created.tags == []
+    assert library.get(created.id).serialize()["tags"] == []
+
+    # A voice stored before tags existed: no key in metadata.json, still a voice.
+    import json
+    metadata = tmp_path / created.id / voices.METADATA_FILENAME
+    stored = json.loads(metadata.read_text())
+    stored.pop("tags", None)
+    metadata.write_text(json.dumps(stored))
+    old = library.get(created.id)
+    assert old is not None and old.tags == []

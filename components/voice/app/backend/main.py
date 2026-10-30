@@ -1323,6 +1323,7 @@ async def sync_fleet_voice(
     source_url: str = Form(""),
     transcript: str = Form(""),
     transcript_segments_json: str = Form(""),
+    tags: str = Form(""),
     permission_acknowledged: bool = Form(False),
 ) -> dict:
     """Idempotently install one authenticated, Hub-owned shared voice.
@@ -1355,6 +1356,8 @@ async def sync_fleet_voice(
             transcript=transcript or None,
             transcript_segments=segments,
             permission_acknowledged=permission_acknowledged,
+            # The Gateway's tags, kept as sent. This route is the only place they arrive.
+            tags=tags,
         )
     except FleetVoiceConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc))

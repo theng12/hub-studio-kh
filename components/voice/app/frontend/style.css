@@ -350,6 +350,9 @@ button.ghost.danger:hover { background: #1a0e0e; }
 .chip.warn { color: var(--warn); border-color: #4a3e26; background: #261d10; }
 .chip.bad { color: var(--bad); border-color: #4a2a2a; background: #261313; }
 .chip.neutral { color: var(--muted); }
+/* A tag is the Gateway's own word, so it keeps its case; the dashed edge marks it as something
+   you filter by, not another attribute of the clip. */
+.chip.tag { text-transform: none; border-style: dashed; }
 
 /* Downloads page */
 .downloads-table { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -985,9 +988,12 @@ input.num-input-wide { width: 130px; }
 .voices-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   margin: 0 0 16px 0;
 }
+.voice-tag-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.voice-tag-filter .btn.active { border-color: var(--accent); color: var(--accent); }
 .voice-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));

@@ -1760,11 +1760,24 @@
       <button class="btn primary" @click="openVoiceUploader()">+ Add voice</button>
       <button class="btn ghost" @click="openSeedCatalog()">🌐 Browse public-domain catalog</button>
       <button class="btn ghost small" @click="refreshVoices()">↻ Refresh</button>
-      <span class="muted small" x-show="voices.length > 0" x-text="voices.length + ' voice' + (voices.length===1?'':'s') + ' in library'"></span>
+      <span class="muted small" x-show="voices.length > 0"
+            x-text="voiceTagFilter ? shownVoices.length + ' of ' + voices.length + ' voices tagged ' + voiceTagFilter
+                   : voices.length + ' voice' + (voices.length===1?'':'s') + ' in library'"></span>
+      <!-- Tags come from the Gateway, which owns them: this row shows them and picks one. -->
+      <template x-if="voiceTags.length > 0">
+        <div class="voice-tag-filter">
+          <button class="btn ghost small" :class="{active: !voiceTagFilter}" @click="voiceTagFilter=''">All tags</button>
+          <template x-for="t in voiceTags" :key="t.tag">
+            <button class="btn ghost small" :class="{active: voiceTagFilter===t.tag}"
+                    @click="voiceTagFilter = voiceTagFilter===t.tag ? '' : t.tag"
+                    x-text="t.tag + ' (' + t.count + ')'"></button>
+          </template>
+        </div>
+      </template>
     </div>
 
     <div class="voice-grid">
-      <template x-for="v in voices" :key="v.id">
+      <template x-for="v in shownVoices" :key="v.id">
         <div class="voice-card">
           <div class="voice-card-head">
             <h3 x-text="v.name"></h3>
@@ -1778,6 +1791,9 @@
             <span class="chip gender" x-text="genderLabel(v.gender)"></span>
             <span class="chip license" :class="'license-' + v.license" x-text="licenseLabel(v.license)"></span>
             <span class="chip" x-show="v.has_transcript" title="Has transcript (works with F5-TTS)">📝 transcript</span>
+            <template x-for="tag in (v.tags || [])" :key="tag">
+              <span class="chip tag" x-text="tag"></span>
+            </template>
           </div>
           <audio class="voice-audio" :src="v.audio_url" controls preload="metadata"></audio>
           <div class="voice-meta muted small">
