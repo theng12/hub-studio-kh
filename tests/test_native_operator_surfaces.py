@@ -102,7 +102,8 @@ class FleetTests(unittest.TestCase):
 
     def test_unread_controller_roster_is_not_presented_as_zero_nodes(self):
         group = body(VIEWS, "private var groupLine", 800)
-        self.assertIn('guard let nodes = workspace.fleetNodes?.nodes else { return "Controller · fleet not read" }', group)
+        self.assertIn("guard let nodes = workspace.fleetNodes?.nodes else {", group)
+        self.assertIn('if workspace.fleetReadError != nil { return "Controller · nodes not read" }', group)
         self.assertIn("let count = nodes.count", group)
 
 
@@ -168,10 +169,12 @@ class PollCostTests(unittest.TestCase):
 
 class OverviewTests(unittest.TestCase):
     def test_in_progress_includes_video_and_subtitle_work(self):
-        overview = body(VIEWS, "private var overview: some View", 2600)
-        self.assertIn("activeVideo.isEmpty && activeSubtitles.isEmpty", overview)
-        self.assertIn("activeVideo.map { AnyView(videoJobRow($0)) }", overview)
-        self.assertIn("activeSubtitles.map { AnyView(subtitleJobRow($0)) }", overview)
+        overview = body(VIEWS, "private var overview: some View", 6000)
+        self.assertIn("let video = activeVideo.filter(overviewMachineFilter.includes)", overview)
+        self.assertIn("let subtitles = activeSubtitles.filter(overviewMachineFilter.includes)", overview)
+        self.assertIn("video.isEmpty\n                        && subtitles.isEmpty", overview)
+        self.assertIn("video.map { AnyView(videoJobRow($0)) }", overview)
+        self.assertIn("subtitles.map { AnyView(subtitleJobRow($0)) }", overview)
 
 
 class DownloadTests(unittest.TestCase):

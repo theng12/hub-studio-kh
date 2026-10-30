@@ -215,6 +215,8 @@ class Harness:
         previous_home = os.environ.get("HOME")
         previous_app = os.environ.get("STUDIOHUB_APP_ROOT")
         previous_copy = os.environ.get("STUDIOHUB_KIT_COPY")
+        # `main()` points the preset reader at the kit for its own process; a test shares ours.
+        previous_presets = os.environ.get("STUDIOHUB_MODEL_PRESETS")
         os.environ["HOME"] = str(self.root)
         if copy_everything:
             os.environ["STUDIOHUB_KIT_COPY"] = "1"
@@ -247,6 +249,10 @@ class Harness:
                 os.environ.pop("STUDIOHUB_KIT_COPY", None)
             else:
                 os.environ["STUDIOHUB_KIT_COPY"] = previous_copy
+            if previous_presets is None:
+                os.environ.pop("STUDIOHUB_MODEL_PRESETS", None)
+            else:
+                os.environ["STUDIOHUB_MODEL_PRESETS"] = previous_presets
         return code, out.getvalue(), prompt
 
 
