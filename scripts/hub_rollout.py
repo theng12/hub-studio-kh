@@ -43,7 +43,10 @@ What changed:
     site already holding the release, or a receipt for this same artifact, skips the POST.
     `--evidence` itself refuses to overwrite; reuse is a refusal, not a silent append. A POST
     the Gateway answers `LOCATION_UNREACHABLE` accepted nothing, so that one is retried inside the
-    site's window; an **accepted** POST is never repeated.
+    site's window; an **accepted** POST is never repeated. **The one exception is `--full`**, which
+    repairs a site that took the release as changed files and never had the image: it re-sends the
+    whole image to a site that already holds the release, writes its own `-full` receipt beside the
+    ordinary one, and a second `--full` run then skips like any other rerun.
   * **This Mac's fleet generation stays paused.** The owner's pause (`local_paused_at` in the
     Gateway's roster) is read before the first POST, after each site that verifies, and at the
     end, and written nowhere: this tool has no resume path and touches no fleet setting. The
@@ -393,10 +396,16 @@ class Rollout:
 
     # -- receipts ---------------------------------------------------------
     def receipt_path(self, site_id: str) -> Path:
-        return self.receipts / f'{site_id}-{self.version}.json'
+        # A `--full` push that follows an ordinary one keeps its own receipt: neither is ever
+        # overwritten, and each says how the release reached the site.
+        suffix = '-full' if self.force_full else ''
+        return self.receipts / f'{site_id}-{self.version}{suffix}.json'
 
     def read_receipt(self, site_id: str) -> dict | None:
+        ordinary = self.receipts / f'{site_id}-{self.version}.json'
         path = self.receipt_path(site_id)
+        if not path.is_file():
+            path = ordinary
         if not path.is_file():
             return None
         receipt = json.loads(path.read_text())
@@ -416,7 +425,7 @@ class Rollout:
         record = {'schema': SITE_SCHEMA, 'site': site_id, 'version': self.version,
                   'build': self.build, 'artifact': str(self.artifact),
                   'sha256': self.accepted['sha256'], 'bytes': self.accepted['bytes'],
-                  'published_at': utc_now(), **outcome}
+                  'force_full': self.force_full, 'published_at': utc_now(), **outcome}
         # 'x': a receipt is written once. Never overwritten, never appended.
         with path.open('x') as handle:
             handle.write(json.dumps(record, indent=2) + '\n')
@@ -490,12 +499,18 @@ class Rollout:
 
         first = self._try_read(site_id)
 
-        if first is not None and holds_release(first, self.version, self.build,
-                                               self.accepted['sha256'],
-                                               self.accepted['bytes']):
+        held = (first is not None and holds_release(first, self.version, self.build,
+                                                    self.accepted['sha256'],
+                                                    self.accepted['bytes']))
+        if held and not self.force_full:
             row['published_at'] = 'already held before this run'
             note(f'{label}: already holds {self.version}; not republishing')
             return self._verify(site_id, label, row)
+        if held:
+            # A release the controller took as changed files leaves no disk image anywhere in
+            # the chain, so its older nodes get HTTP 404 from the artifact route. `--full` is
+            # the repair, and skipping "already held" would keep the image from ever arriving.
+            note(f'{label}: already holds {self.version}; re-sending the whole image (--full)')
 
         gate_deadline = started + self.window_s
         read = first
@@ -562,12 +577,18 @@ class Rollout:
 
     def _publish(self, site_id: str, label: str, row: dict) -> str:
         receipt = self.read_receipt(site_id)
-        if receipt is not None:
+        if receipt is not None and (not self.force_full or receipt.get('force_full')):
             row['published_at'] = receipt.get('published_at')
             row['warnings'].append('an accepted publication receipt already existed; '
                                    'the POST was not repeated')
             note(f'{label}: receipt from an earlier run; not reposting')
             return 'reused'
+        if receipt is not None:
+            # An ordinary run accepted this artifact without sending the image. `--full` is
+            # asked for exactly that repair, so this one POST repeats it; its receipt is kept
+            # beside the first rather than over it.
+            row['warnings'].append('an earlier run published this release as changed files; '
+                                   '--full re-sent the whole image')
         row['post_count'] += 1
         status, reply = self.gateway.publish(self.artifact, self.version, self.build, [site_id],
                                              force_full=self.force_full,

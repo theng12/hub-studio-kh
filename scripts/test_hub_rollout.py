@@ -154,9 +154,10 @@ class Harness(unittest.TestCase):
     def gateway(self, *sites, **kwargs) -> 'FakeGateway':
         return FakeGateway(list(sites), identity=self.identity, **kwargs)
 
-    def rollout(self, gateway) -> hub.Rollout:
+    def rollout(self, gateway, full: bool = False) -> hub.Rollout:
         return hub.Rollout(gateway, self.accepted, self.artifact, VERSION, BUILD,
-                           receipts=self.receipts, window_s=WINDOW, poll_s=POLL)
+                           receipts=self.receipts, window_s=WINDOW, poll_s=POLL,
+                           force_full=full)
 
     @staticmethod
     def by_site(rows):
@@ -434,6 +435,30 @@ class RerunTests(Harness):
         self.assertEqual(receipt['outcome'], 'accepted')
         self.assertEqual(receipt['sha256'], self.accepted['sha256'])
 
+
+    def test_full_resends_the_image_to_a_site_that_already_holds_a_files_only_release(self):
+        # 0.6.197 nodes cannot install from a controller holding only changed files (the
+        # artifact route answers 404). A controller that already reports the release is exactly
+        # the one that needs the whole image, so `--full` must not take the already-held skip.
+        site = FakeSite('1503', ['1503'])
+        site.release = dict(self.identity)
+        gateway = FakeGateway([site], identity=self.identity)
+        row = self.rollout(gateway, full=True).run([{'id': '1503'}])[0]
+        self.assertEqual(gateway.full_flags, [True], 'the whole image was asked for')
+        self.assertEqual(row['post_count'], 1)
+        self.assertEqual(row['state'], 'verified')
+        # Its receipt is kept beside the ordinary one, never over it.
+        self.assertTrue((self.receipts / f'1503-{VERSION}-full.json').is_file())
+        self.assertIs(json.loads((self.receipts / f'1503-{VERSION}-full.json').read_text())
+                      ['force_full'], True)
+
+    def test_a_second_full_run_does_not_repost(self):
+        site = FakeSite('1503', ['1503'])
+        site.release = dict(self.identity)
+        gateway = FakeGateway([site], identity=self.identity)
+        self.rollout(gateway, full=True).run([{'id': '1503'}])
+        self.rollout(gateway, full=True).run([{'id': '1503'}])
+        self.assertEqual(len(gateway.posts), 1)
 
 class PauseTests(Harness):
     def test_the_pause_is_read_before_the_first_post_and_again_at_the_end(self):
