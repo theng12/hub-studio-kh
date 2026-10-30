@@ -12,6 +12,10 @@ Studio Hub now asks the Mac **which** disks are mounted — that list is free, i
 
 Two things worth knowing. A kit drive that has been **renamed** is no longer found automatically, so keep the KH-STUDIO- name. And a kit drive shared over the network is not read either, because that is the other permission Studio Hub is avoiding.
 
+### Lite Mode is set up like any other Mac
+
+The extra **Copy the Lite Mode models** step is gone from the kit. A cashier Mac is installed and set up like any other Mac — take **Essentials 8 GB** on **Set up this Mac**, which carries every model Lite Mode uses — and then tick **Lite Mode** in Settings. Lite Mode itself works exactly as before: it runs only its own short list of models and hands everything else to another Mac.
+
 ### The Setup page says which "no kit" it means
 
 "No SSD kit is mounted" now appears only when that is what happened. If a KH-STUDIO- drive is mounted but has no model-library folder on it, the page says that; if the drive with that name is a network share, it says that. A drive the Hub is not allowed to read still shows **needs permission (Removable Volumes)**.

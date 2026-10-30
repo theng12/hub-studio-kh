@@ -568,16 +568,11 @@ def main() -> int:
     # **Copy everything this Mac can run** (the pre-2026-10-28 behaviour), only when asked for
     # explicitly. The picker is the decision; this step is a source. See the module docstring.
     copy_everything = os.environ.get("STUDIOHUB_KIT_COPY", "").strip() == "1"
-    # **Lite Mode models only (owner 2026-10-03/04)**: the 8 GB-class models a Lite Mode Mac runs
-    # (`components/workstation_models.py`, ~15 GB). The kit's `2 - Copy the Lite Mode models.command`
-    # sets STUDIOHUB_WORKSTATION=1; it is the only difference from `2 - Copy the models`.
-    shop_mac = os.environ.get("STUDIOHUB_WORKSTATION", "").strip() == "1"
-    if shop_mac:
-        try:
-            from workstation_models import manifest_allowed  # type: ignore
-        except ImportError:
-            print("  This kit's Studio Hub predates Lite Mode, so it cannot copy only the Lite Mode models.")
-            return 2
+    # **No Lite Mode copy set (owner 2026-10-30).** `STUDIOHUB_WORKSTATION=1` and the kit's
+    # "2 - Copy the Lite Mode models" launcher are retired: a Lite Mode Mac is set up like any
+    # Mac and takes the Essentials 8 GB preset, which carries every model it runs. Lite Mode itself
+    # is unchanged - `components/workstation_models.py` is a **runtime allowlist**, and the Hub
+    # still refuses a job for any other model at such a Mac's door - so nothing here filters by it.
     manifests = {m["package_id"]: m for m in
                  (json.loads(p.read_text()) for p in sorted(manifests_dir.glob("*.json")))
                  if not manifest_retired(m)}
@@ -600,15 +595,12 @@ def main() -> int:
     print(f"  This Mac has {memory} GB of memory.")
     print()
 
-    chosen, skipped, not_for_shop, pending = [], [], [], []
+    chosen, skipped, pending = [], [], []
     for package_id, manifest in sorted(manifests.items()):
         if not copy_everything:
             break                       # nothing is chosen by this step unless it was asked to choose
         if admission_check is not None and not admission_check(manifest):
             pending.append((package_id, manifest))
-            continue
-        if shop_mac and not manifest_allowed(manifest):
-            not_for_shop.append(package_id)
             continue
         needs = required_gb(manifest)
         (chosen if needs <= memory else skipped).append((package_id, needs, manifest))
@@ -752,9 +744,6 @@ def main() -> int:
     if absent:
         names = ", ".join(package_id for package_id, _n, _m, _how in absent)
         print(f"  Not on this SSD, so not copied ({len(absent)}): {names}")
-        print()
-    if not_for_shop:
-        print(f"  Lite Mode models only: {len(not_for_shop)} other model(s) stay on the SSD.")
         print()
     if pending:
         print(f"  Pending models ({len(pending)}): not yet qualified; retained on SSD")

@@ -17,7 +17,7 @@ and the order to set them up.
 
 **Story Studio** is where you work. It turns an idea into a script, scene prompts, images,
 narration, subtitles, a thumbnail and a finished video file, and it uploads to YouTube.
-It also installs Content Packs you buy from the Content Store. It does **not** run any AI
+It also installs Content Packs you download from the Studio Library. It does **not** run any AI
 model itself.
 
 **GatewayKH** is the coordinator. Story Studio talks to exactly one address — GatewayKH —

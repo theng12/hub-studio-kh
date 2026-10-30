@@ -51,8 +51,8 @@ queue, or it is a controller's own share of its group's work (a controller stand
 and sends its group's work to its nodes; a standalone Mac's work just waits).
 
 **Lite Mode Mac: set it up like any Mac and take the Essentials 8 GB preset on the app's "Set up this
-Mac" screen, then tick Lite Mode in Settings.** "2 - Copy the Lite Mode models" is retired as a
-separate install option (2026-10-28) and copies nothing now; the 8 GB preset carries every model Lite
+Mac" screen, then tick Lite Mode in Settings.** The kit has no Lite Mode copy step of its own (the
+last one was retired and its launcher deleted, 2026-10-30); the 8 GB preset carries every model Lite
 Mode runs. Lite Mode still refuses a job for any other model at its door, so the runtime allowlist in
 `components/workstation_models.py` is what makes a shop Mac a shop Mac - not an install set.
 

@@ -580,7 +580,7 @@ class LauncherTests(unittest.TestCase):
     to working from either place, and to naming the files the owner actually sees.
     """
 
-    LAUNCHERS = ("copy-models.command", "copy-all-models.command", "copy-lite-models.command",
+    LAUNCHERS = ("copy-models.command", "copy-all-models.command",
                  "install_app.command", "Update this Mac.command")
 
     def test_each_launcher_is_a_valid_shell_script(self):

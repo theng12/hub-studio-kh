@@ -3,7 +3,10 @@
 A workstation is a shop's cashier Mac (8 GB, Chrome, Telegram, a PDF viewer) that lends its idle
 time to the fleet. It carries and runs only the 8 GB-class lanes the owner chose (2026-10-03), so a
 job for any other model is refused at its door with a plain reason and the controller sends it to
-another Mac. The kit's "2 - Copy the Lite Mode models" copies exactly these packages (~15 GB).
+another Mac. **This is a runtime allowlist, not an install set** (owner, 2026-10-30): the kit no
+longer has a Lite Mode copy step, and a Lite Mode Mac takes the Essentials 8 GB preset on the
+app's Set up this Mac screen like every other Mac. The list below decides what such a Mac will
+run, whatever it happens to hold.
 
 Adding a model to the workstation lanes is one line here: its package id and the repo id its jobs
 name it by.

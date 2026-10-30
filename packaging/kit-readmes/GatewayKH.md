@@ -13,7 +13,7 @@ It:
   controller's models with about 17 cloud providers;
 - routes each job to a controller that has a suitable model;
 - receives the finished artifacts, stores them, and serves them back to Story Studio;
-- serves your private Content Pack shelf to Story Studio's Content Store.
+- serves your private Content Pack shelf to Story Studio's Studio Library.
 
 It does **not** generate anything, so it needs no GPU and very little memory. It can run
 on a small always-on Mac. It never talks to a Studio Hub **node** — only to controllers —

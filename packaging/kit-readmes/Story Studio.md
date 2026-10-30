@@ -12,7 +12,7 @@ produce:
 - YouTube metadata, the thumbnail, and the assembled video;
 - the upload itself.
 
-It installs **Content Packs** you buy from the Content Store — formats, styles, topic
+It installs **Content Packs** you download from the Studio Library — formats, styles, topic
 packs, thumbnail recipes, fonts and metadata formulas that extend what it can produce.
 
 It does **not** run any AI model itself and does not hold a list of models. Everything
@@ -53,12 +53,12 @@ A Content Pack is an independently authored product (a `.sspack`) that **adds to
 library. The kinds are: topic pack, series formula, visual style, thumbnail recipe, font
 pack and metadata formula. Older `channel-kit` and `niche-bundle` packs are retired.
 
-- Packs are bought with credits in the in-app **Content Store** and installed **per Mac**.
+- Packs are downloaded in the in-app **Studio Library** and installed **per Mac**. Nothing is sold and there is no balance.
 - Installed packs live under
   `~/Library/Application Support/Story Studio KH/content-packs/installed/<publisher>/<pack>/<version>/`.
 - Only a read-only **recovery pack** ships inside the app; nothing else is bundled.
 
-The Content Store is served by GatewayKH, so the gateway must be reachable and its shelf
+The Studio Library is served by GatewayKH, so the gateway must be reachable and its shelf
 linked before packs will appear. If the shelf is not connected, the gateway answers
 `503 CONTENT_STORE_NOT_CONNECTED`.
 

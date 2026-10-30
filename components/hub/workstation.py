@@ -34,7 +34,10 @@ request (Subtitle's ``/api/transcribe``) is not cancelled mid-way; it is short a
 
 The settings live in ``workstation.json`` in the Hub's data folder. The Mac's own Studio Hub app changes
 them in Settings > Lite Mode (``POST /api/hub/workstation``), the Gateway through the controller
-(``POST /api/hub/fleet/nodes/{id}/workstation``), and the kit's "2 - Copy the Lite Mode models" only copies the models (Lite Mode itself is ticked in Settings). Every decision re-reads the file, so a change applies without a restart. ``status()`` is what every fleet row publishes as
+(``POST /api/hub/fleet/nodes/{id}/workstation``), and that is the only place it is switched on: a Lite Mode
+Mac is installed like any other Mac (no kit step since the Lite-only copy launcher was retired
+2026-10-30) and takes the Essentials 8 GB preset, while ``workstation_models.py`` stays what it is -
+a runtime allowlist. Every decision re-reads the file, so a change applies without a restart. ``status()`` is what every fleet row publishes as
 ``workstation``.
 """
 from __future__ import annotations

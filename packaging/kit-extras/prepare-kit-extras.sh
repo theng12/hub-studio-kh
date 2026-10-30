@@ -52,7 +52,8 @@ chmod 755 "$KIT/Extras/$COMMAND"
 #  - 2026-10-04 `Set Up the Shops Controller`: the Shops controller is a regular controller that also
 #    generates - set it up like any Mac, then tick Lite Mode.
 #  - 2026-10-04 `Set Up a Shop Mac`: a Lite Mode Mac is set up like any Mac, then Lite Mode is ticked in
-#    Studio Hub > Settings; the kit's root has '2 - Copy the Lite Mode models.command' for its models.
+#    Studio Hub > Settings (and takes the Essentials 8 GB preset like any Mac; the Lite-only copy
+#    launcher was retired 2026-10-30 - `prepare-kit.sh` moves a drive's copy to its `_trash`).
 for name in "Set Up the Shops Controller.command" "Set Up a Shop Mac.command"; do
   RETIRED="$KIT/Extras/$name"
   if [ -e "$RETIRED" ]; then

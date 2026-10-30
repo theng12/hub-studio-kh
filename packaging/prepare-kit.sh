@@ -38,6 +38,16 @@ cp -f "$ROOT/copy-models.command" "$KIT/2 - Copy the models.command"
 # copy when this Mac already has that exact build. Both of those files remain, because they are
 # what to reach for when a step needs looking at on its own.
 cp -f "$ROOT/Update this Mac.command" "$KIT/Update this Mac.command"
+# Retired 2026-10-30 (owner): the Lite Mode copy launcher. A drive prepared before then may still
+# carry it at the kit root and nothing writes it again, so it is moved to the volume's own `_trash`
+# here - never deleted - the same rule as the app swap and the Technical prune. Lite Mode itself is
+# unchanged and is ticked in Settings; there is no Lite-only model set.
+if [ -e "$KIT/2 - Copy the Lite Mode models.command" ]; then
+  mkdir -p "/Volumes/$VOLUME/_trash"
+  mv "$KIT/2 - Copy the Lite Mode models.command" \
+     "/Volumes/$VOLUME/_trash/2 - Copy the Lite Mode models.command-$(date +%Y%m%d%H%M%S)" \
+    && echo "   _trash: 2 - Copy the Lite Mode models.command (retired)"
+fi
 mkdir -p "$KIT/Technical"
 cp -f "$ROOT/qualification/copy_models_for_this_mac.py" "$KIT/Technical/copy_models_for_this_mac.py"
 cp -f "$ROOT/qualification/verify-kit.sh" "$KIT/Technical/verify-kit.sh"

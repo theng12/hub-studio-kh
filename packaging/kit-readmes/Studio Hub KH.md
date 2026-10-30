@@ -165,7 +165,6 @@ the 8 GB Macs: it is qualified there (measured on an 8 GB M1 Mac mini, low-RAM m
 |---|---|
 | `START-HERE.md` | the plain walk-through for a new Mac |
 | `NODE-SETUP-CHECKLIST.md` | tick list for setting up a node |
-| `2 - Copy the Lite Mode models.command` | **retired 2026-10-28.** It copies nothing now: a Lite Mode Mac is set up like any Mac and takes **Essentials 8 GB** on the app's **Set up this Mac** screen, then ticks Lite Mode in Settings. It still never changes the Mac's role and never ticks Lite Mode - see `NODE-SETUP-CHECKLIST.md`, "Shops" |
 | `2 - Copy the models (everything).command` | the older copy-all path, for a Mac with no internet and no other Mac to copy from. Same helper with `STUDIOHUB_KIT_COPY=1`. |
 | `Token and Stuff.md` | a place you have written down this Mac's addresses and tokens |
 | `Technical/verify-kit.sh` | proves this copy installs, starts and answers health |
