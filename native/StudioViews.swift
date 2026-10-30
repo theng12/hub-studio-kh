@@ -5427,7 +5427,9 @@ struct StudioContent: View {
                           .filter { !active($0.state) }
                       VStack(alignment: .leading, spacing: HubSpace.m) {
                         sectionTitle(StudioPage.page(for: history.function)?.title ?? history.function.rawValue)
-                        if jobs.isEmpty {
+                        // Only when this Studio has nothing at all: a Studio whose work is all
+                        // in Running now or Queued above must not also say "no jobs yet".
+                        if jobs.isEmpty && history.jobs.filter(jobMachineFilter.includes).isEmpty {
                             let source = jobMachineFilter == .thisMac ? "this Mac"
                                 : (jobMachineFilter == .nodes ? "the nodes" : "this Mac or its nodes")
                             Text("No \((StudioPage.page(for: history.function)?.title ?? history.function.rawValue).lowercased()) jobs from \(source) yet.")
