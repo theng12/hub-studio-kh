@@ -4683,6 +4683,15 @@ struct StudioContent: View {
                         Text("Click Allow on the macOS prompt, then restart the services. Models can still download from another Mac or the internet in the meantime.")
                             .font(HubType.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    } else if let reason = plan.kitsState?.reason, !reason.isEmpty {
+                        // The Hub's own sentence, because "no kit" has more than one meaning now
+                        // (0.6.211): no drive named like a kit is mounted and nothing was opened,
+                        // a kit drive is mounted but holds no model-library, or the only mount
+                        // with that name is a network share the Hub never reads. A fixed line
+                        // would claim the first of those in all three cases.
+                        Text(reason)
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     } else {
                         Text("No SSD kit is mounted, so models download from the internet (or copy from another Mac on the network).")
                             .font(HubType.caption).foregroundStyle(.secondary)

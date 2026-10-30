@@ -2,6 +2,20 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.211 — 2026-10-30
+
+### No more "Allow" on a Mac that has no kit drive
+
+Every time Studio Hub started, it looked inside every drive attached to the Mac — it was looking for the SSD kit. On a Mac with no kit attached, the only thing that look could find was somebody else's disk or a mounted network share, and macOS asks for permission to read those. On a build without a Developer ID the Mac asks again after every update, so the prompts kept arriving on Mac after Mac for an answer the app never needed.
+
+Studio Hub now asks the Mac **which** disks are mounted — that list is free, it reads no drive — and looks inside only a drive whose name begins with **KH-STUDIO-**, the name every kit drive has. A Mac with no kit drive is not read at all, so macOS has nothing to ask about.
+
+Two things worth knowing. A kit drive that has been **renamed** is no longer found automatically, so keep the KH-STUDIO- name. And a kit drive shared over the network is not read either, because that is the other permission Studio Hub is avoiding.
+
+### The Setup page says which "no kit" it means
+
+"No SSD kit is mounted" now appears only when that is what happened. If a KH-STUDIO- drive is mounted but has no model-library folder on it, the page says that; if the drive with that name is a network share, it says that. A drive the Hub is not allowed to read still shows **needs permission (Removable Volumes)**.
+
 ## 0.6.210 — 2026-10-30
 
 ### A Mac no longer freezes when macOS asks about the model drive
