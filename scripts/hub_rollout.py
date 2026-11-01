@@ -363,9 +363,72 @@ def holds_release(read: dict, version: str, build: str, sha256: str, size: int) 
     return True
 
 
+def member_services_up(member: dict) -> bool | None:
+    """Whether every studio this Mac runs is up: True, False, or None when it said nothing.
+
+    The Gateway's `startup.services_running` is the Mac's own count of its studios
+    (`components/hub/backend/startup_control.py` -> `snapshot()`). Reading it is the whole point of
+    this check: a Mac that answers with the new version and has all of its studios down has not
+    finished installing anything - it is the 1300/1400 shape, an app that is up while its studios
+    are not.
+
+    `up == total == 0` is **not** a pass. It is a Mac that reported no studios at all, which is the
+    same shape as a Hub that never answered, and a zero that means two things is a defect: unknown
+    is not up.
+    """
+    startup = member.get('startup')
+    if not isinstance(startup, dict):
+        return None
+    # A report the controller is repeating from before the Mac went quiet is not a fresh answer.
+    if startup.get('stale') is True:
+        return None
+    running = startup.get('services_running')
+    if not isinstance(running, dict):
+        return None
+    up, total = running.get('up'), running.get('total')
+    if isinstance(up, bool) or not isinstance(up, int):
+        return None
+    if isinstance(total, bool) or not isinstance(total, int):
+        return None
+    if total <= 0:
+        return None
+    return up == total
+
+
+def member_label(member: dict) -> str:
+    """The name a report should use for this Mac: its label when it has one, else its id."""
+    return str(member.get('label') or member.get('machine') or '')
+
+
 def member_is_current(member: dict, version: str) -> bool:
+    """A Mac counts as updated only when the new version answers **and** its studios are up."""
     return (member.get('reachable') is True and member.get('hub_version') == version
-            and str(member.get('health') or '').lower() in ('up', 'ready', ''))
+            and str(member.get('health') or '').lower() in ('up', 'ready', '')
+            and member_services_up(member) is True)
+
+
+def studios_down_reason(member: dict, version: str) -> str | None:
+    """What to say about a Mac that answers with the new version but is not serving, or None.
+
+    Reported by name because that is what the operator can act on: "2 of 7 studios up" names both
+    the Mac and the situation, where a bare count names neither. A Mac that is offline, or that
+    never reported the new version, is somebody else's warning - this is specifically the one that
+    has the release and cannot show that it is serving it.
+
+    "Did not say" is here deliberately: a Mac that never reported its studios, or whose report the
+    controller is repeating from before it went quiet, is *unknown*, and unknown must be reported
+    by name rather than read as up.
+    """
+    if member.get('reachable') is not True or member.get('hub_version') != version:
+        return None
+    services = member_services_up(member)
+    if services is True:
+        return None
+    name = member_label(member)
+    if services is None:
+        return f'{name} did not say which of its studios are up'
+    running = (member.get('startup') or {}).get('services_running') or {}
+    return f'{name} ({running.get("up")} of {running.get("total")} studios up)'
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +548,7 @@ class Rollout:
         except Exception as exc:  # noqa: BLE001 - one site's fault is one site's row
             row = {'site': site['id'], 'label': site.get('label') or site['id'],
                    'state': 'deferred: unreadable', 'published_at': None, 'post_count': 0,
-                   'members_updated': 0, 'members_total': 0,
+                   'members_updated': 0, 'members_total': 0, 'studios_down': [],
                    'warnings': [f'{type(exc).__name__}: {exc}'], 'attempts': []}
             note(f'{site["id"]}: deferred: unreadable ({type(exc).__name__}: {exc})')
         row['elapsed_s'] = round(self.now() - started, 1)
@@ -494,8 +557,8 @@ class Rollout:
     def _run_site(self, site: dict) -> dict:
         site_id, label = site['id'], site.get('label') or site['id']
         row = {'site': site_id, 'label': label, 'state': 'pending', 'published_at': None,
-               'post_count': 0, 'members_updated': 0, 'members_total': 0, 'warnings': [],
-               'attempts': []}
+               'post_count': 0, 'members_updated': 0, 'members_total': 0, 'studios_down': [],
+               'warnings': [], 'attempts': []}
         started = self.now()
 
         first = self._try_read(site_id)
@@ -683,6 +746,10 @@ class Rollout:
         required: set[str] = {m['machine'] for m in self._try_members(site_id)
                               if m.get('machine')}
         seen: set[str] = set()
+        # A Mac that answers with the new version but has not brought its studios up has not
+        # finished: the rollout does not report success while it is down, and it names that Mac
+        # rather than counting it. It never stops this site's row being written, nor any other site.
+        down_studios: list[str] = []
         while True:
             members = self._try_members(site_id)
             for member in members:
@@ -691,6 +758,8 @@ class Rollout:
                 if member_is_current(member, self.version) and member.get('machine'):
                     seen.add(member['machine'])
             pending = sorted(required - seen)
+            down_studios = sorted({reason for member in members
+                                   if (reason := studios_down_reason(member, self.version))})
             if not pending:
                 break
             if self.now() >= deadline:
@@ -704,6 +773,9 @@ class Rollout:
                 if silent:
                     row['warnings'].append('reached but silent about the new version: '
                                            + ', '.join(silent))
+                if down_studios:
+                    row['warnings'].append('on the new version but its studios are not up: '
+                                           + ', '.join(down_studios))
                 note(f'{label}: {len(required) - len(pending)}/{len(required)} members on '
                      f'{self.version}; warning only')
                 break
@@ -713,6 +785,14 @@ class Rollout:
 
         row['members_total'] = len(required)
         row['members_updated'] = len(seen)
+        row['studios_down'] = list(down_studios)
+        if down_studios:
+            # Not verified: the release is on the Mac but is not serving. The row is still written
+            # and the other sites still run - this is a report, never a stop.
+            row['state'] = 'updated, studios down'
+            note(f'{label}: {len(seen)}/{len(required)} members on {self.version}, but '
+                 f'{"; ".join(down_studios)}')
+            return row
         row['state'] = 'verified'
         note(f'{label}: verified ({len(seen)}/{len(required)} members on {self.version})')
         self.read_pause(f'after {label} verified')

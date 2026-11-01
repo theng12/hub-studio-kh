@@ -48,7 +48,8 @@ class FakeSite:
     """One site's answer: reachable or not, busy or not, and what its members report."""
 
     def __init__(self, site_id: str, members, *, label=None, reachable=True, running=(),
-                 queue=0, open_jobs=0, publish='ok', silent=(), offline=(), delay=0.0):
+                 queue=0, open_jobs=0, publish='ok', silent=(), offline=(), delay=0.0,
+                 studios_down=(), studios=(4, 4), studio_labels=None):
         self.id = site_id
         self.label = label or site_id
         self.members = list(members)
@@ -60,6 +61,11 @@ class FakeSite:
         self.silent = set(silent)
         self.offline = set(offline)
         self.delay = delay
+        # A Mac whose Hub answers with the new release but whose studios are not all up: the
+        # 1300/1400 shape. `studios` is the normal (up, total) count every member reports.
+        self.studios_down = set(studios_down)
+        self.studios = studios
+        self.studio_labels = studio_labels or {}
         self.release = None
         self.published_at = None
 
@@ -69,10 +75,17 @@ class FakeSite:
         rows = []
         for name in self.members:
             current = settled and name not in self.silent
+            if name in self.studios_down:
+                up, total = 0, self.studios[1]
+            else:
+                up, total = self.studios
             rows.append({'machine': name, 'location_id': self.id,
+                         'label': self.studio_labels.get(name, name),
                          'reachable': name not in self.offline,
                          'hub_version': TARGET['version'] if current else '0.6.998',
-                         'health': 'up'})
+                         'health': 'up',
+                         'startup': {'services_running': {'up': up, 'total': total,
+                                                          'studios': {}}}})
         return rows
 
 
@@ -396,6 +409,128 @@ class FanOutTests(Harness):
         self.assertEqual(row['state'], 'verified')
         self.assertTrue(any('offline' in warning and 'asleep' in warning
                             for warning in row['warnings']), row)
+
+
+class ServicesRunningTests(unittest.TestCase):
+    """A Mac counts as updated only when the new version answers AND its studios are up.
+
+    The 2026-10-31 shape: 1300's controller answered with the release and had all seven of its
+    studios down for nineteen hours. Counting that as "updated" is what let a rollout say
+    success while the fleet was down.
+    """
+
+    @staticmethod
+    def member(*, version='0.6.999', reachable=True, health='up', up=4, total=4, startup=...):
+        row = {'machine': 'mac-1', 'label': 'Control Mac', 'reachable': reachable,
+               'hub_version': version, 'health': health}
+        if startup is not ...:
+            row['startup'] = startup
+        elif up is not None:
+            row['startup'] = {'services_running': {'up': up, 'total': total, 'studios': {}}}
+        return row
+
+    def test_all_studios_up_counts_as_updated(self):
+        self.assertEqual(hub.member_services_up(self.member()), True)
+        self.assertTrue(hub.member_is_current(self.member(), VERSION))
+
+    def test_a_mac_with_a_studio_down_is_not_counted_as_updated(self):
+        # The exact fleet read from 1300: the release is on the Mac, and it is not serving.
+        row = self.member(up=0, total=7)
+        self.assertEqual(hub.member_services_up(row), False)
+        self.assertFalse(hub.member_is_current(row, VERSION),
+                         'a Mac whose studios are down must not count as updated')
+
+    def test_partly_up_is_not_up(self):
+        self.assertEqual(hub.member_services_up(self.member(up=6, total=7)), False)
+        self.assertFalse(hub.member_is_current(self.member(up=6, total=7), VERSION))
+
+    def test_zero_of_zero_is_unknown_never_a_pass(self):
+        # A zero that means two things is a defect: no studios reported is the same shape as
+        # a Hub that never answered, and neither may read as "all up".
+        self.assertIsNone(hub.member_services_up(self.member(up=0, total=0)))
+        self.assertFalse(hub.member_is_current(self.member(up=0, total=0), VERSION))
+
+    def test_a_mac_that_never_said_is_unknown_not_updated(self):
+        for startup in (None, {}):
+            row = self.member(startup=startup)
+            self.assertIsNone(hub.member_services_up(row), f'startup={startup!r}')
+            self.assertFalse(hub.member_is_current(row, VERSION), f'startup={startup!r}')
+
+    def test_a_stale_startup_is_unknown_not_updated(self):
+        # The controller repeating what a Mac said before it went quiet is not a fresh answer.
+        row = self.member(startup={'stale': True,
+                                   'services_running': {'up': 7, 'total': 7, 'studios': {}}})
+        self.assertFalse(hub.member_is_current(row, VERSION))
+
+    def test_the_other_half_of_the_rule_still_holds(self):
+        # Studios up alone is not enough: the new version must answer too.
+        self.assertFalse(hub.member_is_current(self.member(version='0.6.998'), VERSION))
+        self.assertFalse(hub.member_is_current(self.member(reachable=False), VERSION))
+        self.assertFalse(hub.member_is_current(self.member(health='down'), VERSION))
+
+    def test_the_reason_names_the_mac_and_the_counts(self):
+        reason = hub.studios_down_reason(self.member(up=0, total=7), VERSION)
+        self.assertIsNotNone(reason)
+        self.assertIn('Control Mac', reason)
+        self.assertIn('0 of 7 studios up', reason)
+
+    def test_the_reason_is_none_for_a_mac_that_is_fine(self):
+        self.assertIsNone(hub.studios_down_reason(self.member(), VERSION))
+
+    def test_the_reason_is_none_for_a_mac_that_never_got_the_release(self):
+        # A Mac on the old version with its studios down is a different warning, already reported.
+        self.assertIsNone(hub.studios_down_reason(self.member(version='0.6.998', up=0, total=7),
+                                                  VERSION))
+        self.assertIsNone(hub.studios_down_reason(self.member(up=0, total=7, reachable=False),
+                                                  VERSION))
+
+    def test_a_stale_startup_reports_that_the_mac_did_not_say(self):
+        reason = hub.studios_down_reason(
+            self.member(startup={'stale': True,
+                                 'services_running': {'up': 7, 'total': 7, 'studios': {}}}),
+            VERSION)
+        self.assertIsNotNone(reason, 'an unknown must be reported, never read as up')
+
+
+class StudiosDownRolloutTests(Harness):
+    """The receipt: a site whose member answers with the release and is not serving."""
+
+    def test_a_member_with_studios_down_is_named_and_the_site_is_not_verified(self):
+        site = FakeSite('1900', ['controller', 'worker-1'],
+                        studios_down=['worker-1'], studio_labels={'worker-1': '1301 Desk'})
+        gateway = self.gateway(site)
+        row = self.by_site(self.rollout(gateway).run([{'id': '1900'}]))['1900']
+        self.assertEqual(row['state'], 'updated, studios down')
+        self.assertTrue(row['published_at'], 'the release must still have been published')
+        self.assertEqual((row['members_updated'], row['members_total']), (1, 2))
+        self.assertEqual(row['studios_down'], ['1301 Desk (0 of 4 studios up)'])
+        self.assertTrue(any('1301 Desk' in warning for warning in row['warnings']), row)
+
+    def test_the_site_does_not_block_the_others(self):
+        # The owner's rule: one Mac that never got there is that Mac's report, never a stop.
+        down = FakeSite('1910', ['controller', 'worker-1'], studios_down=['worker-1'])
+        healthy = FakeSite('1920', ['controller'])
+        gateway = self.gateway(down, healthy)
+        rows = self.by_site(self.rollout(gateway).run([{'id': '1910'}, {'id': '1920'}]))
+        self.assertEqual(rows['1910']['state'], 'updated, studios down')
+        self.assertEqual(rows['1920']['state'], 'verified')
+        self.assertEqual(len(gateway.posts), 2, 'both sites must have been published to')
+
+    def test_the_receipt_records_the_macs_that_are_down(self):
+        site = FakeSite('1930', ['controller', 'worker-1'],
+                        studios_down=['worker-1'], studio_labels={'worker-1': '1301 Desk'})
+        gateway = self.gateway(site)
+        rows = self.rollout(gateway).run([{'id': '1930'}])
+        receipt = {'schema': 1, 'sites': rows}
+        self.assertEqual(receipt['sites'][0]['studios_down'],
+                         ['1301 Desk (0 of 4 studios up)'])
+
+    def test_a_site_is_verified_when_every_studio_is_up(self):
+        site = FakeSite('1940', ['controller', 'worker-1'])
+        gateway = self.gateway(site)
+        row = self.by_site(self.rollout(gateway).run([{'id': '1940'}]))['1940']
+        self.assertEqual(row['state'], 'verified')
+        self.assertEqual(row['studios_down'], [])
 
 
 class RerunTests(Harness):
