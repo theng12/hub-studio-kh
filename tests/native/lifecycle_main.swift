@@ -729,6 +729,37 @@ struct NativeLifecycleTests {
                 controller.stop()
             }
 
+            // A start that fails every time under the *default* policy: five fast attempts, then it
+            // slows down and says so. It must never fall silent between attempts - an unattended Mac
+            // that is being retried has to be able to say it is still being retried, and why.
+            do {
+                let root = temporary.appendingPathComponent("launch-retry-exhaust")
+                let controller = try makeController(root: root, server: server, now: Date.init,
+                                                    maxAttempts: 5, backoffSeconds: [0, 0, 0, 0, 0])
+                try writeFixtureService(at: root.appendingPathComponent("StudioHubService"), absent: true)
+                controller.start()
+                let fastPhases = await waitUntil(timeout: 8) {
+                    controller.status.contains("Recovering local services")
+                }
+                requireLifecycle(fastPhases, "launch-retry: the first failure must be on the ladder, got \(controller.status)")
+                requireLifecycle(controller.recoveryPending,
+                                 "launch-retry: the ladder must still be running while it retries")
+                // Past the five rungs it slows down and keeps the reason on screen rather than
+                // reporting a success it never achieved.
+                let slowed = await waitUntil(timeout: 12) {
+                    controller.status.contains("Still trying to start the services")
+                }
+                requireLifecycle(slowed, "launch-retry: past the bound it must keep trying loudly, got \(controller.status)")
+                requireLifecycle(controller.failure?.contains("last failure") == true,
+                                 "launch-retry: the slow phase must record the last failure, got \(String(describing: controller.failure))")
+                requireLifecycle(!controller.running && readyPID(controller) == nil,
+                                 "launch-retry: a start that never succeeded must not report running")
+                requireLifecycle(controller.status != "Local services ready",
+                                 "launch-retry: a start that never succeeded must not claim to be ready")
+                controller.stop()
+                requireLifecycle(!controller.recoveryPending, "launch-retry: stop must end the slow retry too")
+            }
+
             // A start that fails, then the owner stops it: the ladder must stop with them. A retry
             // that fires after a deliberate stop would be the app arguing with its owner.
             do {
