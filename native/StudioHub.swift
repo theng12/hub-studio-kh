@@ -103,7 +103,17 @@ final class StudioController: ObservableObject {
     /// name it even after the banner has been replaced by the phase wording.
     private var lastServiceFailure: String?
     private var healthySince: Date?
+    /// When the services last answered their health check, while they are running and silent.
+    /// Non-nil from the first failed check; thrown away by the next good one.
+    private var unresponsiveSince: Date?
     private var startupTimedOut = false
+    /// Set when the app ends a service that stopped answering, so that exit is recovered the way a
+    /// failed start is rather than read as a deliberate stop.
+    private var stoppedAnswering = false
+    /// Set only while the app itself is ending services that stopped answering. Those services are
+    /// serving nothing, so the fifteen-second escalation ends them instead of asking a person who is
+    /// not there - the same reasoning as an unattended update's stop. Cleared with the exit.
+    private var forceStopSilently = false
     private var instanceLock: InstanceLock?
     /// True when the data-folder lock is held by another copy of Studio Hub. The app then presents
     /// that copy and exits quietly instead of showing a failure.
@@ -213,7 +223,7 @@ final class StudioController: ObservableObject {
     var hasLibrary: Bool { configuration.modelsDirectory != nil }
     /// Lets the operator cancel a pending restart or timeout recovery while
     /// keeping the owned worker's normal shutdown escalation available.
-    var canCancelRecovery: Bool { restartTask != nil || startupTimedOut }
+    var canCancelRecovery: Bool { restartTask != nil || startupTimedOut || stoppedAnswering }
 
     func chooseLibrary() {
         guard canConfigure else { return }
@@ -395,6 +405,9 @@ final class StudioController: ObservableObject {
             failure = nil
             starting = true
             startupTimedOut = false
+            stoppedAnswering = false
+            forceStopSilently = false
+            unresponsiveSince = nil
             status = "Starting local services…"
             worker = process
             try process.run()
@@ -450,6 +463,7 @@ final class StudioController: ObservableObject {
                                 guard !Task.isCancelled, !self.stopping, process.isRunning,
                                       self.worker === process else { return }
                                 if self.healthySince == nil { self.healthySince = self.now() }
+                                self.unresponsiveSince = nil
                                 self.status = health["busy"] as? Bool == true ? "Local services working" : "Local services ready"
                                 // **A Hub that came up without the operator's addresses is
                                 // reachable by nobody, however healthy it looks.** It answers this
@@ -477,6 +491,8 @@ final class StudioController: ObservableObject {
                                       self.worker === process else { return }
                                 self.healthySince = nil
                                 self.status = "Local services not responding"
+                                if self.unresponsiveSince == nil { self.unresponsiveSince = self.now() }
+                                self.endStoppedAnswering(process: process)
                             }
                             try? await Task.sleep(nanoseconds: 3_000_000_000)
                         }
@@ -520,8 +536,10 @@ final class StudioController: ObservableObject {
         forceStopTask = nil
         let expectedStop = stopping
         let startupFailure = startupTimedOut
+        let answeringFailure = stoppedAnswering
         startLadder.resetAfterHealthyUptime(readyAt: healthySince, now: now())
         healthySince = nil
+        unresponsiveSince = nil
         worker = nil
         readyURL = nil
         connectionToken = nil
@@ -529,6 +547,8 @@ final class StudioController: ObservableObject {
         starting = false
         stopping = false
         startupTimedOut = false
+        stoppedAnswering = false
+        forceStopSilently = false
         canForceStop = false
         workspace.disconnect()
         if !expectedStop {
@@ -544,8 +564,12 @@ final class StudioController: ObservableObject {
         try? logHandle?.close()
         logHandle = nil
         if expectedStop {
-            status = startupFailure ? "Startup needs attention" : "Local services stopped"
-            if startupFailure { scheduleRecovery() }
+            // Two reasons to come back by ourselves: a start that never finished, and services that
+            // were up and then stopped answering. A stop the owner asked for is neither, and it
+            // clears `stoppedAnswering` before it reaches here.
+            status = startupFailure ? "Startup needs attention"
+                : (answeringFailure ? "Local services stopped answering" : "Local services stopped")
+            if startupFailure || answeringFailure { scheduleRecovery() }
         } else {
             status = "Local services stopped unexpectedly"
             lastServiceFailure = "the engine exited (code \(code))"
@@ -558,6 +582,36 @@ final class StudioController: ObservableObject {
             start()
         }
     }
+    /// The services are running but have stopped answering. After a silence long enough to be a
+    /// hung process rather than a slow one, they are ended so the ladder can start a fresh set -
+    /// the same ladder, and the same `setRecoveryPolicy` switch, as any other automatic start.
+    ///
+    /// Nothing here can fire while the owner has asked for a stop: `stop()` sets `stopping`, the
+    /// health loop's guard returns on it, and an owner who cancels during the wind-down clears
+    /// `stoppedAnswering` so the exit is read as their stop and nothing is started again.
+    private func endStoppedAnswering(process: Process) {
+        guard !stopping, process.isRunning, worker === process else { return }
+        guard let since = unresponsiveSince else { return }
+        guard StartupRecovery.shouldRestartSilentServices(
+            silentFor: now().timeIntervalSince(since),
+            maxAttempts: startLadder.maxFastAttempts) else { return }
+        unresponsiveSince = nil
+        stoppedAnswering = true
+        lastServiceFailure = "the services stopped answering"
+        status = "Local services stopped answering"
+        failure = "The local services stopped answering, so they are being restarted."
+        // The fleet's word for the outage, written before anything is torn down: a hung Hub
+        // cannot publish while it is hung, so the record has to be on disk first.
+        StopRecord.recordSilentServices(directory: configuration.dataDirectory, now: now())
+        stopping = true
+        forceStopSilently = true
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        try? logHandle?.write(contentsOf: Data(
+            "[app \(stamp)] the local services stopped answering for two minutes; restarting them\n".utf8))
+        process.terminate()
+        scheduleForceStop(for: process)
+    }
+
     private func scheduleRecovery() {
         guard restartTask == nil else { return }
         let attempt = startLadder.attempt
@@ -633,11 +687,15 @@ final class StudioController: ObservableObject {
         startLadder.reset()
         recoveryReportedPhase = nil
         healthySince = nil
+        unresponsiveSince = nil
+        forceStopSilently = false
         // A timeout is an automatic stop. An explicit Stop while it is
         // winding down cancels the follow-up recovery without interrupting
-        // the existing force-stop escalation.
+        // the existing force-stop escalation - and the same is true of a service
+        // being ended for not answering: the owner asked, so nothing starts again.
         if stopping {
             startupTimedOut = false
+            stoppedAnswering = false
             return
         }
         guard let worker, worker.isRunning, !stopping else {
@@ -664,7 +722,8 @@ final class StudioController: ObservableObject {
             self.canForceStop = true
             // An unattended update is waiting on this exit and nobody is there to answer a dialog:
             // work was drained before it began, so a shutdown that hangs is ended, not asked about.
-            if self.forceStopWithoutAsking { self.forceStop() } else { self.confirmForceStop() }
+            if self.forceStopWithoutAsking || self.forceStopSilently { self.forceStop() }
+            else { self.confirmForceStop() }
         }
     }
     var recoveryPending: Bool { restartTask != nil }
