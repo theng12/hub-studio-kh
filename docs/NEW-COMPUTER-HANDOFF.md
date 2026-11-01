@@ -253,8 +253,14 @@ pins. The inputs all match what the builder demands — Python 3.12.14, `mlx-Yue
 `ca0f93f2f0b7be6744c760a738da5b7b0c94057c89305b859ab548395ffaef8b` against the pin
 `75465dc4…`. `stage_voice.py` digests the source tree itself and refuses a
 staging that does not match, so that is a stop at stage time. The script prints the
-same comparison as it finishes; resolving it is a re-qualification of the pin, which
-is a release act and is not done here.
+same comparison as it finishes; re-qualifying the pin is a release act and is not done here.
+
+[MEASURED 2026-11-02] The exact pinned tree ships inside every released app, so restore it
+from there instead: attach a released DMG read-only, `ditto "Studio Hub.app/Contents/Resources/runtimes/music-yue2"
+.build/yue2-runtime`, and detach by its `/dev/diskN` (never by mount path; that once ejected a
+kit drive). From `StudioHub-0.6.213-4be63f0.dmg` (kept in `_backups/installers/`) the copy
+digested `75465dc4…41d4fb4`, the pin exactly. Use the script's YuE2 build only when no
+released app carries the pinned tree.
 
 ## First development checks
 
