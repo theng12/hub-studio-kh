@@ -322,12 +322,58 @@ RESTART_STABLE_SECONDS = 300
 # enough on its side either - a studio running a long model job may answer slowly, so the monitor's
 # word is required too, and the monitor does not report a studio down while this Hub holds a job
 # lease on it (`monitor._has_active_lease`). Together they mean: no work in flight, and nothing
-# answered for as long as the app itself would have given up.
+# answered for as long as the app itself would have given up. Whether any of it may happen at all
+# is the app's switch, read from `--recovery-attempts` in `silent_restarts_allowed`.
 SILENT_STUDIO_RESTART_AFTER = 120.0
 
 # The watcher backs off after a failure it did not expect, so one studio that fails every pass
 # cannot spin the thread or flood the service log.
 WATCH_ERROR_BACKOFF_SECONDS = 5.0
+
+# This Mac's own recovery switch - the app's `setRecoveryPolicy(maxAttempts:)` - as the app passed
+# it on the command line it started this process with. Zero means the owner asked for no automatic
+# restarts, so a studio that is still running but has stopped answering is left alone here too:
+# restarting it would be exactly the restart they refused. None means the app gave no readable
+# value, which keeps the behaviour this watcher has always had (restart) and is said once, so
+# "not told" never reads as "allowed" in the service log.
+RECOVERY_ATTEMPTS: int | None = None
+_recovery_policy_said = False
+
+
+def set_recovery_attempts(raw: str | None) -> None:
+    """Read `--recovery-attempts` once, at start. Absent or unreadable leaves it unset."""
+    global RECOVERY_ATTEMPTS
+    try:
+        RECOVERY_ATTEMPTS = None if raw is None else int(raw)
+    except (TypeError, ValueError):
+        RECOVERY_ATTEMPTS = None
+
+
+def silent_restarts_allowed(child) -> bool:
+    """Whether a studio whose process is alive may be restarted for silence, under this Mac's
+    recovery switch.
+
+    The app honours the same switch for its own hung services
+    (`StartupRecovery.shouldRestartSilentServices`), so without this the switch would govern one
+    half of the restarts on a Mac that asked for none. An exited studio is not this question - it
+    is restarted either way, as it always was.
+    """
+    global _recovery_policy_said
+    if RECOVERY_ATTEMPTS is None:
+        if not _recovery_policy_said:
+            _recovery_policy_said = True
+            print("Private studios: this Hub was not given a readable recovery policy, so a "
+                  "studio that stops answering is still restarted after two minutes.",
+                  file=sys.stderr, flush=True)
+        return True
+    if RECOVERY_ATTEMPTS > 0:
+        return True
+    if not child.get("silent_restart_declined"):
+        child["silent_restart_declined"] = True
+        print(f"Private {str(child.get('id', 'studio')).title()} worker: left alone because this "
+              f"Mac's recovery policy is set to never restart services by itself; a studio that "
+              f"has exited is still restarted.", file=sys.stderr, flush=True)
+    return False
 
 
 def restart_delay(failures: int) -> int:
@@ -354,7 +400,9 @@ def hung_reason(child, *, status: dict | None = None, now: float | None = None) 
     """Why a studio whose process is still alive must be restarted, or ``None`` to leave it be.
 
     Returns a sentence that reads on its own after the studio's name, because the service log and
-    the alert are the only places an operator learns why a studio was restarted.
+    the alert are the only places an operator learns why a studio was restarted. `None` also
+    covers this Mac's recovery policy: a studio that has stopped answering is left alone when the
+    owner asked for no automatic restarts (`silent_restarts_allowed`).
     """
     row = _studio_status(child["id"]) if status is None else dict(status or {})
     label = child["id"].title()
@@ -375,13 +423,17 @@ def hung_reason(child, *, status: dict | None = None, now: float | None = None) 
         silent_for = time.monotonic() - child.get("started", time.monotonic())
         if silent_for < SILENT_STUDIO_RESTART_AFTER:
             return None
-        return (f"never answered health since it started {int(silent_for)} s ago, while the "
-                f"Hub's monitor reports it down")
-    silent_for = moment - last_seen
-    if silent_for < SILENT_STUDIO_RESTART_AFTER:
+        reason = (f"never answered health since it started {int(silent_for)} s ago, while the "
+                  f"Hub's monitor reports it down")
+    else:
+        silent_for = moment - last_seen
+        if silent_for < SILENT_STUDIO_RESTART_AFTER:
+            return None
+        reason = (f"stopped answering health {int(silent_for)} s ago, while the Hub's monitor "
+                  f"reports it down")
+    if not silent_restarts_allowed(child):
         return None
-    return (f"stopped answering health {int(silent_for)} s ago, while the Hub's monitor reports "
-            f"it down")
+    return reason
 
 
 def announce_restart(studio_id: str, reason: str) -> None:
@@ -438,8 +490,15 @@ def main():
     # Mac serve its LAN and its Tailscale address at once; loopback is always included.
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--offline', action='store_true')
+    # The app's own recovery switch (`setRecoveryPolicy(maxAttempts:)`): 0 means this Mac's owner
+    # asked for no automatic restarts, so a studio that has stopped answering is left alone. It
+    # arrives as an argument because every STUDIOHUB_* environment variable is stripped below -
+    # the app cannot hand it over as one. Left unset (an app that does not pass it) keeps the
+    # behaviour this worker has always had.
+    parser.add_argument('--recovery-attempts', default=None)
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
+    set_recovery_attempts(args.recovery_attempts)
     data, models = args.data_dir.expanduser().resolve(), args.models_dir.expanduser().resolve()
     ready = args.ready_file.expanduser().absolute()
     bundle = RESOURCES.parent.parent

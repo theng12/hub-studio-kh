@@ -393,6 +393,7 @@ final class StudioController: ObservableObject {
                 dataDirectory: configuration.dataDirectory, modelsDirectory: models,
                 readyFile: configuration.readyFile, parentPID: ProcessInfo.processInfo.processIdentifier,
                 listenHost: listenHost, offline: configuration.offline,
+                recoveryMaxAttempts: configuration.recoveryMaxAttempts,
                 port: configuration.port)
             process.currentDirectoryURL = configuration.dataDirectory
             process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]

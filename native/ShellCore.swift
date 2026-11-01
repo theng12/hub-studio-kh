@@ -259,15 +259,21 @@ struct ShellConfiguration {
     /// Every check ran the worker directly with its real flag, so the mismatch lived in the one
     /// place nothing exercised: the argument list the app builds. The worker's own
     /// `tests/test_fleet_binding.py` pins its side; this pins ours, and the names must stay equal.
+    /// `recoveryMaxAttempts` is this Mac's own `setRecoveryPolicy` switch carried onto the same
+    /// command line: the worker's child watcher restarts a studio that has stopped answering, and
+    /// a Mac whose owner asked for no automatic restarts must not have one restarted behind their
+    /// back. Zero means never; the worker keeps restarting a studio that has actually exited.
     static func serviceArguments(dataDirectory: URL, modelsDirectory: URL, readyFile: URL,
                                  parentPID: Int32, listenHost: String, offline: Bool,
+                                 recoveryMaxAttempts: Int,
                                  port: Int = ShellConfiguration.defaultPort) -> [String] {
         var arguments = ["--data-dir", dataDirectory.path,
                          "--models-dir", modelsDirectory.path,
                          "--ready-file", readyFile.path,
                          "--parent-pid", String(parentPID),
                          "--host", listenHost,
-                         "--port", String(port)]
+                         "--port", String(port),
+                         "--recovery-attempts", String(recoveryMaxAttempts)]
         if offline { arguments.append("--offline") }
         return arguments
     }

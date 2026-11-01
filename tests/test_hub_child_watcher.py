@@ -29,6 +29,13 @@ sys.path.insert(0, str(ROOT / "packaging"))
 import hub_worker  # noqa: E402
 
 
+def setUpModule():
+    # The "no recovery policy was given" note is a once-per-process line, and most tests here ask
+    # the question with no policy on purpose. `RecoveryPolicyTests` clears the flag for itself, so
+    # the suite prints it exactly where it is being tested instead of once at random.
+    hub_worker._recovery_policy_said = True
+
+
 class FakeProcess:
     def __init__(self, returncode=None):
         self.returncode = returncode
@@ -185,6 +192,80 @@ class SilentStudioTests(unittest.TestCase):
                     sys.modules[name] = previous
         self.assertIsNotNone(reason)
         self.assertIn("monitor reports it down", reason)
+
+
+class RecoveryPolicyTests(unittest.TestCase):
+    """The app's recovery switch reaches this watcher and governs the silence restart only.
+
+    `--recovery-attempts` is the app's own `setRecoveryPolicy(maxAttempts:)`, passed on the
+    command line the app starts the worker with. Zero means this Mac's owner asked for no
+    automatic restarts, so a studio that is still running but has stopped answering is left
+    alone here too - the app already honours the same switch for its own hung services. A studio
+    whose process has exited is a different question and keeps being restarted.
+    """
+
+    def setUp(self):
+        self._saved = (hub_worker.RECOVERY_ATTEMPTS, hub_worker._recovery_policy_said)
+        hub_worker._recovery_policy_said = False
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        hub_worker.RECOVERY_ATTEMPTS, hub_worker._recovery_policy_said = self._saved
+
+    @staticmethod
+    def _silent():
+        return {"status": "down", "last_seen": time.time() - 200}
+
+    def test_zero_leaves_a_down_and_silent_studio_alone_and_says_why_once(self):
+        hub_worker.RECOVERY_ATTEMPTS = 0
+        studio = child()
+        with redirect_stderr(io.StringIO()) as log:
+            first = hub_worker.hung_reason(studio, status=self._silent())
+            second = hub_worker.hung_reason(studio, status=self._silent())
+        self.assertIsNone(first, "policy 0 must not produce a restart reason")
+        self.assertIsNone(second)
+        self.assertEqual(log.getvalue().count("left alone"), 1,
+                         "the reason must be said once, not on every pass")
+        self.assertIn("never restart services by itself", log.getvalue())
+
+    def test_zero_stops_the_watch_pass_from_offering_a_restart(self):
+        hub_worker.RECOVERY_ATTEMPTS = 0
+        calls = []
+        with redirect_stderr(io.StringIO()), \
+                mock.patch.object(hub_worker, "_studio_status", return_value=self._silent()):
+            hub_worker.watch_studio(child(), lambda studio, **kw: calls.append(kw), FakeStop())
+        self.assertEqual(calls, [], "a silent studio must not be restarted under policy 0")
+
+    def test_zero_still_restarts_a_studio_whose_process_exited(self):
+        hub_worker.RECOVERY_ATTEMPTS = 0
+        calls = []
+        hub_worker.watch_studio(child(FakeProcess(9)),
+                                lambda studio, **kw: calls.append(kw), FakeStop())
+        self.assertEqual(calls, [{}],
+                         "an exited studio is restarted whatever the recovery policy says")
+
+    def test_a_value_that_was_not_given_keeps_the_restart_and_is_said_once(self):
+        """Not told and allowed are the same behaviour and must not be the same log line."""
+        hub_worker.RECOVERY_ATTEMPTS = None
+        with redirect_stderr(io.StringIO()) as log:
+            first = hub_worker.hung_reason(child(), status=self._silent())
+            second = hub_worker.hung_reason(child(), status=self._silent())
+        self.assertIsNotNone(first, "with no policy given the restart is today's default")
+        self.assertIsNotNone(second)
+        self.assertEqual(log.getvalue().count("not given a readable recovery policy"), 1)
+
+    def test_an_enabled_policy_keeps_the_restart_without_a_note(self):
+        hub_worker.RECOVERY_ATTEMPTS = 5
+        with redirect_stderr(io.StringIO()) as log:
+            reason = hub_worker.hung_reason(child(), status=self._silent())
+        self.assertIsNotNone(reason)
+        self.assertEqual(log.getvalue(), "")
+
+    def test_the_flag_is_read_as_the_policy_it_names(self):
+        for given, expected in (("0", 0), ("5", 5), (None, None), ("later", None), ("", None)):
+            with self.subTest(given=given):
+                hub_worker.set_recovery_attempts(given)
+                self.assertEqual(hub_worker.RECOVERY_ATTEMPTS, expected)
 
 
 class ReasonPublicationTests(unittest.TestCase):

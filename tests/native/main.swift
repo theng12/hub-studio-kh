@@ -91,7 +91,7 @@ require(legacyConfig.controllerAddress == nil, "a Mac that has never joined must
 let serviceArgs = ShellConfiguration.serviceArguments(
     dataDirectory: config.dataDirectory, modelsDirectory: config.modelsDirectory!,
     readyFile: config.readyFile, parentPID: 4321, listenHost: "100.64.0.1,192.168.1.5",
-    offline: false)
+    offline: false, recoveryMaxAttempts: config.recoveryMaxAttempts)
 require(serviceArgs.contains("--host"), "the service must be told its listen address with --host")
 require(!serviceArgs.contains("--listen-host"),
         "the worker has no --listen-host; passing it makes the worker exit 2")
@@ -104,12 +104,28 @@ require(serviceArgs[serviceArgs.firstIndex(of: "--port")! + 1] == String(ShellCo
 require(ShellConfiguration.defaultPort == 47873,
         "the pinned default must be the Hub's own default port, or peers build URLs to nowhere")
 require(!serviceArgs.contains("--offline"), "offline must not be passed when it is off")
+// This Mac's recovery switch has to reach the worker: `packaging/hub_worker.py` restarts a
+// studio that is still running but has stopped answering, and a Mac whose owner asked for no
+// automatic restarts must not have one restarted behind their back. The value is the app's own
+// `recoveryMaxAttempts`, so 0 travels as 0 and nothing is re-derived on the way out.
+let recoveryIndex = serviceArgs.firstIndex(of: "--recovery-attempts")
+require(recoveryIndex != nil && serviceArgs[recoveryIndex! + 1] == String(config.recoveryMaxAttempts),
+        "the app's recovery policy must reach the worker as --recovery-attempts, got: \(serviceArgs)")
+let disabledArgs = ShellConfiguration.serviceArguments(
+    dataDirectory: config.dataDirectory, modelsDirectory: config.modelsDirectory!,
+    readyFile: config.readyFile, parentPID: 4321, listenHost: "127.0.0.1", offline: false,
+    recoveryMaxAttempts: 0)
+let disabledIndex = disabledArgs.firstIndex(of: "--recovery-attempts")
+require(disabledIndex != nil && disabledArgs[disabledIndex! + 1] == "0",
+        "a disabled recovery policy must reach the worker as 0, got: \(disabledArgs)")
 let offlineArgs = ShellConfiguration.serviceArguments(
     dataDirectory: config.dataDirectory, modelsDirectory: config.modelsDirectory!,
-    readyFile: config.readyFile, parentPID: 4321, listenHost: "127.0.0.1", offline: true)
+    readyFile: config.readyFile, parentPID: 4321, listenHost: "127.0.0.1", offline: true,
+    recoveryMaxAttempts: config.recoveryMaxAttempts)
 require(offlineArgs.contains("--offline"), "offline must be passed when it is on")
 require(offlineArgs.contains("--parent-pid") && offlineArgs.contains("--data-dir")
-        && offlineArgs.contains("--models-dir") && offlineArgs.contains("--ready-file"),
+        && offlineArgs.contains("--models-dir") && offlineArgs.contains("--ready-file")
+        && offlineArgs.contains("--recovery-attempts"),
         "the worker requires every mandatory flag on every start")
 // No argument may be the empty string: an empty value is accepted by argparse and then fails
 // later, somewhere the app cannot explain.
