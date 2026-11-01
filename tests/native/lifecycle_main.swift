@@ -152,7 +152,7 @@ func waitUntil(timeout: TimeInterval = 8, _ condition: @MainActor () -> Bool) as
 @MainActor
 func makeController(root: URL, server: LocalHubFixture, now: @escaping () -> Date,
                     healthRequest: ((URLRequest, URLSession) async throws -> (Data, URLResponse))? = nil,
-                    maxAttempts: Int = 1,
+                    maxAttempts: Int = 1, backoffSeconds: [TimeInterval] = [0],
                     agentPlistURL: URL? = nil,
                     loginAgentOperations: LoginAgentOperations? = nil,
                     loginAgentCoordinator: LoginAgentMutationCoordinator = .shared) throws -> StudioController {
@@ -162,6 +162,23 @@ func makeController(root: URL, server: LocalHubFixture, now: @escaping () -> Dat
     try FileManager.default.createDirectory(at: models, withIntermediateDirectories: true)
     try Data(String(server.port).utf8).write(to: data.appendingPathComponent("fixture-port"))
     let service = root.appendingPathComponent("StudioHubService")
+    try writeFixtureService(at: service)
+    var configuration = try ShellConfiguration(arguments: ["lifecycle-tests", "--data-dir", data.path,
+        "--models-dir", models.path, "--port", String(try unusedPort())],
+        bundle: URL(fileURLWithPath: "/Applications/StudioHubFixture.app"))
+    try configuration.setRecoveryPolicy(maxAttempts: maxAttempts, backoffSeconds: backoffSeconds)
+    return StudioController(configuration: configuration, serviceExecutable: service,
+                            agentPlistURL: agentPlistURL ?? LaunchAgent.defaultPlistURL(),
+                            loginAgentOperations: loginAgentOperations,
+                            loginAgentCoordinator: loginAgentCoordinator,
+                            now: now, healthRequest: healthRequest)
+}
+
+/// The fixture service: it writes its readiness record and then sleeps until it is told to stop.
+/// `absent` leaves the executable out entirely, which is how a start fails before anything runs.
+func writeFixtureService(at service: URL, absent: Bool = false) throws {
+    try? FileManager.default.removeItem(at: service)
+    guard !absent else { return }
     let script = #"""
 #!/bin/sh
 data=""
@@ -184,15 +201,6 @@ while :; do sleep 1; done
 """#
     try Data(script.utf8).write(to: service)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: service.path)
-    var configuration = try ShellConfiguration(arguments: ["lifecycle-tests", "--data-dir", data.path,
-        "--models-dir", models.path, "--port", String(try unusedPort())],
-        bundle: URL(fileURLWithPath: "/Applications/StudioHubFixture.app"))
-    try configuration.setRecoveryPolicy(maxAttempts: maxAttempts, backoffSeconds: [0])
-    return StudioController(configuration: configuration, serviceExecutable: service,
-                            agentPlistURL: agentPlistURL ?? LaunchAgent.defaultPlistURL(),
-                            loginAgentOperations: loginAgentOperations,
-                            loginAgentCoordinator: loginAgentCoordinator,
-                            now: now, healthRequest: healthRequest)
 }
 
 @MainActor
@@ -669,6 +677,110 @@ struct NativeLifecycleTests {
             // Hung app that honours SIGTERM, and one that ignores it (needs the SIGKILL step).
             try await scenario("hung-term", stub: "while :; do sleep 1; done", wait: 2, grace: 5, expectKilled: true)
             try await scenario("hung-kill", stub: "trap '' TERM; while :; do sleep 1; done", wait: 2, grace: 2, expectKilled: true)
+        }
+
+        // The launch's own start, and what a start that fails does about it. This is the shape of
+        // the 2026-10-31 outage at 1300 and 1400: an app that was up, answering, with
+        // "Start services on startup" on, and with every studio down because its one start had
+        // failed and nothing ever tried again.
+        if runs("launch-retry") {
+            let server = try LocalHubFixture(); defer { server.stop() }
+
+            // A start that fails is retried, and the retry brings the services up when the cause
+            // has gone. The service is missing at the first attempt - the same class of failure as
+            // a model library that mounts a second later - and present by the second.
+            do {
+                let root = temporary.appendingPathComponent("launch-retry-later")
+                let controller = try makeController(root: root, server: server, now: Date.init,
+                                                    maxAttempts: 5, backoffSeconds: [0, 0, 0, 0, 0])
+                try writeFixtureService(at: root.appendingPathComponent("StudioHubService"), absent: true)
+                controller.start()
+                let failed = await waitUntil { controller.failure != nil }
+                requireLifecycle(failed, "launch-retry: a failed start must say so, not stay silent")
+                requireLifecycle(controller.failure!.contains("missing") || controller.status == "Unable to start local services",
+                                 "launch-retry: the reason must be the one that happened, got \(controller.failure!)")
+                // Without this the app sat down for nineteen hours: the first failure scheduled
+                // nothing, so no second attempt was ever made.
+                requireLifecycle(controller.recoveryPending || controller.canCancelRecovery,
+                                 "launch-retry: a failed launch start must enter the retry ladder")
+                try writeFixtureService(at: root.appendingPathComponent("StudioHubService"))
+                let up = await waitUntil { readyPID(controller) != nil && controller.running }
+                requireLifecycle(up, "launch-retry: the retry never started the services; status is \(controller.status)")
+                requireLifecycle(readyPID(controller) != nil, "launch-retry: no readiness record after the retry")
+                controller.stop()
+                _ = await waitUntil { !controller.running }
+            }
+
+            // A start that fails every time gives up with a reason the operator can act on, and it
+            // says which policy stopped it rather than falling silent.
+            do {
+                let root = temporary.appendingPathComponent("launch-retry-giveup")
+                let controller = try makeController(root: root, server: server, now: Date.init,
+                                                    maxAttempts: 0, backoffSeconds: [1])
+                try writeFixtureService(at: root.appendingPathComponent("StudioHubService"), absent: true)
+                controller.start()
+                let gaveUp = await waitUntil(timeout: 8) {
+                    controller.status.contains("repeated service failures")
+                }
+                requireLifecycle(gaveUp, "launch-retry: a start that cannot succeed must give up loudly, got \(controller.status)")
+                requireLifecycle(controller.failure?.contains("repeated service failures") == true,
+                                 "launch-retry: giving up must be recorded, not only shown")
+                requireLifecycle(!controller.recoveryPending, "launch-retry: a policy of zero attempts must stop retrying")
+                controller.stop()
+            }
+
+            // A start that fails, then the owner stops it: the ladder must stop with them. A retry
+            // that fires after a deliberate stop would be the app arguing with its owner.
+            do {
+                let root = temporary.appendingPathComponent("launch-retry-stop")
+                let controller = try makeController(root: root, server: server, now: Date.init,
+                                                    maxAttempts: 5, backoffSeconds: [1, 1, 1, 1, 1])
+                try writeFixtureService(at: root.appendingPathComponent("StudioHubService"), absent: true)
+                controller.start()
+                let pending = await waitUntil { controller.canCancelRecovery }
+                requireLifecycle(pending, "launch-retry: no retry to cancel before the stop")
+                controller.stop()
+                requireLifecycle(!controller.recoveryPending, "launch-retry: an owner's stop must cancel the pending retry")
+                requireLifecycle(controller.status == "Local services stopped",
+                                 "launch-retry: an owner's stop must be the last word, got \(controller.status)")
+                try? await Task.sleep(for: .milliseconds(400))
+                requireLifecycle(!controller.running && readyPID(controller) == nil,
+                                 "launch-retry: the services came back after a deliberate stop")
+                requireLifecycle(controller.status == "Local services stopped",
+                                 "launch-retry: a late retry overwrote the owner's stop, got \(controller.status)")
+            }
+
+            // The two launch decisions, driven against a real controller: the setting governs the
+            // login launch, and an update's reopen always starts. A Mac with the setting off must
+            // not be started by its own login, and one with it on must be.
+            do {
+                let root = temporary.appendingPathComponent("launch-retry-decide")
+                let controller = try makeController(root: root, server: server, now: Date.init)
+                controller.configuration.chooseStartServices(false)
+                try controller.configuration.save()
+                let off = LaunchStart.decide(loginLaunch: true, startServicesOnLaunch: controller.configuration.startServicesAtLogin,
+                                             hasLibrary: controller.hasLibrary, canConfigure: controller.canConfigure)
+                requireLifecycle(off == .stayStopped(LaunchStart.stoppedByChoice),
+                                 "launch-retry: the setting off must leave a login launch stopped, got \(off)")
+                controller.noteLaunchDeclined(LaunchStart.stoppedByChoice)
+                requireLifecycle(controller.status.contains("Start services on startup is off"),
+                                 "launch-retry: the reason must be on the Mac, got \(controller.status)")
+                controller.configuration.chooseStartServices(true)
+                try controller.configuration.save()
+                let on = LaunchStart.decide(loginLaunch: true, startServicesOnLaunch: controller.configuration.startServicesAtLogin,
+                                            hasLibrary: controller.hasLibrary, canConfigure: controller.canConfigure)
+                requireLifecycle(on == .start, "launch-retry: the setting on must start a login launch, got \(on)")
+                // An update's reopen is not a login launch: it starts whatever the setting says.
+                let update = LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: controller.configuration.startServicesAtLogin,
+                                                hasLibrary: controller.hasLibrary, canConfigure: controller.canConfigure)
+                requireLifecycle(update == .start, "launch-retry: an update's reopen must start, got \(update)")
+                try writeFixtureService(at: root.appendingPathComponent("StudioHubService"))
+                controller.start()
+                let started = await waitUntil { readyPID(controller) != nil && controller.running }
+                requireLifecycle(started, "launch-retry: the launched app never brought its services up")
+                controller.stop()
+                _ = await waitUntil { !controller.running }
+            }
         }
 
         SecretChecks.run()

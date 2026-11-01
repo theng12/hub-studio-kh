@@ -334,6 +334,66 @@ require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: true, ownerRunn
 require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: false, ownerRunning: false, userStopped: false) == .stop("The selected model library is unavailable"), "missing SSD must not create replacement state")
 require(StartupRecovery.attemptsAfterHealthyUptime(2, readyAt: Date(timeIntervalSince1970: 100), now: Date(timeIntervalSince1970: 130)) == 2, "brief ready period must retain crash bound")
 require(StartupRecovery.attemptsAfterHealthyUptime(2, readyAt: Date(timeIntervalSince1970: 100), now: Date(timeIntervalSince1970: 160)) == 0, "sustained health resets crash bound")
+
+// ── what a launch decides about the services ────────────────────────────────
+// The setting is read once, at launch, and it governs the login launch only: opening the app is
+// the intent to use it. The decision is pure so the fleet's own words ("the studios were down
+// after an update") can be driven from here rather than from a running app.
+require(LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: false,
+                           hasLibrary: true, canConfigure: true) == .start,
+        "opening the app starts the services whatever the setting says")
+require(LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: false,
+                           hasLibrary: true, canConfigure: true).shouldStart,
+        "the setting-off case must still start when the app is opened by hand")
+require(LaunchStart.decide(loginLaunch: true, startServicesOnLaunch: false,
+                           hasLibrary: true, canConfigure: true)
+        == .stayStopped(LaunchStart.stoppedByChoice),
+        "a login launch with the setting off stays stopped, and says so")
+require(!LaunchStart.decide(loginLaunch: true, startServicesOnLaunch: false,
+                            hasLibrary: true, canConfigure: true).shouldStart,
+        "the setting-off answer is never mistaken for a start")
+require(LaunchStart.decide(loginLaunch: true, startServicesOnLaunch: true,
+                           hasLibrary: true, canConfigure: true) == .start,
+        "a login launch with the setting on really starts the services")
+require(LaunchStart.decide(loginLaunch: true, startServicesOnLaunch: true,
+                           hasLibrary: true, canConfigure: true).shouldStart,
+        "the setting-on answer is a start")
+require(LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: true,
+                           hasLibrary: true, canConfigure: true) == .start,
+        "an update's reopen starts the services even though it is not a login launch")
+require(LaunchStart.decide(loginLaunch: true, startServicesOnLaunch: true,
+                           hasLibrary: false, canConfigure: true) == .nothingToStart,
+        "no model library chosen is nothing to start, not a failure")
+require(LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: true,
+                           hasLibrary: false, canConfigure: true) == .nothingToStart,
+        "the same without a login launch")
+require(LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: true,
+                           hasLibrary: true, canConfigure: false) == .stayStopped("another copy of Studio Hub is already running"),
+        "a second copy of the app must never start a second set of services")
+require(LaunchStart.stoppedByChoice == "Start services on startup is off",
+        "the reason a deliberate choice gives is a sentence a person can read")
+// The bound itself: a start that fails is retried on the ladder, five times, then slowly.
+require(StartupRecovery.defaultMaxAutomaticAttempts == 5
+        && StartupRecovery.defaultDelays == [1, 3, 10, 60, 120],
+        "the launch retry ladder must stay bounded at five fast attempts")
+for attempt in 0..<5 {
+    guard case .wait(let delay) = StartupRecovery.nextAction(attempt: attempt, libraryAvailable: true,
+                                                             ownerRunning: false, userStopped: false) else {
+        fatalError("the launch retry at attempt \(attempt) must wait, not stop")
+    }
+    require(delay == StartupRecovery.defaultDelays[attempt],
+            "the launch retry at attempt \(attempt) must wait \(StartupRecovery.defaultDelays[attempt])s, got \(delay)")
+}
+require(StartupRecovery.nextAction(attempt: 5, libraryAvailable: true, ownerRunning: false, userStopped: false)
+        == .wait(300),
+        "past the bound the launch retry slows to five minutes instead of stopping")
+require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: false, ownerRunning: false, userStopped: false)
+        == .stop("The selected model library is unavailable"),
+        "giving up must record the reason, never a silent stop")
+// A deliberate stop is the one thing that still stops.
+require(StartupRecovery.nextAction(attempt: 0, libraryAvailable: true, ownerRunning: false, userStopped: true)
+        == .stop("Local services stopped"),
+        "an owner's stop must not be retried by the ladder")
 // ── fleet binding ──────────────────────────────────────────────────────────
 // Binding beyond loopback is the act that stops the Hub being private, so the address is
 // validated rather than trusted, and the app is told to connect to the address that answers.

@@ -52,6 +52,49 @@ struct StartupRecovery {
     }
 }
 
+/// What a launch decides about the services, before anything is spawned.
+///
+/// The launch itself is the trigger, not a person pressing Start: a Mac with "Start services on
+/// startup" on must come back serving after an update, a reboot or a restart, and a Mac whose
+/// owner turned the setting off must stay quiet. The decision is here, pure, so the contract
+/// suite can drive it without AppKit or a real service.
+enum LaunchStartDecision: Equatable {
+    /// Start the services now.
+    case start
+    /// Leave them stopped: the owner asked for it.
+    case stayStopped(String)
+    /// There is nothing to start yet (no model library chosen).
+    case nothingToStart
+
+    /// Whether the services should be started by this launch.
+    var shouldStart: Bool { self == .start }
+}
+
+/// The one decision a launch makes about the services, and the one reason it may not start them.
+///
+/// `loginLaunch` is true when launchd started the app at login (the agent's own environment
+/// marker) or when macOS opened it as a login item. Every other launch - a person opening the app
+/// from Finder or Spotlight, an update's reopen - is the intent to use it, and starts the
+/// services.
+///
+/// The setting "Start services on startup" governs the *login* launch only. It is off by default,
+/// so a Mac that is only used in person does not hold its Studios open all night; a fleet node has
+/// it turned on for it once (`ShellConfiguration.applyFleetServicesDefault`).
+enum LaunchStart {
+    /// The message a stopped-by-choice launch carries, so the reason is never silent.
+    static let stoppedByChoice = "Start services on startup is off"
+
+    static func decide(loginLaunch: Bool, startServicesOnLaunch: Bool,
+                       hasLibrary: Bool, canConfigure: Bool) -> LaunchStartDecision {
+        guard hasLibrary else { return .nothingToStart }
+        // A copy that does not own the data folder cannot start anything: another Studio Hub is
+        // the real app, and this copy presents it and exits.
+        guard canConfigure else { return .stayStopped("another copy of Studio Hub is already running") }
+        guard loginLaunch else { return .start }
+        return startServicesOnLaunch ? .start : .stayStopped(stoppedByChoice)
+    }
+}
+
 /// The position of the one app-owned service set in its start ladder.
 ///
 /// The ladder is fixed: 1, 3, 10, 60 and 120 seconds, then a slow retry every five minutes for as

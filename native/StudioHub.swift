@@ -503,7 +503,14 @@ final class StudioController: ObservableObject {
             failure = error.localizedDescription
             lastServiceFailure = error.localizedDescription
             status = "Unable to start local services"
-            if automaticRecovery { scheduleRecovery() }
+            // A start that failed is retried, whoever asked for it. This used to be automatic
+            // starts only, so the one start an unattended Mac really needs - the one the launch
+            // does when "Start services on startup" is on - was the only one that gave up on the
+            // first error. A Mac whose model library mounts a second after the launch, or whose
+            // old Hub still held the port when the app reopened after an update, sat with its
+            // services down for hours and nothing tried again. The ladder is the bound: five
+            // fast attempts, then a slow retry, and a reason either way.
+            scheduleRecovery()
         }
     }
     private func workerExited(process: Process, code: Int32) {
@@ -798,6 +805,13 @@ final class StudioController: ObservableObject {
     /// somebody opens the app.
     var servicesWillNotAutoStart: Bool {
         !configuration.startServicesAtLogin && (configuration.isJoinedNode || fleetRoleIsMember)
+    }
+    /// A launch that decided not to start the services, and why. Shown on the Mac so "nothing is
+    /// running" is never mistaken for "it failed to start": the two look identical in a log and
+    /// only one of them needs a person. It never overwrites a live or a failed start.
+    func noteLaunchDeclined(_ reason: String) {
+        guard !running && !starting && !stopping, failure == nil else { return }
+        status = reason
     }
     /// Set from the Hub's own report of its role; false until a running Hub says so.
     @Published var fleetRoleIsMember = false
@@ -1217,8 +1231,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // A login launch starts the Studios only when the owner asked for it; the default is
         // off, so a Mac that signs in overnight stays idle until someone sends it work. Every
         // other launch starts them, because opening the app is the intent to use it.
-        if controller.hasLibrary && controller.canConfigure && (!loginLaunch || controller.configuration.startServicesAtLogin) {
+        //
+        // The decision is `LaunchStart`, not this expression: a Mac whose start then FAILS is
+        // retried by the ladder rather than left with its studios down for ever, which is what
+        // happened after the 2026-10-31 updates at 1300 and 1400.
+        switch LaunchStart.decide(loginLaunch: loginLaunch,
+                                  startServicesOnLaunch: controller.configuration.startServicesAtLogin,
+                                  hasLibrary: controller.hasLibrary,
+                                  canConfigure: controller.canConfigure) {
+        case .start:
             controller.start()
+        case .stayStopped(let reason):
+            // Say why the Studios are not up, so a Mac that looks idle is not mistaken for one
+            // that failed. A person opening the app still starts them (the launch is not a login
+            // launch), so this only ever fires for a login launch with the setting off, or for
+            // a second copy of the app that is about to exit.
+            controller.noteLaunchDeclined(reason)
+        case .nothingToStart:
+            break
         }
         // Opened by hand or by an update's reopen: refresh the existing launchd registration so it
         // can restore the app after an abnormal exit; a clean Quit remains stopped. Only the
