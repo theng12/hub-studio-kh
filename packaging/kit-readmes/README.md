@@ -17,8 +17,8 @@ and the order to set them up.
 
 **Story Studio** is where you work. It turns an idea into a script, scene prompts, images,
 narration, subtitles, a thumbnail and a finished video file, and it uploads to YouTube.
-It also installs Content Packs you download from the Studio Library. It does **not** run any AI
-model itself.
+It also installs Content Packs you download from the Studio Library. Every model call goes
+to GatewayKH, except optional duplicate screening, which runs EmbeddingGemma on the Mac itself.
 
 **GatewayKH** is the coordinator. Story Studio talks to exactly one address — GatewayKH —
 and GatewayKH decides which of your Macs should do the work. It holds the combined model
@@ -132,7 +132,7 @@ Do it in this order. The linking steps each have a guide in `GatewayKH/`.
 Video Generation Kit/
   README.md            ← you are here: the whole setup
   GatewayKH/           README.md + installers/ + the six setup guides
-  Story Studio/        README.md + the installer DMG
+  Story Studio/        README.md + the installer DMG + Install Story Studio.command + EmbeddingGemma/
   Studio Hub KH/       README.md + the app, the models and its own guides
   KH Updater/          README.md + Install KH Updater.command + the agent kit + apps.json
 ```
