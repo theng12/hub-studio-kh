@@ -146,7 +146,7 @@ In joined-worker mode, native creation submits through its parent controller. Al
 accepted work survives brief disconnection; new submissions show the connection problem.
 An owner may return an idle device to Standalone through the normal safe mode change.
 Do not create a second global scheduler or billing/account system: GenStudio retains
-global customer jobs, pricing, credits, assets and cross-location routing.
+global customer jobs, pricing, assets and cross-location routing.
 
 ### Locations, nodes and operational data
 
