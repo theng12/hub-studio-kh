@@ -207,6 +207,55 @@ Do not delete an existing runtime just to retry these commands. Resolve the stat
 prerequisite or use a new output name and qualify the new artifact. Download endpoint
 availability and a fresh runtime build were not tested in this audit.
 
+### Rebuilding the local gate inputs
+
+Four gitignored things under `.build/` are needed before any gate or release worktree
+means anything, and nothing recorded how they were made: `docs/tasks/HANDOFF.md`
+repeatedly names them as build inputs and says only that a worktree *linked* them from
+the primary checkout. When that checkout's `.build/` went away on 2026-11-02 the recipe
+went with it. `packaging/rebuild_build_inputs.sh` is that recipe, written from the
+evidence still in the tree.
+
+```sh
+bash packaging/rebuild_build_inputs.sh                      # all four, into this checkout's .build/
+bash packaging/rebuild_build_inputs.sh --only hub-gate      # one of them
+bash packaging/rebuild_build_inputs.sh --root /path/to/checkout   # write elsewhere
+```
+
+| Input | What it is | Rebuilt from | Size / time |
+| --- | --- | --- | --- |
+| `.build/prepare-kit.sh` | The kit-prep script the kit tests read at that exact path | A copy of the tracked `packaging/prepare-kit.sh`; it derives `ROOT` from its own path, so the copy needs no edit | 18 KB, instant |
+| `.build/hub-gate` | Python 3.12 venv the gate runs *in* — `scripts/hub_offline_gate.py` launches `unittest` in it and runs `regressions`/`pytest` as `bin/python -m pytest` | `packaging/voice-runtime/requirements.lock.txt` (the repo's one complete hash-pinned set covering the gate's import surface) plus `pytest==9.1.1` and its four deps | ~2 GB, ~10–20 min |
+| `.build/test-deps` | `pytest` and four deps as a `--target` tree, put on `PYTHONPATH` so a runtime stripped of its tests can still run a pytest stage | The five `[MEASURED]` versions in the table above | ~25 MB, seconds |
+| `.build/yue2-runtime` | The pinned YuE2 interpreter the Music lane ships | `packaging/yue2-runtime/build.sh` (tracked: pins the `mlx-Yue` commit, hash-checks its own lock, prints the tree digest `stage_voice.py` compares against `YUE2_RUNTIME_SHA256`). The script clones the pinned source, then hands over | ~0.7 GB, ~5–10 min |
+
+Roughly 15–30 minutes and ~2.8 GB for all four, network included. The script is
+idempotent: an input that already passes its check is left alone and nothing downloads.
+One that is present but wrong moves into `_trash/build-inputs-<stamp>/` first — nothing
+here deletes.
+
+[MEASURED] **`.build/hub-gate`'s exact contents were never written down, so a rebuild
+is a reconstruction, not the original bytes.** What the tree proves it held: `fastapi`,
+`starlette`, `anyio` and `tqdm` imported from its `site-packages` in the 0.6.197–0.6.212
+gate logs; `mlx_lm` and `espeak` (HANDOFF 0.6.101: the wrong venv gave 24
+`ModuleNotFoundError`s and three espeak failures); `mlx` and `PIL`, imported unguarded
+at module level by `tests/test_image_staging.py`; and `fastapi`, `httpx`, `starlette`,
+`psutil`, `numpy` and `uvicorn` at module level across `tests/` and `components/hub/`.
+At ~2 GB it was the size of the Voice lock's package set, not of a test-only tree — so
+that lock is what the rebuild installs. Each run writes the resulting freeze beside the
+venv at `.build/hub-gate/requirements.freeze.txt`; that file, not this paragraph, is
+what makes the *next* rebuild exact. The other three inputs are not reconstructions.
+
+[MEASURED] A rebuilt YuE2 tree did **not** reproduce the digest `stage_voice.py`
+pins. The inputs all match what the builder demands — Python 3.12.14, `mlx-Yue` at
+`mlx-Yue 9253ed133343406947bde7b67d43c7a63fb39d99`, `mlx` 0.32.2, and a hash-checked
+`requirements.yue2.lock.txt` unchanged since 2026-09-28 — but the tree digested
+`ca0f93f2f0b7be6744c760a738da5b7b0c94057c89305b859ab548395ffaef8b` against the pin
+`75465dc4…`. `stage_voice.py` digests the source tree itself and refuses a
+staging that does not match, so that is a stop at stage time. The script prints the
+same comparison as it finishes; resolving it is a re-qualification of the pin, which
+is a release act and is not done here.
+
 ## First development checks
 
 `native/build.sh` and `native/render-page.sh` share explicit SDK selection, defaulting
