@@ -45,8 +45,8 @@ class HubProcessTests(unittest.TestCase):
         if probe.returncode:
             raise unittest.SkipTest(f"FastAPI/Uvicorn unavailable in test runtime: {probe.stderr.strip()}")
 
-    def _fixture(self, base: Path, *, failing_voice: bool = False, image: bool = False,
-                 orphan_image: bool = False) -> dict[str, Path]:
+    def _fixture(self, base: Path, *, failing_voice: bool = False, flaky_voice: bool = False,
+                 image: bool = False, orphan_image: bool = False) -> dict[str, Path]:
         resources = base / "Proof.app" / "Contents" / "Resources"
         resources.mkdir(parents=True)
         shutil.copyfile(WORKTREE / "packaging/hub_worker.py", resources / "hub_worker.py")
@@ -61,7 +61,10 @@ class HubProcessTests(unittest.TestCase):
             """import os\nfrom pathlib import Path\n\ndef load_token():\n    path = Path(os.environ['STUDIOHUB_DATA_DIR']) / '.hub_token'\n    return path.read_text().strip()\n"""
         )
         (resources / "components/hub/standalone.py").write_text(
-            """import json\nimport os\nfrom pathlib import Path\nfrom fastapi import FastAPI, Request\nfrom fastapi.responses import JSONResponse\n\napp = FastAPI()\nTOKEN = (Path(os.environ['STUDIOHUB_DATA_DIR']) / '.hub_token').read_text().strip()\n\ndef _workers():\n    path = Path(os.environ['STUDIOHUB_WORKERS_FILE'])\n    return json.loads(path.read_text())\n\n@app.get('/api/health')\ndef health():\n    return {'ok': True, 'component': 'hub'}\n\n@app.get('/api/version')\ndef version():\n    release = json.loads(Path(os.environ['STUDIOHUB_RELEASE_MANIFEST']).read_text())\n    return {'version': release['version'], 'schema': release['schema']}\n\n@app.get('/api/hub/workers')\ndef workers(request: Request):\n    if request.headers.get('x-hub-token') != TOKEN:\n        return JSONResponse({'detail': 'Hub token required'}, status_code=401)\n    allowed = ('id', 'modality', 'title', 'host', 'port', 'machine', 'local', 'runtime_identity', 'pid')\n    return {'workers': [{key: worker[key] for key in allowed if key in worker}\n                        for worker in _workers()]}\n"""
+            """import json\nimport os\nfrom pathlib import Path\nfrom fastapi import FastAPI, Request\nfrom fastapi.responses import JSONResponse\n\napp = FastAPI()\nTOKEN = (Path(os.environ['STUDIOHUB_DATA_DIR']) / '.hub_token').read_text().strip()\n\n# The child watcher reads this Hub's own monitor, exactly as it does in production: a studio's\n# row there is the only figure that knows a silent studio from one with a long job in flight.\n# The fixture cannot run the real monitor, so a test-only route sets the row it would report.\nclass Monitor:\n    def __init__(self):\n        self.status = {}\n\napp.state.monitor = Monitor()\n\ndef _workers():\n    path = Path(os.environ['STUDIOHUB_WORKERS_FILE'])\n    return json.loads(path.read_text())\n\n@app.get('/api/health')\ndef health():\n    return {'ok': True, 'component': 'hub'}\n\n@app.get('/api/version')\ndef version():\n    release = json.loads(Path(os.environ['STUDIOHUB_RELEASE_MANIFEST']).read_text())\n    return {'version': release['version'], 'schema': release['schema']}\n\n@app.get('/api/hub/workers')\ndef workers(request: Request):\n    if request.headers.get('x-hub-token') != TOKEN:\n        return JSONResponse({'detail': 'Hub token required'}, status_code=401)\n    allowed = ('id', 'modality', 'title', 'host', 'port', 'machine', 'local', 'runtime_identity', 'pid')\n    return {'workers': [{key: worker[key] for key in allowed if key in worker}\n                        for worker in _workers()]}\n\n@app.post('/test/studio-status')\nasync def studio_status(request: Request):\n    if request.headers.get('x-hub-token') != TOKEN:\n        return JSONResponse({'detail': 'Hub token required'}, status_code=401)\n    body = json.loads(await request.body() or b'{}')\n    app.state.monitor.status[body['studio']] = {\n        'status': body['status'], 'last_seen': body.get('last_seen')}\n    return {'ok': True}\n"""
+        )
+        (hub_backend / "alerts.py").write_text(
+            """import json\nimport os\nimport time\nfrom pathlib import Path\n\ndef emit(kind, message, data=None):\n    path = Path(os.environ['STUDIOHUB_DATA_DIR']) / 'fixture-alerts.jsonl'\n    with path.open('a') as stream:\n        stream.write(json.dumps({'kind': kind, 'message': message, 'data': data or {}}) + '\\n')\n    return {'kind': kind, 'message': message}\n"""
         )
 
         voice_backend = resources / "voice/app/backend"
@@ -69,6 +72,22 @@ class HubProcessTests(unittest.TestCase):
         (voice_backend / "__init__.py").write_text("")
         if failing_voice:
             voice_source = "raise RuntimeError('fixture voice startup failure')\n"
+        elif flaky_voice:
+            # Starts once, then exits on every later start: the shape of a studio whose restart
+            # keeps failing while the Hub itself stays up and answering.
+            voice_source = (
+                "import os\n"
+                "from pathlib import Path\n"
+                "marker = Path(os.environ['STUDIOHUB_DATA_DIR']) / 'voice-started-once'\n"
+                "if marker.exists():\n"
+                "    os._exit(1)\n"
+                "marker.write_text('1')\n"
+                "from fastapi import FastAPI\n"
+                "app = FastAPI()\n"
+                "@app.get('/api/health')\n"
+                "def health():\n"
+                "    return {'ok': True, 'component': 'voice'}\n"
+            )
         else:
             voice_source = """from fastapi import FastAPI\n\napp = FastAPI()\n\n@app.get('/api/health')\ndef health():\n    return {'ok': True, 'component': 'voice'}\n"""
         (voice_backend / "main.py").write_text(voice_source)
@@ -146,6 +165,7 @@ def from_environment():
             "child_ready": data / "hub/voice-ready.json",
             "workers": data / "hub/owned-workers.json",
             "release": release_path,
+            "alerts": data / "hub/fixture-alerts.jsonl",
         }
 
     @staticmethod
@@ -214,10 +234,11 @@ def from_environment():
             return error.code, json.loads(error.read())
 
     @contextmanager
-    def _running_hub(self, *, failing_voice: bool = False, image: bool = False,
-                     orphan_image: bool = False):
+    def _running_hub(self, *, failing_voice: bool = False, flaky_voice: bool = False,
+                     image: bool = False, orphan_image: bool = False):
         with tempfile.TemporaryDirectory(prefix="studiohub-hub-process-") as temp:
-            fixture = self._fixture(Path(temp), failing_voice=failing_voice, image=image,
+            fixture = self._fixture(Path(temp), failing_voice=failing_voice,
+                                    flaky_voice=flaky_voice, image=image,
                                     orphan_image=orphan_image)
             environment = {
                 "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -399,6 +420,94 @@ def from_environment():
                            "Old Image leaf survived its worker restart")
             self.assertTrue(self._alive(new_leaf))
             self.assertEqual(os.getpgid(new_leaf), again["pid"])
+
+    @staticmethod
+    def _set_studio_status(hub_ready: dict, studio: str, status: str, last_seen: float | None = None):
+        """Tell the fixture's monitor row what the real monitor would report for that studio."""
+        body = json.dumps({"studio": studio, "status": status, "last_seen": last_seen}).encode()
+        request = Request(hub_ready["url"] + "/test/studio-status", data=body, method="POST",
+                          headers={"X-Hub-Token": TOKEN, "Content-Type": "application/json"})
+        with urlopen(request, timeout=5) as response:
+            assert json.loads(response.read())["ok"]
+
+    def test_a_silent_studio_is_restarted_with_a_reason_the_fleet_can_read(self):
+        """A studio that is alive but has stopped answering is the shape of the outages at sites
+        1400 and 1301: the Hub answered every request while no studio ever came back, and only a
+        hand-run `start_services` fixed it. The Hub restarts it itself, and says why on the
+        alert channel the service log and a configured webhook already carry."""
+        with self._running_hub() as (fixture, process, known_children):
+            hub_ready, child_ready, _, child_pid = self._await_started(
+                fixture, process, known_children)
+            self._set_studio_status(hub_ready, "voice", "down", time.time() - 1000)
+
+            again = self._await_restart(fixture, process, fixture["child_ready"], child_pid)
+            known_children.append(again["pid"])
+            self.assertEqual(again["url"], child_ready["url"],
+                             "the restart must keep the studio on its own port")
+            status, _ = self._get_json(hub_ready["url"] + "/api/health")
+            self.assertEqual(status, 200, "the Hub must stay up across a studio restart")
+
+            def published():
+                if not fixture["alerts"].exists():
+                    return None
+                rows = [json.loads(line) for line in fixture["alerts"].read_text().splitlines()]
+                return next((row for row in rows if row["kind"] == "studio_restarted"), None)
+
+            alert = self._wait_for(published, 5,
+                                   "the restart reason was not published on the alert channel")
+            self.assertEqual(alert["data"]["studio"], "voice")
+            self.assertIn("stopped answering health", alert["message"])
+            self.assertIn("monitor reports it down", alert["message"])
+
+            # The reason stops firing once the monitor says the studio is answering again, so a
+            # healthy studio is never restarted twice for one silence.
+            self._set_studio_status(hub_ready, "voice", "up", time.time())
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                self.assertEqual(self._read_json(fixture["child_ready"])["pid"], again["pid"],
+                                 "the studio was restarted while the monitor reported it up")
+                time.sleep(0.2)
+
+    def test_a_studio_the_monitor_reports_up_is_never_restarted(self):
+        """Silence alone must not restart a studio: a long model job may answer slowly, and
+        killing it is worse than the silence it is answering with."""
+        with self._running_hub() as (fixture, process, known_children):
+            hub_ready, _, _, child_pid = self._await_started(fixture, process, known_children)
+            self._set_studio_status(hub_ready, "voice", "up", time.time())
+            deadline = time.monotonic() + 4
+            while time.monotonic() < deadline:
+                self.assertEqual(self._read_json(fixture["child_ready"])["pid"], child_pid,
+                                 "a studio the monitor reports up was restarted")
+                self.assertIsNone(process.poll(), "the Hub stopped")
+                time.sleep(0.2)
+
+    def test_a_restart_that_keeps_failing_never_ends_the_hub_or_its_watcher(self):
+        """The watcher thread is the only thing that brings a studio back. If a restart fails and
+        the thread ends with it, the Hub answers every request for ever while no studio ever
+        returns - which is the shape of the outages this change exists to stop. The restart
+        ladder is expected to keep trying; the Hub is expected to keep serving."""
+        with self._running_hub(flaky_voice=True) as (fixture, process, known_children):
+            hub_ready, _, _, child_pid = self._await_started(fixture, process, known_children)
+            os.kill(child_pid, signal.SIGKILL)
+            deadline = time.monotonic() + 20
+
+            def attempts():
+                if not fixture["alerts"].exists():
+                    return 0
+                return len([line for line in fixture["alerts"].read_text().splitlines()
+                            if '"studio_restarted"' in line])
+
+            def enough():
+                value = attempts()
+                return value if value >= 3 else None
+
+            count = self._wait_for(enough, deadline,
+                                   "the Hub never retried a studio whose restart kept failing")
+            self.assertIsNone(process.poll(), "the Hub stopped while its studio kept failing")
+            status, health = self._get_json(hub_ready["url"] + "/api/health")
+            self.assertEqual((status, health), (200, {"ok": True, "component": "hub"}),
+                             "the Hub must keep answering while a studio cannot start")
+            self.assertGreaterEqual(count, 3)
 
     def test_voice_startup_failure_never_publishes_hub_readiness(self):
         with self._running_hub(failing_voice=True) as (fixture, process, known_children):
