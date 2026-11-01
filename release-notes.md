@@ -2,6 +2,16 @@
 
 Written to be read by the person using the app. Newest first.
 
+## 0.6.213 — 2026-11-01
+
+### Studios come back after a failed start
+
+If the Studios could not start when the app opened, for example just after an update, the app stayed open with nothing running and never tried again. It now keeps trying, quickly at first and then slowly, and says why if it can't start. If you stop or quit the Hub yourself, it stays stopped.
+
+### An update only counts when the Studios are running
+
+When a new version goes out to your Macs, a Mac counts as updated only once its Studios are actually up. Any Mac that doesn't get there is named, and the update carries on with the others.
+
 ## 0.6.212 — 2026-10-30
 
 ### Voices can be tagged

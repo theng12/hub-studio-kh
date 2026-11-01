@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.213 — 2026-11-01
+
+- **A start that fails at launch is retried (owner, 2026-11-01; sites 1300 and 1400 sat with their studios down).** `StudioController.start` only entered the recovery ladder for automatic starts, so the launch's own start gave up on its first error while the app kept answering. It now always enters the ladder, and a launch that chose not to start says why.
+- **A rollout counts a Mac as updated only when its studios are up.** `services_running` must report every studio up; unknown is named, never passed. Such a Mac is named in the receipt and the rest of the rollout carries on.
+- **A rollout detaches the accepted image by its device, never by a path.**
+
 ## 0.6.212 — 2026-10-30
 
 - **A voice's tags are kept, shown and filterable, and the Gateway is their only editor.** The Gateway sends a JSON array in the multipart `tags` field of `POST /api/hub/shared-voices` (its commits `56c7b7b`, `a699bd4`); the Hub stored nothing and now stores them in `shared_voices` (`_tags`: trimmed, de-duplicated, at most 12 of at most 24 characters; a missing or malformed field is **no tags** and never refuses the voice), answers them on `serialize`, and fans them to every Voice Studio in the `_sync_target` payload. The Voice Studio's `Voice` record gains `tags` (read-only here), `sync_from_hub` keeps them, and the Voice page shows each tag as a dashed chip and filters the grid by one. The native Voices page decodes `tags` as an optional list (absent on an older worker), shows chips beside the Fleet badge, and has the same filter with counts. Nothing in the Hub edits a tag. **Proof:** `tests/test_shared_voices.py` (26; store, fan-out, omitted/empty refresh, older voices, malformed and out-of-bounds fields), `tests/hub_regression/cases/test_shared_voice_tags.py` (2; the Gateway's multipart push through the real route and auth), `components/voice/app/tests/test_fleet_voice_sync.py` (6; install keeps the Gateway's tags, an older voice loads with none).
