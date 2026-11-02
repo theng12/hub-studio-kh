@@ -788,7 +788,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         shutil.copyfile(mark, resources / name)
     # Keep the app's existing resource name; CHANGELOG.md is the only authored release text.
     (resources / 'release-notes.md').write_text(
-        release_notes_text((ROOT / 'CHANGELOG.md').read_text(), version), encoding='utf-8')
+        release_notes_text((ROOT / 'CHANGELOG.md').read_text(encoding='utf-8'), version), encoding='utf-8')
     shutil.copytree(runtime, resources / 'runtimes/voice', symlinks=True)
     # Nothing in the product runs a dependency's tests or pytest, and both were in 0.6.200's
     # bundle. Removed here, at the staging step, so a reused `.build/voice-runtime` cannot smuggle

@@ -88,7 +88,7 @@ class VersionAgreementTests(unittest.TestCase):
         """`Bundle.main` looks in Resources, not in the Voice worker's subtree."""
         text = STAGE.read_text()
         self.assertIn("(resources / 'release-notes.md').write_text(", text)
-        self.assertIn("release_notes_text((ROOT / 'CHANGELOG.md').read_text(), version)", text)
+        self.assertIn("release_notes_text((ROOT / 'CHANGELOG.md').read_text(encoding='utf-8'), version)", text)
         self.assertFalse((ROOT / "release-notes.md").exists(),
                          "release text must be authored only in CHANGELOG.md")
 
