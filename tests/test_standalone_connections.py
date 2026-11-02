@@ -1546,7 +1546,9 @@ class FleetSharedVoiceTests(unittest.TestCase):
                 break
             time.sleep(0.5)
         else:
-            self.fail("the controller never saw the joined node as reachable")
+            self.fail(f"the controller never saw the joined node as reachable: "
+                      f"status={status}, targets={listing.get('targets', [])!r}, "
+                      f"node requests={worker.seen[-12:]!r}")
         return worker, controller_worker, controller
 
     @staticmethod

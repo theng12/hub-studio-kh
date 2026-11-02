@@ -27,6 +27,7 @@ import faulthandler
 import os
 import subprocess
 import sys
+import threading
 import unittest
 import uuid
 from unittest.mock import patch
@@ -155,6 +156,23 @@ def main():
         for test, reason in result.skipped:
             print('SKIP:', test.id(), reason, flush=True)
         print(f'GATE RESULT: run={result.testsRun} skipped={len(result.skipped)} failures={len(result.failures)} errors={len(result.errors)}', flush=True)
+        pending = [thread for thread in threading.enumerate()
+                   if thread is not threading.main_thread() and not thread.daemon]
+        if pending:
+            print('THREADS AT SUITE END:', [(thread.name, thread.ident) for thread in pending],
+                  flush=True)
+            faulthandler.dump_traceback()
+        def shutdown_timed_out():
+            print('SHUTDOWN TIMEOUT: tests finished but the interpreter did not exit in 120s; gate failed',
+                  file=sys.stderr, flush=True)
+            print('THREADS AT SHUTDOWN:', [(thread.name, thread.ident, thread.daemon)
+                                          for thread in threading.enumerate()],
+                  file=sys.stderr, flush=True)
+            faulthandler.dump_traceback()
+            os._exit(1)
+        watchdog = threading.Timer(120, shutdown_timed_out)
+        watchdog.daemon = True
+        watchdog.start()
         sys.exit(0 if result.wasSuccessful() else 1)
     commands = {
         'regressions': [gate_python(root), '-m', 'pytest', '-p', 'no:cacheprovider', '-q', 'tests/hub_regression/cases'],
