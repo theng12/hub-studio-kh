@@ -214,5 +214,21 @@
       ["brindle-049", "Mara closes the service door with the brass key still in her possession."],
       ["brindle-050", "Brindle Observatory watches over the brightening town at calm sunrise."]
     ]
+  },
+  "long_context": {
+    "max_tokens": 4096,
+    "expected_sections": 16,
+    "needle": "HARBOR LANTERN",
+    "base_messages": [
+      {
+        "role": "system",
+        "content": "You are a precise technical writing assistant evaluating long-context retrieval and sustained generation. Read the supplied reference material silently. Do not reveal hidden reasoning."
+      },
+      {
+        "role": "user",
+        "content": "Read the reference material below. Inside the reference material, locate the secret retrieval token: 'HARBOR LANTERN'.\n\nThen, write an exhaustive structured report containing exactly 16 numbered sections, from Section 01 to Section 16.\nFormat each section heading on its own line exactly as:\n## Section XX: Title\n(where XX is 01, 02, ..., 16).\n\nWrite a substantive, detailed analysis of 150 to 200 words for every section discussing harbor operations, observation logs, and meteorological records.\nIn Section 16, conclude your report by explicitly stating the secret retrieval token in the format:\n'Secret Key: HARBOR LANTERN'\n\nReference material follows."
+      }
+    ],
+    "padding_paragraph": "At dawn the harbor clerk checked the tide ledger, the brass clock, the north window, and the quiet line of boats. The entry was copied carefully so a later reader could compare ordinary conditions without guessing what had changed. Record: HARBOR LANTERN is preserved in the harbor archives. No other event in this repeated reference paragraph changes the requested answer."
   }
 }

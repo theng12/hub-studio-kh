@@ -30,6 +30,7 @@ import time
 from typing import Any
 
 GIB = 1024 ** 3
+DEFAULT_MAX_FOOTPRINT_GIB = 26.0
 CACHE_LIMIT = 512_000_000
 CACHE_LIMIT_SOURCE = (
     "configured: components/voice/app/backend/mlx_memory.py CACHE_LIMIT_MB=512; "
@@ -43,6 +44,38 @@ DEFAULT_HUB_SOURCE = (HERE.parent if (HERE.parent / "components" / "host_memory.
                       else HERE / "moe-support")
 REPORT = "report.json"
 THINK_MARKERS = ("<think", "</think", "thinking process:")
+
+DEFAULT_LONG_CONTEXT_SPEC: dict[str, Any] = {
+    "max_tokens": 4096,
+    "expected_sections": 16,
+    "needle": "HARBOR LANTERN",
+    "base_messages": [
+        {
+            "role": "system",
+            "content": "You are a precise technical writing assistant evaluating long-context retrieval and sustained generation. Read the supplied reference material silently. Do not reveal hidden reasoning.",
+        },
+        {
+            "role": "user",
+            "content": (
+                "Read the reference material below. Inside the reference material, locate the secret retrieval token: 'HARBOR LANTERN'.\n\n"
+                "Then, write an exhaustive structured report containing exactly 16 numbered sections, from Section 01 to Section 16.\n"
+                "Format each section heading on its own line exactly as:\n"
+                "## Section XX: Title\n"
+                "(where XX is 01, 02, ..., 16).\n\n"
+                "Write a substantive, detailed analysis of 150 to 200 words for every section discussing harbor operations, observation logs, and meteorological records.\n"
+                "In Section 16, conclude your report by explicitly stating the secret retrieval token in the format:\n"
+                "'Secret Key: HARBOR LANTERN'\n\n"
+                "Reference material follows."
+            ),
+        },
+    ],
+    "padding_paragraph": (
+        "At dawn the harbor clerk checked the tide ledger, the brass clock, the north window, and the quiet line of boats. "
+        "The entry was copied carefully so a later reader could compare ordinary conditions without guessing what had changed. "
+        "Record: HARBOR LANTERN is preserved in the harbor archives. "
+        "No other event in this repeated reference paragraph changes the requested answer."
+    ),
+}
 
 
 class _Usage(ctypes.Structure):
@@ -327,6 +360,73 @@ def validate_scene_json(text: str, expected_ids: list[str], max_chars: int | Non
             "length_stats": length_stats(), "errors": errors}
 
 
+def validate_long_context(text: str, spec: dict[str, Any]) -> dict[str, Any]:
+    expected_count = spec.get("expected_sections", 16)
+    needle = spec.get("needle", "HARBOR LANTERN")
+    section_pattern = re.compile(r"(?m)^#{2,3}\s+Section\s+(\d+)[:\s-]([^\n]+)$", re.IGNORECASE)
+    matches = list(section_pattern.finditer(text))
+    found_numbers = [int(m.group(1)) for m in matches]
+
+    if not matches:
+        numbered_pattern = re.compile(r"(?m)^(\d+)\.\s+([^\n]+)$")
+        matches = list(numbered_pattern.finditer(text))
+        found_numbers = [int(m.group(1)) for m in matches]
+
+    errors: list[str] = []
+    if len(matches) < expected_count:
+        errors.append(f"expected {expected_count} sections, got {len(matches)}")
+    missing_nums = [i for i in range(1, expected_count + 1) if i not in found_numbers]
+    if missing_nums:
+        errors.append(f"missing section numbers: {missing_nums}")
+
+    needle_found = needle.casefold() in text.casefold()
+    if not needle_found:
+        errors.append(f"needle '{needle}' not found in output")
+
+    if has_think_spill(text):
+        errors.append("thinking trace marker leaked into output")
+
+    return {
+        "pass": not errors,
+        "sections_count": len(matches),
+        "expected_sections": expected_count,
+        "needle_found": needle_found,
+        "needle": needle,
+        "errors": errors,
+    }
+
+
+def eval_stop_rule(row: dict[str, Any], max_footprint_bytes: int, current_safe_size: str) -> tuple[bool, str, str]:
+    """Evaluate stop rule for one completed long-context size.
+
+    Returns (should_stop, stop_reason, last_safe_size).
+    Stops before next size if swap grew (swap_delta > 0) or peak process footprint
+    exceeded max_footprint_bytes (default 26 GB).
+    """
+    case_name = row.get("name", "unknown")
+    swap_delta = row.get("swap_delta_bytes")
+    if swap_delta is None and isinstance(row.get("health_after"), dict):
+        swap_delta = row["health_after"].get("swap_delta_bytes")
+    swap_delta = swap_delta or 0
+
+    footprint_val = row.get("kernel_phys_footprint_peak_bytes") or 0
+    swap_grew = swap_delta > 0
+    footprint_exceeded = footprint_val > max_footprint_bytes
+
+    if swap_grew or footprint_exceeded:
+        reasons = []
+        if footprint_exceeded:
+            reasons.append(
+                f"peak process footprint of {footprint_val / GIB:.2f} GiB exceeded {max_footprint_bytes / GIB:.2f} GiB limit"
+            )
+        if swap_grew:
+            reasons.append(f"swap grew by {swap_delta} bytes ({swap_delta / (1024**2):.2f} MiB)")
+        stop_reason = f"stopped before next size: {' and '.join(reasons)} at {case_name}"
+        return True, stop_reason, current_safe_size
+
+    return False, "safe", case_name
+
+
 def scene_messages(batch: dict[str, Any]) -> list[dict[str, str]]:
     expected = [{"scene_id": row[0], "narration": row[1]} for row in batch["scenes"]]
     max_chars = batch.get("max_chars", 4000)
@@ -464,12 +564,17 @@ def generate_case(model: Any, tokenizer: Any, mx: Any, stream_generate: Any,
     started = time.monotonic()
     chunks: list[str] = []
     final = None
+    prefill_time: float | None = None
+    first_token_time: float | None = None
     generator = stream_generate(
         model, tokenizer, prompt=prompt, max_tokens=max_tokens,
         sampler=sampler_factory(temp=0.6, top_p=0.9),
     )
     try:
         for response in generator:
+            if prefill_time is None:
+                prefill_time = time.monotonic() - started
+                first_token_time = time.monotonic()
             final = response
             chunks.append(response.text)
             reason = abort_reason(health(baseline_swap))
@@ -478,9 +583,11 @@ def generate_case(model: Any, tokenizer: Any, mx: Any, stream_generate: Any,
     finally:
         generator.close()
     elapsed = time.monotonic() - started
+    generate_time = (time.monotonic() - first_token_time) if first_token_time is not None else 0.0
     text = "".join(chunks)
     output_path.write_text(text, encoding="utf-8")
     after = health(baseline_swap)
+    swap_delta = after.get("swap_delta_bytes")
     return {
         "output_file": output_path.name,
         "max_tokens": max_tokens,
@@ -491,10 +598,14 @@ def generate_case(model: Any, tokenizer: Any, mx: Any, stream_generate: Any,
         "decode_tps": getattr(final, "generation_tps", None),
         "finish_reason": getattr(final, "finish_reason", None),
         "elapsed_seconds": round(elapsed, 3),
+        "prefill_seconds": round(prefill_time, 3) if prefill_time is not None else None,
+        "generate_seconds": round(generate_time, 3),
         "mlx_peak_bytes": int(mx.get_peak_memory()),
         "kernel_phys_footprint_peak_bytes": sampler.peak,
         "health_before": before,
         "health_after": after,
+        "memory_pressure": after.get("pressure_name", "unknown"),
+        "swap_delta_bytes": swap_delta,
         "think_spill": has_think_spill(text),
     }
 
@@ -555,6 +666,68 @@ def run_worker(args: argparse.Namespace) -> int:
         if reason:
             raise InterruptedError(reason)
         write_report(output_dir, report)
+
+        if args.suite == "long-context":
+            max_footprint_bytes = int(args.max_footprint_gb * GIB)
+            lc_spec = prompts.get("long_context") or DEFAULT_LONG_CONTEXT_SPEC
+            targets = [
+                ("input-48k", 49152),
+                ("input-64k", 65536),
+            ]
+            last_safe_size = "none"
+            stopped_early = False
+            stop_reason = "all tested sizes completed within safe limits"
+
+            for name, target_tokens in targets:
+                print(f"preparing {name} prompt (~{target_tokens} tokens)...", flush=True)
+                messages, measured_tokens = padded_messages(tokenizer, lc_spec, target_tokens)
+                print(f"running {name} ({measured_tokens} prompt tokens, target ~4K output)...", flush=True)
+                mx.random.seed(7)
+                row = {"name": name, "purpose": "long_context_qualification", "target_tokens": target_tokens}
+                row.update(generate_case(model, tokenizer, mx, stream_generate, make_sampler,
+                                         messages, lc_spec.get("max_tokens", 4096), sampler,
+                                         baseline_swap, output_dir / f"{name}.txt"))
+                text = (output_dir / f"{name}.txt").read_text(encoding="utf-8")
+                row["free_memory_at_start_bytes"] = report["environment"].get("available_memory_bytes_at_start")
+                row["validation"] = validate_long_context(text, lc_spec)
+                row["generation_complete"] = row["finish_reason"] == "stop"
+                row["answer_complete"] = bool(row["validation"]["pass"] and row["generation_complete"])
+                row["mechanical_pass"] = row["answer_complete"]
+                report["cases"].append(row)
+                write_report(output_dir, report)
+
+                should_stop, reason, updated_safe = eval_stop_rule(row, max_footprint_bytes, last_safe_size)
+                if should_stop:
+                    stopped_early = True
+                    stop_reason = reason
+                    last_safe_size = updated_safe
+                    print(f"STOPPING: {stop_reason}", flush=True)
+                    break
+                else:
+                    last_safe_size = updated_safe
+
+            report["stop_rule"] = {
+                "max_footprint_bytes": max_footprint_bytes,
+                "max_footprint_gib": args.max_footprint_gb,
+                "stopped_early": stopped_early,
+                "last_safe_size": last_safe_size,
+                "stop_reason": stop_reason,
+            }
+            sampler.stopping.set()
+            sampler.join(timeout=1)
+            mechanical = bool(report["cases"]) and all(row["mechanical_pass"] for row in report["cases"])
+            report["generation_mechanical_pass"] = mechanical
+            report["physical_tier_result"] = {
+                "tier_gib": report["environment"]["physical_ram_tier_gib"],
+                "suite": args.suite,
+                "last_safe_size": last_safe_size,
+                "mechanically_qualified": bool(mechanical and not stopped_early),
+                "scope": "this physical host only; no lower-memory tier is inferred",
+            }
+            report["status"] = "pass" if (mechanical and not stopped_early) else "fail"
+            report["finished_at"] = time.time()
+            write_report(output_dir, report)
+            return 0 if (mechanical and not stopped_early) else 1
 
         specs: list[tuple[str, list[dict[str, str]], int, str]] = [
             ("speed", prompts["speed"]["messages"], prompts["speed"]["max_tokens"], "benchmark"),
@@ -661,7 +834,8 @@ def run_parent(args: argparse.Namespace) -> int:
         return 2
     command = [sys.executable, str(Path(__file__).resolve()), "--worker", "--model-dir", str(args.model_dir),
                "--output-dir", str(args.output_dir), "--suite", args.suite,
-               "--hub-source", str(args.hub_source)]
+               "--hub-source", str(args.hub_source),
+               "--max-footprint-gb", str(args.max_footprint_gb)]
     env = dict(os.environ, MOE_PROBE_BASELINE_SWAP=str(baseline or 0))
     child = subprocess.Popen(command, env=env)
     peak = 0
@@ -698,7 +872,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--suite", choices=("smoke", "full"), default="smoke")
+    parser.add_argument("--suite", choices=("smoke", "full", "long-context"), default="smoke")
+    parser.add_argument("--max-footprint-gb", type=float, default=DEFAULT_MAX_FOOTPRINT_GIB,
+                        help=f"Peak physical footprint limit in GiB before stopping subsequent sizes (default: {DEFAULT_MAX_FOOTPRINT_GIB:.1f})")
     parser.add_argument("--hub-source", type=Path, default=DEFAULT_HUB_SOURCE,
                         help="Studio Hub checkout used only for components/host_memory.py")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)

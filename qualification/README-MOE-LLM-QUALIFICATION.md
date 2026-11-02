@@ -49,3 +49,26 @@ the largest passing tested batch and any failed batch sizes, along with timing, 
 pressure and swap. A passing 50-scene response is a first capacity result, not proof of reliable
 374-scene production or a different RAM tier. Start by evaluating 25-scene batches; adopt 50 only
 after the larger batch repeatedly preserves IDs and completes with useful prompts.
+
+## Gemma 4 Long-Context Probe (`RUN-GEMMA4-LONG-CONTEXT.command`)
+
+A dedicated Finder-runnable probe evaluates extended context scaling for **Gemma 4 26B-A4B QAT MLX 4-bit** beyond the current 32K deployment budget.
+
+- Finder launcher: `RUN-GEMMA4-LONG-CONTEXT.command`
+- Evaluates: **48K** (`input-48k`, 49,152 prompt tokens) and **64K** (`input-64k`, 65,536 prompt tokens) context windows using the model's own tokenizer.
+- Output workload: Each size asks for a **~4K-token answer** (16 structured sections) requiring sustained generation and needle recall (`HARBOR LANTERN`).
+- Completeness check: Mechanically verifies all 16 numbered sections, presence of the needle token, clean finish reason (`stop`), and lack of thinking spill.
+- Stop rule: Stops before the next size if swap grows (`swap_delta > 0`) or peak process footprint exceeds **26.0 GiB** (default threshold printed at launch, overridable via `--max-footprint-gb`).
+- Published limit unchanged: Studio Hub's published context window (`model-manifests/gemma4-26b-a4b-qat-4bit.json`, `context_window_tokens=32768`) is not modified by this qualification probe.
+
+### How to run on Mac 1607 (M2 Pro 32 GB)
+
+1. **Quit Studio Hub and other applications:** Ensure Studio Hub is completely closed before running to avoid memory contention and ensure the maximum clean physical RAM headroom. The host-wide advisory lock (`moe-llm-qualification.lock`) will prevent the probe from starting if another qualification run is active.
+2. **Double-click `RUN-GEMMA4-LONG-CONTEXT.command` in Finder.** A terminal window will open, verify the installed Voice runtime and model files, and execute the `long-context` suite.
+3. The probe runs `input-48k`. If memory footprint remains <= 26 GB and swap does not grow, it proceeds to `input-64k`. If limits are breached, it stops safely before the next size and records the exact reason.
+4. **What to send back:** After the run finishes, send back the entire timestamped results folder created on the Desktop under `~/Desktop/StudioHub LLM Qualification/gemma4-26b-a4b-qat-4bit-<host>-<timestamp>/`, including:
+   - `SUMMARY.txt` (the primary human-readable summary stating the last safe size, stop reason, and per-size metrics)
+   - `report.json` (machine-readable measurements: prompt/completion tokens, prefill & generate times, MLX peak, footprint peak, swap delta, memory pressure, answer completeness)
+   - `input-48k.txt` and `input-64k.txt` (raw generated output texts)
+   - `run.log` (complete terminal transcript)
+

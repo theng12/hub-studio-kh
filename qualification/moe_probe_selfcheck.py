@@ -86,7 +86,46 @@ def main() -> None:
         "still stars remain calm", "short"), long_spec)["pass"], "every chapter needs its own length check"
     assert not probe.validate_long_script(long_script +
         "\n\n## Chapter 10: Extra\n\nextra body words", long_spec)["pass"], "extra chapter must fail"
-    print("PASS: strict chapter and scene identity, per-body length, UTF-16 cap, facts, and think-spill checks")
+
+    # Long-context validation
+    lc_spec = {
+        "expected_sections": 3,
+        "needle": "HARBOR LANTERN",
+    }
+    valid_lc = (
+        "## Section 01: Dawn Observation\nDetailed notes here.\n\n"
+        "## Section 02: Tide Records\nWater levels steady.\n\n"
+        "## Section 03: Final Key\nSecret Key: HARBOR LANTERN"
+    )
+    assert probe.validate_long_context(valid_lc, lc_spec)["pass"]
+    assert not probe.validate_long_context(valid_lc.replace("HARBOR LANTERN", "WRONG KEY"), lc_spec)["pass"], "missing needle must fail"
+    assert not probe.validate_long_context("## Section 01: Only One", lc_spec)["pass"], "missing sections must fail"
+    assert not probe.validate_long_context(valid_lc + "\n<think>leak</think>", lc_spec)["pass"], "think spill must fail"
+
+    # Stop rule checks
+    limit_26gb = int(26.0 * probe.GIB)
+    # Safe case: no swap, under 26 GB
+    stop, reason, safe = probe.eval_stop_rule(
+        {"name": "input-48k", "kernel_phys_footprint_peak_bytes": int(22.0 * probe.GIB), "swap_delta_bytes": 0},
+        limit_26gb, "none",
+    )
+    assert not stop and safe == "input-48k"
+
+    # Swap growth: stops before next size
+    stop, reason, safe = probe.eval_stop_rule(
+        {"name": "input-48k", "kernel_phys_footprint_peak_bytes": int(22.0 * probe.GIB), "swap_delta_bytes": 1024 * 1024},
+        limit_26gb, "none",
+    )
+    assert stop and "swap grew" in reason and safe == "none"
+
+    # Footprint exceeded: stops before next size
+    stop, reason, safe = probe.eval_stop_rule(
+        {"name": "input-64k", "kernel_phys_footprint_peak_bytes": int(27.0 * probe.GIB), "swap_delta_bytes": 0},
+        limit_26gb, "input-48k",
+    )
+    assert stop and "exceeded 26.00 GiB limit" in reason and safe == "input-48k"
+
+    print("PASS: strict chapter, scene identity, long-context, stop-rule, and think-spill checks")
 
 
 if __name__ == "__main__":

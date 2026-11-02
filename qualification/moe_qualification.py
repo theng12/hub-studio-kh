@@ -19,6 +19,7 @@ from typing import Any
 
 
 GIB = 1024 ** 3
+DEFAULT_MAX_FOOTPRINT_GIB = 26.0
 LOCK_PATH = Path.home() / "Library/Application Support/Studio Hub/moe-llm-qualification.lock"
 
 
@@ -247,6 +248,17 @@ def summary_text(report: dict[str, Any], spec: ModelSpec) -> str:
             "Failed scene batch sizes: " + (", ".join(str(n) for n in capacity.get("failed_batch_sizes", [])) or "none"),
             "Batch scope: screening results; repeated production reliability is not established.",
         ]
+    stop_rule = report.get("stop_rule")
+    if isinstance(stop_rule, dict):
+        lines += [
+            "",
+            "Long-Context Stop Rule Evaluation:",
+            f"  Suite: {report.get('suite', 'long-context')}",
+            f"  Peak footprint stop threshold: {stop_rule.get('max_footprint_gib', DEFAULT_MAX_FOOTPRINT_GIB):.2f} GiB",
+            f"  Last safe context size: {stop_rule.get('last_safe_size', 'unknown')}",
+            f"  Stop reason: {stop_rule.get('stop_reason', 'none')}",
+            f"  Stopped early: {'YES' if stop_rule.get('stopped_early') else 'NO'}",
+        ]
     if report.get("error"):
         lines.append(f"Error: {report['error']}")
     if report.get("inconclusive_reason"):
@@ -254,15 +266,24 @@ def summary_text(report: dict[str, Any], spec: ModelSpec) -> str:
     for row in cases:
         lines += ["", f"Case: {row.get('name', 'unknown')}",
                   f"  Mechanical: {'PASS' if row.get('mechanical_pass') is True else 'FAIL' if row.get('mechanical_pass') is False else 'UNKNOWN'}",
+                  f"  Answer complete: {'YES' if row.get('answer_complete') is True else 'NO' if row.get('answer_complete') is False else 'UNKNOWN'}",
                   f"  Finish reason: {_value(row.get('finish_reason'))}",
                   f"  Elapsed: {_value(row.get('elapsed_seconds'), ' seconds')}",
+                  f"  Prefill time: {_value(row.get('prefill_seconds'), ' seconds')}",
+                  f"  Generate time: {_value(row.get('generate_seconds'), ' seconds')}",
                   f"  Prompt tokens: {_value(row.get('prompt_tokens_measured'))}",
                   f"  Completion tokens: {_value(row.get('completion_tokens'))}",
                   f"  Prompt tokens/s: {_value(row.get('prompt_tps'))}",
                   f"  Decode tokens/s: {_value(row.get('decode_tps'))}",
                   f"  Peak MLX memory: {_bytes(row.get('mlx_peak_bytes'))}",
-                  f"  Peak process footprint: {_bytes(row.get('kernel_phys_footprint_peak_bytes'))}"]
+                  f"  Peak process footprint: {_bytes(row.get('kernel_phys_footprint_peak_bytes'))}",
+                  f"  Memory pressure: {_value(row.get('memory_pressure'))}",
+                  f"  Swap delta: {_bytes(row.get('swap_delta_bytes'))}",
+                  f"  Free memory at start: {_bytes(row.get('free_memory_at_start_bytes'))}"]
         validation = row.get("validation") or {}
+        if "sections_count" in validation:
+            needle_status = "recalled" if validation.get("needle_found") else "MISSING"
+            lines.append(f"  Sections: {validation.get('sections_count')}/{validation.get('expected_sections')}; needle '{validation.get('needle')}': {needle_status}")
         for chapter in validation.get("chapters", []):
             number = chapter.get("number")
             label = f"{number:02d}" if isinstance(number, int) else "unknown"
@@ -303,12 +324,17 @@ def run_live(args: argparse.Namespace, spec: ModelSpec) -> int:
         model_dir = Path(check["model_dir"])
         print(f"Model: {spec.display_name}\nExact revision: {spec.revision}")
         print(f"Physical RAM: {_bytes(check['physical_ram_bytes'])}")
+        if args.suite == "long-context":
+            print("Suite: long-context (evaluating 48K and 64K input tokens)")
+            print(f"Peak footprint stop threshold: {args.max_footprint_gb:.2f} GiB (override with --max-footprint-gb)")
+            print("Stop rule: stop before next size if swap grows or peak footprint exceeds threshold")
         print("WARNING: this run measures only this physical Mac; writing quality review remains required.")
         print("It never enables the model or infers support for a smaller memory tier.")
         hub_source = Path(check["helpers"]["host_memory"]).parents[1]
         command = [str(args.runtime_python), "-B", str(args.technical_root / "moe_probe.py"),
                    "--model-dir", str(model_dir), "--output-dir", str(result_dir),
-                   "--suite", args.suite, "--hub-source", str(hub_source)]
+                   "--suite", args.suite, "--hub-source", str(hub_source),
+                   "--max-footprint-gb", str(args.max_footprint_gb)]
         with log_path.open("w", encoding="utf-8") as log:
             log.write(json.dumps(check, indent=2) + "\n")
             log.flush()
@@ -366,7 +392,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--runtime-python", type=Path, required=True)
     parser.add_argument("--output-root", type=Path,
                         default=Path.home() / "Desktop" / "StudioHub LLM Qualification")
-    parser.add_argument("--suite", choices=("smoke", "full"), default="full")
+    parser.add_argument("--suite", choices=("smoke", "full", "long-context"), default="full")
+    parser.add_argument("--max-footprint-gb", type=float, default=DEFAULT_MAX_FOOTPRINT_GIB,
+                        help=f"Peak physical footprint limit in GiB before stopping subsequent sizes (default: {DEFAULT_MAX_FOOTPRINT_GIB:.1f})")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
     for name in ("kit_root", "technical_root", "runtime_python", "output_root"):
