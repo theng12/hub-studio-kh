@@ -1436,17 +1436,18 @@ struct StudioContent: View {
     /// never offers work its list cannot show.
     private func machineFilterPicker(_ selection: Binding<JobMachineFilter>,
                                      counts: [JobMachineFilter: Int]? = nil) -> some View {
-        Picker("Made on", selection: selection) {
-            ForEach(JobMachineFilter.allCases) { filter in
+        HubSegmentedControl(
+            selection: selection,
+            items: JobMachineFilter.allCases.map { filter in
                 let count = counts?[filter]
-                Text(count.map { "\(filter.rawValue) \($0)" } ?? filter.rawValue).tag(filter)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .hubSegmented()
-        .accessibilityLabel("Show jobs made on")
-        .accessibilityHint("Separate this Mac's own work from work its nodes made")
+                return HubSegmentItem(
+                    tag: filter,
+                    label: count.map { "\(filter.rawValue) \($0)" } ?? filter.rawValue
+                )
+            },
+            accessibilityLabel: "Show jobs made on",
+            accessibilityHint: "Separate this Mac's own work from work its nodes made"
+        )
     }
 
     /// How many running rows each tab of the Overview filter would show: every Studio's active
@@ -2107,16 +2108,19 @@ struct StudioContent: View {
             HStack(alignment: .firstTextBaseline) {
                 sectionTitle("Measured on this Mac")
                 Spacer()
-                Picker("Window", selection: Binding(
-                    get: { statisticsWindow },
-                    set: { value in
-                        statisticsWindow = value
-                        Task { await workspace.refreshStatistics(hours: value == 0 ? nil : value) }
-                    })) {
-                    Text("All time").tag(0)
-                    Text("Last 7 days").tag(168)
-                    Text("Last 24 hours").tag(24)
-                }.pickerStyle(.segmented).labelsHidden().hubSegmented()
+                HubSegmentedControl(
+                    selection: Binding(
+                        get: { statisticsWindow },
+                        set: { value in
+                            statisticsWindow = value
+                            Task { await workspace.refreshStatistics(hours: value == 0 ? nil : value) }
+                        }),
+                    items: [
+                        HubSegmentItem(tag: 0, label: "All time"),
+                        HubSegmentItem(tag: 168, label: "Last 7 days"),
+                        HubSegmentItem(tag: 24, label: "Last 24 hours")
+                    ]
+                )
             }
             HubCard {
             VStack(alignment: .leading, spacing: HubSpace.m) {
@@ -2510,13 +2514,13 @@ struct StudioContent: View {
             if control.offersControl {
                 LabeledRow(label: "Loading mode") {
                   VStack(alignment: .leading, spacing: HubSpace.tight) {
-                    Picker("Loading mode", selection: Binding(
-                        get: { control.selected },
-                        set: { value in Task { await workspace.setImageLoadingMode(value) } })) {
-                            ForEach(control.options) { option in Text(option.label).tag(option.id) }
-                        }
-                        .pickerStyle(.segmented).labelsHidden().hubSegmented()
-                        .disabled(!connected || workspace.updatingImageLoadingMode)
+                    HubSegmentedControl(
+                        selection: Binding(
+                            get: { control.selected },
+                            set: { value in Task { await workspace.setImageLoadingMode(value) } }),
+                        items: control.options.map { HubSegmentItem(tag: $0.id, label: $0.label) }
+                    )
+                    .disabled(!connected || workspace.updatingImageLoadingMode)
                     if let detail = control.detail {
                         Text(detail).font(HubType.secondary).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -3960,19 +3964,12 @@ struct StudioContent: View {
     private var voiceModeTabs: some View {
         VStack(alignment: .leading, spacing: HubSpace.tight) {
             if !workspace.audioModes.isEmpty {
-                Picker("Voice", selection: $workspace.audioMode) {
-                    ForEach(workspace.audioModes) { mode in
-                        // Short labels, because a segmented control's minimum width is the sum of
-                        // its labels and three long ones could not fit the column - which clipped
-                        // the tabs themselves. The full name is in the line underneath and in the
-                        // accessibility label, so nothing is lost.
-                        Text(mode.shortTitle).tag(mode)
-                            .accessibilityLabel(mode.title)
+                HubSegmentedControl(
+                    selection: $workspace.audioMode,
+                    items: workspace.audioModes.map { mode in
+                        HubSegmentItem(tag: mode, label: mode.shortTitle, accessibilityLabel: mode.title)
                     }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .hubSegmented()
+                )
                 .frame(maxWidth: .infinity)
                 .onChange(of: workspace.audioMode) { _, mode in
                     // The tab decides the shape of the request, so the model has to be one that
@@ -4083,7 +4080,14 @@ struct StudioContent: View {
                         VStack(alignment: .leading, spacing: HubSpace.tight) {
                             Text("Result format").font(HubType.rowTitle)
                             HStack {
-                                Picker("Result format", selection: $transcriptFormat) { Text("Text").tag("Text"); Text("SRT").tag("SRT"); Text("VTT").tag("VTT") }.pickerStyle(.segmented).labelsHidden().hubSegmented()
+                                HubSegmentedControl(
+                                    selection: $transcriptFormat,
+                                    items: [
+                                        HubSegmentItem(tag: "Text", label: "Text"),
+                                        HubSegmentItem(tag: "SRT", label: "SRT"),
+                                        HubSegmentItem(tag: "VTT", label: "VTT")
+                                    ]
+                                )
                                 Spacer()
                                 if workspace.transcribing { ProgressView().controlSize(.small) }
                                 pinChip
@@ -4230,17 +4234,16 @@ struct StudioContent: View {
     private var modelTabs: some View {
         let counts = modelSections.reduce(into: [StudioFunction: Int]()) { $0[$1.function] = $1.models.count }
         let total = counts.values.reduce(0, +)
-        return Picker("Function", selection: $modelFilter) {
-            Text("All \(total)").tag("All functions")
-            ForEach(modelTabFunctions) { function in
-                Text("\(StudioPage.page(for: function)?.title ?? function.rawValue) \(counts[function] ?? 0)")
-                    .tag(function.rawValue)
-            }
+        var items = [HubSegmentItem(tag: "All functions", label: "All \(total)")]
+        for function in modelTabFunctions {
+            let label = "\(StudioPage.page(for: function)?.title ?? function.rawValue) \(counts[function] ?? 0)"
+            items.append(HubSegmentItem(tag: function.rawValue, label: label))
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .hubSegmented()
-        .accessibilityLabel("Function")
+        return HubSegmentedControl(
+            selection: $modelFilter,
+            items: items,
+            accessibilityLabel: "Function"
+        )
     }
 
     /// The sections the list draws: every Studio with something in it under "All", the chosen
@@ -5356,15 +5359,19 @@ struct StudioContent: View {
 
     private var jobsWorkspace: some View {
         PageScaffold(title: pageTitle(.jobs), subtitle: "Every local generation in one place, or filtered to a single studio.", scrolls: true) {
-                Picker("History", selection: $historyTab) {
-                    ForEach(HistoryTab.allCases) { tab in
-                        let running = workspace.downloads.filter { active($0.state) }.count
-                        Text(tab == .downloads && running > 0 ? "\(tab.title) (\(running))" : tab.title).tag(tab)
-                    }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HubSegmentedControl(
+                        selection: $historyTab,
+                        items: HistoryTab.allCases.map { tab in
+                            let running = workspace.downloads.filter { active($0.state) }.count
+                            return HubSegmentItem(
+                                tag: tab,
+                                label: tab == .downloads && running > 0 ? "\(tab.title) (\(running))" : tab.title
+                            )
+                        },
+                        sizing: .stablePerLabel
+                    )
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .hubSegmented()
                 .accessibilityLabel("History filter")
                 // The controller is the only Mac whose Jobs page holds work that ran somewhere
                 // else. A node's list is its own machine throughout, so a split there would be
@@ -6838,22 +6845,24 @@ struct StudioContent: View {
             ValueRow("Group", value: groupStatus)
             Text(roleExplanation(workspace.controllerIdentity?.settings.role))
                 .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Picker("Role", selection: Binding(
-                get: { workspace.controllerIdentity?.settings.role ?? "standalone" },
-                set: { value in
-                    // A role change is an identity change, not a preference: becoming a controller
-                    // mints this Mac's own group credential and stops it being anybody's node, and
-                    // becoming a node ends the group this Mac runs. It is confirmed before it is
-                    // sent, and the confirmation says which of those it is.
-                    guard value != (workspace.controllerIdentity?.settings.role ?? "standalone") else { return }
-                    pendingRoleChange = value
-                }
-            )) {
-                Text("Standalone").tag("standalone")
-                Text("Controller").tag("controller")
-                Text("Node").tag("agent")
-            }
-            .pickerStyle(.segmented).labelsHidden().hubSegmented()
+            HubSegmentedControl(
+                selection: Binding(
+                    get: { workspace.controllerIdentity?.settings.role ?? "standalone" },
+                    set: { value in
+                        // A role change is an identity change, not a preference: becoming a controller
+                        // mints this Mac's own group credential and stops it being anybody's node, and
+                        // becoming a node ends the group this Mac runs. It is confirmed before it is
+                        // sent, and the confirmation says which of those it is.
+                        guard value != (workspace.controllerIdentity?.settings.role ?? "standalone") else { return }
+                        pendingRoleChange = value
+                    }
+                ),
+                items: [
+                    HubSegmentItem(tag: "standalone", label: "Standalone"),
+                    HubSegmentItem(tag: "controller", label: "Controller"),
+                    HubSegmentItem(tag: "agent", label: "Node")
+                ]
+            )
             .disabled(!connected || workspace.controllerIdentity == nil)
             // Promoting a node by name, where the node is: the picker's "Controller" does the same
             // thing, but the consequence (this Mac stops following its controller and mints its own
@@ -7999,16 +8008,18 @@ struct StudioContent: View {
                     Text(policy.releasePolicy ?? "The model is released when each job finishes.")
                         .font(HubType.secondary).foregroundStyle(.secondary)
                 } else {
-                    Picker("Release policy", selection: Binding(
-                        get: { policy.mode },
-                        set: { value in Task { await workspace.setMemoryMode(value, studioIDs: [row.id]) } }
-                    )) {
-                        ForEach(options) { option in
-                            Text(option.mode == policy.defaultMode ? "\(option.label) (default)" : option.label)
-                                .tag(option.mode)
+                    HubSegmentedControl(
+                        selection: Binding(
+                            get: { policy.mode },
+                            set: { value in Task { await workspace.setMemoryMode(value, studioIDs: [row.id]) } }
+                        ),
+                        items: options.map { option in
+                            HubSegmentItem(
+                                tag: option.mode,
+                                label: option.mode == policy.defaultMode ? "\(option.label) (default)" : option.label
+                            )
                         }
-                    }
-                    .pickerStyle(.segmented).labelsHidden().hubSegmented()
+                    )
                     .disabled(!connected || workspace.updatingMemory)
                     // The Studio's own sentence for the selected mode, which is the only one that
                     // knows what `auto` resolved to on this Mac. The list above is the Studio's
