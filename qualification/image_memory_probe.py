@@ -78,9 +78,7 @@ class Sampler(threading.Thread):
 def find_pack(package_id: str) -> Path:
     """The installed pack's ``model`` folder: ~/StudioHubModels first, then a kit drive."""
     bases = [Path.home() / 'StudioHubModels', *sorted(Path('/Volumes').glob('KH-STUDIO-*/model-library')),
-             # A kit drive's library sits one level deeper (`<drive>/Video Generation Kit/Studio Hub
-             # KH/model-library`); the shallow glob above found nothing on this Mac, so the probe
-             # reported "no installed pack" for packs that were installed.
+             # The kit library is at <drive>/1 Install Apps/Studio Hub/model-library.
              *sorted(Path('/Volumes').glob('KH-STUDIO-*/*/*/model-library'))]
     for base in bases:
         for pack in sorted((base / package_id).glob('*/model')):

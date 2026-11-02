@@ -42,14 +42,14 @@ If a double-click does nothing, right-click the file → **Open** → **Open**; 
 needs that once. Both files also work when run by hand:
 
 ```sh
-sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/1 - Install the app.command"
-sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/2 - Copy the models.command"
+sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/1 - Install the app.command"
+sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/2 - Copy the models.command"
 ```
 
 To place things manually instead — app by hand, library left on the SSD:
 
 ```sh
-cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app" /Applications/
+cp -Rp "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/Studio Hub.app" /Applications/
 ```
 
 A library can stay on the SSD, but it must be **outside** the app bundle — the app refuses a
@@ -74,7 +74,7 @@ xattr -cr "/Applications/Studio Hub.app"
 
 That is the command for the app in `/Applications`. If you ever run it straight off the SSD
 instead, the path is
-`xattr -cr "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app"`.
+`xattr -cr "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/Studio Hub.app"`.
 
 **About the errors it prints.** That command will scroll past a wall of `Permission denied` and
 `No such xattr` lines against files under `Contents/Resources/runtimes`. That is expected and it
@@ -164,7 +164,7 @@ Expect exactly:
 ```
 
 Change the path if you put the app somewhere else — running it straight from the SSD, that is
-`/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app/...`. If it prints that line,
+`/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/Studio Hub.app/...`. If it prints that line,
 you are running the exact build the tests passed against.
 
 ## Your own voices
@@ -176,7 +176,7 @@ use it for the next generation with **Use**.
 To bring over voices you already have, check the folder first:
 
 ```sh
-sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/check-voices-folder.sh" "/path/to/your/voices"
+sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/check-voices-folder.sh" "/path/to/your/voices"
 ```
 
 It reports which voices are ready and which have no transcript. Then **Voices → Import

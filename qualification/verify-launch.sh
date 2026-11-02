@@ -15,7 +15,7 @@
 # ownership check then shelved/retired real weights into that throwaway directory's Trash Folder,
 # which destroyed them. A library is therefore never passed to the service here.)
 #
-#   sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/verify-launch.sh"
+#   sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/verify-launch.sh"
 #
 # Override the app if yours differs:
 #   APP="/Applications/Studio Hub 0.4.0.app" sh verify-launch.sh

@@ -1,4 +1,4 @@
-# Video Generation Kit
+# 1 Install Apps
 
 Three apps that together turn an idea into a finished video. Install them once per Mac,
 then point them at each other. This README explains what each one is for, how they link,
@@ -7,8 +7,8 @@ and the order to set them up.
 | Folder | App | Version | What it does |
 |---|---|---|---|
 | `Story Studio/` | Story Studio KH | 1.4.367 | Writes and produces the episode: ideas, script, prompts, thumbnails, final video |
-| `GatewayKH/` | GatewayKH | 0.2.205 | The middle man: one address, one model catalogue, routes work to your Macs |
-| `Studio Hub KH/` | Studio Hub | its `focused-release-manifest.json` | Runs the models themselves — images, voice, subtitles, music |
+| `Gateway/` | GatewayKH | 0.2.205 | The middle man: one address, one model catalogue, routes work to your Macs |
+| `Studio Hub/` | Studio Hub | its `focused-release-manifest.json` | Runs the models themselves — images, voice, subtitles, music |
 | `KH Updater/` | KH Updater | its `khu-agent/VERSION` | Keeps the three apps up to date on every Mac, from the publisher's signed releases |
 
 ---
@@ -27,7 +27,7 @@ it needs no GPU and very little memory; it can run on a small always-on Mac.
 
 > **The version numbers above are stamped on the drive, not taken from this file.**
 > `packaging/kit_stamp_index.py` reads them from the newest `Story Studio/*.dmg`, the newest
-> `GatewayKH/installers/*.dmg` and `KH Updater/khu-agent/VERSION` actually present and rewrites
+> `Gateway/installers/*.dmg` and `KH Updater/khu-agent/VERSION` actually present and rewrites
 > these rows — and the drive-root copy of this document — every time a kit is prepared.
 > Hand-editing them here is only about giving the *repository* copy a sensible value; the drive
 > always describes what it carries. Two rows name no version in this file for the same reason: the
@@ -72,10 +72,10 @@ contains a secret: every credential is added by hand on the machine that needs i
 
 ## Setup order
 
-Do it in this order. The linking steps each have a guide in `GatewayKH/`.
+Do it in this order. The linking steps each have a guide in `Gateway/`.
 
-1. **Install the apps.** `Studio Hub KH/` and `Story Studio/` have their own README with
-   the install steps. GatewayKH is in `GatewayKH/`.
+1. **Install the apps.** `Studio Hub/` and `Story Studio/` have their own README with
+   the install steps. GatewayKH is in `Gateway/`.
 2. **Install KH Updater on every Mac** — one double-click per Mac: `KH Updater/Install KH
    Updater.command`, with the publisher's enrolment window open at the Mac Studio first. It
    is what keeps the three apps current from then on, and it is worth doing before the Macs
@@ -129,11 +129,11 @@ Do it in this order. The linking steps each have a guide in `GatewayKH/`.
 ## Folder map
 
 ```
-Video Generation Kit/
+1 Install Apps/
   README.md            ← you are here: the whole setup
-  GatewayKH/           README.md + installers/ + the six setup guides
+  Gateway/             README.md + installers/ + the six setup guides
   Story Studio/        README.md + the installer DMG + Install Story Studio.command + EmbeddingGemma/
-  Studio Hub KH/       README.md + the app, the models and its own guides
+  Studio Hub/          README.md + the app, the models and its own guides
   KH Updater/          README.md + Install KH Updater.command + the agent kit + apps.json
 ```
 
@@ -146,4 +146,4 @@ current, and it belongs on every Mac.
 Work flows in one direction: **Story Studio → GatewayKH → controller → nodes**. If
 something is not working, test it in that order — first does Story Studio reach the
 gateway, then does the gateway reach the controller, then does the controller reach its
-nodes. `GatewayKH/05-verify.md` walks exactly that path.
+nodes. `Gateway/05-verify.md` walks exactly that path.

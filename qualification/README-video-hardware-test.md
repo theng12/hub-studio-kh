@@ -58,7 +58,7 @@ start a job it would have to swap through. The refusal is recorded with its reas
 **`RUN-16GB-LTX-VIDEO.command`** needs the weights, and finds them on the SSD by itself:
 
 ```
-<drive>/Video Generation Kit/Studio Hub KH/model-library/ltx-2-3-22b-ram-12gb-mlx/<revision>/model
+<drive>/1 Install Apps/Studio Hub/model-library/ltx-2-3-22b-ram-12gb-mlx/<revision>/model
 ```
 
 That is the kit's **own** library — the one `verify-kit.sh` checks and the one that reports 30 of 30
@@ -86,15 +86,15 @@ Double-clicking runs the defaults. Everything below is optional.
 
 ```sh
 # through the shipped worker, text-to-video, the lane's own defaults
-sh "/Volumes/KH-STUDIO-NOVA/Video Generation Kit/Studio Hub KH/Technical/RUN-LTX-VIDEO-WORKER.command"
+sh "/Volumes/KH-STUDIO-NOVA/1 Install Apps/Studio Hub/Technical/RUN-LTX-VIDEO-WORKER.command"
 
 # through the shipped worker, image-to-video (the heavier door; scene-first)
 STUDIOHUB_LTX_IMAGE=~/Desktop/scene.png \
-  sh "/Volumes/KH-STUDIO-NOVA/Video Generation Kit/Studio Hub KH/Technical/RUN-LTX-VIDEO-WORKER.command"
+  sh "/Volumes/KH-STUDIO-NOVA/1 Install Apps/Studio Hub/Technical/RUN-LTX-VIDEO-WORKER.command"
 
 # a different configuration of the same run
 STUDIOHUB_ASPECT=16:9 STUDIOHUB_RESOLUTION=288p STUDIOHUB_DURATION=2 \
-  sh "/Volumes/KH-STUDIO-NOVA/Video Generation Kit/Studio Hub KH/Technical/RUN-LTX-VIDEO-WORKER.command"
+  sh "/Volumes/KH-STUDIO-NOVA/1 Install Apps/Studio Hub/Technical/RUN-LTX-VIDEO-WORKER.command"
 ```
 
 The knobs that are read: `STUDIOHUB_LTX_IMAGE`, `STUDIOHUB_PROMPT`, `STUDIOHUB_ASPECT`,

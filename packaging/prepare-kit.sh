@@ -12,10 +12,8 @@ set -u
 # the worktree the operator is working in.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VOLUME="${1:?usage: prepare-kit.sh <volume name>}"
-# The kit moved into the "Video Generation Kit" folder; the old path is kept as a
-# fallback so this still works on a drive that has not been restructured yet.
-KIT="/Volumes/$VOLUME/Video Generation Kit/Studio Hub KH"
-[ -d "$KIT" ] || KIT="/Volumes/$VOLUME/Studio Hub App"
+# The owner-approved installer layout; never recreate the retired kit folder.
+KIT="/Volumes/$VOLUME/1 Install Apps/Studio Hub"
 # The staged app this drive is prepared from. It was hard-coded to a single stage directory, which
 # is how a drive gets prepared from an old build while the release moves on; the stage is now named
 # by the caller (`STAGE_DIR=... bash prepare-kit.sh <volume>`) and defaults to the newest one that

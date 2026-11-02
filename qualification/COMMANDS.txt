@@ -32,7 +32,7 @@ Importing a folder you already have still works with it on.
 ------------------------------------------------------------------
 On the Mac that has the app installed:
 
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/verify-launch.sh"
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/verify-launch.sh"
 
 It prints RESULT: PASS, or RESULT: FAIL and the reason. Run this before opening
 the app. If it fails, copy the whole output back.
@@ -53,8 +53,8 @@ without pressing Verify.
 
 Doing it by hand instead, if a launcher ever refuses to run:
 
-    cp -Rp "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Studio Hub.app" /Applications/
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/Technical/copy-models.command"
+    cp -Rp "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/Studio Hub.app" /Applications/
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/Technical/copy-models.command"
 
 The models land in ~/StudioHubModels, and that is the folder the app offers as
 "Use the Models Already on This Mac". Keep a library out of Downloads, Desktop
@@ -86,7 +86,7 @@ Quieter version, same effect:
 The app shows a model only when its package is installed AND it is in the
 catalog the matching Studio reports. This prints both, per model:
 
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/studiohub-check.sh"
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/studiohub-check.sh"
 
 In that output, look at section 6b. Send me the whole file if you can. What it
 tells us:
@@ -103,7 +103,7 @@ tells us:
 
 Also useful, the two lists side by side:
 
-    ls "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/model-library"
+    ls "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/model-library"
     ls "/Applications/Studio Hub.app/Contents/Resources/model-manifests"
 
 
@@ -113,7 +113,7 @@ Also useful, the two lists side by side:
 This one uses only the app's own Python, so macOS cannot ask you to install
 anything:
 
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/why-models.sh"
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/why-models.sh"
 
 Read it in this order:
   A. which build is installed - compare it with the line it prints for "newest"
@@ -133,11 +133,11 @@ does not have - it is never needed by the app.
 ------------------------------------------------------------------
 No clicking. Point it at the folder that holds your voices:
 
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/run-voice-import.sh" "/Volumes/KH-STUDIO-ATLAS/studio-models/voices"
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/run-voice-import.sh" "/Volumes/KH-STUDIO-ATLAS/studio-models/voices"
 
 See what it would do first, without writing anything:
 
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/run-voice-import.sh" "/path/to/voices" --dry-run
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/run-voice-import.sh" "/path/to/voices" --dry-run
 
 It reads one folder per voice (a clip, and a transcript beside it if you have one). Voices
 without a transcript are still imported - they show as needing one, and you can add it in the
@@ -152,7 +152,7 @@ Then open Voices in the app (or press Refresh) and they are there.
 First check they are in a shape the importer reads - one folder per voice,
 containing a clip and (for cloning) a transcript file:
 
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/check-voices-folder.sh" "/Volumes/KH-STUDIO-ATLAS/studio-models/voices"
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/check-voices-folder.sh" "/Volumes/KH-STUDIO-ATLAS/studio-models/voices"
 
 Point it at whichever folder holds them. It lists each voice and says whether it
 is ready, then in the app: Voices -> Import Folder... and choose the same folder.
@@ -187,14 +187,14 @@ answer.)
 5. Full diagnosis, when you want one file to send back
 ------------------------------------------------------------------
 
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/studiohub-check.sh"
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/studiohub-check.sh"
 
 
 ------------------------------------------------------------------
 6. Watch the service start by hand, to see the real error
 ------------------------------------------------------------------
 
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/studiohub-start.sh"
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/studiohub-start.sh"
 
 
 ------------------------------------------------------------------
@@ -212,7 +212,7 @@ Expected right now:
 8. Does the model library still verify? (slow - reads 29 GB)
 ------------------------------------------------------------------
 
-    sh "/Volumes/KH-STUDIO-ATLAS/Studio Hub App/verify-launch.sh" | grep -E "identity|RESULT"
+    sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/verify-launch.sh" | grep -E "identity|RESULT"
 
 
 ------------------------------------------------------------------

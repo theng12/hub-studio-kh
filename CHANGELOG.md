@@ -24,12 +24,17 @@ Gemma 4 26B-A4B QAT MLX 4-bit now uses a 49,152-token total window, including th
 
 The kit readmes now describe Story’s install script and its embedding model. Credits are explained as a Gateway setting.
 
+### Install SSDs use the new app folders
+
+Kit preparation, installer lookup and drive instructions now use `1 Install Apps`, with Hub’s kit in `Studio Hub` and Gateway in `Gateway`. Preparing a drive keeps this layout.
+
 ### Technical notes
 
 - Controller recovery: 466c64f, including fcbea7a and 144c5ca. Recover a hung Hub, restart a dead child watcher, and respect the configured recovery attempts for silent studios. These code paths do not prove the original 1300/1400 failure trigger.
 - Native tab geometry: 40f980e and its branch ancestry. Owned NSSegmentedControl with fixed measured widths and per-segment accessibility; native view and transition checks retained.
 - Release notes: 4475832 + 9441307. CHANGELOG.md is canonical; staging generates Resources/release-notes.md from the plain sections and refuses a version without plain changes. The engineering separator is `### Technical notes`.
 - Gemma 4 26B-A4B QAT MLX 4-bit: 653b457. Manifest context 49,152 and output cap 8,192; actual-manifest boundary checks and measured evidence retained. The existing default-output reservation semantics are unchanged.
+- SSD layout: kit preparation, restructuring, index stamping and active launcher paths use `1 Install Apps/<App>/`; no retired kit root is recreated.
 - Kit readmes: 76f14fa + d62ac9e. Installer and embedding instructions updated; the standalone plan stops describing a second credit balance.
 - Real image prompt limits remain excluded until Story 1.4.376 is installed, per Developer. No image limit or runtime change is included.
 

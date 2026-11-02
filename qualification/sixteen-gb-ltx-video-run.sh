@@ -106,7 +106,7 @@ echo "          $("$RUNTIME" -c 'import mlx.core as mx; print("mlx", mx.__versio
 #    The drive-root `model-library/<modality>-models/` tree is a **stale duplicate that nothing
 #    verifies**: measured the same day, its package count was 43/35/35/34 across the four drives
 #    while the kit's own library was **31 every time**. The complete copy is in the tree the kit's
-#    verifier actually checks, `<drive>/Video Generation Kit/Studio Hub KH/model-library/<package>/<rev>/model`,
+#    verifier actually checks, `<drive>/1 Install Apps/Studio Hub/model-library/<package>/<rev>/model`,
 #    and it is complete on all four drives. So that path is tried **first**, and an incomplete
 #    candidate is now **ineligible** rather than chosen-then-warned-about: a truncated pack cannot
 #    load, so running it only produces a misleading error.
@@ -127,7 +127,7 @@ MODEL_PARTIAL=""
 for cand in \
     "${STUDIOHUB_LTX_MODEL:-}" \
     "$HERE/ltx-2.3-22b-ram-12gb-mlx" \
-    /Volumes/KH-STUDIO-*/"Video Generation Kit/Studio Hub KH/model-library/ltx-2-3-22b-ram-12gb-mlx"/*/model \
+    /Volumes/KH-STUDIO-*/"1 Install Apps/Studio Hub/model-library/ltx-2-3-22b-ram-12gb-mlx"/*/model \
     /Volumes/KH-STUDIO-*/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx \
     "$HOME/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx"/*/model \
     "$HOME/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx" \
@@ -160,7 +160,7 @@ if [ -z "$MODEL_DIR" ]; then
         echo "than running it is the point of this message."
         echo
         echo "The complete copy ships on the KH-STUDIO drives at"
-        echo "  <drive>/Video Generation Kit/Studio Hub KH/model-library/ltx-2-3-22b-ram-12gb-mlx/<rev>/model"
+        echo "  <drive>/1 Install Apps/Studio Hub/model-library/ltx-2-3-22b-ram-12gb-mlx/<rev>/model"
         echo "and the app installs one to ~/StudioHubModels when you pick the model in Models."
         echo
         echo "Point this script at a good copy:  STUDIOHUB_LTX_MODEL=/path/to/model $0"

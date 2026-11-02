@@ -4,7 +4,7 @@
 #
 #   bash packaging/kit-extras/prepare-kit-extras.sh "<kit folder>" "<trash folder>"
 #
-# <kit folder> is ".../Video Generation Kit/Studio Hub KH"; <trash folder> is that volume's `_trash`.
+# <kit folder> is ".../1 Install Apps/Studio Hub"; <trash folder> is that volume's `_trash`.
 # The installer comes from KIT_ASSETS (default ~/Developer/_orchestra/kit-assets) and the command
 # from this folder; both are copied and their sha256 is checked against the source. An older
 # YamDisplay*.dmg already in Extras is moved to the trash folder, never deleted. Anything else in

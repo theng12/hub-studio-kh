@@ -1,5 +1,5 @@
 #!/bin/bash
-# Lay each SSD out as "Video Generation Kit/{GatewayKH,Story Studio,Studio Hub KH,KH Updater}".
+# Lay each SSD out as "1 Install Apps/{Gateway,Story Studio,Studio Hub,KH Updater}".
 #
 # Safe by construction: every move is a rename inside one volume, so the model library is
 # never copied, and nothing is overwritten - a destination that already exists is refused
@@ -18,7 +18,7 @@
 # Installers are matched by pattern (`Story Studio KH*.dmg`, `StudioHub-*.dmg`), because a
 # version-pinned name means a new build silently stays where it is. The GatewayKH guides and
 # SHA256SUMS are repointed at the sibling Studio Hub KH folder, because the spare StudioHub DMG
-# inside GatewayKH/installers is a second copy of a kit that already ships in full.
+# inside Gateway/installers is a second copy of a kit that already ships in full.
 #
 # **The KH Updater folder is laid out from two inputs named by the caller** - `--agent-kit DIR`
 # (kh-updater's own `packaging/build-agent-kit.sh` output, credential-free) and
@@ -37,7 +37,7 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 SRC="$ROOT_DIR/packaging/kit-readmes"
 DRY="${DRY:-0}"
 STAMP="${STAMP:-$(date +%Y-%m-%d)}"
-KIT_FOLDERS=("Video Generation Kit" "GatewayKH App" "Studio Hub App")
+KIT_FOLDERS=("1 Install Apps" "GatewayKH App" "Studio Hub App")
 #: This repository's half of the KH Updater folder: the installer, the apps config, the helper.
 KH_UPDATER_SOURCE="${KH_UPDATER_SOURCE:-$ROOT_DIR/packaging/kit-khu}"
 #: The two inputs the caller names. Empty means "this drive cannot carry an installer yet".
@@ -142,7 +142,7 @@ move_into() { # src dst
   run mv "$src" "$dst"
 }
 
-kh_updater_layout() { # $1 = the drive's "Video Generation Kit" folder
+kh_updater_layout() { # $1 = the drive's "1 Install Apps" folder
   # Two inputs, named by the caller: kh-updater's built agent kit (credential-free) and the
   # publisher's `publisher.json` (the trust anchor). Nothing is read from a fixed path - a kit
   # build that guessed is how a drive gets an agent from last month.
@@ -229,7 +229,7 @@ for V in "${DRIVES[@]}"; do
   esac
   echo "===== $V"
   if [ ! -d "$ROOT" ]; then echo "  NOT MOUNTED, skipped"; continue; fi
-  KIT="$ROOT/Video Generation Kit"
+  KIT="$ROOT/1 Install Apps"
   TRASH="$ROOT/_trash"
   # The signing key backup is measured before anything is touched and again at the end of this
   # drive's run. It is never read into the kit, never listed and never moved: the digest exists so
@@ -239,8 +239,8 @@ for V in "${DRIVES[@]}"; do
 
   run mkdir -p "$KIT" "$KIT/Story Studio"
 
-  move_into "$ROOT/GatewayKH App" "$KIT/GatewayKH"
-  move_into "$ROOT/Studio Hub App" "$KIT/Studio Hub KH"
+  move_into "$ROOT/GatewayKH App" "$KIT/Gateway"
+  move_into "$ROOT/Studio Hub App" "$KIT/Studio Hub"
   # Whatever Story Studio installer this drive carries, by pattern: a build this script has never
   # seen is still placed, and a second one left beside it is moved too rather than left behind.
   for loose in "$ROOT"/Story\ Studio\ KH*.dmg; do
@@ -248,11 +248,13 @@ for V in "${DRIVES[@]}"; do
     move_into "$loose" "$KIT/Story Studio/$(basename "$loose")"
   done
 
+  run mkdir -p "$KIT/Studio Hub" "$KIT/Gateway"
+
   # Duplicates -> this drive's _trash, keeping the sub-structure.
   run mkdir -p "$TRASH/duplicate-kit-$STAMP"
   # A spare Studio Hub installer inside the gateway kit is a duplicate of the sibling Studio Hub
   # KH folder whatever version it is, so the pattern - not a pinned filename - decides.
-  for duplicate in "$KIT/GatewayKH/installers"/StudioHub-*.dmg; do
+  for duplicate in "$KIT/Gateway/installers"/StudioHub-*.dmg; do
     [ -e "$duplicate" ] || continue
     echo "  duplicate: $(basename "$duplicate") -> _trash/duplicate-kit-$STAMP/"
     run mv "$duplicate" "$TRASH/duplicate-kit-$STAMP/$(basename "$duplicate")"
@@ -260,23 +262,23 @@ for V in "${DRIVES[@]}"; do
   # The kit's own README is superseded by packaging/kit-readmes/GatewayKH.md. Compare before
   # moving, so a second run cannot mistake our README for theirs and overwrite the preserved
   # original in _trash.
-  if [ -f "$KIT/GatewayKH/README.md" ] \
-     && ! cmp -s "$SRC/GatewayKH.md" "$KIT/GatewayKH/README.md"; then
+  if [ -f "$KIT/Gateway/README.md" ] \
+     && ! cmp -s "$SRC/GatewayKH.md" "$KIT/Gateway/README.md"; then
     echo "  superseded: GatewayKH kit README -> _trash/duplicate-kit-$STAMP/"
-    run mv "$KIT/GatewayKH/README.md" \
+    run mv "$KIT/Gateway/README.md" \
           "$TRASH/duplicate-kit-$STAMP/GatewayKH-kit-README.md"
   fi
 
   echo "  -- readmes"
   # `README.md` is the kit index and lives in two places on a prepared drive: the kit's own root
-  # and inside `Studio Hub KH/`. `kit_stamp_index.py` stamps the second one and mirrors it over the
+  # and inside `Studio Hub/`. `kit_stamp_index.py` stamps the second one and mirrors it over the
   # first, so leaving either without an index is how a drive came to describe a version it did not
   # carry. The Hub's own page is a different document and keeps the name it has on the drives.
   for pair in "README.md:$KIT/README.md" \
-              "README.md:$KIT/Studio Hub KH/README.md" \
-              "GatewayKH.md:$KIT/GatewayKH/README.md" \
+              "README.md:$KIT/Studio Hub/README.md" \
+              "GatewayKH.md:$KIT/Gateway/README.md" \
               "Story Studio.md:$KIT/Story Studio/README.md" \
-              "Studio Hub KH.md:$KIT/Studio Hub KH/Studio Hub KH.md"; do
+              "Studio Hub KH.md:$KIT/Studio Hub/Studio Hub KH.md"; do
     from="$SRC/${pair%%:*}"; to="${pair#*:}"
     if [ ! -f "$from" ]; then echo "  MISSING SOURCE: $from"; continue; fi
     echo "  README -> $to"
@@ -288,7 +290,7 @@ for V in "${DRIVES[@]}"; do
   # Regenerate the gateway kit's checksums from whatever installers are actually present,
   # so this stays correct when the gateway DMG is replaced by a later version. The spare
   # Studio Hub DMG was moved to _trash above, so it no longer appears here.
-  GW="$KIT/GatewayKH"
+  GW="$KIT/Gateway"
   if [ -d "$GW/installers" ]; then
     echo "  SHA256SUMS.txt regenerated from installers/"
     run bash -c "cd '$GW' && shasum -a 256 installers/*.dmg content-shelf-manifest-*.tsv > SHA256SUMS.txt"

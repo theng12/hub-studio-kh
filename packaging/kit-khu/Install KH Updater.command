@@ -73,7 +73,7 @@ else
   for candidate in "/Applications/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3" \
                    "$HOME/Applications/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3" \
                    "/usr/bin/python3" \
-                   "$HERE/../Studio Hub KH/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3"; do
+                   "$HERE/../Studio Hub/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3"; do
     [ -x "$candidate" ] || continue
     # `/usr/bin/python3` is present on a Mac with no developer tools and only prints a prompt to
     # install them, so the candidate has to actually run.

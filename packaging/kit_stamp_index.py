@@ -14,10 +14,10 @@ fixed the same way this file fixes the other two: **derive it from the artefact 
 What it reads, and what it refuses to guess:
 
   * **Studio Hub** — the row already points at the kit's generated
-    `Studio Hub KH/focused-release-manifest.json`, and is left alone for that reason. This script
+    `Studio Hub/focused-release-manifest.json`, and is left alone for that reason. This script
     does not restate a number the manifest already derives.
   * **Story Studio** — the newest `*.dmg` in `Story Studio/`, version read from its filename.
-  * **GatewayKH** — the newest `*.dmg` in `GatewayKH/installers/`, version read from its filename.
+  * **GatewayKH** — the newest `*.dmg` in `Gateway/installers/`, version read from its filename.
   * **KH Updater** — the `VERSION` inside `KH Updater/khu-agent/`, which is what the agent kit on
     that drive actually is. A drive laid out before the publisher key existed carries no agent kit,
     so there is no version to state: that row is left alone and reported, and the row itself names
@@ -143,8 +143,8 @@ def stamp(drive: Path) -> int:
         print(f"REFUSED: {drive} is inside the publisher signing key backup, which is not part "
               "of the kit")
         return 2
-    kit = drive / "Video Generation Kit"
-    index = kit / "Studio Hub KH" / "README.md"
+    kit = drive / "1 Install Apps"
+    index = kit / "Studio Hub" / "README.md"
     if not index.exists():
         print(f"no kit index at {index.resolve()} — is {drive.resolve()} the drive?")
         return 1
@@ -162,12 +162,12 @@ def stamp(drive: Path) -> int:
         else:
             print(f"Story Studio  -> {story_version}   ({story.name})")
 
-    gateway, gateway_version = newest_installer(kit / "GatewayKH" / "installers")
+    gateway, gateway_version = newest_installer(kit / "Gateway" / "installers")
     if gateway is None or gateway_version is None:
         problems.append(
-            f"GatewayKH: no installer with a version in its name under {kit / 'GatewayKH' / 'installers'}")
+            f"GatewayKH: no installer with a version in its name under {kit / 'Gateway' / 'installers'}")
     else:
-        text, ok = _stamp_row(text, "GatewayKH", gateway_version)
+        text, ok = _stamp_row(text, "Gateway", gateway_version)
         if not ok:
             problems.append("GatewayKH: the index has no row for that folder")
         else:
@@ -288,18 +288,18 @@ def rewrite_installer_names(folder: Path, installer: Path, *, prefix: str = "") 
 
 def stamp_documents(drive: Path) -> int:
     """Rewrite the installer names in each app's instructions, from what is on the drive."""
-    kit = drive / "Video Generation Kit"
+    kit = drive / "1 Install Apps"
     problems = 0
     story, _ = newest_installer(kit / "Story Studio")
     if story is not None:
         rewrite_installer_names(kit / "Story Studio", story)
     else:
         problems += 1
-    gateway, _ = newest_installer(kit / "GatewayKH" / "installers")
+    gateway, _ = newest_installer(kit / "Gateway" / "installers")
     if gateway is not None:
         # The Gateway kit is the one that keeps its DMG in a subfolder, so its documents say
         # `installers/<name>` — and its own folder is the root of those documents.
-        rewrite_installer_names(kit / "GatewayKH", gateway, prefix="installers/")
+        rewrite_installer_names(kit / "Gateway", gateway, prefix="installers/")
     else:
         problems += 1
     return problems

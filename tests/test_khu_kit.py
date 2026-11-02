@@ -278,7 +278,23 @@ class DriveLayoutTests(unittest.TestCase):
 
     @property
     def folder(self) -> Path:
-        return self.drive / "Video Generation Kit" / "KH Updater"
+        return self.drive / "1 Install Apps" / "KH Updater"
+
+    def test_an_already_reorganized_drive_keeps_the_new_layout(self) -> None:
+        apps = self.drive / "1 Install Apps"
+        apps.mkdir()
+        (self.drive / "Studio Hub App").rename(apps / "Studio Hub")
+        (self.drive / "GatewayKH App").rename(apps / "Gateway")
+        (apps / "Story Studio").mkdir()
+        installer = self.drive / "Story Studio KH 1.4.351-arm64.dmg"
+        installer.rename(apps / "Story Studio" / installer.name)
+        result = restructure(self.drive)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((apps / "Studio Hub" / "marker").read_bytes(), b"app")
+        self.assertTrue((apps / "Studio Hub" / "README.md").is_file())
+        self.assertTrue((apps / "Gateway" / "installers" / "gateway-kh-0.2.195.dmg").is_file())
+        self.assertFalse((self.drive / "Video Generation Kit").exists())
+        self.assertFalse((apps / "Studio Hub KH").exists())
 
     def test_without_a_publisher_record_there_is_no_install_file_and_it_says_why(self) -> None:
         result = restructure(self.drive)
@@ -359,18 +375,18 @@ class DriveLayoutTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_the_readme_index_is_on_the_drive_where_the_stamper_looks_for_it(self) -> None:
-        """`kit_stamp_index.py` stamps `Studio Hub KH/README.md` and mirrors it to the kit root.
+        """`kit_stamp_index.py` stamps `Studio Hub/README.md` and mirrors it to the kit root.
 
         Those two are the kit index and must carry the KH Updater row on a prepared drive; the Hub's
         own page is a different document beside them.
         """
         restructure(self.drive)
-        kit = self.drive / "Video Generation Kit"
+        kit = self.drive / "1 Install Apps"
         index_root = (kit / "README.md").read_text()
-        index_hub = (kit / "Studio Hub KH" / "README.md").read_text()
+        index_hub = (kit / "Studio Hub" / "README.md").read_text()
         self.assertIn("| `KH Updater/` | KH Updater |", index_root)
         self.assertEqual(index_root, index_hub)
-        self.assertTrue((kit / "Studio Hub KH" / "Studio Hub KH.md").read_text()
+        self.assertTrue((kit / "Studio Hub" / "Studio Hub KH.md").read_text()
                         .startswith("# Studio Hub KH — the Macs that run the models"))
 
 
@@ -435,7 +451,7 @@ class SigningKeyBackupTests(unittest.TestCase):
 
     def test_it_is_never_named_in_a_readme_or_a_checksum_on_the_drive(self) -> None:
         restructure(self.drive, "--agent-kit", str(self.kit), "--publisher-json", str(self.descriptor))
-        kit = self.drive / "Video Generation Kit"
+        kit = self.drive / "1 Install Apps"
         documents = [p for p in sorted(kit.rglob("*"))
                      if p.is_file() and p.suffix in (".md", ".txt")]
         self.assertTrue(documents, "the drive has no documents to check")
@@ -446,7 +462,7 @@ class SigningKeyBackupTests(unittest.TestCase):
                 continue
             self.assertNotIn(PROTECTED, text, path)
             self.assertNotIn("khupdater-publisher-private.key", text, path)
-        for checksum in ("GatewayKH/SHA256SUMS.txt", "Story Studio/SHA256.txt"):
+        for checksum in ("Gateway/SHA256SUMS.txt", "Story Studio/SHA256.txt"):
             text = (kit / checksum).read_text()
             self.assertNotIn(PROTECTED, text, checksum)
             self.assertNotIn("khupdater-publisher-private.key", text, checksum)
@@ -643,7 +659,7 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3", text)
         order = [text.index("/Applications/Studio Hub.app"),
                  text.index("/usr/bin/python3"),
-                 text.index("../Studio Hub KH/Studio Hub.app")]
+                 text.index("../Studio Hub/Studio Hub.app")]
         self.assertEqual(order, sorted(order), "the drive's copy must be the last resort")
 
     def test_no_publisher_record_refuses_before_anything_is_written(self) -> None:
@@ -900,7 +916,7 @@ class IndexStampTests(unittest.TestCase):
         self.descriptor = write_descriptor(self.work / "publisher.json", 8790, "A" * 43 + "=")
 
     def index(self) -> Path:
-        return self.drive / "Video Generation Kit" / "Studio Hub KH" / "README.md"
+        return self.drive / "1 Install Apps" / "Studio Hub" / "README.md"
 
     def test_the_row_takes_the_version_the_agent_kit_states(self) -> None:
         write_agent_kit_source(self.work, version="2.4.1")
@@ -912,7 +928,7 @@ class IndexStampTests(unittest.TestCase):
         self.assertIn("KH Updater    -> 2.4.1", result.stdout)
         self.assertIn("| 2.4.1 |", self.index().read_text())
         self.assertEqual(self.index().read_text(),
-                         (self.drive / "Video Generation Kit" / "README.md").read_text())
+                         (self.drive / "1 Install Apps" / "README.md").read_text())
 
     def test_a_drive_without_a_staged_agent_leaves_that_row_alone(self) -> None:
         """The row names the artefact, so a drive with no agent kit is described truthfully by
@@ -927,7 +943,7 @@ class IndexStampTests(unittest.TestCase):
 
     def test_a_drive_with_no_kh_updater_folder_at_all_is_left_alone_too(self) -> None:
         restructure(self.drive)
-        shutil.rmtree(self.drive / "Video Generation Kit" / "KH Updater")
+        shutil.rmtree(self.drive / "1 Install Apps" / "KH Updater")
         result = subprocess.run([sys.executable, str(STAMP_INDEX), str(self.drive)],
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -938,7 +954,7 @@ class IndexStampTests(unittest.TestCase):
         here. A drive carrying an agent kit that cannot say what it is must not be stamped."""
         restructure(self.drive, "--agent-kit", str(self.kit),
                     "--publisher-json", str(self.descriptor))
-        (self.drive / "Video Generation Kit" / "KH Updater" / "khu-agent" / "VERSION").write_text(
+        (self.drive / "1 Install Apps" / "KH Updater" / "khu-agent" / "VERSION").write_text(
             "not a version\n")
         before = self.index().read_bytes()
         result = subprocess.run([sys.executable, str(STAMP_INDEX), str(self.drive)],

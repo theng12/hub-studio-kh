@@ -205,9 +205,9 @@ class KitDocumentNumbersTests(unittest.TestCase):
     def test_the_kit_index_does_not_pin_the_studio_hub_version(self) -> None:
         """A version in this table went stale every release; it points at the kit receipt now."""
         text = self.KIT_INDEX.read_text(encoding="utf-8")
-        row = re.search(r"^\| `Studio Hub KH/` \| ([^|]*) \| ([^|]*) \|", text, re.MULTILINE)
+        row = re.search(r"^\| `Studio Hub/` \| ([^|]*) \| ([^|]*) \|", text, re.MULTILINE)
         self.assertIsNotNone(row, "packaging/kit-readmes/README.md no longer has its Studio Hub "
-                                  "row in the form '| `Studio Hub KH/` | ... | ... | ... |'")
+                                  "row in the form '| `Studio Hub/` | ... | ... | ... |'")
         self.assertIsNone(
             re.search(r"\d+\.\d+\.\d+", row.group(2)),
             "the kit index pins a Studio Hub version, which goes stale on the next release; "
@@ -235,27 +235,27 @@ class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
     def _kit(self, *, story: str | None = "Story Studio KH 9.9.9-arm64.dmg",
              gateway: str | None = "gateway-kh-8.8.8.dmg",
              index: str | None = None) -> Path:
-        kit = self.drive / "Video Generation Kit"
-        (kit / "Studio Hub KH").mkdir(parents=True, exist_ok=True)
+        kit = self.drive / "1 Install Apps"
+        (kit / "Studio Hub").mkdir(parents=True, exist_ok=True)
         if story:
             (kit / "Story Studio").mkdir(parents=True, exist_ok=True)
             (kit / "Story Studio" / story).write_bytes(b"dmg")
         if gateway:
-            (kit / "GatewayKH" / "installers").mkdir(parents=True, exist_ok=True)
-            (kit / "GatewayKH" / "installers" / gateway).write_bytes(b"dmg")
-        (kit / "Studio Hub KH" / "README.md").write_text(index or (
+            (kit / "Gateway" / "installers").mkdir(parents=True, exist_ok=True)
+            (kit / "Gateway" / "installers" / gateway).write_bytes(b"dmg")
+        (kit / "Studio Hub" / "README.md").write_text(index or (
             "| Folder | App | Version | What it does |\n"
             "|---|---|---|---|\n"
             "| `Story Studio/` | Story Studio KH | 1.4.234 | Writes and produces the episode |\n"
-            "| `GatewayKH/` | GatewayKH | 0.2.60 | The middle man |\n"
-            "| `Studio Hub KH/` | Studio Hub | its `focused-release-manifest.json` | Runs the models |\n"
+            "| `Gateway/` | GatewayKH | 0.2.60 | The middle man |\n"
+            "| `Studio Hub/` | Studio Hub | its `focused-release-manifest.json` | Runs the models |\n"
         ), encoding="utf-8")
         return kit
 
     def test_both_rows_take_the_version_the_installer_states(self) -> None:
         kit = self._kit()
         self.assertEqual(self.stamp.stamp(self.drive), 0)
-        text = (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8")
+        text = (kit / "Studio Hub" / "README.md").read_text(encoding="utf-8")
         self.assertIn("| 9.9.9 |", text)
         self.assertIn("| 8.8.8 |", text)
         self.assertNotIn("1.4.234", text)
@@ -267,12 +267,12 @@ class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
         kit = self._kit()
         self.stamp.stamp(self.drive)
         self.assertIn("its `focused-release-manifest.json`",
-                      (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"))
+                      (kit / "Studio Hub" / "README.md").read_text(encoding="utf-8"))
 
     def test_a_missing_installer_refuses_rather_than_stamping_unknown(self) -> None:
         kit = self._kit(story=None)
         self.assertEqual(self.stamp.stamp(self.drive), 2)
-        self.assertIn("1.4.234", (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"),
+        self.assertIn("1.4.234", (kit / "Studio Hub" / "README.md").read_text(encoding="utf-8"),
                       "a refusal must leave the document exactly as it was")
 
     def test_a_filename_with_no_version_refuses_too(self) -> None:
@@ -286,7 +286,7 @@ class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
         (kit / "README.md").write_text("stale", encoding="utf-8")
         self.stamp.stamp(self.drive)
         self.assertEqual((kit / "README.md").read_text(encoding="utf-8"),
-                         (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"))
+                         (kit / "Studio Hub" / "README.md").read_text(encoding="utf-8"))
 
     def test_the_instructions_in_the_body_are_rewritten_too(self) -> None:
         """Stamping the version *line* was not enough — the same document says "Open `…dmg`".
@@ -299,12 +299,12 @@ class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
         (kit / "Story Studio" / "README.md").write_text(
             "# Story Studio\n\n**Version 1.4.219.** Installer: `Story Studio KH 1.4.219-arm64.dmg`\n"
             "\n## Install\n\n1. Open `Story Studio KH 1.4.219-arm64.dmg`.\n", encoding="utf-8")
-        (kit / "GatewayKH" / "README.md").write_text(
+        (kit / "Gateway" / "README.md").write_text(
             "1. Open `installers/gateway-kh-0.2.2-b1c0d8f-202609221617-arm64.dmg`.\n",
             encoding="utf-8")
         self.assertEqual(self.stamp.stamp(self.drive), 0)
         story = (kit / "Story Studio" / "README.md").read_text(encoding="utf-8")
-        gateway = (kit / "GatewayKH" / "README.md").read_text(encoding="utf-8")
+        gateway = (kit / "Gateway" / "README.md").read_text(encoding="utf-8")
         self.assertIn("`Story Studio KH 9.9.9-arm64.dmg`", story)
         self.assertNotIn("1.4.219", story)
         # The Gateway's installer lives in `installers/`, so the rewritten path keeps that prefix.
@@ -314,7 +314,7 @@ class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
         # A document is free to mention a different app's DMG, or a checksum file.
         kit = self._kit()
         (kit / "Story Studio" / "README.md").write_text(
-            "See also `GatewayKH/installers/gateway-kh-0.2.2.dmg` and `SHA256.txt`.\n",
+            "See also `Gateway/installers/gateway-kh-0.2.2.dmg` and `SHA256.txt`.\n",
             encoding="utf-8")
         self.stamp.stamp(self.drive)
         text = (kit / "Story Studio" / "README.md").read_text(encoding="utf-8")
@@ -326,7 +326,7 @@ class TheKitIndexIsStampedFromTheDriveTest(unittest.TestCase):
         import os
         os.utime(kit / "Story Studio" / "Story Studio KH 9.9.10-arm64.dmg", (2_000_000_000, 2_000_000_000))
         self.stamp.stamp(self.drive)
-        self.assertIn("| 9.9.10 |", (kit / "Studio Hub KH" / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("| 9.9.10 |", (kit / "Studio Hub" / "README.md").read_text(encoding="utf-8"))
 
     def test_a_bare_volume_name_is_read_as_a_volume(self) -> None:
         """`prepare-kit.sh` passes the bare name it loops over, and that is how the write was lost.
