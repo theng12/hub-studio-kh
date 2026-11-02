@@ -14,11 +14,11 @@ fixed the same way this file fixes the other two: **derive it from the artefact 
 What it reads, and what it refuses to guess:
 
   * **Studio Hub** — the row already points at the kit's generated
-    `Studio Hub/focused-release-manifest.json`, and is left alone for that reason. This script
+    `Hub Studio KH/focused-release-manifest.json`, and is left alone for that reason. This script
     does not restate a number the manifest already derives.
-  * **Story Studio** — the newest `*.dmg` in `Story Studio/`, version read from its filename.
-  * **GatewayKH** — the newest `*.dmg` in `Gateway/installers/`, version read from its filename.
-  * **KH Updater** — the `VERSION` inside `KH Updater/khu-agent/`, which is what the agent kit on
+  * **Story Studio** — the newest `*.dmg` in `Story Studio KH/`, version read from its filename.
+  * **GatewayKH** — the newest `*.dmg` in `Gateway Studio KH/installers/`, version read from its filename.
+  * **Update Studio KH** — the `VERSION` inside `Update Studio KH/khu-agent/`, which is what the agent kit on
     that drive actually is. A drive laid out before the publisher key existed carries no agent kit,
     so there is no version to state: that row is left alone and reported, and the row itself names
     the artefact rather than a number for exactly that reason. A drive that *does* carry an agent
@@ -58,7 +58,7 @@ PROTECTED_AT_ROOT = "KH Updater signing key backup"
 #: is not an installer whose name happens to carry a number.
 AGENT_VERSION = re.compile(r"[0-9]+(\.[0-9]+)*")
 #: Where the KH Updater kit's staged agent lives, relative to the kit root.
-AGENT_KIT = ("KH Updater", "khu-agent")
+AGENT_KIT = ("Update Studio KH", "khu-agent")
 
 
 def inside_protected(path: Path) -> bool:
@@ -144,7 +144,7 @@ def stamp(drive: Path) -> int:
               "of the kit")
         return 2
     kit = drive / "1 Install Apps"
-    index = kit / "Studio Hub" / "README.md"
+    index = kit / "Hub Studio KH" / "README.md"
     if not index.exists():
         print(f"no kit index at {index.resolve()} — is {drive.resolve()} the drive?")
         return 1
@@ -152,22 +152,22 @@ def stamp(drive: Path) -> int:
     text = index.read_text(encoding="utf-8")
     problems: list[str] = []
 
-    story, story_version = newest_installer(kit / "Story Studio")
+    story, story_version = newest_installer(kit / "Story Studio KH")
     if story is None or story_version is None:
-        problems.append(f"Story Studio: no installer with a version in its name under {kit / 'Story Studio'}")
+        problems.append(f"Story Studio: no installer with a version in its name under {kit / 'Story Studio KH'}")
     else:
-        text, ok = _stamp_row(text, "Story Studio", story_version)
+        text, ok = _stamp_row(text, "Story Studio KH", story_version)
         if not ok:
             problems.append("Story Studio: the index has no row for that folder")
         else:
             print(f"Story Studio  -> {story_version}   ({story.name})")
 
-    gateway, gateway_version = newest_installer(kit / "Gateway" / "installers")
+    gateway, gateway_version = newest_installer(kit / "Gateway Studio KH" / "installers")
     if gateway is None or gateway_version is None:
         problems.append(
-            f"GatewayKH: no installer with a version in its name under {kit / 'Gateway' / 'installers'}")
+            f"GatewayKH: no installer with a version in its name under {kit / 'Gateway Studio KH' / 'installers'}")
     else:
-        text, ok = _stamp_row(text, "Gateway", gateway_version)
+        text, ok = _stamp_row(text, "Gateway Studio KH", gateway_version)
         if not ok:
             problems.append("GatewayKH: the index has no row for that folder")
         else:
@@ -176,15 +176,15 @@ def stamp(drive: Path) -> int:
     agent, agent_reason, agent_defect = agent_version(kit)
     if agent is None:
         if agent_defect:
-            problems.append(f"KH Updater: {agent_reason}")
+            problems.append(f"Update Studio KH: {agent_reason}")
         else:
-            print(f"KH Updater    -- left alone: {agent_reason}")
+            print(f"Update Studio KH -- left alone: {agent_reason}")
     else:
-        text, ok = _stamp_row(text, "KH Updater", agent)
+        text, ok = _stamp_row(text, "Update Studio KH", agent)
         if not ok:
-            problems.append("KH Updater: the index has no row for that folder")
+            problems.append("Update Studio KH: the index has no row for that folder")
         else:
-            print(f"KH Updater    -> {agent}")
+            print(f"Update Studio KH -> {agent}")
 
     if not problems:
         # A separate count: `problems` is the list of *reasons it refused*, and a folder it could
@@ -290,16 +290,16 @@ def stamp_documents(drive: Path) -> int:
     """Rewrite the installer names in each app's instructions, from what is on the drive."""
     kit = drive / "1 Install Apps"
     problems = 0
-    story, _ = newest_installer(kit / "Story Studio")
+    story, _ = newest_installer(kit / "Story Studio KH")
     if story is not None:
-        rewrite_installer_names(kit / "Story Studio", story)
+        rewrite_installer_names(kit / "Story Studio KH", story)
     else:
         problems += 1
-    gateway, _ = newest_installer(kit / "Gateway" / "installers")
+    gateway, _ = newest_installer(kit / "Gateway Studio KH" / "installers")
     if gateway is not None:
         # The Gateway kit is the one that keeps its DMG in a subfolder, so its documents say
         # `installers/<name>` — and its own folder is the root of those documents.
-        rewrite_installer_names(kit / "Gateway", gateway, prefix="installers/")
+        rewrite_installer_names(kit / "Gateway Studio KH", gateway, prefix="installers/")
     else:
         problems += 1
     return problems

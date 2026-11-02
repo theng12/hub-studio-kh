@@ -6,10 +6,10 @@ and the order to set them up.
 
 | Folder | App | Version | What it does |
 |---|---|---|---|
-| `Story Studio/` | Story Studio KH | 1.4.367 | Writes and produces the episode: ideas, script, prompts, thumbnails, final video |
-| `Gateway/` | GatewayKH | 0.2.205 | The middle man: one address, one model catalogue, routes work to your Macs |
-| `Studio Hub/` | Studio Hub | its `focused-release-manifest.json` | Runs the models themselves — images, voice, subtitles, music |
-| `KH Updater/` | KH Updater | its `khu-agent/VERSION` | Keeps the three apps up to date on every Mac, from the publisher's signed releases |
+| `Story Studio KH/` | Story Studio KH | 1.4.367 | Writes and produces the episode: ideas, script, prompts, thumbnails, final video |
+| `Gateway Studio KH/` | Gateway Studio KH | 0.2.205 | The middle man: one address, one model catalogue, routes work to your Macs |
+| `Hub Studio KH/` | Hub Studio KH | its `focused-release-manifest.json` | Runs the models themselves — images, voice, subtitles, music |
+| `Update Studio KH/` | Update Studio KH | its `khu-agent/VERSION` | Keeps the three apps up to date on every Mac, from the publisher's signed releases |
 
 ---
 
@@ -26,12 +26,12 @@ catalogue and a private shelf of your Content Packs. It does **not** generate an
 it needs no GPU and very little memory; it can run on a small always-on Mac.
 
 > **The version numbers above are stamped on the drive, not taken from this file.**
-> `packaging/kit_stamp_index.py` reads them from the newest `Story Studio/*.dmg`, the newest
-> `Gateway/installers/*.dmg` and `KH Updater/khu-agent/VERSION` actually present and rewrites
+> `packaging/kit_stamp_index.py` reads them from the newest `Story Studio KH/*.dmg`, the newest
+> `Gateway Studio KH/installers/*.dmg` and `Update Studio KH/khu-agent/VERSION` actually present and rewrites
 > these rows — and the drive-root copy of this document — every time a kit is prepared.
 > Hand-editing them here is only about giving the *repository* copy a sensible value; the drive
 > always describes what it carries. Two rows name no version in this file for the same reason: the
-> Studio Hub row points at the kit's generated `focused-release-manifest.json`, and the KH Updater
+> Studio Hub row points at the kit's generated `focused-release-manifest.json`, and the Update Studio KH
 > row at the agent kit's own `VERSION`, so neither can describe a build the drive does not carry.
 
 **Studio Hub** is the muscle. It runs the actual models on each Mac. One Mac is the
@@ -72,14 +72,14 @@ contains a secret: every credential is added by hand on the machine that needs i
 
 ## Setup order
 
-Do it in this order. The linking steps each have a guide in `Gateway/`.
+Do it in this order. The linking steps each have a guide in `Gateway Studio KH/`.
 
-1. **Install the apps.** `Studio Hub/` and `Story Studio/` have their own README with
-   the install steps. GatewayKH is in `Gateway/`.
-2. **Install KH Updater on every Mac** — one double-click per Mac: `KH Updater/Install KH
+1. **Install the apps.** `Hub Studio KH/` and `Story Studio KH/` have their own README with
+   the install steps. GatewayKH is in `Gateway Studio KH/`.
+2. **Install KH Updater on every Mac** — one double-click per Mac: `Update Studio KH/Install KH
    Updater.command`, with the publisher's enrolment window open at the Mac Studio first. It
    is what keeps the three apps current from then on, and it is worth doing before the Macs
-   are spread around a site. `KH Updater/README.md` has the two-step version on the
+   are spread around a site. `Update Studio KH/README.md` has the two-step version on the
    publisher. A Mac that already has the agent — every Hub Mac gets it from Studio Hub
    itself — says so and changes nothing.
 3. **Gateway host** — install GatewayKH on one Mac and read its API key (guide
@@ -131,13 +131,13 @@ Do it in this order. The linking steps each have a guide in `Gateway/`.
 ```
 1 Install Apps/
   README.md            ← you are here: the whole setup
-  Gateway/             README.md + installers/ + the six setup guides
-  Story Studio/        README.md + the installer DMG + Install Story Studio.command + EmbeddingGemma/
-  Studio Hub/          README.md + the app, the models and its own guides
-  KH Updater/          README.md + Install KH Updater.command + the agent kit + apps.json
+  Gateway Studio KH/  README.md + installers/ + the six setup guides
+  Story Studio KH/        README.md + the installer DMG + Install Story Studio.command + EmbeddingGemma/
+  Hub Studio KH/          README.md + the app, the models and its own guides
+  Update Studio KH/   README.md + Install KH Updater.command + the agent kit + apps.json
 ```
 
-Each folder's own `README.md` covers that app's role and install steps in detail. `KH Updater/`
+Each folder's own `README.md` covers that app's role and install steps in detail. `Update Studio KH/`
 is the one folder that is not part of the chain: it is the agent that keeps the three apps
 current, and it belongs on every Mac.
 
@@ -146,4 +146,4 @@ current, and it belongs on every Mac.
 Work flows in one direction: **Story Studio → GatewayKH → controller → nodes**. If
 something is not working, test it in that order — first does Story Studio reach the
 gateway, then does the gateway reach the controller, then does the controller reach its
-nodes. `Gateway/05-verify.md` walks exactly that path.
+nodes. `Gateway Studio KH/05-verify.md` walks exactly that path.

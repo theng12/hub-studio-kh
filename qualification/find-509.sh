@@ -1,7 +1,7 @@
 #!/bin/sh
 # What returned 509? The Hub logs every request with its status.
 #
-#   sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/find-509.sh"
+#   sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Hub Studio KH/find-509.sh"
 #
 # Reads only.
 

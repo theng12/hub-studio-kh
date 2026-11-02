@@ -313,7 +313,7 @@ class PrepareKitExtrasTests(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
         self.assets = self.tmp / "assets"
         self.assets.mkdir()
-        self.kit = self.tmp / "vol" / "1 Install Apps" / "Studio Hub"
+        self.kit = self.tmp / "vol" / "1 Install Apps" / "Hub Studio KH"
         self.kit.mkdir(parents=True)
         self.trash = self.tmp / "vol" / "_trash"
         (self.assets / "YamDisplay2.4.8.4.dmg").write_bytes(b"new image" * 1000)

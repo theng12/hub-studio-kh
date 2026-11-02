@@ -69,7 +69,7 @@ def build(app: Path, output: Path) -> None:
         # Content/link identity and the manifest's executable flags remain unchanged.
         subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / 'Studio Hub.app')], check=True)
         (scratch / 'Applications').symlink_to('/Applications', target_is_directory=True)
-        subprocess.run(['diskutil', 'image', 'create', 'from', '--volumeName', 'Studio Hub',
+        subprocess.run(['diskutil', 'image', 'create', 'from', '--volumeName', 'Hub Studio KH',
                         '--format', 'UDZO', str(scratch), str(output)], check=True)
         subprocess.run(['hdiutil', 'verify', str(output)], check=True)
         complete = True

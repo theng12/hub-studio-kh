@@ -13,7 +13,7 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VOLUME="${1:?usage: prepare-kit.sh <volume name>}"
 # The owner-approved installer layout; never recreate the retired kit folder.
-KIT="/Volumes/$VOLUME/1 Install Apps/Studio Hub"
+KIT="/Volumes/$VOLUME/1 Install Apps/Hub Studio KH"
 # The staged app this drive is prepared from. It was hard-coded to a single stage directory, which
 # is how a drive gets prepared from an old build while the release moves on; the stage is now named
 # by the caller (`STAGE_DIR=... bash prepare-kit.sh <volume>`) and defaults to the newest one that

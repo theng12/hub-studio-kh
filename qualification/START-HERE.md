@@ -145,7 +145,7 @@ Open the app's menu bar icon and choose **Open Engine Log**. Or run this and sen
 the result:
 
 ```
-sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/Technical/verify-launch.sh"
+sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Hub Studio KH/Technical/verify-launch.sh"
 ```
 
 **Anything else.** Send me a photo of the screen, or the text. I will sort it.

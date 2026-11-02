@@ -26,7 +26,7 @@ failure here means the machine differs, not that the step is wrong.
 Yam Display installs automatically with **1 - Install the app** (or run `Extras/Install Yam Display.command`). It is the virtual display a headless Mac mini needs.
 
 If any step fails, stop and send me: the step number, a photo of the screen, and the output of
-`sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/Technical/verify-launch.sh"`.
+`sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Hub Studio KH/Technical/verify-launch.sh"`.
 
 ## Before the rest of the fleet
 

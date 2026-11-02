@@ -99,7 +99,7 @@ def stage_agent_kit(output: Path, kit: Path, descriptor: Path) -> Path:
 
 
 def kit_folder(root: Path, kit: Path, descriptor: Path) -> Path:
-    """A laid-out `KH Updater/` folder, built from this repository's own sources."""
+    """A laid-out `Update Studio KH/` folder, built from this repository's own sources."""
     folder = root / "KH Updater"
     folder.mkdir(parents=True)
     for name in (COMMAND, INSTALLER, APPS):
@@ -263,7 +263,7 @@ class PublisherFixture:
 
 # --------------------------------------------------------------------------- the layout on a drive
 class DriveLayoutTests(unittest.TestCase):
-    """What `kit-restructure.sh` puts in `KH Updater/`, with and without a publisher record.
+    """What `kit-restructure.sh` puts in `Update Studio KH/`, with and without a publisher record.
 
     Without one there must be **no install file**: an agent installed from a kit with no pinned
     publisher key can never enrol, and it would look from the outside exactly like a Mac that is
@@ -278,21 +278,21 @@ class DriveLayoutTests(unittest.TestCase):
 
     @property
     def folder(self) -> Path:
-        return self.drive / "1 Install Apps" / "KH Updater"
+        return self.drive / "1 Install Apps" / "Update Studio KH"
 
     def test_an_already_reorganized_drive_keeps_the_new_layout(self) -> None:
         apps = self.drive / "1 Install Apps"
         apps.mkdir()
-        (self.drive / "Studio Hub App").rename(apps / "Studio Hub")
-        (self.drive / "GatewayKH App").rename(apps / "Gateway")
-        (apps / "Story Studio").mkdir()
+        (self.drive / "Studio Hub App").rename(apps / "Hub Studio KH")
+        (self.drive / "GatewayKH App").rename(apps / "Gateway Studio KH")
+        (apps / "Story Studio KH").mkdir()
         installer = self.drive / "Story Studio KH 1.4.351-arm64.dmg"
-        installer.rename(apps / "Story Studio" / installer.name)
+        installer.rename(apps / "Story Studio KH" / installer.name)
         result = restructure(self.drive)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual((apps / "Studio Hub" / "marker").read_bytes(), b"app")
-        self.assertTrue((apps / "Studio Hub" / "README.md").is_file())
-        self.assertTrue((apps / "Gateway" / "installers" / "gateway-kh-0.2.195.dmg").is_file())
+        self.assertEqual((apps / "Hub Studio KH" / "marker").read_bytes(), b"app")
+        self.assertTrue((apps / "Hub Studio KH" / "README.md").is_file())
+        self.assertTrue((apps / "Gateway Studio KH" / "installers" / "gateway-kh-0.2.195.dmg").is_file())
         self.assertFalse((self.drive / "Video Generation Kit").exists())
         self.assertFalse((apps / "Studio Hub KH").exists())
 
@@ -375,7 +375,7 @@ class DriveLayoutTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_the_readme_index_is_on_the_drive_where_the_stamper_looks_for_it(self) -> None:
-        """`kit_stamp_index.py` stamps `Studio Hub/README.md` and mirrors it to the kit root.
+        """`kit_stamp_index.py` stamps `Hub Studio KH/README.md` and mirrors it to the kit root.
 
         Those two are the kit index and must carry the KH Updater row on a prepared drive; the Hub's
         own page is a different document beside them.
@@ -383,10 +383,10 @@ class DriveLayoutTests(unittest.TestCase):
         restructure(self.drive)
         kit = self.drive / "1 Install Apps"
         index_root = (kit / "README.md").read_text()
-        index_hub = (kit / "Studio Hub" / "README.md").read_text()
-        self.assertIn("| `KH Updater/` | KH Updater |", index_root)
+        index_hub = (kit / "Hub Studio KH" / "README.md").read_text()
+        self.assertIn("| `Update Studio KH/` | Update Studio KH |", index_root)
         self.assertEqual(index_root, index_hub)
-        self.assertTrue((kit / "Studio Hub" / "Studio Hub KH.md").read_text()
+        self.assertTrue((kit / "Hub Studio KH" / "Studio Hub KH.md").read_text()
                         .startswith("# Studio Hub KH — the Macs that run the models"))
 
 
@@ -462,7 +462,7 @@ class SigningKeyBackupTests(unittest.TestCase):
                 continue
             self.assertNotIn(PROTECTED, text, path)
             self.assertNotIn("khupdater-publisher-private.key", text, path)
-        for checksum in ("Gateway/SHA256SUMS.txt", "Story Studio/SHA256.txt"):
+        for checksum in ("Gateway Studio KH/SHA256SUMS.txt", "Story Studio KH/SHA256.txt"):
             text = (kit / checksum).read_text()
             self.assertNotIn(PROTECTED, text, checksum)
             self.assertNotIn("khupdater-publisher-private.key", text, checksum)
@@ -659,7 +659,7 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3", text)
         order = [text.index("/Applications/Studio Hub.app"),
                  text.index("/usr/bin/python3"),
-                 text.index("../Studio Hub/Studio Hub.app")]
+                 text.index("../Hub Studio KH/Studio Hub.app")]
         self.assertEqual(order, sorted(order), "the drive's copy must be the last resort")
 
     def test_no_publisher_record_refuses_before_anything_is_written(self) -> None:
@@ -916,7 +916,7 @@ class IndexStampTests(unittest.TestCase):
         self.descriptor = write_descriptor(self.work / "publisher.json", 8790, "A" * 43 + "=")
 
     def index(self) -> Path:
-        return self.drive / "1 Install Apps" / "Studio Hub" / "README.md"
+        return self.drive / "1 Install Apps" / "Hub Studio KH" / "README.md"
 
     def test_the_row_takes_the_version_the_agent_kit_states(self) -> None:
         write_agent_kit_source(self.work, version="2.4.1")
@@ -925,7 +925,7 @@ class IndexStampTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(STAMP_INDEX), str(self.drive)],
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("KH Updater    -> 2.4.1", result.stdout)
+        self.assertIn("Update Studio KH -> 2.4.1", result.stdout)
         self.assertIn("| 2.4.1 |", self.index().read_text())
         self.assertEqual(self.index().read_text(),
                          (self.drive / "1 Install Apps" / "README.md").read_text())
@@ -938,29 +938,29 @@ class IndexStampTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(STAMP_INDEX), str(self.drive)],
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("KH Updater    -- left alone: no agent kit on this drive", result.stdout)
+        self.assertIn("Update Studio KH -- left alone: no agent kit on this drive", result.stdout)
         self.assertIn("| its `khu-agent/VERSION` |", self.index().read_text())
 
     def test_a_drive_with_no_kh_updater_folder_at_all_is_left_alone_too(self) -> None:
         restructure(self.drive)
-        shutil.rmtree(self.drive / "1 Install Apps" / "KH Updater")
+        shutil.rmtree(self.drive / "1 Install Apps" / "Update Studio KH")
         result = subprocess.run([sys.executable, str(STAMP_INDEX), str(self.drive)],
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("KH Updater    -- left alone:", result.stdout)
+        self.assertIn("Update Studio KH -- left alone:", result.stdout)
 
     def test_an_agent_kit_whose_version_cannot_be_read_is_a_defect(self) -> None:
         """`None` means two things and they are kept apart: nothing here, versus something broken
         here. A drive carrying an agent kit that cannot say what it is must not be stamped."""
         restructure(self.drive, "--agent-kit", str(self.kit),
                     "--publisher-json", str(self.descriptor))
-        (self.drive / "1 Install Apps" / "KH Updater" / "khu-agent" / "VERSION").write_text(
+        (self.drive / "1 Install Apps" / "Update Studio KH" / "khu-agent" / "VERSION").write_text(
             "not a version\n")
         before = self.index().read_bytes()
         result = subprocess.run([sys.executable, str(STAMP_INDEX), str(self.drive)],
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("REFUSED: KH Updater: ", result.stdout)
+        self.assertIn("REFUSED: Update Studio KH: ", result.stdout)
         self.assertIn("does not state a version", result.stdout)
         self.assertEqual(self.index().read_bytes(), before,
                          "a refusal writes nothing: half-stamped is worse than stale")

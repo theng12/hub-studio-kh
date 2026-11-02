@@ -1,7 +1,7 @@
 #!/bin/sh
 # Why are Image / Subtitle models missing?  Uses the app's OWN python - nothing to install.
 #
-#   sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/why-models.sh"
+#   sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Hub Studio KH/why-models.sh"
 #
 # Reads only. Writes nothing except this output.
 
