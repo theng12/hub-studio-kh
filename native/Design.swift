@@ -205,6 +205,80 @@ extension View {
     func hubRowControl() -> some View { controlSize(.small) }
 }
 
+// MARK: - Segmented controls / Tabs
+
+/// A helper view that enforces equal-width, invariant segment dimensions on an NSSegmentedControl.
+/// Sizing every segment to fit the widest label in bold font eliminates width changes when a tab
+/// is selected and ensures even divider spacing across all segments.
+final class SegmentConfigView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        configure()
+    }
+
+    override func layout() {
+        super.layout()
+        configure()
+    }
+
+    func configure() {
+        guard let sc = findSegmentedControl() else { return }
+        sc.segmentDistribution = .fillEqually
+        let count = sc.segmentCount
+        guard count > 0 else { return }
+
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: sc.controlSize))
+        let boldFont = NSFont.boldSystemFont(ofSize: font.pointSize)
+
+        var maxWidth: CGFloat = 0
+        for i in 0..<count {
+            let label = sc.label(forSegment: i) ?? ""
+            let w = (label as NSString).size(withAttributes: [.font: boldFont]).width
+            if w > maxWidth { maxWidth = w }
+        }
+        let segW = max(48, ceil(maxWidth + 24))
+        var changed = false
+        for i in 0..<count {
+            if sc.width(forSegment: i) != segW {
+                sc.setWidth(segW, forSegment: i)
+                changed = true
+            }
+        }
+        if changed {
+            sc.sizeToFit()
+        }
+    }
+
+    private func findSegmentedControl() -> NSSegmentedControl? {
+        var current: NSView? = self
+        while let c = current {
+            if let sc = findInSubviews(c) { return sc }
+            current = c.superview
+        }
+        return nil
+    }
+
+    private func findInSubviews(_ view: NSView) -> NSSegmentedControl? {
+        if let sc = view as? NSSegmentedControl { return sc }
+        for sub in view.subviews {
+            if sub !== self, let sc = findInSubviews(sub) { return sc }
+        }
+        return nil
+    }
+}
+
+struct SegmentConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> SegmentConfigView { SegmentConfigView() }
+    func updateNSView(_ nsView: SegmentConfigView, context: Context) { nsView.configure() }
+}
+
+extension View {
+    /// Enforces equal segment widths and stable dimensions on a segmented Picker.
+    func hubSegmented() -> some View {
+        self.background(SegmentConfigurator())
+    }
+}
+
 // MARK: - Page scaffold
 
 /// Every page: the title and subtitle named like the sidebar row, the one page margin, content below.

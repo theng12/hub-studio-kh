@@ -1444,7 +1444,7 @@ struct StudioContent: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .frame(maxWidth: 320, alignment: .leading)
+        .hubSegmented()
         .accessibilityLabel("Show jobs made on")
         .accessibilityHint("Separate this Mac's own work from work its nodes made")
     }
@@ -2116,7 +2116,7 @@ struct StudioContent: View {
                     Text("All time").tag(0)
                     Text("Last 7 days").tag(168)
                     Text("Last 24 hours").tag(24)
-                }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320)
+                }.pickerStyle(.segmented).labelsHidden().hubSegmented()
             }
             HubCard {
             VStack(alignment: .leading, spacing: HubSpace.m) {
@@ -2515,7 +2515,7 @@ struct StudioContent: View {
                         set: { value in Task { await workspace.setImageLoadingMode(value) } })) {
                             ForEach(control.options) { option in Text(option.label).tag(option.id) }
                         }
-                        .pickerStyle(.segmented).labelsHidden()
+                        .pickerStyle(.segmented).labelsHidden().hubSegmented()
                         .disabled(!connected || workspace.updatingImageLoadingMode)
                     if let detail = control.detail {
                         Text(detail).font(HubType.secondary).foregroundStyle(.secondary)
@@ -3972,6 +3972,7 @@ struct StudioContent: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                .hubSegmented()
                 .frame(maxWidth: .infinity)
                 .onChange(of: workspace.audioMode) { _, mode in
                     // The tab decides the shape of the request, so the model has to be one that
@@ -4082,7 +4083,7 @@ struct StudioContent: View {
                         VStack(alignment: .leading, spacing: HubSpace.tight) {
                             Text("Result format").font(HubType.rowTitle)
                             HStack {
-                                Picker("Result format", selection: $transcriptFormat) { Text("Text").tag("Text"); Text("SRT").tag("SRT"); Text("VTT").tag("VTT") }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                                Picker("Result format", selection: $transcriptFormat) { Text("Text").tag("Text"); Text("SRT").tag("SRT"); Text("VTT").tag("VTT") }.pickerStyle(.segmented).labelsHidden().hubSegmented()
                                 Spacer()
                                 if workspace.transcribing { ProgressView().controlSize(.small) }
                                 pinChip
@@ -4238,6 +4239,7 @@ struct StudioContent: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
+        .hubSegmented()
         .accessibilityLabel("Function")
     }
 
@@ -5362,7 +5364,7 @@ struct StudioContent: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(maxWidth: 520, alignment: .leading)
+                .hubSegmented()
                 .accessibilityLabel("History filter")
                 // The controller is the only Mac whose Jobs page holds work that ran somewhere
                 // else. A node's list is its own machine throughout, so a split there would be
@@ -6851,7 +6853,7 @@ struct StudioContent: View {
                 Text("Controller").tag("controller")
                 Text("Node").tag("agent")
             }
-            .pickerStyle(.segmented).labelsHidden()
+            .pickerStyle(.segmented).labelsHidden().hubSegmented()
             .disabled(!connected || workspace.controllerIdentity == nil)
             // Promoting a node by name, where the node is: the picker's "Controller" does the same
             // thing, but the consequence (this Mac stops following its controller and mints its own
@@ -8006,7 +8008,7 @@ struct StudioContent: View {
                                 .tag(option.mode)
                         }
                     }
-                    .pickerStyle(.segmented).labelsHidden()
+                    .pickerStyle(.segmented).labelsHidden().hubSegmented()
                     .disabled(!connected || workspace.updatingMemory)
                     // The Studio's own sentence for the selected mode, which is the only one that
                     // knows what `auto` resolved to on this Mac. The list above is the Studio's
