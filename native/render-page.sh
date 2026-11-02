@@ -7,6 +7,7 @@
 # shows real jobs and history instead of empty lists. Read-only and safe to run while the app is up.
 #
 # STUDIOHUB_RENDER_JOBS_TABS=1 selects/captures every Jobs tab and logs native segment frames.
+# STUDIOHUB_RENDER_JOBS_TRANSITIONS=1 opens a fixture window and samples mouse-driven transitions at 60 Hz.
 # STUDIOHUB_RENDER_REF=<commit> renders native sources from that revision for before/after evidence.
 # STUDIOHUB_RENDER_FIXTURES=1 seeds jobs in every state, models, voices and a controller with four Macs;
 # STUDIOHUB_RENDER_ROLES=controller,node,node-offline,standalone renders each page once per role;
@@ -52,5 +53,6 @@ PY
 python3 "$ROOT_DIR/tests/native/render_fixture_patch.py" "$WORK/StudioAPI.swift" "$WORK/StudioViews.swift" "$WORK/ReleaseNotes.swift" "$WORK/StudioHub.swift"
 
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -parse-as-library \
-  "$WORK"/*.swift "$ROOT_DIR/tests/native/render_main.swift" -o "$WORK/render-page"
+  "$WORK"/*.swift "$ROOT_DIR/tests/native/render_main.swift" \
+  "$ROOT_DIR/tests/native/jobs_transition_capture.swift" -o "$WORK/render-page"
 "$WORK/render-page" "$PAGE" "$OUT" "$@"

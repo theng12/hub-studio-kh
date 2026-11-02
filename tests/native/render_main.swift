@@ -183,6 +183,15 @@ struct PageRenderHarness {
                 for child in view.subviews { if let found = jobsControl(child) { return found } }
                 return nil
             }
+            if page == .jobs && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_JOBS_TRANSITIONS"] == "1" {
+                guard let control = jobsControl(hosting) else { fatalError("Jobs control missing") }
+                app.setActivationPolicy(.regular)
+                window.setFrameOrigin(NSPoint(x: 0, y: 60))
+                window.makeKeyAndOrderFront(nil)
+                app.activate(ignoringOtherApps: true)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                try! captureJobsTransition(control, output: output)
+            }
             for tabIndex in (captureTabs ? Array(HistoryTab.allCases.indices) : [-1]) {
             if captureTabs {
                 guard let control = jobsControl(hosting) else { fatalError("Jobs control missing") }
