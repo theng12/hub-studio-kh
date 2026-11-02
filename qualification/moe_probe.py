@@ -821,6 +821,9 @@ def run_parent(args: argparse.Namespace) -> int:
     if (args.output_dir / REPORT).exists():
         raise SystemExit(f"refusing to overwrite existing {(args.output_dir / REPORT)}")
     check, refusal = preflight(args.model_dir, args.hub_source)
+    free = check.get("available_memory_bytes")
+    print("Free memory before start: "
+          + (f"{free / GIB:.1f} GiB" if isinstance(free, (int, float)) else "not measured"), flush=True)
     baseline = swap_used()
     if refusal:
         report = {

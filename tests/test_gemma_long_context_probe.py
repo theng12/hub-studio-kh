@@ -331,36 +331,33 @@ if __name__ == "__main__":
 
 
 class HubBusyGuardTests(unittest.TestCase):
-    """The long-context run refuses while Studio Hub could take Gateway work."""
+    """The long-context run refuses while Studio Hub's services could take Gateway work."""
 
-    def _run(self, pgrep_code, ready=None):
-        import json, os, subprocess, tempfile
+    def _run(self, ready=None, raw=None):
+        import json, tempfile
         from unittest import mock
         mq = _load_module("moe_qualification_guard_mod", MOE_QUALIFICATION)
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp)
             if ready is not None:
                 (data / "hub-ready.json").write_text(json.dumps(ready))
-            done = subprocess.CompletedProcess([], pgrep_code, "", "")
-            with mock.patch.object(mq, "HUB_DATA", data), \
-                 mock.patch.object(mq.subprocess, "run", return_value=done):
+            if raw is not None:
+                (data / "hub-ready.json").write_text(raw)
+            with mock.patch.object(mq, "HUB_DATA", data):
                 return mq.hub_busy_reason()
-
-    def test_open_app_refuses(self):
-        self.assertIn("app is open", self._run(0))
 
     def test_live_services_refuse(self):
         import os
-        self.assertIn("still running", self._run(1, {"pid": os.getpid()}))
+        self.assertIn("still running", self._run({"pid": os.getpid()}))
 
-    def test_quit_hub_with_stale_ready_file_runs(self):
-        self.assertIsNone(self._run(1, {"pid": 999999}))
+    def test_stopped_services_with_stale_ready_file_run(self):
+        self.assertIsNone(self._run({"pid": 999999}))
 
-    def test_quit_hub_without_ready_file_runs(self):
-        self.assertIsNone(self._run(1))
+    def test_stopped_services_without_ready_file_run(self):
+        self.assertIsNone(self._run())
 
-    def test_unrunnable_check_refuses(self):
-        self.assertIn("could not check", self._run(2))
+    def test_unreadable_ready_file_refuses(self):
+        self.assertIn("could not check", self._run(raw="{not json"))
 
     def test_live_run_refuses_before_the_lock(self):
         from unittest import mock

@@ -63,27 +63,19 @@ def installed_library() -> Path | None:
 
 
 def hub_busy_reason() -> str | None:
-    """Why a run must not start because Studio Hub is up on this Mac, or None.
+    """Why a run must not start because Studio Hub's services are up on this Mac, or None.
 
-    A Mac whose Studio Hub is quit cannot take Gateway work, so "quit" is the check: an open app
-    or live services may be running or about to receive a job, and a probe beside them would
-    measure both. A check that cannot run refuses too; not checked is never idle.
+    Stopped services cannot take Gateway work and hold no model, so they are the check: live
+    services may be running or about to receive a job, and a probe beside them would measure
+    both. The app itself may stay open with its services stopped. A check that cannot run
+    refuses too; not checked is never idle.
     """
-    try:
-        found = subprocess.run(["/usr/bin/pgrep", "-x", "StudioHub"], capture_output=True,
-                               text=True, check=False)
-    except OSError as exc:
-        return f"could not check whether Studio Hub is open ({exc})"
-    if found.returncode == 0:
-        return "the Studio Hub app is open"
-    if found.returncode != 1:
-        return f"could not check whether Studio Hub is open (pgrep exit {found.returncode})"
     try:
         pid = int(json.loads((HUB_DATA / "hub-ready.json").read_text(encoding="utf-8"))["pid"])
     except FileNotFoundError:
         return None
-    except (OSError, ValueError, KeyError, TypeError):
-        return None  # a stale or partial ready file names no live process
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return f"could not check whether Studio Hub's services are running ({exc})"
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -357,7 +349,7 @@ def run_live(args: argparse.Namespace, spec: ModelSpec) -> int:
         if busy:
             raise QualificationError(
                 f"{busy}. Pause this Mac in GatewayKH's Fleet page, wait until it shows no job "
-                "running here, quit Studio Hub, then double-click this command again. Nothing was "
+                "running here, press Stop Services in Studio Hub, then double-click this command again. Nothing was "
                 "loaded or measured.")
     lock = acquire_lock()
     result_dir = _result_dir(args.output_root, spec)
