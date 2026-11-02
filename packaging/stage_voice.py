@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -111,6 +112,19 @@ HUB_RELEASE_ARTIFACTS: dict[str, tuple[str, ...]] = {
         'image_worker.py',
     ),
 }
+
+
+def release_notes_text(changelog: str, version: str) -> str:
+    """Project the plain-language release history from the one authored changelog."""
+    entries = re.split(r'(?=^## \d+\.\d+\.\d+[^\n]*$)', changelog, flags=re.MULTILINE)[1:]
+    notes = []
+    for entry in entries:
+        public = entry.split('\n### Technical notes\n', 1)[0].strip()
+        if len(public.splitlines()) > 1:
+            notes.append(public)
+    if not any(re.match(rf'## {re.escape(version)}(?:\s|$)', note) for note in notes):
+        raise ValueError(f'CHANGELOG.md has no plain-language changes for {version}')
+    return "# What's New\n\n" + '\n\n'.join(notes) + '\n'
 
 
 def missing_release_artifacts(resources: Path) -> list[str]:
@@ -772,10 +786,9 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
                 f"the menu-bar icon is missing: {mark.relative_to(ROOT)}. "
                 "Run packaging/make_app_icon.py and commit the result.")
         shutil.copyfile(mark, resources / name)
-    # The owner-facing notes go at the top of Resources, where `Bundle.main` finds them for the
-    # app's What's New screen. Bundling the shipped file rather than a second copy means the screen
-    # cannot describe a build it is not part of.
-    shutil.copyfile(ROOT / 'release-notes.md', resources / 'release-notes.md')
+    # Keep the app's existing resource name; CHANGELOG.md is the only authored release text.
+    (resources / 'release-notes.md').write_text(
+        release_notes_text((ROOT / 'CHANGELOG.md').read_text(encoding='utf-8'), version), encoding='utf-8')
     shutil.copytree(runtime, resources / 'runtimes/voice', symlinks=True)
     # Nothing in the product runs a dependency's tests or pytest, and both were in 0.6.200's
     # bundle. Removed here, at the staging step, so a reused `.build/voice-runtime` cannot smuggle
