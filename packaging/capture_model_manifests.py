@@ -148,6 +148,7 @@ CHOICES: tuple[dict[str, Any], ...] = (
      "model_id": "mlx-community/gemma-4-26B-A4B-it-qat-4bit",
      "revision": "0e3cbab38ce568cf6e23543010d08d03b731910c", "engine": "chat-mlx",
      "captured_at": "2026-10-07", "production_allowed": True,
+     "max_output_tokens": 8192,
      "display_name": "Gemma 4 26B-A4B QAT MLX 4-bit",
      "quantization": "QAT MLX 4-bit",
      "quantization_source": "model/config.json quantization: affine 4-bit, group size 64; preserved publisher per-tensor precision overrides"},
@@ -367,9 +368,9 @@ DETAILS: dict[str, dict[str, Any]] = {
         "memory": (32, 32, "MEASURED on the owner's physical 32 GiB M2 Max, 2026-10-07, across two Gemma 4 26B-A4B QAT MLX 4-bit runs. The first seven-case suite passed all seven mechanical checks; its largest observed process footprint was 19,813,822,128 bytes (18.45 GiB). In the extended run, the three-chapter case took 72.209 s at 43.4297 decode tok/s with a 16,486,903,472-byte (15.35 GiB) worker peak; the 50-scene case took 103.764 s at 41.7067 decode tok/s with a 16,678,416,048-byte (15.53 GiB) worker peak. Pressure remained normal with no positive new swap growth in the extended run. Physical 24 GiB and 16 GiB were not tested, so 32 GiB is both the minimum and recommended measured tier. Repository evidence: qualification/evidence/gemma4-20261007-32gb/measurement.json."),
         "qualification": {
             "status": "qualified",
-            "reason": "Qualified only on the owner's physical 32 GiB M2 Max. The first profile passed all seven mechanical checks. The extended strict 3x1,200-word test remains FAIL: it produced 985, 800 and 805 words, and Chapter 8 rather than Chapter 08; the owner accepted those observed lengths, and the real Story Studio parser recovered chapters 7, 8 and 9 identically with or without zero padding. The 50-scene case returned all 50 exact IDs as strict JSON under the 4,000 UTF-16-unit cap (mean 422, maximum 531). qualification.context_window_tokens=32,768 is a curated hardware budget for combined input plus reserved output, not a model claim; the checkpoint retains its model-declared text_config.max_position_embeddings=262,144. tested_usable_context_tokens=32,775 records the observed input plus a tiny reply and does not prove 32k input plus the worker's 16,384-token default output. Physical 24 GiB and 16 GiB were not tested.",
-            "context_window_tokens": 32768,
-            "tested_usable_context_tokens": 32775,
+            "reason": "Qualified on the owner's physical 32 GiB M2 Max and M2 Pro. The original extended strict 3x1,200-word test remains FAIL: it produced 985, 800 and 805 words; the owner accepted those observed lengths. The 50-scene case returned all 50 exact IDs as strict JSON. On 2026-11-02, Mac 1607 (32 GiB M2 Pro) passed input-48k: 49,120 measured prompt tokens plus 1,915 completion tokens, all 16 sections and the needle recalled, 21,150,477,952-byte process peak (19.70 GiB), normal pressure and no new swap. input-64k failed quality (14/16 sections), despite normal memory. qualification.context_window_tokens=49,152 is the owner-approved curated hardware budget for combined input plus reserved output, not a model claim; the checkpoint retains its model-declared text_config.max_position_embeddings=262,144. tested_usable_context_tokens=51,035 records the successful combined token count, not a qualified 49,152-token prompt plus 8,192 output. The 8,192 output cap is owner policy, not a new output-length measurement. Physical 24 GiB and 16 GiB were not tested. Evidence: qualification/evidence/gemma4-20261102-1607-48k/report.json.",
+            "context_window_tokens": 49152,
+            "tested_usable_context_tokens": 51035,
         },
     },
     "qwen36-35b-4bit": {
@@ -727,7 +728,7 @@ def capture(choice: dict[str, Any]) -> dict[str, Any]:
     # Licence/attribution a person declares (CC-BY packages must carry it); passed through verbatim.
     if choice.get("license"):
         manifest["license"] = choice["license"]
-    for field in ("display_name", "quantization", "quantization_source"):
+    for field in ("display_name", "quantization", "quantization_source", "max_output_tokens"):
         if field in choice:
             manifest[field] = choice[field]
     return manifest

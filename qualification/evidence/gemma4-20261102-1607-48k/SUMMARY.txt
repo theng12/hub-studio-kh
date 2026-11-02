@@ -1,0 +1,65 @@
+Studio Hub LLM Qualification Summary
+
+Model: Gemma 4 26B-A4B QAT MLX 4-bit
+Repository: mlx-community/gemma-4-26B-A4B-it-qat-4bit
+Revision: 0e3cbab38ce568cf6e23543010d08d03b731910c
+Status: fail
+Mechanical checks: FAIL
+Subjective writing quality: PENDING
+Physical tier only: 32 GiB
+Tier scope: this physical host only; no lower-memory tier is inferred.
+
+Total measured prompt tokens: 114641
+Total completion tokens: 4202
+First load in fresh process: 2.736 seconds
+Available memory at start: 25.96 GiB
+Initial memory pressure: normal
+Final memory pressure: normal
+Final swap growth: 0.00 GiB
+Peak MLX memory: 20.04 GiB
+Largest observed process footprint: 21.32 GiB
+
+Long-Context Stop Rule Evaluation:
+  Suite: long-context
+  Peak footprint stop threshold: 26.00 GiB
+  Last safe context size: input-64k
+  Stop reason: all tested sizes completed within safe limits
+  Stopped early: NO
+
+Case: input-48k
+  Mechanical: PASS
+  Answer complete: YES
+  Finish reason: stop
+  Elapsed: 285.289 seconds
+  Prefill time: 212.764 seconds
+  Generate time: 72.525 seconds
+  Prompt tokens: 49120
+  Completion tokens: 1915
+  Prompt tokens/s: 231.07222185026595
+  Decode tokens/s: 26.41149343650434
+  Peak MLX memory: 18.69 GiB
+  Peak process footprint: 19.70 GiB
+  Memory pressure: normal
+  Swap delta: 0.00 GiB
+  Free memory at start: 25.96 GiB
+  Sections: 16/16; needle 'HARBOR LANTERN': recalled
+
+Case: input-64k
+  Mechanical: FAIL
+  Answer complete: NO
+  Finish reason: stop
+  Elapsed: 398.355 seconds
+  Prefill time: 300.221 seconds
+  Generate time: 98.134 seconds
+  Prompt tokens: 65521
+  Completion tokens: 2287
+  Prompt tokens/s: 218.4044497746579
+  Decode tokens/s: 23.309688636494695
+  Peak MLX memory: 20.04 GiB
+  Peak process footprint: 21.32 GiB
+  Memory pressure: normal
+  Swap delta: 0.00 GiB
+  Free memory at start: 25.96 GiB
+  Sections: 14/16; needle 'HARBOR LANTERN': recalled
+  Validation: expected 16 sections, got 14
+  Validation: missing section numbers: [8, 9]
