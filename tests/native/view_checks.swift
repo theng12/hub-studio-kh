@@ -143,6 +143,13 @@ enum ViewChecks {
         if let nc = narrowControl {
             let lastSegW = nc.width(forSegment: 7)
             check(lastSegW >= 90.0, "narrow layout preserves full Downloads segment width: \(lastSegW)pt")
+            check(nc.frame.width >= nc.fittingSize.width, "narrow layout keeps intrinsic tab width")
+            let lastSegment = NSRect(x: nc.bounds.maxX - lastSegW, y: 0,
+                                     width: lastSegW, height: nc.bounds.height)
+            _ = nc.scrollToVisible(lastSegment)
+            narrowHost.layoutSubtreeIfNeeded()
+            check(nc.visibleRect.maxX >= lastSegment.maxX - 1,
+                  "Downloads becomes fully visible after scrolling")
         }
 
         // The Models page's function tabs (owner, 2026-10-19: "it has no tab or proper spacing. it's

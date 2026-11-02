@@ -184,21 +184,21 @@ struct CaptureJobsTabs {
             let (beforeImg, beforeSC) = renderView(beforeV, size: NSSize(width: 580, height: 110))
             beforeImages.append(beforeImg)
             // Stock Picker with maxWidth 520 in owner captures varied 442 to 469 px (cell width 728 / compressed)
-            let bWidth = beforeSC?.frame.width ?? 520.0
+            guard let beforeSC else { fatalError("Before control was not rendered") }
+            let bWidth = beforeSC.frame.width
             beforeWidths.append(bWidth)
 
             // 2. Render After
             let afterV = JobsHeaderAfter(tab: binding)
             let (afterImg, afterSC) = renderView(afterV, size: NSSize(width: 580, height: 110))
             afterImages.append(afterImg)
-            let aWidth = afterSC?.fittingSize.width ?? 507.0
+            guard let afterSC else { fatalError("After control was not rendered") }
+            let aWidth = afterSC.frame.width
             afterWidths.append(aWidth)
 
             var segs: [CGFloat] = []
-            if let sc = afterSC {
-                for i in 0..<sc.segmentCount {
-                    segs.append(sc.width(forSegment: i))
-                }
+            for i in 0..<afterSC.segmentCount {
+                segs.append(afterSC.width(forSegment: i))
             }
             afterSegmentArrays.append(segs)
             print("  Tab \(tab.title): Before frame=\(bWidth) pt | After fitting=\(aWidth) pt, segments=\(segs)")
@@ -238,7 +238,7 @@ struct CaptureJobsTabs {
             .font: NSFont.systemFont(ofSize: 14, weight: .regular),
             .foregroundColor: NSColor(calibratedWhite: 0.72, alpha: 1.0)
         ]
-        ("Real native AppKit / SwiftUI capture in actual page harness · Base: 4be63f0 · Branch: fix/stable-jobs-tabs-20261102" as NSString)
+        ("Real native AppKit / SwiftUI capture in recreated header harness (not a full app capture) · Base: 4be63f0 · Branch: fix/stable-jobs-tabs-20261102" as NSString)
             .draw(at: NSPoint(x: 48, y: sheetHeight - 84), withAttributes: subtitleAttrs)
 
         // Comparison Summary Cards
@@ -261,7 +261,7 @@ struct CaptureJobsTabs {
             .font: NSFont.systemFont(ofSize: 12, weight: .regular),
             .foregroundColor: NSColor(calibratedWhite: 0.85, alpha: 1.0)
         ]
-        ("Variable segment widths; bold text on selected tab dynamically shifts downstream tabs and dividers (442-469px in owner captures)." as NSString)
+        ("Baseline Picker recreated from 4be63f0; widths below are measured in this harness, in points." as NSString)
             .draw(at: NSPoint(x: col1X + 16, y: cardY + 14), withAttributes: bDescAttrs)
 
         // After summary card
@@ -277,7 +277,7 @@ struct CaptureJobsTabs {
             .font: NSFont.systemFont(ofSize: 12, weight: .regular),
             .foregroundColor: NSColor(calibratedWhite: 0.85, alpha: 1.0)
         ]
-        ("Pre-measured bold system font widths [44, 60, 73, 62, 61, 60, 53, 94] = 507.0 pt. Zero width shift on selection, 100% stable dividers." as NSString)
+        ("Bold-label widths are fixed before selection. Frame and segment widths below come from each native capture." as NSString)
             .draw(at: NSPoint(x: col2X + 16, y: cardY + 14), withAttributes: aDescAttrs)
 
         // Draw 8 Rows of comparisons
@@ -302,9 +302,7 @@ struct CaptureJobsTabs {
             beforeImages[i].draw(in: NSRect(x: col1X, y: rowY + 14, width: 620, height: 104))
 
             // Before annotation badge
-            let bBadgeText = i == 2
-                ? "Width: ~469 pt · Subtitle bold expands +5 pt, shifting Image...Downloads"
-                : (i == 7 ? "Width: ~472 pt · Downloads expands +5 pt, dynamic divider" : "Width: ~462 pt · Dynamic cell fitting, divider positions jitter")
+            let bBadgeText = String(format: "Measured frame: %.1f pt", Double(beforeWidths[i]))
             let badgeAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
                 .foregroundColor: NSColor(calibratedRed: 1.0, green: 0.7, blue: 0.7, alpha: 1.0)
@@ -315,7 +313,9 @@ struct CaptureJobsTabs {
             afterImages[i].draw(in: NSRect(x: col2X, y: rowY + 14, width: 620, height: 104))
 
             // After annotation badge
-            let aBadgeText = "Total: 507.0 pt (Δ = 0.0 pt) · Segments: [44, 60, 73, 62, 61, 60, 53, 94] pt · Invariant"
+            let segmentText = afterSegmentArrays[i].map { String(format: "%.0f", Double($0)) }.joined(separator: ", ")
+            let aBadgeText = String(format: "Frame: %.1f pt (delta %.1f) | segments: [%@] pt",
+                                    Double(afterWidths[i]), Double(afterWidths[i] - afterWidths[0]), segmentText)
             let aBadgeAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
                 .foregroundColor: NSColor(calibratedRed: 0.6, green: 1.0, blue: 0.7, alpha: 1.0)
@@ -345,7 +345,7 @@ struct CaptureJobsTabs {
             .font: NSFont.systemFont(ofSize: 12, weight: .regular),
             .foregroundColor: NSColor(calibratedWhite: 0.8, alpha: 1.0)
         ]
-        ("✓ At narrow window widths (400 pt), horizontal scroll container preserves all 8 segments with zero clipping. Downloads remains fully reachable." as NSString)
+        ("400 pt viewport, initial scroll position. Scroll right to reach Downloads; reachability is checked in the native test." as NSString)
             .draw(at: NSPoint(x: col1X, y: bottomSectionY - 142), withAttributes: narrowNoteAttrs)
 
         // Draw Multibar Independence Image

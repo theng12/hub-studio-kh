@@ -55,7 +55,7 @@ struct TabGeometryChecks {
         let jobsView = ScrollView(.horizontal, showsIndicators: false) {
             HubSegmentedControl(
                 selection: Binding(get: { holder.tab }, set: { holder.tab = $0 }),
-                items: HistoryTab.allCases.map { HubSegmentItem(tag: $0, label: $0.title) },
+                items: HistoryTab.allCases.map { HubSegmentItem(tag: $0, label: $0.title, accessibilityLabel: "Filter: \($0.title)") },
                 sizing: .stablePerLabel
             )
         }
@@ -75,6 +75,12 @@ struct TabGeometryChecks {
         }
 
         assertCheck(sc.segmentCount == 8, "Segment count equals 8")
+        let group = sc.accessibilityChildren()?.first as? any NSAccessibilityProtocol
+        let segmentHelp = group?.accessibilityChildren()?.compactMap {
+            ($0 as? any NSAccessibilityProtocol)?.accessibilityHelp()
+        } ?? []
+        assertCheck(segmentHelp == HistoryTab.allCases.map { "Filter: \($0.title)" },
+                    "Full segment descriptions remain available to accessibility")
         let baseTotalWidth = sc.fittingSize.width
         let baseSegments = (0..<8).map { sc.width(forSegment: $0) }
         print("    Base total width: \(baseTotalWidth) pt")
@@ -91,6 +97,7 @@ struct TabGeometryChecks {
                 hosting.layoutSubtreeIfNeeded()
             }
 
+            assertCheck(holder.tab == HistoryTab.allCases[i], "Selection action updates binding")
             let curW = sc.fittingSize.width
             let delta = abs(curW - baseTotalWidth)
             if delta > maxDelta { maxDelta = delta }
@@ -172,6 +179,14 @@ struct TabGeometryChecks {
             assertCheck(narrowSC.segmentCount == 8, "Narrow layout contains all 8 segments without clipping")
             let downloadsW = narrowSC.width(forSegment: 7)
             assertCheck(downloadsW >= 90.0, "Full Downloads segment width preserved in narrow scroll view: \(downloadsW) pt")
+            assertCheck(narrowSC.frame.width >= narrowSC.fittingSize.width,
+                        "Narrow viewport retains intrinsic control width")
+            let lastSegment = NSRect(x: narrowSC.bounds.maxX - downloadsW, y: 0,
+                                     width: downloadsW, height: narrowSC.bounds.height)
+            _ = narrowSC.scrollToVisible(lastSegment)
+            narrowHost.layoutSubtreeIfNeeded()
+            assertCheck(narrowSC.visibleRect.maxX >= lastSegment.maxX - 1,
+                        "Scrolling reveals the entire Downloads segment")
         } else {
             assertCheck(false, "Failed to find segmented control in narrow host")
         }

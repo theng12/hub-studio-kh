@@ -333,6 +333,7 @@ public struct HubSegmentedControl<T: Hashable>: NSViewRepresentable {
             if sc.label(forSegment: i) != item.label {
                 sc.setLabel(item.label, forSegment: i)
             }
+            sc.setToolTip(item.accessibilityLabel, forSegment: i)
             let boldW = (item.label as NSString).size(withAttributes: [.font: boldFont]).width
             boldWidths.append(boldW)
             if boldW > maxBold { maxBold = boldW }

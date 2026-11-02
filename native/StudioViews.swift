@@ -2119,7 +2119,8 @@ struct StudioContent: View {
                         HubSegmentItem(tag: 0, label: "All time"),
                         HubSegmentItem(tag: 168, label: "Last 7 days"),
                         HubSegmentItem(tag: 24, label: "Last 24 hours")
-                    ]
+                    ],
+                    accessibilityLabel: "Window"
                 )
             }
             HubCard {
@@ -2518,7 +2519,8 @@ struct StudioContent: View {
                         selection: Binding(
                             get: { control.selected },
                             set: { value in Task { await workspace.setImageLoadingMode(value) } }),
-                        items: control.options.map { HubSegmentItem(tag: $0.id, label: $0.label) }
+                        items: control.options.map { HubSegmentItem(tag: $0.id, label: $0.label) },
+                        accessibilityLabel: "Loading mode"
                     )
                     .disabled(!connected || workspace.updatingImageLoadingMode)
                     if let detail = control.detail {
@@ -3968,7 +3970,8 @@ struct StudioContent: View {
                     selection: $workspace.audioMode,
                     items: workspace.audioModes.map { mode in
                         HubSegmentItem(tag: mode, label: mode.shortTitle, accessibilityLabel: mode.title)
-                    }
+                    },
+                    accessibilityLabel: "Voice"
                 )
                 .frame(maxWidth: .infinity)
                 .onChange(of: workspace.audioMode) { _, mode in
@@ -4086,7 +4089,8 @@ struct StudioContent: View {
                                         HubSegmentItem(tag: "Text", label: "Text"),
                                         HubSegmentItem(tag: "SRT", label: "SRT"),
                                         HubSegmentItem(tag: "VTT", label: "VTT")
-                                    ]
+                                    ],
+                                    accessibilityLabel: "Result format"
                                 )
                                 Spacer()
                                 if workspace.transcribing { ProgressView().controlSize(.small) }
@@ -4239,11 +4243,13 @@ struct StudioContent: View {
             let label = "\(StudioPage.page(for: function)?.title ?? function.rawValue) \(counts[function] ?? 0)"
             items.append(HubSegmentItem(tag: function.rawValue, label: label))
         }
-        return HubSegmentedControl(
-            selection: $modelFilter,
-            items: items,
-            accessibilityLabel: "Function"
-        )
+        return ScrollView(.horizontal) {
+            HubSegmentedControl(
+                selection: $modelFilter,
+                items: items,
+                accessibilityLabel: "Function"
+            )
+        }
     }
 
     /// The sections the list draws: every Studio with something in it under "All", the chosen
@@ -5359,7 +5365,7 @@ struct StudioContent: View {
 
     private var jobsWorkspace: some View {
         PageScaffold(title: pageTitle(.jobs), subtitle: "Every local generation in one place, or filtered to a single studio.", scrolls: true) {
-                ScrollView(.horizontal, showsIndicators: false) {
+                ScrollView(.horizontal) {
                     HubSegmentedControl(
                         selection: $historyTab,
                         items: HistoryTab.allCases.map { tab in
@@ -5369,7 +5375,8 @@ struct StudioContent: View {
                                 label: tab == .downloads && running > 0 ? "\(tab.title) (\(running))" : tab.title
                             )
                         },
-                        sizing: .stablePerLabel
+                        sizing: .stablePerLabel,
+                        accessibilityLabel: "History filter"
                     )
                 }
                 .accessibilityLabel("History filter")
@@ -6861,7 +6868,8 @@ struct StudioContent: View {
                     HubSegmentItem(tag: "standalone", label: "Standalone"),
                     HubSegmentItem(tag: "controller", label: "Controller"),
                     HubSegmentItem(tag: "agent", label: "Node")
-                ]
+                ],
+                accessibilityLabel: "Role"
             )
             .disabled(!connected || workspace.controllerIdentity == nil)
             // Promoting a node by name, where the node is: the picker's "Controller" does the same
@@ -8018,7 +8026,8 @@ struct StudioContent: View {
                                 tag: option.mode,
                                 label: option.mode == policy.defaultMode ? "\(option.label) (default)" : option.label
                             )
-                        }
+                        },
+                        accessibilityLabel: "Release policy"
                     )
                     .disabled(!connected || workspace.updatingMemory)
                     // The Studio's own sentence for the selected mode, which is the only one that
