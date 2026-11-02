@@ -2,6 +2,37 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.214 — 2026-11-02
+
+### Studios recover when they stop answering
+
+Hub can restart a studio that stops answering and bring its watcher back if that watcher stops. Choosing no automatic restarts also applies to a studio that stops answering.
+
+### Tabs stay evenly spaced
+
+The Jobs tabs keep their spacing when you switch between empty and busy lists. Other tab bars using the same control keep stable sizes too.
+
+### What’s New stays with the version
+
+The app’s version and plain-language release notes are maintained together in one changelog.
+
+### Gemma 4 QAT 4-bit uses its checked context size
+
+Gemma 4 26B-A4B QAT MLX 4-bit now uses a 49,152-token total window, including the answer, with an 8,192-token answer cap. Its existing memory requirement stays the same.
+
+### Kit instructions match the current installer
+
+The kit readmes now describe Story’s install script and its embedding model. Credits are explained as a Gateway setting.
+
+### Technical notes
+
+- Controller recovery: 466c64f, including fcbea7a and 144c5ca. Recover a hung Hub, restart a dead child watcher, and respect the configured recovery attempts for silent studios. These code paths do not prove the original 1300/1400 failure trigger.
+- Native tab geometry: 40f980e and its branch ancestry. Owned NSSegmentedControl with fixed measured widths and per-segment accessibility; native view and transition checks retained.
+- Release notes: 4475832 + 9441307. CHANGELOG.md is canonical; staging generates Resources/release-notes.md from the plain sections and refuses a version without plain changes. The engineering separator is `### Technical notes`.
+- Gemma 4 26B-A4B QAT MLX 4-bit: 653b457. Manifest context 49,152 and output cap 8,192; actual-manifest boundary checks and measured evidence retained. The existing default-output reservation semantics are unchanged.
+- Kit readmes: 76f14fa + d62ac9e. Installer and embedding instructions updated; the standalone plan stops describing a second credit balance.
+- Real image prompt limits remain excluded until Story 1.4.376 is installed, per Developer. No image limit or runtime change is included.
+
 ## 0.6.213 — 2026-11-01
 
 ### Studios come back after a failed start
