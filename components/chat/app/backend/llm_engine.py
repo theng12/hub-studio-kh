@@ -583,7 +583,7 @@ class ChatEngine:
         (`_named_a_figure_of_its_own`) and `_budget` served the worker default — 128,000 since
         the owner's 2026-10-19 decision ("the minimum is at least 128K tokens"). A model that
         states a smaller context than that would otherwise REFUSE every request that names no
-        allowance: gemma4-26b-a4b-qat-4bit states `qualification.context_window_tokens = 32768`,
+        allowance: gemma4-26b-a4b-qat-4bit states `qualification.context_window_tokens = 49152`,
         and the prompt alone would never leave 128,000 of room, so the model would be unusable
         for exactly the caller that asked for nothing. So our own default shrinks to the room the
         context leaves and the caller gets the longest answer the model can hold. A figure the

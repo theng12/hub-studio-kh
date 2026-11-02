@@ -382,20 +382,20 @@ class ModelManifestCatalogTests(unittest.TestCase):
         self.assertEqual(qualification["status"], "qualified")
         self.assertEqual(qualification["minimum_unified_memory_gb"], 32)
         self.assertEqual(qualification["recommended_unified_memory_gb"], 32)
-        self.assertEqual(qualification["context_window_tokens"], 32_768)
-        self.assertEqual(qualification["tested_usable_context_tokens"], 32_775)
+        self.assertEqual(qualification["context_window_tokens"], 49_152)
+        self.assertEqual(qualification["tested_usable_context_tokens"], 51_035)
         self.assertNotIn("min_free_memory_gb", qualification)
-        self.assertNotIn("max_output_tokens", manifest)
+        self.assertEqual(manifest["max_output_tokens"], 8_192)
         self.assertIn("MEASURED", qualification["memory_evidence"])
         self.assertIn("physical 32 GiB M2 Max", qualification["memory_evidence"])
         self.assertIn("3x1,200-word", qualification["reason"])
         self.assertIn("985, 800 and 805", qualification["reason"])
         self.assertIn("owner accepted", qualification["reason"])
-        self.assertIn("32,768", qualification["reason"])
+        self.assertIn("49,152", qualification["reason"])
         self.assertIn("combined input plus reserved output", qualification["reason"])
         self.assertIn("curated hardware budget", qualification["reason"])
-        self.assertIn("32,775", qualification["reason"])
-        self.assertIn("tiny reply", qualification["reason"])
+        self.assertIn("51,035", qualification["reason"])
+        self.assertIn("14/16 sections", qualification["reason"])
         self.assertIn("262,144", qualification["reason"])
         self.assertIn("model-declared", qualification["reason"])
 
@@ -511,7 +511,7 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # The independently verified 11-file SSD stock remains whole; runtime capture
             # excludes only its 363-byte README.md. Only the 32 GiB qualification metadata
             # changed here; the pinned revision and every publisher file hash stayed fixed.
-            "gemma4-26b-a4b-qat-4bit": "962823f4d412465351316da5241c7c11915ff52bae1c3e55c6c94a1a86c94e92",
+            "gemma4-26b-a4b-qat-4bit": "db49cdedea6effed5dc53baaa57e93f1c78fb2e3d6583494e13994be26df1947",
             # Gemma 3 12B Instruct MLX 4-bit: 13 runtime files / 8,068,018,787 bytes.
             # Admitted 2026-10-27 as chat-mlx package with a PROVISIONAL 16/24 GB weight-size floor
             # (7.51 GiB of weights cannot fit 8 GB). The pinned revision and verified file hashes

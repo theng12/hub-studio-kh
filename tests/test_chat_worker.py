@@ -686,6 +686,42 @@ class PromptBudgetTests(unittest.TestCase):
                 outcome = engine.complete(self.MESSAGE, max_tokens=20)
         self.assertEqual(outcome["text"], "served")
 
+    def test_shipped_gemma_context_boundary_and_output_cap(self) -> None:
+        manifest_path = (Path(__file__).resolve().parents[1] / "model-manifests"
+                         / "gemma4-26b-a4b-qat-4bit.json")
+        manifest = json.loads(manifest_path.read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / manifest["package_id"] / manifest["revision"] / "model"
+            model_dir.mkdir(parents=True)
+            (model_dir / "config.json").write_text(json.dumps({
+                "text_config": {"max_position_embeddings": 262144}}))
+            (model_dir / "model.safetensors").write_bytes(b"weights")
+            (model_dir / "tokenizer.json").write_text("{}")
+            with mock.patch.dict(os.environ, {
+                    "STUDIOHUB_MODELS_DIR": str(root),
+                    "STUDIOHUB_CHAT_MANIFEST": str(manifest_path)}):
+                engine = engine_from_environment()
+            self.assertEqual(engine.context_window_tokens, 49_152)
+            self.assertEqual(engine.max_output_tokens, 8_192)
+            policy = memory_policy_module.MemoryPolicy(root, engine)
+            with TestClient(create_app(engine, policy, TOKEN, "a" * 64)) as client:
+                for prompt_tokens, expected in ((49_151, 200), (49_152, 422)):
+                    for stream in (False, True):
+                        with self.subTest(prompt_tokens=prompt_tokens, stream=stream), \
+                                mock.patch("mlx_lm.load", lambda *a, **k: (
+                                    object(), _CountedTokenizer(prompt_tokens))), \
+                                mock.patch("mlx_lm.stream_generate",
+                                           _stream_text(lambda *a, **k: "served")):
+                            engine.release(force=True)
+                            response = client.post(
+                                "/v1/chat/completions", headers={"x-studio-token": TOKEN},
+                                json={"messages": self.MESSAGE, "max_tokens": 1,
+                                      "stream": stream})
+                            self.assertEqual(response.status_code, expected, response.text)
+                            if expected == 422:
+                                self.assertIn("49153 together", response.json()["detail"])
+
     def test_nothing_is_refused_when_nothing_states_a_context_window(self) -> None:
         # 4 million tokens with no stated window: the worker must not invent a limit.
         with tempfile.TemporaryDirectory() as tmp:
@@ -886,7 +922,7 @@ class RealEngineIntegrationTests(unittest.TestCase):
 
         `_budget` uses `FALLBACK_MAX_OUTPUT_TOKENS` (128,000 since the owner's 2026-10-19
         decision) when the caller names nothing, and a model can state a much smaller context —
-        gemma4-26b-a4b-qat-4bit states `qualification.context_window_tokens = 32768`. Refusing
+        gemma4-26b-a4b-qat-4bit states `qualification.context_window_tokens = 49152`. Refusing
         every unsized request on such a model would make it unusable for exactly the caller that
         asked for nothing, so the worker's own default shrinks to the room the context leaves,
         and the generation runs with that number.

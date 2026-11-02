@@ -1,0 +1,242 @@
+{
+  "schema_version": 2,
+  "suite_profile_version": 2,
+  "status": "fail",
+  "suite": "long-context",
+  "model_dir": "/build/StudioHubModels/gemma4-26b-a4b-qat-4bit/0e3cbab38ce568cf6e23543010d08d03b731910c/model",
+  "started_at": 1793591854.656482,
+  "environment": {
+    "python": "3.12.14",
+    "executable": "/Applications/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3.12",
+    "libraries": {
+      "mlx": "0.31.2",
+      "mlx-lm": "0.31.3",
+      "transformers": "5.14.1"
+    },
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "chip": "Apple M2 Pro",
+    "machine_model": "Mac14,12",
+    "physical_ram_bytes": 34359738368,
+    "physical_ram_tier_gib": 32,
+    "available_memory_bytes_at_start": 27871461376,
+    "available_memory_source": "/build/Desktop/Gemma 4 long-context test/moe-support/components/host_memory.py"
+  },
+  "cache_limit_bytes": 512000000,
+  "cache_limit_source": "configured: components/voice/app/backend/mlx_memory.py CACHE_LIMIT_MB=512; not measured RAM, throughput, or an admission floor",
+  "prompts_sha256": "06887c3d8e4301dfdf77d5a5401caa25804ae713ae3b1be074f87b5fa113a1c2",
+  "swap_abort_delta_bytes": 1073741824,
+  "subjective_writing_review": "not_performed",
+  "suite_profile": {
+    "version": 2,
+    "long_script": {
+      "name": "long-script-3x1200",
+      "enabled": false,
+      "chapter_count": 3,
+      "target_words_per_chapter": 1200,
+      "max_tokens": 12288
+    },
+    "scene_batches": [
+      {
+        "name": "scenes-harbor",
+        "scene_count": 12,
+        "max_tokens": 6144,
+        "max_chars": 4000
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "input-48k",
+      "purpose": "long_context_qualification",
+      "target_tokens": 49152,
+      "output_file": "input-48k.txt",
+      "max_tokens": 4096,
+      "prompt_tokens_measured": 49120,
+      "prompt_tokens_reported": 49120,
+      "completion_tokens": 1915,
+      "prompt_tps": 231.07222185026595,
+      "decode_tps": 26.41149343650434,
+      "finish_reason": "stop",
+      "elapsed_seconds": 285.289,
+      "prefill_seconds": 212.764,
+      "generate_seconds": 72.525,
+      "mlx_peak_bytes": 20070652664,
+      "kernel_phys_footprint_peak_bytes": 21150477952,
+      "health_before": {
+        "swap_used_bytes": 331546624,
+        "swap_delta_bytes": 0,
+        "pressure_level": 1,
+        "pressure_name": "normal"
+      },
+      "health_after": {
+        "swap_used_bytes": 331546624,
+        "swap_delta_bytes": 0,
+        "pressure_level": 1,
+        "pressure_name": "normal"
+      },
+      "memory_pressure": "normal",
+      "swap_delta_bytes": 0,
+      "think_spill": false,
+      "free_memory_at_start_bytes": 27871461376,
+      "validation": {
+        "pass": true,
+        "sections_count": 16,
+        "expected_sections": 16,
+        "needle_found": true,
+        "needle": "HARBOR LANTERN",
+        "errors": []
+      },
+      "generation_complete": true,
+      "answer_complete": true,
+      "mechanical_pass": true
+    },
+    {
+      "name": "input-64k",
+      "purpose": "long_context_qualification",
+      "target_tokens": 65536,
+      "output_file": "input-64k.txt",
+      "max_tokens": 4096,
+      "prompt_tokens_measured": 65521,
+      "prompt_tokens_reported": 65521,
+      "completion_tokens": 2287,
+      "prompt_tps": 218.4044497746579,
+      "decode_tps": 23.309688636494695,
+      "finish_reason": "stop",
+      "elapsed_seconds": 398.355,
+      "prefill_seconds": 300.221,
+      "generate_seconds": 98.134,
+      "mlx_peak_bytes": 21518918854,
+      "kernel_phys_footprint_peak_bytes": 22888820472,
+      "health_before": {
+        "swap_used_bytes": 331546624,
+        "swap_delta_bytes": 0,
+        "pressure_level": 1,
+        "pressure_name": "normal"
+      },
+      "health_after": {
+        "swap_used_bytes": 331546624,
+        "swap_delta_bytes": 0,
+        "pressure_level": 1,
+        "pressure_name": "normal"
+      },
+      "memory_pressure": "normal",
+      "swap_delta_bytes": 0,
+      "think_spill": false,
+      "free_memory_at_start_bytes": 27871461376,
+      "validation": {
+        "pass": false,
+        "sections_count": 14,
+        "expected_sections": 16,
+        "needle_found": true,
+        "needle": "HARBOR LANTERN",
+        "errors": [
+          "expected 16 sections, got 14",
+          "missing section numbers: [8, 9]"
+        ]
+      },
+      "generation_complete": true,
+      "answer_complete": false,
+      "mechanical_pass": false
+    }
+  ],
+  "model_files": {
+    "weights": [
+      {
+        "name": "model-00001-of-00003.safetensors",
+        "bytes": 5275612587,
+        "sha256": "898863f0d5eba7153a9c9b9443aac1969809f2149e88481c725b6da40783f129"
+      },
+      {
+        "name": "model-00002-of-00003.safetensors",
+        "bytes": 5296718232,
+        "sha256": "2abdca76ed4a647cfe8af680908894e2709b4e1221ddbbbef1b1edb14f60e303"
+      },
+      {
+        "name": "model-00003-of-00003.safetensors",
+        "bytes": 5036507755,
+        "sha256": "a554f0fdb61bc9e510a5318e723a780c31434fd3e3dcdd3c16c700f835ade7b7"
+      }
+    ],
+    "configs": [
+      {
+        "name": "config.json",
+        "bytes": 33376,
+        "sha256": "29910322dd085f45c8f95c6c0f1611b20f722d6f6c8394321b34817e98a972fa"
+      },
+      {
+        "name": "generation_config.json",
+        "bytes": 203,
+        "sha256": "b69207f9be617e982d13cc273cce6fd88c98dda99a4bdc5e2d52ffe0a0d9f0a9"
+      },
+      {
+        "name": "tokenizer_config.json",
+        "bytes": 2740,
+        "sha256": "080d9e1aff284e2f6043889cd05367966f7c7b80e025fbc0b06745e218158656"
+      },
+      {
+        "name": "tokenizer.json",
+        "bytes": 32169626,
+        "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+      },
+      {
+        "name": "chat_template.jinja",
+        "bytes": 16934,
+        "sha256": "94899c0f917d93f6fe81c95744d1e8ddab2d21d39228d2e4aec1fb2a25bff413"
+      },
+      {
+        "name": "model.safetensors.index.json",
+        "bytes": 176940,
+        "sha256": "5455e83705bbdd4e3702c7d4f9d49d4900e84533036628f74500538075dd5c80"
+      }
+    ],
+    "weights_bytes": 15608838574,
+    "weights_manifest_sha256": "36e76487b4b6f67f6b01151d6cde70e61013969b093e14136dd5c68466cf734c"
+  },
+  "cold_load": {
+    "seconds": 2.736,
+    "mlx_peak_bytes": 14469705876,
+    "kernel_phys_footprint_peak_bytes": 15800397752,
+    "health_after": {
+      "swap_used_bytes": 331546624,
+      "swap_delta_bytes": 0,
+      "pressure_level": 1,
+      "pressure_name": "normal"
+    }
+  },
+  "stop_rule": {
+    "max_footprint_bytes": 27917287424,
+    "max_footprint_gib": 26.0,
+    "stopped_early": false,
+    "last_safe_size": "input-64k",
+    "stop_reason": "all tested sizes completed within safe limits"
+  },
+  "generation_mechanical_pass": false,
+  "physical_tier_result": {
+    "tier_gib": 32,
+    "suite": "long-context",
+    "last_safe_size": "input-64k",
+    "mechanically_qualified": false,
+    "scope": "this physical host only; no lower-memory tier is inferred"
+  },
+  "finished_at": 1793592556.420236,
+  "preflight": {
+    "weights_bytes": 15608838574,
+    "working_room_bytes": 4294967296,
+    "physical_ram_bytes": 34359738368,
+    "available_memory_bytes": 27882504192,
+    "available_memory_is_warning_only": true,
+    "health": {
+      "swap_used_bytes": 331546624,
+      "swap_delta_bytes": 0,
+      "pressure_level": 1,
+      "pressure_name": "normal"
+    }
+  },
+  "parent_observed_peak_phys_footprint_bytes": 22888820472,
+  "run_health_final": {
+    "swap_used_bytes": 331546624,
+    "swap_delta_bytes": 0,
+    "pressure_level": 1,
+    "pressure_name": "normal"
+  }
+}
