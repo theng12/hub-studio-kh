@@ -454,8 +454,7 @@ class StagingTests(unittest.TestCase):
             repo.mkdir()
             files = {
                 'VERSION': '0.1.0',
-                'CHANGELOG.md': '# Standalone changes',
-                'release-notes.md': "# What's new",
+                'CHANGELOG.md': '## 0.1.0 — 2026-11-02\n\nPlain release changes.\n\n### Technical notes\n\nInternal details.',
                 'assets/app-icon.icns': 'icns-fixture',
                 'assets/menubar-icon.png': 'png-fixture',
                 'assets/menubar-icon@2x.png': 'png-fixture',
@@ -505,8 +504,7 @@ class StagingTests(unittest.TestCase):
             repo.mkdir()
             files = {
                 'VERSION': '0.1.0',
-                'CHANGELOG.md': '# Standalone changes',
-                'release-notes.md': '# What\'s new',
+                'CHANGELOG.md': '## 0.1.0 — 2026-11-02\n\nPlain release changes.\n\n### Technical notes\n\nInternal details.',
                 'assets/app-icon.icns': 'icns-fixture',
                 'assets/menubar-icon.png': 'png-fixture',
                 'assets/menubar-icon@2x.png': 'png-fixture',
@@ -627,8 +625,7 @@ class StagingTests(unittest.TestCase):
             repo.mkdir()
             files = {
                 'VERSION': '0.2.0',
-                'CHANGELOG.md': '# Standalone changes',
-                'release-notes.md': '# What\'s new',
+                'CHANGELOG.md': '## 0.2.0 — 2026-11-02\n\nPlain release changes.\n\n### Technical notes\n\nInternal details.',
                 'assets/app-icon.icns': 'icns-fixture',
                 'assets/menubar-icon.png': 'png-fixture',
                 'assets/menubar-icon@2x.png': 'png-fixture',

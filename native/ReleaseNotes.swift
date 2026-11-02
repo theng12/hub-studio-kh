@@ -2,8 +2,8 @@ import SwiftUI
 
 /// What's New, read from the notes that ship inside the app.
 ///
-/// The text lives in the bundle's `release-notes.md` so the screen and the file agree by
-/// construction. `CHANGELOG.md` stays the developer record; this is the owner-facing one.
+/// Packaging generates the bundle's `release-notes.md` from CHANGELOG.md, keeping the
+/// plain-language changes in the app tied to the same version as the release record.
 ///
 /// It is shown once after an update and then left alone. Two decisions worth stating:
 ///

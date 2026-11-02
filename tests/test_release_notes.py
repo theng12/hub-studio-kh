@@ -1,14 +1,14 @@
 """There is one version, and every surface agrees with it.
 
 The app is copied onto machines as a folder, so nothing forces a version to be consistent: the
-bundle name, `VERSION`, the packaged `Info.plist`, the changelog and the owner-facing notes are all
-written separately. These tests make "raise the version" a single edit that the gates check, rather
-than five edits and a hope.
+bundle name, `VERSION`, the packaged `Info.plist` and the changelog must agree. The owner-facing
+notes are generated from the changelog. These tests catch a version bump without its release entry.
 
 They also pin the two decisions behind the What's New screen, because both are easy to reverse by
 accident: the release notes are the *bundled* file (not a second copy), and a brand-new install
 does not greet its operator with release notes.
 """
+import importlib.util
 import json
 import os
 import plistlib
@@ -21,9 +21,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = ROOT / "VERSION"
 CHANGELOG = ROOT / "CHANGELOG.md"
-NOTES = ROOT / "release-notes.md"
 STAGE = ROOT / "packaging" / "stage_voice.py"
 NATIVE = ROOT / "native"
+SPEC = importlib.util.spec_from_file_location("release_notes_stage", STAGE)
+STAGER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(STAGER)
+
+
+def generated_notes() -> str:
+    return STAGER.release_notes_text(CHANGELOG.read_text(), current_version())
 
 
 def current_version() -> str:
@@ -42,13 +48,13 @@ class VersionAgreementTests(unittest.TestCase):
                          "the newest changelog entry must be the version being shipped")
 
     def test_the_owner_facing_notes_have_an_entry_for_this_version(self):
-        headings = re.findall(r"^## (\d+\.\d+\.\d+)", NOTES.read_text(), re.M)
+        headings = re.findall(r"^## (\d+\.\d+\.\d+)", generated_notes(), re.M)
         self.assertIn(current_version(), headings)
         self.assertEqual(headings[0], current_version())
 
     def test_the_notes_and_the_changelog_are_different_audiences(self):
-        """The notes are read by the operator; the changelog is the engineering record."""
-        notes = NOTES.read_text()
+        """Keep engineering details out of the generated in-app text."""
+        notes = generated_notes()
         self.assertNotIn("REFERENCE_AUDIO_CONTRACT_UNAVAILABLE", notes)
         self.assertNotIn("WORKER_FOR_MODALITY", notes)
         self.assertLess(len(notes), len(CHANGELOG.read_text()),
@@ -81,8 +87,54 @@ class VersionAgreementTests(unittest.TestCase):
     def test_the_notes_are_shipped_where_the_app_reads_them(self):
         """`Bundle.main` looks in Resources, not in the Voice worker's subtree."""
         text = STAGE.read_text()
-        self.assertIn("shutil.copyfile(ROOT / 'release-notes.md', resources / 'release-notes.md')",
-                      text)
+        self.assertIn("(resources / 'release-notes.md').write_text(", text)
+        self.assertIn("release_notes_text((ROOT / 'CHANGELOG.md').read_text(), version)", text)
+        self.assertFalse((ROOT / "release-notes.md").exists(),
+                         "release text must be authored only in CHANGELOG.md")
+
+
+class ReleaseNotesProjectionTests(unittest.TestCase):
+    def test_plain_history_is_kept_without_technical_details(self):
+        changelog = """# Changelog
+
+## 1.2.0 — 2026-11-02
+
+### Easier updates
+
+- Updates explain what changed. Khmer: ថ្មី
+
+### Technical notes
+
+- INTERNAL_NEW
+
+## 1.1.0 — 2026-10-01
+
+Older plain words.
+
+### Technical notes
+
+- INTERNAL_OLD
+
+## 1.0.0 — 2026-09-01
+
+### Technical notes
+
+- Technical-only historical release.
+"""
+        notes = STAGER.release_notes_text(changelog, "1.2.0")
+        self.assertIn("## 1.2.0 — 2026-11-02", notes)
+        self.assertIn("### Easier updates", notes)
+        self.assertIn("Khmer: ថ្មី", notes)
+        self.assertIn("Older plain words.", notes)
+        self.assertNotIn("INTERNAL_", notes)
+        self.assertNotIn("## 1.0.0", notes)
+        self.assertLess(notes.index("1.2.0"), notes.index("1.1.0"))
+
+    def test_missing_or_empty_current_release_is_refused(self):
+        for source in ("# Changelog", "## 1.2.0\n\n### Technical notes\n\nInternal only.",
+                       "## 1.1.0\n\nOld notes.\n"):
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, "1.2.0"):
+                STAGER.release_notes_text(source, "1.2.0")
 
 
 class ReleaseNotesScreenTests(unittest.TestCase):
