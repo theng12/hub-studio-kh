@@ -1156,15 +1156,23 @@ class GenerationTimeTests(unittest.TestCase):
     number that included the load would understate the model on exactly the first reply and then
     change meaning on the second.
 
-    Each test pins that by measuring the load: a monkeypatched slow `_load_locked` (a slow
-    `mlx_lm.load`) has to happen - the wall clock proves it did - while the number the worker
-    states stays far below it.
+    A controlled clock advances inside the fake load and generation calls. Exact windows prove
+    that loading is excluded without making machine scheduling part of the assertion.
     """
 
-    # Long enough for the load to be unmistakable, with the stated window an order of magnitude
-    # below it, so a scheduling stall cannot make a route-measured number look engine-measured.
     LOAD_SECONDS = 0.5
     GENERATE_SECONDS = 0.04
+
+    def setUp(self) -> None:
+        self.now = 1000.0
+        clock = types.SimpleNamespace(time=lambda: self.now)
+        for module in ("llm_engine", "main"):
+            patcher = mock.patch(f"components.chat.app.backend.{module}.time", clock)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _advance(self, seconds: float) -> None:
+        self.now += seconds
 
     def _engine(self, root: Path) -> ChatEngine:
         model_dir = root / "model"
@@ -1176,16 +1184,16 @@ class GenerationTimeTests(unittest.TestCase):
         return ChatEngine(model_dir=model_dir, model_id="mlx-community/Qwen3.5-9B-4bit",
                           revision="r" * 40)
 
-    def _slow_load(self):
+    def _timed_load(self):
         def load(*args, **kwargs):
-            time.sleep(self.LOAD_SECONDS)
+            self._advance(self.LOAD_SECONDS)
             return object(), _TemplateTokenizer()
         return load
 
-    def _slow_stream(self, pieces=("Phnom", " Penh")):
+    def _timed_stream(self, pieces=("Phnom", " Penh")):
         def stream_generate(*args, **kwargs):
             for piece in pieces:
-                time.sleep(self.GENERATE_SECONDS)
+                self._advance(self.GENERATE_SECONDS)
                 yield type("R", (), {"text": piece})()
         return stream_generate
 
@@ -1204,59 +1212,46 @@ class GenerationTimeTests(unittest.TestCase):
                 return chunks, stop.value
 
     def test_a_completion_states_generation_time_and_not_the_model_load(self) -> None:
-        def slow_generate(*args, **kwargs):
-            time.sleep(self.GENERATE_SECONDS)
+        def timed_generate(*args, **kwargs):
+            self._advance(self.GENERATE_SECONDS)
             return "served"
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = self._engine(Path(tmp))
-            started = time.time()
-            with mock.patch("mlx_lm.load", self._slow_load()), \
-                    mock.patch("mlx_lm.stream_generate", _stream_text(slow_generate)):
+            with mock.patch("mlx_lm.load", self._timed_load()), \
+                    mock.patch("mlx_lm.stream_generate", _stream_text(timed_generate)):
                 outcome = engine.complete([{"role": "user", "content": "hi"}], max_tokens=8)
-            wall = time.time() - started
-        self.assertGreaterEqual(wall, self.LOAD_SECONDS, "the slow model load did not happen")
-        self.assertGreaterEqual(outcome["elapsed_seconds"], self.GENERATE_SECONDS * 0.5,
-                                "the generation itself is not in the stated time")
-        self.assertLess(
-            outcome["elapsed_seconds"], self.LOAD_SECONDS / 2,
-            "the model load is inside the stated generation time: a rate derived from it would "
-            "understate the model on the turn the owner is measuring")
+        self.assertAlmostEqual(self.now - 1000.0, self.LOAD_SECONDS + self.GENERATE_SECONDS)
+        self.assertEqual(outcome["elapsed_seconds"], self.GENERATE_SECONDS)
 
     def test_a_stream_returns_the_generation_window_it_measured(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             engine = self._engine(Path(tmp))
-            started = time.time()
-            with mock.patch("mlx_lm.load", self._slow_load()), \
-                    mock.patch("mlx_lm.stream_generate", self._slow_stream()):
+            with mock.patch("mlx_lm.load", self._timed_load()), \
+                    mock.patch("mlx_lm.stream_generate", self._timed_stream()):
                 chunks, stated = self._consume(
                     engine.stream([{"role": "user", "content": "hi"}], max_tokens=8))
-            wall = time.time() - started
         self.assertEqual(chunks, ["Phnom", " Penh"])
-        self.assertGreaterEqual(wall, self.LOAD_SECONDS, "the slow model load did not happen")
         self.assertIsInstance(stated, float, "the stream stated no generation window")
-        self.assertGreaterEqual(stated, self.GENERATE_SECONDS * 0.5)
-        self.assertLess(stated, self.LOAD_SECONDS / 2,
-                        "the model load is inside the stream's stated generation window")
+        self.assertAlmostEqual(self.now - 1000.0, self.LOAD_SECONDS + 2 * self.GENERATE_SECONDS)
+        self.assertEqual(stated, 2 * self.GENERATE_SECONDS)
 
     def test_the_streamed_final_chunk_states_the_engines_own_measured_elapsed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             engine = self._engine(Path(tmp))
             policy = memory_policy_module.MemoryPolicy(Path(tmp), engine)
             app = create_app(engine, policy, TOKEN, "a" * 64)
-            started = time.time()
-            # The prompt pre-flight is bypassed so the slow load happens *inside* `stream()`, on
+            # The prompt pre-flight is bypassed so the timed load happens *inside* `stream()`, on
             # the first step the route takes - the one case a window measured by the route would
             # pick the load up in. The engine's own window starts after the model is resident and
             # must not contain it.
             with mock.patch.object(ChatEngine, "check_prompt_fits", lambda *a, **k: None), \
-                    mock.patch("mlx_lm.load", self._slow_load()), \
-                    mock.patch("mlx_lm.stream_generate", self._slow_stream()):
+                    mock.patch("mlx_lm.load", self._timed_load()), \
+                    mock.patch("mlx_lm.stream_generate", self._timed_stream()):
                 with TestClient(app) as client:
                     response = client.post(
                         "/v1/chat/completions", headers={"x-studio-token": TOKEN},
                         json={"messages": [{"role": "user", "content": "hi"}], "stream": True})
-            wall = time.time() - started
         self.assertEqual(response.status_code, 200, response.text)
         events = [line[len("data:"):].strip() for line in response.text.splitlines()
                   if line.startswith("data:")]
@@ -1265,11 +1260,8 @@ class GenerationTimeTests(unittest.TestCase):
         self.assertEqual(final["choices"][0]["finish_reason"], "stop")
         self.assertEqual(final["usage"]["completion_tokens"], 2)
         stated = final["studio_hub"]["elapsed_seconds"]
-        self.assertGreaterEqual(wall, self.LOAD_SECONDS, "the slow model load did not happen")
-        self.assertGreaterEqual(stated, self.GENERATE_SECONDS * 0.5)
-        self.assertLess(stated, self.LOAD_SECONDS / 2,
-                        "the route published a number measured around the stream rather than "
-                        "the engine's own generation window")
+        self.assertAlmostEqual(self.now - 1000.0, self.LOAD_SECONDS + 2 * self.GENERATE_SECONDS)
+        self.assertEqual(stated, 2 * self.GENERATE_SECONDS)
 
     def test_a_stream_that_states_no_window_publishes_no_number(self) -> None:
         # `_FakeEngine.stream` returns nothing at all. A worker whose engine measures nothing
