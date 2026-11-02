@@ -15,14 +15,23 @@ produce:
 It installs **Content Packs** you download from the Studio Library — formats, styles, topic
 packs, thumbnail recipes, fonts and metadata formulas that extend what it can produce.
 
-It does **not** run any AI model itself and does not hold a list of models. Everything
-that needs a model goes to GatewayKH.
+It does not hold a list of models, and everything that needs a model goes to GatewayKH,
+with one exception: optional duplicate screening runs **EmbeddingGemma** on this Mac to compare
+scene images and titles. Screening is off until you turn it on, gives warnings only, and reads
+"not checked" (never "passed") when it is off or the model is missing.
 
 > **The version and the installer filename below are stamped on the drive**, not read from this
 > file: `packaging/kit_stamp_index.py` rewrites both from the `.dmg` actually sitting in the folder
 > beside this one. What is written here only has to be sensible for a reader of the repository.
 
 ## Install
+
+Easiest: quit Story Studio, then double-click **`Install Story Studio.command`** in this folder.
+It installs the app from the DMG beside it and copies EmbeddingGemma from the `EmbeddingGemma`
+folder into Story's data folder, checking every file against its SHA-256 list. The old app goes
+to the Trash. It does not turn screening on.
+
+By hand, without EmbeddingGemma:
 
 1. Open `Story Studio KH 1.4.367-arm64.dmg`.
 2. Drag **Story Studio KH** into **Applications**.
