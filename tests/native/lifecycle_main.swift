@@ -211,6 +211,21 @@ func readyPID(_ controller: StudioController) -> Int32? {
     return pid.int32Value
 }
 
+/// How many times the fixture service has been spawned, from its own count. The ready file is
+/// left behind on exit, so it cannot say whether the services are running; this can.
+func launchCount(root: URL) -> Int {
+    let path = root.appendingPathComponent("state/launches").path
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
+    return text.split(separator: "\n", omittingEmptySubsequences: true).count
+}
+
+/// The app's own record of why the services ended, as the fleet reads it from `last-stop.json`.
+func lastStopReason(root: URL) -> String? {
+    guard let data = try? Data(contentsOf: root.appendingPathComponent("state/last-stop.json")),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    return json["reason"] as? String
+}
+
 @main
 struct NativeLifecycleTests {
     @MainActor
@@ -809,6 +824,182 @@ struct NativeLifecycleTests {
                 controller.start()
                 let started = await waitUntil { readyPID(controller) != nil && controller.running }
                 requireLifecycle(started, "launch-retry: the launched app never brought its services up")
+                controller.stop()
+                _ = await waitUntil { !controller.running }
+            }
+        }
+
+        // A service that is running but has stopped answering is ended by the app, with the reason
+        // recorded where the fleet reads it. This is the shape of the 2026-10-31 outage at 1400:
+        // an app that was up, services that were running, health checks that never came back, and
+        // nothing in the app that would have ended them - `start_services` by hand was the only
+        // thing that did. An exit is already recovered; silence was not.
+        if runs("silent") {
+            let backoff: [TimeInterval] = [0, 0, 0, 0, 0]
+
+            // Silence past the bound is ended and restarted, and the fleet is told why.
+            do {
+                let root = temporary.appendingPathComponent("silent-hang")
+                let server = try LocalHubFixture(); defer { server.stop() }
+                var clock = Date(timeIntervalSince1970: 100)
+                let controller = try makeController(root: root, server: server, now: { clock },
+                                                    maxAttempts: 5, backoffSeconds: backoff)
+                server.setHealthy(true)
+                controller.start()
+                let up = await waitUntil {
+                    readyPID(controller) != nil && controller.status == "Local services ready"
+                }
+                requireLifecycle(up, "silent: the service never became ready, \(controller.status)")
+                let before = readyPID(controller)!
+                let launches = launchCount(root: root)
+
+                // The Hub stops answering. Nothing may end it yet: one slow answer, however busy
+                // this Mac has been, is not a hung service.
+                server.setHealthy(false)
+                let wentQuiet = await waitUntil { controller.status == "Local services not responding" }
+                requireLifecycle(wentQuiet, "silent: a failed health check must be visible, \(controller.status)")
+                server.resetHealthReadCount()
+                clock = clock.addingTimeInterval(60)
+                let checkedUnderBound = await waitUntil { server.healthReadCount() > 0 }
+                requireLifecycle(checkedUnderBound, "silent: the health check never ran again")
+                requireLifecycle(readyPID(controller) == before && controller.running,
+                                 "silent: a silence under the bound must not end the services")
+
+                // Past the bound it does, and the reason is on disk before anything is torn down:
+                // a hung Hub cannot publish while it is hung, so the record has to exist first.
+                clock = clock.addingTimeInterval(60)
+                let recorded = await waitUntil(timeout: 10) {
+                    lastStopReason(root: root) == "stopped_answering"
+                }
+                requireLifecycle(recorded,
+                    "silent: the fleet must be told why, got \(String(describing: lastStopReason(root: root)))")
+
+                // And it comes back by itself - the whole point, and the thing `start_services`
+                // by hand used to do by hand.
+                server.setHealthy(true)
+                let back = await waitUntil(timeout: 12) {
+                    guard let pid = readyPID(controller), pid != before else { return false }
+                    return controller.running && controller.status == "Local services ready"
+                }
+                requireLifecycle(back, "silent: the services never came back, \(controller.status)")
+                requireLifecycle(launchCount(root: root) > launches,
+                                 "silent: a silent service must be started again, not left down")
+                controller.stop()
+                _ = await waitUntil { !controller.running }
+            }
+
+            // The owner stops the services while they are silent: nothing starts them again, and
+            // the stop is theirs - it is never recorded as a service that stopped answering.
+            do {
+                let root = temporary.appendingPathComponent("silent-owner-stop")
+                let server = try LocalHubFixture(); defer { server.stop() }
+                var clock = Date(timeIntervalSince1970: 100)
+                let controller = try makeController(root: root, server: server, now: { clock },
+                                                    maxAttempts: 5, backoffSeconds: backoff)
+                server.setHealthy(true)
+                controller.start()
+                let up = await waitUntil {
+                    readyPID(controller) != nil && controller.status == "Local services ready"
+                }
+                requireLifecycle(up, "silent: the service never became ready, \(controller.status)")
+                server.setHealthy(false)
+                let wentQuiet = await waitUntil { controller.status == "Local services not responding" }
+                requireLifecycle(wentQuiet, "silent: a failed health check must be visible, \(controller.status)")
+
+                controller.stop()
+                let stopped = await waitUntil { !controller.running }
+                requireLifecycle(stopped, "silent: the owner's stop must take effect")
+                requireLifecycle(controller.status == "Local services stopped",
+                                 "silent: an owner's stop must be the last word, got \(controller.status)")
+                requireLifecycle(lastStopReason(root: root) != "stopped_answering",
+                    "silent: an owner's stop must not be recorded as a silent service")
+
+                // Well past the bound, with the clock moved on, nothing comes back.
+                let launches = launchCount(root: root)
+                clock = clock.addingTimeInterval(600)
+                try? await Task.sleep(for: .milliseconds(400))
+                requireLifecycle(!controller.running && launchCount(root: root) == launches,
+                                 "silent: a service the owner stopped must stay stopped")
+                requireLifecycle(controller.status == "Local services stopped",
+                                 "silent: a late restart overwrote the owner's stop, got \(controller.status)")
+            }
+
+            // The harder version of the same rule: the bound is reached, the services are being
+            // ended, and the owner stops them while that is in flight. The recovery must be
+            // cancelled - a stop the owner asked for is never followed by an app of its own.
+            do {
+                let root = temporary.appendingPathComponent("silent-owner-cancel")
+                let server = try LocalHubFixture(); defer { server.stop() }
+                var clock = Date(timeIntervalSince1970: 100)
+                let controller = try makeController(root: root, server: server, now: { clock },
+                                                    maxAttempts: 5, backoffSeconds: [5, 0, 0, 0, 0])
+                server.setHealthy(true)
+                controller.start()
+                let up = await waitUntil {
+                    readyPID(controller) != nil && controller.status == "Local services ready"
+                }
+                requireLifecycle(up, "silent: the service never became ready, \(controller.status)")
+                server.setHealthy(false)
+                let wentQuiet = await waitUntil { controller.status == "Local services not responding" }
+                requireLifecycle(wentQuiet, "silent: a failed health check must be visible, \(controller.status)")
+                clock = clock.addingTimeInterval(120)
+                let recorded = await waitUntil(timeout: 10) {
+                    lastStopReason(root: root) == "stopped_answering"
+                }
+                requireLifecycle(recorded, "silent: the fleet must be told why before anything is torn down")
+
+                // The recovery is on a five-second rung, so the owner's stop lands inside it.
+                let pending = await waitUntil { controller.recoveryPending || controller.canCancelRecovery }
+                requireLifecycle(pending, "silent: a service ended for silence must enter the ladder")
+                requireLifecycle(controller.failure?.contains("stopped answering") == true,
+                    "silent: the reason must be on screen, not only in the record, "
+                        + "got \(String(describing: controller.failure))")
+                controller.stop()
+                requireLifecycle(!controller.recoveryPending,
+                                 "silent: an owner's stop must cancel the pending recovery")
+                let launches = launchCount(root: root)
+                clock = clock.addingTimeInterval(600)
+                try? await Task.sleep(for: .milliseconds(600))
+                requireLifecycle(!controller.running && launchCount(root: root) == launches,
+                                 "silent: a recovery the owner cancelled must not start the services")
+                requireLifecycle(controller.status == "Local services stopped",
+                                 "silent: an owner's stop must be the last word, got \(controller.status)")
+            }
+
+            // Slow but alive is never killed: the silence clock is thrown away by the next good
+            // answer, so an evening of intermittent slowness never ends a working service.
+            do {
+                let root = temporary.appendingPathComponent("silent-slow")
+                let server = try LocalHubFixture(); defer { server.stop() }
+                var clock = Date(timeIntervalSince1970: 100)
+                let controller = try makeController(root: root, server: server, now: { clock },
+                                                    maxAttempts: 5, backoffSeconds: backoff)
+                server.setHealthy(true)
+                controller.start()
+                let up = await waitUntil {
+                    readyPID(controller) != nil && controller.status == "Local services ready"
+                }
+                requireLifecycle(up, "silent: the service never became ready, \(controller.status)")
+                let launches = launchCount(root: root)
+
+                server.setHealthy(false)
+                let firstQuiet = await waitUntil { controller.status == "Local services not responding" }
+                requireLifecycle(firstQuiet, "silent: a failed health check must be visible")
+                clock = clock.addingTimeInterval(60)
+                server.setHealthy(true)
+                let answered = await waitUntil { controller.status == "Local services ready" }
+                requireLifecycle(answered, "silent: a service that answers again must be seen, \(controller.status)")
+
+                // A second silence, with the clock already past the first one's bound. If the
+                // first silence were still being counted, this is the moment it would fire.
+                clock = clock.addingTimeInterval(60)
+                server.setHealthy(false)
+                let secondQuiet = await waitUntil { controller.status == "Local services not responding" }
+                requireLifecycle(secondQuiet, "silent: a failed health check must be visible")
+                try? await Task.sleep(for: .milliseconds(1_500))
+                requireLifecycle(controller.running && launchCount(root: root) == launches,
+                    "silent: a service that answered again must never be killed, "
+                        + "launches \(launchCount(root: root)) of \(launches)")
                 controller.stop()
                 _ = await waitUntil { !controller.running }
             }

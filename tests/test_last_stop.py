@@ -81,7 +81,8 @@ class LastStopTests(unittest.TestCase):
                      {"reason": "quit", "at": "yesterday"}, {"reason": "quit", "at": True},
                      {"reason": "quit"}):
             self.assertIsNone(fleet_nodes.last_stop_of(junk), junk)
-        reasons = {"quit", "crashed", "updated", "force_quit", "low_memory", "mac_restarted"}
+        reasons = {"quit", "crashed", "updated", "force_quit", "low_memory", "mac_restarted",
+                   "stopped_answering"}
         self.assertEqual(set(fleet_nodes.LAST_STOP_REASONS), reasons,
                          "the reasons are the ones StopReason in native/ShellCore.swift writes")
 

@@ -1270,14 +1270,20 @@ def _last_known_startup(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
 _CURRENT_JOB_KEYS = ("job_id", "modality", "model", "label", "started_at")
-LAST_STOP_REASONS = frozenset({"quit", "crashed", "updated", "force_quit", "low_memory", "mac_restarted"})
+#: Why a Mac's Studio Hub last stopped, as that Mac recorded it. ``stopped_answering`` is the app's
+#: record of services that were running and went silent (it ends them to start a fresh set); the
+#: app itself did not stop, and the next app stop overwrites the record with its own reason.
+LAST_STOP_REASONS = frozenset({"quit", "crashed", "updated", "force_quit", "low_memory", "mac_restarted",
+                              "stopped_answering"})
 
 
 def last_stop_of(value: object) -> dict[str, Any] | None:
     """Why a Mac's Studio Hub last stopped, as that Mac recorded it - or ``None``.
 
-    Written by the app (`StopRecord` in native/ShellCore.swift) to ``last-stop.json``. It is another
-    machine's word, so only the four contract keys travel, with a known reason and a real time.
+    Written by the app (`StopRecord` in native/ShellCore.swift) to ``last-stop.json``: why the app
+    ended, or - while the app is still up - why it ended services that had stopped answering. It is
+    another machine's word, so only the four contract keys travel, with a known reason and a real
+    time.
     """
     if not isinstance(value, dict) or value.get("reason") not in LAST_STOP_REASONS:
         return None

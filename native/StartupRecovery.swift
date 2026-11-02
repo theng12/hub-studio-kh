@@ -50,6 +50,25 @@ struct StartupRecovery {
         guard let readyAt, now.timeIntervalSince(readyAt) >= healthyResetInterval else { return attempts }
         return 0
     }
+
+    /// How long the services may run without answering their health check before the app ends them
+    /// so the ladder can start a fresh set.
+    ///
+    /// Two minutes, because that is the startup path's own bound: a service that has not come up
+    /// within two minutes is already declared failed and stopped. A single slow answer never counts
+    /// - a Mac under model load may take a while - and neither does a run of them: the clock starts
+    /// on the first failed check and is thrown away by the next good one, so only a silence this
+    /// long is a silence.
+    static let silentServicesRestartAfter: TimeInterval = 120
+
+    /// Whether a service that has stopped answering should be ended now, under this policy.
+    ///
+    /// `maxAttempts` is the switch `setRecoveryPolicy` sets. Zero attempts means the app never
+    /// starts the services by itself, so it never ends them either: such a Mac is left saying it is
+    /// not answering - the truth - rather than having its services stopped behind the owner's back.
+    static func shouldRestartSilentServices(silentFor: TimeInterval, maxAttempts: Int) -> Bool {
+        silentFor >= silentServicesRestartAfter && maxAttempts > 0
+    }
 }
 
 /// What a launch decides about the services, before anything is spawned.

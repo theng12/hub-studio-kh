@@ -259,15 +259,21 @@ struct ShellConfiguration {
     /// Every check ran the worker directly with its real flag, so the mismatch lived in the one
     /// place nothing exercised: the argument list the app builds. The worker's own
     /// `tests/test_fleet_binding.py` pins its side; this pins ours, and the names must stay equal.
+    /// `recoveryMaxAttempts` is this Mac's own `setRecoveryPolicy` switch carried onto the same
+    /// command line: the worker's child watcher restarts a studio that has stopped answering, and
+    /// a Mac whose owner asked for no automatic restarts must not have one restarted behind their
+    /// back. Zero means never; the worker keeps restarting a studio that has actually exited.
     static func serviceArguments(dataDirectory: URL, modelsDirectory: URL, readyFile: URL,
                                  parentPID: Int32, listenHost: String, offline: Bool,
+                                 recoveryMaxAttempts: Int,
                                  port: Int = ShellConfiguration.defaultPort) -> [String] {
         var arguments = ["--data-dir", dataDirectory.path,
                          "--models-dir", modelsDirectory.path,
                          "--ready-file", readyFile.path,
                          "--parent-pid", String(parentPID),
                          "--host", listenHost,
-                         "--port", String(port)]
+                         "--port", String(port),
+                         "--recovery-attempts", String(recoveryMaxAttempts)]
         if offline { arguments.append("--offline") }
         return arguments
     }
@@ -1392,6 +1398,11 @@ enum StopReason: String, Equatable {
     case forceQuit = "force_quit"
     case lowMemory = "low_memory"
     case macRestarted = "mac_restarted"
+    /// The services were running but had stopped answering, so the app ended them to start a fresh
+    /// set. `classify` never returns it - the app itself did not stop - and it is written by
+    /// `recordSilentServices` instead, so the fleet's `last_stop` says "stopped answering" rather
+    /// than showing a Mac that is merely offline.
+    case stoppedAnswering = "stopped_answering"
 
     /// Plain English without a time; the Gateway adds the time in its own time zone.
     func label(relaunched: Bool) -> String {
@@ -1402,6 +1413,7 @@ enum StopReason: String, Equatable {
         case .forceQuit: return "Force-quit"
         case .lowMemory: return "Stopped for low memory"
         case .macRestarted: return "Mac restarted, shut down or lost power"
+        case .stoppedAnswering: return "Local services stopped answering"
         }
     }
 }
@@ -1512,6 +1524,22 @@ enum StopRecord {
             unlink(marker(name).path)
         }
         return record
+    }
+
+    /// The app's own record of services that had stopped answering, published as `last_stop`.
+    ///
+    /// `settle` answers why the *app* ended; this says why the services did, which is the fact a
+    /// controller needs when a Mac goes quiet for no reason it can see - the owner's decision of
+    /// 2026-10-03 was "Force-quit at 09:36" on the Fleet page instead of a bare "offline", and a
+    /// hung Hub is the same kind of unexplained outage. The app stays up to restart them, so this
+    /// is not an app stop; the next `settle` overwrites it, because that is the newer fact.
+    static func recordSilentServices(directory: URL, now: Date = Date(),
+                                     reason: StopReason = .stoppedAnswering) {
+        let record: [String: Any] = ["reason": reason.rawValue, "at": now.timeIntervalSince1970,
+                                     "label": reason.label(relaunched: false), "relaunched": false]
+        guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
+        else { return }
+        try? data.write(to: directory.appendingPathComponent(fileName), options: .atomic)
     }
 
     /// Start of a run: the evidence a later `settle` reads. The start time is the file's content,

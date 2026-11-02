@@ -315,9 +315,167 @@ def worker_command(spec: dict, resources: Path, data: Path, models: Path,
 RESTART_BACKOFF_SECONDS = (1, 2, 5, 10, 30, 60)
 RESTART_STABLE_SECONDS = 300
 
+# How long a studio may answer no health at all before this process restarts it, while the Hub's
+# own monitor already reports it down. The bound is the app's, not a second opinion invented here:
+# `StartupRecovery.silentServicesRestartAfter` is the two minutes the app itself waits before it
+# ends silent services, and a Mac under model load is owed at least that. Silence alone is never
+# enough on its side either - a studio running a long model job may answer slowly, so the monitor's
+# word is required too, and the monitor does not report a studio down while this Hub holds a job
+# lease on it (`monitor._has_active_lease`). Together they mean: no work in flight, and nothing
+# answered for as long as the app itself would have given up. Whether any of it may happen at all
+# is the app's switch, read from `--recovery-attempts` in `silent_restarts_allowed`.
+SILENT_STUDIO_RESTART_AFTER = 120.0
+
+# The watcher backs off after a failure it did not expect, so one studio that fails every pass
+# cannot spin the thread or flood the service log.
+WATCH_ERROR_BACKOFF_SECONDS = 5.0
+
+# This Mac's own recovery switch - the app's `setRecoveryPolicy(maxAttempts:)` - as the app passed
+# it on the command line it started this process with. Zero means the owner asked for no automatic
+# restarts, so a studio that is still running but has stopped answering is left alone here too:
+# restarting it would be exactly the restart they refused. None means the app gave no readable
+# value, which keeps the behaviour this watcher has always had (restart) and is said once, so
+# "not told" never reads as "allowed" in the service log.
+RECOVERY_ATTEMPTS: int | None = None
+_recovery_policy_said = False
+
+
+def set_recovery_attempts(raw: str | None) -> None:
+    """Read `--recovery-attempts` once, at start. Absent or unreadable leaves it unset."""
+    global RECOVERY_ATTEMPTS
+    try:
+        RECOVERY_ATTEMPTS = None if raw is None else int(raw)
+    except (TypeError, ValueError):
+        RECOVERY_ATTEMPTS = None
+
+
+def silent_restarts_allowed(child) -> bool:
+    """Whether a studio whose process is alive may be restarted for silence, under this Mac's
+    recovery switch.
+
+    The app honours the same switch for its own hung services
+    (`StartupRecovery.shouldRestartSilentServices`), so without this the switch would govern one
+    half of the restarts on a Mac that asked for none. An exited studio is not this question - it
+    is restarted either way, as it always was.
+    """
+    global _recovery_policy_said
+    if RECOVERY_ATTEMPTS is None:
+        if not _recovery_policy_said:
+            _recovery_policy_said = True
+            print("Private studios: this Hub was not given a readable recovery policy, so a "
+                  "studio that stops answering is still restarted after two minutes.",
+                  file=sys.stderr, flush=True)
+        return True
+    if RECOVERY_ATTEMPTS > 0:
+        return True
+    if not child.get("silent_restart_declined"):
+        child["silent_restart_declined"] = True
+        print(f"Private {str(child.get('id', 'studio')).title()} worker: left alone because this "
+              f"Mac's recovery policy is set to never restart services by itself; a studio that "
+              f"has exited is still restarted.", file=sys.stderr, flush=True)
+    return False
+
 
 def restart_delay(failures: int) -> int:
     return RESTART_BACKOFF_SECONDS[min(failures, len(RESTART_BACKOFF_SECONDS) - 1)]
+
+
+def _studio_status(studio_id: str) -> dict:
+    """The Hub monitor's live row for one of this process's own studios.
+
+    This is the one figure that already knows the difference between a slow worker with work and a
+    studio that is gone: the monitor polls every studio's health and keeps a busy one up through a
+    failed probe. It is read from the Hub app's own monitor, which lives in this same process -
+    building a second one here would poll nothing and report every studio as unknown for ever.
+    ``{"_unavailable": ...}`` when it cannot be read, which is a fact and not an "up".
+    """
+    try:
+        from components.hub.standalone import app
+        return dict((app.state.monitor.status or {}).get(studio_id) or {})
+    except Exception as exc:
+        return {"_unavailable": f"{type(exc).__name__}: {exc}"}
+
+
+def hung_reason(child, *, status: dict | None = None, now: float | None = None) -> str | None:
+    """Why a studio whose process is still alive must be restarted, or ``None`` to leave it be.
+
+    Returns a sentence that reads on its own after the studio's name, because the service log and
+    the alert are the only places an operator learns why a studio was restarted. `None` also
+    covers this Mac's recovery policy: a studio that has stopped answering is left alone when the
+    owner asked for no automatic restarts (`silent_restarts_allowed`).
+    """
+    row = _studio_status(child["id"]) if status is None else dict(status or {})
+    label = child["id"].title()
+    if row.get("_unavailable"):
+        # Cannot tell silence from a long job, so the studio is left alone - said once rather than
+        # on every pass, so the log still says why no studio is ever restarted by this thread.
+        if not child.get("monitor_unavailable_reported"):
+            child["monitor_unavailable_reported"] = True
+            print(f"Private {label} worker: the Hub's monitor cannot be read from the child "
+                  f"watcher ({row['_unavailable']}); a studio that stops answering is left "
+                  f"alone until the Hub itself is restarted.", file=sys.stderr, flush=True)
+        return None
+    if row.get("status") != "down":
+        return None
+    moment = time.time() if now is None else now
+    last_seen = row.get("last_seen")
+    if last_seen is None:
+        silent_for = time.monotonic() - child.get("started", time.monotonic())
+        if silent_for < SILENT_STUDIO_RESTART_AFTER:
+            return None
+        reason = (f"never answered health since it started {int(silent_for)} s ago, while the "
+                  f"Hub's monitor reports it down")
+    else:
+        silent_for = moment - last_seen
+        if silent_for < SILENT_STUDIO_RESTART_AFTER:
+            return None
+        reason = (f"stopped answering health {int(silent_for)} s ago, while the Hub's monitor "
+                  f"reports it down")
+    if not silent_restarts_allowed(child):
+        return None
+    return reason
+
+
+def announce_restart(studio_id: str, reason: str) -> None:
+    """Put a restart and its reason on the Hub's existing alert channel.
+
+    `alerts.emit` is already how a silent failure becomes a signal: it records the event, logs it
+    into the service log, and posts it to the configured webhook. No new channel is opened here -
+    a reason nothing can read is the same as no reason.
+    """
+    try:
+        from components.hub.backend import alerts
+    except Exception:
+        return
+    try:
+        alerts.emit("studio_restarted",
+                    f"{studio_id.title()} Studio was restarted: {reason}",
+                    {"studio": studio_id, "reason": reason})
+    except Exception:
+        pass
+
+
+def watch_studio(child, restart_one, stop):
+    """One watcher pass for one studio. **Never raises.**
+
+    The watcher is a single thread over every studio, and if it ends the Hub keeps answering while
+    no studio ever comes back - `getpgid` on a child that just died, a `spawn` that ran out of
+    descriptors and a `stop_child` that ran out of time all raised straight through it. So any
+    failure here is logged, backed off, and left for the next pass.
+    """
+    label = str(child.get("id", "studio")).title()
+    try:
+        if child["process"].poll() is not None:
+            if not stop.is_set():
+                restart_one(child)
+            return
+        reason = hung_reason(child)
+        if reason and not stop.is_set():
+            restart_one(child, reason=reason)
+    except Exception as exc:
+        print(f"Watching the private {label} worker failed ({type(exc).__name__}: {exc}); the "
+              f"Hub keeps watching every studio.", file=sys.stderr, flush=True)
+        stop.wait(WATCH_ERROR_BACKOFF_SECONDS)
 
 
 def main():
@@ -332,8 +490,15 @@ def main():
     # Mac serve its LAN and its Tailscale address at once; loopback is always included.
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--offline', action='store_true')
+    # The app's own recovery switch (`setRecoveryPolicy(maxAttempts:)`): 0 means this Mac's owner
+    # asked for no automatic restarts, so a studio that has stopped answering is left alone. It
+    # arrives as an argument because every STUDIOHUB_* environment variable is stripped below -
+    # the app cannot hand it over as one. Left unset (an app that does not pass it) keeps the
+    # behaviour this worker has always had.
+    parser.add_argument('--recovery-attempts', default=None)
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
+    set_recovery_attempts(args.recovery_attempts)
     data, models = args.data_dir.expanduser().resolve(), args.models_dir.expanduser().resolve()
     ready = args.ready_file.expanduser().absolute()
     bundle = RESOURCES.parent.parent
@@ -431,15 +596,22 @@ def main():
             'managed_output_roots': [str(child['outputs'])],
         }
 
-    def restart(child):
-        """Bring one exited worker back on its own port; the Hub and other studios stay up."""
+    def restart(child, *, reason: str | None = None):
+        """Bring one worker back on its own port; the Hub and other studios stay up.
+
+        ``reason`` is set when the worker is still running but has stopped answering, rather than
+        having exited - both go through the same ladder, the same port and the same descriptor.
+        """
         label = child['id'].title()
         if time.monotonic() - child['started'] >= RESTART_STABLE_SECONDS:
             child['failures'] = 0
         delay = restart_delay(child['failures'])
         child['failures'] += 1
-        print(f"Private {label} worker exited (status {child['process'].returncode}); restarting "
-              f"it in {delay} s. The other studios keep running.", file=sys.stderr, flush=True)
+        if reason is None:
+            reason = f"exited (status {child['process'].returncode})"
+        print(f"Private {label} worker {reason}; restarting it in {delay} s. The other studios "
+              f"keep running.", file=sys.stderr, flush=True)
+        announce_restart(child['id'], reason)
         stop_child(child['process'], child.get('pgid'))
         child['pgid'] = None
         if child_watch_stop.wait(delay):
@@ -452,7 +624,10 @@ def main():
             await_child(child['process'], child['ready'], label=label)
             if os.getpgid(child['process'].pid) != child['process'].pid:
                 raise RuntimeError(f'Private {label} worker process group is not isolated')
-        except (RuntimeError, ValueError) as exc:
+        # OSError is here for the two that end a watcher thread and leave every studio down while
+        # the Hub keeps answering: `getpgid` on a worker that died in the moment it came ready, and
+        # a `spawn` that could not start one. Both are tried again by the next pass.
+        except (OSError, RuntimeError, ValueError) as exc:
             print(f"{exc}; the Hub will try again.", file=sys.stderr, flush=True)
             stop_child(child['process'], child.get('pgid'))
             child['pgid'] = None
@@ -465,8 +640,7 @@ def main():
     def watch_children():
         while not child_watch_stop.wait(0.2):
             for child in children:
-                if child['process'].poll() is not None and not child_watch_stop.is_set():
-                    restart(child)
+                watch_studio(child, restart, child_watch_stop)
 
     def load_app():
         # The shared server starts its parent watchdog before these startup waits. A worker that
