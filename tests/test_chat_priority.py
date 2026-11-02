@@ -356,8 +356,13 @@ async def routed_proof():
    manifest_file.write_text(json.dumps(manifest))
    one=asyncio.create_task(client.post(path,headers=headers('8'*32),json=body))
    two=asyncio.create_task(client.post(path,headers=headers('9'*32),json=body))
+   # Wait on these two ids, not the registry's size: the cancelled request earlier in
+   # this proof is a fencing tombstone that stays until expiry, so `len==2` never held
+   # and the loop always spun its full budget - burning most of the 2s queue-wait
+   # ceiling before the Mac was even released.
    for _ in range(1000):
-    if len(chat_priority.requests)==2 and all(r['ready'] for r in chat_priority.requests.values()): break
+    if all(chat_priority.requests.get(key,{}).get('ready')
+           for key in ('8'*32,'9'*32)): break
     await asyncio.sleep(.001)
    status=await client.get('/studio/chat/requests/'+'8'*32,headers=fleet_headers)
    assert status.status_code==200,(status.status_code,status.text)

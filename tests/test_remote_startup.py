@@ -552,8 +552,19 @@ class RouteTests(unittest.TestCase):
             client = self.client(stack)
             from components.hub.backend import control_plane
             control_plane.save_settings({"role": "controller"})
-            with FakeApp():
-                time.sleep(0.1)
+            startup_control.sync(REPORT)
+            wait_for = startup_control._wait_for
+
+            async def apply_before_wait(request_id, seconds):
+                # Exercise local delivery/ack without racing the fixture's 0.2s deadline.
+                requests = startup_control.sync(REPORT)["requests"]
+                self.assertEqual([item["id"] for item in requests], [request_id])
+                self.assertEqual(requests[0]["action"], "set_open_at_login")
+                self.assertIs(requests[0]["value"], False)
+                startup_control.sync({**REPORT, "applied": [{"id": request_id, "ok": True}]})
+                return await wait_for(request_id, 0)
+
+            with patch.object(startup_control, "_wait_for", apply_before_wait):
                 mine = client.post("/api/hub/fleet/nodes/local/startup", headers=self.FLEET,
                                    json={"action": "set_open_at_login", "value": False})
             self.assertEqual(mine.json()["state"], "applied")

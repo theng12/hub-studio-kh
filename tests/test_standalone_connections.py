@@ -2064,7 +2064,10 @@ class ControllerRegistryTests(unittest.TestCase):
 
                 here = rows["local"]
                 self.assertTrue(here["reachable"])
-                self.assertEqual(here["label"], "This Mac")
+                status, controller, _ = hub.request("/api/hub/controller", token=hub.token)
+                self.assertEqual(status, 200)
+                self.assertEqual(here["label"], controller["settings"]["machine_name"])
+                self.assertEqual(here["controller_id"], controller["settings"]["controller_id"])
                 self.assertTrue(here["version"])
                 # The facts that decide whether work can run here at all.
                 self.assertIsNotNone(here["disk_free_gb"])
