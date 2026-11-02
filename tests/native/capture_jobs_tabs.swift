@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-// Reproducible native capture helper that renders the real Jobs page header and segmented tabs
-// offscreen using AppKit and CoreGraphics, measuring actual points across all 8 tab selections
+// Recreated Jobs-header harness, not the real app page. For full-page captures use
+// STUDIOHUB_RENDER_JOBS_TABS=1 native/render-page.sh jobs. Measures all 8 selections
 // for both BEFORE (stock SwiftUI Picker baseline) and AFTER (owned HubSegmentedControl).
 // Composes a single comprehensive before/after sheet saved to Desktop.
 
@@ -18,7 +18,7 @@ enum JobMachineFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-// MARK: - Actual Page Harness Views
+// MARK: - Recreated Header Views
 
 struct JobsHeaderBefore: View {
     @Binding var tab: HistoryTab
@@ -183,7 +183,6 @@ struct CaptureJobsTabs {
             let beforeV = JobsHeaderBefore(tab: binding)
             let (beforeImg, beforeSC) = renderView(beforeV, size: NSSize(width: 580, height: 110))
             beforeImages.append(beforeImg)
-            // Stock Picker with maxWidth 520 in owner captures varied 442 to 469 px (cell width 728 / compressed)
             guard let beforeSC else { fatalError("Before control was not rendered") }
             let bWidth = beforeSC.frame.width
             beforeWidths.append(bWidth)
@@ -255,7 +254,7 @@ struct CaptureJobsTabs {
             .font: NSFont.systemFont(ofSize: 15, weight: .bold),
             .foregroundColor: NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.45, alpha: 1.0)
         ]
-        ("BEFORE: Stock SwiftUI Picker (Dynamic Sizing & Selection Jitter)" as NSString)
+        ("BEFORE: Stock SwiftUI Picker (Recreated Baseline)" as NSString)
             .draw(at: NSPoint(x: col1X + 16, y: cardY + 36), withAttributes: bHeaderAttrs)
         let bDescAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12, weight: .regular),

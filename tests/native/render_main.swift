@@ -175,6 +175,44 @@ struct PageRenderHarness {
                 hosting.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
             }
+            // Exercise the shipped Jobs view through its native control; no recreated header.
+            let captureTabs = page == .jobs && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_JOBS_TABS"] == "1"
+            func jobsControl(_ view: NSView) -> NSSegmentedControl? {
+                if let control = view as? NSSegmentedControl,
+                   control.segmentCount == HistoryTab.allCases.count { return control }
+                for child in view.subviews { if let found = jobsControl(child) { return found } }
+                return nil
+            }
+            for tabIndex in (captureTabs ? Array(HistoryTab.allCases.indices) : [-1]) {
+            if captureTabs {
+                guard let control = jobsControl(hosting) else { fatalError("Jobs control missing") }
+                control.selectedSegment = tabIndex
+                _ = control.sendAction(control.action, to: control.target)
+                for _ in 0..<8 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                    hosting.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                }
+                // Read actual accessible segment frames: automatic widths report zero via width(forSegment:).
+                func segmentFrames(_ element: any NSAccessibilityProtocol) -> [[String: Any]] {
+                    if element.accessibilityRole() == .radioButton {
+                        let frame = element.accessibilityFrame()
+                        return [["label": element.accessibilityLabel() ?? "", "x": frame.minX,
+                                 "width": frame.width]]
+                    }
+                    return (element.accessibilityChildren() ?? []).flatMap {
+                        guard let child = $0 as? any NSAccessibilityProtocol else { return [[String: Any]]() }
+                        return segmentFrames(child)
+                    }
+                }
+                let frame = control.convert(control.bounds, to: hosting)
+                let metrics: [String: Any] = ["tab": HistoryTab.allCases[tabIndex].title,
+                    "windowWidth": hosting.bounds.width, "windowHeight": hosting.bounds.height,
+                    "controlX": frame.minX, "controlWidth": frame.width,
+                    "fittingWidth": control.fittingSize.width, "segments": segmentFrames(control)]
+                let data = try! JSONSerialization.data(withJSONObject: metrics, options: [.sortedKeys])
+                print("JOBS_GEOMETRY " + String(data: data, encoding: .utf8)!)
+            }
             guard let representation = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
                 print("could not allocate a bitmap for \(Int(size.0))x\(Int(size.1))")
                 continue
@@ -184,12 +222,14 @@ struct PageRenderHarness {
                 print("could not encode \(Int(size.0))x\(Int(size.1))")
                 continue
             }
-            let path = "\(output)/\(fileName(for: page))\(role.map { "-" + $0 } ?? "")-\(Int(size.0))x\(Int(size.1))\(appearance.map { "-" + $0 } ?? "").png"
+            let tabSuffix = captureTabs ? "-tab-\(tabIndex)" : ""
+            let path = "\(output)/\(fileName(for: page))\(tabSuffix)\(role.map { "-" + $0 } ?? "")-\(Int(size.0))x\(Int(size.1))\(appearance.map { "-" + $0 } ?? "").png"
             do {
                 try png.write(to: URL(fileURLWithPath: path))
                 print("wrote \(path)")
             } catch {
                 print("could not write \(path): \(error)")
+            }
             }
             window.orderOut(nil)
         }

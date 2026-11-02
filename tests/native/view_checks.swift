@@ -136,7 +136,15 @@ enum ViewChecks {
             )
         })
         narrowHost.frame = NSRect(x: 0, y: 0, width: 400, height: 48)
-        narrowHost.layoutSubtreeIfNeeded()
+        let narrowWindow = NSWindow(contentRect: narrowHost.frame, styleMask: [.borderless],
+                                    backing: .buffered, defer: false)
+        narrowWindow.contentView = narrowHost
+        narrowWindow.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+        narrowWindow.orderFront(nil)
+        for _ in 0..<8 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            narrowHost.layoutSubtreeIfNeeded()
+        }
         let narrowControl = segmented(narrowHost)
         check(narrowControl != nil && narrowControl?.segmentCount == 8,
               "narrow layout retains all 8 segments without clipping")
@@ -147,7 +155,10 @@ enum ViewChecks {
             let lastSegment = NSRect(x: nc.bounds.maxX - lastSegW, y: 0,
                                      width: lastSegW, height: nc.bounds.height)
             _ = nc.scrollToVisible(lastSegment)
-            narrowHost.layoutSubtreeIfNeeded()
+            for _ in 0..<8 {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                narrowHost.layoutSubtreeIfNeeded()
+            }
             check(nc.visibleRect.maxX >= lastSegment.maxX - 1,
                   "Downloads becomes fully visible after scrolling")
         }
