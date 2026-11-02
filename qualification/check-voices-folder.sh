@@ -1,7 +1,7 @@
 #!/bin/sh
 # Will my existing voices import?  Point this at the folder that holds them.
 #
-#   sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/check-voices-folder.sh" "/path/to/your/voices"
+#   sh "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Hub Studio KH/check-voices-folder.sh" "/path/to/your/voices"
 #
 # Reads only. Uses the app's own Python, so nothing needs installing.
 

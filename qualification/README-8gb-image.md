@@ -8,7 +8,7 @@ Labels: **[M]** measured, **[I]** inference.
 **On the 8 GB Mac** (Studio Hub 0.6.125 or later installed, the two image models put there by the kit's copy step):
 
 1. Close your other apps, plug the Mac in, and open Studio Hub (leave it open).
-2. On the kit drive, open `1 Install Apps` > `Studio Hub` > `Technical` and double-click
+2. On the kit drive, open `1 Install Apps` > `Hub Studio KH` > `Technical` and double-click
    **`RUN-8GB-IMAGE.command`**.
 3. Leave the Mac alone. When it says "Finished", read `summary.txt` in the new `Image 8GB Run <date>` folder beside the script
    (or send the whole folder back).

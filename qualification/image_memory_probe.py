@@ -78,7 +78,7 @@ class Sampler(threading.Thread):
 def find_pack(package_id: str) -> Path:
     """The installed pack's ``model`` folder: ~/StudioHubModels first, then a kit drive."""
     bases = [Path.home() / 'StudioHubModels', *sorted(Path('/Volumes').glob('KH-STUDIO-*/model-library')),
-             # The kit library is at <drive>/1 Install Apps/Studio Hub/model-library.
+             # The kit library is at <drive>/1 Install Apps/Hub Studio KH/model-library.
              *sorted(Path('/Volumes').glob('KH-STUDIO-*/*/*/model-library'))]
     for base in bases:
         for pack in sorted((base / package_id).glob('*/model')):

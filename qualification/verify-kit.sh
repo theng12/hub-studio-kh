@@ -7,7 +7,7 @@
 # already driven to. So this checks the copy itself, then starts the app that is *in this kit*
 # (not one installed on the Mac) and asks it for its health.
 #
-#   sh "/Volumes/<drive>/1 Install Apps/Studio Hub/Technical/verify-kit.sh"
+#   sh "/Volumes/<drive>/1 Install Apps/Hub Studio KH/Technical/verify-kit.sh"
 #
 # What it can and cannot see: the library records each model file's size, not its hash, so this
 # catches a copy that stopped early or was interrupted - the failure that looks fine in Finder and

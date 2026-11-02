@@ -18,7 +18,7 @@ build time, so every Mac that receives the kit can press Prepare Voice and have 
 fresher timings of its own.
 
     python3 tools/time_kit_voices.py --voices /Volumes/KH-STUDIO-ATLAS/Studio\ Hub\ App/voices \\
-        --app "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Studio Hub/Studio Hub.app" \\
+        --app "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Hub Studio KH/Studio Hub.app" \\
         --models "$HOME/StudioHubModels"
 
 It starts the app's own Hub, transcribes each long clip with the app's own Whisper, writes the

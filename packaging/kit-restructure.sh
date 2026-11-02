@@ -1,5 +1,5 @@
 #!/bin/bash
-# Lay each SSD out as "1 Install Apps/{Gateway,Story Studio,Studio Hub,KH Updater}".
+# Lay each SSD out as "1 Install Apps/{Gateway Studio KH,Story Studio KH,Hub Studio KH,Update Studio KH}".
 #
 # Safe by construction: every move is a rename inside one volume, so the model library is
 # never copied, and nothing is overwritten - a destination that already exists is refused
@@ -15,10 +15,10 @@
 # never visited and nothing said so. A volume counts as a kit when its root carries one of the
 # kit's own folders or a Story Studio installer, not because of what the drive is called.
 #
-# Installers are matched by pattern (`Story Studio KH*.dmg`, `StudioHub-*.dmg`), because a
+# Installers are matched by pattern (`Story Studio KH*.dmg`, `StudioHub-*.dmg` / `Hub Studio KH-*.dmg`), because a
 # version-pinned name means a new build silently stays where it is. The GatewayKH guides and
 # SHA256SUMS are repointed at the sibling Studio Hub KH folder, because the spare StudioHub DMG
-# inside Gateway/installers is a second copy of a kit that already ships in full.
+# inside Gateway Studio KH/installers is a second copy of a kit that already ships in full.
 #
 # **The KH Updater folder is laid out from two inputs named by the caller** - `--agent-kit DIR`
 # (kh-updater's own `packaging/build-agent-kit.sh` output, credential-free) and
@@ -151,8 +151,8 @@ kh_updater_layout() { # $1 = the drive's "1 Install Apps" folder
   # with no pinned publisher key can never enrol: it would sit on the Mac failing every few
   # minutes and look, from the outside, exactly like a Mac that is simply not reporting. A README
   # that says so is the honest artefact; a runnable installer is not.
-  local target="$1/KH Updater" agent="$1/KH Updater/khu-agent" ready=0 stale file
-  echo "  -- KH Updater"
+  local target="$1/Update Studio KH" agent="$1/Update Studio KH/khu-agent" ready=0 stale file
+  echo "  -- Update Studio KH"
   if is_protected "$target" "$ROOT"; then
     echo "  REFUSE (not part of the kit): $target"
     return 0
@@ -192,7 +192,7 @@ kh_updater_layout() { # $1 = the drive's "1 Install Apps" folder
         echo "  MISSING SOURCE: $KH_UPDATER_SOURCE/$file"
         continue
       fi
-      echo "  -> KH Updater/$file"
+      echo "  -> Update Studio KH/$file"
       run cp "$KH_UPDATER_SOURCE/$file" "$target/$file"
       case "$file" in
         *.json) run chmod 644 "$target/$file" ;;   # data, not a program
@@ -237,24 +237,24 @@ for V in "${DRIVES[@]}"; do
   PROTECTED="$ROOT/${PROTECTED_AT_ROOT[0]}"
   PROTECTED_BEFORE="$(folder_digest "$PROTECTED")"
 
-  run mkdir -p "$KIT" "$KIT/Story Studio"
+  run mkdir -p "$KIT" "$KIT/Story Studio KH"
 
-  move_into "$ROOT/GatewayKH App" "$KIT/Gateway"
-  move_into "$ROOT/Studio Hub App" "$KIT/Studio Hub"
+  move_into "$ROOT/GatewayKH App" "$KIT/Gateway Studio KH"
+  move_into "$ROOT/Studio Hub App" "$KIT/Hub Studio KH"
   # Whatever Story Studio installer this drive carries, by pattern: a build this script has never
   # seen is still placed, and a second one left beside it is moved too rather than left behind.
   for loose in "$ROOT"/Story\ Studio\ KH*.dmg; do
     [ -e "$loose" ] || continue
-    move_into "$loose" "$KIT/Story Studio/$(basename "$loose")"
+    move_into "$loose" "$KIT/Story Studio KH/$(basename "$loose")"
   done
 
-  run mkdir -p "$KIT/Studio Hub" "$KIT/Gateway"
+  run mkdir -p "$KIT/Hub Studio KH" "$KIT/Gateway Studio KH"
 
   # Duplicates -> this drive's _trash, keeping the sub-structure.
   run mkdir -p "$TRASH/duplicate-kit-$STAMP"
   # A spare Studio Hub installer inside the gateway kit is a duplicate of the sibling Studio Hub
   # KH folder whatever version it is, so the pattern - not a pinned filename - decides.
-  for duplicate in "$KIT/Gateway/installers"/StudioHub-*.dmg; do
+  for duplicate in "$KIT/Gateway Studio KH/installers"/StudioHub-*.dmg "$KIT/Gateway Studio KH/installers"/Hub\ Studio\ KH-*.dmg; do
     [ -e "$duplicate" ] || continue
     echo "  duplicate: $(basename "$duplicate") -> _trash/duplicate-kit-$STAMP/"
     run mv "$duplicate" "$TRASH/duplicate-kit-$STAMP/$(basename "$duplicate")"
@@ -262,23 +262,23 @@ for V in "${DRIVES[@]}"; do
   # The kit's own README is superseded by packaging/kit-readmes/GatewayKH.md. Compare before
   # moving, so a second run cannot mistake our README for theirs and overwrite the preserved
   # original in _trash.
-  if [ -f "$KIT/Gateway/README.md" ] \
-     && ! cmp -s "$SRC/GatewayKH.md" "$KIT/Gateway/README.md"; then
+  if [ -f "$KIT/Gateway Studio KH/README.md" ] \
+     && ! cmp -s "$SRC/GatewayKH.md" "$KIT/Gateway Studio KH/README.md"; then
     echo "  superseded: GatewayKH kit README -> _trash/duplicate-kit-$STAMP/"
-    run mv "$KIT/Gateway/README.md" \
+    run mv "$KIT/Gateway Studio KH/README.md" \
           "$TRASH/duplicate-kit-$STAMP/GatewayKH-kit-README.md"
   fi
 
   echo "  -- readmes"
   # `README.md` is the kit index and lives in two places on a prepared drive: the kit's own root
-  # and inside `Studio Hub/`. `kit_stamp_index.py` stamps the second one and mirrors it over the
+  # and inside `Hub Studio KH/`. `kit_stamp_index.py` stamps the second one and mirrors it over the
   # first, so leaving either without an index is how a drive came to describe a version it did not
   # carry. The Hub's own page is a different document and keeps the name it has on the drives.
   for pair in "README.md:$KIT/README.md" \
-              "README.md:$KIT/Studio Hub/README.md" \
-              "GatewayKH.md:$KIT/Gateway/README.md" \
-              "Story Studio.md:$KIT/Story Studio/README.md" \
-              "Studio Hub KH.md:$KIT/Studio Hub/Studio Hub KH.md"; do
+              "README.md:$KIT/Hub Studio KH/README.md" \
+              "GatewayKH.md:$KIT/Gateway Studio KH/README.md" \
+              "Story Studio.md:$KIT/Story Studio KH/README.md" \
+              "Studio Hub KH.md:$KIT/Hub Studio KH/Studio Hub KH.md"; do
     from="$SRC/${pair%%:*}"; to="${pair#*:}"
     if [ ! -f "$from" ]; then echo "  MISSING SOURCE: $from"; continue; fi
     echo "  README -> $to"
@@ -290,7 +290,7 @@ for V in "${DRIVES[@]}"; do
   # Regenerate the gateway kit's checksums from whatever installers are actually present,
   # so this stays correct when the gateway DMG is replaced by a later version. The spare
   # Studio Hub DMG was moved to _trash above, so it no longer appears here.
-  GW="$KIT/Gateway"
+  GW="$KIT/Gateway Studio KH"
   if [ -d "$GW/installers" ]; then
     echo "  SHA256SUMS.txt regenerated from installers/"
     run bash -c "cd '$GW' && shasum -a 256 installers/*.dmg content-shelf-manifest-*.tsv > SHA256SUMS.txt"
@@ -301,13 +301,13 @@ for V in "${DRIVES[@]}"; do
   # line and ignores the leading '#' notes. Every Story Studio installer present is listed:
   # the filename is discovered, so a later build is checksummed without editing this script.
   story_files=()
-  for installed in "$KIT/Story Studio"/Story\ Studio\ KH*.dmg; do
+  for installed in "$KIT/Story Studio KH"/Story\ Studio\ KH*.dmg; do
     [ -f "$installed" ] && story_files+=("$installed")
   done
   if [ "${#story_files[@]}" -gt 0 ]; then
-    echo "  SHA256.txt -> Story Studio/ (${#story_files[@]} installer(s))"
+    echo "  SHA256.txt -> Story Studio KH/ (${#story_files[@]} installer(s))"
     if [ "$DRY" = "1" ]; then
-      echo "  DRY: write $KIT/Story Studio/SHA256.txt"
+      echo "  DRY: write $KIT/Story Studio KH/SHA256.txt"
     else
       for target in "${story_files[@]}"; do
         file="$(basename "$target")"
@@ -317,7 +317,7 @@ for V in "${DRIVES[@]}"; do
         printf '# %s bytes\n' "$bytes"
         printf '# Verify from this folder with:  shasum -a 256 -c SHA256.txt\n'
         printf '%s  %s\n' "$hash" "$file"
-      done > "$KIT/Story Studio/SHA256.txt"
+      done > "$KIT/Story Studio KH/SHA256.txt"
     fi
   fi
 

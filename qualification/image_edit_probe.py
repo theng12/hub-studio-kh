@@ -20,7 +20,7 @@ swaps is a failure** for this lane, not a slow success: the row's `swap_delta_mb
 Usage (from the repository root, with the runtime that ships):
 
     .build/image-runtime/bin/python3 qualification/image_edit_probe.py --model klein \
-        --clone-from "/Volumes/<kit>/1 Install Apps/Studio Hub/model-library" \
+        --clone-from "/Volumes/<kit>/1 Install Apps/Hub Studio KH/model-library" \
         --receipt qualification/evidence/image-edit-2026-10-26.jsonl --host-gb 32
 """
 from __future__ import annotations
