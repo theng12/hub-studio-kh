@@ -23,6 +23,7 @@ def load_smoke():
 
 
 class ImageRuntimeSmokeTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("mflux"), "requires the pinned Image runtime; run with .build/image-runtime/bin/python3")
     def test_isolated_smoke_imports_registry_local_class_and_existing_dependency(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

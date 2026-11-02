@@ -85,10 +85,10 @@ class SectionDerivationTests(unittest.TestCase):
         listing = body(VIEWS, "private var modelsWorkspace: some View")
         self.assertIn("modelTabs", listing, "the Models page draws the tab bar")
         tabs = body(VIEWS, "private var modelTabs: some View")
-        self.assertIn('Picker("Function", selection: $modelFilter)', tabs,
+        self.assertIn("selection: $modelFilter", tabs,
                       "the tab bar is the app's segmented picker, as the Jobs page's history is")
-        self.assertIn(".pickerStyle(.segmented)", tabs, "the tabs are a segmented control")
-        self.assertIn('Text("All \\(total)").tag("All functions")', tabs,
+        self.assertIn("HubSegmentedControl(", tabs, "the tabs are a segmented control")
+        self.assertIn('HubSegmentItem(tag: "All functions", label: "All \\(total)")', tabs,
                       "the first tab is All and it carries a count like every other tab")
         # A function's tab filters: that is the whole point of a tab, and it is the opposite of the
         # picker it replaced, which was pinned as "must not filter" because it sat above one list.

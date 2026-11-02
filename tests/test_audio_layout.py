@@ -200,7 +200,7 @@ class AudioLayoutTests(unittest.TestCase):
         shorts = shorts[:shorts.index("var symbol")]
         for label in ('return "Clone"', 'return "Ready-Made"', 'return "Design"'):
             self.assertIn(label, shorts)
-        self.assertIn("accessibilityLabel(mode.title)", VIEWS,
+        self.assertIn("accessibilityLabel: mode.title", VIEWS,
                       "VoiceOver must still hear the full tab name")
 
     def test_captions_wrap_rather_than_being_clipped(self) -> None:

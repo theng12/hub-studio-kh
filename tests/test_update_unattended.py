@@ -38,7 +38,7 @@ class NoDialogOnTheUnattendedPath(unittest.TestCase):
         self.assertNotIn("NSApp.terminate", relaunch)
         self.assertRegex(_body(hub, "func engineStopped()"), r"else if relaunching \{ terminateApp\(\) \}")
         force = _body(hub, "private func scheduleForceStop")
-        self.assertRegex(force, r"if self\.forceStopWithoutAsking \{ self\.forceStop\(\) \} else \{ self\.confirmForceStop\(\) \}")
+        self.assertRegex(force, r"if self\.forceStopWithoutAsking \|\| self\.forceStopSilently \{ self\.forceStop\(\) \}\s+else \{ self\.confirmForceStop\(\) \}")
 
     def test_the_relaunch_helper_ends_a_hung_old_app_and_outlives_it(self):
         # The behaviour is proved live by tests/native/lifecycle_main.swift `relaunch-helper`; this pins the

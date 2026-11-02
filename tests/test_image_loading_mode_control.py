@@ -47,10 +47,10 @@ class ImageLoadingSourceTests(unittest.TestCase):
                       "the control must read the store's published-derived control")
         self.assertIn("control.offersControl", view,
                       "the control must appear exactly when the model published one")
-        # The list is the payload's: `ForEach(control.options)` in the producer's order.
-        self.assertIn("ForEach(control.options)", view,
+        # The list is the payload's: `control.options.map` in the producer's order.
+        self.assertIn("control.options.map", view,
                       "the picker must iterate the published options, not a local list")
-        self.assertIn("option.id", view, "each option is chosen by the id the producer published")
+        self.assertIn("tag: $0.id", view, "each option is chosen by the id the producer published")
         # ...and the sentence under it is the selected option's own, with its measured numbers.
         self.assertIn("control.detail", view, "the selected option's own sentence must be shown")
         self.assertIn("control.effectiveSentence", view,

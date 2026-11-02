@@ -54,7 +54,7 @@ class MemoryAutoSentenceSourceTests(unittest.TestCase):
 
     def test_the_mode_list_is_the_workers_options_not_a_local_array(self) -> None:
         row = body(VIEWS, "private func memoryRow(_ row: NativeMemoryStudio, options: [NativeMemoryMode])")
-        self.assertIn("ForEach(options)", row,
+        self.assertIn("items: options.map", row,
                       "the picker must iterate the published options, not a local list")
         self.assertIn("option.mode", row, "each mode is chosen by the id the worker published")
         self.assertIn("options.first { $0.mode == policy.mode }?.summary", row,
