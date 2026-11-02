@@ -205,6 +205,153 @@ extension View {
     func hubRowControl() -> some View { controlSize(.small) }
 }
 
+// MARK: - Segmented controls / Tabs
+
+/// Sizing strategy for Hub segmented controls.
+public enum HubSegmentSizing: Equatable {
+    /// Each segment is sized to fit its own label in bold font with even padding.
+    /// Eliminates width shifts when segments are selected while keeping the overall control compact.
+    case stablePerLabel
+    /// All segments share the width of the widest label in bold font.
+    case equalWidest
+    /// Automatic: equalWidest for small segment counts (<= 4), stablePerLabel for larger segment counts (e.g. 8 Jobs tabs).
+    case automatic
+}
+
+/// A segment descriptor for `HubSegmentedControl`.
+public struct HubSegmentItem<T: Hashable>: Identifiable {
+    public let tag: T
+    public let label: String
+    public let accessibilityLabel: String?
+    public var id: AnyHashable { AnyHashable(tag) }
+
+    public init(tag: T, label: String, accessibilityLabel: String? = nil) {
+        self.tag = tag
+        self.label = label
+        self.accessibilityLabel = accessibilityLabel
+    }
+}
+
+/// An owned `NSViewRepresentable` wrapping `NSSegmentedControl`.
+/// Unlike view hierarchy introspection modifiers that search superviews and subviews,
+/// `HubSegmentedControl` directly owns and configures its own `NSSegmentedControl`,
+/// eliminating cross-control interference when multiple segmented pickers coexist on the same page.
+/// It pre-calculates segment widths using bold system font so that selection changes never shift
+/// control geometry or divider positions.
+public struct HubSegmentedControl<T: Hashable>: NSViewRepresentable {
+    @Binding public var selection: T
+    public let items: [HubSegmentItem<T>]
+    public var sizing: HubSegmentSizing
+    public var controlSize: NSControl.ControlSize
+    public var trackingMode: NSSegmentedControl.SwitchTracking
+    public var accessibilityLabel: String?
+    public var accessibilityHint: String?
+
+    public init(
+        selection: Binding<T>,
+        items: [HubSegmentItem<T>],
+        sizing: HubSegmentSizing = .automatic,
+        controlSize: NSControl.ControlSize = .regular,
+        trackingMode: NSSegmentedControl.SwitchTracking = .selectOne,
+        accessibilityLabel: String? = nil,
+        accessibilityHint: String? = nil
+    ) {
+        self._selection = selection
+        self.items = items
+        self.sizing = sizing
+        self.controlSize = controlSize
+        self.trackingMode = trackingMode
+        self.accessibilityLabel = accessibilityLabel
+        self.accessibilityHint = accessibilityHint
+    }
+
+    public func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    public final class Coordinator: NSObject {
+        var parent: HubSegmentedControl
+        init(_ parent: HubSegmentedControl) { self.parent = parent }
+
+        @objc func selectionChanged(_ sender: NSSegmentedControl) {
+            let index = sender.selectedSegment
+            guard index >= 0 && index < parent.items.count else { return }
+            let tag = parent.items[index].tag
+            if parent.selection != tag {
+                parent.selection = tag
+            }
+        }
+    }
+
+    public func makeNSView(context: Context) -> NSSegmentedControl {
+        let sc = NSSegmentedControl()
+        sc.trackingMode = trackingMode
+        sc.target = context.coordinator
+        sc.action = #selector(Coordinator.selectionChanged(_:))
+        sc.controlSize = controlSize
+        sc.segmentDistribution = .fit
+        sc.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        sc.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        sc.segmentCount = items.count
+        configure(sc, context: context)
+        return sc
+    }
+
+    public func updateNSView(_ nsView: NSSegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        if nsView.segmentCount != items.count {
+            nsView.segmentCount = items.count
+        }
+        if nsView.controlSize != controlSize {
+            nsView.controlSize = controlSize
+        }
+        configure(nsView, context: context)
+    }
+
+    private func configure(_ sc: NSSegmentedControl, context: Context) {
+        guard !items.isEmpty else { return }
+        sc.isEnabled = context.environment.isEnabled
+        if let label = accessibilityLabel { sc.setAccessibilityLabel(label) }
+        if let hint = accessibilityHint { sc.setAccessibilityHelp(hint) }
+
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: sc.controlSize))
+        let boldFont = NSFont.boldSystemFont(ofSize: font.pointSize)
+
+        let pad: CGFloat = 22.0
+        let minSeg: CGFloat = 44.0
+
+        let useEqual: Bool
+        switch sizing {
+        case .equalWidest: useEqual = true
+        case .stablePerLabel: useEqual = false
+        case .automatic: useEqual = items.count <= 4
+        }
+
+        var maxBold: CGFloat = 0
+        var boldWidths: [CGFloat] = []
+        for (i, item) in items.enumerated() {
+            if sc.label(forSegment: i) != item.label {
+                sc.setLabel(item.label, forSegment: i)
+            }
+            sc.setToolTip(item.accessibilityLabel, forSegment: i)
+            let boldW = (item.label as NSString).size(withAttributes: [.font: boldFont]).width
+            boldWidths.append(boldW)
+            if boldW > maxBold { maxBold = boldW }
+        }
+
+        for i in 0..<items.count {
+            let w = useEqual ? max(minSeg, ceil(maxBold + pad)) : max(minSeg, ceil(boldWidths[i] + pad))
+            if sc.width(forSegment: i) != w {
+                sc.setWidth(w, forSegment: i)
+            }
+        }
+
+        if let selIndex = items.firstIndex(where: { $0.tag == selection }), sc.selectedSegment != selIndex {
+            sc.selectedSegment = selIndex
+        }
+    }
+}
+
 // MARK: - Page scaffold
 
 /// Every page: the title and subtitle named like the sidebar row, the one page margin, content below.

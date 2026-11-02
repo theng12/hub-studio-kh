@@ -6,6 +6,9 @@
 # STUDIOHUB_RENDER_LIVE=1 connects the page to the Hub already running on this Mac, so the render
 # shows real jobs and history instead of empty lists. Read-only and safe to run while the app is up.
 #
+# STUDIOHUB_RENDER_JOBS_TABS=1 selects/captures every Jobs tab and logs native segment frames.
+# STUDIOHUB_RENDER_JOBS_TRANSITIONS=1 opens a fixture window and samples mouse-driven transitions at 60 Hz.
+# STUDIOHUB_RENDER_REF=<commit> renders native sources from that revision for before/after evidence.
 # STUDIOHUB_RENDER_FIXTURES=1 seeds jobs in every state, models, voices and a controller with four Macs;
 # STUDIOHUB_RENDER_ROLES=controller,node,node-offline,standalone renders each page once per role;
 # STUDIOHUB_RENDER_APPEARANCE=light|dark|both (files end -light / -dark); STUDIOHUB_RENDER_BORDERLESS=1 drops
@@ -31,6 +34,13 @@ source "$ROOT_DIR/native/sdk.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 cp "$ROOT_DIR/native/"*.swift "$WORK/"
+# Reproduce the incumbent with the same renderer and fixture data as the corrected views.
+if [ -n "${STUDIOHUB_RENDER_REF:-}" ]; then
+    REF=$(git -C "$ROOT_DIR" rev-parse --verify --end-of-options "${STUDIOHUB_RENDER_REF}^{commit}")
+    for SOURCE in "$WORK/"*.swift; do
+        git -C "$ROOT_DIR" show "$REF:native/$(basename "$SOURCE")" > "$SOURCE"
+    done
+fi
 python3 - "$WORK/StudioHub.swift" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -43,5 +53,6 @@ PY
 python3 "$ROOT_DIR/tests/native/render_fixture_patch.py" "$WORK/StudioAPI.swift" "$WORK/StudioViews.swift" "$WORK/ReleaseNotes.swift" "$WORK/StudioHub.swift"
 
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -parse-as-library \
-  "$WORK"/*.swift "$ROOT_DIR/tests/native/render_main.swift" -o "$WORK/render-page"
+  "$WORK"/*.swift "$ROOT_DIR/tests/native/render_main.swift" \
+  "$ROOT_DIR/tests/native/jobs_transition_capture.swift" -o "$WORK/render-page"
 "$WORK/render-page" "$PAGE" "$OUT" "$@"

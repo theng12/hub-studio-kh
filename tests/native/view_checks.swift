@@ -59,6 +59,110 @@ enum ViewChecks {
         check(all != nil && downloads != nil, "the Jobs page draws offscreen")
         check(all != downloads, "choosing the Downloads tab changes the page")
 
+        // ---- Jobs Tab Geometry Invariance, Multi-bar Independence & Reachability (2026-11-02) ----
+        if let control, control.segmentCount == HistoryTab.allCases.count {
+            let baselineWidth = control.fittingSize.width
+            let baselineSegments = (0..<control.segmentCount).map { control.width(forSegment: $0) }
+            check(baselineWidth > 400 && baselineWidth <= 520,
+                  "Jobs tab control width fits compact window/scaffold bounds: \(baselineWidth)pt")
+
+            var maxVariance: CGFloat = 0
+            for tabIndex in 0..<control.segmentCount {
+                control.selectedSegment = tabIndex
+                _ = control.sendAction(control.action, to: control.target)
+                settle()
+
+                let curWidth = control.fittingSize.width
+                let diff = abs(curWidth - baselineWidth)
+                if diff > maxVariance { maxVariance = diff }
+                check(curWidth == baselineWidth,
+                      "tab \(tabIndex) maintains invariant width: expected \(baselineWidth), got \(curWidth)")
+
+                for segIndex in 0..<control.segmentCount {
+                    let segW = control.width(forSegment: segIndex)
+                    check(segW == baselineSegments[segIndex],
+                          "tab \(tabIndex) preserves segment \(segIndex) width: expected \(baselineSegments[segIndex]), got \(segW)")
+                }
+            }
+            check(maxVariance == 0.0, "all 8 tab selections produce 0.0 pt width variance (100% invariant geometry)")
+        }
+
+        // Multi-bar independence: coexisting segmented controls do not mutate each other
+        func allSegmented(_ view: NSView) -> [NSSegmentedControl] {
+            var list: [NSSegmentedControl] = []
+            if let sc = view as? NSSegmentedControl { list.append(sc) }
+            for child in view.subviews { list.append(contentsOf: allSegmented(child)) }
+            return list
+        }
+        let multiHarness = NSHostingView(rootView: VStack(spacing: HubSpace.m) {
+            HubSegmentedControl(
+                selection: .constant(HistoryTab.all),
+                items: HistoryTab.allCases.map { HubSegmentItem(tag: $0, label: $0.title) },
+                sizing: .stablePerLabel
+            )
+            HubSegmentedControl(
+                selection: .constant(JobMachineFilter.all),
+                items: JobMachineFilter.allCases.map { HubSegmentItem(tag: $0, label: $0.rawValue) }
+            )
+        })
+        multiHarness.frame = NSRect(x: 0, y: 0, width: 800, height: 200)
+        multiHarness.layoutSubtreeIfNeeded()
+        let coexisting = allSegmented(multiHarness)
+        check(coexisting.count == 2, "multi-bar harness hosts exactly 2 segmented controls")
+        if coexisting.count == 2 {
+            let bar1 = coexisting[0]
+            let bar2 = coexisting[1]
+            check(bar1.segmentCount == 8 && bar2.segmentCount == 3,
+                  "coexisting segmented controls maintain distinct segment counts (8 and 3)")
+            let bar1OrigW = bar1.fittingSize.width
+            let bar2OrigW = bar2.fittingSize.width
+            bar2.selectedSegment = 1
+            _ = bar2.sendAction(bar2.action, to: bar2.target)
+            bar1.selectedSegment = 7
+            _ = bar1.sendAction(bar1.action, to: bar1.target)
+            multiHarness.layoutSubtreeIfNeeded()
+            check(bar1.segmentCount == 8 && bar1.fittingSize.width == bar1OrigW,
+                  "bar 1 is unaffected by bar 2 manipulation")
+            check(bar2.segmentCount == 3 && bar2.fittingSize.width == bar2OrigW,
+                  "bar 2 is unaffected by bar 1 manipulation")
+        }
+
+        // Narrow layout reachability: 520pt window minus sidebar (or 400pt container)
+        let narrowHost = NSHostingView(rootView: ScrollView(.horizontal, showsIndicators: false) {
+            HubSegmentedControl(
+                selection: .constant(HistoryTab.all),
+                items: HistoryTab.allCases.map { HubSegmentItem(tag: $0, label: $0.title) },
+                sizing: .stablePerLabel
+            )
+        })
+        narrowHost.frame = NSRect(x: 0, y: 0, width: 400, height: 48)
+        let narrowWindow = NSWindow(contentRect: narrowHost.frame, styleMask: [.borderless],
+                                    backing: .buffered, defer: false)
+        narrowWindow.contentView = narrowHost
+        narrowWindow.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+        narrowWindow.orderFront(nil)
+        for _ in 0..<8 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            narrowHost.layoutSubtreeIfNeeded()
+        }
+        let narrowControl = segmented(narrowHost)
+        check(narrowControl != nil && narrowControl?.segmentCount == 8,
+              "narrow layout retains all 8 segments without clipping")
+        if let nc = narrowControl {
+            let lastSegW = nc.width(forSegment: 7)
+            check(lastSegW >= 90.0, "narrow layout preserves full Downloads segment width: \(lastSegW)pt")
+            check(nc.frame.width >= nc.fittingSize.width, "narrow layout keeps intrinsic tab width")
+            let lastSegment = NSRect(x: nc.bounds.maxX - lastSegW, y: 0,
+                                     width: lastSegW, height: nc.bounds.height)
+            _ = nc.scrollToVisible(lastSegment)
+            for _ in 0..<8 {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                narrowHost.layoutSubtreeIfNeeded()
+            }
+            check(nc.visibleRect.maxX >= lastSegment.maxX - 1,
+                  "Downloads becomes fully visible after scrolling")
+        }
+
         // The Models page's function tabs (owner, 2026-10-19: "it has no tab or proper spacing. it's
         // squished"). One segmented control, one segment per function the library holds a model for
         // and none for a function it does not - the empty "Video — 0 models" group the owner asked
