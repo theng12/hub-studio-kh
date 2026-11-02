@@ -376,7 +376,17 @@ class FleetPoolWithTwoNodes(PoolCase):
         self.assertEqual(3, body["summary"]["total"])
         self.assertEqual(3, body["summary"]["reachable"],
                          "every Mac in this pool is up, so all three must read as reachable")
-        self.assertEqual("This Mac", self.row(body, "local")["label"])
+        local = self.row(body, "local")
+        self.assertEqual("local", local["machine"], "the raw routing sentinel must not move")
+        self.assertNotEqual("This Mac", local["label"],
+                            "the local row must name the configured machine, not the placeholder")
+        settings = self.identity(first, "node-a-hub-token")
+        self.assertEqual(settings["machine_name"], local["label"],
+                         "the local row's label is this Mac's configured name")
+        self.assertEqual(settings["machine_name"], local["machine_label"])
+        self.assertEqual(settings["controller_id"], local["controller_id"])
+        self.assertEqual(settings["site_id"], local["site_id"])
+        self.assertEqual(settings["site_name"], local["site_name"])
         sibling = self.row(body, second_id)
         self.assertEqual("agent", sibling["role"])
         self.assertEqual(second.base, sibling["address"])

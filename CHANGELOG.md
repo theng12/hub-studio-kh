@@ -2,6 +2,14 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.215 — 2026-11-03
+
+- The app is named Hub Studio KH in its window and menu bar.
+- What’s New opens from beside the version at the bottom of the sidebar.
+- The Fleet token stays easy to copy. This Mac’s master Hub token is tucked under Advanced with a warning to keep it private.
+- SSD setup commands and guides use the renamed app folders, and the installer disk is named Hub Studio KH.
+- Controller machines carry a named identity in fleet and job evidence, so remote work can be traced to the Mac that ran it.
+
 ## 0.6.214 — 2026-11-02
 
 ### Studios recover when they stop answering

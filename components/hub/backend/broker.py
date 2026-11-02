@@ -3302,6 +3302,12 @@ def terminal_result(b: dict, item: dict) -> dict | None:
     state = item.get("state")
     if state != "done":
         return None
+    from . import control_plane
+    identity = control_plane.execution_identity()
+    machine = str(item.get("machine") or "local")
+    # A remote executor's label is its own (the registry's name for that raw id, or the id
+    # itself), never this controller's local name; only "local" is this Mac's configured name.
+    machine_label = identity["machine_label"] if machine == "local" else label_for(machine)
     evidence = {
         "runtime_s": item.get("runtime_s", item.get("duration_s")),
         # Kept only for callers that predate runtime_s. It is runtime, never
@@ -3310,7 +3316,16 @@ def terminal_result(b: dict, item: dict) -> dict | None:
         "model_revision": item.get("model_revision"),
         "runtime_revision": item.get("runtime_revision"),
         "worker_id": item.get("worker_id"),
+        # The raw routing sentinel, unchanged. The fields below qualify which controller
+        # and site it belongs to: `machine_label` names the executor, `controller_*` and
+        # `site_*` the reporting controller (`controller_id` is stable per Hub, not a
+        # global identity), so one site's "local" is never read as another's.
         "machine_id": item.get("machine"),
+        "machine_label": machine_label,
+        "controller_id": identity["controller_id"],
+        "controller_label": identity["controller_label"],
+        "site_id": identity["site_id"],
+        "site_name": identity["site_name"],
         "resource_usage": item.get("resource_usage"),
     }
     result = {

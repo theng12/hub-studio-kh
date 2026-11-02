@@ -206,6 +206,27 @@ def public_settings() -> dict:
     }
 
 
+def execution_identity() -> dict:
+    """Site/controller context published beside raw machine ids.
+
+    `machine_id` stays the routing sentinel ("local") and `site_id` its default
+    ("local-site"); these qualify which controller and site that sentinel belongs
+    to, so one site's "local" is never read as another's. `machine_label` is this
+    Hub's own configured name — the local executor's label; a remote executor's
+    label is its own (see `broker.terminal_result`). `controller_id` is stable per
+    Hub but only unique within the roster that stores it: not a global identity.
+    """
+    settings = load_settings()
+    label = public_settings()["machine_name"]
+    return {
+        "machine_label": label,
+        "controller_id": settings["controller_id"],
+        "controller_label": label,
+        "site_id": settings["site_id"],
+        "site_name": settings["site_name"],
+    }
+
+
 def save_settings(values: dict, *, new_database_url: str | None = None,
                   clear_database_url: bool = False,
                   writer_blocking: bool = False) -> dict:

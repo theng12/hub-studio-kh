@@ -2063,9 +2063,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                      (monitor.status.get(item["id"]) or {}).get("status", "unknown"))
                     for item in on_this_machine
                 ])
+                # This Hub's own configured identity, so the controller-local row names the
+                # real Mac and site instead of the same "This Mac" every site would show.
+                # `machine` stays the raw routing sentinel ("local"); `controller_id` is
+                # stable per Hub, not a global identity.
+                identity = control_plane.execution_identity()
                 row = {
                     "machine": machine,
-                    "label": "This Mac",
+                    "label": identity["machine_label"],
+                    "machine_label": identity["machine_label"],
+                    "controller_id": identity["controller_id"],
+                    "site_id": identity["site_id"],
+                    "site_name": identity["site_name"],
                     "role": local_role,
                     "reachable": True,
                     "version": _app_version(),
