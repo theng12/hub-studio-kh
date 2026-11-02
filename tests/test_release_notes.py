@@ -71,6 +71,9 @@ class VersionAgreementTests(unittest.TestCase):
         # release manifest, and the folder name is chosen by the caller (the kit stages
         # `Studio Hub.app`).
         self.assertIn("'CFBundleName': 'Studio Hub'", text)
+        # The approved visible name rides on the display key; the short internal name and
+        # the on-disk `Studio Hub.app` stay put so launchers and lookups keep working.
+        self.assertIn("'CFBundleDisplayName': 'Hub Studio KH'", text)
         self.assertIn("'CFBundleShortVersionString': version", text)
         self.assertIn("'version': version", text)
 
@@ -157,7 +160,7 @@ class ReleaseNotesScreenTests(unittest.TestCase):
         self.assertIn('case whatsNew = "What\'s New"', shell)
         self.assertIn(".whatsNew", shell)
         hub = (NATIVE / "StudioHub.swift").read_text()
-        self.assertIn("What's New in Studio Hub", hub)
+        self.assertIn("What's New in Hub Studio KH", hub)
         self.assertIn("showWhatsNew", hub)
 
 

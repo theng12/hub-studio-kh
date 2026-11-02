@@ -1818,10 +1818,19 @@ struct StudioContent: View {
                     // MERGE POINT (feat/remote-startup): one self-contained line. Keep it, and the
                     // `StartupSidebarNote` struct at the end of this file, when merging the footer.
                     StartupSidebarNote(studio: studio)
-                    Text("Studio Hub \(appVersion)")
-                        .font(HubType.caption).foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .accessibilityLabel("Studio Hub version \(appVersion)")
+                    // The version line carries the display name the operator approved for this
+                    // release; What's New sits beside it and opens the same notes page the
+                    // menu-bar item already reaches — no second notes source.
+                    HStack(alignment: .firstTextBaseline, spacing: HubSpace.tight) {
+                        Text("Hub Studio KH \(appVersion)")
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .accessibilityLabel("Hub Studio KH version \(appVersion)")
+                        Button("What's New") { studio.select(.whatsNew) }
+                            .buttonStyle(.link)
+                            .font(HubType.caption)
+                            .help("Show the release notes for this build.")
+                    }
                     // The owner asked for this where the version is read: a Mac away from the
                     // controller should not have to wait ten minutes for the next silent check.
                     Button {
@@ -6202,7 +6211,7 @@ struct StudioContent: View {
         let body = notes.drop(while: { $0.trimmingCharacters(in: .whitespaces).isEmpty
             || $0.trimmingCharacters(in: .whitespaces).hasPrefix("# ") })
         return PageScaffold(title: pageTitle(.whatsNew),
-                            subtitle: "Release notes for Studio Hub \(ReleaseNotes.currentVersion), newest first.",
+                            subtitle: "Release notes for Hub Studio KH \(ReleaseNotes.currentVersion), newest first.",
                             scrolls: true) {
             MarkdownText(markdown: body.joined(separator: "\n"))
                 .frame(maxWidth: 760, alignment: .leading)

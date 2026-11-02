@@ -1134,7 +1134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     var confirmQuitWhileBusy: () -> Bool = {
         let alert = NSAlert()
-        alert.messageText = "Quit Studio Hub and stop its engine?"
+        alert.messageText = "Quit Hub Studio KH and stop its engine?"
         alert.informativeText = "Active generation, transcription, or downloads may be interrupted. Close the window to keep working in the background."
         alert.addButton(withTitle: "Keep Running")
         alert.addButton(withTitle: "Quit and Stop")
@@ -1167,10 +1167,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             image.addRepresentation(rep)
         }
         guard !image.representations.isEmpty else {
-            return NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Studio Hub")
+            return NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Hub Studio KH")
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Studio Hub"
+        image.accessibilityDescription = "Hub Studio KH"
         return image
     }
 
@@ -1205,10 +1205,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // to serve, and a Mac whose services are off is silent to its controller after a reboot.
             controller.applyFleetServicesDefaultAtLaunch()
         } catch {
-            let alert = NSAlert(); alert.messageText = "Studio Hub could not open"; alert.informativeText = error.localizedDescription; alert.runModal(); NSApp.terminate(nil); return
+            let alert = NSAlert(); alert.messageText = "Hub Studio KH could not open"; alert.informativeText = error.localizedDescription; alert.runModal(); NSApp.terminate(nil); return
         }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1380, height: 900), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "Studio Hub"
+        window.title = "Hub Studio KH"
         // Matches the SwiftUI floor. It used to be 1040 while the content asked for more than
         // that in fixed columns, and a Split View can go below any minimum anyway - so the
         // layout had to learn to compress rather than rely on this number.
@@ -1233,15 +1233,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem(); mainMenu.addItem(applicationItem)
         let applicationMenu = NSMenu(); applicationItem.submenu = applicationMenu
-        applicationMenu.addItem(withTitle: "About Studio Hub", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
-        let whatsNewItem = NSMenuItem(title: "What's New in Studio Hub", action: #selector(showWhatsNew), keyEquivalent: "")
+        applicationMenu.addItem(withTitle: "About Hub Studio KH", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let whatsNewItem = NSMenuItem(title: "What's New in Hub Studio KH", action: #selector(showWhatsNew), keyEquivalent: "")
         whatsNewItem.target = self
         applicationMenu.addItem(whatsNewItem)
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         applicationMenu.addItem(settingsItem)
         applicationMenu.addItem(.separator())
-        applicationMenu.addItem(withTitle: "Quit Studio Hub", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        applicationMenu.addItem(withTitle: "Quit Hub Studio KH", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let editItem = NSMenuItem(); mainMenu.addItem(editItem)
         let editMenu = NSMenu(title: "Edit"); editItem.submenu = editMenu
         for (title, action, key) in [("Undo", "undo:", "z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
@@ -1253,19 +1253,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.mainMenu = mainMenu
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = Self.menuBarMark()
-        statusItem.button?.toolTip = "Studio Hub"
+        statusItem.button?.toolTip = "Hub Studio KH"
         let menu = NSMenu()
-        let openItem = NSMenuItem(title: "Open Studio Hub", action: #selector(openWindow), keyEquivalent: ""); openItem.target = self; menu.addItem(openItem)
+        let openItem = NSMenuItem(title: "Open Hub Studio KH", action: #selector(openWindow), keyEquivalent: ""); openItem.target = self; menu.addItem(openItem)
         let logItem = NSMenuItem(title: "Open Engine Log", action: #selector(openLog), keyEquivalent: ""); logItem.target = self; menu.addItem(logItem)
         let whatsNewBarItem = NSMenuItem(title: "What's New", action: #selector(showWhatsNew), keyEquivalent: ""); whatsNewBarItem.target = self; menu.addItem(whatsNewBarItem)
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Studio Hub", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit Hub Studio KH", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
         let stateItem = NSMenuItem(title: controller.status, action: nil, keyEquivalent: "")
         menu.insertItem(stateItem, at: 0)
         menu.insertItem(.separator(), at: 1)
         statusObserver = controller.$status.sink { [weak self] status in
-            self?.statusItem.button?.toolTip = "Studio Hub — " + status
+            self?.statusItem.button?.toolTip = "Hub Studio KH — " + status
             stateItem.title = status
         }
         refreshWorkstation()
@@ -1364,7 +1364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func relaunchAfterUpdate() {
         do { try spawnRelaunchHelper(ProcessInfo.processInfo.processIdentifier, Bundle.main.bundleURL.path) } catch {
             // Could not arrange a reopen: leave the app running rather than quit and not come back.
-            controller.failure = "The update is installed, but Studio Hub could not relaunch itself (\(error.localizedDescription)). Quit and open it again."
+            controller.failure = "The update is installed, but Hub Studio KH could not relaunch itself (\(error.localizedDescription)). Quit and open it again."
             return
         }
         relaunching = true

@@ -894,7 +894,13 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         plist.update({
             'CFBundleExecutable': 'StudioHub',
             'CFBundleIdentifier': 'local.studiohub.standalone',
+            # The short internal name stays "Studio Hub": launchers, verify scripts and
+            # instruction files still look the bundle up by that name, and the folder on
+            # disk remains `Studio Hub.app`. The name the operator sees in Finder, the
+            # Dock and the About panel is the approved display name (owner, next tested
+            # release), which is what `CFBundleDisplayName` is for.
             'CFBundleName': 'Studio Hub',
+            'CFBundleDisplayName': 'Hub Studio KH',
             'NSMicrophoneUsageDescription':
                 'Studio Hub uses the microphone to record audio for transcription.',
             # macOS gates local-network access per app, separately from App Transport Security,

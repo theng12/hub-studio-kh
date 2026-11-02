@@ -770,6 +770,7 @@ class StagingTests(unittest.TestCase):
                 plist = plistlib.load(stream)
             self.assertEqual(plist['CFBundleExecutable'], 'StudioHub')
             self.assertEqual(plist['CFBundleName'], 'Studio Hub')
+            self.assertEqual(plist['CFBundleDisplayName'], 'Hub Studio KH')
             self.assertEqual(plist['CFBundleIdentifier'], 'local.studiohub.standalone')
             self.assertNotIn('LSUIElement', plist)
             self.assertIn('microphone', plist['NSMicrophoneUsageDescription'].lower())
