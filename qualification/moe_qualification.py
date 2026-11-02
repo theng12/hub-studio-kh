@@ -21,6 +21,8 @@ from typing import Any
 GIB = 1024 ** 3
 DEFAULT_MAX_FOOTPRINT_GIB = 26.0
 LOCK_PATH = Path.home() / "Library/Application Support/Studio Hub/moe-llm-qualification.lock"
+# The installed app's data folder: its saved model library and the ready file of running services.
+HUB_DATA = Path.home() / "Library/Application Support/StudioHub Standalone"
 
 
 class QualificationError(RuntimeError):
@@ -51,10 +53,52 @@ MODELS = {
 }
 
 
+def installed_library() -> Path | None:
+    """The model library the installed Studio Hub app uses on this Mac, or None."""
+    try:
+        path = json.loads((HUB_DATA / "app-preferences.json").read_text(encoding="utf-8")).get("modelsPath")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return Path(path) if isinstance(path, str) and path else None
+
+
+def hub_busy_reason() -> str | None:
+    """Why a run must not start because Studio Hub is up on this Mac, or None.
+
+    A Mac whose Studio Hub is quit cannot take Gateway work, so "quit" is the check: an open app
+    or live services may be running or about to receive a job, and a probe beside them would
+    measure both. A check that cannot run refuses too; not checked is never idle.
+    """
+    try:
+        found = subprocess.run(["/usr/bin/pgrep", "-x", "StudioHub"], capture_output=True,
+                               text=True, check=False)
+    except OSError as exc:
+        return f"could not check whether Studio Hub is open ({exc})"
+    if found.returncode == 0:
+        return "the Studio Hub app is open"
+    if found.returncode != 1:
+        return f"could not check whether Studio Hub is open (pgrep exit {found.returncode})"
+    try:
+        pid = int(json.loads((HUB_DATA / "hub-ready.json").read_text(encoding="utf-8"))["pid"])
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None  # a stale or partial ready file names no live process
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass
+    return f"Studio Hub's services are still running (process {pid})"
+
+
 def resolve_model_dir(root: Path, spec: ModelSpec) -> Path:
     ssd = root / "model-library" / spec.name / spec.revision / "model"
     local = root / "models" / spec.name
-    for candidate in (ssd, local):
+    library = installed_library()
+    candidates = [ssd, local] + ([library / spec.name / spec.revision / "model"] if library else [])
+    for candidate in candidates:
         if candidate.is_dir():
             return candidate
     raise QualificationError(f"exact pinned model is missing: {ssd} (local-study fallback: {local})")
@@ -308,6 +352,13 @@ def _result_dir(output_root: Path, spec: ModelSpec) -> Path:
 
 
 def run_live(args: argparse.Namespace, spec: ModelSpec) -> int:
+    if args.suite == "long-context":
+        busy = hub_busy_reason()
+        if busy:
+            raise QualificationError(
+                f"{busy}. Pause this Mac in GatewayKH's Fleet page, wait until it shows no job "
+                "running here, quit Studio Hub, then double-click this command again. Nothing was "
+                "loaded or measured.")
     lock = acquire_lock()
     result_dir = _result_dir(args.output_root, spec)
     try:

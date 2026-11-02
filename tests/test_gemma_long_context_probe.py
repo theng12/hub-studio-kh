@@ -328,3 +328,62 @@ class GemmaLongContextProbeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HubBusyGuardTests(unittest.TestCase):
+    """The long-context run refuses while Studio Hub could take Gateway work."""
+
+    def _run(self, pgrep_code, ready=None):
+        import json, os, subprocess, tempfile
+        from unittest import mock
+        mq = _load_module("moe_qualification_guard_mod", MOE_QUALIFICATION)
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp)
+            if ready is not None:
+                (data / "hub-ready.json").write_text(json.dumps(ready))
+            done = subprocess.CompletedProcess([], pgrep_code, "", "")
+            with mock.patch.object(mq, "HUB_DATA", data), \
+                 mock.patch.object(mq.subprocess, "run", return_value=done):
+                return mq.hub_busy_reason()
+
+    def test_open_app_refuses(self):
+        self.assertIn("app is open", self._run(0))
+
+    def test_live_services_refuse(self):
+        import os
+        self.assertIn("still running", self._run(1, {"pid": os.getpid()}))
+
+    def test_quit_hub_with_stale_ready_file_runs(self):
+        self.assertIsNone(self._run(1, {"pid": 999999}))
+
+    def test_quit_hub_without_ready_file_runs(self):
+        self.assertIsNone(self._run(1))
+
+    def test_unrunnable_check_refuses(self):
+        self.assertIn("could not check", self._run(2))
+
+    def test_live_run_refuses_before_the_lock(self):
+        from unittest import mock
+        mq = _load_module("moe_qualification_guard_mod", MOE_QUALIFICATION)
+        args = mq.parse_args(["--model", "gemma4-26b-a4b-qat-4bit", "--kit-root", "/tmp",
+                              "--technical-root", "/tmp", "--runtime-python", "/tmp/x",
+                              "--suite", "long-context"])
+        with mock.patch.object(mq, "hub_busy_reason", return_value="the Studio Hub app is open"), \
+             mock.patch.object(mq, "acquire_lock") as lock:
+            with self.assertRaises(mq.QualificationError):
+                mq.run_live(args, mq.MODELS[args.model])
+        lock.assert_not_called()
+
+    def test_installed_library_is_searched(self):
+        import json, tempfile
+        from unittest import mock
+        mq = _load_module("moe_qualification_guard_mod", MOE_QUALIFICATION)
+        spec = mq.MODELS["gemma4-26b-a4b-qat-4bit"]
+        with tempfile.TemporaryDirectory() as tmp:
+            data, lib = Path(tmp) / "data", Path(tmp) / "lib"
+            data.mkdir()
+            (data / "app-preferences.json").write_text(json.dumps({"modelsPath": str(lib)}))
+            model = lib / spec.name / spec.revision / "model"
+            model.mkdir(parents=True)
+            with mock.patch.object(mq, "HUB_DATA", data):
+                self.assertEqual(mq.resolve_model_dir(Path(tmp) / "nokit", spec), model)
