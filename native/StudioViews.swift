@@ -6488,19 +6488,19 @@ struct StudioContent: View {
             Text("What it cannot do: change this Mac's settings, install or remove its models, delete its output, manage its shared voices, or make a Mac join or leave. A Mac that holds this token still cannot administer this Mac.")
                 .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Divider()
-            // Two values, and the difference is the safety property: the Fleet token above is what
-            // a joining Mac adopts and what this Mac then presents back to it. Handing a node the
-            // Hub token instead would give every node's owner full authority over this Mac.
-            ValueRow("Hub token") {
-                SecretValue(value: studio.connectionToken, copyTitle: "Copy Hub Token") {
-                    connectionNote = "Hub token copied"
+            DisclosureGroup("Advanced") {
+                VStack(alignment: .leading, spacing: HubSpace.s) {
+                    ValueRow("Hub token") {
+                        SecretValue(value: studio.connectionToken, copyTitle: "Copy Hub Token") {
+                            connectionNote = "Hub token copied"
+                        }
+                    }
+                    Text("This Mac's master key. Never give it out.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             if let connectionNote { Text(connectionNote).font(HubType.secondary).foregroundStyle(.secondary) }
-            Text("Keep this one. It is this Mac's own key — for you, on this Mac — and it never leaves it. Use it to change settings, install or remove models, delete output, and manage shared voices.")
-                .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("Do not give it out. Anyone who holds it can do everything on this Mac. GatewayKH needs it only if it will manage shared voices here — to send work, give it the Fleet token above instead.")
-                .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 

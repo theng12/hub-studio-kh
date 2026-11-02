@@ -115,25 +115,19 @@ The app is a folder and the models are a folder, so nothing is hard to undo:
 - Point the app at a different library: **Settings → Model library → Choose Folder…**
 - Models are only ever added, never deleted, except an older revision of a model just updated.
 
-## One token per controller
+## Use the controller's Fleet token
 
-There is **one token** to think about. On the controller it is under **Connections** as the **Hub
-token**, and it does three jobs:
+On the controller, open **Connections** and copy the **Fleet token** under **Give this out**. Give
+that token and the controller's address to the gateway and to each Mac joining the group. Each
+controller has its own Fleet token; do not use another group's token.
 
-- it is the controller's own credential on that Mac;
-- the **gateway** uses it to reach that controller's Hub;
-- each **node** is given it when it registers, so a controller can send work to its nodes.
+The **Hub token** is this Mac's master key. Never give it out. It stays under **Advanced**, closed
+by default. The app keeps both tokens; moving the Hub token on the page does not change how
+credentials or joins work. A joining Mac receives its own node credential during registration.
 
-The owner's decision, recorded: **one token per controller, copied to each joining Mac**, rather than
-a separate credential per node. That keeps signup to a single value.
-
-**What that costs, so it is a known trade rather than a surprise:** losing the token for one
-controller means re-entering it on that controller's nine or ten nodes. The five controllers are
-independent, so one group's token cannot reach another group. Keep each controller's token with that
-controller.
-
-**If a node is ever promoted to controller**, it mints a fresh token on the spot, so the new group
-never runs on the old group's credential. Its nodes then re-register with the new one.
+**If a node is promoted to controller**, it mints a fresh Fleet token, so the new group never runs
+on the old group's credential. Give the new controller's Fleet token to the gateway and any Macs
+that will join its group.
 
 ### Setting up a group
 

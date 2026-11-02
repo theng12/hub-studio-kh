@@ -609,7 +609,7 @@ class FleetCredentialWiringTests(unittest.TestCase):
                       "the credential offered for joining must be the fleet token")
         self.assertIn("Copy Fleet Token", credential)
         self.assertIn("studio.connectionToken", credential,
-                      "the Hub token stays visible: the gateway uses it")
+                      "the Hub token remains available for local administration")
         join = source[source.index("private var joinController"):]
         self.assertIn("Fleet token", join, "the join form must ask for the token it needs")
 
@@ -630,8 +630,11 @@ class FleetCredentialWiringTests(unittest.TestCase):
                       "the screen must say, in words, which token is the one to hand out")
         self.assertLess(credential.index("Copy Fleet Token"), credential.index("Copy Hub Token"),
                         "the token to hand out comes first; the two are not peers")
-        self.assertIn("Keep this one", credential,
-                      "the Hub token must be labelled as the one to keep")
+        advanced = credential.index('DisclosureGroup("Advanced")')
+        self.assertLess(credential.index("Copy Fleet Token"), advanced)
+        self.assertGreater(credential.index("Copy Hub Token"), advanced)
+        self.assertIn("This Mac's master key. Never give it out.", credential,
+                      "Advanced must explain the Hub token's local authority")
 
     def test_the_join_form_no_longer_asks_the_operator_to_choose(self) -> None:
         """`not its Hub token` was the phrase that made it read as two options.
