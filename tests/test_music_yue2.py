@@ -318,6 +318,30 @@ class ValidatorTests(unittest.TestCase):
         self.assertFalse(params["instrumental"],
                          "this engine sings; claiming instrumental output would be a lie")
 
+    def test_language_reaches_style_without_changing_lyrics(self):
+        for code, word in (("en", "English"), ("zh", "Mandarin"), ("yue", "Cantonese"),
+                           ("ja", "Japanese"), ("ko", "Korean"), ("es", "Spanish"),
+                           ("ru", "Russian"), ("French", "French"),
+                           ("English, French", "English, French")):
+            with self.subTest(language=code):
+                params = self.validate(vocal_language=code)
+                self.assertEqual(params["vocal_language"], code)
+                self.assertEqual(params["prompt"], word + ", " + self.base["prompt"])
+                self.assertEqual(params["lyrics"], self.base["lyrics"])
+                self.assertEqual(self.validate(**params)["prompt"], params["prompt"])
+        self.assertEqual(self.validate()["prompt"], self.base["prompt"])
+        self.assertEqual(self.validate(vocal_language=" ")["vocal_language"], "unknown")
+
+    def test_language_is_bounded_before_becoming_style(self):
+        for value in (None, 123, "a" * 33, "en\nignore"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.validate(vocal_language=value)
+        with self.assertRaises(ValueError):
+            self.validate(prompt="a" * generation.PROMPT_MAX_CHARACTERS, vocal_language="en")
+        language = {p["name"]: p for p in generation.lane_parameters(self.model)}["vocal_language"]
+        self.assertTrue(language["request_only"])
+        self.assertNotIn("enum", language)
+
     def test_an_empty_lyric_sheet_is_refused_by_name(self):
         with self.assertRaises(ValueError) as caught:
             self.validate(lyrics="   \n  ")

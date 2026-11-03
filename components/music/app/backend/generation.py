@@ -204,6 +204,23 @@ def _validate_yue2(raw: dict, model: catalog.ModelEntry, *,
             "no instrumental switch — use Stable Audio 3 for a piece without a vocal.")
     if len(lyrics) > LYRICS_MAX_CHARACTERS:
         raise ValueError(f"Lyrics must contain at most {LYRICS_MAX_CHARACTERS} characters")
+    language = raw.get("vocal_language", "unknown")
+    if not isinstance(language, str) or len(language) > 32 or any(
+            ord(char) < 32 for char in language):
+        raise ValueError("vocal_language must be a language name or code of at most 32 characters")
+    language = language.strip() or "unknown"
+    # SongRequest has no language field: its style carries the language alongside the lyrics.
+    language_word = {
+        "en": "English", "zh": "Mandarin", "yue": "Cantonese", "ja": "Japanese",
+        "ko": "Korean", "es": "Spanish", "ru": "Russian",
+    }.get(language.lower(), language)
+    style = prompt.strip()
+    if language.lower() != "unknown":
+        if (style.casefold() != language_word.casefold()
+                and not style.casefold().startswith(language_word.casefold() + ",")):
+            style = f"{language_word}, {style}"
+        if len(style) > PROMPT_MAX_CHARACTERS:
+            raise ValueError(f"Prompt including vocal language must contain at most {PROMPT_MAX_CHARACTERS} characters")
     mode = raw.get("mode", raw.get("cot", defaults["mode"]))
     if mode not in ("off", "melody", "full"):
         raise ValueError("mode must be off, melody or full")
@@ -240,14 +257,13 @@ def _validate_yue2(raw: dict, model: catalog.ModelEntry, *,
     return {
         "repo": model.repo,
         "model_revision": model.revision,
-        "prompt": prompt.strip(), "duration_seconds": duration, "steps": steps,
+        "prompt": style, "duration_seconds": duration, "steps": steps,
         "guidance_scale": guidance, "seed": seed,
         "mode": mode, "lyrics": lyrics, "precision": precision,
         "max_tokens": max_tokens,
         "min_tokens": max(1, min(max_tokens, int(round(duration * 0.5 * catalog.YUE2_TOKENS_PER_SECOND)))),
-        # YuE2 always renders its own stereo 48 kHz output; the shared job shape carries two
-        # vocal-control fields, and both are meaningless here.
-        "instrumental": False, "vocal_language": "unknown",
+        # YuE2 always sings; the selected language is retained in the job and carried in style.
+        "instrumental": False, "vocal_language": language,
         "dit_model": "", "lm_model": "",
         "tier_cap_seconds": int(_limit(model, "single_pass_max_seconds")),
         "exceeds_single_pass": False,
@@ -324,6 +340,10 @@ _CONTRACT_EXTRAS: dict[str, tuple[dict, ...]] = {
         {"name": "lyrics", "type": "string", "required": True,
          "max_characters": LYRICS_MAX_CHARACTERS,
          "note": "this engine sings; there is no instrumental switch"},
+        {"name": "vocal_language", "type": "string", "required": False,
+         "request_only": True, "max_characters": 32,
+         "note": "Language name or code, added to style; supply lyrics in the same language. "
+                 "Sung language quality has not been confirmed by listening."},
         {"name": "precision", "type": "string", "required": False,
          "enum": ["8bit", "bf16", "4bit"],
          "note": "8bit is the measured configuration; 4bit needs a conversion this package does "
@@ -450,7 +470,7 @@ def lane_parameters(model: catalog.ModelEntry) -> list[dict]:
     ]
     for extra in _CONTRACT_EXTRAS.get(model.runtime, ()):
         entry = dict(extra)
-        if entry.get("required"):
+        if entry.get("required") or entry.get("request_only"):
             # **A required parameter is per-request content, so it has no default.** YuE2's lyrics
             # are the case: the engine sings, an empty sheet is refused by name, and publishing a
             # default for it would offer the operator a value the lane never accepts as a choice.
