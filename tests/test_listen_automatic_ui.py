@@ -73,8 +73,14 @@ class ListenAutomaticUITests(unittest.TestCase):
     def test_the_resolved_list_and_its_warning_still_render(self) -> None:
         """The existing facts stay: what this Mac answers on, and who can reach it."""
         connections = body(VIEWS, "private var fleetSection: some View")
-        self.assertIn('ValueRow("Listening on", value: listenTitle(studio.configuration.listenHost))',
-                      connections, "the resolved list must still be shown as a fact")
+        self.assertIn('ValueRow("Listening on") {', connections,
+                      "the resolved list must still be shown as a fact")
+        self.assertIn('Text(listenTitle(studio.configuration.listenHost))', connections,
+                      "the wildcard must retain its descriptive summary")
+        self.assertIn('ForEach(studio.configuration.listenHosts, id: \\.self)', connections,
+                      "each concrete listening address must still be shown")
+        self.assertIn('CopyValueButton(value: address)', connections,
+                      "each listening address must have its Copy control")
         self.assertIn("listenWarning", connections, "the who-can-reach-it sentence must stay")
         self.assertIn("LocalAddresses.current()", connections,
                       "the addresses this Mac has right now must still be listed")
