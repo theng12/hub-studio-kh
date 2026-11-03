@@ -267,6 +267,42 @@ class ImageLaneContractTests(unittest.TestCase):
                 {'repo': lane_less.repo, 'prompt': 'x', 'reference_images': ['anything']})
 
 
+    def test_a_geometry_bound_is_row_data_and_honoured_by_every_preset(self):
+        """The engine's multiple-of-N bound is stated on the row that owns it.
+
+        Every published preset satisfies it, `validate_request` refuses a violating canvas
+        before queueing (naming the number), and `lane_contract` publishes the same figure so
+        a consumer reads producer data instead of inventing a rule. A row that states no bound
+        publishes none — the mlx-serve Qwen row measured 1280x720 on its own engine.
+        """
+        import dataclasses
+        from unittest import mock
+
+        for model in self.generation.MODELS.values():
+            with self.subTest(repo=model.repo):
+                presets = self.generation.size_presets(model)
+                contract = self.generation.lane_contract(model)
+                if model.dimension_multiple is None:
+                    self.assertNotIn('dimension_multiple', contract)
+                    continue
+                self.assertEqual(contract['dimension_multiple'], model.dimension_multiple)
+                for ratio, (width, height) in presets.items():
+                    self.assertEqual(width % model.dimension_multiple, 0, ratio)
+                    self.assertEqual(height % model.dimension_multiple, 0, ratio)
+
+        # A preset that ever regressed to an engine-invalid canvas is refused by the validator
+        # itself, before a job is queued, naming the bound — never inside a render.
+        turbo = self.generation.QWEN_IMAGE_21_TURBO
+        regressed = dataclasses.replace(
+            turbo, size_presets={'16:9': (1280, 720)}, dimension_multiple=32,
+            defaults={**turbo.defaults, 'aspect_ratio': '16:9'})
+        with mock.patch.dict(self.generation.MODELS, {regressed.repo: regressed}):
+            with self.assertRaisesRegex(ValueError, 'positive multiples of 32'):
+                self.generation.validate_request({
+                    'repo': regressed.repo, 'prompt': 'x',
+                    'aspect_ratio': '16:9', 'width': 1280, 'height': 720})
+
+
     def test_a_published_runtime_says_where_it_was_measured(self):
         for model in self.generation.MODELS.values():
             with self.subTest(repo=model.repo):

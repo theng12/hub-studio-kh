@@ -577,6 +577,32 @@ struct RevealButton: View {
     }
 }
 
+struct CopyValueButton: View {
+    let value: String?
+    var title = "Copy"
+    var onCopy: (() -> Void)?
+    @State private var copied = false
+
+    var body: some View {
+        Button(copied ? "Copied" : title) {
+            guard let value, !value.isEmpty else { return }
+            NSPasteboard.general.clearContents()
+            if NSPasteboard.general.setString(value, forType: .string) {
+                copied = true
+                onCopy?()
+            }
+        }
+        .controlSize(.small)
+        .disabled(value?.isEmpty ?? true)
+        .accessibilityValue(copied ? "Copied" : "")
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled { copied = false }
+        }
+    }
+}
+
 /// A secret the app holds (a token, a key): masked until the eye is pressed, with Copy beside it. Copy works
 /// while it is masked, so handing a token on never needs it on screen. Hidden, the value is not in the view at
 /// all - only the dots are - so it cannot be selected, read by VoiceOver or caught in a screenshot.
@@ -594,14 +620,7 @@ struct SecretValue: View {
                 Text(SecretMask.text(value, revealed: false)).font(HubType.mono).foregroundStyle(.secondary)
             }
             RevealButton(revealed: $revealed).disabled(value?.isEmpty ?? true)
-            Button(copyTitle) {
-                guard let value, !value.isEmpty else { return }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(value, forType: .string)
-                onCopy?()
-            }
-            .controlSize(.small)
-            .disabled(value?.isEmpty ?? true)
+            CopyValueButton(value: value, title: copyTitle, onCopy: onCopy)
         }
     }
 }

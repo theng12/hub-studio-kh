@@ -197,6 +197,31 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         # A Mac that cannot do it never advertises `edit` (frozen contract, 2026-10-26 §1.5).
         reference_lane = edit_lane(model, state, manager.total_memory_bytes, selected)
         capabilities = ['txt2img'] + (['edit'] if reference_lane['available'] else [])
+        # One contract object, built once: the row's `lane_contract` and the reference block
+        # nested on the edit mode are the same producer data, so they cannot drift apart.
+        contract = lane_contract(model, manager.data, manager.total_memory_bytes)
+        not_ready_reason = (
+            None if ready else files.get('reason')
+            if files['state'] != 'files_verified' else state['reason']
+            if state['state'] == 'production_blocked' else host.get('reason'))
+        # The two owner-visible modes, published explicitly. `id` is the wire value, `label` is
+        # the display string (exactly these words, never "Edit"), `available` is this Mac's live
+        # answer and `reason` says why not. The reference entry appears only where the model has
+        # an intrinsic reference lane (its own `reference_limits`), so a text-only model
+        # publishes Text to image alone, while a supported model on an unready or below-floor
+        # host still shows Reference to image carrying this host's reason — never a false
+        # "does not support references".
+        image_modes = [{
+            'id': 'txt2img', 'label': 'Text to image',
+            'available': bool(ready), 'reason': not_ready_reason,
+        }]
+        if model.reference_limits:
+            image_modes.append({
+                'id': 'edit', 'label': 'Reference to image',
+                'available': reference_lane['available'],
+                'reason': reference_lane['reason'],
+                'references': contract.get('references'),
+            })
         # How this machine's loading-size setting resolves for this model, from the model's own
         # MemoryPolicy: `selected` is the operator's choice, `effective` is what the next job
         # will actually load, and a model with no bounded configuration publishes no options.
@@ -211,6 +236,9 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'model_id': model.repo, 'family': model.family, 'modality': 'image',
             'package_id': model.package_id, 'engine': model.engine,
             'capabilities': capabilities, 'hub_operation': 'image.text_to_image',
+            # The two owner-visible modes with their labels, live availability and — on the
+            # reference entry — the same producer reference contract the lane publishes.
+            'image_modes': image_modes,
             # The reference lane's own two facts. There is no creativity/strength control: Klein
             # edit conditions on concat reference tokens and `image_strength` is the init-image
             # weight, which this lane does not use - so it publishes a fixed mode and no options
@@ -260,10 +288,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             'readiness': {'ready': ready, 'state': state['state'], 'files': files, 'host': host,
                           'production_allowed': state['production_allowed'],
                           'qualification_allowed': state['qualification_allowed'],
-                          'reason': (None if ready else files.get('reason')
-                                     if files['state'] != 'files_verified' else state['reason']
-                                     if state['state'] == 'production_blocked'
-                                     else host.get('reason'))},
+                          'reason': not_ready_reason},
             'execution_ready': ready, 'available': ready,
             # The values in force, with the geometry derived from the aspect ratio in force. The
             # app pre-fills its form from this and sends every field, so this is the number an
@@ -282,7 +307,7 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             # their enforced bounds, artifact, state vocabulary and cancel semantics. Built from
             # this model's own limits so it cannot disagree with `validate_request`, with each
             # settable parameter's `default` resolved to the value in force on this machine.
-            'lane_contract': lane_contract(model, manager.data, manager.total_memory_bytes),
+            'lane_contract': contract,
             'qualification': dict(model.qualification),
         }
 
@@ -308,6 +333,10 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             # at all. It carries no `generation_defaults`/`generation_limits`, which is what
             # the app requires before it offers a model for selection.
             'capabilities': ['txt2img'],
+            # Text to image only: this runtime has no model for the package, so no reference
+            # entry exists — the same intrinsic-support rule as a registered row.
+            'image_modes': [{'id': 'txt2img', 'label': 'Text to image',
+                             'available': False, 'reason': reason}],
             'hub_operation': 'image.text_to_image',
             'model_revision': manifest['revision'],
             'memory_eligible': host['eligible'],

@@ -18,6 +18,27 @@ struct NativeImageSettings: Codable, Equatable {
     var steps: Int?
     var guidance: Double?
     var seed: Int64?
+    var mode: String? = nil
+    var referenceImages: [NativeImageReference]? = nil
+}
+struct NativeImageReference: Codable, Equatable {
+    var b64: String? = nil
+    var mime: String? = nil
+    var url: String? = nil
+    var assetId: String? = nil
+}
+struct NativeImageReferences: Decodable, Equatable {
+    let min: Int
+    let max: Int
+    let maxDimension: Int
+    let mediaTypes: [String]
+}
+struct NativeImageMode: Decodable, Identifiable, Equatable {
+    let id: String
+    let label: String
+    let available: Bool
+    let reason: String?
+    let references: NativeImageReferences?
 }
 struct NativeImageSize: Decodable, Identifiable, Equatable {
     let id: String
@@ -894,6 +915,7 @@ struct NativeModel: Identifiable, Equatable {
     /// catalogue row for a manifest the worker has no registered model for looks like — and the
     /// Image page says so rather than drawing a control that would do nothing.
     var loadingModes: NativeImageLoadingModes? = nil
+    var imageModes: [NativeImageMode] = []
     /// The dispatch contract this model's Studio published for it. The Models tab reads every
     /// per-generator fact from here — the operation, every parameter with its enforced bound, and
     /// the modality every `/studio/<modality>/…` call is addressed with. Nil means the Studio
@@ -3346,6 +3368,56 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var chatJobs: [NativeJob] = []
     @Published private(set) var imageConfigurations: [String: NativeImageConfiguration] = [:]
     @Published var imagePrompt = "" { didSet { scheduleSave() } }
+    @Published var imageMode = "txt2img"
+    @Published var imageReferences: [NativeImageReference] = []
+    @Published var imageReferenceNames: [String] = []
+    var imageModes: [NativeImageMode] {
+        models.first { $0.function == .image && $0.repo == imageModel }?.imageModes ?? []
+    }
+    var selectedImageMode: NativeImageMode? { imageModes.first { $0.id == imageMode } }
+
+    func addImageReference(_ url: URL, replacing index: Int? = nil) {
+        do {
+            guard let bounds = selectedImageMode?.references else {
+                throw NativeAPIError.message("This model does not publish reference-image limits.")
+            }
+            guard bounds.mediaTypes.contains("image/png"), bounds.maxDimension > 0,
+                  index != nil || imageReferences.count < bounds.max else {
+                throw NativeAPIError.message("This model accepts up to \(bounds.max) reference images.")
+            }
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            guard let image = NSImage(contentsOf: url), let tiff = image.tiffRepresentation,
+                  let source = NSBitmapImageRep(data: tiff), source.pixelsWide > 0, source.pixelsHigh > 0 else {
+                throw NativeAPIError.message("Choose a readable image file.")
+            }
+            let scale = min(1, Double(bounds.maxDimension) / Double(max(source.pixelsWide, source.pixelsHigh)))
+            let width = max(1, Int(Double(source.pixelsWide) * scale))
+            let height = max(1, Int(Double(source.pixelsHigh) * scale))
+            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+                  let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
+                throw NativeAPIError.message("The reference image could not be prepared.")
+            }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            image.draw(in: NSRect(x: 0, y: 0, width: width, height: height))
+            NSGraphicsContext.restoreGraphicsState()
+            guard let data = bitmap.representation(using: .png, properties: [:]) else {
+                throw NativeAPIError.message("The reference image could not be encoded.")
+            }
+            let reference = NativeImageReference(b64: data.base64EncodedString(), mime: "image/png")
+            if let index, imageReferences.indices.contains(index) {
+                imageReferences[index] = reference
+                imageReferenceNames[index] = url.lastPathComponent
+            } else {
+                imageReferences.append(reference)
+                imageReferenceNames.append(url.lastPathComponent)
+            }
+            error = nil
+        } catch { self.error = Self.actionable(error, action: "Choose a reference image") }
+    }
     /// Changing the model changes the controls, so the new model's own published defaults are
     /// loaded at once: leaving them nil disabled Generate until the next poll, which read as the
     /// model being unusable.
@@ -4967,12 +5039,36 @@ final class NativeWorkspaceStore: ObservableObject {
                 let model = try usableModel(repo: imageModel, function: .image)
                 let prompt = imagePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !prompt.isEmpty else { throw NativeAPIError.message("Enter an image prompt.") }
-                guard let settings = imageSettings, imageConfiguration?.accepts(settings) == true else {
+                guard var settings = imageSettings, imageConfiguration?.accepts(settings) == true else {
                     throw NativeAPIError.message("Choose an available image size and settings within the model's supported ranges, or restore its defaults.")
                 }
+                guard imageMode == "txt2img" || imageMode == "edit" else {
+                    throw NativeAPIError.message("Choose Text to image or Reference to image.")
+                }
+                if let mode = selectedImageMode {
+                    guard mode.available else {
+                        throw NativeAPIError.message(mode.reason ?? "\(mode.label) is unavailable on this Mac.")
+                    }
+                    settings.mode = mode.id
+                } else if imageMode != "txt2img" || !imageModes.isEmpty {
+                    throw NativeAPIError.message("This model does not offer the selected image mode. Choose an available mode.")
+                }
+                if imageMode == "edit" {
+                    guard let bounds = selectedImageMode?.references,
+                          (bounds.min...bounds.max).contains(imageReferences.count) else {
+                        throw NativeAPIError.message("Choose the required reference images before generating.")
+                    }
+                    settings.referenceImages = imageReferences
+                } else if !imageReferences.isEmpty {
+                    throw NativeAPIError.message("Remove the reference images or choose Reference to image.")
+                }
+                var legacySettings = settings
+                legacySettings.mode = nil
+                legacySettings.referenceImages = nil
                 if let original = imageJobs.first(where: {
                     $0.state == "uncertain" && $0.model == model.repo && $0.text == prompt
-                        && ($0.imageSettings == nil || $0.imageSettings == settings)
+                        && ($0.imageSettings == nil || $0.imageSettings == settings
+                            || $0.imageSettings == legacySettings)
                 }) {
                     throw NativeAPIError.message("Image job \(original.id) has an uncertain result. Reconcile that original job before repeating this request.")
                 }
@@ -10568,6 +10664,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 // The loading-size setting is the model's own catalogue row, read rather than
                 // rebuilt: whether a control exists is the model's answer, not this app's.
                 loadingModes: item.loadingModes,
+                imageModes: item.imageModes ?? [],
                 laneContract: item.laneContract,
                 modelLimits: item.modelLimits,
                 // The size table with its tier where the row publishes one, and the label-carrying
@@ -11660,6 +11757,7 @@ private struct CatalogModel: Decodable {
     let generationDefaults: HubGenerationDefaults?
     let generationLimits: HubGenerationLimits?
     let imageSizes: [NativeImageSize]?
+    let imageModes: [NativeImageMode]?
     /// The fixed WAV shape a Music model publishes. Absent for every other function.
     let sampleRateHz: Int?
     let channels: Int?
@@ -12183,6 +12281,7 @@ private struct HubJobParams: Decodable {
     let resolution: String?
     let audio: Bool?
     let mode: String?
+    let referenceImages: [NativeImageReference]?
     /// Voice's own controls. `speed` is the pace the operator chose, which the engine's own
     /// default equals 1.0; the row shows it because a clip generated at 1.5× is a different
     /// result from one at the model's pace.
@@ -12194,7 +12293,7 @@ private struct HubJobParams: Decodable {
     var imageSettings: NativeImageSettings? {
         guard let width, let height else { return nil }
         return NativeImageSettings(width: width, height: height, steps: steps,
-                                   guidance: guidance, seed: seed)
+                                   guidance: guidance, seed: seed, mode: mode, referenceImages: referenceImages)
     }
     var musicSettings: NativeMusicSettings? {
         guard let durationSeconds else { return nil }
