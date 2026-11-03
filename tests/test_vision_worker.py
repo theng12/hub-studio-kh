@@ -105,6 +105,7 @@ class VisionRouteTests(unittest.TestCase):
             return _FakeDepth() if manifest["defaults"]["kind"] == "depth" else _FakeFlorence(self)
 
         self.service = VisionService([BASE, DEPTH, LARGE], Path(self.temporary.name), loader=loader)
+        self.addCleanup(self.service._thread.shutdown, wait=True)
         self.installed = {DEPTH["model_id"], BASE["model_id"]}
         self.service.files = lambda manifest: (
             {"state": "files_verified"} if manifest["model_id"] in self.installed
