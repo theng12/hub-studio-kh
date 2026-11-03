@@ -6964,7 +6964,22 @@ struct StudioContent: View {
             HubSection("Network") {
             restartNotice
 
-            ValueRow("Listening on", value: listenTitle(studio.configuration.listenHost))
+            ValueRow("Listening on") {
+                if studio.configuration.listenHosts.contains("0.0.0.0") {
+                    Text(listenTitle(studio.configuration.listenHost))
+                } else {
+                    VStack(alignment: .leading, spacing: HubSpace.xs) {
+                        ForEach(studio.configuration.listenHosts, id: \.self) { address in
+                            HStack {
+                                Text(address == "127.0.0.1" ? "This Mac only (\(address))" : address)
+                                    .textSelection(.enabled)
+                                CopyValueButton(value: address)
+                                    .accessibilityLabel("Copy listening address \(address)")
+                            }
+                        }
+                    }
+                }
+            }
             // A setting that changes by itself has to say so, and has to be switchable off. On, the
             // list below is recomputed at every launch from this Mac's own networks — the owner's
             // ask was "i keep forgetting to turn on tailscale. i want it already the default on."
@@ -6982,14 +6997,18 @@ struct StudioContent: View {
             // Several addresses at once, because a Mac serving its office LAN and its tailnet is
             // the normal case; loopback is always included by the Hub, so it is never a choice.
             ForEach(LocalAddresses.current()) { entry in
-                Toggle("Reachable at \(entry.title)", isOn: Binding(
-                    get: { studio.configuration.listenHosts.contains(entry.address) },
-                    set: { included in
-                        var hosts = studio.configuration.listenHosts.filter { $0 != "0.0.0.0" }
-                        if included { hosts.append(entry.address) }
-                        else { hosts.removeAll { $0 == entry.address } }
-                        pinListenHosts(hosts)
-                    }))
+                HStack {
+                    Toggle("Reachable at \(entry.title)", isOn: Binding(
+                        get: { studio.configuration.listenHosts.contains(entry.address) },
+                        set: { included in
+                            var hosts = studio.configuration.listenHosts.filter { $0 != "0.0.0.0" }
+                            if included { hosts.append(entry.address) }
+                            else { hosts.removeAll { $0 == entry.address } }
+                            pinListenHosts(hosts)
+                        }))
+                    CopyValueButton(value: entry.address)
+                        .accessibilityLabel("Copy reachable address \(entry.address)")
+                }
                 // These are editable while the Hub runs: the change is saved and the notice above
                 // offers the restart that applies it, instead of the control refusing to move.
             }
@@ -7009,6 +7028,10 @@ struct StudioContent: View {
                 Text(studio.nodeFacingAddress.map { "A node joins with the address \($0) and this controller's Fleet token below — not the Hub token." }
                      ?? "Until one of these is on, only this Mac can reach the Hub — a node needs an address like the ones above.")
                     .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let address = studio.nodeFacingAddress {
+                    CopyValueButton(value: address)
+                        .accessibilityLabel("Copy node join address")
+                }
             }
             listenWarning
 
@@ -7817,10 +7840,14 @@ struct StudioContent: View {
             HStack {
                 TextField("100.x.y.z  ·  or a name like mac.tailnet.ts.net", text: $controllerDraft)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                CopyValueButton(value: controllerDraft)
+                    .accessibilityLabel("Copy controller address")
                 // Masked like every secret, with the eye to check what was pasted so a wrong copy is
                 // obvious (the owner's reason this field used to be plain text).
                 SecretInput(placeholder: "Controller's Fleet token", text: $controllerToken)
                     .frame(maxWidth: 300)
+                CopyValueButton(value: controllerToken)
+                    .accessibilityLabel("Copy controller Fleet token")
                 Button("Test") {
                     Task { await workspace.testControllerAddress(controllerDraft) }
                 }

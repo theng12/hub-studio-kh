@@ -17,6 +17,11 @@
 import AppKit
 import SwiftUI
 
+@MainActor enum ConnectionCopyRenderProbe {
+    static var frame = CGRect.zero
+    static var didCopy = false
+}
+
 @main
 struct PageRenderHarness {
     @MainActor static func main() {
@@ -45,6 +50,9 @@ struct PageRenderHarness {
             arguments: ["render", "--data-dir", scratch.path, "--models-dir", models.path],
             bundle: Bundle.main.bundleURL)
         let studio = StudioController(configuration: config)
+        if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_CONNECTION_COPY"] == "1" {
+            studio.configuration.listenHost = (["127.0.0.1"] + LocalAddresses.current().map(\.address)).joined(separator: ",")
+        }
 
         // `STUDIOHUB_RENDER_LIVE=1` connects the page to the Hub already running on this Mac, so a
         // render shows the operator's real jobs instead of empty lists. Read-only: it takes the
@@ -159,7 +167,9 @@ struct PageRenderHarness {
         for size in sizes {
             // `.key` because a window on no screen is never the key window, and controls draw their
             // inactive look (a grey "prominent" button) otherwise, which is not what a person sees.
+            ConnectionCopyRenderProbe.frame = .zero
             let hosting = NSHostingView(rootView: StudioWindow(studio: studio)
+                .coordinateSpace(name: "ConnectionCopyRender")
                 .environment(\.controlActiveState, .key))
             hosting.frame = NSRect(x: 0, y: 0, width: size.0, height: size.1)
             let window = NSWindow(contentRect: hosting.frame,
@@ -174,6 +184,77 @@ struct PageRenderHarness {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.15))
                 hosting.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
+            }
+            if page == .connections && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_CONNECTION_COPY"] == "1" {
+                func scrollView(_ view: NSView) -> NSScrollView? {
+                    if let scroll = view as? NSScrollView,
+                       scroll.bounds.width > hosting.bounds.width / 2 { return scroll }
+                    for child in view.subviews { if let scroll = scrollView(child) { return scroll } }
+                    return nil
+                }
+                // The fixture seam observes layout; the mouse still presses the shipped button.
+                app.setActivationPolicy(.regular)
+                window.setFrameOrigin(NSPoint(x: 60, y: 60))
+                window.makeKeyAndOrderFront(nil)
+                app.activate(ignoringOtherApps: true)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                let originalConfiguration = studio.configuration
+                var target: CGRect?
+                ConnectionCopyRenderProbe.didCopy = false
+                if let scroll = scrollView(hosting), let document = scroll.documentView {
+                    for step in 0...10 {
+                        let offset = max(0, document.bounds.height - scroll.contentView.bounds.height) * CGFloat(step) / 10
+                        document.scroll(NSPoint(x: 0, y: offset))
+                        for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                        hosting.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                        let frame = ConnectionCopyRenderProbe.frame
+                        if !frame.isEmpty && hosting.bounds.insetBy(dx: 0, dy: 20).contains(frame) {
+                            target = frame
+                            break
+                        }
+                    }
+                }
+                guard let address = studio.nodeFacingAddress, let target else {
+                    fatalError("Rendered node join Copy button missing")
+                }
+                let local = NSPoint(x: target.midX,
+                    y: hosting.isFlipped ? target.midY : hosting.bounds.height - target.midY)
+                let point = hosting.convert(local, to: nil)
+                NSPasteboard.general.clearContents()
+                for type: NSEvent.EventType in [.leftMouseDown, .leftMouseUp] {
+                    let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 0, clickCount: 1,
+                        pressure: type == .leftMouseDown ? 1 : 0)!
+                    app.postEvent(event, atStart: false)
+                }
+                let stop = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+                    app.stop(nil)
+                    app.postEvent(NSEvent.otherEvent(with: .applicationDefined, location: .zero,
+                        modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                        context: nil, subtype: 0, data1: 0, data2: 0)!, atStart: false)
+                }
+                app.run()
+                stop.invalidate()
+                if !ConnectionCopyRenderProbe.didCopy {
+                    print("COPY_MOUSE missed frame=\(target) host=\(hosting.bounds) flipped=\(hosting.isFlipped) point=\(point)")
+                    let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)!
+                    hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                    try? bitmap.representation(using: .png, properties: [:])?.write(to:
+                        URL(fileURLWithPath: output).appendingPathComponent("copy-driver-diagnostic-\(Int(size.0))x\(Int(size.1)).png"))
+                    fflush(stdout)
+                }
+                precondition(NSPasteboard.general.string(forType: .string) == address,
+                             "Copy must include the complete node address and port")
+                precondition(studio.configuration.listenHost == originalConfiguration.listenHost
+                    && studio.configuration.port == originalConfiguration.port
+                    && studio.configuration.listenHostAutomatic == originalConfiguration.listenHostAutomatic,
+                    "Copy changed connection settings")
+                hosting.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                precondition(ConnectionCopyRenderProbe.didCopy, "Mouse click did not reach the Copy action")
+                print("CONNECTION_COPY_INTERACTION passed: native mouse click, complete address and port, settings unchanged; inspect captured Copied feedback")
             }
             if page == .image && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_IMAGE_REFERENCE"] == "1" {
                 func imageControl(_ view: NSView) -> NSSegmentedControl? {

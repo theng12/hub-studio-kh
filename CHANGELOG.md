@@ -4,6 +4,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 
 ## Unreleased
 
+- Connections has Copy buttons beside network and controller addresses, including the full node join address and port. Copying addresses or tokens briefly shows Copied and leaves settings unchanged.
 - Image generation offers Text to image and Reference to image, using each model’s published modes and limits. Reference to image accepts one or two images where the model supports them.
 - Unsupported reference input and unknown image modes explain why the request cannot run.
 - Qwen Image 2.1 mflux 4-bit models offer image sizes their runtime accepts.
