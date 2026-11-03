@@ -2030,6 +2030,17 @@ struct FleetOperationReport: Equatable {
     }
 }
 
+enum NativeCapacityDisplay {
+    static func gigabytes(bytes: Double, decimals: Int = 1) -> String {
+        String(format: "%.*f GB", decimals, bytes / 1_073_741_824)
+    }
+
+    // Fleet resource wires use decimal GB; keep conversion out of admission and tier calculations.
+    static func gigabytes(decimalGB: Double, decimals: Int = 1) -> String {
+        gigabytes(bytes: decimalGB * 1_000_000_000, decimals: decimals)
+    }
+}
+
 /// One Mac in the fleet, with everything needed to judge whether to send it work.
 ///
 /// A machine that has not reported in shows what is known - that it is absent - rather than
@@ -2077,14 +2088,20 @@ struct NativeFleetMachine: Decodable, Equatable, Identifiable {
     var memoryTier: NativeResourceTier {
         NativeResourceTier.memory(availableGB: availableGb, totalGB: memoryGb)
     }
-    /// "142 GB free", or nil when the Mac has not reported a figure.
+    var totalMemoryText: String? {
+        memoryGb.map { NativeCapacityDisplay.gigabytes(decimalGB: $0, decimals: 0) }
+    }
+    var totalDiskText: String? {
+        (disk?.totalGb ?? diskTotalGb).map { NativeCapacityDisplay.gigabytes(decimalGB: $0) }
+    }
+    /// "142.0 GB free", or nil when the Mac has not reported a figure.
     var diskText: String? {
         guard let free = disk?.freeGb ?? diskFreeGb else { return nil }
-        return String(format: "%.0f GB free", free)
+        return NativeCapacityDisplay.gigabytes(decimalGB: free) + " free"
     }
     var memoryText: String? {
         guard let free = availableGb else { return nil }
-        return String(format: "%.1f GB free", free)
+        return NativeCapacityDisplay.gigabytes(decimalGB: free) + " free"
     }
     var diskFreeFraction: Double? {
         guard let free = disk?.freeGb ?? diskFreeGb, let total = disk?.totalGb ?? diskTotalGb, total > 0 else { return nil }
@@ -7217,7 +7234,7 @@ final class NativeWorkspaceStore: ObservableObject {
     }
 
     static func gigabytes(_ bytes: Int64) -> String {
-        String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
+        NativeCapacityDisplay.gigabytes(bytes: Double(bytes))
     }
 
     /// Read the Hub's generation statistics, optionally limited to the last N hours.

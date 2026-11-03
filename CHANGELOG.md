@@ -4,6 +4,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 
 ## 0.6.216 — 2026-11-03
 
+- Memory and disk displays use consistent 1024-based units: a 32 GB Mac reads 32 GB, and free memory, free disk and total disk show one decimal.
 - Connections has Copy buttons beside network and controller addresses, including the full node join address and port. Copying addresses or tokens briefly shows Copied and leaves settings unchanged.
 - Image generation offers Text to image and Reference to image, using each model’s published modes and limits. Reference to image accepts one or two images where the model supports them.
 - Unsupported reference input and unknown image modes explain why the request cannot run.

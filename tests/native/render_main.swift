@@ -375,7 +375,7 @@ struct PageRenderHarness {
         return """
             {"machine":"\(id)","label":"\(label)","role":"\(role)","address":\(address.map { "\"" + $0 + "\"" } ?? "null"),
              "reachable":\(reachable),"version":"\(version)","health":"\(reachable ? "up" : "down")","detail":null,
-             "memory_gb":\(reachable ? "\(memory)" : "null"),"available_gb":\(reachable ? "\(available)" : "null"),
+             "memory_gb":\(reachable ? "\(memory * 1_073_741_824 / 1_000_000_000)" : "null"),"available_gb":\(reachable ? "\(available)" : "null"),
              "disk_free_gb":\(reachable ? "\(disk)" : "null"),"disk_total_gb":\(reachable ? "\(total)" : "null"),
              "disk":\(diskObject),"startup":\(startup),"current_job":\(job ?? "null"),
              "chip":\(reachable ? "\"\(chip)\"" : "null"),"jobs":\(jobs),"average_seconds":44.0,"modalities":{"image":\(jobs / 2),"voice":\(jobs - jobs / 2)}}
@@ -489,7 +489,7 @@ struct PageRenderHarness {
         switch wire {
         case "controller":
             workspace.fleetOverview = decode(NativeFleetOverview.self, """
-                {"machines":[\(machineJSON("local", "This Mac", role: "controller", chip: "Apple M4", memory: 24, available: 11.8, disk: 188, total: 460, diskState: "green", jobs: 40, job: voiceJob)),
+                {"machines":[\(machineJSON("local", "This Mac", role: "controller", chip: "Apple M2 Max", memory: 32, available: 16.21, disk: 188, total: 460, diskState: "green", jobs: 40, job: voiceJob)),
                    \(machineJSON("blue-1", "Blue Room 1", role: "agent", chip: "Apple M4", memory: 16, available: 9.8, disk: 142, total: 460, diskState: "green", jobs: 61, job: working, address: "100.64.0.21:47873")),
                    \(machineJSON("blue-2", "Blue Room 2", role: "agent", chip: "Apple M2", memory: 8, available: 1.2, disk: 21, total: 256, diskState: "amber", jobs: 30, version: "0.6.120", startOnLaunch: false, address: "100.64.0.22:47873")),
                    \(machineJSON("blue-3", "Blue Room 3", role: "agent", reachable: false, chip: "Apple M2", memory: 8, available: 0, disk: 0, total: 256, diskState: "unknown", jobs: 12, address: "100.64.0.23:47873"))],
@@ -503,7 +503,7 @@ struct PageRenderHarness {
                 """)
         case "agent":
             workspace.fleetOverview = decode(NativeFleetOverview.self, """
-                {"machines":[\(machineJSON("local", "This Mac", role: "agent", chip: "Apple M4", memory: 24, available: 11.8, disk: 188, total: 460, diskState: "green", jobs: 40, job: working)),
+                {"machines":[\(machineJSON("local", "This Mac", role: "agent", chip: "Apple M2 Max", memory: 32, available: 16.21, disk: 188, total: 460, diskState: "green", jobs: 40, job: working)),
                    \(machineJSON("c", "studio-mac-1500-m4-16-256-controller", role: "controller", reachable: role != "node-offline", chip: "Apple M4", memory: 16, available: 9.8, disk: 142, total: 460, diskState: "green", jobs: 61, address: "100.64.0.12:47873")),
                    \(machineJSON("blue-2", "Blue Room 2", role: "agent", chip: "Apple M2", memory: 8, available: 1.2, disk: 21, total: 256, diskState: "amber", jobs: 30, address: "100.64.0.22:47873"))],
                  "summary":{"total":3,"reachable":\(role == "node-offline" ? 2 : 3),"unreachable":\(role == "node-offline" ? 1 : 0)},"role":"agent",
@@ -515,7 +515,7 @@ struct PageRenderHarness {
                 """)
         default:
             workspace.fleetOverview = decode(NativeFleetOverview.self, """
-                {"machines":[\(machineJSON("local", "This Mac", role: "standalone", chip: "Apple M4", memory: 24, available: 11.8, disk: 188, total: 460, diskState: "green", jobs: 40))],
+                {"machines":[\(machineJSON("local", "This Mac", role: "standalone", chip: "Apple M2 Max", memory: 32, available: 16.21, disk: 188, total: 460, diskState: "green", jobs: 40))],
                  "summary":{"total":1,"reachable":1,"unreachable":0},"role":"standalone"}
                 """)
             workspace.fleetNodes = decode(NativeFleetInventory.self, """

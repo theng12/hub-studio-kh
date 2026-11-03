@@ -3189,6 +3189,23 @@ struct NativeAPITests {
         require(tableRows.first { $0.id == "studio-3" }?.state(readiness: nil) == .offline,
                 "a Mac that does not answer reads as offline")
         require(tableRows.first.map { !$0.isReachable } ?? true, "a Mac that does not answer sorts first")
+        require(NativeCapacityDisplay.gigabytes(decimalGB: 34.36, decimals: 0) == "32 GB",
+                "32 GiB reported as decimal GB must match Apple's RAM label")
+        require(NativeCapacityDisplay.gigabytes(decimalGB: 16.21) == "15.1 GB",
+                "free capacity uses binary units with one decimal")
+        require(NativeWorkspaceStore.gigabytes(16_213_534_310) == "15.1 GB",
+                "byte-based storage details must agree with fleet figures")
+        require(ownRow?.machine?.diskText == "204.9 GB free"
+                && ownRow?.machine?.totalDiskText == "460.1 GB"
+                && ownRow?.machine?.memoryText == "8.8 GB free",
+                "fleet free memory and disk, including governor totals, use one decimal")
+        let absent = tableRows.first { $0.id == "studio-3" }?.machine
+        require(absent?.diskText == nil && absent?.memoryText == nil
+                && absent?.totalDiskText == nil && absent?.totalMemoryText == nil,
+                "unreported capacities must stay unknown")
+        require(ownRow?.machine?.diskFreeGb == 220
+                && ownRow?.machine?.diskFreeFraction == 220.0 / 494.0,
+                "display conversion must not change raw figures or resource fractions")
         // Disk tiers are the governor's: amber below 12 % free, red below 6 %, stop below 5 GB; its own
         // word wins when it gives one. Memory (owner decision 2026-10-02): amber below 20 % free, red
         // below 10 % or below 1.5 GB.

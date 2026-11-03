@@ -4892,7 +4892,7 @@ struct StudioContent: View {
     }
 
     private static func gigabytes(_ bytes: Int64) -> String {
-        String(format: "%.1f GB", Double(bytes) / 1e9)
+        NativeCapacityDisplay.gigabytes(bytes: Double(bytes))
     }
 
     /// The four presets, each with its own count, cost and refusal. Selecting one marks it; nothing
@@ -7432,7 +7432,8 @@ struct StudioContent: View {
             nodeStateCell(row).frame(width: NodeColumn.state, alignment: .leading)
             nodeDoingNow(row).frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
             resourceCell(text: row.machine?.diskText, tier: row.machine?.diskTier ?? .unknown,
-                         fraction: row.machine?.diskFreeFraction, reachable: row.isReachable)
+                         fraction: row.machine?.diskFreeFraction, reachable: row.isReachable,
+                         total: row.machine?.totalDiskText)
                 .frame(width: NodeColumn.meter, alignment: .leading)
             resourceCell(text: row.machine?.memoryText, tier: row.machine?.memoryTier ?? .unknown,
                          fraction: row.machine?.memoryFreeFraction, reachable: row.isReachable)
@@ -7454,7 +7455,8 @@ struct StudioContent: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Disk free").font(HubType.caption).foregroundStyle(.secondary)
                     resourceCell(text: row.machine?.diskText, tier: row.machine?.diskTier ?? .unknown,
-                                 fraction: row.machine?.diskFreeFraction, reachable: row.isReachable)
+                                 fraction: row.machine?.diskFreeFraction, reachable: row.isReachable,
+                                 total: row.machine?.totalDiskText)
                 }.frame(width: NodeColumn.meter, alignment: .leading)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Memory free").font(HubType.caption).foregroundStyle(.secondary)
@@ -7580,12 +7582,13 @@ struct StudioContent: View {
 
     /// A free-space figure as a badge in its tier's colour, with a thin meter under it.
     @ViewBuilder private func resourceCell(text: String?, tier: NativeResourceTier, fraction: Double?,
-                                           reachable: Bool) -> some View {
+                                           reachable: Bool, total: String? = nil) -> some View {
         if let text, reachable {
             VStack(alignment: .leading, spacing: HubSpace.xs) {
                 StatusBadge(text: text.replacingOccurrences(of: " free", with: ""),
                             status: HubStatus(tier), symbol: tier == .bad ? "xmark.octagon.fill"
                             : tier == .warn ? "exclamationmark.triangle.fill" : nil)
+                if let total { Text("of \(total)").font(HubType.caption).foregroundStyle(.secondary) }
                 if let fraction { MeterBar(fraction: fraction, status: HubStatus(tier)).frame(width: 60) }
             }
         } else {
@@ -7630,7 +7633,7 @@ struct StudioContent: View {
     private func nodeFactsLine(_ row: NativeFleetRow) -> String? {
         var parts: [String] = []
         if let chip = row.machine?.chip, !chip.isEmpty { parts.append(chip) }
-        if let memory = row.machine?.memoryGb { parts.append(String(format: "%.0f GB", memory)) }
+        if let memory = row.machine?.totalMemoryText { parts.append(memory) }
         if let version = row.version, !version.isEmpty { parts.append(version) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
