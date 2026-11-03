@@ -3199,9 +3199,9 @@ struct NativeAPITests {
                 && ownRow?.machine?.totalDiskText == "460.1 GB"
                 && ownRow?.machine?.memoryText == "8.8 GB free",
                 "fleet free memory and disk, including governor totals, use one decimal")
-        let absent = tableRows.first { $0.id == "studio-3" }?.machine
-        require(absent?.diskText == nil && absent?.memoryText == nil
-                && absent?.totalDiskText == nil && absent?.totalMemoryText == nil,
+        let unreportedMachine = tableRows.first { $0.id == "studio-3" }?.machine
+        require(unreportedMachine?.diskText == nil && unreportedMachine?.memoryText == nil
+                && unreportedMachine?.totalDiskText == nil && unreportedMachine?.totalMemoryText == nil,
                 "unreported capacities must stay unknown")
         require(ownRow?.machine?.diskFreeGb == 220
                 && ownRow?.machine?.diskFreeFraction == 220.0 / 494.0,
