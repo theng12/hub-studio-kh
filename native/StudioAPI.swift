@@ -7233,8 +7233,9 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Restore the storage defaults") } }
     }
 
+    // Storage limits are entered in decimal GB; previews and saved notices use the same units.
     static func gigabytes(_ bytes: Int64) -> String {
-        NativeCapacityDisplay.gigabytes(bytes: Double(bytes))
+        String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
     }
 
     /// Read the Hub's generation statistics, optionally limited to the last N hours.

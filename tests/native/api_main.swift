@@ -3193,8 +3193,10 @@ struct NativeAPITests {
                 "32 GiB reported as decimal GB must match Apple's RAM label")
         require(NativeCapacityDisplay.gigabytes(decimalGB: 16.21) == "15.1 GB",
                 "free capacity uses binary units with one decimal")
-        require(NativeWorkspaceStore.gigabytes(16_213_534_310) == "15.1 GB",
-                "byte-based storage details must agree with fleet figures")
+        require(NativeCapacityDisplay.gigabytes(bytes: 16_213_534_310) == "15.1 GB",
+                "byte-based disk capacity must agree with fleet figures")
+        require(NativeWorkspaceStore.gigabytes(50_000_000_000) == "50.0 GB",
+                "editable decimal storage limits must retain matching previews and notices")
         require(ownRow?.machine?.diskText == "204.9 GB free"
                 && ownRow?.machine?.totalDiskText == "460.1 GB"
                 && ownRow?.machine?.memoryText == "8.8 GB free",

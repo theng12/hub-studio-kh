@@ -8244,7 +8244,7 @@ struct StudioContent: View {
                         Text(NativeWorkspaceStore.gigabytes(usage.usedBytes)).font(HubType.mono)
                     }
                     Text("Generated output: \(NativeWorkspaceStore.gigabytes(usage.usedBytes)), of which \(NativeWorkspaceStore.gigabytes(usage.protectedBytes)) is protected and never deleted"
-                         + (usage.freeBytes.map { " · \(NativeWorkspaceStore.gigabytes($0)) free on disk" } ?? ""))
+                         + (usage.freeBytes.map { " · \(NativeCapacityDisplay.gigabytes(bytes: Double($0))) free on disk" } ?? ""))
                         .font(HubType.caption).foregroundStyle(.secondary)
                     if usage.overLimit {
                         Text("Over the size limit. Cleaning up is possible, but only work that is finished and acknowledged.")
