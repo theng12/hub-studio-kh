@@ -2384,6 +2384,7 @@ struct StudioContent: View {
             HSplitView {
                 ScrollView {
                     VStack(alignment: .leading, spacing: HubSpace.l) {
+                        imageModeControl
                         HStack {
                             Text("Prompt").font(HubType.section)
                             Spacer()
@@ -2502,6 +2503,64 @@ struct StudioContent: View {
                 imagePreviewReceipt = receipt
                 imagePreviewError = nil
             } catch { if !Task.isCancelled { imagePreviewError = error.localizedDescription } }
+        }
+    }
+
+    @ViewBuilder private var imageModeControl: some View {
+        if !workspace.imageModes.isEmpty {
+            VStack(alignment: .leading, spacing: HubSpace.s) {
+                Text("Image mode").font(HubType.secondary)
+                HubSegmentedControl(selection: $workspace.imageMode,
+                    items: workspace.imageModes.map { HubSegmentItem(tag: $0.id, label: $0.label) },
+                    accessibilityLabel: "Image mode")
+            }
+            if let mode = workspace.selectedImageMode, !mode.available {
+                advisory(mode.reason ?? "\(mode.label) is unavailable on this Mac.")
+            }
+        } else {
+            Text("Image modes have not been published by this Hub.")
+                .font(HubType.caption).foregroundStyle(.secondary)
+        }
+        if workspace.imageMode == "edit" {
+            if let bounds = workspace.selectedImageMode?.references {
+                VStack(alignment: .leading, spacing: HubSpace.s) {
+                    Text("Reference images").font(HubType.section)
+                    Text("Choose \(bounds.min)–\(bounds.max) images · up to \(bounds.maxDimension) pixels per side")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                    ForEach(0..<max(bounds.max, workspace.imageReferences.count), id: \.self) { index in
+                        HStack {
+                            Button {
+                                let panel = NSOpenPanel()
+                                panel.title = "Choose a reference image"
+                                panel.allowedContentTypes = [.png, .jpeg, .webP]
+                                panel.allowsMultipleSelection = false
+                                if panel.runModal() == .OK, let url = panel.url {
+                                    workspace.addImageReference(url, replacing: index < workspace.imageReferences.count ? index : nil)
+                                }
+                            } label: {
+                                Text(index < workspace.imageReferenceNames.count
+                                     ? workspace.imageReferenceNames[index] : "Choose reference \(index + 1)…")
+                                    .lineLimit(1).truncationMode(.middle)
+                            }.accessibilityIdentifier("image-reference-\(index)")
+                            if index < workspace.imageReferences.count {
+                                Button("Remove") {
+                                    workspace.imageReferences.remove(at: index)
+                                    workspace.imageReferenceNames.remove(at: index)
+                                }.rowAction()
+                            }
+                        }
+                    }
+                }
+            } else {
+                advisory("This model does not offer Reference to image. Choose another model or Text to image.")
+            }
+        } else if !workspace.imageReferences.isEmpty {
+            Button("Remove reference images") {
+                workspace.imageReferences.removeAll()
+                workspace.imageReferenceNames.removeAll()
+            }
+            Text("Reference images are kept until you remove them or choose Reference to image.")
+                .font(HubType.caption).foregroundStyle(.secondary)
         }
     }
 

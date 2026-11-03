@@ -175,6 +175,29 @@ struct PageRenderHarness {
                 hosting.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
             }
+            if page == .image && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_IMAGE_REFERENCE"] == "1" {
+                func imageControl(_ view: NSView) -> NSSegmentedControl? {
+                    if let control = view as? NSSegmentedControl,
+                       control.segmentCount == 2, control.label(forSegment: 1) == "Reference to image" { return control }
+                    for child in view.subviews { if let found = imageControl(child) { return found } }
+                    return nil
+                }
+                guard let control = imageControl(hosting) else { fatalError("Image mode control missing") }
+                control.selectedSegment = 1
+                _ = control.sendAction(control.action, to: control.target)
+                precondition(studio.workspace.imageMode == "edit", "Native reference mode action did not reach the form")
+                studio.workspace.addImageReference(scratch.appendingPathComponent("fixture.png"))
+                precondition(studio.workspace.imageReferences.count == 1, "Reference image was not prepared")
+                let decoded = Data(base64Encoded: studio.workspace.imageReferences[0].b64!)!
+                let bitmap = NSBitmapImageRep(data: decoded)!
+                precondition(max(bitmap.pixelsWide, bitmap.pixelsHigh) <= 1024)
+                for _ in 0..<8 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                    hosting.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                }
+                print("IMAGE_REFERENCE_INTERACTION passed: native segment action, reference preparation, published pixel bound")
+            }
             // Exercise the shipped Jobs view through its native control; no recreated header.
             let captureTabs = page == .jobs && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_JOBS_TABS"] == "1"
             func jobsControl(_ view: NSView) -> NSSegmentedControl? {
@@ -567,6 +590,14 @@ struct PageRenderHarness {
         workspace.audioModel = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"
         workspace.transcriptionModel = "mlx-community/whisper-large-v3-turbo"
         workspace.imageModel = "black-forest-labs/FLUX.2-klein-4B"
+        if let index = workspace.models.firstIndex(where: { $0.repo == workspace.imageModel }) {
+            workspace.models[index].imageModes = [
+                NativeImageMode(id: "txt2img", label: "Text to image", available: true, reason: nil, references: nil),
+                NativeImageMode(id: "edit", label: "Reference to image", available: true, reason: nil,
+                    references: NativeImageReferences(min: 1, max: 2, maxDimension: 1024,
+                        mediaTypes: ["image/png", "image/jpeg", "image/webp"]))
+            ]
+        }
         workspace.musicModel = "stabilityai/stable-audio-3-optimized"
         workspace.chatModel = "mlx-community/Qwen3-4B-Instruct-4bit"
         applyRole("controller", to: workspace)

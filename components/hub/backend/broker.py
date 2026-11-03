@@ -2248,6 +2248,130 @@ def _shared_params_with_local_reference(envelope: dict) -> dict:
     return shared
 
 
+# The image door's closed mode vocabulary: the wire values an image submission may state.
+# The owner-visible labels live on the catalog's `image_modes` — `Text to image` and
+# `Reference to image` — and these tokens are the wire spellings of exactly those two modes.
+# A deliberate closed class beside `MODALITY`/`MODALITY_RETRY_CLASS`: an unknown value is
+# refused by name at the door, before queueing, instead of being silently dropped by
+# `_multipart_fields` (owner rule: no silent ignore of an incoming mode).
+IMAGE_WIRE_MODES = ("txt2img", "edit")
+
+
+def _image_item_refs(params: dict) -> list:
+    refs = params.get("reference_images")
+    return refs if isinstance(refs, (list, tuple)) and refs else []
+
+
+def _image_mode_door_refusal(envelope: dict) -> str | None:
+    """Refuse an image submission whose stated mode is unknown or contradicts its references.
+
+    Checked at the public door for image only; video/music/voice contracts are untouched.
+    A stated `mode`/`ref_mode` must be one of the two wire values, and when it is stated it
+    must agree with the references the same item carries. Absent mode keeps the dispatch's
+    own derivation (references ⇒ edit), so every existing sender is unchanged.
+    """
+    items = envelope.get("items")
+    if not isinstance(items, list) or not items:
+        return "items must be a non-empty list"
+    if any(not isinstance(item, dict) for item in items):
+        return "each image item must be an object"
+    stated: list[tuple[str, object]] = []
+    if envelope.get("mode") is not None:
+        stated.append(("mode", envelope.get("mode")))
+    for index, item in enumerate(items):
+        params = item.get("params") if isinstance(item.get("params"), dict) else {}
+        if params.get("reference_images") is not None and not isinstance(params["reference_images"], (list, tuple)):
+            return f"items[{index}].params.reference_images must be a list"
+        for key in ("mode", "ref_mode"):
+            if params.get(key) is not None:
+                stated.append((f"items[{index}].params.{key}", params.get(key)))
+    for where, value in stated:
+        if not isinstance(value, str) or value not in IMAGE_WIRE_MODES:
+            return (f"unsupported image mode {value!r} at {where}; accepted modes: "
+                    f"Text to image (txt2img), Reference to image (edit)")
+    for index, item in enumerate(items):
+        params = item.get("params") if isinstance(item.get("params"), dict) else {}
+        # One canonical resolved mode per item: every declared value — envelope `mode`,
+        # `params.mode`, `params.ref_mode` — must say the same thing before the references
+        # are judged against it, so a declared contradiction fails loudly rather than
+        # whichever single key an older check happened to read.
+        resolved = envelope.get("mode")
+        for key in ("mode", "ref_mode"):
+            if params.get(key) is not None:
+                resolved = params.get(key)
+        declared = [(where, value) for where, value in stated
+                    if where == "mode" or where.startswith(f"items[{index}].params.")]
+        if declared and any(value != declared[0][1] for _where, value in declared[1:]):
+            places = ", ".join(f"{where}={value!r}" for where, value in declared)
+            return (f"image mode keys disagree ({places}); send one mode — Text to image "
+                    "(txt2img) or Reference to image (edit) — for the whole submission")
+        refs = _image_item_refs(params)
+        if resolved == "edit" and not refs:
+            return (f"Reference to image needs reference images; item {index} carries "
+                    "none (send Text to image instead)")
+        if resolved == "txt2img" and refs:
+            return (f"Text to image cannot carry reference images; item {index} has "
+                    "reference_images (use Reference to image)")
+    return None
+
+
+def _image_reference_door_refusal(model: str) -> str | None:
+    """Refuse reference images no Mac here could serve, before queueing.
+
+    Intrinsic support is read from the catalog's own `image_modes` (falling back to
+    `lane_contract.references` for a row published before that field): a model with no
+    reference lane is refused by name, and a supported model whose hosts are all unready
+    or below the floor is refused with the producer's own `reason` — never mislabelled as
+    unsupported. No last-known row means no answer, and dispatch keeps its existing
+    refusal. Cache-only (`cached_catalog_entries`): the door never waits on a worker.
+    """
+    try:
+        matches = _monitor().cached_catalog_entries(model, modality="image")
+    except Exception:
+        return None  # an unreadable catalog is not a reason to invent a refusal
+    entries = [m.get("entry") for m in matches if isinstance(m.get("entry"), dict)]
+    if not entries:
+        return None
+    intrinsic = False
+    unavailable_reason = None
+    missing_runtime_reason = None
+    label = model
+    for entry in entries:
+        label = str(entry.get("label") or label)
+        readiness = entry.get("readiness") or {}
+        if readiness.get("state") == "no_runtime_model":
+            missing_runtime_reason = missing_runtime_reason or readiness.get("reason")
+            continue
+        modes = entry.get("image_modes")
+        if isinstance(modes, list):
+            edit = next((m for m in modes
+                         if isinstance(m, dict) and m.get("id") == "edit"), None)
+            if edit is None:
+                continue  # text-only row: no intrinsic support stated
+            intrinsic = True
+            if edit.get("available"):
+                return None
+            unavailable_reason = unavailable_reason or edit.get("reason")
+            continue
+        # Legacy row (published before `image_modes`): the reference contract is the
+        # intrinsic statement, `capabilities` the live one.
+        contract = entry.get("lane_contract")
+        if isinstance(contract, dict) and "references" in contract:
+            intrinsic = True
+            if "edit" in (entry.get("capabilities") or []):
+                return None
+            lane = entry.get("reference_lane")
+            reason = lane.get("reason") if isinstance(lane, dict) else None
+            unavailable_reason = unavailable_reason or reason
+    if not intrinsic:
+        if missing_runtime_reason:
+            return f"Reference to image is unavailable: {missing_runtime_reason}"
+        return f"{label} does not support Reference to image; Text to image only"
+    if unavailable_reason:
+        return f"Reference to image is unavailable: {unavailable_reason}"
+    return None  # intrinsic somewhere, availability undetermined — dispatch decides
+
+
 def submit_batch(envelope: dict) -> dict:
     with _submit_lock:
         return _submit_batch_locked(envelope)
@@ -2275,6 +2399,19 @@ def _submit_batch_locked(envelope: dict) -> dict:
         return {"error": "batch payload must be valid JSON"}
     if not envelope.get("model"):
         return {"error": "model (repo) is required"}
+    # Image-only door checks, before any fence or idempotency record exists: an unknown or
+    # self-contradictory mode, and reference images no Mac here could serve, fail here with
+    # plain words rather than queueing work that cannot run (owner rule: loud at the door).
+    if modality == "image":
+        mode_refusal = _image_mode_door_refusal(envelope)
+        if mode_refusal:
+            return {"error": mode_refusal}
+        if any(_image_item_refs(item.get("params") if isinstance(item.get("params"), dict)
+                                else {})
+               for item in items_in):
+            reference_refusal = _image_reference_door_refusal(envelope["model"])
+            if reference_refusal:
+                return {"error": reference_refusal}
     # Refuse at the door: cloud work is never queued, never accepted
     # and then failed. This runs before execution_identity.prepare so a refused
     # submission also leaves no fence or idempotency record behind.
