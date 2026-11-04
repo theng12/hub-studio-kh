@@ -1,5 +1,9 @@
 # Standalone Studio App Planning
 
+## Active amendment — remote rendering Phase 1, 2026-11-04
+
+Developer approved the Story-owned parity design and requested Hub's encode fix first: publish only actual per-node probed encode tuples, remove the default-medium admission ceiling, preserve honest owner opt-in and immutable accepted-job authority. Coordinate tuple/probe provenance with Story/Gateway before integration. Base `5738076`, feature `feat/render-encode-probes-20261104`, worktree `_worktrees/studio-hub-kh/render-encode-probes`. Normal focused tests, full gate, packaging and paced rollout (online Shops included) remain required; this Mac stays paused. Phases 2/3 await Story's runner/Sketch Draw/font schema. Shared design/evidence: `_orchestra/remote-render-parity-20261104/`. This amendment is in progress, not a qualification or release result. Backend checkpoint: reversible grant storage `f900a3e`, exact-cap admission/publication and durable job/receipt probe bindings implemented; legacy v1 cap bypass blocked. Detached focused R3 exit 0 (206 tests/174 subtests), claim R4 exit 0 (37/9), broader backend/fleet R5 exit 0 (271/204); final boundary R6 receipt must be read. Durable controller/lifecycle wiring, native grant display, combined final verification and Gateway seam agreement remain outstanding. See HANDOFF for current evidence; no Phase 1 gate or deployment yet.
+
 ## Ordered completion plan — owner authorized 2026-09-21
 
 **Current owner correction:** GatewayKH replaces GenStudio as the external client.

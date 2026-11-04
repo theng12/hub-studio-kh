@@ -103,6 +103,23 @@ class RenderJobRuntimeTests(unittest.TestCase):
             free_bytes=lambda _path: self.free_bytes,
         )
 
+    def test_claim_refuses_changed_or_removed_probe_binding_at_same_qualification(self) -> None:
+        binding = {"format": "studio.render.encode-binding.v1",
+                   "authority_digest": "a" * 64,
+                   "selected_tier": "test-tier", "exact_encoder": "libx264"}
+        accepted_authority = replace(qualification(), document={"encode_authority": binding})
+        for index, changed in enumerate((None, dict(binding, authority_digest="b" * 64))):
+            with self.subTest(binding=changed):
+                self.authority.current = accepted_authority
+                key = f"probe-binding-{index}"
+                accepted = self.runtime.accept("owner-a", key, request(dispatch_key=key))
+                self.authority.current = replace(accepted_authority, document=(
+                    {"encode_authority": changed} if changed else None))
+                with self.assertRaisesRegex(RenderJobUnavailable, "encode evidence changed"):
+                    self.runtime.claim_launch("owner-a", accepted["id"], machine="worker-m4",
+                                              dispatch_generation=1)
+                self.assertEqual(self.runtime.get("owner-a", accepted["id"])["state"], "accepted")
+
     def test_public_projection_keeps_gateway_keys_and_dispatch_rows_keep_fifo_age(self) -> None:
         public_keys = {
             "id", "owner_scope", "dispatch_key", "accepted_request_sha256", "purpose",

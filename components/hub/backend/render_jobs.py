@@ -371,6 +371,7 @@ class ValidatedOutputReceipt:
     generated_command_digest: str
     selected_tier: str
     feature_losses: tuple[str, ...]
+    encode_authority: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         _text(self.owner_scope, "owner_scope")
@@ -382,6 +383,15 @@ class ValidatedOutputReceipt:
             _digest(getattr(self, name), name)
         _positive_int(self.output_size_bytes, "output_size_bytes")
         _label(self.selected_tier, "selected_tier")
+        if self.encode_authority is not None:
+            binding = self.encode_authority
+            if (type(binding) is not dict or set(binding) != {
+                    "format", "authority_digest", "selected_tier", "exact_encoder"}
+                    or binding["format"] != "studio.render.encode-binding.v1"
+                    or binding["selected_tier"] != self.selected_tier):
+                raise ValueError("invalid exact encode authority binding")
+            _digest(binding["authority_digest"], "authority_digest")
+            _label(binding["exact_encoder"], "exact_encoder")
         if (type(self.feature_losses) is not tuple
                 or any(not isinstance(value, str) or not value or len(value) > 256
                        for value in self.feature_losses)):
@@ -533,6 +543,10 @@ class RenderJobRuntime:
             },
             "replayed": replayed,
         }
+        qualification = json.loads(row["qualification_json"])
+        document = qualification.get("document") or {}
+        if document.get("encode_authority") is not None:
+            result["encode_authority"] = document["encode_authority"]
         return result
 
     @staticmethod
@@ -748,12 +762,15 @@ class RenderJobRuntime:
                 self._qualification_resolver, packet,
                 allow_candidate=row["purpose"] == "qualification",
             )
-            # qualification_digest already binds every authority key; the document is evidence
-            # (intent_id, measured) and may differ between same-digest records. The row keeps
-            # the document it was accepted with.
+            stored_authority = json.loads(row["qualification_json"])
+            # Measured evidence may change at the same qualification digest; probe bindings
+            # remain separate and must still match the exact accepted evidence at claim.
             if ({**asdict(authority), "document": None}
-                    != {**json.loads(row["qualification_json"]), "document": None}):
+                    != {**stored_authority, "document": None}):
                 raise RenderJobUnavailable("render qualification changed after acceptance")
+            if ((authority.document or {}).get("encode_authority")
+                    != (stored_authority.get("document") or {}).get("encode_authority")):
+                raise RenderJobUnavailable("render encode evidence changed after acceptance")
             required = max(
                 authority.min_free_bytes,
                 authority.scratch_reserve_bytes + authority.output_limit_bytes,
@@ -1190,7 +1207,10 @@ class RenderJobRuntime:
         if type(receipt) is not ValidatedOutputReceipt:
             raise TypeError("output publication requires a trusted validated receipt")
         owner_scope = _text(owner_scope, "owner_scope")
-        receipt_json = _canonical({**asdict(receipt), "feature_losses": list(receipt.feature_losses)})
+        fields = {**asdict(receipt), "feature_losses": list(receipt.feature_losses)}
+        if receipt.encode_authority is None:
+            fields.pop("encode_authority")
+        receipt_json = _canonical(fields)
         with self._conn() as connection:
             self._begin(connection)
             row = self._owned(connection, owner_scope, job_id)
@@ -1212,7 +1232,8 @@ class RenderJobRuntime:
                 receipt.tools_digest, receipt.compiler_digest,
                 receipt.qualification_digest,
             )
-            if actual != expected:
+            document = json.loads(row["qualification_json"]).get("document") or {}
+            if actual != expected or receipt.encode_authority != document.get("encode_authority"):
                 raise RenderJobConflict("render output receipt authority changed")
             connection.execute(
                 """UPDATE render_jobs SET state='output_ready', compute_held=0,

@@ -154,8 +154,8 @@ class RelayPersistenceTests(OptInFixture):
             "non-ascii who": (True, "ownér"),
             "long who": (True, "x" * 121),
             "unknown encode": (True, "owner", {"container": "mp4"}),
-            "bitrate capped": (True, "owner", {**render_encode.DEFAULT_OPT_IN_ENCODE,
-                                               "bitrate_kbps": 4000}),
+            "bitrate capped without probe": (True, "owner", {**render_encode.DEFAULT_OPT_IN_ENCODE,
+                                                               "bitrate_kbps": 4000}),
         }.items():
             with self.subTest(label):
                 with self.assertRaises(ValueError):

@@ -1056,8 +1056,9 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
             **render,
             # What this machine's authority can actually execute, compiled from the same
             # pinned compiler the executor runs. Absent authority publishes None.
-            "encode": render_encode.supported_encode(
-                render.get("selected_tier"), render.get("exact_encoder")),
+            "encode": (render["encode_support"] if "encode_support" in render
+                       else render_encode.supported_encode(
+                           render.get("selected_tier"), render.get("exact_encoder"))),
             # The live one-use intent is a candidate, not production: the Gateway intersects
             # the encode fact on the candidate it selects, so each carries its own.
             "qualification_candidates": _render_candidate_encodes(
@@ -1098,8 +1099,9 @@ async def build_snapshot(monitor, *, app_version: str, settings: dict,
             **capability,
             # The controller holds the same pinned compiler, so a joined leaf's published
             # authority strings answer the same question without a new node route.
-            "encode": render_encode.supported_encode(
-                capability.get("selected_tier"), capability.get("exact_encoder")),
+            "encode": (capability["encode_support"] if "encode_support" in capability
+                       else render_encode.supported_encode(
+                           capability.get("selected_tier"), capability.get("exact_encoder"))),
             # Same fact for the leaf's live intent, compiled by the controller's pinned
             # compiler from the leaf's own published authority strings.
             "qualification_candidates": _render_candidate_encodes(

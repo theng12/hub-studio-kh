@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import asyncio.subprocess
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
 import hashlib
 import inspect
@@ -191,6 +191,8 @@ class InstalledRenderAuthorityLoader:
     _UNQUALIFIED_FORMAT = "studio.render.accepted-unqualified.v1"
     _OPT_IN_FORMAT = "studio.render.accept-unqualified-setting.v1"
     _OPT_IN_KEYS = {"format", "enabled", "encode", "set_by", "set_at"}
+    _PROBED_FORMAT = "studio.render.accepted-unqualified.v2"
+    _QUALIFIED_BINDING_FORMAT = "studio.render.qualified-encode-binding.v1"
 
     _RECEIPT_KEYS = {
         "format", "production_eligible", "profile_digest", "tools_digest",
@@ -227,6 +229,8 @@ class InstalledRenderAuthorityLoader:
             Path(os.path.abspath(data_root)) if data_root is not None else None)
         self._clock = clock
         self._uid = os.getuid() if expected_uid is None else expected_uid
+        self.encode_probe_control = None
+        self.physical_node_id = lambda: ""
 
     def _read(self, path: Path, keys: set[str], name: str) -> dict[str, Any] | None:
         try:
@@ -397,6 +401,60 @@ class InstalledRenderAuthorityLoader:
         self, document: dict[str, Any], packet: dict[str, Any] | None = None,
         *, production: bool = False,
     ) -> InstalledRenderAuthority | None:
+        if document.get("format") == self._QUALIFIED_BINDING_FORMAT:
+            try:
+                if set(document) != {"format", "qualified_document", "requested_encode", "encode_authority"}:
+                    return None
+                base = document["qualified_document"]
+                if (type(base) is not dict or set(base) != self._ENABLED_KEYS
+                        or self._measured_evidence(base, base.get("measured")) is None):
+                    return None
+                binding = document["encode_authority"]
+                if (type(binding) is not dict or set(binding) != {
+                        "format", "authority_digest", "selected_tier", "exact_encoder"}
+                        or binding["format"] != "studio.render.encode-binding.v1"
+                        or binding["selected_tier"] != base["selected_tier"]
+                        or binding["exact_encoder"] != base["exact_encoder"]
+                        or re.fullmatch(r"[0-9a-f]{64}", binding["authority_digest"]) is None
+                        or render_encode.normalize_encode(document["requested_encode"]) is None
+                        or (packet is not None and packet["recipe"]["encode"] != document["requested_encode"])):
+                    return None
+                authority = self._authority(base, packet, production=production)
+                if authority is None:
+                    return None
+                return replace(authority, qualification=replace(
+                    authority.qualification, document=json.loads(_canonical(document))))
+            except (KeyError, TypeError, ValueError):
+                return None
+        if document.get("format") == self._PROBED_FORMAT:
+            try:
+                if set(document) != self._UNQUALIFIED_KEYS | {
+                        "requested_encode", "encode_authority", "grant_digest"}:
+                    return None
+                binding = document["encode_authority"]
+                if (type(binding) is not dict or set(binding) != {
+                        "format", "authority_digest", "selected_tier", "exact_encoder"}
+                        or binding["format"] != "studio.render.encode-binding.v1"
+                        or binding["selected_tier"] != document["selected_tier"]
+                        or binding["exact_encoder"] != document["exact_encoder"]
+                        or re.fullmatch(r"[0-9a-f]{64}", binding["authority_digest"]) is None
+                        or re.fullmatch(r"[0-9a-f]{64}", document["grant_digest"]) is None
+                        or render_encode.normalize_encode(document["requested_encode"]) is None
+                        or (packet is not None
+                            and packet["recipe"]["encode"] != document["requested_encode"])):
+                    return None
+                base = {key: document[key] for key in self._UNQUALIFIED_KEYS}
+                base["format"] = self._UNQUALIFIED_FORMAT
+                base["qualification_digest"] = self._record_digest(base)
+                if document["qualification_digest"] != base["qualification_digest"]:
+                    return None
+                authority = self._authority(base, packet, production=production)
+                if authority is None:
+                    return None
+                return replace(authority, qualification=replace(
+                    authority.qualification, document=json.loads(_canonical(document))))
+            except (KeyError, TypeError, ValueError):
+                return None
         try:
             unqualified = set(document) == self._UNQUALIFIED_KEYS
             if (
@@ -629,6 +687,7 @@ class InstalledRenderAuthorityLoader:
                 or record["format"] != self._OPT_IN_FORMAT
                 or type(record["enabled"]) is not bool
                 or render_encode.normalize_encode(record["encode"]) is None
+                or record["encode"]["bitrate_kbps"] is not None
                 or type(record["set_by"]) is not str
                 or not 0 < len(record["set_by"]) <= 120
                 or not record["set_by"].isascii() or not record["set_by"].isprintable()
@@ -664,12 +723,128 @@ class InstalledRenderAuthorityLoader:
         document["qualification_digest"] = self._record_digest(document)
         return self._authority(document, packet, production=True)
 
+    def probed_grant(self) -> dict[str, Any] | None:
+        from .render_encode_grants import read_v2_grants
+        if self.data_root is None:
+            return None
+        return read_v2_grants(self.data_root, expected_uid=self._uid,
+                              physical_node_id=self.physical_node_id())
+
+    def granted_probe_entries(self) -> list[dict[str, Any]]:
+        grant = self.probed_grant()
+        control = self.encode_probe_control
+        if grant is None or control is None:
+            return []
+        result = []
+        for entry in grant["entries"]:
+            encode = entry["requested_encode"]
+            # Phase 1 output validation remains MP4/H.264, even when probes prove HEVC.
+            if encode["container"] != "mp4" or encode["requested_codec"] != "h264":
+                continue
+            state = control.inspect(encode)
+            if (state["state"] == "supported"
+                    and state["authority_digest"] == entry["authority_digest"]):
+                result.append(entry)
+        return result
+
+    def executable_probe_entries(self) -> list[dict[str, Any]]:
+        entries = self.granted_probe_entries()
+        control = self.encode_probe_control
+        measured = self._enabled()
+        if control is None or measured is None:
+            return entries
+        for state in control.supported_entries():
+            encode = state["requested_encode"]
+            evidence = state.get("evidence") or {}
+            entry = {"requested_encode": encode, "authority_digest": state["authority_digest"]}
+            if (state["state"] == "supported" and encode["container"] == "mp4"
+                    and encode["requested_codec"] == "h264"
+                    and evidence.get("selected_tier") == measured["selected_tier"]
+                    and evidence.get("exact_encoder") == measured["exact_encoder"]
+                    and entry not in entries):
+                entries.append(entry)
+        return entries
+
+    def migrate_probed_grant(self) -> None:
+        from .render_encode_grants import write_v2_grants
+        record = self._opt_in_record()
+        control = self.encode_probe_control
+        if record is None or not record["enabled"] or control is None:
+            return
+        entries = []
+        for state in control.supported_entries():
+            if (state["state"] == "supported"
+                    and state["requested_encode"]["container"] == "mp4"
+                    and state["requested_encode"]["requested_codec"] == "h264"):
+                entries.append({"requested_encode": state["requested_encode"],
+                                "authority_digest": state["authority_digest"]})
+        if not entries:
+            return
+        previous = self.probed_grant()
+        migration = previous["migration"] if previous else {
+            "authorization_id": "owner-direction-via-developer-2026-11-04",
+            "authorized_at": int(self._clock()),
+        }
+        write_v2_grants(self.data_root, expected_uid=self._uid,
+                        physical_node_id=self.physical_node_id(), entries=entries,
+                        **migration)
+
+    def authority_for_packet(self, packet: dict[str, Any]) -> InstalledRenderAuthority | None:
+        encode = (packet.get("recipe") or {}).get("encode")
+        entry = next((entry for entry in self.executable_probe_entries()
+                      if entry["requested_encode"] == encode), None)
+        if entry is None:
+            current = self.snapshot()
+            return current if current is not None and render_encode.packet_is_supported(
+                packet, _canonical(packet), current.selected_tier, current.exact_encoder) else None
+        state = self.encode_probe_control.inspect(encode)
+        if (state["state"] != "supported"
+                or state["authority_digest"] != entry["authority_digest"]):
+            return None
+        evidence = state["evidence"]
+        binding = {"format": "studio.render.encode-binding.v1",
+                   "authority_digest": entry["authority_digest"],
+                   "selected_tier": evidence["selected_tier"],
+                   "exact_encoder": evidence["exact_encoder"]}
+        measured = self._enabled()
+        if (measured is not None and measured["selected_tier"] == evidence["selected_tier"]
+                and measured["exact_encoder"] == evidence["exact_encoder"]):
+            return self._authority({
+                "format": self._QUALIFIED_BINDING_FORMAT,
+                "qualified_document": measured, "requested_encode": dict(encode),
+                "encode_authority": binding,
+            }, packet, production=True)
+        record = self._opt_in_record()
+        grant = self.probed_grant()
+        if record is None or not record["enabled"] or grant is None:
+            return None
+        document = self._installed_document(
+            evidence["selected_tier"], evidence["exact_encoder"], False)
+        if document is None:
+            return None
+        document["format"] = self._UNQUALIFIED_FORMAT
+        document["opt_in"] = {"provenance": OPT_IN_PROVENANCE,
+                              "accepted_by": record["set_by"], "accepted_at": record["set_at"]}
+        document["qualification_digest"] = self._record_digest(document)
+        document.update({
+            "format": self._PROBED_FORMAT, "requested_encode": dict(encode),
+            "grant_digest": hashlib.sha256(_canonical(grant)).hexdigest(),
+            "encode_authority": binding,
+        })
+        return self._authority(document, packet, production=True)
+
     def opt_in_state(self) -> dict[str, Any]:
         """What the setting says now, and whether this Mac can act on it."""
         record = self._opt_in_record()
         enabled = record is not None and record["enabled"] is True
         authority = self._unqualified_authority() if enabled else None
+        grant = self.probed_grant() if enabled else None
+        entries = self.granted_probe_entries() if grant else []
         return {
+            "grant_version": "v2" if grant else "v1",
+            "granted_encodes": [entry["requested_encode"] for entry in entries] if grant else (
+                [dict(record["encode"])] if enabled and authority is not None else []),
+            "migration_provenance": grant["migration"] if grant else None,
             "accept_unqualified": enabled,
             "provenance": OPT_IN_PROVENANCE,
             "set_by": record["set_by"] if record else None,
@@ -699,6 +874,8 @@ class InstalledRenderAuthorityLoader:
             chosen = render_encode.normalize_encode(encode)
             if chosen is None:
                 raise ValueError("encode is not one of the combinations the pinned compiler offers")
+            if chosen["bitrate_kbps"] is not None:
+                raise ValueError("a capped encode needs an exact successful probe and a v2 grant")
         else:
             chosen = (dict(previous["encode"]) if previous
                       else dict(render_encode.DEFAULT_OPT_IN_ENCODE))
@@ -723,8 +900,10 @@ class InstalledRenderAuthorityLoader:
         opt-in evidence stays on the job row - the receipt's key set is closed so it can later
         be copied into ``enabled/`` exactly as a qualification receipt can.
         """
-        if (type(document) is not dict or set(document) != self._UNQUALIFIED_KEYS
-                or document["format"] != self._UNQUALIFIED_FORMAT):
+        if (type(document) is not dict or set(document) not in (
+                self._UNQUALIFIED_KEYS,
+                self._UNQUALIFIED_KEYS | {"requested_encode", "encode_authority", "grant_digest"})
+                or document["format"] not in (self._UNQUALIFIED_FORMAT, self._PROBED_FORMAT)):
             return None
         receipt = {key: document[key] for key in self._RECEIPT_KEYS}
         receipt["format"] = "studio.render.qualification-receipt.v1"
@@ -746,6 +925,11 @@ class InstalledRenderAuthorityLoader:
         return [candidate] if candidate is not None else []
 
     def resolve(self, packet: dict[str, Any]) -> RuntimeQualification | None:
+        if self.executable_probe_entries():
+            production = self.authority_for_packet(packet)
+            if (production is not None and production.qualification.document.get("format")
+                    in (self._PROBED_FORMAT, self._QUALIFIED_BINDING_FORMAT)):
+                return production.qualification
         enabled = self._enabled()
         production = (self._authority(enabled, packet, production=True)
                       if enabled is not None else None)
@@ -1437,7 +1621,8 @@ class RenderExecutor:
         writer = getattr(self._authority, "write_receipt", None)
         opted_in = (type(document) is dict
                     and document.get("format")
-                    == InstalledRenderAuthorityLoader._UNQUALIFIED_FORMAT)
+                    in (InstalledRenderAuthorityLoader._UNQUALIFIED_FORMAT,
+                        InstalledRenderAuthorityLoader._PROBED_FORMAT))
         if context.purpose != "qualification" and not opted_in:
             return True
         if opted_in:
@@ -1696,6 +1881,9 @@ class RenderExecutor:
             "generated_command_digest": command_digest,
             "selected_tier": authority.selected_tier, "feature_losses": (),
         }
+        document = authority.qualification.document or {}
+        if document.get("encode_authority") is not None:
+            fields["encode_authority"] = dict(document["encode_authority"])
         receipt_digest = hashlib.sha256(_canonical({
             **fields, "feature_losses": [],
         })).hexdigest()
@@ -1875,4 +2063,12 @@ class RenderExecutor:
         from . import registry
         if registry.render_while_paused(self.machine):
             row["render_while_paused"] = True
+        grant = getattr(self._authority, "probed_grant", None)
+        entries = (self._authority.executable_probe_entries()
+                   if hasattr(self._authority, "executable_probe_entries") else [])
+        if entries or (callable(grant) and grant() is not None):
+            row["encode_support"] = {
+                "format": render_encode.FORMAT,
+                "entries": [entry["requested_encode"] for entry in entries],
+            }
         return row

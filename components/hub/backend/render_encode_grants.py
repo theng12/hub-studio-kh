@@ -93,6 +93,7 @@ def _read_v1(data_root: Path, expected_uid: int) -> dict[str, Any] | None:
     if (document["format"] != V1_FORMAT
             or type(document["enabled"]) is not bool
             or render_encode.normalize_encode(document["encode"]) is None
+            or document["encode"]["bitrate_kbps"] is not None
             or not _is_person(document["set_by"])
             or type(document["set_at"]) is not int or document["set_at"] < 1):
         return None
@@ -186,7 +187,7 @@ def write_v2_grants(data_root: str | Path, *, expected_uid: int,
     root = Path(data_root)
     if not _is_id(physical_node_id):
         raise ValueError("the physical node id is missing or not a short text")
-    if not _is_id(authorization_id):
+    if not _is_person(authorization_id):
         raise ValueError("the migration authorization must name who authorized it")
     if type(authorized_at) is not int or authorized_at < 1:
         raise ValueError("the migration authorization needs the time it was given")

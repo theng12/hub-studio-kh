@@ -144,7 +144,7 @@ class RenderService:
         self.sweep()
         return accepted
 
-    def _admission_authority(self, qualification_vector: str | None):
+    def _admission_authority(self, qualification_vector: str | None, packet=None):
         """The exact installed authority this request would run under.
 
         Returns ``(api_available, authority)``. ``api_available`` is False only for a
@@ -165,6 +165,12 @@ class RenderService:
             except Exception:
                 return True, None
             return True, None
+        selector = getattr(loader, "authority_for_packet", None)
+        if packet is not None and callable(selector):
+            try:
+                return True, selector(packet)
+            except Exception:
+                return True, None
         snapshot = getattr(loader, "snapshot", None)
         if not callable(snapshot):
             return False, None
@@ -181,7 +187,7 @@ class RenderService:
         accepted job - and the one-use qualification intent or asset references it would
         hold - from ending in a failure the machine could have stated up front.
         """
-        available, authority = self._admission_authority(qualification_vector)
+        available, authority = self._admission_authority(qualification_vector, packet)
         if not available:
             # A loader double without the installer lookup. `runtime.accept` still
             # refuses a missing authority before any row, so nothing is accepted here.
@@ -607,6 +613,55 @@ def register_routes(
             raise HTTPException(409 if exc.code == "UPLOAD_CONFLICT" else 400,
                                 exc.detail) from exc
 
+    def probe_control():
+        control = getattr(service.authority_loader, "encode_probe_control", None)
+        if control is None:
+            raise HTTPException(503, "encode probe control is unavailable")
+        return control
+
+    def probe_encode(raw):
+        from .render_hash_v1 import decode_render_json
+        from .render_encode import normalize_encode
+        value = decode_render_json(raw.encode("utf-8") if type(raw) is str else raw)
+        encode = normalize_encode(value)
+        if encode is None:
+            raise ValueError("requested_encode must be one exact six-field tuple")
+        return encode
+
+    @app.get("/api/hub/final-renders/encode-probes")
+    async def inspect_encode_probe(request: Request):
+        scope(request)
+        values = request.query_params.getlist("requested_encode")
+        if set(request.query_params) != {"requested_encode"} or len(values) != 1:
+            raise HTTPException(400, "one requested_encode query value is required")
+        if len(values[0].encode("utf-8")) > _MAX_ACK_BYTES:
+            raise HTTPException(413, "requested_encode is too large")
+        try:
+            encode = probe_encode(values[0])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "invalid requested_encode") from exc
+        return probe_control().inspect(encode)
+
+    @app.post("/api/hub/final-renders/encode-probes")
+    async def start_encode_probe(request: Request):
+        scope(request)
+        from .render_hash_v1 import decode_render_json
+        try:
+            value = decode_render_json(await _bounded_body(request, _MAX_ACK_BYTES))
+            if (type(value) is not dict or set(value) != {"format", "requested_encode"}
+                    or value["format"] != "studio.render.encode-probe-request.v1"):
+                raise ValueError("invalid probe control request")
+            encode = probe_encode(json.dumps(value["requested_encode"]))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "invalid encode probe request") from exc
+        result = await probe_control().probe(encode)
+        if result["state"] == "supported":
+            try:
+                service.authority_loader.migrate_probed_grant()
+            except ValueError as exc:
+                raise HTTPException(409, "probe completed but the grant could not be migrated") from exc
+        return result
+
     @app.get("/api/hub/final-renders/capability")
     async def render_capability(request: Request):
         """This Mac's own final-render worker row, for a controller that must publish it.
@@ -770,7 +825,8 @@ def register_relay_routes(
     settings: Callable[[], dict[str, Any]],
 ) -> None:
     """Register the fixed controller-to-node mirror without accepting a caller URL/path."""
-    async def answer(node_id, operation, identity, request, *, limit, size_bytes=None):
+    async def answer(node_id, operation, identity, request, *, limit, size_bytes=None,
+                     requested_encode=None):
         _actor(request, hub_token, fleet_token, settings)
         body = await _bounded_body(request, limit) if request.method in {"POST", "PUT"} else b""
         names = {
@@ -778,12 +834,25 @@ def register_relay_routes(
             "if-match", "idempotency-key", "x-studio-render-qualification-vector",
         }
         headers = {name: value for name, value in request.headers.items() if name in names}
+        extra = {"requested_encode": requested_encode} if requested_encode is not None else {}
         result = await relay(
             node_id, operation, identity=identity, body=body,
-            headers=headers, size_bytes=size_bytes,
+            headers=headers, size_bytes=size_bytes, **extra,
         )
         return Response(content=result.body, status_code=result.status_code,
                         headers=result.headers)
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/final-renders/encode-probes")
+    async def relay_probe_get(node_id: str, request: Request):
+        values = request.query_params.getlist("requested_encode")
+        if set(request.query_params) != {"requested_encode"} or len(values) != 1:
+            raise HTTPException(400, "one requested_encode query value is required")
+        return await answer(node_id, "encode_probe_get", "", request, limit=0,
+                            requested_encode=values[0])
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/final-renders/encode-probes")
+    async def relay_probe_post(node_id: str, request: Request):
+        return await answer(node_id, "encode_probe_post", "", request, limit=_MAX_ACK_BYTES)
 
     @app.put("/api/hub/fleet/nodes/{node_id}/final-renders/blobs/{sha256}")
     async def relay_blob_put(node_id: str, sha256: str, request: Request):

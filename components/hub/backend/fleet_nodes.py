@@ -85,7 +85,7 @@ _RENDER_OPT_IN_EVIDENCE_KEYS = frozenset(("provenance", "accepted_by", "accepted
 #: every Mac that has ever rendered from an older controller's roster. The speed travels on the
 #: machine row instead (`standalone.fleet_overview` -> `machines[].render_speed`).
 _RENDER_WHILE_PAUSED_KEY = "render_while_paused"
-_OPTIONAL_RENDER_KEYS = frozenset((_RENDER_OPT_IN_KEY, _RENDER_WHILE_PAUSED_KEY))
+_OPTIONAL_RENDER_KEYS = frozenset((_RENDER_OPT_IN_KEY, _RENDER_WHILE_PAUSED_KEY, "encode_support"))
 _RENDER_CANDIDATE_KEYS = frozenset((
     "vector_id", "hardware_class", "profile_digest", "tools_digest", "compiler_digest",
     "qualification_digest", "selected_tier", "exact_encoder", "font_support", "bounds",
@@ -1405,6 +1405,14 @@ def _render_capability(value: object) -> dict[str, Any] | None:
     extra = set(value) - _RENDER_CAPABILITY_KEYS
     if not extra <= _OPTIONAL_RENDER_KEYS:
         return None
+    if "encode_support" in extra:
+        from .render_encode import FORMAT, normalize_encode
+        support = value["encode_support"]
+        if (type(support) is not dict or set(support) != {"format", "entries"}
+                or support["format"] != FORMAT or type(support["entries"]) is not list
+                or len(support["entries"]) > 32
+                or any(normalize_encode(entry) is None for entry in support["entries"])):
+            return None
     opted_in = _RENDER_OPT_IN_KEY in extra
     if value.get("operation") != "video.final_render":
         return None
@@ -2352,9 +2360,9 @@ _MAX_RENDER_RELAY_RESPONSE = 8 * 1024 * 1024
 
 
 def _render_relay_segment(operation: str, identity: str) -> str:
-    if operation == "submit":
+    if operation in {"submit", "encode_probe_get", "encode_probe_post"}:
         if identity:
-            raise ValueError("submit does not accept a render identity")
+            raise ValueError("this operation does not accept a render identity")
         return ""
     patterns = {
         "blob_put": _RENDER_BLOB_SHA,
@@ -2384,6 +2392,7 @@ async def relay_final_render(
     body: bytes = b"",
     headers: dict[str, str] | None = None,
     size_bytes: int | None = None,
+    requested_encode: str | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> RenderRelayResponse:
     """Relay one fixed final-render operation to one joined node; no caller path or host."""
@@ -2397,6 +2406,8 @@ async def relay_final_render(
         "blob_put": f"/api/hub/final-renders/blobs/{segment}",
         "blob_status": f"/api/hub/final-renders/blobs/{segment}/status",
         "submit": "/api/hub/final-renders",
+        "encode_probe_get": "/api/hub/final-renders/encode-probes",
+        "encode_probe_post": "/api/hub/final-renders/encode-probes",
         "key_get": f"/api/hub/final-renders/by-idempotency-key/{segment}",
         "key_cancel": f"/api/hub/final-renders/by-idempotency-key/{segment}/cancel",
         "status": f"/api/hub/final-renders/{segment}",
@@ -2406,6 +2417,7 @@ async def relay_final_render(
     }
     methods = {
         "blob_put": "PUT", "blob_status": "GET", "submit": "POST",
+        "encode_probe_get": "GET", "encode_probe_post": "POST",
         "key_get": "GET", "key_cancel": "POST", "status": "GET",
         "cancel": "POST", "output": "GET", "ack": "POST",
     }
@@ -2417,6 +2429,16 @@ async def relay_final_render(
         }
     }
     params = {"size_bytes": size_bytes} if operation == "blob_status" else None
+    if operation == "encode_probe_get":
+        from .render_encode import normalize_encode
+        from .render_hash_v1 import decode_render_json
+        if type(requested_encode) is not str or len(requested_encode.encode("utf-8")) > 4096:
+            raise ValueError("one bounded requested_encode is required")
+        if normalize_encode(decode_render_json(requested_encode.encode("utf-8"))) is None:
+            raise ValueError("invalid requested_encode")
+        params = {"requested_encode": requested_encode}
+    elif requested_encode is not None:
+        raise ValueError("requested_encode is only valid on probe discovery")
     requested_range = None
     if operation == "output":
         range_value = next((value for key, value in request_headers.items()
