@@ -2,6 +2,10 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.218 — 2026-11-04
+
+- The Jobs tabs are evenly spaced and stay steady when you switch between them. Narrow windows scroll the tab bar so every tab remains reachable.
+
 ## 0.6.217 — 2026-11-03
 
 - YuE2 8-bit keeps your chosen vocal language in the song’s style prompt. Supply lyrics in the same language; sung language quality still needs listening confirmation.
