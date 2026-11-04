@@ -569,7 +569,8 @@ def insert_render(path: Path, job_id: str, *, machine: str, started: float, sett
         "output_receipt_json TEXT, display_json TEXT, purpose TEXT, output_path TEXT, "
         "recovery_note TEXT, stopped_evidence_json TEXT, story_uuid TEXT, "
         "intent_id TEXT, attempt_no INTEGER, gateway_attempt_key TEXT, dispatch_key TEXT, "
-        "profile_digest TEXT, tools_digest TEXT, compiler_digest TEXT)")
+        "profile_digest TEXT, tools_digest TEXT, compiler_digest TEXT, "
+        "qualification_json TEXT NOT NULL DEFAULT '{}')")
     connection.execute(
         "INSERT INTO render_jobs (id, state, machine, created_at, updated_at, started_at, "
         "packet_json) VALUES (?, 'output_ready', ?, ?, ?, ?, ?)",
