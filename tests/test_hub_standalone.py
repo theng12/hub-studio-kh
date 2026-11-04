@@ -194,6 +194,35 @@ class StandaloneHubConfigTests(unittest.TestCase):
                 stack.enter_context(patch.object(module, name, value))
             registry._labels_cache = None
             registry._flags_cache = None
+            from components import model_library
+            from qualification.library_guard import require_disposable
+            from components.hub.backend.render_encode_probes import EncodeProbeControl
+            from components.hub.backend import broker
+            library = self.root / "disposable-models"
+            library.mkdir()
+            require_disposable(library)
+            stack.enter_context(patch.object(model_library, "resolve_library",
+                return_value=model_library.Resolution(library, "configured")))
+            lifecycle = []
+            recover_probes = EncodeProbeControl.recover_and_restore_physical_holds
+            stop_probes = EncodeProbeControl.stop
+            restore_batches = broker.restore_batches
+
+            async def recover_control(control):
+                lifecycle.append("probe-recovery")
+                return await recover_probes(control)
+
+            async def stop_control(control):
+                lifecycle.append("probe-stop")
+                return await stop_probes(control)
+
+            def restore_queues():
+                lifecycle.append("queue-restore")
+                return restore_batches()
+
+            stack.enter_context(patch.object(EncodeProbeControl, "recover_and_restore_physical_holds", recover_control))
+            stack.enter_context(patch.object(EncodeProbeControl, "stop", stop_control))
+            stack.enter_context(patch.object(broker, "restore_batches", restore_queues))
             app = create_app(start_background=False)
             preview_calls = []
             def capture_preview(**kwargs):
@@ -211,6 +240,7 @@ class StandaloneHubConfigTests(unittest.TestCase):
                         headers={"Authorization": "Bearer same-existing-hub-token"},
                     )
 
+        self.assertEqual(lifecycle, ["probe-recovery", "queue-restore", "probe-stop"])
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(accepted.json()["effective"]["max_bytes"], 20_000_000_000)

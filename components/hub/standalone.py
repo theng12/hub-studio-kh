@@ -37,6 +37,7 @@ from .backend import app_release, chat_deadline, chat_jobs, peers, release_sync,
 from .backend import render_executor as render_executor_module, render_service
 from .backend.render_assets import RenderAssetStore
 from .backend.render_executor import InstalledRenderAuthorityLoader, RenderExecutor
+from .backend.render_encode_probes import EncodeProbeControl
 from .backend.render_jobs import RenderJobRuntime
 from .backend.monitor import StudioMonitor, is_cached
 
@@ -1467,6 +1468,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         render_runtime, render_assets_store, installed_authority,
         machine="local", broker_api=broker,
     )
+    installed_authority.physical_node_id = lambda: control_plane.load_settings()["controller_id"]
+    encode_probe_control = EncodeProbeControl(
+        data_root, loader=installed_authority, executor=final_render_executor,
+        node_id=installed_authority.physical_node_id,
+        hardware_identity=resource_stats.hardware_identity,
+    )
+    installed_authority.encode_probe_control = encode_probe_control
     final_render_service = render_service.RenderService(
         render_runtime, render_assets_store, final_render_executor, installed_authority,
         trash_root=output_storage.trash_root)
@@ -1480,6 +1488,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         output_storage.recover_process_leases()
         # Durable render ownership is restored before any queue or dispatcher can grant this Mac.
         final_render_executor.recover_and_restore_physical_holds()
+        await encode_probe_control.recover_and_restore_physical_holds()
         broker.restore_batches()
         transcription_jobs.restore_batches()
         # A pause this build can never clear is not a safety feature, it is a permanent refusal.
@@ -1568,10 +1577,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         try:
             yield
         finally:
+            final_render_executor.begin_shutdown()
+            await encode_probe_control.stop()
             if start_background:
-                # Fence render admission before any drain snapshot. The dispatcher may still
-                # observe queued work while shutdown begins, but it cannot claim or launch it.
-                final_render_executor.begin_shutdown()
                 if storage_sweep is not None:
                     storage_sweep.cancel()
                     try:

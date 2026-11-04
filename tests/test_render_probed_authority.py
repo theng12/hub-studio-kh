@@ -63,6 +63,16 @@ class ProbedAuthorityTests(OptInFixture):
         self.assertEqual(self.loader.opt_in_state()["grant_version"], "v2")
         self.assertEqual(self.loader.opt_in_state()["granted_encodes"], [self.encode])
 
+    def test_v2_grant_with_no_current_probe_is_not_displayed_as_effective(self):
+        self.opt_in()
+        self.loader.migrate_probed_grant()
+        self.assertTrue(self.loader.opt_in_state()["effective"])
+        self.state["authority_digest"] = "b" * 64
+        state = self.loader.opt_in_state()
+        self.assertEqual(state["grant_version"], "v2")
+        self.assertEqual(state["granted_encodes"], [])
+        self.assertFalse(state["effective"])
+
     def test_exact_execution_mapping_labels_grant_and_withdraws_on_revocation(self):
         self.opt_in()
         self.assertIsNone(self.loader.execution_for_encode(self.encode))

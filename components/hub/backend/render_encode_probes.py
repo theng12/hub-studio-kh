@@ -185,6 +185,8 @@ class EncodeProbeControl:
         self._clock = clock
         self._uid = os.getuid() if expected_uid is None else expected_uid
         self._lock = threading.Lock()
+        self._closing = threading.Event()
+        self._runs: set[asyncio.Task] = set()
         self._runner_callable = runner
         self._rss_limit: int | None = None
         self._output_limit: int | None = None
@@ -306,7 +308,8 @@ class EncodeProbeControl:
         return {
             "requested_encode": dict(encode),
             "node_identity": dict(identity["node_identity"]),
-            "hardware_identity": dict(identity["hardware_identity"]),
+            "hardware_identity": {key: value for key, value in identity["hardware_identity"].items()
+                                  if key != "backend"},
             "profile_digest": identity["profile_digest"],
             "tools_digest": identity["tools_digest"],
             "compiler_digest": identity["compiler_digest"],
@@ -501,11 +504,11 @@ class EncodeProbeControl:
             return None
         return document
 
-    def _read_launch(self, probe_key: str) -> dict[str, Any] | None:
+    def _read_launch(self, probe_key: str, phase: int = 1) -> dict[str, Any] | None:
         """The recorded launch: the exact process identity, written once after the spawn."""
         try:
             raw = render_authority_files.read_record(
-                self.data_root, DIRECTORY, f"{probe_key}.launch.json",
+                self.data_root, DIRECTORY, f"{probe_key}.{phase}.launch.json",
                 expected_uid=self._uid, max_bytes=MAX_RECORD_BYTES)
         except (OSError, ValueError):
             return None
@@ -535,7 +538,7 @@ class EncodeProbeControl:
             return None
 
     def _write_launch(self, probe_key: str, identity: ProcessIdentity,
-                      owner: str) -> bool:
+                      owner: str, phase: int = 1) -> bool:
         document = {
             "format": LAUNCH_FORMAT,
             "probe_key": probe_key,
@@ -550,7 +553,7 @@ class EncodeProbeControl:
         self._ensure_authority_directory()
         try:
             render_authority_files.write_record_once(
-                self.data_root, DIRECTORY, f"{probe_key}.launch.json",
+                self.data_root, DIRECTORY, f"{probe_key}.{phase}.launch.json",
                 _canonical(document))
         except (OSError, ValueError):
             return False
@@ -579,6 +582,8 @@ class EncodeProbeControl:
         says a paused Mac may still assemble a final render: a probe runs a real
         encoder here, and a paused Mac runs no generation here.
         """
+        if self._closing.is_set():
+            return False, "the probe control is shutting down"
         if self._admission_allowed is not None:
             if not self._admission_allowed():
                 return False, "this Mac is paused or not enabled"
@@ -722,7 +727,10 @@ class EncodeProbeControl:
         may still be running. Both are reported as an unknown outcome, never as a
         clean finish.
         """
+        if on_spawn is None:
+            raise ValueError("a probe requires a durable process identity callback")
         started = time.monotonic()
+        identity = None
         process = subprocess.Popen(
             list(argv), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, cwd=str(workspace),
@@ -731,12 +739,16 @@ class EncodeProbeControl:
             try:
                 identity = self._identity_of(process, Path(argv[0]))
             except Exception as exc:  # noqa: BLE001 - an unproved identity is no identity
-                self._kill_group(process)
+                self._kill_group(process, identity)
                 detail = f"the probe process identity could not be proved: {exc}"
                 return ProbeRun(-1, b"",
                                 detail.encode("utf-8", "replace")[:512],
                                 time.monotonic() - started)
-            on_spawn(identity)
+            try:
+                on_spawn(identity)
+            except Exception:
+                self._kill_group(process, identity)
+                raise
         stdout = bytearray()
         stderr = bytearray()
         drainers = [
@@ -748,18 +760,18 @@ class EncodeProbeControl:
         deadline = started + timeout_seconds
         killed = False
         while process.poll() is None:
-            if time.monotonic() >= deadline:
-                self._kill_group(process)
+            if self._closing.is_set() or time.monotonic() >= deadline:
+                self._kill_group(process, identity)
                 killed = True
                 break
             if self._rss_limit is not None:
                 rss = self._tree_rss(process.pid)
-                if rss is not None and rss > self._rss_limit:
-                    self._kill_group(process)
+                if rss is None or rss > self._rss_limit:
+                    self._kill_group(process, identity)
                     killed = True
                     break
             if self._scratch_over_limit(workspace):
-                self._kill_group(process)
+                self._kill_group(process, identity)
                 killed = True
                 break
             time.sleep(0.05)
@@ -773,12 +785,11 @@ class EncodeProbeControl:
         for drainer in drainers:
             drainer.join(timeout=2.0)
         # A leader that exited is not proof that its group is empty.
-        group = self._group_of(process)
-        if group is not None and self._group_exists(group):
-            self._kill_group(process)
-            return ProbeRun(-1, bytes(stdout),
-                            bytes(stderr) + b"the probe process group did not settle",
-                            time.monotonic() - started)
+        if self._recorded_state(identity) != "gone":
+            self._kill_group(process, identity)
+            raise RuntimeError("the probe process group did not settle")
+        if killed:
+            raise RuntimeError("the probe exceeded a resource bound or lost its memory measurement")
         return ProbeRun(
             returncode=int(process.returncode if process.returncode is not None else -1),
             stdout=bytes(stdout), stderr=bytes(stderr),
@@ -799,25 +810,6 @@ class EncodeProbeControl:
         except OSError:
             return False
         return False
-
-    @staticmethod
-    def _group_of(process: Any) -> int | None:
-        try:
-            return int(os.getpgid(process.pid))
-        except OSError:
-            return None
-
-    @staticmethod
-    def _group_exists(process_group_id: int) -> bool:
-        try:
-            os.killpg(process_group_id, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except OSError:
-            return False
-        return True
 
     def _identity_of(self, process: Any, executable: Path) -> ProcessIdentity:
         """The executor's own exact process identity for one spawned process."""
@@ -856,21 +848,29 @@ class EncodeProbeControl:
         except (OSError, ValueError):
             return
 
-    @staticmethod
-    def _kill_group(process: Any) -> None:
-        """Stop the exact group this runner started. Nothing else is ever signalled."""
-        try:
-            group = os.getpgid(process.pid)
-        except OSError:
-            return
+    def _kill_group(self, process: Any, identity: ProcessIdentity | None) -> bool:
+        """Signal only the proved recorded group, and require it to become empty."""
+        if identity is None:
+            return False
         for number in (signal.SIGTERM, signal.SIGKILL):
+            state = self._recorded_state(identity)
+            if state == "gone":
+                return True
+            if state != "live":
+                return False
             try:
-                os.killpg(group, number)
-            except (ProcessLookupError, PermissionError, OSError):
-                return
-            time.sleep(0.5)
-            if process.poll() is not None:
-                return
+                os.killpg(identity.process_group_id, number)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                return False
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                process.poll()
+                if self._recorded_state(identity) == "gone":
+                    return True
+                time.sleep(0.05)
+        return self._recorded_state(identity) == "gone"
 
     def _runner(self) -> Callable[..., ProbeRun]:
         return self._runner_callable or self._default_runner
@@ -937,11 +937,16 @@ class EncodeProbeControl:
                 return self._state(closed, "unmeasured", probe_key,
                                    "the probe record could not be saved on this Mac")
         try:
-            outcome = await asyncio.to_thread(
-                self._run_probe, closed, probe_key, tools, owner)
+            run = asyncio.create_task(asyncio.to_thread(
+                self._run_probe, closed, probe_key, tools, owner))
+            self._runs.add(run)
+            run.add_done_callback(self._runs.discard)
+            outcome = await asyncio.shield(run)
         except BaseException:
             # The outcome is unknown: the record stays pending and the hold stays.
             raise
+        if outcome["state"] == "pending":
+            return self._state(closed, "pending", probe_key, outcome["reason"])
         if outcome["state"] == "supported":
             # The evidence is the record of a support; no second outcome is written.
             if not self._write_evidence(probe_key, outcome["evidence"]):
@@ -1003,7 +1008,7 @@ class EncodeProbeControl:
 
     def _owner(self, probe_key: str) -> str:
         """The owner string of the physical hold. It is a render-lane lease."""
-        return f"render:encode-probe-{probe_key[:16]}"
+        return f"render:encode-probe-{probe_key}"
 
     def _acquire(self, owner: str) -> bool:
         acquire = getattr(self.executor.broker, "acquire_external_machine", None)
@@ -1051,11 +1056,34 @@ class EncodeProbeControl:
             int(getattr(bounds, "max_rss_bytes", 0)) if bounds is not None else 0) or None
         self._output_limit = output_limit
 
+        phase = 0
+        unsettled = False
+        deadline = time.monotonic() + wall
+
         def bounded_runner(argv: Sequence[str], timeout_seconds: float) -> ProbeRun:
-            budget = min(float(timeout_seconds), wall)
-            def on_spawn(identity: ProcessIdentity) -> None:
-                self._write_launch(probe_key, identity, owner)
-            return runner(argv, budget, scratch, on_spawn)
+            nonlocal phase, unsettled
+            phase += 1
+            budget = min(float(timeout_seconds), deadline - time.monotonic())
+            if self._closing.is_set() or phase > 2 or budget <= 0:
+                raise RuntimeError("the probe exhausted its bounded phases or wall time")
+            identity = None
+            saved = False
+
+            def on_spawn(value: ProcessIdentity) -> None:
+                nonlocal identity, saved
+                if identity is not None:
+                    raise RuntimeError("the probe phase reported more than one process")
+                identity = value
+                saved = self._write_launch(probe_key, value, owner, phase)
+                if not saved:
+                    raise RuntimeError("the probe process identity could not be saved")
+
+            try:
+                return runner(argv, budget, scratch, on_spawn)
+            finally:
+                if not saved or identity is None or self._recorded_state(identity) != "gone":
+                    unsettled = True
+                    raise RuntimeError("the probe launch or process stop is not proved")
 
         try:
             result = probe_encode_support(
@@ -1070,10 +1098,11 @@ class EncodeProbeControl:
         except UnsupportedEncodeProbe as exc:
             return {"state": "unsupported", "reason": str(exc)[:200], "evidence": None}
         except EncodeProbeError as exc:
-            state = "unsupported" if _is_capability_refusal(exc.reason) else "unmeasured"
+            state = ("pending" if unsettled else
+                     "unsupported" if _is_capability_refusal(exc.reason) else "unmeasured")
             return {"state": state, "reason": exc.reason[:200], "evidence": None}
         except Exception as exc:  # noqa: BLE001 - an unknown outcome is not support
-            return {"state": "unmeasured",
+            return {"state": "pending" if unsettled else "unmeasured",
                     "reason": f"the probe did not finish: {exc}"[:200], "evidence": None}
         oversized = self._oversized_output(scratch, output_limit)
         if oversized is not None:
@@ -1168,6 +1197,13 @@ class EncodeProbeControl:
             return None
         return evidence
 
+    async def stop(self) -> None:
+        """Fence new probes and drain owned threads before the broker shuts down."""
+        self._closing.set()
+        if self._runs:
+            await asyncio.gather(*(asyncio.shield(run) for run in tuple(self._runs)),
+                                 return_exceptions=True)
+
     # --- recovery -----------------------------------------------------------------------
 
     async def recover_and_restore_physical_holds(self) -> list[dict[str, Any]]:
@@ -1188,36 +1224,28 @@ class EncodeProbeControl:
             if self._read_evidence(probe_key) is not None:
                 # The probe already finished and proved its tuple; nothing is pending.
                 continue
-            launch = self._read_launch(probe_key)
             owner = str(record.get("owner") or self._owner(probe_key))
-            if launch is None:
-                # The spawn was never recorded: no process can be proved to be ours.
-                self._write_result(probe_key, "unmeasured",
-                                   "the probe did not finish and no process was recorded")
-                self._release(owner)
-                recovered.append({"probe_key": probe_key, "state": "unmeasured"})
-                continue
-            identity = launch["process"]
-            state = self._recorded_state(identity)
-            if state == "live":
-                stopped = await self._stop_exact_group(identity)
-                if not stopped:
-                    self._restore_hold(owner)
-                    recovered.append({"probe_key": probe_key, "state": "pending"})
-                    continue
-                self._write_result(probe_key, "unmeasured",
-                                   "the probe did not finish and its process was stopped")
-                self._release(owner)
-                recovered.append({"probe_key": probe_key, "state": "unmeasured"})
-                continue
-            if state == "gone":
-                self._write_result(probe_key, "unmeasured",
-                                   "the probe did not finish and its process is gone")
-                self._release(owner)
-                recovered.append({"probe_key": probe_key, "state": "unmeasured"})
-                continue
             self._restore_hold(owner)
-            recovered.append({"probe_key": probe_key, "state": "pending"})
+            settled = True
+            for phase in (1, 2):
+                launch = self._read_launch(probe_key, phase)
+                if launch is None:
+                    # A crash can occur between spawn and identity persistence.
+                    settled = False
+                    continue
+                identity = launch["process"]
+                state = self._recorded_state(identity)
+                if state == "live":
+                    if not await self._stop_exact_group(identity):
+                        settled = False
+                elif state != "gone":
+                    settled = False
+            if settled and self._write_result(
+                    probe_key, "unmeasured", "the interrupted probe process groups are proved stopped"):
+                self._release(owner)
+                recovered.append({"probe_key": probe_key, "state": "unmeasured"})
+            else:
+                recovered.append({"probe_key": probe_key, "state": "pending"})
         return recovered
 
     def _recorded_state(self, identity: ProcessIdentity) -> str:

@@ -897,7 +897,7 @@ class InstalledRenderAuthorityLoader:
             "exact_encoder": authority.exact_encoder if authority else None,
             # True only when the installed tools, hardware class and encode all pass the same
             # checks a measured authority passes; a Mac that cannot act on it says so here.
-            "effective": authority is not None,
+            "effective": bool(entries) if grant else authority is not None,
         }
 
     def set_opt_in(self, enabled: object, requested_by: object,

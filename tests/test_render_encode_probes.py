@@ -348,7 +348,7 @@ class ProbeTests(ProbeControlFixture):
         self.assertEqual(len(self.runner.calls), 2,
                          "one encode and one ffprobe, and no more")
 
-    def test_a_failed_spawn_is_unmeasured_not_a_refusal(self):
+    def test_a_failed_spawn_without_identity_retains_the_hold(self):
         """A launch that never happened proves nothing about this Mac's encoder."""
 
         def exploding_runner(argv, timeout_seconds, workspace, on_spawn=None):
@@ -356,8 +356,10 @@ class ProbeTests(ProbeControlFixture):
 
         self.control._runner_callable = exploding_runner
         state = self.probe()
-        self.assertEqual(state["state"], "unmeasured")
+        self.assertEqual(state["state"], "pending")
         self.assertIsNone(state["evidence"])
+        self.assertEqual(self.executor.broker.released, [])
+        self.assertTrue(self.executor.broker.holds)
 
     def test_a_post_after_a_failure_never_runs_the_probe_again(self):
         self.runner = FakeRunner(encoder_code=1)
@@ -374,8 +376,7 @@ class ProbeTests(ProbeControlFixture):
         self.runner = FakeRunner(probe_report=report(video_codec="hevc"))
         self.control._runner_callable = self.runner
         state = self.probe(hevc)
-        if state["state"] != "supported":
-            self.skipTest("the pinned helper refuses this tuple on this build")
+        self.assertEqual(state["state"], "supported")
         evidence = state["evidence"]
         self.assertEqual(evidence["exact_encoder"], "hevc_videotoolbox")
         self.assertIsNone(evidence["selected_tier"])
@@ -384,6 +385,93 @@ class ProbeTests(ProbeControlFixture):
                   if entry["requested_encode"]["requested_codec"] == "h265"]
         self.assertEqual(len(grants), 1)
         self.assertIsNone(grants[0]["evidence"]["selected_tier"])
+
+
+class ProcessSafetyTests(ProbeControlFixture):
+    def test_each_phase_has_a_distinct_durable_identity(self):
+        state = self.probe()
+        self.assertEqual(state["state"], "supported")
+        for phase in (1, 2):
+            self.assertIsNotNone(self.control._read_launch(state["probe_key"], phase))
+
+    def test_failed_second_launch_record_keeps_hold_and_refuses_evidence(self):
+        original = self.control._write_launch
+        self.control._write_launch = lambda key, identity, owner, phase: (
+            original(key, identity, owner, phase) if phase == 1 else False)
+        state = self.probe()
+        self.assertEqual(state["state"], "pending")
+        self.assertIsNone(state["evidence"])
+        self.assertEqual(self.executor.broker.released, [])
+        self.assertIsNone(self.control._read_result(state["probe_key"]))
+
+    def test_unknown_group_after_leader_exit_keeps_hold(self):
+        self.executor.process_state = "unknown"
+        state = self.probe()
+        self.assertEqual(state["state"], "pending")
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertEqual(self.executor.broker.released, [])
+
+    def test_default_runner_refuses_a_surviving_group_after_leader_exit(self):
+        import io
+        from unittest.mock import Mock, patch
+        process = Mock(pid=999999, stdout=io.BytesIO(), stderr=io.BytesIO(), returncode=0)
+        process.poll.return_value = 0
+        self.executor.process_state = "unknown"
+        self.control._identity_of = lambda process, executable: FakeIdentity()
+        recorded = []
+        with patch.object(render_encode_probes.subprocess, "Popen", return_value=process), \
+                patch.object(render_encode_probes.os, "getpgid", side_effect=ProcessLookupError), \
+                patch.object(render_encode_probes.os, "killpg") as kill:
+            with self.assertRaisesRegex(RuntimeError, "did not settle"):
+                self.control._default_runner(["/tools/ffmpeg"], 1, self.root, recorded.append)
+        self.assertEqual(len(recorded), 1)
+        kill.assert_not_called()
+
+    def test_cancelled_request_keeps_thread_owned_until_shutdown_drains_it(self):
+        import threading
+        started = threading.Event()
+        finish = threading.Event()
+        original = self.runner
+
+        def waiting_runner(argv, budget, workspace, on_spawn):
+            started.set()
+            if not finish.wait(2):
+                raise RuntimeError("test runner was not released")
+            return original(argv, budget, workspace, on_spawn)
+
+        self.control._runner_callable = waiting_runner
+
+        async def scenario():
+            request = asyncio.create_task(self.control.probe(ENCODE))
+            self.assertTrue(await asyncio.to_thread(started.wait, 2))
+            request.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await request
+            stop = asyncio.create_task(self.control.stop())
+            await asyncio.sleep(0)
+            self.assertFalse(stop.done())
+            finish.set()
+            await stop
+            self.assertFalse(self.control._runs)
+
+        asyncio.run(scenario())
+        self.assertEqual(self.inspect()["state"], "pending")
+        self.assertEqual(self.executor.broker.released, [])
+
+    def test_shutdown_fences_new_probes(self):
+        asyncio.run(self.control.stop())
+        state = self.probe()
+        self.assertEqual(state["state"], "unmeasured")
+        self.assertEqual(self.runner.calls, [])
+        self.assertIn("shutting down", state["reason"])
+
+    def test_kill_never_signals_an_unproved_identity(self):
+        from unittest.mock import patch
+        self.executor.process_state = "unknown"
+        with patch.object(render_encode_probes.os, "killpg") as kill:
+            self.assertFalse(self.control._kill_group(object(), FakeIdentity()))
+            self.assertFalse(self.control._kill_group(object(), None))
+        kill.assert_not_called()
 
 
 class DurableRecordTests(ProbeControlFixture):
@@ -445,16 +533,19 @@ class RecoveryTests(ProbeControlFixture):
         })
         return probe_key
 
-    def test_a_probe_without_a_recorded_process_is_unmeasured_after_a_restart(self):
+    def test_a_probe_without_a_recorded_process_retains_its_hold_after_restart(self):
         probe_key = self._write_pending_record()
         recovered = asyncio.run(self.control.recover_and_restore_physical_holds())
-        self.assertEqual(recovered, [{"probe_key": probe_key, "state": "unmeasured"}])
-        self.assertEqual(self.inspect()["state"], "unmeasured")
+        self.assertEqual(recovered, [{"probe_key": probe_key, "state": "pending"}])
+        self.assertEqual(self.inspect()["state"], "pending")
+        self.assertTrue(self.executor.broker.holds)
+        self.assertEqual(self.executor.broker.released, [])
 
     def test_a_probe_whose_process_is_gone_is_unmeasured_after_a_restart(self):
         probe_key = self._write_pending_record()
-        self.control._write_launch(
-            probe_key, FakeIdentity(), self.control._owner(probe_key))
+        for phase in (1, 2):
+            self.control._write_launch(
+                probe_key, FakeIdentity(), self.control._owner(probe_key), phase)
         recovered = asyncio.run(self.control.recover_and_restore_physical_holds())
         self.assertEqual(recovered, [{"probe_key": probe_key, "state": "unmeasured"}])
         self.assertEqual(self.inspect()["state"], "unmeasured")
@@ -471,12 +562,13 @@ class RecoveryTests(ProbeControlFixture):
 
     def test_a_live_process_is_stopped_before_the_hold_is_released(self):
         probe_key = self._write_pending_record()
-        self.control._write_launch(
-            probe_key, FakeIdentity(), self.control._owner(probe_key))
+        for phase in (1, 2):
+            self.control._write_launch(
+                probe_key, FakeIdentity(), self.control._owner(probe_key), phase)
         self.executor.process_state = "live"
         recovered = asyncio.run(self.control.recover_and_restore_physical_holds())
         self.assertEqual(recovered, [{"probe_key": probe_key, "state": "unmeasured"}])
-        self.assertEqual(len(self.executor.stopped), 1)
+        self.assertEqual(len(self.executor.stopped), 2)
         self.assertEqual(self.inspect()["state"], "unmeasured")
 
     def test_a_live_process_that_cannot_be_stopped_keeps_its_hold(self):
