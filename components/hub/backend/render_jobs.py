@@ -196,6 +196,17 @@ def _display(value: Any) -> dict[str, str]:
     return value
 
 
+def validate_encode_binding(value: object) -> dict[str, Any]:
+    if (type(value) is not dict or set(value) != {
+            "format", "authority_digest", "selected_tier", "exact_encoder"}
+            or value["format"] != "studio.render.encode-binding.v1"):
+        raise ValueError("invalid exact encode authority binding")
+    _digest(value["authority_digest"], "authority_digest")
+    _label(value["selected_tier"], "selected_tier")
+    _label(value["exact_encoder"], "exact_encoder")
+    return value
+
+
 def decode_render_request(
     raw_request: bytes, hub_dispatch_key: str,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
@@ -208,11 +219,18 @@ def decode_render_request(
         value = decode_render_json(raw_request)
     except ValueError as exc:
         raise ValueError("invalid render request: " + str(exc)) from exc
-    if (type(value) is not dict
-            or set(value) - {"display"} != {"format", "dispatch", "packet", "assets"}):
-        raise ValueError("render request has missing or unknown fields")
-    if value["format"] != "studio.render.hub-request.v1":
+    if type(value) is not dict:
+        raise ValueError("render request must be an object")
+    version = value.get("format")
+    if version not in ("studio.render.hub-request.v1", "studio.render.hub-request.v2"):
         raise ValueError("render request format is unsupported")
+    keys = {"format", "dispatch", "packet", "assets"}
+    if version == "studio.render.hub-request.v2":
+        keys.add("encode_authority")
+    if set(value) - {"display"} != keys:
+        raise ValueError("render request has missing or unknown fields")
+    if version == "studio.render.hub-request.v2":
+        validate_encode_binding(value["encode_authority"])
     if "display" in value:
         _display(value["display"])
     dispatch = value["dispatch"]
@@ -385,13 +403,9 @@ class ValidatedOutputReceipt:
         _label(self.selected_tier, "selected_tier")
         if self.encode_authority is not None:
             binding = self.encode_authority
-            if (type(binding) is not dict or set(binding) != {
-                    "format", "authority_digest", "selected_tier", "exact_encoder"}
-                    or binding["format"] != "studio.render.encode-binding.v1"
-                    or binding["selected_tier"] != self.selected_tier):
+            validate_encode_binding(binding)
+            if binding["selected_tier"] != self.selected_tier:
                 raise ValueError("invalid exact encode authority binding")
-            _digest(binding["authority_digest"], "authority_digest")
-            _label(binding["exact_encoder"], "exact_encoder")
         if (type(self.feature_losses) is not tuple
                 or any(not isinstance(value, str) or not value or len(value) > 256
                        for value in self.feature_losses)):
@@ -426,6 +440,7 @@ class RenderJobRuntime:
         *,
         database_path: str | Path = ledger.DB_FILE,
         qualification_resolver: Callable[[dict], RuntimeQualification | None] | None = None,
+        probed_qualification_resolver: Callable[[dict], RuntimeQualification | None] | None = None,
         free_bytes: Callable[[Path], int] | None = None,
     ) -> None:
         self.root = Path(data_root).absolute()
@@ -433,6 +448,7 @@ class RenderJobRuntime:
         self.database_path = Path(database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._qualification_resolver = qualification_resolver or (lambda _packet: None)
+        self._probed_qualification_resolver = probed_qualification_resolver or (lambda _packet: None)
         self._free_bytes = free_bytes or (lambda path: shutil.disk_usage(path).free)
         with self._conn():
             pass
@@ -564,7 +580,7 @@ class RenderJobRuntime:
     @staticmethod
     def _current_qualification(
         resolver: Callable[[dict], RuntimeQualification | None], packet: dict,
-        *, allow_candidate: bool = False,
+        *, allow_candidate: bool = False, expected_binding: dict | None = None,
     ) -> RuntimeQualification:
         authority = resolver(packet)
         if (type(authority) is not RuntimeQualification
@@ -572,6 +588,8 @@ class RenderJobRuntime:
             raise RenderJobUnavailable("no server-qualified render runtime is available")
         if authority.profile_digest != packet["recipe"]["profile_digest"]:
             raise RenderJobUnavailable("qualified render profile does not match the packet")
+        if (authority.document or {}).get("encode_authority") != expected_binding:
+            raise RenderJobUnavailable("render encode evidence does not match the request")
         return authority
 
     @staticmethod
@@ -637,9 +655,12 @@ class RenderJobRuntime:
                         "render dispatch key was cancelled for a different exact body")
                 raise RenderJobUnavailable(
                     "render dispatch was cancelled before acceptance")
+            expected_binding = value.get("encode_authority")
+            resolver = (self._probed_qualification_resolver if expected_binding is not None
+                        else self._qualification_resolver)
             authority = self._current_qualification(
-                self._qualification_resolver, packet,
-                allow_candidate=qualification_permit is not None,
+                resolver, packet, allow_candidate=qualification_permit is not None,
+                expected_binding=expected_binding,
             )
             permit_json = None
             purpose = "production"
@@ -758,9 +779,13 @@ class RenderJobRuntime:
             if row["state"] != "accepted":
                 raise RenderJobConflict("render job no longer grants launch permission")
             packet = json.loads(row["packet_json"])
+            request_value = json.loads(row["request_bytes"])
+            expected_binding = request_value.get("encode_authority")
+            resolver = (self._probed_qualification_resolver if expected_binding is not None
+                        else self._qualification_resolver)
             authority = self._current_qualification(
-                self._qualification_resolver, packet,
-                allow_candidate=row["purpose"] == "qualification",
+                resolver, packet, allow_candidate=row["purpose"] == "qualification",
+                expected_binding=expected_binding,
             )
             stored_authority = json.loads(row["qualification_json"])
             # Measured evidence may change at the same qualification digest; probe bindings

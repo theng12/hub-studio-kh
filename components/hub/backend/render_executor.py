@@ -789,14 +789,12 @@ class InstalledRenderAuthorityLoader:
                         physical_node_id=self.physical_node_id(), entries=entries,
                         **migration)
 
-    def authority_for_packet(self, packet: dict[str, Any]) -> InstalledRenderAuthority | None:
-        encode = (packet.get("recipe") or {}).get("encode")
+    def _probed_authority(self, encode: dict[str, Any],
+                          packet: dict[str, Any] | None = None) -> InstalledRenderAuthority | None:
         entry = next((entry for entry in self.executable_probe_entries()
                       if entry["requested_encode"] == encode), None)
         if entry is None:
-            current = self.snapshot()
-            return current if current is not None and render_encode.packet_is_supported(
-                packet, _canonical(packet), current.selected_tier, current.exact_encoder) else None
+            return None
         state = self.encode_probe_control.inspect(encode)
         if (state["state"] != "supported"
                 or state["authority_digest"] != entry["authority_digest"]):
@@ -832,6 +830,50 @@ class InstalledRenderAuthorityLoader:
             "encode_authority": binding,
         })
         return self._authority(document, packet, production=True)
+
+    def authority_for_packet(self, packet: dict[str, Any]) -> InstalledRenderAuthority | None:
+        return self._probed_authority((packet.get("recipe") or {}).get("encode"), packet)
+
+    def execution_for_encode(self, encode: dict[str, Any]) -> dict[str, Any] | None:
+        """Current exact permission, separate from support and from the legacy worker row."""
+        authority = self._probed_authority(encode)
+        if authority is None:
+            return None
+        qualification = authority.qualification
+        document = qualification.document
+        measured = document["format"] == self._QUALIFIED_BINDING_FORMAT
+        grant = None
+        if not measured:
+            current = self.probed_grant()
+            if current is None:
+                return None
+            digest = hashlib.sha256(_canonical(current)).hexdigest()
+            if digest != document["grant_digest"]:
+                return None
+            grant = {"format": current["format"], "digest": digest,
+                     "v1": current["v1"], "migration": current["migration"],
+                     "node": current["node"]}
+        return {
+            "format": "studio.render.encode-execution-authority.v1",
+            "requested_encode": dict(encode),
+            "encode_authority": document["encode_authority"],
+            "authority_kind": "measured" if measured else "accepted_unqualified",
+            "qualification_digest": qualification.qualification_digest,
+            "profile_digest": qualification.profile_digest,
+            "tools_digest": qualification.tools_digest,
+            "compiler_digest": qualification.compiler_digest,
+            "hardware_class": qualification.hardware_class,
+            "selected_tier": authority.selected_tier,
+            "exact_encoder": authority.exact_encoder,
+            "font_support": authority.font_support,
+            "bounds": asdict(authority.bounds),
+            "profile_execution_bounds": json.loads(_canonical(authority.profile_execution_bounds)),
+            "grant": grant,
+        }
+
+    def resolve_probed(self, packet: dict[str, Any]) -> RuntimeQualification | None:
+        authority = self.authority_for_packet(packet)
+        return authority.qualification if authority is not None else None
 
     def opt_in_state(self) -> dict[str, Any]:
         """What the setting says now, and whether this Mac can act on it."""
@@ -925,11 +967,6 @@ class InstalledRenderAuthorityLoader:
         return [candidate] if candidate is not None else []
 
     def resolve(self, packet: dict[str, Any]) -> RuntimeQualification | None:
-        if self.executable_probe_entries():
-            production = self.authority_for_packet(packet)
-            if (production is not None and production.qualification.document.get("format")
-                    in (self._PROBED_FORMAT, self._QUALIFIED_BINDING_FORMAT)):
-                return production.qualification
         enabled = self._enabled()
         production = (self._authority(enabled, packet, production=True)
                       if enabled is not None else None)

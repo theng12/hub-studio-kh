@@ -1460,6 +1460,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     render_runtime = RenderJobRuntime(
         data_root / "final-renders", database_path=ledger.DB_FILE,
         qualification_resolver=installed_authority.resolve,
+        probed_qualification_resolver=installed_authority.resolve_probed,
         free_bytes=lambda path: shutil.disk_usage(path).free,
     )
     final_render_executor = RenderExecutor(

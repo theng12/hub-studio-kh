@@ -63,6 +63,23 @@ class ProbedAuthorityTests(OptInFixture):
         self.assertEqual(self.loader.opt_in_state()["grant_version"], "v2")
         self.assertEqual(self.loader.opt_in_state()["granted_encodes"], [self.encode])
 
+    def test_exact_execution_mapping_labels_grant_and_withdraws_on_revocation(self):
+        self.opt_in()
+        self.assertIsNone(self.loader.execution_for_encode(self.encode))
+        self.loader.migrate_probed_grant()
+        mapping = self.loader.execution_for_encode(self.encode)
+        authority = self.loader.authority_for_packet(self.packet())
+        self.assertEqual(mapping["format"], "studio.render.encode-execution-authority.v1")
+        self.assertEqual(mapping["requested_encode"], self.encode)
+        self.assertEqual(mapping["authority_kind"], "accepted_unqualified")
+        self.assertEqual(mapping["qualification_digest"], authority.qualification.qualification_digest)
+        self.assertNotEqual(mapping["qualification_digest"], self.loader.snapshot().qualification.qualification_digest)
+        self.assertEqual(mapping["encode_authority"], authority.qualification.document["encode_authority"])
+        self.assertEqual(mapping["grant"]["digest"], authority.qualification.document["grant_digest"])
+        self.assertEqual(mapping["grant"]["node"], {"physical_node_id": "node-01"})
+        self.loader.set_opt_in(False, "owner")
+        self.assertIsNone(self.loader.execution_for_encode(self.encode))
+
     def test_legacy_grant_write_cannot_bypass_the_exact_cap_probe(self):
         self.opt_in()
         path = self.data_root / "render-authority/opt-in/unqualified.json"
@@ -124,7 +141,12 @@ class ProbedAuthorityTests(OptInFixture):
         self.assertEqual(authority.qualification.qualification_digest, document["qualification_digest"])
         self.assertEqual(authority.qualification.document["qualified_document"], document)
         self.assertNotIn("opt_in", authority.qualification.document)
-        self.assertEqual(self.loader.resolve(self.packet()).document,
+        mapping = self.loader.execution_for_encode(self.encode)
+        self.assertEqual(mapping["authority_kind"], "measured")
+        self.assertEqual(mapping["qualification_digest"], document["qualification_digest"])
+        self.assertIsNone(mapping["grant"])
+        self.assertNotIn("encode_authority", self.loader.resolve(self.packet()).document)
+        self.assertEqual(self.loader.resolve_probed(self.packet()).document,
                          authority.qualification.document)
 
     def test_exact_cap_validation_rejects_bool_and_out_of_range(self):

@@ -98,7 +98,8 @@ class RenderService:
         # and runs before the permit lookup, and the permit itself is spent only by
         # runtime.accept. A refusal here leaves no reference, no permit consumption and
         # no row.
-        self._require_supported_encode(packet, packet_json, qualification_vector)
+        self._require_supported_encode(packet, packet_json, qualification_vector,
+                                       value.get("encode_authority"))
         permit = None
         if qualification_vector is not None:
             permit = self.authority_loader.qualification_permit(
@@ -144,7 +145,8 @@ class RenderService:
         self.sweep()
         return accepted
 
-    def _admission_authority(self, qualification_vector: str | None, packet=None):
+    def _admission_authority(self, qualification_vector: str | None, packet=None,
+                             expected_binding=None):
         """The exact installed authority this request would run under.
 
         Returns ``(api_available, authority)``. ``api_available`` is False only for a
@@ -155,6 +157,8 @@ class RenderService:
         if loader is None:
             return False, None
         if qualification_vector is not None:
+            if expected_binding is not None:
+                return True, None
             lister = getattr(loader, "qualification_candidates", None)
             if not callable(lister):
                 return False, None
@@ -166,9 +170,15 @@ class RenderService:
                 return True, None
             return True, None
         selector = getattr(loader, "authority_for_packet", None)
-        if packet is not None and callable(selector):
+        if expected_binding is not None:
+            if not callable(selector):
+                return True, None
             try:
-                return True, selector(packet)
+                authority = selector(packet)
+                if (authority is None or (authority.qualification.document or {}).get(
+                        "encode_authority") != expected_binding):
+                    return True, None
+                return True, authority
             except Exception:
                 return True, None
         snapshot = getattr(loader, "snapshot", None)
@@ -180,14 +190,16 @@ class RenderService:
             return True, None
 
     def _require_supported_encode(self, packet, packet_json: str,
-                                  qualification_vector: str | None) -> None:
+                                  qualification_vector: str | None,
+                                  expected_binding=None) -> None:
         """Refuse an encode this machine's authority cannot execute, before the row exists.
 
         The executor applies the same tier rule again at launch. Doing it here keeps an
         accepted job - and the one-use qualification intent or asset references it would
         hold - from ending in a failure the machine could have stated up front.
         """
-        available, authority = self._admission_authority(qualification_vector, packet)
+        available, authority = self._admission_authority(
+            qualification_vector, packet, expected_binding)
         if not available:
             # A loader double without the installer lookup. `runtime.accept` still
             # refuses a missing authority before any row, so nothing is accepted here.
@@ -628,6 +640,14 @@ def register_routes(
             raise ValueError("requested_encode must be one exact six-field tuple")
         return encode
 
+    def probe_state(encode, state):
+        selector = getattr(service.authority_loader, "execution_for_encode", None)
+        execution = selector(encode) if callable(selector) and state["state"] == "supported" else None
+        if (execution is not None and execution["encode_authority"]["authority_digest"]
+                != state["authority_digest"]):
+            execution = None
+        return {**state, "execution_authority": execution}
+
     @app.get("/api/hub/final-renders/encode-probes")
     async def inspect_encode_probe(request: Request):
         scope(request)
@@ -640,7 +660,7 @@ def register_routes(
             encode = probe_encode(values[0])
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, "invalid requested_encode") from exc
-        return probe_control().inspect(encode)
+        return probe_state(encode, probe_control().inspect(encode))
 
     @app.post("/api/hub/final-renders/encode-probes")
     async def start_encode_probe(request: Request):
@@ -660,7 +680,7 @@ def register_routes(
                 service.authority_loader.migrate_probed_grant()
             except ValueError as exc:
                 raise HTTPException(409, "probe completed but the grant could not be migrated") from exc
-        return result
+        return probe_state(encode, result)
 
     @app.get("/api/hub/final-renders/capability")
     async def render_capability(request: Request):

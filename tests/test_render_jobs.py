@@ -100,6 +100,7 @@ class RenderJobRuntimeTests(unittest.TestCase):
             self.root,
             database_path=self.root / "hub.db",
             qualification_resolver=self.authority.resolve,
+            probed_qualification_resolver=self.authority.resolve,
             free_bytes=lambda _path: self.free_bytes,
         )
 
@@ -112,13 +113,40 @@ class RenderJobRuntimeTests(unittest.TestCase):
             with self.subTest(binding=changed):
                 self.authority.current = accepted_authority
                 key = f"probe-binding-{index}"
-                accepted = self.runtime.accept("owner-a", key, request(dispatch_key=key))
+                raw = request(dispatch_key=key, extra={
+                    "format": "studio.render.hub-request.v2", "encode_authority": binding})
+                accepted = self.runtime.accept("owner-a", key, raw)
+                self.assertEqual(accepted["encode_authority"], binding)
                 self.authority.current = replace(accepted_authority, document=(
                     {"encode_authority": changed} if changed else None))
-                with self.assertRaisesRegex(RenderJobUnavailable, "encode evidence changed"):
+                with self.assertRaisesRegex(RenderJobUnavailable, "encode evidence"):
                     self.runtime.claim_launch("owner-a", accepted["id"], machine="worker-m4",
                                               dispatch_generation=1)
                 self.assertEqual(self.runtime.get("owner-a", accepted["id"])["state"], "accepted")
+
+    def test_v2_requires_exact_binding_and_cannot_fall_back_to_v1(self) -> None:
+        binding = {"format": "studio.render.encode-binding.v1",
+                   "authority_digest": "a" * 64,
+                   "selected_tier": "test-tier", "exact_encoder": "libx264"}
+        for index, extra in enumerate((
+                {"format": "studio.render.hub-request.v2"},
+                {"encode_authority": binding},
+                {"format": "studio.render.hub-request.v2", "encode_authority": None},
+                {"format": "studio.render.hub-request.v2", "encode_authority": dict(binding, extra=True)})):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                key = f"invalid-v2-{index}"
+                self.runtime.accept("owner-a", key, request(dispatch_key=key, extra=extra))
+        raw = request(extra={"format": "studio.render.hub-request.v2", "encode_authority": binding})
+        with self.assertRaisesRegex(RenderJobUnavailable, "encode evidence"):
+            self.runtime.accept("owner-a", "dispatch-7", raw)
+        self.authority.current = replace(qualification(), document={"encode_authority": binding})
+        accepted = self.runtime.accept("owner-a", "dispatch-7", raw)
+        self.assertEqual(accepted["encode_authority"], binding)
+        self.assertTrue(self.runtime.accept("owner-a", "dispatch-7", raw)["replayed"])
+        changed = request(extra={"format": "studio.render.hub-request.v2",
+                                 "encode_authority": dict(binding, authority_digest="b" * 64)})
+        with self.assertRaises(RenderJobConflict):
+            self.runtime.accept("owner-a", "dispatch-7", changed)
 
     def test_public_projection_keeps_gateway_keys_and_dispatch_rows_keep_fifo_age(self) -> None:
         public_keys = {
@@ -189,6 +217,7 @@ class RenderJobRuntimeTests(unittest.TestCase):
         restarted = RenderJobRuntime(
             self.root, database_path=self.root / "hub.db",
             qualification_resolver=self.authority.resolve,
+            probed_qualification_resolver=self.authority.resolve,
             free_bytes=lambda _path: self.free_bytes,
         )
         replay = restarted.request_cancel_by_key(
@@ -436,6 +465,7 @@ class RenderJobRuntimeTests(unittest.TestCase):
         reopened = RenderJobRuntime(
             self.root, database_path=self.root / "hub.db",
             qualification_resolver=self.authority.resolve,
+            probed_qualification_resolver=self.authority.resolve,
             free_bytes=lambda _path: self.free_bytes,
         )
         replay = reopened.accept(
@@ -486,6 +516,7 @@ class RenderJobRuntimeTests(unittest.TestCase):
             self.root,
             database_path=self.root / "hub.db",
             qualification_resolver=self.authority.resolve,
+            probed_qualification_resolver=self.authority.resolve,
             free_bytes=lambda _path: self.free_bytes,
         )
         durable = restarted.get("owner-a", job["id"])
@@ -589,6 +620,7 @@ class RenderJobRuntimeTests(unittest.TestCase):
             self.root,
             database_path=self.root / "hub.db",
             qualification_resolver=self.authority.resolve,
+            probed_qualification_resolver=self.authority.resolve,
             free_bytes=lambda _path: self.free_bytes,
         )
         recovered = restarted.recover_incomplete()
@@ -646,6 +678,7 @@ class RenderJobRuntimeTests(unittest.TestCase):
         restarted = RenderJobRuntime(
             self.root, database_path=self.root / "hub.db",
             qualification_resolver=self.authority.resolve,
+            probed_qualification_resolver=self.authority.resolve,
             free_bytes=lambda _path: self.free_bytes,
         )
         recovered = restarted.recover_incomplete_with_proof(
@@ -682,6 +715,7 @@ class RenderJobRuntimeTests(unittest.TestCase):
         restarted = RenderJobRuntime(
             self.root, database_path=self.root / "hub.db",
             qualification_resolver=self.authority.resolve,
+            probed_qualification_resolver=self.authority.resolve,
             free_bytes=lambda _path: self.free_bytes,
         )
 
@@ -860,6 +894,7 @@ class RenderJobRuntimeTests(unittest.TestCase):
             self.root,
             database_path=self.root / "hub.db",
             qualification_resolver=self.authority.resolve,
+            probed_qualification_resolver=self.authority.resolve,
             free_bytes=lambda _path: self.free_bytes,
         )
         recovered = restarted.recover_incomplete()
@@ -918,6 +953,7 @@ class RenderJobRuntimeTests(unittest.TestCase):
         restarted = RenderJobRuntime(
             self.root, database_path=self.root / "hub.db",
             qualification_resolver=self.authority.resolve,
+            probed_qualification_resolver=self.authority.resolve,
             free_bytes=lambda _path: self.free_bytes,
         )
         restarted.recover_incomplete()

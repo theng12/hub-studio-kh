@@ -8,7 +8,7 @@ import unittest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from components.hub.backend.render_encode import DEFAULT_OPT_IN_ENCODE
-from components.hub.backend.render_service import register_routes
+from components.hub.backend.render_service import RenderService, register_routes
 from components.hub.backend import auth
 
 
@@ -28,6 +28,7 @@ class ProbeRoutesTests(unittest.TestCase):
         control = SimpleNamespace(inspect=state, probe=probe)
         loader = SimpleNamespace(encode_probe_control=control,
                                  migrate_probed_grant=lambda: self.events.append("migrate"))
+        self.loader = loader
         app = FastAPI()
         credential = "probe-route-fixture"
         register_routes(app, SimpleNamespace(authority_loader=loader, executor=None),
@@ -44,6 +45,23 @@ class ProbeRoutesTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["requested_encode"], self.encode)
         self.assertEqual(self.events, [])
+
+    def test_discovery_adds_only_current_execution_mapping_without_writes(self):
+        mapping = {"encode_authority": {"authority_digest": "b" * 64}}
+        self.loader.execution_for_encode = lambda encode: mapping
+        response = self.client.get(self.path, headers=self.headers,
+                                   params={"requested_encode": json.dumps(self.encode)})
+        self.assertEqual(response.json()["execution_authority"], mapping)
+        mapping["encode_authority"]["authority_digest"] = "c" * 64
+        response = self.client.get(self.path, headers=self.headers,
+                                   params={"requested_encode": json.dumps(self.encode)})
+        self.assertIsNone(response.json()["execution_authority"])
+        self.assertEqual(self.events, [])
+
+    def test_v2_preflight_never_uses_a_qualification_candidate(self):
+        service = SimpleNamespace(authority_loader=self.loader)
+        self.assertEqual(RenderService._admission_authority(
+            service, "qualification-intent", {}, {"authority_digest": "b" * 64}), (True, None))
 
     def test_explicit_post_probes_before_grant_migration(self):
         response = self.client.post(self.path, headers=self.headers, json={
