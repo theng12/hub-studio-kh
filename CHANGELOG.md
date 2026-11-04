@@ -2,6 +2,17 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.219 — 2026-11-04
+
+- Remote final rendering can use an exact H.264 hardware or CPU encoding choice, including a specific bitrate cap, after that Mac has proved it can encode it.
+- The Renders page shows this Mac’s render grant version and the exact encoding choices it covers.
+- Existing grants stay restorable, Off stays Off, and an interrupted encoding check keeps the Mac reserved until its processes are proved stopped.
+
+### Technical notes
+
+- Adds authenticated exact-tuple probe control, separate immutable support evidence and reversible v2 owner grants. Probe evidence is separate from measured workload qualification; HEVC probes publish capability only.
+- New internal v2 render requests bind the selected probe evidence through acceptance, claim and output receipts. Legacy v1 lifecycle shapes remain unchanged.
+
 ## 0.6.218 — 2026-11-04
 
 - The Jobs tabs are evenly spaced and stay steady when you switch between them. Narrow windows scroll the tab bar so every tab remains reachable.

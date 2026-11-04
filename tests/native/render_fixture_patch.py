@@ -47,6 +47,16 @@ text = text.replace(
              '!message.isEmpty { throw NativeAPIError.message(message) }\n'
              '        if let p = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_IMAGE"], '
              'let d = FileManager.default.contents(atPath: p) { return d }\n', 1)
+if "func refreshRenderAuthority() async {" in text:
+    needle = "    func refreshRenderAuthority() async {\n"
+    grant = '{"ok":true,"render_authority":{"accept_unqualified":true,"effective":true,"grant_version":"v2","granted_encodes":[{"container":"mp4","requested_codec":"h264","requested_effort":"hardware","crf":23,"quality_cpu_preset":"medium","bitrate_kbps":8000}],"migration_provenance":{"authorization_id":"fixture-owner-direction","authorized_at":1700000000}}}'
+    text = text.replace(needle, needle + '''        if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            renderAuthority = try? decoder.decode(NativeRenderAuthorityResponse.self, from: Data(#"''' + grant + '''"#.utf8)).renderAuthority
+            return
+        }
+''', 1)
 api.write_text(text)
 
 text = views.read_text()

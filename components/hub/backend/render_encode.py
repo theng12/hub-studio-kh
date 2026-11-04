@@ -181,7 +181,9 @@ def normalize_encode(value: object) -> dict[str, Any] | None:
         return None
     if (value["container"] not in _CONTAINERS or value["requested_codec"] not in _CODECS
             or value["requested_effort"] not in _EFFORTS
-            or value["bitrate_kbps"] is not None
+            or (value["bitrate_kbps"] is not None and (
+                type(value["bitrate_kbps"]) is not int
+                or not 500 <= value["bitrate_kbps"] <= 100000))
             or (value["crf"], value["quality_cpu_preset"]) not in _QUALITY_PAIRS
             or type(value["crf"]) is not int):
         return None

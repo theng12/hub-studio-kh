@@ -2449,6 +2449,167 @@ struct NativeRenderHistory: Decodable, Equatable {
     let machines: [NativeRenderMachine]?
 }
 
+/// One exact encode tuple the owner's render grant covers, as `GET /api/hub/render-authority`
+/// publishes it in `granted_encodes`.
+///
+/// Every field is optional because the Hub states what it knows: a tuple the pinned compiler
+/// could not build names no tier, and a tuple with no bitrate cap says so with null rather than
+/// with 0 — 0 would read as "capped at nothing", which is a different claim.
+struct NativeRenderEncode: Decodable, Equatable {
+    let container: String?
+    let requestedCodec: String?
+    let requestedEffort: String?
+    let crf: Int?
+    let qualityCpuPreset: String?
+    /// The bitrate cap in kbps, or nil when the tuple is uncapped. Never 0 for "no cap".
+    let bitrateKbps: Int?
+
+    /// One tuple, however the Hub states it.
+    ///
+    /// The route publishes the flat six-field tuple. The v2 grant record on disk wraps each one
+    /// as `requested_encode` beside its evidence digest, so both shapes are read: a tuple the
+    /// Hub named either way is the same tuple, and neither shape is guessed.
+    ///
+    /// Both spellings of every key are listed because the app decodes with
+    /// `convertFromSnakeCase`: the JSON key is folded to camelCase before it is matched, so a
+    /// snake-case key alone would match nothing and the tuple would read as empty.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // A wrapped tuple carries its six fields one level down; a flat one carries them here.
+        let tuple = container.contains(.requestedEncode) || container.contains(.requestedEncodeSnake)
+            ? try container.nestedContainer(keyedBy: CodingKeys.self, forKey:
+                container.contains(.requestedEncode) ? .requestedEncode : .requestedEncodeSnake)
+            : container
+        self.container = try tuple.decodeIfPresent(String.self, forKey: .container)
+        self.requestedCodec = try tuple.decodeIfPresent(String.self, forKey: .requestedCodec)
+            ?? tuple.decodeIfPresent(String.self, forKey: .requestedCodecSnake)
+        self.requestedEffort = try tuple.decodeIfPresent(String.self, forKey: .requestedEffort)
+            ?? tuple.decodeIfPresent(String.self, forKey: .requestedEffortSnake)
+        self.crf = try tuple.decode(Int.self, forKey: .crf)
+        self.qualityCpuPreset = try tuple.decodeIfPresent(String.self, forKey: .qualityCpuPreset)
+            ?? tuple.decodeIfPresent(String.self, forKey: .qualityCpuPresetSnake)
+        guard tuple.contains(.bitrateKbps) || tuple.contains(.bitrateKbpsSnake) else {
+            throw DecodingError.keyNotFound(CodingKeys.bitrateKbps,
+                .init(codingPath: decoder.codingPath, debugDescription: "The Hub omitted the bitrate cap."))
+        }
+        self.bitrateKbps = try tuple.decodeIfPresent(Int.self, forKey: .bitrateKbps)
+            ?? tuple.decodeIfPresent(Int.self, forKey: .bitrateKbpsSnake)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case container
+        case crf
+        case requestedCodec = "requestedCodec"
+        case requestedCodecSnake = "requested_codec"
+        case requestedEffort = "requestedEffort"
+        case requestedEffortSnake = "requested_effort"
+        case qualityCpuPreset = "qualityCpuPreset"
+        case qualityCpuPresetSnake = "quality_cpu_preset"
+        case bitrateKbps = "bitrateKbps"
+        case bitrateKbpsSnake = "bitrate_kbps"
+        case requestedEncode = "requestedEncode"
+        case requestedEncodeSnake = "requested_encode"
+    }
+
+    /// The tuple in one readable line, naming only what the Hub stated.
+    var line: String {
+        var parts: [String] = []
+        if let container { parts.append(container.uppercased()) }
+        if let codec = requestedCodec { parts.append(codec.uppercased()) }
+        if let effort = requestedEffort { parts.append(effort) }
+        if let crf { parts.append("CRF \(Int(crf))") }
+        if let preset = qualityCpuPreset { parts.append("CPU \(preset)") }
+        parts.append(bitrateKbps.map { "bitrate capped at \(Int($0)) kbps" } ?? "bitrate uncapped")
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// This Mac's owner render grant, as `GET /api/hub/render-authority` publishes it.
+///
+/// The grant is the owner's own setting: nothing here changes it, and the app never writes it.
+/// Every field is optional because an absent field is an honest "not stated" — the page says so
+/// rather than guessing a default that would read as a working grant.
+struct NativeRenderGrantMigration: Decodable, Equatable {
+    let authorizationId: String
+    let authorizedAt: Int
+}
+
+struct NativeRenderAuthority: Decodable, Equatable {
+    /// The owner's choice: true only when this Mac accepts unqualified final renders.
+    let acceptUnqualified: Bool?
+    /// Where the grant came from (`owner-opt-in-unqualified`, or a migration's own word).
+    let provenance: String?
+    /// Who changed it, and when, as the Hub recorded them.
+    let setBy: String?
+    let setAt: Double?
+    /// The single encode the v1 grant names.
+    let encode: NativeRenderEncode?
+    /// The encode the Hub would use when the grant names none.
+    let defaultEncode: NativeRenderEncode?
+    /// The tier and encoder this Mac actually runs.
+    let selectedTier: String?
+    let exactEncoder: String?
+    /// True only when the installed tools and hardware pass the same checks a measured
+    /// authority passes. False means the grant is on but this Mac cannot act on it.
+    let effective: Bool?
+    /// `v1` or `v2` — which grant version is in force, when the Hub states it.
+    let grantVersion: String?
+    /// Every exact tuple the v2 grant covers, when the Hub publishes them.
+    let grantedEncodes: [NativeRenderEncode]?
+    /// The migration that produced the v2 grant, when it came from one.
+    let migrationProvenance: NativeRenderGrantMigration?
+
+    /// The one plain line the Render page shows about this grant.
+    ///
+    /// It says what the Hub stated and nothing more. A grant the Hub did not answer about is
+    /// "unknown", not off and not on: an unread grant must never read as a working one.
+    var grantLine: String {
+        guard let accept = acceptUnqualified else {
+            return "Render grant: unknown — the Hub did not say whether this Mac accepts unqualified final renders."
+        }
+        guard accept else {
+            return "Render grant: Off\(grantVersion.map { " (\($0))" } ?? "") — this Mac does not accept unqualified final renders."
+        }
+        var parts = ["Render grant: On\(grantVersion.map { " (\($0))" } ?? "")"]
+        if let provenance, !provenance.isEmpty { parts.append("from \(provenance)") }
+        if let setBy, !setBy.isEmpty {
+            parts.append("set by \(setBy)")
+        }
+        if let setAt {
+            parts.append("on \(Date(timeIntervalSince1970: setAt).formatted(date: .abbreviated, time: .shortened))")
+        }
+        // "Effective" is the Mac's own answer: on but unable to act is a different state from on
+        // and working, and it is never softened into a plain "On".
+        if effective == true {
+            parts.append("· effective on this Mac")
+        } else if effective == false {
+            parts.append("· not effective on this Mac")
+        } else {
+            parts.append("· effectiveness not reported")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// Every exact tuple this grant covers, in the Hub's own order.
+    ///
+    /// A v2 grant publishes its tuples; a v1 grant names the one encode it covers. The Hub's
+    /// `default_encode` is what it would use when the grant names none — it is not a tuple the
+    /// grant covers, so it is never shown as one. An empty list means the Hub published no tuple
+    /// at all, which is "not stated", not "no tuples".
+    var effectiveTuples: [NativeRenderEncode] {
+        guard acceptUnqualified == true else { return [] }
+        if let grantedEncodes { return grantedEncodes }
+        if let encode { return [encode] }
+        return []
+    }
+}
+
+/// The answer the Hub gives for the render grant, wrapped the way it sends it.
+struct NativeRenderAuthorityResponse: Decodable, Equatable {
+    let ok: Bool?
+    let renderAuthority: NativeRenderAuthority?
+}
+
 
 /// One engine attempt's measured Chat facts. Every field is optional because a provider that does
 /// not report a measurement has not reported zero. A literal zero remains a real measurement.
@@ -3746,6 +3907,11 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Why the last read failed, when it did. A Hub older than this build has no such route, and
     /// that is reported as the Hub's own sentence, not as an empty history.
     @Published private(set) var renderHistoryError: String?
+    /// This Mac's owner render grant, read when the Render page opens. Nil is "not read yet":
+    /// the page says so rather than showing a grant that was never confirmed.
+    @Published private(set) var renderAuthority: NativeRenderAuthority?
+    /// Why the last grant read failed, when it did.
+    @Published private(set) var renderAuthorityError: String?
     /// Result of the last import or verify, so the Models screen can say what happened.
     /// `modelNoteRepo` scopes a per-model result to that model; a nil repo means the note is
     /// about the library as a whole.
@@ -4247,6 +4413,8 @@ final class NativeWorkspaceStore: ObservableObject {
         submittingChat = false
         memoryInventory = nil
         memoryNote = nil
+        renderAuthority = nil
+        renderAuthorityError = nil
         updatingMemory = false
         workstation = nil
         workstationNote = nil
@@ -7282,6 +7450,26 @@ final class NativeWorkspaceStore: ObservableObject {
             guard connectionID == requestConnection else { return }
             renderHistory = nil
             renderHistoryError = error.localizedDescription
+        }
+    }
+
+    /// Read this Mac's owner render grant (`GET /api/hub/render-authority`).
+    ///
+    /// Read when the Render page opens, like the render list: the grant changes when the owner
+    /// changes it, not on every poll. This is a read only — the app never writes the grant, and
+    /// a failure is kept as the Hub's own sentence so the page can say the grant was not read
+    /// rather than claiming it is off.
+    func refreshRenderAuthority() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let answer: NativeRenderAuthorityResponse = try await get(["api", "hub", "render-authority"])
+            guard connectionID == requestConnection else { return }
+            renderAuthority = answer.renderAuthority
+            renderAuthorityError = nil
+        } catch {
+            guard connectionID == requestConnection else { return }
+            renderAuthority = nil
+            renderAuthorityError = error.localizedDescription
         }
     }
 
