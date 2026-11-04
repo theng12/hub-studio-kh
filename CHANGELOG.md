@@ -2,6 +2,11 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.220 — 2026-11-04
+
+- A Mac can check its encoding choices before you turn on remote rendering. Enabling it after a successful check covers only the choices that passed on that Mac.
+- Failed checks leave remote rendering off and explain why. Paused Macs stay paused.
+
 ## 0.6.219 — 2026-11-04
 
 - Remote final rendering can use an exact H.264 hardware or CPU encoding choice, including a specific bitrate cap, after that Mac has proved it can encode it.

@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-11-04 — 0.6.220 Off-probe follow-up
+
+Developer authorized the narrow bootstrap fix, full gate/package and paced idle rollout. Backend checkpoint `c53c64f` adds installed-only probe authority while execution remains Off. First detached focused run:107 tests,2.463s, actual exit0; the final explicit-enable boundary change committed8a6b667 subsequently passed181 tests in6.687s, actual `probe-final-20261104.exit=0`, reviewed independently before release assembly. Three requested outcomes remain the acceptance target: exact passed tuples only after enable, failed probe Off, paused Mac paused. No220 gate/package/install is claimed here.
+
+Probe once on every online idle220 Mac using actual reported chips. Only the9M4+24M2-family owner-selected Macs may be enabled afterward; other chips retain evidence while preserving their prior owner choice. Developer clarified preserve all earlier opt-ins, including1600 M1, and withdraw nothing; label on (earlier owner opt-in). This Mac remains paused. Prepared evidence-only operational driver passes its no-repeat policy self-check and syntax checks. Runtime inputs remain pinned to219. Canonical evidence: `_orchestra/hub-lead/release-0.6.220-20261104/` and `_orchestra/hub-lead/probe-off-bootstrap-20261104/`.
+
+219 resumed rollout actual exit0:1600 verified10/10 and onlineShops1/1, fresh health confirmed and pause unchanged; eight offlineShops not chased. Final219 registered probe pass actual exit0:8supported,41unmeasured,19skipped; no new opt-ins, pause unchanged. These are219 facts, not220 proof.
+
 ## 2026-09-21 — local verification / GatewayKH continuation
 
 [MEASURED] FINAL LOCAL GATE: clean candidate `936b3e5` passed 641 root tests
