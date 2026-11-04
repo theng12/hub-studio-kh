@@ -26,10 +26,14 @@ class ProbedAuthorityTests(OptInFixture):
             "authority_digest": "a" * 64,
             "evidence": {"selected_tier": tier, "exact_encoder": encoder},
         }
+        # `probed` stands in for "this node has successful probe evidence": an enable
+        # migrates only what the control lists, so a test that pins the pre-probe state
+        # clears it before enabling, the way a real off node has no evidence yet.
+        self.probed = True
         self.loader.encode_probe_control = SimpleNamespace(
             inspect=lambda encode: self.state if encode == self.encode else {
                 "state": "unmeasured", "authority_digest": None},
-            supported_entries=lambda: [self.state],
+            supported_entries=lambda: [self.state] if self.probed else [],
         )
 
     def packet(self):
@@ -46,9 +50,11 @@ class ProbedAuthorityTests(OptInFixture):
         return packet
 
     def test_hardware_cap_requires_successful_probe_and_grant(self):
+        self.probed = False
         self.opt_in()
         self.assertIsNone(self.loader.authority_for_packet(self.packet()))
         original = (self.data_root / "render-authority/opt-in/unqualified.json").read_bytes()
+        self.probed = True
         self.loader.migrate_probed_grant()
         authority = self.loader.authority_for_packet(self.packet())
         self.assertIsNotNone(authority)
@@ -74,8 +80,10 @@ class ProbedAuthorityTests(OptInFixture):
         self.assertFalse(state["effective"])
 
     def test_exact_execution_mapping_labels_grant_and_withdraws_on_revocation(self):
+        self.probed = False
         self.opt_in()
         self.assertIsNone(self.loader.execution_for_encode(self.encode))
+        self.probed = True
         self.loader.migrate_probed_grant()
         mapping = self.loader.execution_for_encode(self.encode)
         authority = self.loader.authority_for_packet(self.packet())
@@ -91,6 +99,7 @@ class ProbedAuthorityTests(OptInFixture):
         self.assertIsNone(self.loader.execution_for_encode(self.encode))
 
     def test_legacy_grant_write_cannot_bypass_the_exact_cap_probe(self):
+        self.probed = False
         self.opt_in()
         path = self.data_root / "render-authority/opt-in/unqualified.json"
         original = path.read_bytes()
@@ -130,6 +139,7 @@ class ProbedAuthorityTests(OptInFixture):
         self.assertIsNone(self.loader.authority_for_packet(self.packet()))
 
     def test_hevc_capability_does_not_become_phase_one_render_permission(self):
+        self.probed = False
         self.opt_in()
         self.state["requested_encode"] = dict(self.encode, requested_codec="h265")
         self.loader.migrate_probed_grant()

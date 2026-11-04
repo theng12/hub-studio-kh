@@ -952,6 +952,10 @@ class InstalledRenderAuthorityLoader:
                 expected_uid=self._uid)
         except (OSError, ValueError) as exc:
             raise ValueError("the setting could not be saved on this Mac") from exc
+        # The enable boundary: only tuples this node successfully probed, with their exact
+        # evidence digests, become the v2 grant here. Nothing unprobed - the default CPU
+        # pair included - ever enters a grant on an enable alone.
+        self.migrate_probed_grant()
         return self.opt_in_state()
 
     def receipt_document_for(self, document: dict[str, Any]) -> dict[str, Any] | None:
