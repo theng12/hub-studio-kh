@@ -5384,7 +5384,7 @@ struct StudioContent: View {
                                 label: tab == .downloads && running > 0 ? "\(tab.title) (\(running))" : tab.title
                             )
                         },
-                        sizing: .stablePerLabel,
+                        sizing: .equalWidest,
                         accessibilityLabel: "History filter"
                     )
                 }

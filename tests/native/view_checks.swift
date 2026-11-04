@@ -63,8 +63,8 @@ enum ViewChecks {
         if let control, control.segmentCount == HistoryTab.allCases.count {
             let baselineWidth = control.fittingSize.width
             let baselineSegments = (0..<control.segmentCount).map { control.width(forSegment: $0) }
-            check(baselineWidth > 400 && baselineWidth <= 520,
-                  "Jobs tab control width fits compact window/scaffold bounds: \(baselineWidth)pt")
+            check(baselineSegments.allSatisfy { $0 == baselineSegments[0] },
+                  "Jobs tabs have equal widths: \(baselineSegments)")
 
             var maxVariance: CGFloat = 0
             for tabIndex in 0..<control.segmentCount {

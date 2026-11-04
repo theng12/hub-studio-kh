@@ -56,7 +56,7 @@ struct TabGeometryChecks {
             HubSegmentedControl(
                 selection: Binding(get: { holder.tab }, set: { holder.tab = $0 }),
                 items: HistoryTab.allCases.map { HubSegmentItem(tag: $0, label: $0.title, accessibilityLabel: "Filter: \($0.title)") },
-                sizing: .stablePerLabel
+                sizing: .equalWidest
             )
         }
 
@@ -86,7 +86,8 @@ struct TabGeometryChecks {
         print("    Base total width: \(baseTotalWidth) pt")
         print("    Base segment widths: \(baseSegments)")
 
-        assertCheck(baseTotalWidth > 400 && baseTotalWidth <= 520, "Total width fits within 520pt ceiling: \(baseTotalWidth) pt")
+        assertCheck(baseSegments.allSatisfy { $0 == baseSegments[0] },
+                    "Every Jobs tab has the same width: \(baseSegments)")
 
         var maxDelta: CGFloat = 0
         for i in 0..<8 {
@@ -115,7 +116,7 @@ struct TabGeometryChecks {
             HubSegmentedControl(
                 selection: .constant(HistoryTab.all),
                 items: HistoryTab.allCases.map { HubSegmentItem(tag: $0, label: $0.title) },
-                sizing: .stablePerLabel
+                sizing: .equalWidest
             )
             HubSegmentedControl(
                 selection: .constant(JobMachineFilter.all),
@@ -164,7 +165,7 @@ struct TabGeometryChecks {
             HubSegmentedControl(
                 selection: .constant(HistoryTab.all),
                 items: HistoryTab.allCases.map { HubSegmentItem(tag: $0, label: $0.title) },
-                sizing: .stablePerLabel
+                sizing: .equalWidest
             )
         })
         narrowHost.frame = NSRect(x: 0, y: 0, width: 400, height: 50)
