@@ -9016,6 +9016,65 @@ struct NativeAPITests {
         pullStore.disconnect()
         FixtureProtocol.setCheckinCommands([])
 
+        // **The owner's render grant, read and shown honestly.** The Hub states what it knows;
+        // the app never guesses a grant, and a grant it could not read never reads as a working
+        // one. The tuples are the Hub's own, in the Hub's own order.
+        let grantDecoder = JSONDecoder()
+        grantDecoder.keyDecodingStrategy = .convertFromSnakeCase
+        let grantJSON = #"{"ok":true,"render_authority":{"accept_unqualified":true,"provenance":"owner-opt-in-unqualified","set_by":"owner@gateway","set_at":1700000000,"encode":{"container":"mp4","requested_codec":"h264","requested_effort":"medium","crf":23,"quality_cpu_preset":"medium","bitrate_kbps":null},"default_encode":{"container":"mp4","requested_codec":"h264","requested_effort":"medium","crf":23,"quality_cpu_preset":"medium","bitrate_kbps":null},"selected_tier":"tier-0","exact_encoder":"libx264","effective":true,"grant_version":"v2","granted_encodes":[{"container":"mp4","requested_codec":"h264","requested_effort":"medium","crf":23,"quality_cpu_preset":"medium","bitrate_kbps":null},{"container":"mov","requested_codec":"h265","requested_effort":"slow","crf":18,"quality_cpu_preset":"slow","bitrate_kbps":8000}],"migration_provenance":{"authorization_id":"owner-direction-via-developer-2026-11-04","authorized_at":1700000000}}}"#
+        let grant = try! grantDecoder.decode(NativeRenderAuthorityResponse.self, from: Data(grantJSON.utf8))
+        let authority = grant.renderAuthority
+        require(authority != nil, "the Hub's grant must decode")
+        require(authority?.acceptUnqualified == true, "the grant must say it is on")
+        require(authority?.effective == true, "the grant must say this Mac can act on it")
+        require(authority?.grantVersion == "v2", "the grant version must be read")
+        require(authority?.migrationProvenance?.authorizationId == "owner-direction-via-developer-2026-11-04",
+                "the actual Hub migration object must decode")
+        require(authority?.grantLine.contains("v2") == true, "the grant version must be shown")
+        require(authority?.grantedEncodes?.count == 2, "every granted tuple must be read")
+        require(authority?.grantLine.contains("On") == true, "an effective grant must read as on")
+        require(authority?.grantLine.contains("effective on this Mac") == true,
+                "the line must say the grant is effective here")
+        // An uncapped tuple says "uncapped", and a capped one says its cap: 0 would read as a cap.
+        let uncapped = authority?.grantedEncodes?.first?.line ?? ""
+        require(uncapped.contains("H264") && uncapped.contains("CRF 23") && uncapped.contains("CPU medium"),
+                "the tuple must name the codec, the CRF and the CPU preset: \(uncapped)")
+        require(uncapped.contains("bitrate uncapped"), "an uncapped tuple must say so: \(uncapped)")
+        let capped = authority?.grantedEncodes?.last?.line ?? ""
+        require(capped.contains("bitrate capped at 8000 kbps"), "a capped tuple must name its cap: \(capped)")
+        require(authority?.effectiveTuples.count == 2, "both granted tuples must be the effective ones")
+
+        // A grant that is off says Off, and it is not softened.
+        let off = try! grantDecoder.decode(NativeRenderAuthorityResponse.self,
+            from: Data(#"{"ok":true,"render_authority":{"accept_unqualified":false}}"#.utf8))
+        require(off.renderAuthority?.grantLine.contains("Off") == true,
+                "an off grant must read as off: \(off.renderAuthority?.grantLine ?? "")")
+        // A grant the Hub did not answer about is unknown, never on and never off.
+        let silent = try! grantDecoder.decode(NativeRenderAuthorityResponse.self,
+            from: Data(#"{"ok":true,"render_authority":{}}"#.utf8))
+        require(silent.renderAuthority?.grantLine.contains("unknown") == true,
+                "a grant that states nothing must read as unknown: \(silent.renderAuthority?.grantLine ?? "")")
+        require(silent.renderAuthority?.effectiveTuples.isEmpty == true,
+                "no tuple published means no tuple shown")
+        // The Hub's default encode is what it would use when the grant names none: it is not a
+        // tuple the grant covers, so it is never shown as one.
+        let defaultOnly = try! grantDecoder.decode(NativeRenderAuthorityResponse.self,
+            from: Data(#"{"ok":true,"render_authority":{"accept_unqualified":true,"default_encode":{"container":"mp4","requested_codec":"h264","requested_effort":"medium","crf":23,"quality_cpu_preset":"medium","bitrate_kbps":null}}}"#.utf8))
+        require(defaultOnly.renderAuthority?.effectiveTuples.isEmpty == true,
+                "the default encode must not be shown as a granted tuple")
+        let withdrawnGrant = try! grantDecoder.decode(NativeRenderAuthorityResponse.self,
+            from: Data(#"{"ok":true,"render_authority":{"accept_unqualified":true,"grant_version":"v2","granted_encodes":[],"encode":{"container":"mp4","requested_codec":"h264","requested_effort":"medium","crf":23,"quality_cpu_preset":"medium","bitrate_kbps":null}}}"#.utf8))
+        require(withdrawnGrant.renderAuthority?.effectiveTuples.isEmpty == true,
+                "an explicitly empty v2 list must not fall back to the old tuple")
+        // A tuple the Hub wraps as `requested_encode` beside its evidence digest is the same
+        // tuple, and it reads the same way.
+        let wrapped = try! grantDecoder.decode(NativeRenderAuthorityResponse.self,
+            from: Data(#"{"ok":true,"render_authority":{"accept_unqualified":true,"granted_encodes":[{"requested_encode":{"container":"webm","requested_codec":"h264","requested_effort":"ultrafast","crf":28,"quality_cpu_preset":"ultrafast","bitrate_kbps":null},"authority_digest":"a"}]}}"#.utf8))
+        let wrappedTuple = wrapped.renderAuthority?.effectiveTuples.first?.line ?? ""
+        require(wrappedTuple.contains("WEBM") && wrappedTuple.contains("CRF 28")
+                && wrappedTuple.contains("bitrate uncapped"),
+                "a wrapped tuple must read the same as a flat one: \(wrappedTuple)")
+
         print("Native API contract checks passed")
     }
 }

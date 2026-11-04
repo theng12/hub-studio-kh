@@ -5303,9 +5303,14 @@ struct StudioContent: View {
                      trailing: {
                          // The list is read when the page opens, not on the poll: a render finishing
                          // while the page is open is one click away rather than two seconds away.
-                         Button("Refresh") { Task { await workspace.refreshRenders() } }
+                         // The grant is read with it: the owner changes the grant on the Gateway,
+                         // and this button is the one way to see the new answer here.
+                         Button("Refresh") {
+                             Task { await workspace.refreshRenders(); await workspace.refreshRenderAuthority() }
+                         }
                              .hubRowControl().disabled(!connected)
                      }) {
+            renderGrantLine
             if let history = workspace.renderHistory {
                 renderTotals(history)
                 if history.renders.isEmpty {
@@ -5345,6 +5350,41 @@ struct StudioContent: View {
         .sheet(item: $openRender) { render in
             RenderDetailSheet(render: render) { openRender = nil }
         }
+    }
+
+    /// The owner's render grant on this Mac, in one plain line, with every exact tuple it covers.
+    ///
+    /// Read only — the app never changes the grant. A grant the Hub did not answer about says
+    /// so; it never reads as a working one, and a grant that is on but cannot act on this Mac
+    /// says that too rather than being softened into "On".
+    private var renderGrantLine: some View {
+        VStack(alignment: .leading, spacing: HubSpace.xs) {
+            if let authority = workspace.renderAuthority {
+                Text(authority.grantLine)
+                    .font(HubType.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                let tuples = authority.effectiveTuples
+                if tuples.isEmpty {
+                    Text("No encode tuple was published for this grant.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ForEach(tuples.indices, id: \.self) { index in
+                        Text(tuples[index].line)
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } else if let problem = workspace.renderAuthorityError {
+                Text("Render grant: not read — \(problem)")
+                    .font(HubType.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Reading this Mac's render grant…")
+                    .font(HubType.secondary).foregroundStyle(.secondary)
+            }
+        }
+        .task(id: connected) { if connected { await workspace.refreshRenderAuthority() } }
     }
 
     /// The four numbers the owner asked for, each either measured or absent — never a 0 standing in
