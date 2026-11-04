@@ -601,6 +601,25 @@ class InstalledRenderAuthorityLoader:
         # is left when there is no measured one.
         return self._unqualified_authority()
 
+    def probe_authority(self) -> InstalledRenderAuthority | None:
+        """The installed, identity-checked tools an encode probe runs under, or None.
+
+        A probe names the digests of the tools that are actually pinned whether or not this
+        Mac has been granted production rendering: probing is how that evidence is produced
+        in the first place. This reuses the exact descriptor, manifest, tool-hash and
+        source-hash validation a measured authority passes. The tier fields carry the
+        pinned compiler's own default and are not part of a probe's identity (the probe
+        tuple and the evidence decide those). The result grants nothing: it is never
+        production_eligible and is never written anywhere.
+        """
+        pair = render_encode.primary_pair(render_encode.DEFAULT_OPT_IN_ENCODE)
+        if pair is None:
+            return None
+        document = self._installed_document(pair[0], pair[1], False)
+        if document is None:
+            return None
+        return self._authority(document, production=False)
+
     def _intent(self) -> dict[str, Any] | None:
         intent = self._record(self._INTENT_KEYS, "qualify.json")
         try:

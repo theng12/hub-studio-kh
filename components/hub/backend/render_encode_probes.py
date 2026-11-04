@@ -231,10 +231,7 @@ class EncodeProbeControl:
         """The closed hardware block the evidence carries."""
         facts = self._hardware()
         hardware_class = ""
-        try:
-            authority = self.loader.snapshot()
-        except (OSError, TypeError, ValueError, KeyError):
-            authority = None
+        authority = self._authority()
         if authority is not None:
             hardware_class = getattr(authority.qualification, "hardware_class", "") or ""
         return {
@@ -250,10 +247,7 @@ class EncodeProbeControl:
         The digests come from the loader's own authority: the probe runs the pinned
         tools, so it may only name the digests of the tools that are actually pinned.
         """
-        try:
-            authority = self.loader.snapshot()
-        except (OSError, TypeError, ValueError, KeyError):
-            return None
+        authority = self._authority()
         if authority is None:
             return None
         qualification = getattr(authority, "qualification", None)
@@ -267,10 +261,7 @@ class EncodeProbeControl:
         return digests  # type: ignore[return-value]
 
     def _tool_paths(self) -> tuple[Path, Path] | None:
-        try:
-            authority = self.loader.snapshot()
-        except (OSError, TypeError, ValueError, KeyError):
-            return None
+        authority = self._authority()
         if authority is None:
             return None
         ffmpeg = getattr(authority, "ffmpeg", None)
@@ -992,8 +983,23 @@ class EncodeProbeControl:
         return None
 
     def _authority(self) -> Any:
+        """The authority a probe runs under: the granted one, else the installed tools.
+
+        A probe produces the evidence an owner's later enable acts on, so it must run with
+        execution off. The installed descriptors, tools and bounds are the same checks a
+        measured authority passes, and the installed authority grants nothing.
+        """
         try:
-            return self.loader.snapshot()
+            granted = self.loader.snapshot()
+        except (OSError, TypeError, ValueError, KeyError):
+            granted = None
+        if granted is not None:
+            return granted
+        installed = getattr(self.loader, "probe_authority", None)
+        if not callable(installed):
+            return None
+        try:
+            return installed()
         except (OSError, TypeError, ValueError, KeyError):
             return None
 
