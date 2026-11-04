@@ -107,6 +107,47 @@ class ReadTests(unittest.TestCase):
         self.assertEqual(row["gateway_attempt_key"], "gateway-job-1")
         self.assertIsNone(row["failure"])
 
+    def test_peak_rss_comes_from_the_completed_jobs_retained_receipt(self) -> None:
+        from uuid import uuid4
+        from components.hub.backend import render_authority_files
+        from components.hub.backend.render_executor import InstalledRenderAuthorityLoader
+
+        # macOS spells TemporaryDirectory under /var, a symlink the strict reader refuses.
+        self.path = self.path.resolve()
+        job_id = str(uuid4())
+        document = {
+            "format": "studio.render.qualification-receipt.v1", "production_eligible": False,
+            "profile_digest": "1" * 64, "tools_digest": "2" * 64,
+            "compiler_digest": "3" * 64, "hardware_class": "m4-16gb",
+            "selected_tier": "hardware-h264", "exact_encoder": "h264_videotoolbox",
+            "font_support": False, "files": {},
+            "bounds": {"max_rss_bytes": 100_000_000, "max_wall_seconds": 120,
+                       "min_available_memory_bytes": 100_000_000,
+                       "output_limit_bytes": 50_000_000},
+        }
+        document["qualification_digest"] = InstalledRenderAuthorityLoader._record_digest(document)
+        measured = {"peak_rss_bytes": 12_345_678, "wall_seconds": 60,
+                    "min_free_bytes": 100_000_000, "output_bytes": 25_000_000,
+                    "hub_job_id": job_id, "receipt_digest": _RECEIPT["receipt_digest"]}
+        insert(self.path, job_id, qualification_json=json.dumps({"document": document}))
+        self.assertIsNone(self.read()["renders"][0]["peak_rss_bytes"])
+        (self.path.parent / "render-authority").mkdir(mode=0o700)
+        render_authority_files.write_record_once(
+            self.path.parent, "receipts", InstalledRenderAuthorityLoader._receipt_name(
+                document["hardware_class"], job_id, document["qualification_digest"]),
+            json.dumps({**document, "intent_id": job_id, "measured": measured}).encode())
+        row = self.read()["renders"][0]
+        self.assertEqual(row["peak_rss_bytes"], 12_345_678)
+        self.assertIn("sampled every 250 ms", row["peak_rss_source"])
+        self.assertEqual(render_history.detail(self.path, job_id, now=NOW)["peak_rss_bytes"],
+                         12_345_678)
+        # The same file must not be credited to a different output or failed attempt.
+        with sqlite3.connect(self.path) as connection:
+            connection.execute("UPDATE render_jobs SET output_receipt_json = ? WHERE id = ?",
+                               (json.dumps({**_RECEIPT, "receipt_digest": "0" * 64}), job_id))
+        self.assertIsNone(self.read()["renders"][0]["peak_rss_bytes"])
+        self.assertIsNone(self.read()["renders"][0]["peak_rss_source"])
+
     def test_display_labels_story_sent_are_published_and_absent_ones_stay_absent(self) -> None:
         """Channel and episode for the row, or nothing: never a name the Hub made up."""
         insert(self.path, "job-1",

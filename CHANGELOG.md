@@ -2,6 +2,18 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.221 — 2026-11-05
+
+- Failed encoding checks keep the Mac’s actual tool error, including missing-file or permission details, so a later read still explains the failure.
+- Completed remote rendering jobs retain their own measured peak memory. Older jobs without that measurement remain unknown; the current memory admission limit is unchanged.
+- Paced updates keep the health readback that held the next site. Verified rendering-switch writes are reported separately when their fleet listing has not caught up.
+- Best for this hardware stays unavailable until qualified comparisons support it. Paused Macs stay paused.
+
+### Technical notes
+
+- Pending probe diagnostics are retained separately from settled results; unknown process state continues to hold physical capacity. Existing public probe and explicit-render schemas remain compatible.
+- Revision-4 output-settings transport fixtures preserve deployed Hub v1/v2 parsing. A private capability read, including the fixed controller-to-node relay, explicitly reports Best unsupported with null profile descriptors. Selection and evidence routes remain unavailable; no temporary selection store or synthetic Best grant is created.
+
 ## 0.6.220 — 2026-11-04
 
 - A Mac can check its encoding choices before you turn on remote rendering. Enabling it after a successful check covers only the choices that passed on that Mac.

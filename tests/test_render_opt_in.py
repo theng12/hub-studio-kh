@@ -440,18 +440,24 @@ class ReceiptHonestyTests(OptInFixture):
             machine="local", broker_api=SimpleNamespace())
         self.assertFalse(no_writer._record_qualification(context, output, measured, 0.0))
 
-    def test_an_ordinary_production_run_still_writes_nothing(self) -> None:
+    def test_an_ordinary_production_run_retains_its_own_measurement(self) -> None:
         output = SimpleNamespace(output_size_bytes=1, receipt_digest="5" * 64)
         context = SimpleNamespace(
-            purpose="production", qualification_permit=None, hub_job_id="job-1",
+            purpose="production", qualification_permit=None, hub_job_id=str(uuid4()),
             qualification=SimpleNamespace(document=self.document))
         executor = RenderExecutor(
             runtime=SimpleNamespace(), assets=None, authority=self.loader,
-            machine="local", broker_api=SimpleNamespace())
-        with mock.patch.object(self.loader, "write_receipt") as writer:
+            machine="local", broker_api=SimpleNamespace(), monotonic=lambda: 1.0)
+        measured = {"peak_rss_bytes": 4_096, "min_free_bytes": 9_000_000}
+        with mock.patch.object(self.loader, "write_receipt", return_value=True) as writer:
             self.assertTrue(executor._record_qualification(
-                context, output, {"peak_rss_bytes": 1, "min_free_bytes": 1}, 0.0))
-        writer.assert_not_called()
+                context, output, measured, 0.0))
+        writer.assert_called_once_with(self.document, context.hub_job_id, {
+            **measured, "wall_seconds": 1, "output_bytes": 1,
+            "hub_job_id": context.hub_job_id, "receipt_digest": output.receipt_digest,
+        })
+        with mock.patch.object(self.loader, "write_receipt", return_value=False):
+            self.assertFalse(executor._record_qualification(context, output, measured, 0.0))
 
 
 class RealTierLabelTests(unittest.TestCase):

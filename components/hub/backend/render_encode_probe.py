@@ -77,11 +77,32 @@ class EncodeProbeError(RuntimeError):
         self.detail = detail
 
 
+def exception_text(exc: BaseException) -> str:
+    """Bounded text for a failure: its own message plus what it masked, never argv."""
+    parts = [str(exc)]
+    seen = exc.__context__
+    while seen is not None and len(parts) < 4:
+        parts.append(f"{type(seen).__name__}: {seen}")
+        seen = seen.__context__
+    return " | ".join(parts).encode("utf-8")[:_DIAGNOSTIC_TAIL_BYTES].decode("utf-8", "ignore")
+
+
+def failure_reason(error: EncodeProbeError) -> str:
+    """What a durable failure keeps: the classification and its bounded detail."""
+    reason = error.reason[:_DIAGNOSTIC_TAIL_BYTES]
+    detail = error.detail.strip()
+    if not detail:
+        return reason
+    room = max(0, _DIAGNOSTIC_TAIL_BYTES - len(reason) - 2)
+    return f"{reason}: {detail[:room]}".encode("utf-8")[:_DIAGNOSTIC_TAIL_BYTES].decode("utf-8", "ignore")
+
+
 @dataclass(frozen=True)
 class ProbeRun:
     """What one finished process said. The caller owns the process; this is its report."""
 
-    returncode: int
+    # None when no exit could be proved; a negative number is the POSIX death signal.
+    returncode: int | None
     stdout: bytes = b""
     stderr: bytes = b""
     wall_seconds: float = 0.0
@@ -302,6 +323,21 @@ def _tail(data: bytes) -> str:
     return data[-_DIAGNOSTIC_TAIL_BYTES:].decode("utf-8", "replace")
 
 
+def _exit_detail(returncode: int | None, stderr: bytes) -> str:
+    """The numeric exit (or signal, or its absence) and the stderr tail, bounded."""
+    if returncode is None:
+        label = "exit unknown"
+    elif returncode < 0:
+        label = f"signal {-returncode}"
+    else:
+        label = f"exit {returncode}"
+    tail = _tail(stderr).strip()
+    if not tail:
+        return label
+    room = max(0, _DIAGNOSTIC_TAIL_BYTES - len(label) - 2)
+    return f"{label}: {tail[:room]}"
+
+
 def _stream_of(streams: list[Any], kind: str) -> dict[str, Any]:
     for stream in streams:
         if type(stream) is dict and stream.get("codec_type") == kind:
@@ -394,13 +430,17 @@ def probe_encode_support(encode: Mapping[str, Any], *, ffmpeg: Path, ffprobe: Pa
     try:
         run = runner(plan.ffmpeg_argv, timeout_seconds)
     except Exception as exc:  # noqa: BLE001 - a failed launch is a failed probe
-        raise EncodeProbeError("the encoder could not be run", str(exc)) from exc
+        raise EncodeProbeError("the encoder could not be run",
+                               exception_text(exc)) from exc
     if not math.isfinite(run.wall_seconds) or not 0 <= run.wall_seconds <= timeout_seconds:
         raise EncodeProbeError("the encoder exceeded its wall bound",
                                str(run.wall_seconds))
+    if run.returncode is None:
+        raise EncodeProbeError("the encoder did not prove a clean exit",
+                               _exit_detail(None, run.stderr))
     if run.returncode != 0:
         raise EncodeProbeError("the encoder exited with a non-zero code",
-                               _tail(run.stderr))
+                               _exit_detail(run.returncode, run.stderr))
     if plan.output_path.is_symlink() or not plan.output_path.is_file():
         raise EncodeProbeError("the encoder produced no regular output file")
     try:
@@ -412,11 +452,15 @@ def probe_encode_support(encode: Mapping[str, Any], *, ffmpeg: Path, ffprobe: Pa
     try:
         probe = runner(plan.ffprobe_argv, timeout_seconds)
     except Exception as exc:  # noqa: BLE001 - a failed launch is a failed probe
-        raise EncodeProbeError("ffprobe could not be run", str(exc)) from exc
+        raise EncodeProbeError("ffprobe could not be run", exception_text(exc)) from exc
     if not math.isfinite(probe.wall_seconds) or not 0 <= probe.wall_seconds <= timeout_seconds:
         raise EncodeProbeError("ffprobe exceeded its wall bound", str(probe.wall_seconds))
+    if probe.returncode is None:
+        raise EncodeProbeError("ffprobe did not prove a clean exit",
+                               _exit_detail(None, probe.stderr))
     if probe.returncode != 0:
-        raise EncodeProbeError("ffprobe exited with a non-zero code", _tail(probe.stderr))
+        raise EncodeProbeError("ffprobe exited with a non-zero code",
+                               _exit_detail(probe.returncode, probe.stderr))
     if len(probe.stdout) > _FFPROBE_LIMIT_BYTES:
         raise EncodeProbeError("ffprobe metadata exceeded its bound")
     try:

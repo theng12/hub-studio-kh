@@ -519,9 +519,58 @@ class Rollout:
             open_jobs, error = None, f'{type(exc).__name__}: {exc}'
         return site_read(location, open_jobs, error)
 
-    def members_of(self, site_id: str, force: bool = False) -> list[dict]:
+    def members_of(self, site_id: str, force: bool = False, *, include_unexpected=False) -> list[dict]:
         fleet = self.gateway.fleet(force=force)
-        return [m for m in fleet.get('machines') or [] if m.get('location_id') == site_id]
+        required = getattr(self, '_paced_required', None)
+        excluded = getattr(self, '_paced_offline', set())
+        return [m for m in fleet.get('machines') or [] if m.get('location_id') == site_id
+                and (required is None or m.get('machine') in required
+                     or (include_unexpected and m.get('machine') not in excluded))]
+
+    def require_fresh_members(self, site_id: str, required: set[str], destination: Path) -> dict:
+        """Retain the serial driver's exact comparison before holding the next site."""
+        read_error = None
+        try:
+            members = self.members_of(site_id, force=True, include_unexpected=True)
+        except Exception as exc:  # a failed read must also leave a comparison receipt
+            members = []
+            read_error = type(exc).__name__
+        fields = ('machine', 'label', 'reachable', 'hub_version', 'health')
+        compared = []
+        for member in members:
+            startup = member.get('startup')
+            startup = startup if isinstance(startup, dict) else {}
+            running = startup.get('services_running')
+            running = running if isinstance(running, dict) else {}
+            failures = [key for key, valid in (
+                ('reachable', member.get('reachable') is True),
+                ('hub_version', member.get('hub_version') == self.version),
+                ('health', str(member.get('health') or '').lower() in ('up', 'ready', '')),
+                ('startup.stale', startup.get('stale') is not True),
+                ('startup.services_running', member_services_up(member) is True),
+            ) if not valid]
+            compared.append({**{key: member.get(key) for key in fields},
+                             'startup': {'stale': startup.get('stale'),
+                                         'services_running': {key: running.get(key)
+                                                              for key in ('up', 'total')}},
+                             'failing_fields': failures})
+        observed = {member.get('machine') for member in members if member.get('machine')}
+        missing, unexpected = sorted(required - observed), sorted(observed - required)
+        passed = bool(required) and not missing and not unexpected and all(
+            not member['failing_fields'] for member in compared)
+        record = {'at': utc_now(), 'site': site_id, 'version': self.version,
+                  'required_members': sorted(required), 'members': compared,
+                  'missing_members': missing, 'unexpected_members': unexpected,
+                  'read_error': read_error, 'passed': passed,
+                  'hold_reason': None if passed else
+                      'Fresh site health/version readback failed; next site held'}
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open('x') as handle:
+            handle.write(json.dumps(record, indent=2) + '\n')
+        if not passed:
+            raise RuntimeError(record['hold_reason'])
+        return record
 
     def _try_read(self, site_id: str) -> dict | None:
         """A read that failed is this site's wait, not this run's end."""
@@ -798,7 +847,56 @@ class Rollout:
         self.read_pause(f'after {label} verified')
         return row
 
-    def run(self, sites: list[dict]) -> list[dict]:
+    def run_paced(self, sites: list[dict]) -> list[dict]:
+        """Publish one quiet site at a time, retaining fresh proof before the next site."""
+        baseline = self.read_pause('before the first POST')
+        rows = []
+        for site in sites:
+            site_id = site['id']
+            row = {'site': site_id, 'label': site.get('label'), 'warnings': []}
+            try:
+                if self.read_pause('before paced site') != baseline:
+                    raise RuntimeError('generation pause changed; next site held')
+                fleet = self.gateway.fleet(force=True)
+                location = next(x for x in fleet.get('locations', []) if x.get('id') == site_id)
+                members = [x for x in fleet.get('machines', []) if x.get('location_id') == site_id]
+                offline = [{k: x.get(k) for k in ('machine', 'label', 'hub_version')}
+                           for x in members if x.get('reachable') is not True]
+                row['offline_members_not_chased'] = offline
+                if location.get('reachable') is not True:
+                    row['state'] = 'offline; not published'
+                    rows.append(row)
+                    continue
+                required = {x['machine'] for x in members
+                            if x.get('reachable') is True and x.get('machine')}
+                if not required:
+                    raise RuntimeError('reachable site returned no online members; next site held')
+                self._paced_required = required
+                self._paced_offline = {x.get('machine') for x in offline}
+                row = {**self.run_site(site), 'offline_members_not_chased': offline,
+                       'required_online_members': sorted(required)}
+                if row.get('state') != 'verified' or row.get('studios_down'):
+                    raise RuntimeError('site is not fully healthy; next site held')
+                comparison = self.receipts / f'{site_id}-{self.version}-fresh-{time.time_ns()}.json'
+                row['fresh_readback_receipt'] = str(comparison)
+                self.require_fresh_members(site_id, required, comparison)
+                if self.read_pause('after paced verification') != baseline:
+                    raise RuntimeError('generation pause changed; next site held')
+            except Exception as exc:
+                row['state'] = 'verification pending; next site held'
+                row['hold_reason'] = str(exc)
+                rows.append(row)
+                break
+            finally:
+                self._paced_required = None
+                self._paced_offline = set()
+            rows.append(row)
+        self.read_pause('final readback')
+        return rows
+
+    def run(self, sites: list[dict], *, paced: bool = False) -> list[dict]:
+        if paced:
+            return self.run_paced(sites)
         self.read_pause('before the first POST')
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(sites))) as pool:
             rows = list(pool.map(self.run_site, sites))
@@ -854,6 +952,8 @@ def main(argv: list[str] | None = None) -> int:
                         help='receipt JSON to write; refused when it already exists')
     parser.add_argument('--only-sites', default=None,
                         help='comma-separated site ids or labels; default: every site')
+    parser.add_argument('--paced', action='store_true',
+                        help='verify each online site with fresh retained health before the next')
     parser.add_argument('--full', action='store_true',
                         help='send the whole image to every site, even one that advertises the '
                              'delta capability (a Hub older than the release can refuse a delta '
@@ -889,7 +989,7 @@ def main(argv: list[str] | None = None) -> int:
     sites = choose_sites(fleet.get('locations') or [], args.only_sites)
     note('sites: ' + ', '.join(f'{s["id"]} ({s["label"]})' for s in sites))
 
-    rows = rollout.run(sites)
+    rows = rollout.run(sites, paced=args.paced)
     pause_reads = rollout.pause_reads
     pause_baseline = next((r['value'] for r in pause_reads
                            if r['where'] == 'before the first POST'), None)
@@ -925,7 +1025,9 @@ def main(argv: list[str] | None = None) -> int:
                           for loc in readback_fleet.get('locations') or []],
             'error': readback_fleet.get('error'),
         },
-        'concurrency': (f'{len(sites)} site workers, one bounded window per phase each, '
+        'paced': args.paced,
+        'concurrency': ('one site at a time, fresh health verified before advancing' if args.paced else
+                        f'{len(sites)} site workers, one bounded window per phase each, '
                         'no shared wait; the Gateway signs one push at a time '
                         '(release_publisher._push_lock)'),
         'table': render_table(rows),
@@ -939,7 +1041,8 @@ def main(argv: list[str] | None = None) -> int:
                   else 'CHANGED during the run by something other than this tool')
     note(f'pause readback: {pause_final!r} ({pause_note}); never written')
     note(f'receipt: {evidence}')
-    bad = [row for row in rows if row.get('state') != 'verified']
+    bad = [row for row in rows if row.get('state') != 'verified'
+           and not (args.paced and row.get('state') == 'offline; not published')]
     if bad:
         note('sites not verified: ' + ', '.join(f'{r["site"]} ({r["state"]})' for r in bad))
     return 0 if not bad else 1

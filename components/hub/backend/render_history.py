@@ -49,7 +49,7 @@ _COLUMNS = (
     "id, state, machine, purpose, created_at, updated_at, started_at, display_json, "
     "packet_json, output_path, output_receipt_json, recovery_note, stopped_evidence_json, "
     "story_uuid, intent_id, attempt_no, gateway_attempt_key, dispatch_key, "
-    "profile_digest, tools_digest, compiler_digest"
+    "profile_digest, tools_digest, compiler_digest, qualification_json"
 )
 
 FAILURE_REASONS = {
@@ -126,7 +126,7 @@ def _display(row: Any) -> dict[str, str] | None:
     return labels or None
 
 
-def entry(row: Any, *, now: float) -> dict[str, Any]:
+def entry(row: Any, *, now: float, data_root: Path | None = None) -> dict[str, Any]:
     """One render, as the tab shows it. Every field is either measured or None."""
     packet = _json(row["packet_json"])
     recipe = packet.get("recipe") if isinstance(packet.get("recipe"), dict) else {}
@@ -135,6 +135,15 @@ def entry(row: Any, *, now: float) -> dict[str, Any]:
     receipt = _json(row["output_receipt_json"])
     state = str(row["state"])
     finished = outcome(state) != "running"
+    measured = None
+    if state == SUCCEEDED and data_root is not None:
+        from .render_executor import InstalledRenderAuthorityLoader
+        qualification = _json(row["qualification_json"])
+        measured = InstalledRenderAuthorityLoader.read_job_measurement(
+            data_root, qualification.get("document") or {}, row["id"], receipt)
+    peak_rss = (measured or {}).get("peak_rss_bytes")
+    if type(peak_rss) is not int or peak_rss <= 0:
+        peak_rss = None
 
     started = _stated_number(row["started_at"])
     settled = _stated_number(row["updated_at"]) if finished else None
@@ -171,6 +180,10 @@ def entry(row: Any, *, now: float) -> dict[str, Any]:
         "tier": receipt.get("selected_tier"),
         "output_bytes": _stated_number(receipt.get("output_size_bytes")),
         "output_sha256": receipt.get("output_sha256"),
+        "peak_rss_bytes": peak_rss,
+        "peak_rss_source": (
+            "retained job receipt; FFmpeg process-tree RSS sampled every 250 ms"
+            if peak_rss is not None else None),
         "profile_digest": row["profile_digest"],
         "tools_digest": row["tools_digest"],
         "compiler_digest": row["compiler_digest"],
@@ -304,7 +317,7 @@ def read(database_path: str | Path, *, limit: int = 200,
     answer: dict[str, Any] = {"renders": [], "totals": totals([]),
                               "retention_days": RETENTION_DAYS}
     rows = _rows(database_path, now=now)
-    every = [entry(row, now=now) for row in rows]
+    every = [entry(row, now=now, data_root=Path(database_path).parent) for row in rows]
     answer["renders"] = every[:limit]
     answer["totals"] = totals(every)
     # Per-Mac measured speed, over the whole retained window rather than the page's `limit`:
@@ -343,5 +356,5 @@ def detail(database_path: str | Path, job_id: str, *,
     now = time.time() if now is None else now
     for row in _rows(database_path, now=now):
         if row["id"] == job_id:
-            return entry(row, now=now)
+            return entry(row, now=now, data_root=Path(database_path).parent)
     return None

@@ -297,6 +297,82 @@ class ProbeTests(ProbeControlFixture):
         self.assertIsNone(state["evidence"])
         self.assertIsNone(state["authority_digest"])
 
+    def test_a_tool_that_cannot_run_keeps_its_diagnostics_in_the_result_and_the_receipt(self):
+        """errno, message and path of a failed tool reach the durable result and back out."""
+        calls = []
+
+        def missing_ffprobe(argv, timeout_seconds, workspace, on_spawn=None):
+            on_spawn(FakeIdentity())
+            calls.append(list(argv))
+            if len(calls) == 1:
+                Path(argv[-1]).write_bytes(b"probe-bytes")
+                return ProbeRun(0, b"", b"", 0.5)
+            raise FileNotFoundError(2, "No such file or directory", "/tools/ffprobe")
+
+        self.control._runner_callable = missing_ffprobe
+        state = self.probe()
+        self.assertEqual(state["state"], "unmeasured")
+        self.assertEqual(set(state), set(render_encode_probes._STATE_KEYS),
+                         "the closed public response gains no key")
+        stored = self.control._read_result(state["probe_key"])
+        self.assertEqual(set(stored),
+                         {"format", "probe_key", "state", "reason", "updated_at"})
+        for text in (stored["reason"], self.inspect()["reason"]):
+            self.assertIn("ffprobe could not be run", text)
+            self.assertIn("Errno 2", text)
+            self.assertIn("/tools/ffprobe", text)
+        self.assertEqual(stored["reason"], self.inspect()["reason"])
+
+    def test_a_signal_death_retains_its_number(self):
+        self.control._runner_callable = FakeRunner(encoder_code=-9)
+        state = self.probe()
+        self.assertEqual(state["state"], "unsupported")
+        stored = self.control._read_result(state["probe_key"])
+        self.assertEqual(stored["reason"], self.inspect()["reason"])
+        self.assertIn("signal 9", stored["reason"])
+
+    def test_an_unproved_exit_is_never_an_invented_code(self):
+        self.control._runner_callable = FakeRunner(encoder_code=None)
+        state = self.probe()
+        self.assertEqual(state["state"], "unmeasured")
+        stored = self.control._read_result(state["probe_key"])
+        self.assertEqual(stored["reason"], self.inspect()["reason"])
+        self.assertIn("exit unknown", stored["reason"])
+
+    def test_a_spawn_failure_stays_readable_without_settling_its_unknown_hold(self):
+        def missing_encoder(argv, timeout_seconds, workspace, on_spawn=None):
+            raise PermissionError(13, "Permission denied", "/tools/ffmpeg")
+
+        self.control._runner_callable = missing_encoder
+        state = self.probe()
+        self.assertEqual(state["state"], "pending")
+        self.assertEqual(set(state), set(render_encode_probes._STATE_KEYS))
+        self.assertIsNone(self.control._read_result(state["probe_key"]))
+        diagnostic = self.control._read_result(state["probe_key"], pending=True)
+        self.assertEqual(diagnostic["format"], "studio.render.encode-probe-diagnostic.v1")
+        self.assertEqual(diagnostic["reason"], self.inspect()["reason"])
+        for text in (state["reason"], self.inspect()["reason"]):
+            self.assertIn("Errno 13", text)
+            self.assertIn("Permission denied", text)
+            self.assertIn("/tools/ffmpeg", text)
+        self.assertTrue(self.executor.broker.holds)
+        recovered = asyncio.run(self.control.recover_and_restore_physical_holds())
+        self.assertEqual(recovered, [{"probe_key": state["probe_key"], "state": "pending"}])
+        self.assertEqual(self.inspect()["reason"], diagnostic["reason"])
+        self.assertTrue(self.executor.broker.holds)
+        self.assertEqual(self.executor.broker.released, [])
+        self.assertEqual(self.probe()["reason"], diagnostic["reason"])
+        self.assertEqual(len(self.executor.broker.acquired), 1)
+
+    def test_pending_diagnostics_keep_unicode_within_the_record_byte_bound(self):
+        key = self.inspect()["probe_key"]
+        self.assertTrue(self.control._write_result(
+            key, "pending", "Errno 13: /ឧបករណ៍/ffmpeg\n" + "ភ" * 5000, pending=True))
+        diagnostic = self.control._read_result(key, pending=True)
+        self.assertIn("/ឧបករណ៍/ffmpeg", diagnostic["reason"])
+        self.assertLessEqual(len(diagnostic["reason"].encode("utf-8")), 4096)
+        self.assertIsNone(self.control._read_result(key))
+
     def test_a_wrong_probe_report_is_never_support(self):
         self.runner = FakeRunner(probe_report=report(pix_fmt="yuv444p"))
         self.control._runner_callable = self.runner

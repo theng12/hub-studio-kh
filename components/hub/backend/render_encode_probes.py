@@ -34,9 +34,12 @@ from typing import Any, Callable, Mapping, Sequence
 
 from . import render_authority_files
 from .render_encode_probe import (
+    _DIAGNOSTIC_TAIL_BYTES,
     EncodeProbeError,
     ProbeRun,
     UnsupportedEncodeProbe,
+    exception_text,
+    failure_reason,
     plan_encode_probe,
     probe_encode_support,
 )
@@ -455,30 +458,32 @@ class EncodeProbeControl:
             return False
         return True
 
-    def _write_result(self, probe_key: str, state: str, reason: str) -> bool:
-        """Publish the outcome of one probe once. The outcome is never rewritten."""
+    def _write_result(self, probe_key: str, state: str, reason: str, *, pending: bool = False) -> bool:
+        """Retain a result, or a separate diagnostic that cannot settle a pending probe."""
+        suffix = "diagnostic" if pending else "result"
         document = {
-            "format": RESULT_FORMAT,
+            "format": "studio.render.encode-probe-diagnostic.v1" if pending else RESULT_FORMAT,
             "probe_key": probe_key,
             "state": state,
-            "reason": reason,
+            "reason": reason.encode("utf-8")[:_DIAGNOSTIC_TAIL_BYTES].decode("utf-8", "ignore"),
             "updated_at": int(self._clock()),
         }
         raw = _canonical(document)
         self._ensure_authority_directory()
         try:
             render_authority_files.write_record_once(
-                self.data_root, DIRECTORY, f"{probe_key}.result.json", raw)
+                self.data_root, DIRECTORY, f"{probe_key}.{suffix}.json", raw)
         except FileExistsError:
             return True
         except (OSError, ValueError):
             return False
         return True
 
-    def _read_result(self, probe_key: str) -> dict[str, Any] | None:
+    def _read_result(self, probe_key: str, *, pending: bool = False) -> dict[str, Any] | None:
+        suffix = "diagnostic" if pending else "result"
         try:
             raw = render_authority_files.read_record(
-                self.data_root, DIRECTORY, f"{probe_key}.result.json",
+                self.data_root, DIRECTORY, f"{probe_key}.{suffix}.json",
                 expected_uid=self._uid, max_bytes=MAX_RECORD_BYTES)
         except (OSError, ValueError):
             return None
@@ -489,9 +494,13 @@ class EncodeProbeControl:
         if (type(document) is not dict or set(document) != {
                 "format", "probe_key", "state", "reason", "updated_at"}):
             return None
-        if document["format"] != RESULT_FORMAT or document["probe_key"] != probe_key:
+        expected_format = "studio.render.encode-probe-diagnostic.v1" if pending else RESULT_FORMAT
+        if document["format"] != expected_format or document["probe_key"] != probe_key:
             return None
-        if document["state"] not in ("unsupported", "unmeasured"):
+        if document["state"] not in (("pending",) if pending else ("unsupported", "unmeasured")):
+            return None
+        if pending and (type(document["reason"]) is not str
+                        or not 0 < len(document["reason"].encode("utf-8")) <= _DIAGNOSTIC_TAIL_BYTES):
             return None
         return document
 
@@ -617,7 +626,9 @@ class EncodeProbeControl:
         if result is not None:
             return self._state(closed, result["state"], probe_key, result["reason"])
         if self._read_record(probe_key) is not None:
+            diagnostic = self._read_result(probe_key, pending=True)
             return self._state(closed, "pending", probe_key,
+                               diagnostic["reason"] if diagnostic is not None else
                                "the probe is running or its outcome is unknown")
         return self._state(closed, "unmeasured", probe_key,
                            "no probe has been run for this tuple on this node")
@@ -732,7 +743,7 @@ class EncodeProbeControl:
             except Exception as exc:  # noqa: BLE001 - an unproved identity is no identity
                 self._kill_group(process, identity)
                 detail = f"the probe process identity could not be proved: {exc}"
-                return ProbeRun(-1, b"",
+                return ProbeRun(None, b"",
                                 detail.encode("utf-8", "replace")[:512],
                                 time.monotonic() - started)
             try:
@@ -782,7 +793,7 @@ class EncodeProbeControl:
         if killed:
             raise RuntimeError("the probe exceeded a resource bound or lost its memory measurement")
         return ProbeRun(
-            returncode=int(process.returncode if process.returncode is not None else -1),
+            returncode=process.returncode,
             stdout=bytes(stdout), stderr=bytes(stderr),
             wall_seconds=time.monotonic() - started)
 
@@ -937,7 +948,10 @@ class EncodeProbeControl:
             # The outcome is unknown: the record stays pending and the hold stays.
             raise
         if outcome["state"] == "pending":
-            return self._state(closed, "pending", probe_key, outcome["reason"])
+            reason = outcome["reason"]
+            if not self._write_result(probe_key, "pending", reason, pending=True):
+                reason = "the pending diagnostic could not be saved: " + reason
+            return self._state(closed, "pending", probe_key, reason)
         if outcome["state"] == "supported":
             # The evidence is the record of a support; no second outcome is written.
             if not self._write_evidence(probe_key, outcome["evidence"]):
@@ -1106,10 +1120,11 @@ class EncodeProbeControl:
         except EncodeProbeError as exc:
             state = ("pending" if unsettled else
                      "unsupported" if _is_capability_refusal(exc.reason) else "unmeasured")
-            return {"state": state, "reason": exc.reason[:200], "evidence": None}
+            return {"state": state, "reason": failure_reason(exc), "evidence": None}
         except Exception as exc:  # noqa: BLE001 - an unknown outcome is not support
             return {"state": "pending" if unsettled else "unmeasured",
-                    "reason": f"the probe did not finish: {exc}"[:200], "evidence": None}
+                    "reason": f"the probe did not finish: {exception_text(exc)}"
+                    [:_DIAGNOSTIC_TAIL_BYTES], "evidence": None}
         oversized = self._oversized_output(scratch, output_limit)
         if oversized is not None:
             return {"state": "unsupported", "reason": oversized, "evidence": None}
@@ -1246,8 +1261,11 @@ class EncodeProbeControl:
                         settled = False
                 elif state != "gone":
                     settled = False
-            if settled and self._write_result(
-                    probe_key, "unmeasured", "the interrupted probe process groups are proved stopped"):
+            reason = "the interrupted probe process groups are proved stopped"
+            diagnostic = self._read_result(probe_key, pending=True)
+            if diagnostic is not None:
+                reason += ": " + diagnostic["reason"]
+            if settled and self._write_result(probe_key, "unmeasured", reason):
                 self._release(owner)
                 recovered.append({"probe_key": probe_key, "state": "unmeasured"})
             else:

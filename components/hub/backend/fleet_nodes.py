@@ -2360,7 +2360,7 @@ _MAX_RENDER_RELAY_RESPONSE = 8 * 1024 * 1024
 
 
 def _render_relay_segment(operation: str, identity: str) -> str:
-    if operation in {"submit", "encode_probe_get", "encode_probe_post"}:
+    if operation in {"submit", "encode_probe_get", "encode_probe_post", "output_settings_capabilities"}:
         if identity:
             raise ValueError("this operation does not accept a render identity")
         return ""
@@ -2408,6 +2408,7 @@ async def relay_final_render(
         "submit": "/api/hub/final-renders",
         "encode_probe_get": "/api/hub/final-renders/encode-probes",
         "encode_probe_post": "/api/hub/final-renders/encode-probes",
+        "output_settings_capabilities": "/api/hub/final-renders/output-settings/capabilities",
         "key_get": f"/api/hub/final-renders/by-idempotency-key/{segment}",
         "key_cancel": f"/api/hub/final-renders/by-idempotency-key/{segment}/cancel",
         "status": f"/api/hub/final-renders/{segment}",
@@ -2418,6 +2419,7 @@ async def relay_final_render(
     methods = {
         "blob_put": "PUT", "blob_status": "GET", "submit": "POST",
         "encode_probe_get": "GET", "encode_probe_post": "POST",
+        "output_settings_capabilities": "GET",
         "key_get": "GET", "key_cancel": "POST", "status": "GET",
         "cancel": "POST", "output": "GET", "ack": "POST",
     }

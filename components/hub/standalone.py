@@ -1629,6 +1629,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         settings=control_plane.load_settings,
     )
 
+    from .backend import render_output_settings
+    render_output_settings.register_routes(
+        app, hub_token=token, fleet_token=peers.fleet_token,
+        settings=control_plane.load_settings,
+    )
+
     async def _relay_final_render(node_id, operation, **kwargs):
         from .backend import fleet_nodes as fleet
         try:

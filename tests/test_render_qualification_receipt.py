@@ -267,6 +267,51 @@ class QualificationReceiptAuthorityTests(unittest.TestCase):
         self.assertFalse(self.loader.write_receipt(
             self.document, INTENT_ID, self.measured(hub_job_id="job-3")))
 
+    def test_completed_job_rss_reads_only_its_own_validated_receipt(self) -> None:
+        job_id = str(uuid4())
+        measured = self.measured(hub_job_id=job_id, peak_rss_bytes=12_345_678)
+        output = {"receipt_digest": measured["receipt_digest"], "output_size_bytes": 1}
+        self.assertTrue(self.loader.write_receipt(self.document, job_id, measured))
+        # Opt-in jobs retain a normalized qualification receipt, not their grant document.
+        opted_in = {**self.document, "format": self.loader._UNQUALIFIED_FORMAT,
+                    "opt_in": {"by": "owner", "at": 1}}
+        for document in (self.document, opted_in):
+            with self.subTest(format=document["format"]):
+                self.assertEqual(self.loader.read_job_measurement(
+                    self.data_root, document, job_id, output), measured)
+        self.assertIsNone(self.loader.read_job_measurement(
+            self.data_root, self.document, str(uuid4()), output))
+        self.assertIsNone(self.loader.read_job_measurement(
+            self.data_root, self.document, job_id,
+            {**output, "receipt_digest": "0" * 64}))
+        self.assertIsNone(self.loader.read_job_measurement(
+            self.data_root, self.document, job_id,
+            {**output, "output_size_bytes": 2}))
+        path = self.data_root / "render-authority/receipts" / self.loader._receipt_name(
+            HARDWARE_CLASS, job_id, self.document["qualification_digest"])
+        path.chmod(0o644)
+        self.assertIsNone(self.loader.read_job_measurement(
+            self.data_root, self.document, job_id, output))
+
+    def test_production_on_measured_authority_retains_this_runs_peak_rss(self) -> None:
+        job_id = str(uuid4())
+        context = SimpleNamespace(
+            purpose="production", qualification_permit=None, hub_job_id=job_id,
+            qualification=SimpleNamespace(document=self.enabled_record()))
+        output = SimpleNamespace(output_size_bytes=1, receipt_digest="5" * 64)
+        measured = {"peak_rss_bytes": 12_345_678, "min_free_bytes": 100_000_000}
+        executor = RenderExecutor(
+            runtime=SimpleNamespace(), assets=None, authority=self.loader,
+            machine="local", broker_api=SimpleNamespace(), monotonic=lambda: 1.0)
+        self.assertTrue(executor._record_qualification(context, output, measured, 0.0))
+        retained = self.loader.read_job_measurement(
+            self.data_root, self.document, job_id,
+            {"receipt_digest": output.receipt_digest, "output_size_bytes": 1})
+        self.assertEqual(retained["peak_rss_bytes"], 12_345_678)
+        self.assertNotEqual(retained["peak_rss_bytes"], self.enabled_record()["measured"]["peak_rss_bytes"])
+        with mock.patch.object(self.loader, "write_receipt", return_value=False):
+            self.assertFalse(executor._record_qualification(context, output, measured, 0.0))
+
     def test_post_validation_wall_over_bound_fails_without_clamping(self) -> None:
         measured = {"peak_rss_bytes": 1, "min_free_bytes": 1}
         receipt = SimpleNamespace(output_size_bytes=1, receipt_digest="5" * 64)

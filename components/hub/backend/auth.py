@@ -548,6 +548,8 @@ FLEET_ALLOWED = (
     ("PUT", r"^/api/hub/final-renders/blobs/[0-9a-f]{64}$"),
     ("GET", r"^/api/hub/final-renders/blobs/[0-9a-f]{64}/status$"),
     ("GET", r"^/api/hub/final-renders/capability$"),
+    ("GET", r"^/api/hub/final-renders/output-settings/capabilities$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/final-renders/output-settings/capabilities$"),
     ("GET", r"^/api/hub/final-renders/encode-probes$"),
     ("POST", r"^/api/hub/final-renders/encode-probes$"),
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/final-renders/encode-probes$"),

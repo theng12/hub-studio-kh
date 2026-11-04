@@ -314,8 +314,9 @@ class InstalledRenderAuthorityLoader:
             if key in cls._RECEIPT_KEYS and key != "qualification_digest"
         })).hexdigest()
 
+    @classmethod
     def _measured_evidence(
-        self, document: dict[str, Any], measured: Any,
+        cls, document: dict[str, Any], measured: Any,
     ) -> dict[str, Any] | None:
         """Validate evidence appended after the qualification run.
 
@@ -334,7 +335,7 @@ class InstalledRenderAuthorityLoader:
             )
             if any(type(value) is not int or value < 1 for value in bounds.values()):
                 return None
-            value = _closed(measured, self._MEASURED_KEYS, "measured evidence")
+            value = _closed(measured, cls._MEASURED_KEYS, "measured evidence")
             peak_rss_bytes = value["peak_rss_bytes"]
             wall_seconds = value["wall_seconds"]
             min_free_bytes = value["min_free_bytes"]
@@ -958,7 +959,8 @@ class InstalledRenderAuthorityLoader:
         self.migrate_probed_grant()
         return self.opt_in_state()
 
-    def receipt_document_for(self, document: dict[str, Any]) -> dict[str, Any] | None:
+    @classmethod
+    def receipt_document_for(cls, document: dict[str, Any]) -> dict[str, Any] | None:
         """The measured-receipt form of an opted-in authority, for the run that just proved it.
 
         Same tier, encoder, bounds and tool pins; the receipt format and its own digest. The
@@ -966,14 +968,45 @@ class InstalledRenderAuthorityLoader:
         be copied into ``enabled/`` exactly as a qualification receipt can.
         """
         if (type(document) is not dict or set(document) not in (
-                self._UNQUALIFIED_KEYS,
-                self._UNQUALIFIED_KEYS | {"requested_encode", "encode_authority", "grant_digest"})
-                or document["format"] not in (self._UNQUALIFIED_FORMAT, self._PROBED_FORMAT)):
+                cls._UNQUALIFIED_KEYS,
+                cls._UNQUALIFIED_KEYS | {"requested_encode", "encode_authority", "grant_digest"})
+                or document["format"] not in (cls._UNQUALIFIED_FORMAT, cls._PROBED_FORMAT)):
             return None
-        receipt = {key: document[key] for key in self._RECEIPT_KEYS}
+        receipt = {key: document[key] for key in cls._RECEIPT_KEYS}
         receipt["format"] = "studio.render.qualification-receipt.v1"
-        receipt["qualification_digest"] = self._record_digest(receipt)
+        receipt["qualification_digest"] = cls._record_digest(receipt)
         return receipt
+
+    @classmethod
+    def read_job_measurement(
+        cls, data_root: Path, document: dict[str, Any], job_id: str,
+        output_receipt: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Read only this completed job's retained measurement, never a qualification baseline."""
+        try:
+            expected = (
+                cls.receipt_document_for(document)
+                if document.get("format") in (cls._UNQUALIFIED_FORMAT, cls._PROBED_FORMAT)
+                else {key: document[key] for key in cls._RECEIPT_KEYS})
+            if expected is None:
+                return None
+            name = cls._receipt_name(
+                expected["hardware_class"], job_id, expected["qualification_digest"])
+            receipt = _closed(json.loads(render_authority_files.read_record(
+                data_root, "receipts", name, expected_uid=os.getuid())),
+                cls._ENABLED_KEYS, "render measurement receipt")
+            if (any(receipt[key] != expected[key] for key in cls._RECEIPT_KEYS)
+                    or receipt["qualification_digest"] != cls._record_digest(receipt)
+                    or receipt["intent_id"] != job_id):
+                return None
+            measured = cls._measured_evidence(receipt, receipt["measured"])
+            if (measured is None or measured["hub_job_id"] != job_id
+                    or measured["receipt_digest"] != output_receipt.get("receipt_digest")
+                    or measured["output_bytes"] != output_receipt.get("output_size_bytes")):
+                return None
+            return measured
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
 
     def _candidate(
         self, packet: dict[str, Any] | None = None, *, open_only: bool = True,
@@ -1670,11 +1703,10 @@ class RenderExecutor:
         self, context: RenderExecutionContext, receipt: ValidatedOutputReceipt,
         measured: dict[str, Any], started: float,
     ) -> bool:
-        """Leave one durable receipt before a qualification or opt-in output is published.
+        """Retain this render's measurements, separate from any earlier qualification run.
 
-        A qualification run writes the receipt its one-use intent was spent on. A run on an
-        owner-opted-in authority writes the receipt the authority never had: the measured
-        numbers of this very render, keyed by the Hub job id. Nothing else gets one.
+        A qualification uses its one-use intent; production uses its own job id so a
+        previously measured authority never substitutes old numbers for this run.
         """
         permit = context.qualification_permit
         document = context.qualification.document
@@ -1684,8 +1716,15 @@ class RenderExecutor:
                     in (InstalledRenderAuthorityLoader._UNQUALIFIED_FORMAT,
                         InstalledRenderAuthorityLoader._PROBED_FORMAT))
         if context.purpose != "qualification" and not opted_in:
-            return True
-        if opted_in:
+            if (type(document) is not dict
+                    or document.get("format") != "studio.render.qualification-receipt.v1"):
+                return True
+            if writer is None:
+                return False
+            document = {key: document[key]
+                        for key in InstalledRenderAuthorityLoader._RECEIPT_KEYS}
+            intent_id = context.hub_job_id
+        elif opted_in:
             convert = getattr(self._authority, "receipt_document_for", None)
             document = convert(document) if callable(convert) else None
             intent_id = context.hub_job_id

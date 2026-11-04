@@ -177,6 +177,44 @@ class Harness(unittest.TestCase):
         return {row['site']: row for row in rows}
 
 
+class PacedRolloutTests(Harness):
+    def test_paced_rollout_records_fresh_health_and_does_not_chase_offline_members(self):
+        gateway = self.gateway(FakeSite('one', ['controller', 'asleep'], offline=['asleep']),
+                               FakeSite('two', ['controller']),
+                               FakeSite('offline', ['controller'], reachable=False))
+        publish = gateway.publish
+        def checked_publish(*args, **kwargs):
+            if kwargs.get('controller_ids', args[3] if len(args) > 3 else None) == ['two']:
+                self.assertTrue(list(self.receipts.glob('one-*-fresh-*.json')))
+            return publish(*args, **kwargs)
+        gateway.publish = checked_publish
+        rows = self.rollout(gateway).run(
+            [{'id': key, 'label': key} for key in gateway.sites], paced=True)
+        self.assertEqual([row['state'] for row in rows],
+                         ['verified', 'verified', 'offline; not published'])
+        self.assertEqual([site for site, _ in gateway.posts], ['one', 'two'])
+        self.assertEqual(rows[0]['required_online_members'], ['controller'])
+        self.assertEqual(rows[0]['offline_members_not_chased'][0]['machine'], 'asleep')
+        self.assertTrue(json.loads(Path(rows[0]['fresh_readback_receipt']).read_text())['passed'])
+
+    def test_failed_fresh_readback_retains_evidence_and_holds_next_site(self):
+        gateway = self.gateway(FakeSite('one', ['controller']), FakeSite('two', ['controller']))
+        driver = self.rollout(gateway)
+        members_of = driver.members_of
+        require = driver.require_fresh_members
+        def stale_readback(site, required, destination):
+            driver.members_of = lambda *args, **kwargs: [
+                {**row, 'startup': {'stale': True}} for row in members_of(*args, **kwargs)]
+            return require(site, required, destination)
+        driver.require_fresh_members = stale_readback
+        rows = driver.run([{'id': key, 'label': key} for key in gateway.sites], paced=True)
+        self.assertEqual([site for site, _ in gateway.posts], ['one'])
+        self.assertEqual(rows[0]['state'], 'verification pending; next site held')
+        retained = json.loads(Path(rows[0]['fresh_readback_receipt']).read_text())
+        self.assertFalse(retained['passed'])
+        self.assertIn('startup.stale', retained['members'][0]['failing_fields'])
+
+
 class IdleRuleTests(unittest.TestCase):
     def read(self, **kwargs):
         value = {'reachable': True, 'running_job_ids': [], 'queue_depth': 0,
@@ -490,6 +528,67 @@ class ServicesRunningTests(unittest.TestCase):
                                  'services_running': {'up': 7, 'total': 7, 'studios': {}}}),
             VERSION)
         self.assertIsNotNone(reason, 'an unknown must be reported, never read as up')
+
+
+class FreshMemberReadbackTests(unittest.TestCase):
+    def test_paced_fresh_readback_keeps_unexpected_members_visible(self):
+        members = [{**ServicesRunningTests.member(), 'location_id': 'site', 'machine': name}
+                   for name in ('mac-1', 'new-mac', 'asleep')]
+        with tempfile.TemporaryDirectory() as directory:
+            driver = hub.Rollout(SimpleNamespace(fleet=lambda **kwargs: {'machines': members}),
+                                 TARGET, Path(directory) / 'unused.dmg', VERSION, BUILD,
+                                 Path(directory) / 'receipts')
+            driver._paced_required = {'mac-1'}
+            driver._paced_offline = {'asleep'}
+            destination = Path(directory) / 'fresh.json'
+            with self.assertRaisesRegex(RuntimeError, 'next site held'):
+                driver.require_fresh_members('site', {'mac-1'}, destination)
+            record = json.loads(destination.read_text())
+            self.assertEqual(record['unexpected_members'], ['new-mac'])
+            self.assertEqual({row['machine'] for row in record['members']}, {'mac-1', 'new-mac'})
+            self.assertFalse(record['passed'])
+
+    def test_serial_guard_retains_failed_comparison_before_holding(self):
+        stale = ServicesRunningTests.member(startup={
+            'stale': True, 'services_running': {'up': 4, 'total': 4}})
+        stale.update(location_id='site', private_token='must not be retained')
+        for label, members, required, missing in (
+            ('stale', [stale], {'mac-1'}, []),
+            ('missing', [], {'mac-1'}, ['mac-1']),
+            ('read failed', None, {'mac-1'}, ['mac-1']),
+            ('healthy', [{**ServicesRunningTests.member(), 'location_id': 'site'}],
+             {'mac-1'}, []),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                forces = []
+                def fleet(*, force=False):
+                    forces.append(force)
+                    if members is None:
+                        raise TimeoutError('private upstream URL must not be retained')
+                    return {'machines': members}
+                driver = hub.Rollout(SimpleNamespace(fleet=fleet), TARGET,
+                                     Path(directory) / 'unused.dmg', VERSION, BUILD,
+                                     Path(directory) / 'receipts')
+                destination = Path(directory) / 'fresh.json'
+                if label == 'healthy':
+                    self.assertTrue(driver.require_fresh_members(
+                        'site', required, destination)['passed'])
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'next site held'):
+                        driver.require_fresh_members('site', required, destination)
+                record = json.loads(destination.read_text())
+                self.assertEqual(forces, [True])
+                self.assertEqual(record['missing_members'], missing)
+                self.assertNotIn('must not be retained', destination.read_text())
+                self.assertEqual(record['read_error'],
+                                 'TimeoutError' if label == 'read failed' else None)
+                if label == 'stale':
+                    self.assertIn('startup.stale', record['members'][0]['failing_fields'])
+                    self.assertIn('startup.services_running',
+                                  record['members'][0]['failing_fields'])
+                self.assertEqual(record['passed'], label == 'healthy')
+                with self.assertRaises(FileExistsError):
+                    driver.require_fresh_members('site', required, destination)
 
 
 class StudiosDownRolloutTests(Harness):

@@ -862,6 +862,10 @@ def register_relay_routes(
         return Response(content=result.body, status_code=result.status_code,
                         headers=result.headers)
 
+    @app.get("/api/hub/fleet/nodes/{node_id}/final-renders/output-settings/capabilities")
+    async def relay_output_settings(node_id: str, request: Request):
+        return await answer(node_id, "output_settings_capabilities", "", request, limit=0)
+
     @app.get("/api/hub/fleet/nodes/{node_id}/final-renders/encode-probes")
     async def relay_probe_get(node_id: str, request: Request):
         values = request.query_params.getlist("requested_encode")
