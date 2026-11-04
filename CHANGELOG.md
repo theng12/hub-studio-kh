@@ -2,6 +2,19 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.217 — 2026-11-03
+
+- YuE2 8-bit keeps your chosen vocal language in the song’s style prompt. Supply lyrics in the same language; sung language quality still needs listening confirmation.
+- Creator 16 GB includes YuE2 8-bit and automatically installs its required bf16 decoder.
+
+## 0.6.216 — 2026-11-03
+
+- Memory and disk displays use consistent 1024-based units: a 32 GB Mac reads 32 GB, and free memory, free disk and total disk show one decimal.
+- Connections has Copy buttons beside network and controller addresses, including the full node join address and port. Copying addresses or tokens briefly shows Copied and leaves settings unchanged.
+- Image generation offers Text to image and Reference to image, using each model’s published modes and limits. Reference to image accepts one or two images where the model supports them.
+- Unsupported reference input and unknown image modes explain why the request cannot run.
+- Qwen Image 2.1 mflux 4-bit models offer image sizes their runtime accepts.
+
 ## 0.6.215 — 2026-11-03
 
 - The app is named Hub Studio KH in its window and menu bar.

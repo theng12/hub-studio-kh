@@ -1215,7 +1215,8 @@ class EveryJobLaneIsListedOrDeclaredTests(unittest.TestCase):
         from components.hub.backend import broker, chat_jobs, ledger
 
         with tempfile.TemporaryDirectory(prefix="studiohub-chat-listed-") as state:
-            with patch.object(ledger, "DB_FILE", Path(state) / "hub.db"):
+            with patch.object(ledger, "DB_FILE", Path(state) / "hub.db"), \
+                    patch.object(broker, "batches", {}):
                 done = chat_jobs.record_page_completion(
                     request_body=b'{"model": "mlx-community/Qwen3.5-9B-4bit", "messages": '
                                  b'[{"role": "user", "content": "when is low tide?"}]}',

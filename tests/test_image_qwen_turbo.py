@@ -33,7 +33,8 @@ class QwenTurboRegistryTests(unittest.TestCase):
         self.assertEqual(model.defaults["guidance"], 1.0)
         self.assertEqual(model.limits["min_guidance"], 1.0)
         self.assertEqual(model.limits["max_guidance"], 1.0)
-        self.assertEqual(generation.size_presets(model), generation.QWEN_SIZE_PRESETS)
+        self.assertEqual(generation.size_presets(model), generation.QWEN_MFLUX_SIZE_PRESETS)
+        self.assertEqual(model.dimension_multiple, 32)
         self.assertEqual(model.qualified_minimum_memory_gb, 16.0)
         self.assertEqual(model.min_free_memory_gb, 8.0)
         self.assertIsNone(model.seconds_per_step)
@@ -152,6 +153,62 @@ class QwenTurboRegistryTests(unittest.TestCase):
                 self.assertEqual(broker._memory_gate(
                     {"min_total": 16.0, "min_free": 8.0},
                     {"total_gb": total_gb, "available_gb": 9.0})[0], expected)
+
+
+    def test_mflux_presets_are_engine_valid_and_catalog_names_both_modes(self) -> None:
+        """Both mflux Qwen rows (text lane and reference lane) publish only canvases their
+        engine accepts; the 720-height family table stays on the mlx-serve row that measured
+        it. The catalog's `image_modes` carries the two owner-visible labels, this Mac's live
+        availability, and the reference contract nested on the reference entry — the same
+        object `lane_contract` publishes, never a second copy.
+        """
+        model = generation.QWEN_IMAGE_21_TURBO
+        presets = generation.size_presets(model)
+        self.assertEqual(presets, generation.QWEN_MFLUX_SIZE_PRESETS)
+        self.assertEqual(model.dimension_multiple, 32)
+        for width, height in presets.values():
+            self.assertEqual(width % 32, 0)
+            self.assertEqual(height % 32, 0)
+        lowram = generation.QWEN_IMAGE_21_LOW_RAM
+        self.assertEqual(generation.size_presets(lowram), generation.QWEN_MFLUX_SIZE_PRESETS)
+        self.assertEqual(lowram.dimension_multiple, 32)
+        mlxserve = generation.QWEN_IMAGE_21
+        self.assertEqual(generation.size_presets(mlxserve), generation.QWEN_SIZE_PRESETS)
+        self.assertIsNone(mlxserve.dimension_multiple)
+
+        manifest = json.loads(
+            (ROOT / "model-manifests/qwen-image-2-1-turbo-mflux-q4.json").read_text())
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manager = generation.GenerationManager(
+                root / "data", root / "models", {}, "a" * 64,
+                manifests=[manifest], total_memory_bytes=32_000_000_000)
+            manager.preflight = lambda _repo: {"state": "files_verified", "folder": str(root)}
+            manager._enqueue = lambda *_args: None
+            app = main.create_app(manager, TOKEN)
+            headers = {"X-Studio-Token": TOKEN}
+            with patch.object(main, "_host_facts", return_value={
+                    "eligible": True, "macos": "26.6",
+                    "unified_memory_bytes": 32_000_000_000}):
+                client = TestClient(app)
+                rows = {item["repo"]: item for item in
+                        client.get("/api/catalog", headers=headers).json()["models"]}
+
+        turbo = rows[model.repo]
+        modes = turbo["image_modes"]
+        self.assertEqual([entry["id"] for entry in modes], ["txt2img", "edit"])
+        self.assertEqual([entry["label"] for entry in modes],
+                         ["Text to image", "Reference to image"])
+        self.assertEqual(modes[0]["available"], turbo["execution_ready"])
+        self.assertIs(modes[1]["available"], turbo["reference_lane"]["available"])
+        self.assertEqual(modes[1]["reason"], turbo["reference_lane"]["reason"])
+        self.assertEqual(modes[1]["references"], turbo["lane_contract"]["references"])
+        # A text-only model publishes Text to image alone — no reference entry, no nested
+        # contract, whatever this Mac's live state is.
+        zimage = rows.get(generation.Z_IMAGE_TURBO.repo)
+        if zimage is not None:
+            self.assertEqual([entry["id"] for entry in zimage["image_modes"]], ["txt2img"])
+            self.assertEqual(zimage["image_modes"][0]["label"], "Text to image")
 
 
 if __name__ == "__main__":

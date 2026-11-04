@@ -99,6 +99,15 @@ SIZE_PRESETS = {
 QWEN_SIZE_PRESETS = {
     '16:9': (1280, 720), '9:16': (720, 1280), '1:1': (1024, 1024),
 }
+# The two **mflux** Qwen rows (Low-RAM and Turbo, text lane and reference lane alike): mflux's
+# Qwen-Image-2.1 latent creator refuses any dimension that is not a positive multiple of 32
+# (`mflux/models/qwen21/latent_creator/qwen_image21_latent_creator.py`), so 720-height canvases
+# pass `validate_request` and then die inside the engine. The family table above stays only on
+# the mlx-serve row, whose own qualification measured 1280x720 on that different engine.
+# These are the same frames at engine-valid pixels — producer data, never a consumer's rule.
+QWEN_MFLUX_SIZE_PRESETS = {
+    '16:9': (1024, 576), '9:16': (576, 1024), '1:1': (1024, 1024),
+}
 TERMINAL = {'done', 'error', 'cancelled'}
 
 # The fleet tier the Image Studio qualifies models at, and the floor below which a host is
@@ -216,6 +225,12 @@ class ImageModel:
     qualification: dict
     engine: str = IMAGE_ENGINE
     size_presets: dict | None = None
+    # The engine's own geometry bound, stated once on the row that owns it: every published
+    # preset (and every request `validate_request` queues) must be a positive multiple of this.
+    # None means the engine states no such bound here — a number this row did not get from its
+    # engine is never guessed. Published in `lane_contract` so a consumer reads the same figure
+    # instead of inventing one.
+    dimension_multiple: int | None = None
     minimum_macos: tuple[int, int] = (14, 0)
     resident_allowed: bool = True
     # The fleet tier this model is qualified at. Published per model, because a tier is a
@@ -610,7 +625,8 @@ QWEN_IMAGE_21_LOW_RAM = ImageModel(
             '2026-10-08 supports it: starts at 9.31-10.65 GB free, largest drop 4.47 GB, never below '
             '6.05 GB, no swap; qualification/evidence/qwen-image-21-20261008-16gb/measurement.json.'),
     },
-    size_presets=QWEN_SIZE_PRESETS,
+    size_presets=QWEN_MFLUX_SIZE_PRESETS,
+    dimension_multiple=32,
     qualified_minimum_memory_gb=16.0,
     resident_allowed=False,
     # ponytail: measured peak + 2 GB (32 GiB run). The physical 16 GiB M4 run started at 9.31 GB or
@@ -655,7 +671,8 @@ QWEN_IMAGE_21_TURBO = ImageModel(
             'regular Qwen Image 2.1 Low-RAM MLX 4-bit free-before-start floor of 8.0 GB until '
             'Turbo-specific operations establish a different floor.'),
     },
-    size_presets=QWEN_SIZE_PRESETS,
+    size_presets=QWEN_MFLUX_SIZE_PRESETS,
+    dimension_multiple=32,
     qualified_minimum_memory_gb=16.0,
     resident_allowed=False,
     # Provisional owner-adopted operational assumption: regular Qwen Image 2.1 Low-RAM uses
@@ -1554,6 +1571,15 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None) -> dict:
         raise ValueError('Width and height must be integer 1K preset pixels')
     if (raw.get('width', width), raw.get('height', height)) != (width, height):
         raise ValueError('Dimensions must match the selected 1K aspect ratio')
+    if model.dimension_multiple:
+        # The engine's own bound, stated on the row: a preset that ever regressed to an
+        # engine-invalid canvas is refused here, before a job is queued, naming the number —
+        # never inside a render that would then fail after the queue had accepted it.
+        multiple = model.dimension_multiple
+        if width % multiple or height % multiple:
+            raise ValueError(
+                f'{model.label} takes only dimensions that are positive multiples of '
+                f'{multiple}; {width}x{height} is not')
     steps = raw.get('steps', defaults['steps'])
     guidance = raw.get('guidance', defaults['guidance'])
     if type(steps) is not int or not model.limits['min_steps'] <= steps <= model.limits['max_steps']:
@@ -1653,6 +1679,10 @@ def lane_contract(model: ImageModel, data_dir=None, total_memory_bytes: int | No
         contract['references'] = _reference_contract(
             model, total_memory_bytes,
             selected=loading_mode.current(data_dir) if data_dir is not None else DEFAULT_LOADING_MODE)
+    if model.dimension_multiple:
+        # The engine's geometry bound beside the validator that enforces it, so a consumer
+        # (catalog, Gateway, native) reads the same figure instead of guessing one.
+        contract['dimension_multiple'] = model.dimension_multiple
     for parameter in contract['parameters']:
         if parameter.get('note') is None:
             parameter.pop('note', None)

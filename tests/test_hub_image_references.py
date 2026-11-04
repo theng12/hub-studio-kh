@@ -251,5 +251,158 @@ class EditMemoryAdmissionTests(unittest.TestCase):
             workload_policy.required_reference_total_memory_gb(MODEL, row)
 
 
+class DoorTests(unittest.TestCase):
+    """The public image door refuses unknown modes and unserviceable references before queueing.
+
+    Owner rule: an incoming mode the door does not know fails loudly with the two accepted
+    modes named in the owner's words, and reference images are refused by name (text-only
+    model) or with the producer's own unavailability reason (supported model, host cannot
+    serve it) — never silently ignored, never mislabelled. Video/music/voice are untouched.
+    """
+
+    class _Monitor:
+        def __init__(self, entries):
+            self._entries = entries
+
+        def cached_catalog_entries(self, model, *, modality=None):
+            return [{"entry": entry} for entry in self._entries
+                    if entry.get("repo") == model]
+
+    @staticmethod
+    def _envelope(**params):
+        return {"modality": "image", "model": MODEL,
+                "items": [{"prompt": "a quiet garden", "params": dict(params)}]}
+
+    def _submit(self, envelope, entries=()):
+        with mock.patch.object(broker, "_monitor",
+                               lambda: DoorTests._Monitor(list(entries))):
+            return broker._submit_batch_locked(envelope)
+
+    def test_malformed_image_items_are_refused_before_mode_validation(self):
+        for items in ([None], [123], ["text"], "nope", {"prompt": "text"}, []):
+            with self.subTest(items=items):
+                result = self._submit({**self._envelope(mode="edit"), "items": items})
+                self.assertIn("error", result)
+                self.assertNotIn("batch_id", result)
+
+    def test_missing_runtime_preserves_producer_reason(self):
+        result = self._submit(self._envelope(reference_images=[reference(b"image")]), entries=[{
+            "repo": MODEL, "label": "Unregistered image package",
+            "image_modes": [{"id": "txt2img", "available": False}],
+            "readiness": {"state": "no_runtime_model", "reason": "No compatible image runtime is installed"},
+        }])
+        self.assertIn("No compatible image runtime is installed", result.get("error", ""))
+        self.assertNotIn("does not support", result.get("error", ""))
+
+    def test_malformed_reference_list_cannot_fall_back_to_text(self):
+        for references in ({"url": "https://example.invalid/image.png"}, "image.png", 1):
+            with self.subTest(references=references):
+                result = self._submit(self._envelope(reference_images=references))
+                self.assertIn("reference_images must be a list", result.get("error", ""))
+                self.assertNotIn("batch_id", result)
+
+    def test_an_unknown_image_mode_is_refused_by_name_before_queueing(self):
+        result = self._submit(self._envelope(mode="banana"))
+        error = result.get("error", "")
+        self.assertIn("unsupported image mode 'banana'", error)
+        self.assertIn("Text to image (txt2img)", error)
+        self.assertIn("Reference to image (edit)", error)
+        self.assertNotIn("batch_id", result)
+
+    def test_ref_mode_and_a_top_level_mode_are_checked_too(self):
+        for envelope in (self._envelope(ref_mode="invented"),
+                         {**self._envelope(), "mode": "edit-it"}):
+            with self.subTest(envelope=envelope):
+                result = self._submit(envelope)
+                self.assertIn("accepted modes", result.get("error", ""))
+                self.assertNotIn("batch_id", result)
+
+    def test_every_declared_mode_key_must_agree(self):
+        """One canonical resolved mode per item: `ref_mode`, `params.mode` and the
+        envelope's `mode` cannot disagree, and none of them escapes the references check."""
+        ref_mode_only = self._submit(self._envelope(ref_mode="edit"))
+        self.assertIn("Reference to image needs reference images",
+                      ref_mode_only.get("error", ""))
+        conflict = self._submit({**self._envelope(mode="txt2img"), "mode": "txt2img"})
+        # envelope txt2img + item ref_mode edit: the declared keys contradict each other.
+        contradictory = self._submit({**self._envelope(ref_mode="edit"), "mode": "txt2img"})
+        self.assertIn("disagree", contradictory.get("error", ""))
+        self.assertNotIn("batch_id", contradictory)
+        # Same mode declared at both levels with references present: consistent, passes.
+        agreed = self._submit({**self._envelope(mode="edit",
+                                                reference_images=[reference(b"x")]),
+                               "mode": "edit"})
+        self.assertNotIn("error", agreed)
+
+    def test_an_explicit_mode_must_agree_with_the_references(self):
+        no_refs = self._submit(self._envelope(mode="edit"))
+        self.assertIn("Reference to image needs reference images",
+                      no_refs.get("error", ""))
+        conflict = self._submit(self._envelope(
+            mode="txt2img", reference_images=[reference(b"x")]))
+        self.assertIn("Text to image cannot carry reference images",
+                      conflict.get("error", ""))
+
+    def test_a_text_only_model_is_refused_with_the_owner_words(self):
+        zimage = {"repo": MODEL, "modality": "image",
+                  "label": "Z-Image-Turbo 6B MLX 4-bit",
+                  "image_modes": [{"id": "txt2img", "label": "Text to image",
+                                   "available": True, "reason": None}]}
+        result = self._submit(self._envelope(reference_images=[reference(b"x")]), [zimage])
+        error = result.get("error", "")
+        self.assertIn("Z-Image-Turbo 6B MLX 4-bit does not support Reference to image", error)
+        self.assertIn("Text to image only", error)
+        self.assertNotIn("batch_id", result)
+
+    def test_a_supported_model_that_is_unavailable_says_why_not(self):
+        unavailable = {
+            "repo": MODEL, "modality": "image", "label": "FLUX.2 Klein 4B MLX 4-bit",
+            "image_modes": [
+                {"id": "txt2img", "label": "Text to image", "available": True, "reason": None},
+                {"id": "edit", "label": "Reference to image", "available": False,
+                 "reason": "reference rendering needs about 24 GB of unified memory",
+                 "references": {"min": 1, "max": 2}},
+            ]}
+        result = self._submit(self._envelope(reference_images=[reference(b"x")]),
+                              [unavailable])
+        error = result.get("error", "")
+        self.assertIn("Reference to image is unavailable", error)
+        self.assertIn("24 GB", error)
+        self.assertNotIn("does not support", error)
+
+    def test_references_pass_the_door_when_a_row_serves_them_or_none_exists(self):
+        available = {
+            "repo": MODEL, "modality": "image", "label": "FLUX.2 Klein 4B MLX 4-bit",
+            "image_modes": [
+                {"id": "txt2img", "label": "Text to image", "available": True, "reason": None},
+                {"id": "edit", "label": "Reference to image", "available": True,
+                 "reason": None, "references": {"min": 1, "max": 2}},
+            ]}
+        with mock.patch.object(broker, "_monitor",
+                               lambda: DoorTests._Monitor([available])):
+            self.assertIsNone(broker._image_reference_door_refusal(MODEL))
+        with mock.patch.object(broker, "_monitor", lambda: DoorTests._Monitor([])):
+            self.assertIsNone(broker._image_reference_door_refusal(MODEL))
+
+    def test_legacy_rows_without_image_modes_are_read_from_the_lane_contract(self):
+        # Intrinsic support stated by `lane_contract.references`, no live `edit` capability:
+        # unavailable with the producer's reason — never "does not support".
+        legacy = image_row(capabilities=("txt2img",))
+        legacy["reference_lane"] = {"available": False, "mode": "bounded-staged",
+                                    "reason": "this Mac reports 16.0 GB"}
+        with mock.patch.object(broker, "_monitor", lambda: DoorTests._Monitor([legacy])):
+            error = broker._image_reference_door_refusal(MODEL)
+        self.assertIn("Reference to image is unavailable", error)
+        self.assertIn("16.0 GB", error)
+
+    def test_video_mode_keys_are_out_of_scope(self):
+        with mock.patch.object(broker, "_image_mode_door_refusal") as door, \
+                mock.patch.object(broker.cloud_guard, "refusal", return_value="blocked"):
+            broker._submit_batch_locked({
+                "modality": "video", "model": "org/model",
+                "items": [{"prompt": "x", "params": {"mode": "banana"}}]})
+        door.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

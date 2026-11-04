@@ -5,6 +5,7 @@ Audio/Image/Music history with long-prompt jobs, make the pages read as connecte
 generated PNG for every image fetch (and STUDIOHUB_RENDER_IMAGE_MODAL=<job id> opens that
 image's large view), so a layout is checked against the text that broke it.
 """
+import os
 import pathlib
 import sys
 
@@ -63,6 +64,19 @@ needle = "@State private var imageModalID: String?"
 assert needle in text, "imageModalID moved; update render_fixture_patch.py"
 text = text.replace(
     needle, '@State private var imageModalID: String? = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_IMAGE_MODAL"]', 1)
+# Observe the real node-address button's layout only in the throwaway render sources.
+needle = 'CopyValueButton(value: address)\n                        .accessibilityLabel("Copy node join address")'
+if os.environ.get("STUDIOHUB_RENDER_CONNECTION_COPY") == "1":
+    assert needle in text, "Node join Copy button moved; update render_fixture_patch.py"
+    text = text.replace(needle, '''CopyValueButton(value: address, onCopy: { ConnectionCopyRenderProbe.didCopy = true })
+                        .accessibilityLabel("Copy node join address")
+                        .background(GeometryReader { geometry in
+                            Color.clear
+                                .onAppear { ConnectionCopyRenderProbe.frame = geometry.frame(in: .named("ConnectionCopyRender")) }
+                                .onChange(of: geometry.frame(in: .named("ConnectionCopyRender"))) { _, frame in
+                                    ConnectionCopyRenderProbe.frame = frame
+                                }
+                        })''', 1)
 views.write_text(text)
 
 # What's New reads the notes shipped in the app bundle, which a render has none of. STUDIOHUB_RENDER_NOTES

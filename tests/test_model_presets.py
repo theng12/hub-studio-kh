@@ -79,14 +79,14 @@ class PresetDataTests(unittest.TestCase):
 
     def test_a_companion_is_carried_into_the_install_set(self) -> None:
         # yue2-3b-mlx is no use without yue2-vae, and the manifest already says so.
-        preset = model_presets.by_id("creator-plus-24")
+        preset = model_presets.by_id("creator-16")
         install = model_presets.install_set(preset, self.manifests)
         self.assertIn("yue2-3b-mlx", preset["packages"])
         self.assertNotIn("yue2-vae", preset["packages"])
         self.assertIn("yue2-vae", install)
 
     def test_the_owner_s_lists_are_what_ships(self) -> None:
-        # The exact membership the owner approved on 2026-10-28, pinned so a later edit to a data
+        # Owner-approved membership, including YuE2 at 16 GB on 2026-11-02; a later edit to a data
         # file is a visible decision rather than a quiet drift. Renaming a preset is a data edit
         # and stays free; changing what it installs is this test.
         eight = set(model_presets.by_id("essentials-8")["packages"])
@@ -96,10 +96,10 @@ class PresetDataTests(unittest.TestCase):
                                  "bge-small-en-v1-5-bf16", "stable-audio-3-medium"})
         self.assertEqual(set(model_presets.by_id("creator-16")["packages"]) - eight,
                          {"qwen-image-2-1-turbo-mflux-q4", "qwen3-5-9b-4bit", "florence-2-large-ft",
-                          "omnivoice-bfloat16", "breeze-tts-2-mlx-4bit"})
+                          "omnivoice-bfloat16", "breeze-tts-2-mlx-4bit", "yue2-3b-mlx"})
         self.assertEqual(set(model_presets.by_id("creator-plus-24")["packages"])
                          - set(model_presets.by_id("creator-16")["packages"]),
-                         {"yue2-3b-mlx", "gemma-3-12b-it-4bit"})
+                         {"gemma-3-12b-it-4bit"})
         self.assertEqual(set(model_presets.by_id("studio-pro-32")["packages"])
                          - set(model_presets.by_id("creator-plus-24")["packages"]),
                          {"qwen36-35b-4bit", "gemma4-26b-a4b-qat-4bit"})
