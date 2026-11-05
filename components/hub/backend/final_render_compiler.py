@@ -734,7 +734,8 @@ def _late_overlay_statement(
     start_sec: float,
     end_sec: float,
     motion: str,
-) -> str:
+    alloc_label: Callable[[], str],
+) -> tuple[str, ...]:
     scale = None
     eval_frame = False
     if motion == "pop":
@@ -750,13 +751,18 @@ def _late_overlay_statement(
     elif motion == "float":
         y = (f"{operation['placement']['y_px']}+"
              f"sin((t-{_js_fixed(start_sec, 3)})*2)*3")
-    options = [f"overlay=x={x}:y={y}:eof_action=repeat"]
+    statements = []
     if scale is not None:
-        options.append(f"scale='{scale}'")
+        scaled = alloc_label()
+        statements.append(
+            f"{source_label}scale=w='iw*({scale})':h='ih*({scale})':eval=frame{scaled}")
+        source_label = scaled
+    options = [f"x={x}", f"y={y}", "eof_action=repeat"]
     if eval_frame:
         options.append("eval=frame")
     options.append(_late_gate_enable(start_sec, end_sec).lstrip(":"))
-    return f"{video_label}{source_label}{','.join(options)}{output_label}"
+    statements.append(f"{video_label}{source_label}overlay={':'.join(options)}{output_label}")
+    return tuple(statements)
 
 
 def _build_late_label_filters(
@@ -785,9 +791,9 @@ def _build_late_label_filters(
         filters.append(
             f"[{index}:v]setpts=PTS+{_js_fixed(start, 3)}/TB{source}")
         output = alloc_label()
-        filters.append(_late_overlay_statement(
+        filters.extend(_late_overlay_statement(
             current, source, output, operation, x="0", y="0",
-            start_sec=start, end_sec=end, motion=motion,
+            start_sec=start, end_sec=end, motion=motion, alloc_label=alloc_label,
         ))
         current = output
     elif line is not None:
@@ -795,9 +801,9 @@ def _build_late_label_filters(
         index = input_indices[line["asset"]["logical_id"]]
         filters.append(f"[{index}:v]format=rgba{source}")
         output = alloc_label()
-        filters.append(_late_overlay_statement(
+        filters.extend(_late_overlay_statement(
             current, source, output, operation, x="0", y="0",
-            start_sec=start, end_sec=end, motion=motion,
+            start_sec=start, end_sec=end, motion=motion, alloc_label=alloc_label,
         ))
         current = output
 
@@ -809,9 +815,9 @@ def _build_late_label_filters(
         filters.append(
             f"[{index}:v]setpts=PTS+{_js_fixed(start, 3)}/TB{source}")
         output = alloc_label()
-        filters.append(_late_overlay_statement(
+        filters.extend(_late_overlay_statement(
             current, source, output, operation, x=x, y=y,
-            start_sec=start, end_sec=end, motion=motion,
+            start_sec=start, end_sec=end, motion=motion, alloc_label=alloc_label,
         ))
         current = output
     elif label is not None:
@@ -819,9 +825,9 @@ def _build_late_label_filters(
         index = input_indices[label["asset"]["logical_id"]]
         filters.append(f"[{index}:v]format=rgba{source}")
         output = alloc_label()
-        filters.append(_late_overlay_statement(
+        filters.extend(_late_overlay_statement(
             current, source, output, operation, x=x, y=y,
-            start_sec=start, end_sec=end, motion=motion,
+            start_sec=start, end_sec=end, motion=motion, alloc_label=alloc_label,
         ))
         current = output
     return tuple(filters), current

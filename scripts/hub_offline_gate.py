@@ -1,10 +1,9 @@
 """Serialized Hub gates with retained empty data/model roots before imports.
 
 The per-release gate runner, now a repo script so every release does not copy one under
-`.build/`. It is the accepted hub-offline-gate-201/202 runner: isolation, selectors,
-retained empty data/model roots, fixture scoping, the ProgressResult class and the
-GATE RESULT line are byte-identical. Only the root, the evidence dir and the Python
-interpreters are parameterised.
+`.build/`. It retains the accepted runner's isolation, selectors, empty data/model
+roots, fixture scoping, progress and result output. Post-result shutdown uses the
+C-level faulthandler watchdog without inspecting the Python thread registry.
 
 The `unittest` stage runs in the launching interpreter, so launch it with the gate
 Python (`.build/hub-gate/bin/python`); the other stages pick their interpreter from
@@ -38,12 +37,18 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import unittest
 import uuid
 from unittest.mock import patch
 
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent
+SHUTDOWN_TIMEOUT_S = 120
+
+
+def finish_unittest(successful: bool) -> None:
+    # Thread enumeration and Timer.start both need the registry lock we may be diagnosing.
+    faulthandler.dump_traceback_later(SHUTDOWN_TIMEOUT_S, exit=True)
+    raise SystemExit(0 if successful else 1)
 
 
 def gate_python(root: Path) -> str:
@@ -340,24 +345,7 @@ def main():
         for test, reason in result.skipped:
             print('SKIP:', test.id(), reason, flush=True)
         print(f'GATE RESULT: run={result.testsRun} skipped={len(result.skipped)} failures={len(result.failures)} errors={len(result.errors)}', flush=True)
-        pending = [thread for thread in threading.enumerate()
-                   if thread is not threading.main_thread() and not thread.daemon]
-        if pending:
-            print('THREADS AT SUITE END:', [(thread.name, thread.ident) for thread in pending],
-                  flush=True)
-            faulthandler.dump_traceback()
-        def shutdown_timed_out():
-            print('SHUTDOWN TIMEOUT: tests finished but the interpreter did not exit in 120s; gate failed',
-                  file=sys.stderr, flush=True)
-            print('THREADS AT SHUTDOWN:', [(thread.name, thread.ident, thread.daemon)
-                                          for thread in threading.enumerate()],
-                  file=sys.stderr, flush=True)
-            faulthandler.dump_traceback()
-            os._exit(1)
-        watchdog = threading.Timer(120, shutdown_timed_out)
-        watchdog.daemon = True
-        watchdog.start()
-        sys.exit(0 if result.wasSuccessful() else 1)
+        finish_unittest(result.wasSuccessful())
     commands = {
         'regressions': [gate_python(root), '-m', 'pytest', '-p', 'no:cacheprovider', '-q', 'tests/hub_regression/cases'],
         'voice': [voice_python(root), '-m', 'pytest', '-p', 'no:cacheprovider', '-q', 'components/voice/app/tests'],

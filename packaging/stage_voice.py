@@ -43,7 +43,9 @@ RENDER_AUTHORITY_MODES: tuple[RenderAuthorityMode, ...] = (
 # A version string would not have caught it - both trees contain an `mflux` package and both accept
 # the same commands. The content digest is what distinguishes them, and refusing here is what makes
 # the mistake impossible rather than merely documented.
-IMAGE_RUNTIME_SHA256 = 'b720c5bc473aaf13179c70bb1c1faa5715bfd87e0fa7e26fa43dc1d3f1794fef'
+# 0.6.222 appends psutil 7.2.2 without changing engine files; native audit, isolated smoke
+# and the live admission reader passed. See qualification/evidence/image-runtime-psutil-20261106.json.
+IMAGE_RUNTIME_SHA256 = '810a725d20ef9bbc942d53bfea39e56327964d519d3cb4f33a5eea13a4a08178'
 # Kept so the refusal can name what it was handed and where that tree came from.
 IMAGE_RUNTIME_SUPERSEDED = {
     'c5ac478f85d5687e0bd6df715eec5d55a3a59e36aae4f14da352f45ea546923a':

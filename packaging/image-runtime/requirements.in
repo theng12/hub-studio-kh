@@ -16,3 +16,5 @@ pillow==12.3.0
 # `create_app` raises inside route registration, so the packaged worker never starts. The test
 # environment already had it; the packaged runtime did not until 0.6.202.
 python-multipart==0.0.32
+# Admission imports psutil lazily; without it, jobs with a live free-memory floor are refused.
+psutil==7.2.2
