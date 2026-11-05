@@ -14,8 +14,10 @@ final class LocalHubFixture: @unchecked Sendable {
     private var healthy = false
     private var healthReads = 0
     let port: Int
+    private let busy: Bool
 
-    init() throws {
+    init(busy: Bool = false) throws {
+        self.busy = busy
         let socketFD = socket(AF_INET, SOCK_STREAM, 0)
         guard socketFD >= 0 else { throw POSIXError(.ENOTSOCK) }
         var reuse: Int32 = 1
@@ -86,7 +88,7 @@ final class LocalHubFixture: @unchecked Sendable {
         case "/api/health":
             lock.lock(); healthReads += 1; let ok = healthy; lock.unlock()
             status = ok ? "200 OK" : "503 Service Unavailable"
-            body = ok ? #"{"ok":true,"busy":false}"# : #"{"ok":false}"#
+            body = ok ? "{\"ok\":true,\"busy\":\(busy)}" : #"{"ok":false}"#
         default:
             status = "404 Not Found"; body = #"{"detail":"fixture route missing"}"#
         }
@@ -273,7 +275,7 @@ struct NativeLifecycleTests {
 
         // A valid authenticated health interval does reset that same budget, allowing a third run.
         if runs("healthy") {
-            let server = try LocalHubFixture(); defer { server.stop() }
+            let server = try LocalHubFixture(busy: true); defer { server.stop() }
             var clock = Date(timeIntervalSince1970: 100)
             let controller = try makeController(root: temporary.appendingPathComponent("healthy"),
                                                 server: server, now: { clock })
@@ -292,8 +294,9 @@ struct NativeLifecycleTests {
             }
             requireLifecycle(secondReady, "second service did not become ready")
             server.resetHealthReadCount()
+            // Only the processed health response sets working; startup already sets ready.
             let healthyReady = await waitUntil {
-                server.healthReadCount() > 0 && controller.status == "Local services ready"
+                server.healthReadCount() > 0 && controller.status == "Local services working"
             }
             requireLifecycle(healthyReady, "second service did not report authenticated health")
             let healthyPID = readyPID(controller)!
