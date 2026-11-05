@@ -15,6 +15,9 @@ MODULES = (
     "fastapi",
     "mlx.core",
     "mlx_audio",
+    # Declared in research/st01-runtime-contracts.json (voice-mlx required_imports).
+    # Importing the parent alone does not prove the Qwen3 TTS model package shipped.
+    "mlx_audio.tts.models.qwen3_tts.qwen3_tts",
     # The Chat lane's only multimodal loader. It was named in requirements-pilot.txt while the
     # lock did not carry it, so a built runtime shipped without it and the Chat worker refused
     # images naming the missing module (0.6.206). Importing it here is what makes that omission

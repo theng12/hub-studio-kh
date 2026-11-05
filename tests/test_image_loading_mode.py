@@ -449,5 +449,18 @@ class TheCatalogIsHonestAboutAModelWithNoBoundedMode(ImageMemoryModeFixture):
                                  'a comparison must not be invented from a number nobody stated')
 
 
+
+def setUpModule() -> None:
+    # Jobs here reach the start door and the memory guard: report normal pressure so no run
+    # depends on this Mac's live host state (a Mac mid-render can be critical).
+    global _pressure
+    from _image_pressure import pressure
+    _pressure = pressure(1)
+
+
+def tearDownModule() -> None:
+    _pressure.stop()
+
+
 if __name__ == '__main__':
     unittest.main()

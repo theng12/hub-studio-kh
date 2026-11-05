@@ -13,6 +13,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+from _model_library import shipped_model_library
+
 import httpx
 
 from components import model_packages
@@ -445,7 +447,7 @@ class EncoderMatchesTransformersTests(unittest.TestCase):
                 np.testing.assert_allclose(np.array(vectors), expected, atol=1e-5)
 
 
-_INSTALLED = (Path.home() / "StudioHubModels" / MANIFEST["package_id"] / MANIFEST["revision"]
+_INSTALLED = (shipped_model_library() / MANIFEST["package_id"] / MANIFEST["revision"]
               / "model")
 
 

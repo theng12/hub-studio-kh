@@ -24,6 +24,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import httpx
 
@@ -379,6 +380,46 @@ class TheSchedulerSeesTheSameMac(PullCase):
                   "local": False, "fleet_node": NODE}
         failure = {"reachable": False, "status": "unreachable"}
         self.assertEqual(failure, peers._checkin_fallback(studio, failure))
+
+
+class ResultsExpire(PullCase):
+    """A result is read for `RESULT_TTL_S` and no longer, and a re-post never revives it."""
+
+    def age_result(self, command_id: str, *, seconds: float) -> float:
+        document = json.loads(fleet_pull.store_path().read_text())
+        entry = next(row for row in document["nodes"][NODE]["results"]
+                     if row["id"] == command_id)
+        entry["at"] = time.time() - seconds
+        fleet_pull.store_path().write_text(json.dumps(document))
+        return entry["at"]
+
+    def test_a_result_past_its_expiry_is_not_read_or_counted(self) -> None:
+        fleet_pull.record_result(NODE, "c_expired", 200, {"ok": True})
+        self.age_result("c_expired", seconds=fleet_pull.RESULT_TTL_S + 1)
+        self.assertIsNone(fleet_pull.result_of(NODE, "c_expired"))
+        self.assertEqual(0, fleet_pull.summary(NODE)["results"])
+
+    def test_a_later_write_drops_the_expired_result(self) -> None:
+        fleet_pull.record_result(NODE, "c_expired", 200, {"ok": True})
+        self.age_result("c_expired", seconds=fleet_pull.RESULT_TTL_S + 1)
+        fleet_pull.record_result(NODE, "c_live", 200, {})
+        stored = json.loads(fleet_pull.store_path().read_text())["nodes"][NODE]["results"]
+        self.assertEqual(["c_live"], [row["id"] for row in stored])
+
+    def test_a_reposted_result_keeps_its_first_arrival_time(self) -> None:
+        fleet_pull.record_result(NODE, "c_1", 200, {"ok": True})
+        first = self.age_result("c_1", seconds=60.0)
+        fleet_pull.record_result(NODE, "c_1", 200, {"ok": True})
+        self.assertEqual(first, fleet_pull.result_of(NODE, "c_1")["at"])
+
+    def test_an_identical_repost_does_not_rewrite_the_store(self) -> None:
+        fleet_pull.record_result(NODE, "c_1", 200, {"ok": True})
+        with mock.patch.object(fleet_pull, "_write") as write:
+            fleet_pull.record_result(NODE, "c_1", 200, {"ok": True})
+        write.assert_not_called()
+        with mock.patch.object(fleet_pull, "_write") as write:
+            fleet_pull.record_result(NODE, "c_1", 200, {"ok": False})
+        write.assert_called_once()
 
 
 if __name__ == "__main__":

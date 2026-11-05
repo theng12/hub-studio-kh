@@ -1004,11 +1004,23 @@ struct NativeModel: Identifiable, Equatable {
     static func pickerName(for label: String) -> String {
         var name = label
         if let suffix = name.range(of: " — ") {
-            name = String(name[name.startIndex..<suffix.lowerBound])
+            // A weight marker published only after the dash is this model's quant, and the
+            // owner's rule keeps it visible: dropping it names a model without the weights
+            // he validated. Recommendation/runtime noise carries no marker and is still dropped.
+            let tail = String(name[suffix.upperBound...])
+            if !Self.carriesWeightMarker(tail) {
+                name = String(name[name.startIndex..<suffix.lowerBound])
+            }
         }
+        name = name.replacingOccurrences(of: "(MLX ", with: "(")
         name = name.replacingOccurrences(of: " (MLX)", with: "")
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? label : trimmed
+    }
+    /// A published bits/precision marker, in any spelling a catalogue row may use.
+    private static func carriesWeightMarker(_ text: String) -> Bool {
+        text.range(of: #"(?i)(?<![A-Za-z])(?:bf16|fp16|fp32|fp8|int[48]|q[48]|[0-9]+[- ]?bit)(?![A-Za-z])"#,
+                   options: .regularExpression) != nil
     }
 
     // MARK: - Read-only facts, per generator
@@ -1668,8 +1680,13 @@ struct NativeWorkPolicy: Decodable, Equatable {
         guard let index = enabled.firstIndex(of: functionID), enabled.indices.contains(index + offset) else { return nil }
         enabled.swapAt(index, index + offset)
         let enabledIDs = Set(enabled)
+        // The producer's function vocabulary is the only ids the Hub accepts. A saved id the
+        // catalogue no longer offers would make the whole order a 400, so it is dropped here;
+        // ids that are still published keep their saved position even when switched off.
+        let known = Set(priorityFunctions.map(\.id))
         var next = enabled.makeIterator()
-        var result = priorityOrder.map { enabledIDs.contains($0) ? (next.next() ?? $0) : $0 }
+        var result = priorityOrder.filter { known.contains($0) }
+            .map { enabledIDs.contains($0) ? (next.next() ?? $0) : $0 }
         result.append(contentsOf: next)
         return result
     }
@@ -8414,18 +8431,13 @@ final class NativeWorkspaceStore: ObservableObject {
               let requestConnection = connectionID else { return }
         let own = nodeOriginCredential
         let path = "api/hub/fleet/nodes/\(nodeID)/checkin"
-        let first = await fleetCall(target, path: path, credential: own,
-                                    body: await fleetCheckinBody(nodeID: nodeID, membership: membership,
-                                                                 target: target))
+        var sent = await fleetCheckinBody(nodeID: nodeID, membership: membership, target: target)
+        let first = await fleetCall(target, path: path, credential: own, body: sent)
         guard connectionID == requestConnection else { return }
         var answer = first
-        if let status = first?.0, status == 401,
-           let group = fleetTokenCredential, group != own,
-           let again = await fleetCall(target, path: path, credential: group,
-                                       body: await fleetCheckinBody(nodeID: nodeID,
-                                                                    membership: membership,
-                                                                    target: target)) {
-            answer = again
+        if first?.0 == 401, let group = fleetTokenCredential, group != own {
+            sent = await fleetCheckinBody(nodeID: nodeID, membership: membership, target: target)
+            answer = await fleetCall(target, path: path, credential: group, body: sent)
         }
         guard connectionID == requestConnection, let (status, payload) = answer else { return }
         // An older controller has no such route: this Mac is not broken, it simply has nothing to
@@ -8436,6 +8448,7 @@ final class NativeWorkspaceStore: ObservableObject {
             await askControllerWhetherStillListed()
             return
         }
+        acknowledgeFleetCheckin(sent)
         let commands = (payload["commands"] as? [[String: Any]]) ?? []
         guard !commands.isEmpty else { return }
         var ran: [[String: Any]] = []
@@ -8451,14 +8464,20 @@ final class NativeWorkspaceStore: ObservableObject {
         }
         fleetPendingResults.append(contentsOf: ran)
         // Hand the answers straight back: the controller is holding a connection open for them.
-        let delivered = await fleetCall(target, path: path, credential: own,
-                                        body: await fleetCheckinBody(nodeID: nodeID,
-                                                                     membership: membership,
-                                                                     target: target))
+        let delivery = await fleetCheckinBody(nodeID: nodeID, membership: membership, target: target)
+        let delivered = await fleetCall(target, path: path, credential: own, body: delivery)
         guard connectionID == requestConnection else { return }
-        if delivered?.0 == 200 {
-            fleetPendingResults.removeAll()
-            fleetSeenCommands.removeAll()
+        if delivered?.0 == 200 { acknowledgeFleetCheckin(delivery) }
+    }
+
+    private func acknowledgeFleetCheckin(_ sent: [String: Any]) {
+        // A late response acknowledges only its own body, not results added while it was in flight.
+        let seen = Set((sent["seen"] as? [String]) ?? [])
+        let results = Set(((sent["results"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String })
+        fleetSeenCommands.removeAll { seen.contains($0) }
+        fleetPendingResults.removeAll {
+            guard let id = $0["id"] as? String else { return false }
+            return results.contains(id)
         }
     }
 

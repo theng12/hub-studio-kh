@@ -181,6 +181,19 @@ class ImageBundleTests(unittest.TestCase):
                 self.assertFalse(ready.exists(), log.read_text())
 
 
+
+def setUpModule() -> None:
+    # Jobs here reach the start door and the memory guard: report normal pressure so no run
+    # depends on this Mac's live host state (a Mac mid-render can be critical).
+    global _pressure
+    from _image_pressure import pressure
+    _pressure = pressure(1)
+
+
+def tearDownModule() -> None:
+    _pressure.stop()
+
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -8344,7 +8344,7 @@ struct StudioContent: View {
                         Spacer()
                         Text(NativeWorkspaceStore.gigabytes(usage.usedBytes)).font(HubType.mono)
                     }
-                    Text("Generated output: \(NativeWorkspaceStore.gigabytes(usage.usedBytes)), of which \(NativeWorkspaceStore.gigabytes(usage.protectedBytes)) is protected and never deleted"
+                    Text("Generated output: \(NativeCapacityDisplay.gigabytes(bytes: Double(usage.usedBytes))), of which \(NativeCapacityDisplay.gigabytes(bytes: Double(usage.protectedBytes))) is protected and never deleted"
                          + (usage.freeBytes.map { " · \(NativeCapacityDisplay.gigabytes(bytes: Double($0))) free on disk" } ?? ""))
                         .font(HubType.caption).foregroundStyle(.secondary)
                     if usage.overLimit {

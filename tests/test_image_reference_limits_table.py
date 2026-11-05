@@ -5,6 +5,8 @@ import types
 import unittest
 from unittest.mock import patch
 
+import _image_pressure
+
 from components.image.app.backend import generation as g
 from components.image.app.backend.main import edit_lane
 
@@ -55,7 +57,7 @@ class ReferenceLimitTableTests(unittest.TestCase):
             self.assertTrue(g.effective_reference_policy(g.FLUX2_KLEIN, 'edit', memory, 1)['allowed'])
 
     def test_existing_free_floor_is_checked_live(self):
-        with patch.object(g, '_reclaimable_available_gb', return_value=0.01), patch.object(g, '_under_memory_pressure', return_value=False):
+        with patch.object(g, '_reclaimable_available_gb', return_value=0.01), _image_pressure.pressure(1):
             self.assertIn('free before it starts', g._admit_job(g.FLUX2_KLEIN, 'txt2img', 8 * 1024**3))
 
 
@@ -68,7 +70,7 @@ class ImageMemoryStopTests(unittest.TestCase):
     def test_swap_growth_stops_with_baseline_and_reason(self):
         manager = self.manager()
         event = threading.Event()
-        with patch.object(g, '_host_swap_used_mb', side_effect=[1000.0, 1001.0]), patch.object(g, '_under_memory_pressure', return_value=False):
+        with patch.object(g, '_host_swap_used_mb', side_effect=[1000.0, 1001.0]), _image_pressure.pressure(1):
             guard = g._JobMemoryGuard(manager, 'job', g.FLUX2_KLEIN, 'edit')
             guard.check(event)
         self.assertTrue(event.is_set())
@@ -78,12 +80,22 @@ class ImageMemoryStopTests(unittest.TestCase):
     def test_critical_pressure_stops_even_with_loose_swap_allowance(self):
         manager = self.manager()
         event = threading.Event()
-        with patch.object(g, '_host_swap_used_mb', return_value=1000.0), patch.object(g, '_under_memory_pressure', return_value=True):
+        with patch.object(g, '_host_swap_used_mb', return_value=1000.0), _image_pressure.pressure(4):
             guard = g._JobMemoryGuard(manager, 'job', g.FLUX2_KLEIN, 'edit')
             guard.allowance_gb = 100.0
             guard.check(event)
         self.assertTrue(event.is_set())
         self.assertEqual(manager.jobs['job']['error_code'], 'MEMORY_PRESSURE_STOPPED')
+
+    def test_warning_pressure_leaves_a_running_job_alone(self):
+        # The other half of the owner's 2026-11-05 split, which a level-blind mock could not ask:
+        # warning (2) evicts an idle resident model, but never stops work already running.
+        manager = self.manager()
+        event = threading.Event()
+        with patch.object(g, '_host_swap_used_mb', return_value=1000.0), _image_pressure.pressure(2):
+            g._JobMemoryGuard(manager, 'job', g.FLUX2_KLEIN, 'edit').check(event)
+        self.assertFalse(event.is_set())
+        self.assertFalse(manager.hard_stops)
 
     def test_stop_reason_survives_failure_recording(self):
         manager = self.manager()
@@ -102,7 +114,7 @@ class ImageMemoryStopTests(unittest.TestCase):
     def test_existing_swap_without_growth_is_allowed(self):
         manager = self.manager()
         event = threading.Event()
-        with patch.object(g, '_host_swap_used_mb', return_value=5000.0), patch.object(g, '_under_memory_pressure', return_value=False):
+        with patch.object(g, '_host_swap_used_mb', return_value=5000.0), _image_pressure.pressure(1):
             g._JobMemoryGuard(manager, 'job', g.FLUX2_KLEIN, 'edit').check(event)
         self.assertFalse(event.is_set())
         self.assertFalse(manager.hard_stops)

@@ -1,0 +1,42 @@
+# Required closure for the offline gate environment (.build/hub-gate).
+# Exact pins from the verified R7 reconstruction:
+# _orchestra/hub-lead/next-batch-20261105/gate-r7-environment.json,
+# dependency_closure of soundfile/mlx/misaki/espeakng-loader/phonemizer-fork.
+# The gate environment may carry more distributions; every line here must be
+# present at exactly this version or scripts/hub_offline_gate.py preflight refuses.
+addict==2.4.0
+attrs==26.1.0
+babel==2.18.0
+cffi==2.1.1
+cloudpickle==3.1.2
+csvw==4.1.0
+dlinfo==2.0.0
+espeakng-loader==0.2.4
+isodate==0.7.2
+joblib==1.6.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+language-tags==1.3.1
+misaki==0.9.4
+mlx==0.31.2
+mlx-metal==0.31.2
+numpy==2.2.6
+phonemizer-fork==3.3.2
+pycparser==3.0
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+rdflib==7.6.0
+referencing==0.37.0
+regex==2026.9.10
+rfc3986==1.5.0
+rpds-py==2026.6.3
+segments==2.4.0
+six==1.17.0
+soundfile==0.14.0
+termcolor==3.3.0
+# The Vision worker's Florence2 reads the shipped checkpoint through `tokenizers`
+# (components/vision/app/backend/florence.py); it reuses the shared Voice runtime,
+# so this is that runtime's exact pin, not a guessed one.
+tokenizers==0.22.2
+typing-extensions==4.16.0
+uritemplate==4.2.0

@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import threading
 import time
 import uuid
@@ -745,6 +746,25 @@ def _a_joined_mac_can_run(envelope: dict[str, Any], modality: str | None) -> boo
         and broker._can_run(studio, entry, model, routing)
         and entry.get("runtime_ready") is not False and entry.get("available") is not False
         for studio, entry in broker._model_rows(str(modality or ""), model))
+
+
+_SAFE_CLIENT_REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{8,160}")
+
+
+def _audit_submission_failure(envelope: dict[str, Any], exc: BaseException) -> None:
+    """One bounded line to correlate a failed submit; never the request or the exception text."""
+    client_request_id = envelope.get("clientRequestId")
+    items = envelope.get("items")
+    modality, model = envelope.get("modality"), envelope.get("model")
+    startup_control.audit("batch_submit_failed", {
+        "client_request_id": (client_request_id
+                              if isinstance(client_request_id, str)
+                              and _SAFE_CLIENT_REQUEST_ID.fullmatch(client_request_id) else None),
+        "modality": modality[:40] if isinstance(modality, str) else None,
+        "model": model[:200] if isinstance(model, str) else None,
+        "item_count": len(items) if isinstance(items, list) else None,
+        "exception": type(exc).__name__,
+    })
 
 
 def _submission_readiness(envelope: dict[str, Any], monitor: StudioMonitor) -> dict[str, Any] | None:
@@ -2498,6 +2518,13 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if actor.get("kind") == "node" and not own:
             raise HTTPException(403, "a node credential may check in only for the Mac that holds it")
         row = fleet.record_checkin(asked, payload)
+        if row is None:
+            # A Mac this controller has never heard of, or has removed. The same three states the
+            # status route answers, so the Mac's own handling of `removed`/`unknown` is unchanged.
+            # Nothing it carries is written: recording its results would re-create the pull row
+            # that `forget` dropped when the Mac was removed.
+            return {**fleet.status(asked), "server_time": time.time(),
+                    "reachable_via": None, "commands": []}
         # What the Mac has already run, and what it answered. Recorded before the queue is read, so
         # a command it has finished can never be handed back to it in this same answer.
         seen = [str(value) for value in (payload.get("seen") or []) if value] \
@@ -2512,11 +2539,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 status = 200
             fleet_pull.record_result(asked, str(entry["id"]), status, entry.get("json"))
         fleet_pull.ack(asked, seen)
-        if row is None:
-            # A Mac this controller has never heard of, or has removed. The same three states the
-            # status route answers, so the Mac's own handling of `removed`/`unknown` is unchanged.
-            return {**fleet.status(asked), "server_time": time.time(),
-                    "reachable_via": None, "commands": []}
         if payload.get("address") or payload.get("studios"):
             # Where it answers and what it runs decide the dispatch registry, so a change is
             # picked up now rather than at the next restart - the same reason a join reloads it.
@@ -4345,6 +4367,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         replay = replay or (ledger.load_batch_by_client_request_id(client_request_id)
                             if isinstance(client_request_id, str) else None)
         if replay is None:
+            shape_refusal = broker.submission_shape_refusal(envelope)
+            if shape_refusal:
+                raise HTTPException(400, shape_refusal)
             try:
                 refusal = _submission_readiness(envelope, monitor)
             except ValueError as exc:
@@ -4362,7 +4387,21 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # token is this Mac's app; any other credential is the Gateway or the fleet.
         envelope = {**envelope,
                     "origin": "this-mac" if auth.presented_owner_token(request, token) else "gateway"}
-        result = broker.submit_batch(envelope)
+        try:
+            result = broker.submit_batch(envelope)
+        except Exception as exc:  # noqa: BLE001 - the door answers with a cause, not a bare 500
+            _audit_submission_failure(envelope, exc)
+            if isinstance(exc, (OSError, sqlite3.Error)):
+                raise HTTPException(503, {
+                    "code": "SUBMIT_STORE_FAILED",
+                    "detail": "this Hub could not write the batch to its store; "
+                              "retry with the same clientRequestId",
+                }) from exc
+            raise HTTPException(500, {
+                "code": "SUBMIT_FAILED",
+                "detail": f"the Hub failed while accepting this batch ({type(exc).__name__}); "
+                          "retry with the same clientRequestId",
+            }) from exc
         if result.get("code") == cloud_guard.REFUSAL_CODE:
             raise HTTPException(403, {"code": result["code"], "detail": result["error"]})
         if "error" in result:

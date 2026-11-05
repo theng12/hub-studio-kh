@@ -27,6 +27,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient  # noqa: E402
+import _image_pressure  # noqa: E402
+from components.image.app.backend import generation  # noqa: E402
 
 from components import model_packages  # noqa: E402
 from components.image.app.backend import main as image_main  # noqa: E402
@@ -311,6 +313,49 @@ class MemoryCatalogTests(unittest.TestCase):
                             headers={'X-Studio-Token': TOKEN}).json()
         self.assertEqual(policy['loaded_models'], [[Z_IMAGE_TURBO.repo]])
         self.assertTrue(policy['resident'])
+
+
+
+class ReportedPressureRunsTheRealPredicate(unittest.TestCase):
+    """Levels 1/2/4 and an unreadable host, through `_under_memory_pressure` itself.
+
+    Nothing here patches the predicate: the fixture states the level the sysctl reports, so the
+    function's own comparison, its default level and its unreadable-is-not-pressure rule run.
+    """
+
+    def test_every_level_the_owner_rules_distinguish(self):
+        cases = ((1, False, False),      # normal: neither warning nor critical
+                 (2, True, False),       # warning: the default that governs idle residency
+                 (4, True, True),        # critical: what the hard stops ask for
+                 (None, False, False))   # unreadable: never pressure a host did not show
+        for reported, warning, critical in cases:
+            with self.subTest(reported=reported):
+                with _image_pressure.pressure(reported):
+                    self.assertEqual(generation._under_memory_pressure(), warning)
+                    self.assertEqual(generation._under_memory_pressure(level=4), critical)
+
+    def test_admission_refuses_only_at_critical_pressure(self):
+        with patch.object(generation, '_reclaimable_available_gb', return_value=64.0):
+            for reported in (1, 2, None):
+                with self.subTest(reported=reported), _image_pressure.pressure(reported):
+                    self.assertIsNone(
+                        generation._admit_job(generation.FLUX2_KLEIN, 'txt2img', 32 * GiB))
+            with _image_pressure.pressure(4):
+                refusal = generation._admit_job(generation.FLUX2_KLEIN, 'txt2img', 32 * GiB)
+        self.assertIsNotNone(refusal)
+        self.assertIn('critical memory pressure', refusal)
+
+
+def setUpModule() -> None:
+    # Jobs here reach the start door and the memory guard: report normal pressure so no run
+    # depends on this Mac's live host state (a Mac mid-render can be critical).
+    global _pressure
+    from _image_pressure import pressure
+    _pressure = pressure(1)
+
+
+def tearDownModule() -> None:
+    _pressure.stop()
 
 
 if __name__ == '__main__':

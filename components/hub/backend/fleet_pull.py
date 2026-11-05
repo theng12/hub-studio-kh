@@ -211,8 +211,26 @@ def ack(node_id: str, ids: list[str] | None = None) -> int:
 
 
 # ── results ─────────────────────────────────────────────────────────────────
+def _live_results(results: list[Any], now: float) -> list[dict[str, Any]]:
+    """The results still worth reading: well formed and not past their expiry."""
+    kept: list[dict[str, Any]] = []
+    for row in results:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        at = row.get("at")
+        if isinstance(at, (int, float)) and not isinstance(at, bool) and at + RESULT_TTL_S <= now:
+            continue
+        kept.append(row)
+    return kept
+
+
 def record_result(node_id: str, command_id: str, status: int, body: Any) -> None:
-    """Store what the node's replay answered, and wake whoever is still waiting for it."""
+    """Store what the node's replay answered, and wake whoever is still waiting for it.
+
+    A result expires after `RESULT_TTL_S`, and a repeated answer for the same command keeps its
+    first arrival time, so a node that re-posts does not keep it alive. An identical repeat is
+    not written again.
+    """
     node_id = str(node_id or "").strip().lower()
     command_id = str(command_id or "")
     if not command_id:
@@ -220,14 +238,25 @@ def record_result(node_id: str, command_id: str, status: int, body: Any) -> None
     now = time.time()
     document = _document()
     row = _row(document, node_id, create=True)
-    results = [entry for entry in (row.get("results") or [])
-               if isinstance(entry, dict) and entry.get("id") != command_id]
-    results.append({"id": command_id, "status": int(status), "json": body, "at": now})
-    row["results"] = results[-MAX_RESULTS:]
+    stored = row.get("results") or []
+    results = _live_results(stored, now)
+    existing = next((entry for entry in results if str(entry.get("id")) == command_id), None)
+    entry = {"id": command_id, "status": int(status), "json": body, "at": now}
+    if existing is not None:
+        entry["at"] = existing.get("at", now)  # a re-post never refreshes the expiry
+        if existing.get("status") == entry["status"] and existing.get("json") == body:
+            entry = existing
+        else:
+            results = [entry if row_ is existing else row_ for row_ in results]
+    else:
+        results.append(entry)
     # The command is done: it is never handed out again, whichever side noticed first.
-    row["commands"] = [entry for entry in (row.get("commands") or [])
-                       if not (isinstance(entry, dict) and str(entry.get("id")) == command_id)]
-    _write(document)
+    commands = [entry_ for entry_ in (row.get("commands") or [])
+                if not (isinstance(entry_, dict) and str(entry_.get("id")) == command_id)]
+    if results != stored or commands != (row.get("commands") or []):
+        row["results"] = results[-MAX_RESULTS:]
+        row["commands"] = commands
+        _write(document)
     waiter = _WAITERS.get(command_id)
     if waiter is not None:
         waiter.set()
@@ -236,8 +265,8 @@ def record_result(node_id: str, command_id: str, status: int, body: Any) -> None
 def result_of(node_id: str, command_id: str) -> dict[str, Any] | None:
     """What the node answered for one command, or `None` while it has not answered yet."""
     row = _document()["nodes"].get(str(node_id or "").strip().lower()) or {}
-    for entry in row.get("results") or []:
-        if isinstance(entry, dict) and str(entry.get("id")) == str(command_id):
+    for entry in _live_results(row.get("results") or [], time.time()):
+        if str(entry.get("id")) == str(command_id):
             return entry
     return None
 
@@ -287,8 +316,9 @@ def forget(node_id: str) -> None:
 def summary(node_id: str) -> dict[str, int]:
     """How much is waiting for one node, for the roster row and the operator's eye."""
     row = _document()["nodes"].get(str(node_id or "").strip().lower()) or {}
-    return {"queued": len(_live(row.get("commands") or [], time.time())),
-            "results": len(row.get("results") or [])}
+    now = time.time()
+    return {"queued": len(_live(row.get("commands") or [], now)),
+            "results": len(_live_results(row.get("results") or [], now))}
 
 
 # ── who may be pulled from ──────────────────────────────────────────────────

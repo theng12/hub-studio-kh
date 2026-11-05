@@ -2,6 +2,21 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.223 — 2026-11-05
+
+- Image jobs carry the Models page’s free-memory override through to the worker, including reference-image jobs. Reference jobs still require their own measured minimum. If the swap monitor cannot be read, the job stops and explains why.
+- Invalid job requests name the field that needs fixing. A storage error during acceptance is reported before the job enters this Hub’s in-memory queue, and diagnostics retain a bounded correlation record without request content.
+- A Mac stops resending acknowledged command results even when the controller has no new commands. Removed Macs cannot recreate their old result queue, and expired results no longer appear as current.
+- An update check recognises a release the site already holds, including after an earlier read failed.
+- Moving work priorities drops functions this Mac no longer offers while preserving disabled functions’ saved positions. Model pickers keep the published weight precision visible. Generated-output sizes use consistent units in the same sentence.
+
+### Technical notes
+
+- Preparation only: focused Python guards and Swift parsing have passed; the complete native suite, full 0.6.223 gate, packaging and installation remain pending. The separate 0.6.222 source and R7 evidence are unchanged.
+- Shared guards cover submission shapes, durable-before-publication ordering, image queue/execution floors, swap-monitor availability, pressure fixtures, model-library fixture isolation, gate interpreter identity/dependency seeds, result expiry and per-read rollout reconciliation. The gate seed lock is not a reproducible environment builder or a complete dependency closure.
+- Hub acceptance and external execution identity remain separate SQLite stores. A hard kill between their commits can leave a stale identity pointer; this change does not claim cross-store atomicity.
+- Developer Mode and signed image-limit override transport remain separately queued; no runtime support is claimed for either.
+
 ## 0.6.222 — 2026-11-05
 
 - Failed encoding checks can be explicitly retried without reusing an earlier attempt. Their history stays available, and an uncertain previous attempt keeps the Mac reserved.

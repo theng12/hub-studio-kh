@@ -394,6 +394,27 @@ class TheControllerCannotDialItTests(unittest.TestCase):
         self.assertEqual(200, status, body)
         self.assertEqual([], body.get("entries"))
 
+    def test_a_removed_mac_cannot_recreate_its_pull_store(self) -> None:
+        self.node.checkin()
+        status, body, _ = self.controller.request(
+            f"/api/hub/fleet/nodes/{NODE}", token="controller-hub-token", method="DELETE")
+        self.assertEqual(200, status, body)
+        # The Mac's own credential went with the row; the group credential still authenticates
+        # the route, and that is the caller the guard has to stop.
+        status, answer = self.node._call(
+            f"/api/hub/fleet/nodes/{NODE}/checkin",
+            {"node_id": NODE, "address": self.node.address, "version": "0.6.193",
+             "seen": ["c_removed_1"],
+             "results": [{"id": "c_removed_1", "status": 200, "json": {"ok": True}}]},
+            token=self.fleet_token)
+        self.assertEqual(200, status, answer)
+        self.assertEqual("removed", answer.get("state"))
+        store = self.controller.data / "fleet_pull.json"
+        if store.exists():
+            document = json.loads(store.read_text())
+            self.assertNotIn(NODE, document.get("nodes") or {},
+                             "a removed Mac's check-in re-created its pull row")
+
     # ── the release the controller holds, published the way the Gateway publishes one ──
     def _publish_a_release(self) -> None:
         from components.hub.backend import app_release, ed25519

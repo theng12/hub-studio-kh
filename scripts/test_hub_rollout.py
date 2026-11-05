@@ -380,6 +380,39 @@ class FanOutTests(Harness):
         self.assertEqual(row['post_count'], 1)
         self.assertTrue(any('queue unknown' in warning for warning in row['warnings']), row)
 
+    def unreadable_first_read(self, gateway):
+        """The fleet does not answer the very first read, then answers normally."""
+        real_fleet = gateway.fleet
+        reads = {'count': 0}
+        def fleet(force=True):
+            reads['count'] += 1
+            if reads['count'] == 1:
+                raise RuntimeError('the fleet read failed: http 0')
+            return real_fleet(force)
+        gateway.fleet = fleet
+        return gateway
+
+    def test_a_site_already_holding_after_an_unreadable_first_read_is_not_republished(self):
+        site = FakeSite('1600', ['1600'])
+        site.release = dict(self.identity)     # an earlier run accepted it
+        site.published_at = time.monotonic()   # so its members already report the new version
+        gateway = self.unreadable_first_read(self.gateway(site))
+        row = self.by_site(self.rollout(gateway).run([{'id': '1600'}]))['1600']
+        self.assertEqual([], gateway.posts, 'a rerun never republishes')
+        self.assertEqual(row['published_at'], 'already held before this run')
+        self.assertEqual(row['state'], 'verified')
+
+    def test_force_full_still_re_sends_after_an_unreadable_first_read(self):
+        site = FakeSite('1601', ['1601'])
+        site.release = dict(self.identity)
+        site.published_at = time.monotonic()
+        gateway = self.unreadable_first_read(self.gateway(site))
+        row = self.by_site(self.rollout(gateway, full=True).run([{'id': '1601'}]))['1601']
+        self.assertEqual([site_id for site_id, _ in gateway.posts], ['1601'],
+                         '--full is the repair and must still send the whole image')
+        self.assertEqual(gateway.full_flags, [True])
+        self.assertEqual(row['state'], 'verified')
+
     def test_an_unreachable_site_is_deferred_while_the_others_verify(self):
         gone = FakeSite('1400', ['1400'], reachable=False)
         local = FakeSite('local', ['this-mac'])

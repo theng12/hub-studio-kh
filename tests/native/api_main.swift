@@ -198,6 +198,7 @@ final class FixtureProtocol: URLProtocol {
     /// When set, a call home that carries answers is refused with this status — the controller
     /// not taking the results, which is the window a command could be run twice in.
     static var checkinResultStatus: Int?
+    static var checkinStatus: Int?
     /// Every request replayed on this Mac's own Hub: path and the credential it was sent with.
     static var fleetReplays: [[String: String]] = []
     static func setStatus(_ status: Int?, body: String = "") {
@@ -212,6 +213,9 @@ final class FixtureProtocol: URLProtocol {
     }
     static func setCheckinResultStatus(_ value: Int?) {
         lock.lock(); defer { lock.unlock() }; checkinResultStatus = value
+    }
+    static func setCheckinStatus(_ value: Int?) {
+        lock.lock(); defer { lock.unlock() }; checkinStatus = value
     }
     static func replays() -> [[String: String]] { lock.lock(); defer { lock.unlock() }; return fleetReplays }
     static func resetReplays() { lock.lock(); defer { lock.unlock() }; fleetReplays = [] }
@@ -846,7 +850,8 @@ final class FixtureProtocol: URLProtocol {
                 // contrived one.
                 let hand = isLocalHub ? []
                     : Self.checkinCommands.filter { !answered.contains($0["id"] as? String ?? "") }
-                let refuse = !isLocalHub && !answered.isEmpty ? Self.checkinResultStatus : nil
+                let refuse = isLocalHub ? nil
+                    : Self.checkinStatus ?? (!answered.isEmpty ? Self.checkinResultStatus : nil)
                 Self.lock.unlock()
                 if let refuse {
                     finish((refuse, "application/json",
@@ -2636,6 +2641,14 @@ struct NativeAPITests {
                 "the full-precision suffix must be dropped in the picker")
         require(NativeModel.pickerName(for: "Qwen3-TTS 0.6B Base") == "Qwen3-TTS 0.6B Base",
                 "a label with nothing to strip must pass through unchanged")
+        // A weight marker published only after the dash is the model's quant, and the owner's
+        // rule keeps it visible; recommendation/runtime noise carries no marker and is dropped.
+        let suffixQuant = NativeModel.pickerName(for: "Qwen3-TTS 1.7B Base — quality voice cloning (MLX 4-bit)")
+        require(suffixQuant.contains("4-bit") && suffixQuant.contains("quality voice cloning"),
+                "a quant published after the dash must survive the picker, got: \(suffixQuant)")
+        require(NativeModel.pickerName(for: "Example Future TTS 3B — natural narration (MLX 8-bit)")
+                    .contains("8-bit"),
+                "any future catalogue quant after the dash must survive, with no model-name list")
         let healthy = store.models.first { $0.repo == "mlx-community/whisper-large-v3-turbo" }
         require(healthy?.blockReason == nil, "a model that can run must carry no reason")
 
@@ -4172,6 +4185,18 @@ struct NativeAPITests {
         require(disabledPolicy.enabledPriorityFunctions.map(\.id) == ["chat", "image", "voice"]
                 && disabledPolicy.priorityOrder(moving: "image", by: -1) == ["image", "transcription", "chat", "voice"],
                 "moving enabled functions must preserve disabled saved positions and omit unknown functions")
+        // The Hub refuses the whole order (400) when it names a function this Mac no longer lists,
+        // so a stale saved id must never be sent; one that is still published keeps its position.
+        let stalePolicyJSON = Data(#"{"machine_enabled":false,"priority_order":["chat","render"],"priority_functions":[{"id":"chat","title":"Chat Studio"},{"id":"voice","title":"Voice Studio"}],"studios":[{"id":"chat@local","title":"Chat Studio","modality":"chat","enabled":true},{"id":"voice@local","title":"Voice Studio","modality":"voice","enabled":true}]}"#.utf8)
+        let stalePolicy = try rankedPolicyDecoder.decode(NativeWorkPolicy.self, from: stalePolicyJSON)
+        require(stalePolicy.priorityOrder(moving: "chat", by: 1) == ["voice", "chat"],
+                "a saved id the catalogue no longer lists must be dropped, or the Hub refuses the whole order: "
+                + "\(String(describing: stalePolicy.priorityOrder(moving: "chat", by: 1)))")
+        let futurePolicyJSON = Data(#"{"machine_enabled":false,"priority_order":["chat","future"],"priority_functions":[{"id":"chat","title":"Chat Studio"},{"id":"voice","title":"Voice Studio"},{"id":"future","title":"Future Studio"}],"studios":[{"id":"chat@local","title":"Chat Studio","modality":"chat","enabled":true},{"id":"voice@local","title":"Voice Studio","modality":"voice","enabled":true},{"id":"future@local","title":"Future Studio","modality":"future","enabled":true}]}"#.utf8)
+        let futurePolicy = try rankedPolicyDecoder.decode(NativeWorkPolicy.self, from: futurePolicyJSON)
+        require(futurePolicy.priorityOrder(moving: "voice", by: -1) == ["chat", "voice", "future"],
+                "a function published by a future catalogue row keeps its saved position: "
+                + "\(String(describing: futurePolicy.priorityOrder(moving: "voice", by: -1)))")
         let legacyPolicyJSON = Data(#"{"machine_enabled":false,"chat_priority":true,"studios":[]}"#.utf8)
         let legacyPolicy = try rankedPolicyDecoder.decode(NativeWorkPolicy.self, from: legacyPolicyJSON)
         require(legacyPolicy.priorityOrder == ["chat"] && !legacyPolicy.supportsFunctionPriority,
@@ -9014,12 +9039,27 @@ struct NativeAPITests {
                 + "\(FixtureProtocol.replays())")
         FixtureProtocol.setCheckinResultStatus(nil)
 
+        // A later successful check-in takes the owed result even when it returns no new commands.
+        FixtureProtocol.setCheckinCommands([])
+        FixtureProtocol.resetCheckins()
+        await pullStore.fleetCheckinTick()
+        let retryBody = FixtureProtocol.checkins().last?["body"] as? [String: Any] ?? [:]
+        require((retryBody["results"] as? [[String: Any]])?.count == 1,
+                "the lost result must be retried until the controller takes it")
+        FixtureProtocol.resetCheckins()
+        await pullStore.fleetCheckinTick()
+        let acknowledgedBody = FixtureProtocol.checkins().last?["body"] as? [String: Any] ?? [:]
+        require((acknowledgedBody["results"] as? [[String: Any]])?.isEmpty == true
+                && (acknowledgedBody["seen"] as? [String])?.isEmpty == true,
+                "a successful empty-command reply must retire the results and ids it acknowledged")
+        require(FixtureProtocol.replays().isEmpty, "acknowledging results must not replay commands")
+
         // And a controller older than this build has no such route: the Mac simply carries on.
         FixtureProtocol.resetCheckins()
         FixtureProtocol.resetReplays()
-        FixtureProtocol.setCheckinResultStatus(404)
+        FixtureProtocol.setCheckinStatus(404)
         await pullStore.fleetCheckinTick()
-        FixtureProtocol.setCheckinResultStatus(nil)
+        FixtureProtocol.setCheckinStatus(nil)
         require(pullStore.controllerRemoval == nil,
                 "an older controller answering 404 must never be read as a removal")
         require(FixtureProtocol.replays().isEmpty,

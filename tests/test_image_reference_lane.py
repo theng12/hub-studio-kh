@@ -106,10 +106,13 @@ class LaneHarness:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         for name, value in (('_reclaimable_available_gb', 64.0),
-                            ('_host_swap_used_mb', 0.0), ('_under_memory_pressure', False)):
+                            ('_host_swap_used_mb', 0.0)):
             mocked = patch('components.image.app.backend.generation.' + name, return_value=value)
             mocked.start()
             self.addCleanup(mocked.stop)
+        # The predicate stays real; only the reported level is pinned (see _image_pressure).
+        from _image_pressure import pressure
+        self.addCleanup(pressure(1).stop)
         root = Path(self.temp.name)
         self.library = root / 'models'
         self.library.mkdir()
@@ -648,10 +651,13 @@ class PerCountDeadlineHarness(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         for name, value in (('_reclaimable_available_gb', 64.0),
-                            ('_host_swap_used_mb', 0.0), ('_under_memory_pressure', False)):
+                            ('_host_swap_used_mb', 0.0)):
             mocked = patch('components.image.app.backend.generation.' + name, return_value=value)
             mocked.start()
             self.addCleanup(mocked.stop)
+        # The predicate stays real; only the reported level is pinned (see _image_pressure).
+        from _image_pressure import pressure
+        self.addCleanup(pressure(1).stop)
         root = Path(self.temp.name)
         self.library = root / 'models'
         self.library.mkdir()

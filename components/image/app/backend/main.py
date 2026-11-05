@@ -402,7 +402,8 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                     steps: int | None = Form(default=None),
                     guidance: float | None = Form(default=None),
                     seed: int | None = Form(default=None),
-                    output_format: str | None = Form(default=None)) -> dict:
+                    output_format: str | None = Form(default=None),
+                    memory_floor_gb: float | None = Form(default=None)) -> dict:
         """Reference-to-image: N reference images plus a prompt, one scene image out.
 
         Multipart, mirroring `/api/generate/txt2img`: one repeated `images` part per reference, in
@@ -462,7 +463,8 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             for name, value in (('aspect_ratio', aspect_ratio), ('resolution', resolution),
                                 ('width', width), ('height', height), ('steps', steps),
                                 ('guidance', guidance), ('seed', seed),
-                                ('output_format', output_format)):
+                                ('output_format', output_format),
+                                ('memory_floor_gb', memory_floor_gb)):
                 if value is not None:
                     raw[name] = value
             return {'job': manager.submit(raw, mode='edit', job_id=job_id)}

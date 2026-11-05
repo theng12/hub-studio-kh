@@ -40,6 +40,7 @@ from components.image.app.backend.generation import (  # noqa: E402
     FLUX2_KLEIN, Z_IMAGE_TURBO, GenerationManager, apply_memory_plan, memory_plan)
 
 from test_image_memory_pressure import install_tiny_packages  # noqa: E402
+import _image_pressure  # noqa: E402
 
 GiB = 1024 ** 3
 TOKEN = 'imageownercred_' * 3
@@ -421,6 +422,8 @@ class ResidentModelTests(unittest.TestCase):
         self.data.mkdir()
         self.flux_manifest, self.z_manifest = install_tiny_packages(self.library)
         self.counter: dict = {}
+        # The module global is process-wide: restore the value that was there, not blindly None.
+        self.addCleanup(setattr, memory_policy, '_MANAGER', memory_policy._MANAGER)
 
     def manager(self, memory_bytes: int) -> GenerationManager:
         manager = GenerationManager(self.data, self.library, self.flux_manifest, RUNTIME_ID,
@@ -435,7 +438,7 @@ class ResidentModelTests(unittest.TestCase):
         with (patch.dict(sys.modules, modules),
               patch.object(image_main, '_host_eligibility',
                            return_value={'eligible': True, 'macos': '26.6.2'}),
-              patch.object(generation, '_under_memory_pressure', return_value=False)):
+              _image_pressure.pressure(1)):
             job_id = manager.submit(request)['id']
             for _ in range(300):
                 job = manager.get(job_id)
@@ -508,9 +511,9 @@ class ResidentModelTests(unittest.TestCase):
         with (patch.dict(sys.modules, modules),
               patch.object(image_main, '_host_eligibility',
                            return_value={'eligible': True, 'macos': '26.6.2'}),
-              # Warning pressure evicts residency; critical pressure refuses work.
-              patch.object(generation, '_under_memory_pressure',
-                           side_effect=lambda level=2: level <= 2)):
+              # Reported warning (2): eviction is decided by the real predicate; at 4 the
+              # job would be refused instead, which the door test below pins.
+              _image_pressure.pressure(2)):
             job_id = manager.submit({'repo': FLUX2_KLEIN.repo, 'prompt': 'x', 'aspect_ratio': '1:1',
                                      'width': 1024, 'height': 1024, 'seed': 1})['id']
             for _ in range(300):
@@ -521,6 +524,35 @@ class ResidentModelTests(unittest.TestCase):
         self.assertEqual(job['state'], 'done', job.get('error'))
         self.assertFalse(job['model_reused'])
         self.assertEqual(self.counter['inits'], 2)
+
+    def test_critical_pressure_at_the_start_door_stops_before_the_model_loads(self):
+        # Admission already passed at level 1; the pressure appears while the job waits for the
+        # inference lock, so the live re-read at the door is what must refuse it - and refuse it
+        # before the weights are ever loaded.
+        manager = self.manager(32 * GiB)
+        modules = _fake_klein_module(self.counter)
+        with (patch.dict(sys.modules, modules),
+              patch.object(image_main, '_host_eligibility',
+                           return_value={'eligible': True, 'macos': '26.6.2'}),
+              _image_pressure.pressure(1) as reported):
+            manager.inference_lock.acquire()
+            try:
+                job_id = manager.submit({'repo': FLUX2_KLEIN.repo, 'prompt': 'x',
+                                         'aspect_ratio': '1:1', 'width': 1024, 'height': 1024,
+                                         'seed': 1})['id']
+                reported.level = 4
+            finally:
+                manager.inference_lock.release()
+            for _ in range(300):
+                job = manager.get(job_id)
+                if job['state'] in ('done', 'error'):
+                    break
+                time.sleep(0.02)
+        self.assertEqual(job['state'], 'error', job.get('error'))
+        self.assertEqual(job.get('error_code'), 'MEMORY_PRESSURE_STOPPED')
+        self.assertIn('before it started', job.get('error') or '')
+        self.assertEqual(self.counter.get('inits', 0), 0,
+                         'the door must stop the job before anything loads')
 
     def test_the_hub_release_drops_it_and_never_preempts_a_running_job(self):
         manager = self.manager(32 * GiB)

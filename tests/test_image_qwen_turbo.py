@@ -19,10 +19,13 @@ TOKEN = "qwen_turbo_owner_" * 3
 class QwenTurboRegistryTests(unittest.TestCase):
     def setUp(self):
         for name, value in (('_reclaimable_available_gb', 64.0),
-                            ('_host_swap_used_mb', 0.0), ('_under_memory_pressure', False)):
+                            ('_host_swap_used_mb', 0.0)):
             mocked = patch.object(generation, name, return_value=value)
             mocked.start()
             self.addCleanup(mocked.stop)
+        # The predicate stays real; only the reported level is pinned (see _image_pressure).
+        from _image_pressure import pressure
+        self.addCleanup(pressure(1).stop)
 
     def test_registry_publishes_only_the_turbo_eight_step_contract(self) -> None:
         model = generation.QWEN_IMAGE_21_TURBO

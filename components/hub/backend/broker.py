@@ -2372,12 +2372,41 @@ def _image_reference_door_refusal(model: str) -> str | None:
     return None  # intrinsic somewhere, availability undetermined — dispatch decides
 
 
+def submission_shape_refusal(envelope: dict) -> dict[str, str] | None:
+    """The one shape gate for every modality, before any len(), membership or dict() use.
+
+    A wrong-typed field here used to raise inside this function and read as a bare HTTP 500
+    (an unhashable modality, len() of an int, dict() of a string); this names the field instead.
+    """
+    modality = envelope.get("modality")
+    if not isinstance(modality, str):
+        return {"code": "INVALID_MODALITY", "detail": "modality must be a string"}
+    model = envelope.get("model")
+    if not isinstance(model, str) or not model.strip():
+        return {"code": "INVALID_MODEL", "detail": "model (repo) is required"}
+    items = envelope.get("items")
+    if not isinstance(items, list) or not items:
+        return {"code": "INVALID_ITEMS", "detail": "items must be a non-empty list"}
+    if any(not isinstance(item, dict) for item in items):
+        return {"code": "INVALID_ITEMS", "detail": "every item must be an object"}
+    if any(item.get("params") is not None and not isinstance(item.get("params"), dict)
+           for item in items):
+        return {"code": "INVALID_ITEM_PARAMS", "detail": "every item's params must be an object"}
+    shared = envelope.get("sharedParams")
+    if shared is not None and not isinstance(shared, dict):
+        return {"code": "INVALID_SHARED_PARAMS", "detail": "sharedParams must be an object"}
+    return None
+
+
 def submit_batch(envelope: dict) -> dict:
     with _submit_lock:
         return _submit_batch_locked(envelope)
 
 
 def _submit_batch_locked(envelope: dict) -> dict:
+    shape_refusal = submission_shape_refusal(envelope)
+    if shape_refusal:
+        return {"error": shape_refusal["detail"], "code": shape_refusal["code"]}
     modality = envelope.get("modality")
     if modality not in MODALITY:
         return {"error": f"modality must be one of {sorted(MODALITY)}"}
@@ -2397,8 +2426,6 @@ def _submit_batch_locked(envelope: dict) -> dict:
             return {"error": "batch payload exceeds the 25 MB limit"}
     except (TypeError, ValueError):
         return {"error": "batch payload must be valid JSON"}
-    if not envelope.get("model"):
-        return {"error": "model (repo) is required"}
     # Image-only door checks, before any fence or idempotency record exists: an unknown or
     # self-contradictory mode, and reference images no Mac here could serve, fail here with
     # plain words rather than queueing work that cannot run (owner rule: loud at the door).
@@ -2499,7 +2526,7 @@ def _submit_batch_locked(envelope: dict) -> dict:
     else:
         request_fingerprint = None
     batch_id = uuid.uuid4().hex[:10]
-    batches[batch_id] = {
+    batch = {
         "id": batch_id,
         "client_request_id": client_request_id,
         "request_fingerprint": request_fingerprint,
@@ -2538,8 +2565,22 @@ def _submit_batch_locked(envelope: dict) -> dict:
             "retry_at": None,
         } for i, it in enumerate(items_in)],
     }
-    ledger.save_batch(batches[batch_id])
+    # Durable before public: the fence and the row are written while this batch is still a
+    # local candidate, so a failure here publishes nothing, reloads nothing, and answers a
+    # coded refusal the caller can retry with the same clientRequestId.
     execution_identity.bind_local_batch(prepared.evidence, batch_id)
+    try:
+        ledger.save_batch(batch)
+    except BaseException:
+        # The fence must not point at a batch that was never stored.
+        try:
+            execution_identity.bind_local_batch(prepared.evidence, "")
+        except Exception as rollback:  # noqa: BLE001 - name the type, never its payload
+            logging.getLogger("studiohub.broker").warning(
+                "could not clear the execution fence for batch %s after a failed store: %s",
+                batch_id, type(rollback).__name__)
+        raise
+    batches[batch_id] = batch
     _wakeup.set()
     return {"batch_id": batch_id, "items": len(items_in), "replayed": False}
 
@@ -5762,6 +5803,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
     if b["modality"] == "voice":
         body["client_request_id"] = (item.get("client_request_id")
                                      or f"studiohub:{b['id']}:{item['index']}")
+    if b["modality"] in ("voice", "image"):
         floor = memory_admission.worker_free_floor_gb(b["model"])
         if floor is not None:   # the worker's own preflight must honour the same override / measurement
             body["memory_floor_gb"] = floor

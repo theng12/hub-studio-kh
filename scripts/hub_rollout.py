@@ -624,6 +624,7 @@ class Rollout:
             # the chain, so its older nodes get HTTP 404 from the artifact route. `--full` is
             # the repair, and skipping "already held" would keep the image from ever arriving.
             note(f'{label}: already holds {self.version}; re-sending the whole image (--full)')
+        full_resend_noted = held
 
         gate_deadline = started + self.window_s
         read = first
@@ -638,6 +639,18 @@ class Rollout:
                 read = self._try_read(site_id)
                 continue
             row['gate'] = read
+            # A site that already holds this release is verified, never offered it again - even
+            # when the first read could not tell (an unreadable fleet at the start of the run).
+            if holds_release(read, self.version, self.build,
+                             self.accepted['sha256'], self.accepted['bytes']):
+                if not self.force_full:
+                    row['published_at'] = 'already held before this run'
+                    note(f'{label}: already holds {self.version}; not republishing')
+                    return self._verify(site_id, label, row)
+                if not full_resend_noted:
+                    note(f'{label}: already holds {self.version}; re-sending the whole image '
+                         '(--full)')
+                    full_resend_noted = True
             if read['reachable'] is not True:
                 row['state'] = 'deferred: unreachable'
                 if self.now() >= gate_deadline:

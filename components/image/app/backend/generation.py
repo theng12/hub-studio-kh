@@ -1022,9 +1022,16 @@ def effective_reference_policy(model: ImageModel, mode: str,
     maximum = int(cell.get('max_reference_images') or 0) if allowed else 0
     source = str(cell.get('source') or 'not measured on this tier')
     receipt = cell.get('receipt')
-    reason = (None if allowed else
-              f'{model.label} {mode} is off on the {tier} GiB tier ({source}'
-              + (f'; {receipt}' if receipt else '') + ')')
+    cap = int(cell.get('max_reference_images') or 0)
+    if allowed:
+        reason = None
+    elif cap > 0:
+        # An off count cell with a retained cap is over the lane's cap, not off on the tier.
+        reason = (f'{model.label} {mode} takes at most {cap} reference images on the {tier} GiB '
+                  f'tier ({source}' + (f'; {receipt}' if receipt else '') + ')')
+    else:
+        reason = (f'{model.label} {mode} is off on the {tier} GiB tier ({source}'
+                  + (f'; {receipt}' if receipt else '') + ')')
     return {'tier': tier, 'allowed': allowed, 'max_reference_images': maximum,
             'swap_allowance_gb': float(cell.get('swap_allowance_gb') or 0),
             'source': source, 'receipt': receipt, 'tier_found': True, 'reason': reason}
@@ -1754,17 +1761,34 @@ def _validate_references(model: ImageModel, references: list[str],
     return list(references)
 
 
+def _job_floor_gb(model: ImageModel, mode: str, total_memory_bytes: int | None,
+                  selected: str, floor_gb: float | None) -> float | None:
+    """The free-before-start floor for one job: the Hub's override, or the mode's own floor.
+
+    Text-to-image takes the override (it wins in ``memory_admission.describe``); edit takes the
+    stricter of the override and its own reference floor.
+    """
+    mode_floor = _reference_floor_gb(model, mode, total_memory_bytes, selected)
+    if floor_gb is None:
+        return mode_floor
+    if mode == 'edit' and mode_floor is not None:
+        return max(floor_gb, mode_floor)
+    return floor_gb
+
+
 def _admit_job(model: ImageModel, mode: str, total_memory_bytes: int | None,
-               selected: str = DEFAULT_LOADING_MODE) -> str | None:
+               selected: str = DEFAULT_LOADING_MODE,
+               floor_gb: float | None = None) -> str | None:
     """Refuse work this node's table cell turns away, or a job starting below its own floor.
 
     Three checks, in this order, each a reason rather than a guess:
 
     1. the cell - ``allowed: false`` for this physical tier is the node's hard no;
     2. the starting free floor - the **existing measured free-before-start floor** for the
-       configuration this job will run (the mode block's own ``min_free_memory_gb``), checked
-       against live reclaimable available memory **right before the job starts** (owner's MLX
-       discipline: a floor is never derived from a peak, and this is not a new floor);
+       configuration this job will run (the mode block's own ``min_free_memory_gb``, or the
+       Hub's effective override where it sent one), checked against live reclaimable available
+       memory **right before the job starts** (owner's MLX discipline: a floor is never derived
+       from a peak, and this is not a new floor);
     3. hard critical memory pressure - an unconditional stop, whatever any allowance says.
 
     ``swap_allowance_gb`` from the cell (always 0 today) is **enforced for a running job** by
@@ -1783,7 +1807,7 @@ def _admit_job(model: ImageModel, mode: str, total_memory_bytes: int | None,
         cell = effective_reference_policy(model, mode, total_memory_bytes)
         if not cell['allowed']:
             return cell['reason']
-    floor = _reference_floor_gb(model, mode, total_memory_bytes, selected)
+    floor = _job_floor_gb(model, mode, total_memory_bytes, selected, floor_gb)
     available = _reclaimable_available_gb()
     if floor is not None and available is None:
         return f'{model.label}: live available memory could not be checked before starting'
@@ -1833,8 +1857,10 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None,
             raise ValueError(cell['reason'])
     if any(raw.get(key) for key in ('image_path', 'lora_names', 'lora_paths',
                                      'negative_prompt', 'quantize')):
+        maximum = (effective_reference_max(model, total_memory_bytes)
+                   if total_memory_bytes is not None else reference_max(model))
         allowed = (f'; this model takes {model.reference_limits["min"]}-'
-                   f'{reference_max(model)} reference images'
+                   f'{maximum} reference images'
                    if model.reference_limits else '')
         raise ValueError('LoRAs, negative prompt and quantization are unavailable' + allowed)
 
@@ -1894,6 +1920,13 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None,
                 or output_format.strip().lower() not in OUTPUT_FORMATS):
             raise ValueError('output_format must be ' + ' or '.join(OUTPUT_FORMATS))
         normalized['output_format'] = output_format.strip().lower()
+    floor_gb = raw.get('memory_floor_gb')
+    if floor_gb is not None:
+        # The Hub's override: validated once, persisted for both the queue and execution gates.
+        if (isinstance(floor_gb, bool) or not isinstance(floor_gb, (int, float))
+                or not math.isfinite(floor_gb) or not 0 <= floor_gb <= 512):
+            raise ValueError('memory_floor_gb must be a finite number of GB from 0 to 512')
+        normalized['memory_floor_gb'] = float(floor_gb)
     return normalized
 
 
@@ -2201,11 +2234,14 @@ class _JobMemoryGuard:
 
     * **macOS critical memory pressure** — unconditional, whatever any allowance says;
     * **host swap growth beyond this tier's published allowance** — measured from *this job's own
-      start baseline*, never the host's swap total, so only growth that began with the job is
-      attributed to it. The reason it records is exactly ``host swap grew beyond allowance`` with
-      the baseline, the live figure and the allowance as its evidence: the allowance is decimal
-      GB (always 0 today, so any growth stops the job), and it is **enforced**, not published as
-      if it were.
+      start baseline*, never the host's swap total, so the figure is the host's swap growth
+      observed during this job's window (host-wide by design: background processes' growth is
+      included), not a figure this job's own pages account for. The reason it records is exactly
+      ``host swap grew beyond allowance`` with the baseline, the live figure and the allowance as
+      its evidence: the allowance is decimal GB (always 0 today, so any growth stops the job), and
+      it is **enforced**, not published as if it were;
+    * **an unreadable swap monitor** — a missing baseline or live read stops the job with
+      ``MEMORY_MONITOR_UNAVAILABLE``: the allowance was not checked, not passed.
 
     A stop goes through the job's own cancel event — mflux's cancel hook ends the loop — and
     records its own reason and error code in ``manager.hard_stops``, so `_record_failure` reports
@@ -2234,6 +2270,12 @@ class _JobMemoryGuard:
             return
         used = _host_swap_used_mb()
         if used is None or self.baseline_mb is None:
+            # Not checked is not passed: an unreadable monitor stops the job loudly.
+            self._stop(event, 'MEMORY_MONITOR_UNAVAILABLE',
+                       'host swap could not be read while this job ran; the published swap '
+                       'allowance cannot be verified (baseline '
+                       + ('unreadable' if self.baseline_mb is None
+                          else f'{self.baseline_mb:.1f} MB') + ')')
             return
         grew_gb = (used - self.baseline_mb) / 1000.0
         if grew_gb > self.allowance_gb:
@@ -2626,7 +2668,7 @@ class GenerationManager:
         # `validate_request`; running the same resolver again here means a queued-but-busy moment
         # cannot slip a job past the floor it was admitted under.
         refused = _admit_job(MODELS[params['repo']], mode, self.total_memory_bytes,
-                             loading_mode.current(self.data))
+                             loading_mode.current(self.data), params.get('memory_floor_gb'))
         if refused:
             raise RuntimeError(refused)
         job_id = job_id or uuid4().hex
@@ -2857,19 +2899,26 @@ class GenerationManager:
                     seed = random.randint(0, model.limits['max_seed'])
                 mode = job.get('mode', 'txt2img')
                 refused = _admit_job(model, mode, self.total_memory_bytes,
-                                     loading_mode.current(self.data))
+                                     loading_mode.current(self.data),
+                                     job['params'].get('memory_floor_gb'))
                 if refused:
                     raise RuntimeError(refused)
-                # `_JobMemoryGuard` then watches this job for the two hard stops, because the inference
+                # `_JobMemoryGuard` then watches this job for the hard stops, because the inference
                 # thread is blocked inside mflux and cannot watch itself. Critical memory pressure
                 # stops it unconditionally, and host swap growth beyond this tier's published
                 # allowance stops it with that exact reason. Both end the job through its own
                 # cancel event - `self.hard_stops` carries the stop's reason and code, and
                 # `_record_failure` keeps them, so a stop is never reported as an operator cancel
-                # and never as a success. The baseline is this job's own start, so the growth
-                # attributed to it is its own; nothing claims all of the host's swap belongs to
-                # this job.
+                # and never as a success. The baseline is this job's own start; the growth is
+                # host-wide during this job's window, not a claim all of it belongs to this job.
                 guard = _JobMemoryGuard(self, job_id, model, mode)
+                if guard.baseline_mb is None:
+                    # No baseline means no enforcement; fail before the model loads, not green.
+                    reason = ('host swap baseline could not be read before the model loaded; '
+                              'the published swap allowance cannot be enforced, so the job '
+                              'did not start')
+                    guard._stop(event, 'MEMORY_MONITOR_UNAVAILABLE', reason)
+                    raise RuntimeError(reason)
                 threading.Thread(target=guard.run, args=(event,),
                                  daemon=True, name=f'image-memory-{job_id[:8]}').start()
                 plan = memory_plan(model, self.total_memory_bytes,

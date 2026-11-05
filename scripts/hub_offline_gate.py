@@ -10,6 +10,16 @@ The `unittest` stage runs in the launching interpreter, so launch it with the ga
 Python (`.build/hub-gate/bin/python`); the other stages pick their interpreter from
 `--root/.build` (`HUB_GATE_PYTHON` / `HUB_VOICE_PYTHON` override).
 
+Before any evidence directory is created, `preflight()` refuses a drifted gate
+environment: a missing interpreter, the unittest stage running in a different
+environment (compared by the selected interpreter's own `sys.prefix`, because
+different venvs often resolve to the same base binary), the full-suite seeds
+(soundfile, mlx.core, misaki.espeak, espeakng_loader and their native assets), a
+gate closure that does not match `packaging/hub-gate/requirements.lock.txt`, or a
+pytest stage that cannot import pytest through the `.build/test-deps` overlay the
+runner now prepends itself. Every probe is bounded; a hung interpreter is a loud
+preflight failure, not a silent wait.
+
 Usage:
   .build/hub-gate/bin/python scripts/hub_offline_gate.py unittest \
       --evidence .build/gate-evidence-<version>
@@ -24,6 +34,7 @@ from pathlib import Path
 import argparse
 import glob
 import faulthandler
+import json
 import os
 import subprocess
 import sys
@@ -43,6 +54,178 @@ def voice_python(root: Path) -> str:
     return os.environ.get('HUB_VOICE_PYTHON') or str(root / '.build' / 'voice-runtime' / 'bin' / 'python3')
 
 
+# The gate environment's required closure: exact pins from the verified R7 reconstruction
+# (_orchestra/hub-lead/next-batch-20261105/gate-r7-environment.json). More distributions
+# may be installed; these must be present at these versions.
+GATE_LOCK = Path('packaging') / 'hub-gate' / 'requirements.lock.txt'
+# Modules the full unittest stage imports directly; the two path assertions cover the
+# espeak native assets that a successful import alone does not prove. tokenizers is the
+# Vision helper Florence2 imports when the shipped checkpoints are installed (R7 error:
+# test_vision_worker.ShippedModelTests -> florence.py `from tokenizers import Tokenizer`).
+GATE_SEEDS = ('soundfile', 'mlx.core', 'misaki.espeak', 'espeakng_loader', 'tokenizers')
+GATE_SEED_CHECK = (
+    'import soundfile, mlx.core, misaki.espeak, espeakng_loader, tokenizers\n'
+    'from pathlib import Path\n'
+    'assert Path(espeakng_loader.get_library_path()).is_file(), "espeak library missing"\n'
+    'assert Path(espeakng_loader.get_data_path()).is_dir(), "espeak data missing"\n'
+)
+DISTRIBUTION_PROBE = (
+    'import json\n'
+    'from importlib import metadata\n'
+    'print(json.dumps({d.metadata["Name"]: d.version for d in metadata.distributions()'
+    ' if d.metadata["Name"]}))\n'
+)
+# A venv's own identity: two venvs can symlink the same base binary, so the
+# resolved executable cannot tell them apart - sys.prefix can.
+INTERPRETER_PROBE = (
+    'import json, sys\n'
+    'print(json.dumps({"prefix": sys.prefix, "executable": sys.executable}))\n'
+)
+PROBE_TIMEOUT_SECONDS = 60
+
+
+def _preflight_fail(message: str):
+    raise SystemExit('GATE PREFLIGHT: ' + message)
+
+
+def _last_line(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else 'no output'
+
+
+def _run_probe(python, code: str, env=None, isolated: bool = True, label: str = 'gate probe'):
+    command = [str(python)] + (['-I'] if isolated else []) + ['-B', '-c', code]
+    try:
+        return subprocess.run(command, capture_output=True, text=True, env=env,
+                              timeout=PROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _preflight_fail(
+            f'{label} did not finish within {PROBE_TIMEOUT_SECONDS}s: {python}')
+
+
+def test_deps_env(root: Path, env: dict) -> dict:
+    """Prepend this checkout's pytest overlay; a caller's own PYTHONPATH is kept."""
+    overlay = str(root / '.build' / 'test-deps')
+    existing = env.get('PYTHONPATH')
+    merged = dict(env)
+    merged['PYTHONPATH'] = overlay + (os.pathsep + existing if existing else '')
+    return merged
+
+
+def check_interpreter(python, label: str) -> None:
+    if not Path(python).is_file():
+        _preflight_fail(f'{label} interpreter missing: {python}')
+
+
+def refuse_different_environment(running_prefix: str, selected_prefix: str, selected) -> None:
+    if Path(running_prefix).resolve() != Path(selected_prefix).resolve():
+        _preflight_fail(
+            f'unittest runs in a different environment; running prefix {running_prefix}, '
+            f'selected gate prefix {selected_prefix} ({selected}); '
+            'set HUB_GATE_PYTHON to choose another')
+
+
+def check_gate_selection(root: Path) -> None:
+    selected = gate_python(root)
+    completed = _run_probe(selected, INTERPRETER_PROBE, label='interpreter identity')
+    if completed.returncode:
+        _preflight_fail(
+            f'cannot read the selected gate interpreter identity from {selected}: '
+            f'{_last_line(completed.stderr)}')
+    try:
+        identity = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        _preflight_fail(f'{selected} returned unreadable interpreter identity')
+    refuse_different_environment(sys.prefix, identity.get('prefix', ''), selected)
+
+
+def check_gate_seeds(python) -> None:
+    completed = _run_probe(python, GATE_SEED_CHECK, label='gate seed import')
+    if completed.returncode:
+        _preflight_fail(
+            f'{python} lacks the full-suite seeds ({", ".join(GATE_SEEDS)}) or their native '
+            f'assets: {_last_line(completed.stderr)}')
+
+
+def _normalize_distribution(name: str) -> str:
+    return name.lower().replace('_', '-').replace('.', '-')
+
+
+def parse_lock_text(text: str) -> dict:
+    required = {}
+    for line in text.splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line:
+            continue
+        name, separator, version = line.partition('==')
+        if not separator or not name.strip() or not version.strip():
+            _preflight_fail(f'gate lock line is not name==version: {line}')
+        required[_normalize_distribution(name)] = version.strip()
+    return required
+
+
+def compare_distributions(required: dict, installed: dict):
+    normalized = {_normalize_distribution(name): version for name, version in installed.items()}
+    missing = [f'{name}=={version}' for name, version in sorted(required.items())
+               if name not in normalized]
+    mismatched = [f'{name}: required {version}, installed {normalized[name]}'
+                  for name, version in sorted(required.items())
+                  if name in normalized and normalized[name] != version]
+    return missing, mismatched
+
+
+def check_gate_closure(python, lock_path: Path) -> None:
+    if not lock_path.is_file():
+        _preflight_fail(f'tracked gate closure missing: {lock_path}')
+    required = parse_lock_text(lock_path.read_text(encoding='utf-8'))
+    completed = _run_probe(python, DISTRIBUTION_PROBE, label='distribution probe')
+    if completed.returncode:
+        _preflight_fail(
+            f'cannot read installed distributions from {python}: {_last_line(completed.stderr)}')
+    try:
+        installed = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        _preflight_fail(f'{python} returned unreadable distribution metadata')
+    missing, mismatched = compare_distributions(required, installed)
+    if missing or mismatched:
+        details = []
+        if missing:
+            details.append('missing ' + ', '.join(missing))
+        if mismatched:
+            details.append('mismatched ' + ', '.join(mismatched))
+        _preflight_fail(f'gate closure does not match {lock_path}: ' + '; '.join(details))
+
+
+def check_pytest(python, env: dict) -> None:
+    completed = _run_probe(python, 'import pytest', env=env, isolated=False,
+                           label='pytest import')
+    if completed.returncode:
+        _preflight_fail(
+            f'{python} cannot import pytest through the test-deps overlay '
+            f'({env.get("PYTHONPATH", "")}): {_last_line(completed.stderr)}')
+
+
+def preflight(root: Path, kind: str) -> None:
+    """Refuse a drifted gate environment before any evidence directory is created."""
+    if kind == 'native':
+        return
+    if kind == 'voice':
+        python = voice_python(root)
+        check_interpreter(python, 'voice')
+        check_pytest(python, test_deps_env(root, os.environ.copy()))
+        print(f'GATE PREFLIGHT: ok ({kind}, {python})', flush=True)
+        return
+    python = gate_python(root)
+    check_interpreter(python, 'gate')
+    if kind == 'unittest':
+        check_gate_selection(root)
+        check_gate_seeds(python)
+    if kind in ('regressions', 'pytest'):
+        check_pytest(python, test_deps_env(root, os.environ.copy()))
+    check_gate_closure(python, root / GATE_LOCK)
+    print(f'GATE PREFLIGHT: ok ({kind}, {python})', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('kind', choices=('unittest', 'regressions', 'voice', 'native', 'pytest'))
@@ -55,6 +238,7 @@ def main():
     args = parser.parse_args()
 
     root, evidence = args.root.resolve(), args.evidence.resolve()
+    preflight(root, args.kind)
     if evidence.exists():
         raise SystemExit(f'refusing to reuse existing evidence dir: {evidence}')
 
@@ -180,7 +364,10 @@ def main():
         'native': ['bash', 'native/build.sh'],
         'pytest': [gate_python(root), '-m', 'pytest', '-p', 'no:cacheprovider', '-q', *args.selectors],
     }
-    result = subprocess.run(commands[args.kind], cwd=root, env=os.environ.copy())
+    stage_env = os.environ.copy()
+    if args.kind in ('regressions', 'voice', 'pytest'):
+        stage_env = test_deps_env(root, stage_env)
+    result = subprocess.run(commands[args.kind], cwd=root, env=stage_env)
     print('GATE EXIT:', result.returncode, flush=True)
     sys.exit(result.returncode)
 

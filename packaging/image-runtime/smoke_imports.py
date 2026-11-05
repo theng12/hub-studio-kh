@@ -30,6 +30,10 @@ BASE_MODULES = (
     "mflux",
     "fastapi",
     "uvicorn",
+    # Declared in research/st01-runtime-contracts.json (image-mflux required_imports).
+    # FastAPI raises while registering Form/File routes without it (0.6.202 shipped
+    # without the package and the packaged worker never started).
+    "multipart",
     "mlx.core",
     "PIL",
     "numpy",
