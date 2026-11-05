@@ -105,6 +105,11 @@ class LaneHarness:
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        for name, value in (('_reclaimable_available_gb', 64.0),
+                            ('_host_swap_used_mb', 0.0), ('_under_memory_pressure', False)):
+            mocked = patch('components.image.app.backend.generation.' + name, return_value=value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
         root = Path(self.temp.name)
         self.library = root / 'models'
         self.library.mkdir()
@@ -364,7 +369,7 @@ class SmallMacLaneTests(LaneHarness, unittest.TestCase):
         refused = edit_lane(FLUX2_KLEIN, {'ready': True}, 8 * 1024 ** 3, 'full')
         self.assertFalse(refused['available'])
         self.assertEqual(refused['mode'], 'default')
-        self.assertIn('unified memory', refused['reason'])
+        self.assertIn('off on the 8 GiB tier', refused['reason'])
 
     def test_an_eight_gigabyte_mac_is_refused_with_the_real_minimum(self):
         """Two references need 7.47 GB of working set, so 8 GiB is not offered the lane.
@@ -378,7 +383,7 @@ class SmallMacLaneTests(LaneHarness, unittest.TestCase):
             row = self.client.get('/api/catalog', headers=self.headers).json()['models'][0]
         self.assertNotIn('edit', row['capabilities'])
         self.assertEqual(row['reference_lane']['mode'], 'bounded-streamed')
-        self.assertIn('12', row['reference_lane']['reason'])
+        self.assertIn('off on the 8 GiB tier', row['reference_lane']['reason'])
         self.assertEqual(reference_mode_values(FLUX2_KLEIN, 'bounded-streamed')
                          ['min_total_memory_gb'], 12.0)
 
@@ -473,9 +478,11 @@ class QwenTurboEditLaneTests(unittest.TestCase):
         self.assertEqual(plan_configuration(large), 'default')
         self.assertIsNone(reference_mode_values(QWEN_IMAGE_21_TURBO, 'default')
                           ['min_total_memory_gb'])
-        refused = edit_lane(QWEN_IMAGE_21_TURBO, {'ready': True}, 64 * 1024 ** 3, 'auto')
-        self.assertFalse(refused['available'])
-        self.assertIn('no measured default configuration', refused['reason'])
+        provisional = edit_lane(QWEN_IMAGE_21_TURBO, {'ready': True}, 64 * 1024 ** 3, 'auto')
+        self.assertTrue(provisional['available'])
+        self.assertEqual(lane_contract(QWEN_IMAGE_21_TURBO,
+                         total_memory_bytes=64 * 1024 ** 3)['references']['policy_source'],
+                         'provisional, measuring')
         # The text lane of the same row keeps its shipped single mode.
         self.assertEqual(plan_configuration(
             memory_plan(QWEN_IMAGE_21_TURBO, 16 * 1024 ** 3, 'auto')), 'default')
@@ -553,7 +560,9 @@ class EngineOwnedCapTests(unittest.TestCase):
         # mflux absent → the row's documented fallback; mflux present → MAX_REFERENCES (10 today).
         self.assertEqual(QWEN_IMAGE_21_TURBO.reference_limits['max'], 10)
         self.assertEqual(reference_max(QWEN_IMAGE_21_TURBO), 10)
-        self.assertEqual(lane_contract(QWEN_IMAGE_21_TURBO)['references']['max'], 10)
+        reference_contract = lane_contract(QWEN_IMAGE_21_TURBO, total_memory_bytes=32 * 1024 ** 3)['references']
+        self.assertEqual(reference_contract['max'], 1)
+        self.assertEqual(reference_contract['max_intrinsic'], 10)
 
     def test_a_future_model_inherits_its_engine_constant_without_an_edit_here(self):
         stub = types.ModuleType('fake_reference_cap_engine')
@@ -618,7 +627,8 @@ class PublishedCountsTests(unittest.TestCase):
     def test_qwens_counts_derive_nothing_either(self):
         references = lane_contract(QWEN_IMAGE_21_TURBO,
                                    total_memory_bytes=16 * 1024 ** 3)['references']
-        self.assertEqual(references['max'], 10)
+        self.assertEqual(references['max'], 0)
+        self.assertEqual(references['max_intrinsic'], 10)
         counts = references['counts']
         self.assertEqual(counts['2']['bounded-staged']['seconds'], 182.96)
         self.assertIsNone(counts['2']['bounded-staged']['min_total_memory_gb'])
@@ -637,6 +647,11 @@ class PerCountDeadlineHarness(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        for name, value in (('_reclaimable_available_gb', 64.0),
+                            ('_host_swap_used_mb', 0.0), ('_under_memory_pressure', False)):
+            mocked = patch('components.image.app.backend.generation.' + name, return_value=value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
         root = Path(self.temp.name)
         self.library = root / 'models'
         self.library.mkdir()

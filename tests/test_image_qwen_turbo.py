@@ -17,6 +17,13 @@ TOKEN = "qwen_turbo_owner_" * 3
 
 
 class QwenTurboRegistryTests(unittest.TestCase):
+    def setUp(self):
+        for name, value in (('_reclaimable_available_gb', 64.0),
+                            ('_host_swap_used_mb', 0.0), ('_under_memory_pressure', False)):
+            mocked = patch.object(generation, name, return_value=value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
     def test_registry_publishes_only_the_turbo_eight_step_contract(self) -> None:
         model = generation.QWEN_IMAGE_21_TURBO
 
@@ -101,7 +108,7 @@ class QwenTurboRegistryTests(unittest.TestCase):
             root = Path(temporary)
             manager = generation.GenerationManager(
                 root / "data", root / "models", {}, "a" * 64,
-                manifests=[manifest], total_memory_bytes=16_000_000_000)
+                manifests=[manifest], total_memory_bytes=16 * 1024**3)
             manager.preflight = lambda _repo: {"state": "files_verified", "folder": str(root)}
             manager._enqueue = lambda *_args: None
             app = main.create_app(manager, TOKEN)
@@ -109,7 +116,7 @@ class QwenTurboRegistryTests(unittest.TestCase):
             request = {"repo": model.repo, "prompt": "A temple at blue hour"}
 
             with patch.object(main, "_host_facts", return_value={
-                "eligible": True, "macos": "26.6", "unified_memory_bytes": 16_000_000_000,
+                "eligible": True, "macos": "26.6", "unified_memory_bytes": 16 * 1024**3,
             }):
                 client = TestClient(app)
                 row = next(item for item in client.get("/api/catalog", headers=headers).json()["models"]
@@ -130,7 +137,7 @@ class QwenTurboRegistryTests(unittest.TestCase):
             root = Path(temporary)
             manager = generation.GenerationManager(
                 root / "data", root / "models", {}, "a" * 64,
-                manifests=[turbo_manifest], total_memory_bytes=16_000_000_000)
+                manifests=[turbo_manifest], total_memory_bytes=16 * 1024**3)
             manager.preflight = lambda _repo: {"state": "files_verified", "folder": str(root)}
             manager._enqueue = lambda *_args: None
 

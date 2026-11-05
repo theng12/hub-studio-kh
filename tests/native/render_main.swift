@@ -672,12 +672,20 @@ struct PageRenderHarness {
         workspace.transcriptionModel = "mlx-community/whisper-large-v3-turbo"
         workspace.imageModel = "black-forest-labs/FLUX.2-klein-4B"
         if let index = workspace.models.firstIndex(where: { $0.repo == workspace.imageModel }) {
+            let cap = Int(ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_REFERENCE_CAP"] ?? "3") ?? 3
             workspace.models[index].imageModes = [
                 NativeImageMode(id: "txt2img", label: "Text to image", available: true, reason: nil, references: nil),
-                NativeImageMode(id: "edit", label: "Reference to image", available: true, reason: nil,
-                    references: NativeImageReferences(min: 1, max: 2, maxDimension: 1024,
-                        mediaTypes: ["image/png", "image/jpeg", "image/webp"]))
+                NativeImageMode(id: "edit", label: "Reference to image", available: cap > 0,
+                    reason: cap == 0 ? "measured: over budget" : nil,
+                    references: NativeImageReferences(min: 1, max: cap, maxDimension: 1024,
+                        mediaTypes: ["image/png", "image/jpeg", "image/webp"],
+                        evidenceNote: cap == 0
+                            ? "measured: over budget at 8 GB · swap allowance 0 decimal GB"
+                            : "owner limit at 16 GB · swap allowance 0 decimal GB"))
             ]
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_REFERENCE_CAP"] != nil {
+                workspace.imageMode = "edit"
+            }
         }
         workspace.musicModel = "stabilityai/stable-audio-3-optimized"
         workspace.chatModel = "mlx-community/Qwen3-4B-Instruct-4bit"

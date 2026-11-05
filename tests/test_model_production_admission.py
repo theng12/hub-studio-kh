@@ -101,6 +101,28 @@ class ReadinessProductionPolicyTests(unittest.TestCase):
         self.assertFalse(readiness.call_args.args[0]["production_allowed"])
 
 
+class ImageReferencePublicationTests(unittest.TestCase):
+    def test_model_packages_echo_explicit_zero_and_positive_reference_caps(self):
+        candidate = manifest()
+        candidate['engine'] = next(engine for engine, (_worker, modality) in standalone._ENGINE_ROUTE.items()
+                                   if modality == 'image')
+        worker_id = standalone._worker_for_engine(candidate['engine'])
+        monitor = SimpleNamespace(registry=[{'id': worker_id, 'modality': 'image', 'local': True,
+            'runtime_identity': {'compatible': True}}])
+        for cap in (0, 3):
+            contract = {'schema': 'studiohub.lane-contract.v1', 'modality': 'image',
+                        'supports_reference_images': cap > 0, 'max_reference_images': cap}
+            with self.subTest(cap=cap), \
+                 mock.patch.object(model_packages, 'preflight', return_value={'state': 'files_verified'}), \
+                 mock.patch.object(standalone, '_model_library', return_value=ROOT), \
+                 mock.patch.object(standalone.broker, 'model_block_state', return_value=None):
+                row = standalone._model_state(candidate, {candidate['package_id']: candidate}, monitor,
+                                               {candidate['model_id']: contract})
+            self.assertEqual(row['max_reference_images'], cap)
+            self.assertIs(row['supports_reference_images'], cap > 0)
+            self.assertNotIn('deadline_seconds', contract)
+
+
 class SubmissionProductionPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.candidate = manifest(production_allowed=False)

@@ -851,16 +851,19 @@ def host_chip() -> str | None:
         return None
 
 
-def _under_memory_pressure() -> bool:
-    """True when macOS reports warning or critical memory pressure (``kern.memorystatus_vm_pressure_level``
-    2 or 4; 1 is normal). A resident model is not reused into a Mac that is already short of memory.
-    An unreadable level is not pressure: the idle window and the Hub's release are the other two guards."""
+def _under_memory_pressure(level: int = 2) -> bool:
+    """True when macOS reports memory pressure at or above ``level`` (``kern.memorystatus_vm_pressure_level``
+    2 warning, 4 critical; 1 is normal). A resident model is not reused into a Mac that is already
+    short of memory, and 4 is the hard stop on every image job (owner, 2026-11-05) whatever any
+    swap allowance says. An unreadable level is not pressure: the idle window and the Hub's
+    release are the other two guards, and a host that cannot be read must not be reported as
+    pressure it did not show."""
     try:
-        level = int(subprocess.check_output(['/usr/sbin/sysctl', '-n', 'kern.memorystatus_vm_pressure_level'],
+        reported = int(subprocess.check_output(['/usr/sbin/sysctl', '-n', 'kern.memorystatus_vm_pressure_level'],
                                             text=True, timeout=3).strip())
     except (OSError, ValueError, subprocess.SubprocessError):
         return False
-    return level >= 2
+    return reported >= level
 
 
 def lane_policy(model: ImageModel, lane: str = 'txt2img') -> MemoryPolicy:
@@ -923,9 +926,8 @@ def reference_max(model: ImageModel) -> int:
 
     A row may declare ``max_engine_constant`` (``module:ATTRIBUTE``); the engine's number wins
     over the row's fallback, so a future model inherits its engine's cap with no edit here.
-    Where the engine states no constant, the row's documented number stands — FLUX.2 Klein
-    4-bit's four is the maker's documented maximum (mflux's flux2 edit lane exposes only
-    ``MAX_REFERENCE_AREA``, no count).
+    Where the engine states no constant, this project's existing row supplies a validation
+    ceiling. FLUX.2 Klein 4-bit's four is an owner limit, not a proved intrinsic engine bound.
     """
     limits = model.reference_limits or {}
     constant = limits.get('max_engine_constant')
@@ -938,6 +940,140 @@ def reference_max(model: ImageModel) -> int:
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
     return int(limits['max'])
+
+
+# ── the per-node reference limits table (owner, 2026-11-05: caps are data, not constants) ────
+# `reference-limits.json`, tracked beside this file and shipped with it (the release stager copies
+# every tracked file under components/image/). One row per model x job mode x reference count,
+# one cell per physical tier; every consumer - `validate_request`, `lane_contract` (so also the
+# Hub/Gateway model-package export, which carries the contract verbatim), `_reference_parameter`,
+# the multipart early refusal and `edit_lane` - reads it through this one resolver, so a cap can
+# never be published one way and enforced another. The engine's own intrinsic cap stays separate
+# (`reference_max`): the table's `max_reference_images` is the effective cap, clamped to it.
+REFERENCE_LIMITS_PATH = Path(__file__).with_name('reference-limits.json')
+
+
+@lru_cache(maxsize=1)
+def reference_limit_table() -> dict:
+    """The whole published table, loaded once from `reference-limits.json`."""
+    with REFERENCE_LIMITS_PATH.open() as stream:
+        table = json.load(stream)
+    if table.get('schema') != 'studiohub.image-reference-limits.v1':
+        raise ValueError(f'{REFERENCE_LIMITS_PATH.name} is not a studiohub image reference table')
+    return table
+
+
+def reference_tier(total_memory_bytes: int | None) -> str:
+    """The physical band this host's unified memory falls in (``'8' | '16' | '24' | '32' | '<8'``).
+
+    Fleet telemetry is decimal GB; the band a Mac belongs to is its binary GiB rounded the same
+    way the fleet's rows round it, then placed in the first band it clears.
+    """
+    gib = round((total_memory_bytes or 0) / 1024 ** 3)
+    bands = sorted({int(tier) for row in reference_limit_table()['rows']
+                    for tier in row.get('tiers', {})}, reverse=True)
+    for floor in bands:
+        if gib >= floor:
+            return str(floor)
+    return '<8'
+
+
+def reference_policy_row(model: ImageModel, mode: str, count: int | None = None) -> dict | None:
+    """The published row for this model, job mode and exact reference count."""
+    return next((row for row in reference_limit_table()['rows']
+                 if row.get('model_id') == model.repo and row.get('mode') == mode
+                 and row.get('reference_count') == count), None)
+
+
+def effective_reference_policy(model: ImageModel, mode: str,
+                               total_memory_bytes: int | None,
+                               count: int | None = None) -> dict:
+    """This host's **effective cell** for one model x mode: allowed, cap, allowance and provenance.
+
+    The single admission answer every consumer reads (owner, 2026-11-05). ``allowed`` false means
+    the node may not take that work at all; ``max_reference_images`` is 0 then, an honest zero
+    rather than a missing number. ``reason`` explains an off cell in the table's own words, and
+    ``swap_allowance_gb`` is the decimal-GB host-swap growth the same tier allows from a job's
+    start baseline - enforced for a running image job in this release.
+    """
+    total_memory_bytes = host_memory_bytes() if total_memory_bytes is None else total_memory_bytes
+    tier = reference_tier(total_memory_bytes)
+    row = reference_policy_row(model, mode, count)
+    if row is None and count is not None:
+        row = reference_policy_row(model, mode)
+    if row is None:
+        maximum = reference_max(model) if model.reference_limits else 0
+        allowed = mode == 'txt2img' or bool(model.edit_model_class and maximum)
+        return {'tier': tier, 'allowed': allowed, 'max_reference_images': maximum,
+                'swap_allowance_gb': 0.0, 'source': 'model default',
+                'receipt': (model.reference_limits or {}).get('source'), 'tier_found': False,
+                'reason': None if allowed else f'{model.label} has no {mode} lane'}
+    cell = row.get('tiers', {}).get(tier)
+    if not isinstance(cell, dict):
+        below = ('; this Mac reports '
+                 f'{(total_memory_bytes or 0) / 1e9:.1f} GB of unified memory, below the smallest '
+                 'tier the table states (8 GiB)' if tier == '<8' else '')
+        return {'tier': tier, 'allowed': False, 'max_reference_images': 0,
+                'swap_allowance_gb': 0.0, 'source': 'not measured on this tier',
+                'receipt': None, 'tier_found': False,
+                'reason': (f'{model.label} {mode} has no {tier} cell in reference-limits.json'
+                           + below)}
+    allowed = bool(cell.get('allowed'))
+    maximum = int(cell.get('max_reference_images') or 0) if allowed else 0
+    source = str(cell.get('source') or 'not measured on this tier')
+    receipt = cell.get('receipt')
+    reason = (None if allowed else
+              f'{model.label} {mode} is off on the {tier} GiB tier ({source}'
+              + (f'; {receipt}' if receipt else '') + ')')
+    return {'tier': tier, 'allowed': allowed, 'max_reference_images': maximum,
+            'swap_allowance_gb': float(cell.get('swap_allowance_gb') or 0),
+            'source': source, 'receipt': receipt, 'tier_found': True, 'reason': reason}
+
+
+def effective_reference_max(model: ImageModel, total_memory_bytes: int | None) -> int:
+    """The effective cap this host enforces: the table's cell, clamped to the engine's own cap.
+
+    ``0`` when the cell is off - an off tier takes no references at all, which is also what
+    ``supports_reference_images`` publishes. The engine's intrinsic cap (``reference_max``) is
+    never raised by the table and never lowers an off cell to a positive number.
+    """
+    cell = effective_reference_policy(model, 'edit', total_memory_bytes)
+    if not cell['allowed']:
+        return 0
+    return max(0, min(cell['max_reference_images'], reference_max(model)))
+
+
+def _reference_floor_gb(model: ImageModel, mode: str,
+                        total_memory_bytes: int | None,
+                        selected: str = DEFAULT_LOADING_MODE) -> float | None:
+    """The starting free-before-existing floor for one job, in GB: the mode block's own figure.
+
+    Read from the configuration this host will run (never derived from a peak, owner's MLX
+    discipline): edit takes the selected edit mode block's ``min_free_memory_gb``, text-to-image
+    takes the model row's. ``None`` means no floor is published and there is nothing to check.
+    """
+    if mode == 'edit':
+        measured = reference_mode_values(model, reference_mode(
+            model, int(total_memory_bytes or 0), selected))
+        value = measured.get('min_free_memory_gb')
+    else:
+        value = model.min_free_memory_gb
+    return float(value) if isinstance(value, (int, float)) and math.isfinite(value) else None
+
+
+def _reclaimable_available_gb() -> float | None:
+    """This Mac's live reclaimable available memory in decimal GB, or ``None`` when unreadable.
+
+    The approved Gateway metric: `host_memory.available_bytes` (the same figure the fleet's
+    available_gb telemetry publishes). An unreadable host reads as *not checked*, never as a
+    failure and never as a pass dressed up as one.
+    """
+    try:
+        import psutil
+        from components.host_memory import available_bytes
+        return available_bytes(psutil.virtual_memory()) / 1e9
+    except Exception:  # noqa: BLE001 - a host that cannot be read must not block or lie
+        return None
 
 
 def reference_count_facts(model: ImageModel, mode: str, count: int) -> dict | None:
@@ -1452,13 +1588,16 @@ def model_class(model: ImageModel, mode: str = 'txt2img'):
     return getattr(importlib.import_module(module_name), class_name)
 
 
-def lane_parameters(model: ImageModel) -> list[dict]:
+def lane_parameters(model: ImageModel, total_memory_bytes: int | None = None) -> list[dict]:
     """The parameters this model's lane publishes, from its own limits and defaults.
 
     One definition read by two consumers that must agree: :func:`lane_contract` publishes it,
     and ``components.model_defaults`` validates an operator's stored default against exactly
     these bounds and enums. A second copy would be free to disagree with the code that rejects
     the request — which is the thing a published bound exists to prevent.
+
+    ``total_memory_bytes`` is this host's tier, so ``reference_images``' ``max_items`` is the
+    same effective cap :func:`validate_request` enforces here (owner, 2026-11-05).
 
     A fresh list of fresh dicts on every call: the caller may set a resolved ``default`` on a
     parameter without that leaking into the next model's contract.
@@ -1493,7 +1632,7 @@ def lane_parameters(model: ImageModel) -> list[dict]:
         # Only a model with a measured reference lane publishes this, and only that lane accepts
         # it: a parameter the validator refuses must not appear in the contract, and the reverse
         # is the same rule - a lane that takes references must say how many and of what.
-        *_reference_parameter(model),
+        *_reference_parameter(model, total_memory_bytes),
         # A per-job choice, never an operator default (``model_defaults.editable`` skips
         # ``request_only``): omitting it always means the PNG.
         {'name': 'output_format', 'type': 'string', 'required': False,
@@ -1503,12 +1642,21 @@ def lane_parameters(model: ImageModel) -> list[dict]:
     ]
 
 
-def _reference_parameter(model: ImageModel) -> list[dict]:
-    """The edit lane's ``reference_images`` parameter, or nothing when the model has no lane."""
+def _reference_parameter(model: ImageModel, total_memory_bytes: int | None = None) -> list[dict]:
+    """The edit lane's ``reference_images`` parameter, or nothing when it cannot be accepted here.
+
+    ``min_items``/``max_items`` come from the same resolver ``validate_request`` enforces: the
+    table's effective cell for this host's tier, clamped to the engine's cap. On a tier whose cell
+    is off the lane refuses every reference here, so the parameter is omitted entirely — a contract
+    must never offer a parameter the validator rejects (owner, 2026-11-05: one resolver, and an
+    honest zero rather than an impossible 1–0 window).
+    """
     limits = model.reference_limits
     if not limits:
         return []
-    maximum = reference_max(model)
+    maximum = effective_reference_max(model, total_memory_bytes)
+    if maximum <= 0:
+        return []
     return [{'name': 'reference_images', 'type': 'array', 'required': False,
              'min_items': limits['min'], 'max_items': maximum,
              'media_types': list(REFERENCE_MEDIA_TYPES), 'request_only': True,
@@ -1574,8 +1722,15 @@ def reference_image_media_type(path) -> tuple[str, str]:
     return media_type, REFERENCE_SUFFIX_BY_MEDIA_TYPE[media_type]
 
 
-def _validate_references(model: ImageModel, references: list[str]) -> list[str]:
-    """Refuse a reference set the edit lane cannot take, naming the published figures."""
+def _validate_references(model: ImageModel, references: list[str],
+                         total_memory_bytes: int | None = None) -> list[str]:
+    """Refuse a reference set this **node** cannot take, naming the published figures.
+
+    One admission sentence from one resolver: the table's effective cell for this host's physical
+    tier decides whether references are accepted at all and how many (owner, 2026-11-05), clamped
+    to the engine's own intrinsic cap - so the count the contract publishes, the count the
+    parameter's ``max_items`` states and the count refused here can never disagree.
+    """
     limits = model.reference_limits
     if not limits:
         # The same words this worker has always refused references with, so a model without an
@@ -1583,7 +1738,10 @@ def _validate_references(model: ImageModel, references: list[str]) -> list[str]:
         raise ValueError('Reference images, LoRAs, negative prompt and quantization are unavailable')
     if not model.edit_model_class:
         raise ValueError(f'{model.label} has no reference-image (edit) lane')
-    maximum = reference_max(model)
+    cell = effective_reference_policy(model, 'edit', total_memory_bytes, len(references))
+    if not cell['allowed']:
+        raise ValueError(cell['reason'])
+    maximum = effective_reference_max(model, total_memory_bytes)
     if not limits['min'] <= len(references) <= maximum:
         raise ValueError(
             f'{model.label} takes between {limits["min"]} and {maximum} reference images; '
@@ -1596,7 +1754,50 @@ def _validate_references(model: ImageModel, references: list[str]) -> list[str]:
     return list(references)
 
 
-def validate_request(raw: dict, data_dir=None, mode: str | None = None) -> dict:
+def _admit_job(model: ImageModel, mode: str, total_memory_bytes: int | None,
+               selected: str = DEFAULT_LOADING_MODE) -> str | None:
+    """Refuse work this node's table cell turns away, or a job starting below its own floor.
+
+    Three checks, in this order, each a reason rather than a guess:
+
+    1. the cell - ``allowed: false`` for this physical tier is the node's hard no;
+    2. the starting free floor - the **existing measured free-before-start floor** for the
+       configuration this job will run (the mode block's own ``min_free_memory_gb``), checked
+       against live reclaimable available memory **right before the job starts** (owner's MLX
+       discipline: a floor is never derived from a peak, and this is not a new floor);
+    3. hard critical memory pressure - an unconditional stop, whatever any allowance says.
+
+    ``swap_allowance_gb`` from the cell (always 0 today) is **enforced for a running job** by
+    `_JobMemoryGuard`: host swap growth beyond it, measured from that job's own start baseline,
+    stops the job with ``host swap grew beyond allowance`` and its evidence. This pre-flight check
+    only reads the cell and the floors - it publishes nothing it does not enforce.
+    """
+    if mode == 'edit':
+        cell = effective_reference_policy(model, 'edit', total_memory_bytes)
+        if not cell['allowed']:
+            return cell['reason']
+    elif reference_policy_row(model, mode) is not None:
+        # txt2img is gated the same way, but only for a model the table has a row for: a model
+        # with no txt2img row (Z-Image, Qwen 2.1) is governed by its existing qualification, not
+        # by a table that does not speak about it.
+        cell = effective_reference_policy(model, mode, total_memory_bytes)
+        if not cell['allowed']:
+            return cell['reason']
+    floor = _reference_floor_gb(model, mode, total_memory_bytes, selected)
+    available = _reclaimable_available_gb()
+    if floor is not None and available is None:
+        return f'{model.label}: live available memory could not be checked before starting'
+    if floor is not None and available < floor:
+        return (f'{model.label} ({mode}) needs {floor:g} GB free before it starts; this Mac has '
+                f'{available:.2f} GB reclaimable now')
+    if _under_memory_pressure(level=4):
+        return (f'{model.label} ({mode}) stopped: macOS reports critical memory pressure '
+                f'(hard stop, owner rule 2026-11-05)')
+    return None
+
+
+def validate_request(raw: dict, data_dir=None, mode: str | None = None,
+                     total_memory_bytes: int | None = None) -> dict:
     """One request, resolved against the model it names and this Mac's stored defaults.
 
     ``data_dir`` is where ``model_defaults.json`` lives (the manager's state directory). A
@@ -1608,6 +1809,10 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None) -> dict:
     ``mode`` is ``'txt2img'`` or ``'edit'``. It is resolved from the request itself — a request
     that carries reference images is an edit — and an explicit ``'edit'`` with none is refused by
     the same count check that refuses too few, never quietly turned into text-to-image.
+
+    ``total_memory_bytes`` is this host's unified memory: the physical tier the reference limits
+    table keys on. None means "not checked against a tier", which reads as the table's off cell
+    rather than as permission.
     """
     if not isinstance(raw, dict):
         raise ValueError('Image request must be an object')
@@ -1621,7 +1826,11 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None) -> dict:
     references = _reference_paths(raw)
     mode = 'edit' if (mode == 'edit' or references) else 'txt2img'
     if mode == 'edit':
-        references = _validate_references(model, references)
+        references = _validate_references(model, references, total_memory_bytes)
+    else:
+        cell = effective_reference_policy(model, mode, total_memory_bytes)
+        if not cell['allowed']:
+            raise ValueError(cell['reason'])
     if any(raw.get(key) for key in ('image_path', 'lora_names', 'lora_paths',
                                      'negative_prompt', 'quantize')):
         allowed = (f'; this model takes {model.reference_limits["min"]}-'
@@ -1721,7 +1930,7 @@ def lane_contract(model: ImageModel, data_dir=None, total_memory_bytes: int | No
     the media types, and the measured cost and memory floor of the edit lane. It is present only
     where the lane exists, so its presence *is* the capability.
     """
-    parameters = lane_parameters(model)
+    parameters = lane_parameters(model, total_memory_bytes)
     in_force = defaults_in_force(model, data_dir)
     for parameter in parameters:
         if parameter['name'] in in_force:
@@ -1756,6 +1965,18 @@ def lane_contract(model: ImageModel, data_dir=None, total_memory_bytes: int | No
         contract['references'] = _reference_contract(
             model, total_memory_bytes,
             selected=loading_mode.current(data_dir) if data_dir is not None else DEFAULT_LOADING_MODE)
+    if model.reference_limits:
+        # The whole per-node table, beside the effective cell, so a reader (Gateway model-package
+        # export, UI) shows one published table instead of writing a second set of native rules
+        # (owner, 2026-11-05). The two top-level booleans/integer are the projection
+        # `standalone._model_state` picks up: explicit false/0 on a tier whose cell is off, never
+        # an absent key, because absent reads as "not stated" downstream.
+        cell = effective_reference_policy(model, 'edit', total_memory_bytes)
+        contract['supports_reference_images'] = cell['allowed'] and effective_reference_max(
+            model, total_memory_bytes) > 0
+        contract['max_reference_images'] = effective_reference_max(model, total_memory_bytes)
+        contract['reference_limits_table'] = reference_limit_table()
+        contract['effective_reference_policy'] = cell
     if model.dimension_multiple:
         # The engine's geometry bound beside the validator that enforces it, so a consumer
         # (catalog, Gateway, native) reads the same figure instead of guessing one.
@@ -1779,16 +2000,47 @@ def _reference_contract(model: ImageModel, total_memory_bytes: int | None = None
     small Mac, the model's own on a large one. Every figure here was measured (the row's
     ``source`` names the receipt) — a number this model did not measure is absent, never
     estimated.
+
+    On top of those rows sit this node's **effective** reference facts, all from the one resolver:
+    ``available`` (may this node take a reference job at all), ``max_effective`` (the table cell
+    clamped to the engine's cap, 0 when off) against ``max`` (the engine's own intrinsic cap,
+    which the table never raises), ``tier`` and ``evidence_note`` — the one plain-language string
+    a native control decodes and displays beside the mode picker: the effective limit, the
+    qualification reason, physical versus inherited tier, the reclaimable-available formula, its
+    snapshot, the P10 allowance and sample counts, and the swap allowance with its enforcement
+    state.
     """
     limits = model.reference_limits
     mode = reference_mode(model, int(total_memory_bytes or 0), selected)
     measured = reference_mode_values(model, mode)
+    cell = effective_reference_policy(model, 'edit', total_memory_bytes)
+    effective = effective_reference_max(model, total_memory_bytes)
     return {
         # The multipart part name `POST /api/generate/edit` accepts, one part per reference.
         'field': 'images',
         'min': limits['min'],
         # The engine's cap (owner, 2026-11-05), not the largest count anyone happened to run.
-        'max': reference_max(model),
+        # It is separate from this node's effective cap below: the engine can take four, and this
+        # node's tier may still accept only three (or none).
+        'max': effective,
+        'max_intrinsic': reference_limit_table().get('engine_intrinsic_cap', {}).get(
+            model.package_id, {}).get('max'),
+        'limits_table': reference_limit_table(),
+        # This node's answer, from reference-limits.json: may it take a reference job, and how
+        # many. 0 is an honest zero — an off tier takes no references — never an absent number.
+        'available': bool(cell['allowed'] and effective > 0),
+        'max_effective': effective,
+        'tier': cell['tier'],
+        'tier_allowed': cell['allowed'],
+        'swap_allowance_gb': cell['swap_allowance_gb'],
+        'source': limits.get('source'),
+        'policy_source': cell['source'],
+        'policy_receipt': cell['receipt'],
+        'max_effective_differs_reason': (
+            None if effective == reference_max(model) else
+            f'effective cap {effective} is this {cell["tier"]} GiB tier\'s reference-limits cell '
+            f'({cell["source"]})'),
+        'evidence_note': _reference_evidence_note(model, cell, effective),
         'max_dimension': limits['max_dimension'],
         'media_types': list(REFERENCE_MEDIA_TYPES),
         # Reference images ride in the multipart body, never inside the prompt character budget.
@@ -1814,8 +2066,29 @@ def _reference_contract(model: ImageModel, total_memory_bytes: int | None = None
         'min_total_memory_gb': measured.get('min_total_memory_gb'),
         'min_free_memory_gb': measured.get('min_free_memory_gb'),
         'timeout_floor_s': measured.get('timeout_floor_s'),
-        'source': limits.get('source'),
     }
+
+
+def _reference_evidence_note(model: ImageModel, cell: dict, effective: int) -> str:
+    """The one string a native control displays: every published fact about this node's limit.
+
+    Decoded by the native mode control (its own format, agreed with the UI lead), so it stays
+    plain ``key=value`` pairs separated by ``;`` — no second schema, and nothing in it that the
+    table or the measurement receipt does not also say.
+    """
+    evidence = reference_limit_table().get('evidence') or {}
+    tier = cell['tier']
+    budget = (evidence.get('budget_bytes') or {}).get(tier)
+    sample = (evidence.get('samples') or {}).get(tier)
+    sampled = '1 node sampled' if sample == 1 else f'{sample} nodes sampled' if sample else 'not sampled'
+    return (f'This Mac: up to {effective} reference images; {cell["source"]}. '
+            f'Physical RAM tier: {tier} GB. {cell.get("receipt") or ""}. '
+            f'Swap allowance: {cell["swap_allowance_gb"]:g} decimal GB of host swap growth '
+            'since the job started. Exceeding it stops the job; critical memory pressure '
+            'always stops the job. '
+            f'Reclaimable available-memory snapshot: {evidence.get("snapshot")}; {sampled}. '
+            f'P10 nearest-rank budget after subtracting 5 MB: {budget} bytes. '
+            f'{evidence.get("available_metric")}. {evidence.get("formula")}.')
 
 
 
@@ -1911,6 +2184,75 @@ def _activity_error_code(value: object) -> str | None:
     return value.strip()[:80] or None
 
 
+def _host_swap_used_mb() -> float | None:
+    """Host swap used right now, in decimal MB; ``None`` when the host cannot be read."""
+    try:
+        import psutil
+        return psutil.swap_memory().used / 1e6
+    except Exception:  # noqa: BLE001 - an unreadable host is *not checked*, never a pass
+        return None
+
+
+class _JobMemoryGuard:
+    """The two hard stops for a running image job (owner, 2026-11-05), watched from its own thread.
+
+    The inference thread is blocked inside mflux, so it cannot watch itself. While the job runs
+    this thread polls at a fixed interval and stops it when either holds:
+
+    * **macOS critical memory pressure** — unconditional, whatever any allowance says;
+    * **host swap growth beyond this tier's published allowance** — measured from *this job's own
+      start baseline*, never the host's swap total, so only growth that began with the job is
+      attributed to it. The reason it records is exactly ``host swap grew beyond allowance`` with
+      the baseline, the live figure and the allowance as its evidence: the allowance is decimal
+      GB (always 0 today, so any growth stops the job), and it is **enforced**, not published as
+      if it were.
+
+    A stop goes through the job's own cancel event — mflux's cancel hook ends the loop — and
+    records its own reason and error code in ``manager.hard_stops``, so `_record_failure` reports
+    a stop as an error with that code, never as an operator cancel and never as a success.
+    """
+    interval_s = 1.0
+
+    def __init__(self, manager: 'GenerationManager', job_id: str, model: 'ImageModel',
+                 mode: str):
+        self.manager, self.job_id, self.model, self.mode = manager, job_id, model, mode
+        self.allowance_gb = effective_reference_policy(
+            model, mode, manager.total_memory_bytes)['swap_allowance_gb']
+        self.baseline_mb = _host_swap_used_mb()
+
+    def run(self, event: threading.Event) -> None:
+        while not event.wait(self.interval_s):
+            job = self.manager.jobs.get(self.job_id)
+            if job is None or job.get('state') != 'running':
+                return
+            self.check(event)
+
+    def check(self, event: threading.Event) -> None:
+        if _under_memory_pressure(level=4):
+            self._stop(event, 'MEMORY_PRESSURE_STOPPED',
+                       'macOS reports critical memory pressure; job stopped (hard stop)')
+            return
+        used = _host_swap_used_mb()
+        if used is None or self.baseline_mb is None:
+            return
+        grew_gb = (used - self.baseline_mb) / 1000.0
+        if grew_gb > self.allowance_gb:
+            self._stop(event, 'SWAP_GROWTH_EXCEEDED',
+                       f'host swap grew beyond allowance: {grew_gb:.3f} GB since this job '
+                       f'started (job-start baseline {self.baseline_mb:.1f} MB, now {used:.1f} MB, '
+                       f'allowance {self.allowance_gb:g} GB)')
+
+    def _stop(self, event: threading.Event, code: str, reason: str) -> None:
+        manager = self.manager
+        with manager.lock:
+            job = manager.jobs.get(self.job_id)
+            if job is None or job.get('state') != 'running':
+                return
+            job['error'], job['error_code'] = reason, code
+            manager.hard_stops[self.job_id] = (code, reason)
+        event.set()
+
+
 class GenerationManager:
     def __init__(self, data: Path, model_library: Path, manifest: dict,
                  runtime_sha256: str, machine: str = 'local',
@@ -1942,6 +2284,10 @@ class GenerationManager:
                                    else int(total_memory_bytes))
         self.jobs: dict[str, dict] = {}
         self.cancel_events: dict[str, threading.Event] = {}
+        # Job ids stopped by `_JobMemoryGuard`, mapped to (code, reason): `_record_failure` and
+        # `_deliver` read it so a hard stop keeps its own error and code (owner, 2026-11-05)
+        # instead of the cancelled path or the generic engine failure.
+        self.hard_stops: dict[str, tuple[str, str]] = {}
         self.lock = threading.RLock()
         self.inference_lock = threading.Lock()
         # The one model kept loaded between jobs (see `_remember`): {'repo', 'instance', 'key',
@@ -2262,7 +2608,8 @@ class GenerationManager:
                job_id: str | None = None) -> dict:
         # The worker's own state directory, so a parameter the request omits takes this Mac's
         # stored default for this model rather than the model's own.
-        params = validate_request(raw, data_dir=self.data, mode=mode)
+        params = validate_request(raw, data_dir=self.data, mode=mode,
+                           total_memory_bytes=self.total_memory_bytes)
         # Resolved here rather than trusted from the caller: a caller that says edit but sends no
         # references was refused above, and a caller that sends references *is* an edit whatever
         # it called itself. The job's own `mode` is that one fact.
@@ -2273,6 +2620,15 @@ class GenerationManager:
         files = self.preflight(params['repo'])
         if files['state'] != 'files_verified':
             raise RuntimeError(f'MODEL_FILES_UNAVAILABLE: {files.get("reason") or files["state"]}')
+        # The start gate, re-read live at accept time (owner, 2026-11-05): the table cell for this
+        # tier, the existing measured free-before-start floor against reclaimable available now,
+        # and the unconditional critical-pressure stop. An edit job was checked once in
+        # `validate_request`; running the same resolver again here means a queued-but-busy moment
+        # cannot slip a job past the floor it was admitted under.
+        refused = _admit_job(MODELS[params['repo']], mode, self.total_memory_bytes,
+                             loading_mode.current(self.data))
+        if refused:
+            raise RuntimeError(refused)
         job_id = job_id or uuid4().hex
         job = {'id': job_id, 'mode': mode, 'params': params, 'state': 'queued',
                'progress': 0.0, 'denoise_step': None, 'denoise_steps': None,
@@ -2459,6 +2815,21 @@ class GenerationManager:
                     self.cancel_events.pop(job_id, None)
                     return
                 job.update(state='running', progress=0.05, started_at=time.time())
+                # Hard stop at the door (owner, 2026-11-05): a job never starts into critical
+                # memory pressure, whatever any swap allowance says. Checked live, not from the
+                # admission that queued it, because pressure is a fact about right now.
+                if _under_memory_pressure(level=4):
+                    job.update(state='error',
+                               error='macOS reports critical memory pressure; job stopped before '
+                                     'it started (hard stop)',
+                               error_code='MEMORY_PRESSURE_STOPPED', finished_at=time.time())
+                    try:
+                        self._persist()
+                    except Exception:
+                        pass
+                    self._discard_inputs(job)
+                    self.cancel_events.pop(job_id, None)
+                    return
                 try:
                     self._persist()
                 except Exception:
@@ -2485,6 +2856,22 @@ class GenerationManager:
                 if seed == -1:
                     seed = random.randint(0, model.limits['max_seed'])
                 mode = job.get('mode', 'txt2img')
+                refused = _admit_job(model, mode, self.total_memory_bytes,
+                                     loading_mode.current(self.data))
+                if refused:
+                    raise RuntimeError(refused)
+                # `_JobMemoryGuard` then watches this job for the two hard stops, because the inference
+                # thread is blocked inside mflux and cannot watch itself. Critical memory pressure
+                # stops it unconditionally, and host swap growth beyond this tier's published
+                # allowance stops it with that exact reason. Both end the job through its own
+                # cancel event - `self.hard_stops` carries the stop's reason and code, and
+                # `_record_failure` keeps them, so a stop is never reported as an operator cancel
+                # and never as a success. The baseline is this job's own start, so the growth
+                # attributed to it is its own; nothing claims all of the host's swap belongs to
+                # this job.
+                guard = _JobMemoryGuard(self, job_id, model, mode)
+                threading.Thread(target=guard.run, args=(event,),
+                                 daemon=True, name=f'image-memory-{job_id[:8]}').start()
                 plan = memory_plan(model, self.total_memory_bytes,
                                    loading_mode.current(self.data), lane=mode)
                 with self.lock:
@@ -2571,6 +2958,7 @@ class GenerationManager:
                     result.save(str(staged), overwrite=True)
                 else:
                     raise RuntimeError(f'Unsupported Image engine: {model.engine}')
+                guard.check(event)
                 with self.lock:
                     job['model_reused'] = reused
                     job['memory_hooks'] = list(plan.get('hooks') or [])
@@ -2614,7 +3002,15 @@ class GenerationManager:
 
     def _record_failure(self, job: dict, event: threading.Event, exc: Exception) -> None:
         with self.lock:
-            if event.is_set():
+            hard = self.hard_stops.pop(job['id'], None)
+            if hard is not None:
+                # A `_JobMemoryGuard` stop: the guard already wrote the reason, and it outranks
+                # the cancelled path - this is an error with its own code (critical pressure or
+                # host swap growth beyond allowance), never an operator cancel and never a
+                # success (owner, 2026-11-05).
+                code, reason = hard
+                job.update(state='error', error=reason, error_code=code)
+            elif event.is_set():
                 job.update(state='cancelled', error=None, error_code=None)
                 job['denoise_cancel_observed'] = isinstance(exc, DenoiseCancelled)
             else:
@@ -2653,7 +3049,14 @@ class GenerationManager:
                 delivery.update(applied='jpeg', quality=JPEG_QUALITY, subsampling='4:2:0',
                                 progressive=True)
         with self.lock:
-            if event.is_set():
+            hard = self.hard_stops.pop(job_id, None)
+            if hard is not None:
+                # Stopped by `_JobMemoryGuard` while delivering: an error with its own code and
+                # reason, never a success and never an operator cancel.
+                code, reason = hard
+                job.update(state='error', error=reason, error_code=code,
+                           finished_at=time.time())
+            elif event.is_set():
                 job.update(state='cancelled', finished_at=time.time())
             else:
                 os.replace(source, delivered)

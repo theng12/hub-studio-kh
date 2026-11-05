@@ -32,6 +32,30 @@ struct NativeImageReferences: Decodable, Equatable {
     let max: Int
     let maxDimension: Int
     let mediaTypes: [String]
+    var evidenceNote: String? = nil
+    var limitsTable: NativeImageLimitTable? = nil
+}
+struct NativeImageLimitTable: Decodable, Equatable {
+    let revision: String
+    let rows: [NativeImageLimitRow]
+}
+struct NativeImageLimitRow: Decodable, Equatable, Identifiable {
+    let modelId: String
+    let mode: String
+    let referenceCount: Int?
+    let tiers: [String: NativeImageLimitCell]
+    var id: String { "\(modelId)/\(mode)/\(referenceCount.map(String.init) ?? "all")" }
+    var label: String {
+        if mode == "txt2img" { return "Text to image" }
+        return referenceCount.map { "\($0) reference images" } ?? "Reference to image"
+    }
+}
+struct NativeImageLimitCell: Decodable, Equatable {
+    let allowed: Bool
+    let maxReferenceImages: Int
+    let swapAllowanceGb: Double
+    let source: String
+    let receipt: String?
 }
 struct NativeImageMode: Decodable, Identifiable, Equatable {
     let id: String
@@ -3556,11 +3580,14 @@ final class NativeWorkspaceStore: ObservableObject {
 
     func addImageReference(_ url: URL, replacing index: Int? = nil) {
         do {
-            guard let bounds = selectedImageMode?.references else {
+            guard let mode = selectedImageMode, mode.available else {
+                throw NativeAPIError.message(selectedImageMode?.reason ?? "Reference images are unavailable on this Mac.")
+            }
+            guard let bounds = mode.references else {
                 throw NativeAPIError.message("This model does not publish reference-image limits.")
             }
             guard bounds.mediaTypes.contains("image/png"), bounds.maxDimension > 0,
-                  index != nil || imageReferences.count < bounds.max else {
+                  bounds.max > 0, index.map({ $0 >= 0 && $0 < bounds.max }) ?? (imageReferences.count < bounds.max) else {
                 throw NativeAPIError.message("This model accepts up to \(bounds.max) reference images.")
             }
             let access = url.startAccessingSecurityScopedResource()

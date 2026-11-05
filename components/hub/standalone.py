@@ -603,6 +603,8 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
         # The dispatch contract the model's own studio published, verbatim except for the Hub's
         # own `deadline_seconds`, or null when no studio is up with one.
         "lane_contract": contract,
+        **({key: contract[key] for key in ("supports_reference_images", "max_reference_images")
+            if key in contract} if contract and _modality_for_engine(manifest["engine"]) == "image" else {}),
         # `model` for something a person can pick; `dependency` for a package that only exists to
         # serve another one. Consumers must not have to infer this.
         "type": ("dependency" if manifest["package_id"] in _dependency_package_ids(catalog) else "model"),

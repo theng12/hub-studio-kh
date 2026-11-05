@@ -1,0 +1,374 @@
+{
+  "schema": "studiohub.image-reference-limits.v1",
+  "revision": "2026-11-05-ship222-defaults",
+  "notes": "Owner-set per-node caps for ship 0.6.222 (owner, 2026-11-05): the caps are data, not constants. Row = model x job mode (txt2img / edit) x reference count 1..N; cell = one physical tier band (8 / 16 / 24 / 32, where 32 means 32 GiB and above). A host's tier is its unified memory rounded to whole GiB (fleet decimal telemetry, e.g. 34.36 GB -> 32), placed in the first band it clears; below 8 GiB no cell applies and nothing is offered. 'allowed: false' means this node may not take that work; 'max_reference_images' is the effective cap, separate from the engine's own intrinsic cap. swap_allowance_gb is decimal GB of host swap growth allowed from a job's start baseline and IS enforced in 0.6.222: a running image job whose host swap grows beyond the allowance stops with reason 'host swap grew beyond allowance' (evidence: job-start baseline vs live sample); a hard stop on macOS critical memory pressure is unconditional for every image job. source: measured (a run behind the receipt), owner limit (owner's instruction), owner: known to run (owner's own prior runs, not yet measured), provisional, measuring (owner-set while measurement runs), not measured on this tier (inherited from a smaller measured tier). Never inherit a larger tier's cap upward from a smaller measured tier. No override writer exists in 0.6.222; overrides are deferred to 0.6.223.",
+  "tier_format": "physical tiers in binary GiB; fleet telemetry reports decimal GB (memory_gb), converted with round(bytes / 1024^3)",
+  "swap_allowance_units": "decimal GB of host swap growth from a job's start baseline",
+  "evidence": {
+    "snapshot": "2026-11-05T10:24:08.684115+00:00",
+    "available_metric": "Hub host_memory.available_bytes; max(psutil free+inactive, free+file-backed+purgeable-kernel free target), capped by total-wired-compressor",
+    "formula": "reclaimable = (free + file_backed + purgeable - margin) * page; ceiling = total - wired - compressor_bytes; available_bytes = max(0, min(max(psutil_available, reclaimable), ceiling)); tier budget = P10 nearest-rank available_gb * 1000000000 - 5000000",
+    "percentile_method": "nearest rank ceil(0.10*n), sorted ascending",
+    "budget_bytes": {
+      "8": 3285000000,
+      "16": 10585000000,
+      "24": 18525000000,
+      "32": 27705000000
+    },
+    "samples": {
+      "8": 34,
+      "16": 16,
+      "24": 1,
+      "32": 1
+    },
+    "receipt": "_orchestra/hub-lead/next-batch-20261105/idle-leftover-r1.json",
+    "tier_measurements": "_orchestra/hub-lead/next-batch-20261105/reference-tier-points-r2..r5, reference-low-ram-r1, reference-leftover-r1"
+  },
+  "engine_intrinsic_cap": {
+    "qwen-image-2-1-turbo-mflux-q4": {
+      "max": 10,
+      "source": "engine constant",
+      "provenance": "mflux.models.qwen21.variants.edit.qwen_image_21_edit:MAX_REFERENCES read at runtime (row fallback 10 when mflux is absent)"
+    },
+    "flux2-klein-4b-mlx-4bit": {
+      "max": null,
+      "source": "unknown",
+      "provenance": "no vendor or engine contract proves a hard engine bound of 4 for FLUX.2 Klein 4-bit: mflux's flux2 edit lane exposes only MAX_REFERENCE_AREA, and the previous reference_limits value of 4 was this project's own default, not engine evidence. The owner's 222 cap of 4 at 24/32 GiB is an owner limit; the engine's intrinsic bound stays unknown until probed (a later 5-count probe must not be read as accepted - the validator stops it before execution)."
+    }
+  },
+  "rows": [
+    {
+      "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+      "package_id": "flux2-klein-4b-mlx-4bit",
+      "quantization": "4-bit",
+      "mode": "txt2img",
+      "reference_count": null,
+      "tiers": {
+        "8": {
+          "allowed": true,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein txt2img 8 GiB+"
+        },
+        "16": {
+          "allowed": true,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05"
+        },
+        "24": {
+          "allowed": true,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05"
+        },
+        "32": {
+          "allowed": true,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05"
+        }
+      }
+    },
+    {
+      "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+      "package_id": "flux2-klein-4b-mlx-4bit",
+      "quantization": "4-bit",
+      "mode": "edit",
+      "reference_count": null,
+      "tiers": {
+        "8": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein references off at 8 GiB"
+        },
+        "16": {
+          "allowed": true,
+          "max_reference_images": 3,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein max 3 at 16 GiB"
+        },
+        "24": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        },
+        "32": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        }
+      }
+    },
+    {
+      "model_id": "mflux-community/qwen-image-2-1-turbo-mflux-q4",
+      "package_id": "qwen-image-2-1-turbo-mflux-q4",
+      "quantization": "4-bit",
+      "mode": "txt2img",
+      "reference_count": null,
+      "tiers": {
+        "8": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05 latest explicit correction: Qwen Turbo txt2img off at 8 GiB"
+        },
+        "16": {
+          "allowed": true,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Qwen txt2img 16 GiB+"
+        },
+        "24": {
+          "allowed": true,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05"
+        },
+        "32": {
+          "allowed": true,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05"
+        }
+      }
+    },
+    {
+      "model_id": "mflux-community/qwen-image-2-1-turbo-mflux-q4",
+      "package_id": "qwen-image-2-1-turbo-mflux-q4",
+      "quantization": "4-bit",
+      "mode": "edit",
+      "reference_count": null,
+      "tiers": {
+        "8": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Qwen references off at 8 GiB"
+        },
+        "16": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Qwen references off at 16 GiB"
+        },
+        "24": {
+          "allowed": true,
+          "max_reference_images": 1,
+          "swap_allowance_gb": 0,
+          "source": "provisional, measuring",
+          "receipt": "owner 2026-11-05: provisional, measuring; never off at 24+"
+        },
+        "32": {
+          "allowed": true,
+          "max_reference_images": 1,
+          "swap_allowance_gb": 0,
+          "source": "provisional, measuring",
+          "receipt": "owner 2026-11-05: provisional, measuring; never off at 24+"
+        }
+      }
+    },
+    {
+      "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+      "package_id": "flux2-klein-4b-mlx-4bit",
+      "quantization": "4-bit",
+      "mode": "edit",
+      "reference_count": 1,
+      "tiers": {
+        "8": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein references off at 8 GiB"
+        },
+        "16": {
+          "allowed": true,
+          "max_reference_images": 3,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein max 3 at 16 GiB"
+        },
+        "24": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        },
+        "32": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        }
+      }
+    },
+    {
+      "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+      "package_id": "flux2-klein-4b-mlx-4bit",
+      "quantization": "4-bit",
+      "mode": "edit",
+      "reference_count": 2,
+      "tiers": {
+        "8": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein references off at 8 GiB"
+        },
+        "16": {
+          "allowed": true,
+          "max_reference_images": 3,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein max 3 at 16 GiB"
+        },
+        "24": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        },
+        "32": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        }
+      }
+    },
+    {
+      "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+      "package_id": "flux2-klein-4b-mlx-4bit",
+      "quantization": "4-bit",
+      "mode": "edit",
+      "reference_count": 3,
+      "tiers": {
+        "8": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein references off at 8 GiB"
+        },
+        "16": {
+          "allowed": true,
+          "max_reference_images": 3,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein max 3 at 16 GiB"
+        },
+        "24": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        },
+        "32": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        }
+      }
+    },
+    {
+      "model_id": "AITRADER/FLUX2-klein-4B-mlx-4bit",
+      "package_id": "flux2-klein-4b-mlx-4bit",
+      "quantization": "4-bit",
+      "mode": "edit",
+      "reference_count": 4,
+      "tiers": {
+        "8": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein references off at 8 GiB"
+        },
+        "16": {
+          "allowed": false,
+          "max_reference_images": 3,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Klein max 3 at 16 GiB"
+        },
+        "24": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        },
+        "32": {
+          "allowed": true,
+          "max_reference_images": 4,
+          "swap_allowance_gb": 0,
+          "source": "owner: known to run",
+          "receipt": "owner 2026-11-05: known to run, not measured yet"
+        }
+      }
+    },
+    {
+      "model_id": "mflux-community/qwen-image-2-1-turbo-mflux-q4",
+      "package_id": "qwen-image-2-1-turbo-mflux-q4",
+      "quantization": "4-bit",
+      "mode": "edit",
+      "reference_count": 1,
+      "tiers": {
+        "8": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Qwen references off at 8 GiB"
+        },
+        "16": {
+          "allowed": false,
+          "max_reference_images": 0,
+          "swap_allowance_gb": 0,
+          "source": "owner limit",
+          "receipt": "owner 2026-11-05: Qwen references off at 16 GiB"
+        },
+        "24": {
+          "allowed": true,
+          "max_reference_images": 1,
+          "swap_allowance_gb": 0,
+          "source": "provisional, measuring",
+          "receipt": "owner 2026-11-05: provisional, measuring; never off at 24+"
+        },
+        "32": {
+          "allowed": true,
+          "max_reference_images": 1,
+          "swap_allowance_gb": 0,
+          "source": "provisional, measuring",
+          "receipt": "owner 2026-11-05: provisional, measuring; never off at 24+"
+        }
+      }
+    }
+  ]
+}

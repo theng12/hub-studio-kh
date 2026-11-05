@@ -16,9 +16,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from . import loading_mode, memory_policy
 from .generation import (MAX_REFERENCE_BYTES, MEDIA_TYPE_BY_SUFFIX, MODEL_ID, MODELS,
                          QUALIFIED_MINIMUM_MEMORY_BYTES, GenerationManager, defaults_in_force,
-                         final_matches, lane_contract, lane_parameters, loading_modes,
+                         effective_reference_max, effective_reference_policy, final_matches,
+                         lane_contract, lane_parameters, loading_modes,
                          missing_runtime_model_reason, reference_image_media_type,
-                         reference_max, reference_mode, reference_mode_values, size_presets)
+                         reference_limit_table, reference_policy_row, reference_max, reference_mode,
+                         reference_mode_values, size_presets)
 
 from components import app_version, model_defaults
 
@@ -57,10 +59,19 @@ def edit_lane(model, state: dict, total_memory_bytes: int, selected: str) -> dic
     limits = model.reference_limits
     if not model.edit_model_class or not limits:
         return {'available': False, 'reason': f'{model.label} has no reference-image (edit) lane'}
+    # This node's cell in reference-limits.json comes first (owner, 2026-11-05): a tier whose cell
+    # is off neither advertises `edit` nor takes one, and the cell's own words are the reason.
+    cell = effective_reference_policy(model, 'edit', total_memory_bytes)
+    if not cell['allowed'] or effective_reference_max(model, total_memory_bytes) <= 0:
+        return {'available': False, 'mode': reference_mode(model, total_memory_bytes, selected),
+                'reason': cell['reason'] or (
+                    f'{model.label} takes no references on the {cell["tier"]} GiB tier')}
     if not state.get('ready'):
         return {'available': False, 'reason': f'{model.label} is not ready on this Mac '
                                               f'({state.get("state")})'}
     mode = reference_mode(model, total_memory_bytes, selected)
+    if reference_policy_row(model, 'edit') is not None and selected != 'full':
+        return {'available': True, 'mode': mode, 'reason': None}
     measured = reference_mode_values(model, mode)
     floor = measured.get('min_total_memory_gb')
     total_gb = total_memory_bytes / 1e9
@@ -211,9 +222,11 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
         # publishes Text to image alone, while a supported model on an unready or below-floor
         # host still shows Reference to image carrying this host's reason — never a false
         # "does not support references".
+        text_policy = effective_reference_policy(model, 'txt2img', manager.total_memory_bytes)
         image_modes = [{
             'id': 'txt2img', 'label': 'Text to image',
-            'available': bool(ready), 'reason': not_ready_reason,
+            'available': bool(ready and text_policy['allowed']),
+            'reason': not_ready_reason or text_policy['reason'],
         }]
         if model.reference_limits:
             image_modes.append({
@@ -412,12 +425,14 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                          loading_mode.current(manager.data))
         if not lane['available']:
             raise HTTPException(409, lane['reason'])
-        # Refuse an over-count before staging a single byte; the engine's cap, named in the
-        # same sentence validate_request enforces. Per-count routing activation is deferred
-        # until approved rows carry measured floors (owner, 2026-11-05): counts inside the cap
-        # run under the existing mode policy exactly as counts 1-2 do today.
+        # Refuse an over-count before staging a single byte - the same effective cap the contract
+        # publishes and `validate_request` enforces (table cell for this node's tier, clamped to
+        # the engine's cap), named in the same sentence.
         limits = model.reference_limits
-        maximum = reference_max(model)
+        maximum = effective_reference_max(model, manager.total_memory_bytes)
+        if not maximum:
+            raise HTTPException(409, effective_reference_policy(
+                model, 'edit', manager.total_memory_bytes)['reason'])
         if len(images or []) > maximum:
             raise HTTPException(
                 422, f'{model.label} takes between {limits["min"]} and {maximum} reference '

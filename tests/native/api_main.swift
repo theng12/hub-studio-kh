@@ -4846,6 +4846,17 @@ struct NativeAPITests {
 
         let referenceDecoder = JSONDecoder()
         referenceDecoder.keyDecodingStrategy = .convertFromSnakeCase
+        let unavailableReferences = try! referenceDecoder.decode(NativeImageMode.self,
+            from: Data(#"{"id":"edit","label":"Reference to image","available":false,"reason":"measured: over budget","references":{"min":1,"max":0,"max_dimension":1024,"media_types":["image/png"],"evidence_note":"measured: over budget at 8 GB; swap allowance 0 decimal GB"}}"#.utf8))
+        require(unavailableReferences.references?.max == 0 && !unavailableReferences.available,
+                "a published zero reference cap stays unavailable rather than becoming an engine default")
+        require(unavailableReferences.references?.evidenceNote?.contains("over budget at 8 GB") == true,
+                "reference evidence must decode from the producer without changing the tier claim")
+        let imageLimitTable = try! referenceDecoder.decode(NativeImageLimitTable.self,
+            from: Data(#"{"revision":"fixture","rows":[{"model_id":"fixture/model","mode":"edit","reference_count":1,"tiers":{"8":{"allowed":false,"max_reference_images":0,"swap_allowance_gb":0,"source":"owner limit","receipt":"fixture"},"24":{"allowed":true,"max_reference_images":1,"swap_allowance_gb":0,"source":"provisional, measuring","receipt":"fixture"}}}]}"#.utf8))
+        require(imageLimitTable.rows[0].tiers["8"]?.allowed == false &&
+                imageLimitTable.rows[0].tiers["24"]?.source == "provisional, measuring",
+                "the native limit table preserves published off cells and provisional sources")
         let historicalReferences = try! referenceDecoder.decode([NativeImageReference].self,
             from: Data(#"[{"url":"https://example.invalid/reference.png"},{"asset_id":"stored-reference"}]"#.utf8))
         require(historicalReferences[0].url != nil && historicalReferences[1].assetId == "stored-reference",

@@ -18,6 +18,13 @@ TOKEN = "qwen_image_owner_" * 3
 
 
 class QwenImageModelTests(unittest.TestCase):
+    def setUp(self):
+        for name, value in (('_reclaimable_available_gb', 64.0),
+                            ('_host_swap_used_mb', 0.0), ('_under_memory_pressure', False)):
+            mocked = patch.object(generation, name, return_value=value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
     def test_image_app_shutdown_cancels_jobs_and_stops_the_native_leaf(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

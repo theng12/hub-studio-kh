@@ -2401,7 +2401,7 @@ struct StudioContent: View {
                             ActiveAura(active: !activeImages.isEmpty || workspace.submittingImage) {
                                 Button("Generate Image") { selectedImageID = nil; Task { await workspace.generateImage() } }
                                     .buttonStyle(.borderedProminent)
-                                    .disabled(!connected || workspace.submittingImage || workspace.imagePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImageModel?.supported != true || selectedImageModel?.runtimeReady != true || selectedImageModel?.cached != true)
+                                    .disabled(!connected || workspace.submittingImage || workspace.imagePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImageModel?.supported != true || selectedImageModel?.runtimeReady != true || selectedImageModel?.cached != true || workspace.selectedImageMode?.available == false)
                             }
                         }
                         Divider()
@@ -2521,12 +2521,32 @@ struct StudioContent: View {
             Text("Image modes have not been published by this Hub.")
                 .font(HubType.caption).foregroundStyle(.secondary)
         }
+        if let mode = workspace.imageModes.first(where: { $0.id == "edit" }),
+           let bounds = mode.references {
+            Text(bounds.max > 0 ? "Reference images: up to \(bounds.max)" : "Reference images: unavailable")
+                .font(HubType.caption).foregroundStyle(.secondary)
+            if bounds.evidenceNote != nil || bounds.limitsTable != nil {
+                DisclosureGroup("Image limit details") {
+                    if let table = bounds.limitsTable {
+                        imageLimitTable(table)
+                    }
+                    if let note = bounds.evidenceNote {
+                        Text(note).font(HubType.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
         if workspace.imageMode == "edit" {
             if let bounds = workspace.selectedImageMode?.references {
                 VStack(alignment: .leading, spacing: HubSpace.s) {
-                    Text("Reference images").font(HubType.section)
-                    Text("Choose \(bounds.min)–\(bounds.max) images · up to \(bounds.maxDimension) pixels per side")
-                        .font(HubType.caption).foregroundStyle(.secondary)
+                    if bounds.max > 0 || !workspace.imageReferences.isEmpty {
+                        Text("Reference images").font(HubType.section)
+                    }
+                    if bounds.max > 0 {
+                        Text("Choose \(bounds.min)–\(bounds.max) images · up to \(bounds.maxDimension) pixels per side")
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                    }
                     ForEach(0..<max(bounds.max, workspace.imageReferences.count), id: \.self) { index in
                         HStack {
                             Button {
@@ -2542,6 +2562,7 @@ struct StudioContent: View {
                                      ? workspace.imageReferenceNames[index] : "Choose reference \(index + 1)…")
                                     .lineLimit(1).truncationMode(.middle)
                             }.accessibilityIdentifier("image-reference-\(index)")
+                                .disabled(workspace.selectedImageMode?.available != true || index >= bounds.max)
                             if index < workspace.imageReferences.count {
                                 Button("Remove") {
                                     workspace.imageReferences.remove(at: index)
@@ -2562,6 +2583,46 @@ struct StudioContent: View {
             Text("Reference images are kept until you remove them or choose Reference to image.")
                 .font(HubType.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private func imageLimitTable(_ table: NativeImageLimitTable) -> some View {
+        let rows = table.rows.filter { $0.modelId == workspace.imageModel }
+        let tiers = Set(rows.flatMap { $0.tiers.keys }).sorted {
+            (Int($0) ?? 0) < (Int($1) ?? 0)
+        }
+        return ScrollView([.horizontal, .vertical]) {
+            VStack(alignment: .leading, spacing: HubSpace.s) {
+                HStack(alignment: .top, spacing: HubSpace.m) {
+                    Text("Job").frame(width: 140, alignment: .leading)
+                    ForEach(tiers, id: \.self) { tier in
+                        Text("\(tier) GB RAM").frame(width: 150, alignment: .leading)
+                    }
+                }.font(HubType.secondary)
+                ForEach(rows) { row in
+                    HStack(alignment: .top, spacing: HubSpace.m) {
+                        Text(row.label).frame(width: 140, alignment: .leading)
+                        ForEach(tiers, id: \.self) { tier in
+                            VStack(alignment: .leading, spacing: HubSpace.xs) {
+                                if let cell = row.tiers[tier] {
+                                    Text(cell.allowed ? "On" : "Off")
+                                    if row.mode == "edit" {
+                                        Text("Up to \(cell.maxReferenceImages) references")
+                                    }
+                                    Text("Swap allowance: \(cell.swapAllowanceGb.formatted()) GB")
+                                    Text(cell.source).foregroundStyle(.secondary)
+                                    if let receipt = cell.receipt {
+                                        Text(receipt).foregroundStyle(.secondary)
+                                    }
+                                } else {
+                                    Text("Not published")
+                                }
+                            }.frame(width: 150, alignment: .leading)
+                        }
+                    }
+                }
+                Text("Published defaults · \(table.revision)").foregroundStyle(.secondary)
+            }.font(HubType.caption).padding(.vertical, HubSpace.xs)
+        }.frame(maxHeight: 280)
     }
 
     private func imageReceiptKey(_ job: NativeJob?) -> String {

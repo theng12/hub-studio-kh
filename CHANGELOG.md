@@ -6,14 +6,14 @@ Plain-language changes appear first in each release and feed the app’s What’
 
 - Failed encoding checks can be explicitly retried without reusing an earlier attempt. Their history stays available, and an uncertain previous attempt keeps the Mac reserved.
 - Image prompts use each model’s own limit: FLUX.2 Klein 4-bit 1,900 characters; Qwen Image 2.1 base and Turbo mflux 4-bit 8,000; Z-Image Turbo 4-bit 2,000.
-- Image editing reports the engine’s reference cap: four images for FLUX.2 Klein 4-bit and ten for Qwen Image 2.1 Turbo mflux 4-bit. Available memory still determines whether a job can start.
+- Image limits are published as a table for each model, job type and RAM tier, with the source beside every default. FLUX.2 Klein 4-bit allows three references at 16 GB (owner limit) and four at 24 GB and above (owner: known to run). Qwen Image 2.1 Turbo mflux 4-bit allows one reference at 24 GB and above, labelled provisional, measuring; its text-to-image jobs start at 16 GB. Reference jobs remain off at 8 GB. The table shows the strict default swap allowance and the critical-memory-pressure safety stop.
 - Late-label preparation has separate capability checks and validated image assets. Older rendering permissions cannot silently enable it, and remote rendering that is off stays off.
 - Closing the Hub drains both encoding-check controls before shutting down its queues.
 
 ### Technical notes
 
 - Retains the shipped v1 compiler source bytes and descriptor identities. The optional late-label v3 profile is isolated; scoped encoding probes do not issue a production execution grant.
-- Reference counts publish recorded measurements only. New per-count memory floors, routing and deadlines are not inferred, and the live render-memory floor remains 10 GiB pending a full-length measurement.
+- Each image-limit cell distinguishes recorded measurements, owner limits and provisional values. Signed Gateway overrides are deferred to the next release. New per-count memory floors, routing and deadlines are not inferred, and the live render-memory floor remains 10 GiB pending a full-length measurement.
 
 ## 0.6.221 — 2026-11-05
 
