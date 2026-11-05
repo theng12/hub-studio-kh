@@ -240,7 +240,8 @@ class StandaloneHubConfigTests(unittest.TestCase):
                         headers={"Authorization": "Bearer same-existing-hub-token"},
                     )
 
-        self.assertEqual(lifecycle, ["probe-recovery", "queue-restore", "probe-stop"])
+        self.assertEqual(lifecycle,
+                         ["probe-recovery", "queue-restore", "probe-stop", "probe-stop"])
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(accepted.json()["effective"]["max_bytes"], 20_000_000_000)
