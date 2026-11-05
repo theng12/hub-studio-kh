@@ -756,7 +756,7 @@ def _late_overlay_statement(
     if eval_frame:
         options.append("eval=frame")
     options.append(_late_gate_enable(start_sec, end_sec).lstrip(":"))
-    return f"{video_label}{source_label}{','.join(options)}{output_label}"
+    return f"{video_label}{source_label}{':'.join(options)}{output_label}"
 
 
 def _build_late_label_filters(

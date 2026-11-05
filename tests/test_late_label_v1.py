@@ -293,6 +293,17 @@ class LateLabelCompilerAndPngTests(unittest.TestCase):
         self.assertNotIn("shortest=1", graph)
         self.assertNotIn("%04d", raw(packet).decode())
 
+    def test_late_overlay_emits_enable_as_an_overlay_option(self):
+        packet = vector_packet("positive-wipe")
+        plan = compile_final_render_packet(
+            raw(packet), assets_for(packet), OUTPUT, late_labels_allowed=True)
+        argv = list(plan.tiers[0].argv)
+        graph = argv[argv.index("-filter_complex") + 1]
+        overlay = next(statement for statement in graph.split(";\n")
+                       if "overlay=" in statement)
+        self.assertIn(":enable='between(t,2.125,4.875)'", overlay)
+        self.assertNotIn(",enable=", overlay)
+
     def test_reveal_then_later_static_cue_keeps_distinct_input_indices(self):
         first = vector("positive-wipe")["operation"]
         second = copy.deepcopy(vector("positive-none")["operation"])

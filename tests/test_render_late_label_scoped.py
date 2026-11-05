@@ -44,8 +44,8 @@ HUB_TOKEN = "late-label-scope-hub"
 INTENT_ID = "11111111-1111-1111-1111-111111111111"
 PACKAGING = ROOT / "packaging/render-authority-late-label"
 FROZEN_PINS = {
-    "PROFILE.json": "b39f239092d8854be82b4a99df0cd591f9cdef05553d7741765b35ac72ca2b3c",
-    "COMPILER.json": "8eb1f962735692144ef8f3627ee8080d0d338c6295781bcde3550d6eef7834e3",
+    "PROFILE.json": "879212641ead393d987b41eb74b23c0bba813096688106f09b5aecda940c9d8f",
+    "COMPILER.json": "8fe79d9775309d0e64edbcc2183bfafebc333d8534bed17463dc19d2e7ea21fb",
     "TOOLS.json": "98c25ae582d4ee43ee1cf665192365149f8d9f860c229a0be9da131df43eba8a",
 }
 BASE_ROW_KEYS = {
