@@ -1121,6 +1121,8 @@ final class FixtureProtocol: URLProtocol {
             result = accepted
                 ? (200, "application/json", Data("{\"version\":2,\"role\":\"\(current)\",\"site_id\":\"studiohub-local\",\"controller_id\":\"controller-local\"}".utf8))
                 : (400, "application/json", Data(#"{"detail":"role must be one of ['agent', 'controller', 'standalone']"}"#.utf8))
+        case ("GET", "/api/hub/fleet/nodes/local/developer-tests/setting"):
+            result = (200, "application/json", Data(#"{"format":"studio.developer-test.node-setting-result.v1","node_id":"studio-mini","controller_id":"controller-roster-id","enabled":false,"verified":true,"revision":"rev-fixture","reason":null,"updated_at":"2026-11-06T00:00:00Z","request_id":null}"#.utf8))
         case ("GET", "/api/hub/workers"):
             result = (200, "application/json", Data(#"{"workers":[{"id":"image","modality":"image"},{"id":"voice","modality":"voice"},{"id":"subtitle","modality":"transcription"}]}"#.utf8))
         case ("POST", "/api/hub/fleet/nodes"):
@@ -1167,7 +1169,7 @@ final class FixtureProtocol: URLProtocol {
             }
             // The credential comes back **once**, in this answer: that is the whole of A8, and a
             // fixture that answered without it would let the app's re-join rot unnoticed.
-            let answer = Data(#"{"node":{"id":"studio-mini","name":"Studio Mini","address":"http://192.168.1.20:47873","role":"agent"},"credential":"\#(issued)"}"#.utf8)
+            let answer = Data(#"{"node":{"id":"studio-mini","name":"Studio Mini","address":"http://192.168.1.20:47873","role":"agent"},"credential":"\#(issued)","controller":{"id":"controller-roster-id","name":"Controller"}}"#.utf8)
             if hold {
                 DispatchQueue.global().async { [self] in
                     _ = Self.releaseJoin.wait(timeout: .now() + 5)
@@ -2527,6 +2529,11 @@ struct NativeAPITests {
         let state = temporary.appendingPathComponent("Native State")
         let store = NativeWorkspaceStore(sessionConfiguration: configuration)
         await store.connect(baseURL: URL(string: "http://127.0.0.1:45678")!, dataDirectory: state, token: "native-test-token")
+        await store.refreshDeveloperMode()
+        require(store.developerModeSetting?.enabled == false && store.developerModeSetting?.verified == true,
+                "Developer Mode must read the actual verified OFF setting")
+        require(store.developerModeSetting?.revision == "rev-fixture" && store.developerModeNote == nil,
+                "Developer Mode must preserve the opaque revision without claiming runner support")
         // What the app offers is every model the Hub publishes a form for, once each. Derived from
         // the fixture's own payloads instead of a count: a number restates the answer and has to be
         // edited by hand for every new model, which is exactly how the voice allowlist stayed green
@@ -2844,6 +2851,9 @@ struct NativeAPITests {
         // which is the whole reason a node could not show the pool it belongs to.
         require(FixtureProtocol.adoptPayload()?["controller_url"] as? String == "http://192.168.1.21:8080",
                 "adoption must record which controller this Mac joined, got: \(String(describing: FixtureProtocol.adoptPayload()))")
+
+        require(FixtureProtocol.adoptPayload()?["parent_controller_id"] as? String == "controller-roster-id",
+                "adoption must preserve the controller's roster identity from the join answer")
 
         // Joining has to be remembered, or the Mac cannot re-join by itself after a restart. The
         // app owns the preferences file, so the workspace reports the address and the app saves it.

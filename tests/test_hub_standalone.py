@@ -207,6 +207,22 @@ class StandaloneHubConfigTests(unittest.TestCase):
             recover_probes = EncodeProbeControl.recover_and_restore_physical_holds
             stop_probes = EncodeProbeControl.stop
             restore_batches = broker.restore_batches
+            from components.hub import developer_test_service
+            configure_tests = developer_test_service.configure
+            recover_tests = developer_test_service.recover
+            shutdown_tests = developer_test_service.shutdown
+
+            def configure_developer_tests():
+                lifecycle.append("developer-configure")
+                return configure_tests()
+
+            def recover_developer_tests():
+                lifecycle.append("developer-recovery")
+                return recover_tests()
+
+            def shutdown_developer_tests():
+                lifecycle.append("developer-stop")
+                return shutdown_tests()
 
             async def recover_control(control):
                 lifecycle.append("probe-recovery")
@@ -223,6 +239,9 @@ class StandaloneHubConfigTests(unittest.TestCase):
             stack.enter_context(patch.object(EncodeProbeControl, "recover_and_restore_physical_holds", recover_control))
             stack.enter_context(patch.object(EncodeProbeControl, "stop", stop_control))
             stack.enter_context(patch.object(broker, "restore_batches", restore_queues))
+            stack.enter_context(patch.object(developer_test_service, "configure", configure_developer_tests))
+            stack.enter_context(patch.object(developer_test_service, "recover", recover_developer_tests))
+            stack.enter_context(patch.object(developer_test_service, "shutdown", shutdown_developer_tests))
             app = create_app(start_background=False)
             preview_calls = []
             def capture_preview(**kwargs):
@@ -241,7 +260,8 @@ class StandaloneHubConfigTests(unittest.TestCase):
                     )
 
         self.assertEqual(lifecycle,
-                         ["probe-recovery", "queue-restore", "probe-stop", "probe-stop"])
+                         ["probe-recovery", "queue-restore", "developer-configure",
+                          "developer-recovery", "probe-stop", "probe-stop", "developer-stop"])
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(accepted.json()["effective"]["max_bytes"], 20_000_000_000)

@@ -3072,7 +3072,7 @@ class GenerationManager:
             job['finished_at'] = time.time()
             job['duration_seconds'] = job['finished_at'] - job['started_at']
             self._persist()
-        self._discard_inputs(job)
+            self._discard_inputs(job)
 
     def _deliver(self, job_id: str, job: dict, event: threading.Event, staged: Path,
                  staged_jpeg: Path, content: bytes, dimensions: tuple, peak) -> None:
@@ -3137,7 +3137,7 @@ class GenerationManager:
                 except OSError:
                     pass
                 raise
-        self._discard_inputs(job)
+            self._discard_inputs(job)
 
 
 def encode_jpeg(source: Path, destination: Path, *, expected_size: tuple) -> bytes:

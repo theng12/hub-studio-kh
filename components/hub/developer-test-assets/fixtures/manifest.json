@@ -1,0 +1,110 @@
+{
+  "fixtures": [
+    {
+      "file": "ref-01.png",
+      "fixture_id": "ref-01",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "8d1f3aa222d53ae01b02b99cc7cdcda8dc97fd46a275db95224016002db30928",
+      "size_bytes": 100582,
+      "width_px": 1024
+    },
+    {
+      "file": "ref-02.png",
+      "fixture_id": "ref-02",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "bea82f42ecf1501a49d4bb73a65791c4f562346da0e74d6cad492ece50ac1caf",
+      "size_bytes": 100010,
+      "width_px": 1024
+    },
+    {
+      "file": "ref-03.png",
+      "fixture_id": "ref-03",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "2c15ad1720df1ec36e9a78e88c9a1dd673883cd413c54690eb18b41e3d0bd529",
+      "size_bytes": 99832,
+      "width_px": 1024
+    },
+    {
+      "file": "ref-04.png",
+      "fixture_id": "ref-04",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "f8347723311e5d094a9167f51b3ec6eb6b12d8cd209155d5d025049c2bbe9461",
+      "size_bytes": 99680,
+      "width_px": 1024
+    },
+    {
+      "file": "ref-05.png",
+      "fixture_id": "ref-05",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "484bb3f307c7e97ba3ddeb2d532ab7a050773d7771df024161da4792b2f4495e",
+      "size_bytes": 99783,
+      "width_px": 1024
+    },
+    {
+      "file": "ref-06.png",
+      "fixture_id": "ref-06",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "b484044aa646697485444fde09dea02ebe2614ad5b7d917804c0e3740942841a",
+      "size_bytes": 99789,
+      "width_px": 1024
+    },
+    {
+      "file": "ref-07.png",
+      "fixture_id": "ref-07",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "b09ac6978a924e9fbdef911c11af2dd160f55ff11e4e6425aaf6b8ebb1e42eb4",
+      "size_bytes": 99256,
+      "width_px": 1024
+    },
+    {
+      "file": "ref-08.png",
+      "fixture_id": "ref-08",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "46bcea4b5a8726cbc98e9f599cd3a8ba423ec164827b13e00ecf86e7f0243727",
+      "size_bytes": 110647,
+      "width_px": 1024
+    },
+    {
+      "file": "ref-09.png",
+      "fixture_id": "ref-09",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "714c825f9e138596050f388738251288b9aeb5be93e4df99fd53be5f08738441",
+      "size_bytes": 111349,
+      "width_px": 1024
+    },
+    {
+      "file": "ref-10.png",
+      "fixture_id": "ref-10",
+      "height_px": 1024,
+      "media_type": "image/png",
+      "sha256": "e0159266b0f260229181ff2c6edd5e990fb46bc327eb67dc7e4899a827a21da8",
+      "size_bytes": 99132,
+      "width_px": 1024
+    }
+  ],
+  "format": "studio.developer-test.fixture-set.v1",
+  "id": "developer-image-basic-v1",
+  "prompt_construction": "repeat_pattern_then_codepoint_prefix_v1",
+  "prompt_pattern": "A tiny red square on a plain white background. ",
+  "reference_order": [
+    "ref-01",
+    "ref-02",
+    "ref-03",
+    "ref-04",
+    "ref-05",
+    "ref-06",
+    "ref-07",
+    "ref-08",
+    "ref-09",
+    "ref-10"
+  ]
+}

@@ -568,6 +568,23 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/final-renders/[^/]+$"),
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/final-renders/[^/]+/(?:cancel|ack)$"),
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/final-renders/[^/]+/output$"),
+    # **Developer Mode's node-side surface (contract studio.developer-test.v1).** Fixed
+    # suffixes only: capability/setting reads, the switch, one exact-byte test submission, and
+    # that attempt's status, cancellation, receipt and bounded log. The controller relays these
+    # same paths to a joined node's `local` route; the leaf's own node credential is not in
+    # `NODE_ALLOWED`, so it cannot authorise a switch or a test.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/developer-tests/capabilities$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/developer-tests/setting$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/developer-tests/setting$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/developer-tests$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/developer-tests/by-key/"
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/developer-tests/by-key/"
+             r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/cancel$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/developer-tests/by-key/"
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/receipt$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/developer-tests/by-key/"
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/log$"),
     ("POST", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs/[^/]+$"),

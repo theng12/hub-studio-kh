@@ -6236,6 +6236,13 @@ struct StudioContent: View {
                 LiteModeSettings(workspace: workspace, connected: connected)
             }
             HubSection("General") {
+                ValueRow("Developer Mode", value: connected ? workspace.developerModeSetting.map {
+                    $0.verified ? ($0.enabled ? "On" : "Off") : "Unverified"
+                } ?? "Unavailable" : "Unavailable")
+                if let note = workspace.developerModeNote ?? workspace.developerModeSetting?.reason?.detail {
+                    Text(note).font(HubType.secondary).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text("Closing the window keeps local jobs running. Quit stops the app and its services.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
             }
@@ -6308,7 +6315,7 @@ struct StudioContent: View {
                 ValueRow("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
             }
         }
-        .task { if connected { await workspace.refreshMemoryPolicy(); await workspace.refreshStorage(); await workspace.refreshTrash() } }
+        .task { if connected { await workspace.refreshDeveloperMode(); await workspace.refreshMemoryPolicy(); await workspace.refreshStorage(); await workspace.refreshTrash() } }
         .sheet(isPresented: $showingStorageEditor) { storageEditor }
     }
 

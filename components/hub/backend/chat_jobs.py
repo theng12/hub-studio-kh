@@ -488,10 +488,13 @@ async def _eligible_studios(
                 or broker.in_maintenance(studio["id"])):
             continue
         machine = studio.get("machine", "local")
+        busy = machine in broker.busy_machines()
         if (monitor.status.get(studio["id"], {}).get("status") != "up"
                 or not machine_enabled(machine)
                 or not studio_enabled(machine, studio["id"])
-                or machine in broker.busy_machines()):
+                or busy):
+            if busy:
+                broker.note_developer_test_production(machine)
             continue
         if not peers.dispatch_ready(studio) or not peers.lite_mode_allows(studio, model):
             continue

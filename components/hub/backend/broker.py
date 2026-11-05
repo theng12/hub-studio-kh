@@ -44,6 +44,7 @@ from . import stall
 from . import update_drain
 from . import memory_admission
 from . import preferred_hold
+from . import developer_test_admission
 from .. import workstation
 
 _MIME_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
@@ -391,6 +392,12 @@ _wakeup = asyncio.Event()
 # lease becoming visible to another local scheduler lane.
 _reserved = {"gb": 0.0}
 _submit_lock = threading.Lock()
+# One lock for "is this machine free, and claim it": production lanes and Developer Mode tests
+# make that check-and-claim atomically instead of racing between the check and the lease write.
+_machine_lease_lock = threading.RLock()
+# machine -> count of production memory preparations inside an await. A test must not claim the
+# Mac between a lane's memory check and its late physical lease check.
+_preparing_machines: dict[str, int] = {}
 _CLIENT_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{8,160}")
 _GENSTUDIO_VOICE_EVIDENCE_VERSION = (1, 20, 13)
 _IMMUTABLE_MODEL_REVISION = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{40,64}$")
@@ -604,17 +611,23 @@ async def prepare_machine_memory(client: httpx.AsyncClient, studio: dict,
     ``mode='edit'`` applies the reference lane's own floors, so an edit item waits or skips a Mac
     that can take text-to-image but not a 12.44 GB reference render.
     """
+    machine = studio.get("machine", "local")
+    if developer_test_admission.held(machine) is not None:
+        return "wait", "a Developer Mode test holds this Mac"
     if model in CLEAR_MACHINE_MODELS:
-        handoff = await release_idle_siblings(client, studio)
-        if handoff["busy"]:
-            return "wait", "waiting for the other work on this Mac before clearing it for YuE2"
-        if handoff["failed"]:
-            # Not cleared is not a start (0.6.170: guaranteed, not best-effort): another Mac takes it.
-            return "skip", ("could not clear this Mac for YuE2 (" + ", ".join(map(str, handoff["failed"]))
-                            + " kept its models) — trying other machines")
-        if handoff["released"] and not peers.is_local_studio(studio):
-            peers.invalidate(studio.get("machine", "local"))
-            await peers.refresh(_monitor().registry, client)
+        with preparing_machine(machine) as preparing:
+            if preparing.blocked:
+                return "wait", "a Developer Mode test holds this Mac"
+            handoff = await release_idle_siblings(client, studio)
+            if handoff["busy"]:
+                return "wait", "waiting for the other work on this Mac before clearing it for YuE2"
+            if handoff["failed"]:
+                # Not cleared is not a start (0.6.170: guaranteed, not best-effort): another Mac takes it.
+                return "skip", ("could not clear this Mac for YuE2 (" + ", ".join(map(str, handoff["failed"]))
+                                + " kept its models) — trying other machines")
+            if handoff["released"] and not peers.is_local_studio(studio):
+                peers.invalidate(machine)
+                await peers.refresh(_monitor().registry, client)
     mem = _with_machine_floor(_admission_requirements(model, entry, mode=mode), studio)
     if mem is None:
         return "run", None
@@ -626,14 +639,17 @@ async def prepare_machine_memory(client: httpx.AsyncClient, studio: dict,
     if decision != "wait":
         return decision, note
 
-    handoff = await release_idle_siblings(client, studio)
-    if handoff["busy"]:
-        return "wait", "waiting for active sibling work on this machine"
-    if not handoff["released"]:
-        return decision, note
-    if not is_local:
-        peers.invalidate(studio.get("machine", "local"))
-        await peers.refresh(_monitor().registry, client)
+    with preparing_machine(machine) as preparing:
+        if preparing.blocked:
+            return "wait", "a Developer Mode test holds this Mac"
+        handoff = await release_idle_siblings(client, studio)
+        if handoff["busy"]:
+            return "wait", "waiting for active sibling work on this machine"
+        if not handoff["released"]:
+            return decision, note
+        if not is_local:
+            peers.invalidate(machine)
+            await peers.refresh(_monitor().registry, client)
     refreshed = _host_for_studio(studio)
     if not refreshed:
         return "wait", "idle sibling memory released; waiting for fresh RAM telemetry"
@@ -2185,6 +2201,9 @@ def restore_batches():
     Running work runs again (`_rerun_after_restart`); a Voice, Image, Music or Video item whose
     cancel was in flight stays fenced. Other modalities retain their historic retry behavior.
     """
+    # A Developer Mode test that may still own a child process keeps the Mac out of every queue
+    # restored below; its hold is restored from the same durable attempt ledger.
+    developer_test_admission.restore_before_production()
     for b in ledger.load_unfinished_batches():
         if _expire_genstudio_batch(b):
             batches[b["id"]] = b
@@ -2673,19 +2692,66 @@ def _is_controller() -> bool:
     return control_plane.load_settings().get("role") == "controller"
 
 
+def machine_lease_lock() -> threading.RLock:
+    """The lock a check-and-claim of a physical machine must hold."""
+    return _machine_lease_lock
+
+
+def preparing_machines() -> set[str]:
+    """Machines with production memory preparation inside an await right now."""
+    return {machine for machine, count in _preparing_machines.items() if count > 0}
+
+
+class preparing_machine:
+    """Mark a production preparation window so a test cannot claim the Mac inside it.
+
+    The test-hold check and the marker are one atomic step under the same machine lease lock a
+    test uses to reserve, so a runner thread cannot slip between "no test" and "preparing". A
+    caller that finds ``blocked`` must return without unloading anything.
+    """
+
+    def __init__(self, machine: str):
+        self.machine = machine
+        self.blocked = False
+        self._marked = False
+
+    def __enter__(self):
+        with _machine_lease_lock:
+            if developer_test_admission.held(self.machine) is not None:
+                developer_test_admission.production_arrived(self.machine)
+                self.blocked = True
+                return self
+            _preparing_machines[self.machine] = _preparing_machines.get(self.machine, 0) + 1
+            self._marked = True
+        return self
+
+    def __exit__(self, *_exc):
+        if self._marked:
+            with _machine_lease_lock:
+                count = _preparing_machines.get(self.machine, 0) - 1
+                if count > 0:
+                    _preparing_machines[self.machine] = count
+                else:
+                    _preparing_machines.pop(self.machine, None)
+        return False
+
+
 def busy_machines() -> set[str]:
     """Physical machines holding a non-preemptive heavy-work lease."""
     by_id = {s["id"]: s for s in _monitor().registry}
+    # A Developer Mode test holds the same lease production does; during an update drain the
+    # drain answers below omit lease rows, so union the test hold explicitly.
+    test_held = developer_test_admission.held_machines()
     if update_drain.draining():
         # This Mac is finishing its work to install an update: its own machine is taken. A
         # controller's joined nodes are other Macs and keep taking work while this Mac's own work
         # finishes (it used to name every machine, so a draining controller left its idle nodes
         # idle for the whole drain) - then they stop too, see `drain_holds_group`.
         if drain_holds_group():
-            return {s.get("machine", "local") for s in by_id.values()} | {"local"}
-        return {s.get("machine", "local") for s in by_id.values()
-                if peers.is_local_studio(s)} | {"local"}
-    occupied = set(_external_machine_leases) | {
+            return {s.get("machine", "local") for s in by_id.values()} | {"local"} | test_held
+        return ({s.get("machine", "local") for s in by_id.values()
+                 if peers.is_local_studio(s)} | {"local"} | test_held)
+    occupied = set(_external_machine_leases) | test_held | {
         by_id[sid].get("machine", "local")
         for sid in _busy
         if sid in by_id
@@ -2787,24 +2853,37 @@ def acquire_external_machine(machine: str, owner: str) -> bool:
     cannot take the Mac for a moment either.
     """
     lane = lease_lane(owner)
-    if lane and not function_enabled(machine, lane):
-        return False
-    if machine in busy_machines():
-        return False
-    if render_wins_next_free(machine, lane):
-        return False
-    _external_machine_leases[machine] = owner
-    _wakeup.set()
-    return True
+    with _machine_lease_lock:
+        held_by_test = developer_test_admission.held(machine)
+        if held_by_test is not None and held_by_test != owner:
+            # Production is asking for a Mac a test holds: stop the test before its next stage
+            # and make production wait for verified release. It never interrupts the test child.
+            developer_test_admission.production_arrived(machine)
+            return False
+        if lane and not function_enabled(machine, lane):
+            return False
+        if machine in busy_machines():
+            return False
+        if render_wins_next_free(machine, lane):
+            return False
+        _external_machine_leases[machine] = owner
+        _wakeup.set()
+        return True
+
+
+def note_developer_test_production(machine: str) -> None:
+    """A production queue has work for this Mac; let an active test stop before its next stage."""
+    developer_test_admission.production_arrived(machine)
 
 
 def restore_external_machine(machine: str, owner: str) -> None:
     """Restore one durable physical hold without replacing any owner."""
-    current = _external_machine_leases.get(machine)
-    if current is not None and current != owner:
-        raise RuntimeError(f"physical machine {machine!r} is already held by {current!r}")
-    _external_machine_leases[machine] = owner
-    _wakeup.set()
+    with _machine_lease_lock:
+        current = _external_machine_leases.get(machine)
+        if current is not None and current != owner:
+            raise RuntimeError(f"physical machine {machine!r} is already held by {current!r}")
+        _external_machine_leases[machine] = owner
+        _wakeup.set()
 
 
 def external_dispatch_allowed(
@@ -2855,9 +2934,10 @@ def _pending_render_for_machine(machine: str) -> bool:
 
 
 def release_external_machine(machine: str, owner: str) -> None:
-    if _external_machine_leases.get(machine) == owner:
-        del _external_machine_leases[machine]
-        _wakeup.set()
+    with _machine_lease_lock:
+        if _external_machine_leases.get(machine) == owner:
+            del _external_machine_leases[machine]
+            _wakeup.set()
 
 
 def set_maintenance(studio_id: str, enabled: bool):
@@ -4894,6 +4974,8 @@ def _eligible_studios(modality: str, routing: str,
                 _record_dispatch_gate(trace, s, "studio_maintenance")
             continue
         if machine in leased_machines:
+            if developer_test_admission.held(machine) is not None:
+                developer_test_admission.production_arrived(machine)
             if trace is not None:
                 _record_dispatch_gate(trace, s, "machine_lease_busy")
             continue

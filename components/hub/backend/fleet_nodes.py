@@ -792,7 +792,10 @@ def join(payload: dict[str, Any], *,
     _write(nodes, document["removed"])
     # The plaintext is returned here and **nowhere else**: it is not written to the roster,
     # not logged, and not published on any read route.
-    return {"node": dict(nodes[node_id]), "credential": credential}
+    # The controller's own roster identity, so the joining Mac can record the actual controller
+    # rather than infer one from an address or a label. It is the same id its roster row uses.
+    return {"node": dict(nodes[node_id]), "credential": credential,
+            "controller": this_machine()}
 
 
 def leave(node_id: str) -> bool:

@@ -79,6 +79,9 @@ def defaults() -> dict:
         "controller_id": f"{hostname}-hub"[:100],
         "database_mode": "off",
         "parent_controller_url": None,
+        # The controller's own roster id, recorded only with the credential that came from it.
+        # Never derived from an address or a label; absent means unverified.
+        "parent_controller_id": None,
         # "minted" when this Hub generated it, "adopted" when it took a controller's during a join.
         # Absent in settings written before this existed, and absent is treated as minted unless the
         # machine is joining, which is the conservative reading: never rotate a credential that
@@ -242,6 +245,8 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
             "database_mode": str(values.get("database_mode", current["database_mode"])).strip().lower(),
             "parent_controller_url": values.get(
                 "parent_controller_url", current.get("parent_controller_url")),
+            "parent_controller_id": values.get(
+                "parent_controller_id", current.get("parent_controller_id")),
         }
         # Every key `defaults()` defines has to be carried here, or `save_settings` writes a file -
         # and seeds the in-memory cache - without it, and the value silently reverts to its default.
@@ -346,8 +351,18 @@ def save_settings(values: dict, *, new_database_url: str | None = None,
         # does not actually leave the group.
         if updated["fleet_credential_origin"] != "adopted":
             updated["parent_controller_url"] = None
-        elif updated["parent_controller_url"] is not None:
-            updated["parent_controller_url"] = str(updated["parent_controller_url"]).strip() or None
+            updated["parent_controller_id"] = None
+        else:
+            if updated["parent_controller_url"] is not None:
+                updated["parent_controller_url"] = str(updated["parent_controller_url"]).strip() or None
+            if (not updated["parent_controller_url"]
+                    or (updated["parent_controller_url"] != current.get("parent_controller_url")
+                        and "parent_controller_id" not in values)):
+                updated["parent_controller_id"] = None
+            if updated["parent_controller_id"] is not None:
+                updated["parent_controller_id"] = str(updated["parent_controller_id"]).strip().lower() or None
+                if updated["parent_controller_id"] is not None and not ID_PATTERN.fullmatch(updated["parent_controller_id"]):
+                    raise ValueError("parent_controller_id must use lowercase letters, numbers, dots, dashes, or underscores")
 
         _write_private_file(SETTINGS_FILE, json.dumps(updated, indent=2) + "\n")
         with _settings_lock:

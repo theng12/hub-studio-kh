@@ -9,13 +9,15 @@ Plain-language changes appear first in each release and feed the app’s What’
 - A Mac stops resending acknowledged command results even when the controller has no new commands. Removed Macs cannot recreate their old result queue, and expired results no longer appear as current.
 - An update check recognises a release the site already holds, including after an earlier read failed.
 - Moving work priorities drops functions this Mac no longer offers while preserving disabled functions’ saved positions. Model pickers keep the published weight precision visible. Generated-output sizes use consistent units in the same sentence.
+- Settings shows this Mac’s reported Developer Mode state. The switch starts off, and test requests use the joined controller’s authenticated path. Test support stays unavailable until real inference and installation stop proofs are verified.
+- Image jobs finish removing their staged reference inputs before readers can observe the terminal job state.
 
 ### Technical notes
 
-- Preparation only: focused Python guards and Swift parsing have passed; the complete native suite, full 0.6.223 gate, packaging and installation remain pending. The separate 0.6.222 source and R7 evidence are unchanged.
+- Source preparation only: the combined Developer Mode/controller/lifecycle lane passed 94 tests, the bug-fix lane passed 277 tests with three skips, changed Python syntax/diff checks passed, and native API/test plus all-view Swift typechecking passed. Released 0.6.222 source is merged with history retained. Native executable/UI verification, the full 0.6.223 gate, real inference/installation stop proof, packaging and installation remain pending.
 - Shared guards cover submission shapes, durable-before-publication ordering, image queue/execution floors, swap-monitor availability, pressure fixtures, model-library fixture isolation, gate interpreter identity/dependency seeds, result expiry and per-read rollout reconciliation. The gate seed lock is not a reproducible environment builder or a complete dependency closure.
 - Hub acceptance and external execution identity remain separate SQLite stores. A hard kill between their commits can leave a stale identity pointer; this change does not claim cross-store atomicity.
-- Developer Mode and signed image-limit override transport remain separately queued; no runtime support is claimed for either.
+- Developer Mode node work uses the frozen studio.developer-test.v1 candidate-2 contract: exact-byte replay, revisioned persisted settings, fixed Fleet-only routes, packaged fixture/policy identities, owned-process measurement and production-first reservations. Acceptance retains receipt identities across an app update; recovery never reruns an attempt, and unknown process or download ownership keeps the physical hold. Retained logs are bounded and redacted. The harmless process-tree stop proof does not qualify model inference or installation release; positive support remains unavailable. Signed image-limit override transport is still queued.
 
 ## 0.6.222 — 2026-11-05
 

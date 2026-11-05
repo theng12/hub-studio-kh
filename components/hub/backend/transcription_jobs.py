@@ -658,6 +658,7 @@ async def _eligible_studios(monitor, model: str, item: dict | None = None,
         # timer, and until then the Mac is free to take other work (the owner's call - transcription
         # is cheap enough to repeat). `broker.busy_machines()` covers leases and image fences.
         if machine in broker.busy_machines():
+            broker.note_developer_test_production(machine)
             if reasons is not None:
                 reasons.append(f"{sid}: machine {machine} is busy with other work")
             continue

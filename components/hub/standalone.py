@@ -1282,6 +1282,7 @@ def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
                     "detail": str(paused.get("reason") or "model is paused on this Mac"),
                     "readiness": paused}
     if not ignore_busy and machine in broker.busy_machines():
+        broker.note_developer_test_production(machine)
         return {"code": "MACHINE_BUSY",
                 "detail": f"{machine} is reserved for other work on this Mac"}
     settings = standalone_config.load_device_settings()["effective"]
@@ -1524,6 +1525,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         final_render_executor.recover_and_restore_physical_holds()
         await encode_probe_control.recover_and_restore_physical_holds()
         broker.restore_batches()
+        from . import developer_test_service
+        developer_test_service.configure()
+        await _asyncio.to_thread(developer_test_service.recover)
         transcription_jobs.restore_batches()
         # A pause this build can never clear is not a safety feature, it is a permanent refusal.
         try:
@@ -1650,6 +1654,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 await transcription_jobs.stop()
                 await control_plane.runtime.stop()
                 await monitor.stop()
+            await _asyncio.to_thread(developer_test_service.shutdown)
+            if start_background:
                 from . import model_downloads
                 model_downloads.shutdown()
             render_assets_store.close()
@@ -2324,8 +2330,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # writes it 0600 where every node-originated call reads it from. Storing it from the app
         # would mean the app had to know the Hub's data directory, which is the Hub's business.
         node_credential = body.get("node_credential")
-        if node_credential is not None:
-            fleet.set_node_credential(str(node_credential))
         values: dict[str, Any] = {}
         # Which controller was joined, recorded with the credential it came from. Always written,
         # never left at its previous value: an adoption that does not name a controller leaves this
@@ -2340,6 +2344,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 raise HTTPException(400, f"controller_url {exc}") from exc
         else:
             values["parent_controller_url"] = None
+        controller_id = body.get("parent_controller_id")
+        if controller_id is not None and not fleet.ID_PATTERN.fullmatch(str(controller_id)):
+            raise HTTPException(400, "parent_controller_id must be a valid roster identity")
+        values["parent_controller_id"] = controller_id if values["parent_controller_url"] else None
+        if node_credential is not None:
+            fleet.set_node_credential(str(node_credential))
         peers.set_fleet_token(value)
         # Record that this credential is someone else's. Promotion to controller reads this and
         # mints a fresh one, so a machine that was a node never ends up running a group on the
@@ -5416,10 +5426,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     raise HTTPException(502, "Chat worker returned activity for another job")
         return JSONResponse(snapshot)
 
-    from . import delivery, operator_controls, renders, statistics
+    from . import delivery, developer_tests, operator_controls, renders, statistics
     delivery.register_routes(app, monitor)
     operator_controls.register_routes(app, monitor)
     statistics.register_routes(app, monitor)
+    # Developer Mode's node-side switch and attempt ledger (contract studio.developer-test.v1).
+    # Fixed routes only; the controller relays them to this Mac's `local` path. The initial
+    # verified OFF is created once here, so a missing file later reads as unverified.
+    developer_tests.ensure_initial_setting()
+    developer_tests.register_routes(app)
     # The Render tab (owner, 2026-10-26). Reads the rows `render_jobs` already writes; on a
     # controller it adds each joined Mac's own list, over the same Fleet-credential read the rest
     # of the fleet uses. No writes, and nothing here reaches the render lane's own routes.

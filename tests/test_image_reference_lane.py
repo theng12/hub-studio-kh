@@ -21,6 +21,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -196,6 +197,53 @@ class ReferenceLaneTests(LaneHarness, unittest.TestCase):
         # A reference is input: the job's staged directory is gone once it is terminal.
         self.assertFalse((self.manager.inputs / job_id).exists())
         self.assertEqual([path for path in self.manager.inputs.iterdir()], [])
+
+    def test_terminal_read_waits_for_reference_cleanup(self):
+        cleaning, finish_cleanup, read_finished = threading.Event(), threading.Event(), threading.Event()
+        discard = self.manager._discard_inputs
+        observed = []
+
+        def blocked_cleanup(job):
+            cleaning.set()
+            if not finish_cleanup.wait(5):
+                raise RuntimeError('test cleanup was not released')
+            discard(job)
+
+        def read(job_id):
+            observed.append(self.manager.get(job_id))
+            read_finished.set()
+
+        job_id = 'cleanup-test'
+        inputs = self.manager.inputs / job_id
+        inputs.mkdir(parents=True)
+        reference = inputs / 'reference.png'
+        reference.write_bytes(png_bytes())
+        content = png_bytes()
+        staged = self.manager.outputs / f'.{job_id}.png'
+        staged.write_bytes(content)
+        job = {'id': job_id, 'state': 'running', 'started_at': time.time(),
+               'params': {'steps': 4, 'reference_images': [str(reference)]}}
+        self.manager.jobs[job_id] = job
+        with patch.object(self.manager, '_discard_inputs', side_effect=blocked_cleanup):
+            delivery = threading.Thread(target=self.manager._deliver, args=(
+                job_id, job, threading.Event(), staged, staged.with_suffix('.jpg'),
+                content, (8, 8), 0))
+            delivery.start()
+            try:
+                self.assertTrue(cleaning.wait(5), 'job never reached cleanup')
+                reader = threading.Thread(target=read, args=(job_id,))
+                reader.start()
+                try:
+                    self.assertFalse(read_finished.wait(0.05), 'terminal state escaped before cleanup')
+                finally:
+                    finish_cleanup.set()
+                    reader.join(5)
+                self.assertFalse(reader.is_alive())
+            finally:
+                finish_cleanup.set()
+                delivery.join(5)
+        self.assertEqual(observed[0]['state'], 'done')
+        self.assertFalse(inputs.exists())
 
     def test_a_reference_job_without_references_is_refused_with_the_published_window(self):
         with patch('components.image.app.backend.main._host_eligibility',

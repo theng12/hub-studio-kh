@@ -3932,6 +3932,16 @@ final class NativeWorkspaceStore: ObservableObject {
     /// out to every Studio, and nothing on the generation screens depends on it.
     @Published private(set) var memoryInventory: NativeMemoryInventory?
     @Published private(set) var deviceSettings: NativeDeviceSettings?
+    struct DeveloperModeSetting: Decodable {
+        struct Reason: Decodable { let detail: String }
+        let format: String
+        let enabled: Bool
+        let verified: Bool
+        let revision: String
+        let reason: Reason?
+    }
+    @Published private(set) var developerModeSetting: DeveloperModeSetting?
+    @Published private(set) var developerModeNote: String?
     @Published private(set) var storageUsage: [NativeMachineUsage] = []
     @Published private(set) var storageTrash: NativeTrash?
     /// The unified Trash Folder as listed by `GET /api/hub/trash`; nil on a Hub that predates it.
@@ -4485,6 +4495,8 @@ final class NativeWorkspaceStore: ObservableObject {
         statistics = nil
         statisticsHours = nil
         deviceSettings = nil
+        developerModeSetting = nil
+        developerModeNote = nil
         storageUsage = []
         storageTrash = nil
         trashFolder = nil
@@ -7300,6 +7312,26 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    func refreshDeveloperMode() async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let setting: DeveloperModeSetting = try await get(
+                ["api", "hub", "fleet", "nodes", "local", "developer-tests", "setting"])
+            guard connectionID == requestConnection else { return }
+            guard setting.format == "studio.developer-test.node-setting-result.v1" else {
+                developerModeSetting = nil
+                developerModeNote = "The Hub returned an unsupported Developer Mode setting."
+                return
+            }
+            developerModeSetting = setting
+            developerModeNote = nil
+        } catch {
+            guard connectionID == requestConnection else { return }
+            developerModeSetting = nil
+            developerModeNote = Self.actionable(error, action: "Read Developer Mode")
+        }
+    }
+
     /// Read the storage policy and what each machine is currently holding.
     func refreshStorage() async {
         guard let requestConnection = connectionID else { return }
@@ -8016,7 +8048,8 @@ final class NativeWorkspaceStore: ObservableObject {
                     : "The controller refused this Mac's join: \(reason)")
             }
             // This Mac's own credential, minted for it in this answer and returned nowhere else.
-            let issued = ((try? JSONDecoder().decode(JoinAnswer.self, from: data))?.credential)?
+            let joinAnswer = try? JSONDecoder().decode(JoinAnswer.self, from: data)
+            let issued = joinAnswer?.credential?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let issued, !issued.isEmpty {
                 setNodeCredential(issued)
@@ -8033,7 +8066,8 @@ final class NativeWorkspaceStore: ObservableObject {
             // local Hub presents *this Mac's* credential on the reads it makes itself (A8) —
             // the app never has to know where the Hub keeps its state.
             do {
-                try await adoptClusterCredential(secret, controller: target, nodeCredential: issued)
+                try await adoptClusterCredential(secret, controller: target, nodeCredential: issued,
+                                                 controllerID: joinAnswer?.controller?.id)
             } catch {
                 // A join without adoption is not a working join: the controller has this Mac
                 // on its roster and then gets 401 from it, which reads as "unreachable" with
@@ -10232,8 +10266,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// reinstall or a second window would leave the Hub holding a borrowed credential with no
     /// idea whose it was, and no way to show this Mac the pool it is in.
     private func adoptClusterCredential(_ token: String, controller: URL,
-                                        nodeCredential: String?) async throws {
+                                        nodeCredential: String?, controllerID: String?) async throws {
         var payload = ["token": token]
+        if let controllerID { payload["parent_controller_id"] = controllerID }
         if let address = Self.literalControllerAddress(controller) {
             payload["controller_url"] = address
         }
@@ -11933,7 +11968,9 @@ private struct JoinRequest: Encodable {
 /// published on a read route, so a Mac that loses it has to be re-admitted rather than re-read.
 /// Absent from a controller older than per-node credentials; the join still stands.
 private struct JoinAnswer: Decodable {
+    struct Controller: Decodable { let id: String }
     let credential: String?
+    let controller: Controller?
 }
 private struct JoinStudio: Encodable {
     let id: String

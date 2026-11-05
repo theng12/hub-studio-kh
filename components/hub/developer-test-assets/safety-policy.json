@@ -1,0 +1,42 @@
+{
+  "format": "studio.developer-test.safety-policy.v1",
+  "revision": "developer-image-safety-2026-11-06.1",
+  "requested_limits": {
+    "max_runtime_seconds": {
+      "minimum": 1,
+      "maximum": 3600,
+      "unit": "seconds",
+      "source": "packaged developer-test safety policy; an operator/test budget, not a measured model limit",
+      "revision": "developer-image-safety-2026-11-06.1",
+      "provenance": "packaged_safety_policy",
+      "enforcement": "deadline"
+    },
+    "max_process_tree_rss_bytes": {
+      "minimum": 268435456,
+      "maximum": 34359738368,
+      "unit": "bytes",
+      "source": "packaged developer-test safety policy; sampled owned-process-tree RSS sum, not a measured model peak",
+      "revision": "developer-image-safety-2026-11-06.1",
+      "provenance": "packaged_safety_policy",
+      "enforcement": "sampled"
+    },
+    "max_system_swap_growth_bytes": {
+      "minimum": 0,
+      "maximum": 8589934592,
+      "unit": "bytes",
+      "source": "packaged developer-test safety policy; sampled system swap growth, no process attribution",
+      "revision": "developer-image-safety-2026-11-06.1",
+      "provenance": "packaged_safety_policy",
+      "enforcement": "sampled"
+    },
+    "test_start_min_free_bytes": {
+      "minimum": 0,
+      "maximum": 68719476736,
+      "unit": "bytes",
+      "source": "packaged developer-test safety policy; psutil.virtual_memory().available immediately before test-owned work",
+      "revision": "developer-image-safety-2026-11-06.1",
+      "provenance": "packaged_safety_policy",
+      "enforcement": "admission"
+    }
+  }
+}
