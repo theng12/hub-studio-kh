@@ -16,7 +16,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 - Installed-model test fixtures respect the configured empty gate library, including Vision and Embeddings; fake-home negative controls verify isolation without loading real checkpoints.
 - The unittest runner exits without thread-registry inspection and uses an independent C-level shutdown watchdog. A blocked shutdown prints its thread stacks and fails; it cannot silently turn green.
 - Retains the shipped v1 compiler source bytes and descriptor identities. The optional late-label v3 profile is isolated; scoped encoding probes do not issue a production execution grant.
-- Late-label overlay statements pass `enable` as an overlay option (`:enable='between(...)'`). The real packaged FFmpeg 8.1 proof rejected the previous comma form; the v3 compiler and its descriptor hashes are rebuilt, while the legacy v1 triple stays byte-identical.
+- Late-label overlay statements pass `enable` as an overlay option (`:enable='between(...)'`), and pop/pulse scale the overlay source with a per-frame `scale` filter instead of an unsupported overlay option. The real packaged FFmpeg 8.1 proof rejected the previous comma form and accepts wipe, pop and pulse; the v3 compiler and its descriptor hashes are rebuilt, while the legacy v1 triple stays byte-identical.
 - Each image-limit cell distinguishes recorded measurements, owner limits and provisional values. Signed Gateway overrides are deferred to the next release. New per-count memory floors, routing and deadlines are not inferred, and the live render-memory floor remains 10 GiB pending a full-length measurement.
 
 ## 0.6.221 — 2026-11-05

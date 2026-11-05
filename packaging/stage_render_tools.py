@@ -95,7 +95,7 @@ _LATE_LABEL_DIRECTORY = Path(__file__).resolve().parent / "render-authority-late
 LATE_LABEL_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
     _AuthorityPin(
         "PROFILE.json", _LATE_LABEL_DIRECTORY / "PROFILE.json", 975,
-        "879212641ead393d987b41eb74b23c0bba813096688106f09b5aecda940c9d8f",
+        "49725bac9c8b3dc20106726aec716e8698a8e2e088dbfb47ec23be82c3fb37dc",
     ),
     _AuthorityPin(
         "TOOLS.json", _LATE_LABEL_DIRECTORY / "TOOLS.json", 796,
@@ -103,7 +103,7 @@ LATE_LABEL_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
     ),
     _AuthorityPin(
         "COMPILER.json", _LATE_LABEL_DIRECTORY / "COMPILER.json", 457,
-        "8fe79d9775309d0e64edbcc2183bfafebc333d8534bed17463dc19d2e7ea21fb",
+        "36182815abb2658a01bc647b0ab87b36ce66b68b54ad6e6663ffeb8a80c6af43",
     ),
 )
 
