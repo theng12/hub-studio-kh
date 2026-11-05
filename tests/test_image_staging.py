@@ -508,7 +508,9 @@ class ResidentModelTests(unittest.TestCase):
         with (patch.dict(sys.modules, modules),
               patch.object(image_main, '_host_eligibility',
                            return_value={'eligible': True, 'macos': '26.6.2'}),
-              patch.object(generation, '_under_memory_pressure', return_value=True)):
+              # Warning pressure evicts residency; critical pressure refuses work.
+              patch.object(generation, '_under_memory_pressure',
+                           side_effect=lambda level=2: level <= 2)):
             job_id = manager.submit({'repo': FLUX2_KLEIN.repo, 'prompt': 'x', 'aspect_ratio': '1:1',
                                      'width': 1024, 'height': 1024, 'seed': 1})['id']
             for _ in range(300):
