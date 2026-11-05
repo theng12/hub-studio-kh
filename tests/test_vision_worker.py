@@ -20,6 +20,7 @@ import httpx
 from components import model_packages
 from components.hub import standalone
 from components.hub.backend import auth, vocabulary
+from _model_library import shipped_model_library
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPTH = json.loads((ROOT / "model-manifests/depth-anything-v2-small.json").read_text())
@@ -571,7 +572,7 @@ class FlorenceMatchesTransformersTests(unittest.TestCase):
         self.assertEqual(len(polygons[0]["polygons"][0]), 6, "an odd trailing coordinate is dropped")
 
 
-_LIBRARY = Path.home() / "StudioHubModels"
+_LIBRARY = shipped_model_library()
 _INSTALLED = {m["package_id"]: _LIBRARY / m["package_id"] / m["revision"] / "model" for m in (DEPTH, BASE)}
 
 
