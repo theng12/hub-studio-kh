@@ -7,7 +7,9 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -107,6 +109,15 @@ class ImageRuntimeSmokeTests(unittest.TestCase):
             ],
         )
         self.assertEqual(result["registry"], str(registry.resolve()))
+
+    def test_memory_snapshot_rejects_an_unreadable_live_reading(self):
+        smoke = load_smoke()
+        fake = types.SimpleNamespace(
+            virtual_memory=lambda: types.SimpleNamespace(total=0, available=0)
+        )
+        with mock.patch.dict(sys.modules, {"psutil": fake}):
+            with self.assertRaisesRegex(SystemExit, "unusable live memory"):
+                smoke.memory_snapshot()
 
     def test_registry_must_have_the_repository_component_path(self):
         smoke = load_smoke()

@@ -255,7 +255,7 @@
         "uvicorn",
         "multipart"
       ],
-      "runtime_lock_sha256": "8c202deb37e259092fda6a358606ad1938df23f78f18471a2662adcc7140dfb3",
+      "runtime_lock_sha256": "cd8cd947284505f1b0f1e9c013ba314a277e83970319a40525cb275da5105e4c",
       "st03_runtime_proof": {
         "binaries_checked": 194,
         "failures": 0,

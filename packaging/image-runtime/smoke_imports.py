@@ -19,6 +19,7 @@ import argparse
 import ast
 from importlib import import_module, metadata
 import json
+import math
 from pathlib import Path
 import platform
 import subprocess
@@ -30,6 +31,7 @@ BASE_MODULES = (
     "mflux",
     "fastapi",
     "uvicorn",
+    "psutil",
     "mlx.core",
     "PIL",
     "numpy",
@@ -140,6 +142,16 @@ def _registry_names(models: ast.expr, source: Path) -> list[str]:
     return names
 
 
+def memory_snapshot() -> dict[str, float]:
+    """Exercise the dependency that memory admission imports lazily."""
+    import psutil
+    memory = psutil.virtual_memory()
+    total, available = float(memory.total), float(memory.available)
+    if not (math.isfinite(total) and math.isfinite(available) and total > 0 and available > 0):
+        raise SystemExit(f"psutil reported unusable live memory: total={total} available={available}")
+    return {"total_gb": round(total / 1e9, 2), "available_gb": round(available / 1e9, 2)}
+
+
 def native_leaf(runtime: Path) -> dict[str, str]:
     """The pinned native leaf staged beside the macOS-14 Python runtime."""
     manifest_path = runtime / "manifest" / "mlx-serve.json"
@@ -191,6 +203,7 @@ def main() -> int:
                 "python": platform.python_version(),
                 "registry": str(source),
                 "models": classes,
+                "memory": memory_snapshot(),
                 "mlx_serve": native,
                 "packages": {
                     name: metadata.version(name)

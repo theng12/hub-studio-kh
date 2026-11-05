@@ -1,0 +1,17 @@
+{
+  "schema": "studiohub.image-runtime-dependency-proof.v1",
+  "date": "2026-11-06",
+  "source_predecessor": "7040c98d93907ce8e5e61a304effb3e65ec1cb54",
+  "baseline_sha256": "b720c5bc473aaf13179c70bb1c1faa5715bfd87e0fa7e26fa43dc1d3f1794fef",
+  "runtime_sha256": "810a725d20ef9bbc942d53bfea39e56327964d519d3cb4f33a5eea13a4a08178",
+  "lock_sha256": "cd8cd947284505f1b0f1e9c013ba314a277e83970319a40525cb275da5105e4c",
+  "dependency": "psutil==7.2.2",
+  "installation": "uv offline, no dependencies, all artifact hashes copied exactly from the qualified Voice lock and required during installation",
+  "existing_engine_files_unchanged": true,
+  "existing_distribution_versions_unchanged": true,
+  "actual_exits": {"install": 0, "inventory": 0, "macos14_native_audit": 0, "isolated_registry_smoke": 0, "real_live_admission_reader": 0},
+  "runtime_manifest_verified": true,
+  "baseline_unchanged": true,
+  "operational_evidence": "_orchestra/hub-lead/image-runtime-psutil-20261106/r5/runtime-result.json",
+  "scope": "Dependency and live-reader preflight only. Source-pinned affected tests and real reference generation must pass before packaging; historical engine measurements remain historical."
+}
