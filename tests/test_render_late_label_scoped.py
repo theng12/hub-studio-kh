@@ -8,8 +8,6 @@ its digests and its max-assets bound.
 """
 from __future__ import annotations
 
-import ast
-import asyncio
 import copy
 import hashlib
 import json
@@ -720,38 +718,32 @@ class RelayScopeTests(unittest.TestCase):
             _render_relay_segment("late_label_capabilities", "job-1")
 
 
-class ProbeShutdownTests(unittest.IsolatedAsyncioTestCase):
-    async def test_lifespan_fences_and_drains_both_probe_scopes(self) -> None:
-        tree = ast.parse((ROOT / "components/hub/standalone.py").read_text())
-        shutdown = next(node for node in ast.walk(tree) if isinstance(node, ast.Try)
-                        and node.finalbody
-                        and any(isinstance(call, ast.Call)
-                                and isinstance(call.func, ast.Attribute)
-                                and call.func.attr == "begin_shutdown"
-                                for call in ast.walk(node.finalbody[0])))
-        events = []
-        both_closing = asyncio.Event()
+class ProbeShutdownTests(unittest.TestCase):
+    def test_lifespan_fences_and_drains_both_probe_scopes(self) -> None:
+        import os
+        from contextlib import ExitStack
+        from unittest.mock import patch
+        from tests import test_node_rename as fixture
+        from components.hub.backend.render_encode_probes import EncodeProbeControl
 
-        class Control:
-            async def stop(self):
-                events.append("closing")
-                if events.count("closing") == 2:
-                    both_closing.set()
-                await both_closing.wait()
-                events.append("drained")
+        stopped = []
+        original_stop = EncodeProbeControl.stop
 
-        namespace = {
-            "_asyncio": asyncio,
-            "final_render_executor": SimpleNamespace(
-                begin_shutdown=lambda: events.append("fenced")),
-            "encode_probe_control": Control(),
-            "late_label_probe_control": Control(),
-        }
-        wrapper = ast.parse("async def close(): pass")
-        wrapper.body[0].body = copy.deepcopy(shutdown.finalbody[:2])
-        exec(compile(ast.fix_missing_locations(wrapper), "<probe-shutdown>", "exec"), namespace)
-        await asyncio.wait_for(namespace["close"](), timeout=1)
-        self.assertEqual(events, ["fenced", "closing", "closing", "drained", "drained"])
+        async def stop(control):
+            await original_stop(control)
+            stopped.append(control)
+
+        fixture.Routes.setUp(self)
+        models = self.data.parent / "models"
+        models.mkdir()
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(os.environ, {"STUDIOHUB_MODELS_DIR": str(models)}))
+            stack.enter_context(patch.object(EncodeProbeControl, "stop", stop))
+            client = fixture.Routes.client(self, stack)
+            self.assertEqual(client.get("/api/health").status_code, 200)
+        self.assertEqual(len(stopped), 2)
+        self.assertIsNot(stopped[0], stopped[1])
+        self.assertTrue(all(control._closing.is_set() for control in stopped))
 
 
 class FrozenTriplePinTests(unittest.TestCase):

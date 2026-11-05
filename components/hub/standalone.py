@@ -1493,6 +1493,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        import asyncio as _asyncio
+
         ledger.prepare_database()
         output_storage.prepare()
         output_storage.recover_process_leases()
@@ -1519,7 +1521,6 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if start_background:
             # The output size / age limits (device settings), enforced for every studio - not only in
             # development. See job_storage.budget_loop.
-            import asyncio as _asyncio
             from .backend import job_storage
             storage_sweep = _asyncio.create_task(
                 job_storage.budget_loop(standalone_config.cleanup_interval_seconds()))
