@@ -923,6 +923,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
             f'startup. Failed bundle preserved at {saved}. Add the new files to git and stage again:\n  ' + '\n  '.join(gaps))
     if include_hub:
         from stage_render_tools import (
+            LATE_LABEL_AUTHORITY_PINS,
             PRODUCTION_AUTHORITY_PINS,
             _stage_render_authority_into,
             _stage_render_tools_into,
@@ -933,6 +934,10 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         _stage_render_tools_into(resources, scratch, render_pins)
         _stage_render_authority_into(
             resources, scratch, render_authority, PRODUCTION_AUTHORITY_PINS)
+        if render_authority != 'tool-only':
+            _stage_render_authority_into(
+                resources, scratch, 'descriptor-only', LATE_LABEL_AUTHORITY_PINS,
+                late_labels=True)
         # The manifest and descriptors were hard-linked out of scratch; keeping it would leave a
         # dot-directory in the output folder whose links hold the same ~264 MB alive.
         shutil.rmtree(scratch, ignore_errors=True)

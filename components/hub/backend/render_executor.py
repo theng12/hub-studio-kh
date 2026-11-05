@@ -25,7 +25,13 @@ import psutil
 
 from components import host_memory
 from . import render_authority_files, render_encode
-from .final_render_compiler import compile_final_render_packet
+from .final_render_compiler import (
+    compile_final_render_packet,
+    late_label_input_requirements,
+    late_label_sequence_path,
+    validate_late_label_dimensions,
+    validate_png_bytes,
+)
 from .render_hash_v1 import decode_render_json
 from .render_jobs import (
     decode_render_request,
@@ -106,7 +112,7 @@ def _input_options(entry: dict[str, Any], stream: Any) -> tuple[str, ...]:
     if role == "premixed_audio" and suffix == ".wav" and (
             header[:4] == b"RIFF" and header[8:12] == b"WAVE"):
         return ("-f", "wav", "-protocol_whitelist", "file,pipe")
-    if role in {"logo", "frame_background", "overlay"} and suffix == ".png" and (
+    if role in {"logo", "frame_background", "overlay", "cue_label"} and suffix == ".png" and (
             header.startswith(b"\x89PNG\r\n\x1a\n")):
         return ("-f", "png_pipe", "-protocol_whitelist", "file,pipe")
     if role == "overlay" and suffix == ".webm" and header.startswith(b"\x1aE\xdf\xa3"):
@@ -116,8 +122,14 @@ def _input_options(entry: dict[str, Any], stream: Any) -> tuple[str, ...]:
 
 def _confined_argv(
     argv: tuple[str, ...], packet: dict[str, Any],
-    local_assets: dict[str, str], readers: dict[str, Any],
+    local_assets: dict[str, str], readers: dict[str, Any], *,
+    sequence_inputs: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[str, ...]:
+    sequence_inputs = sequence_inputs or {}
+    if (set(sequence_inputs) & set(local_assets.values())
+            or any(not ids or not set(ids) <= set(local_assets)
+                   for ids in sequence_inputs.values())):
+        raise RuntimeError("invalid receiver-owned render sequence")
     manifest = {entry["logical_id"]: entry for entry in packet["manifest"]}
     by_path = {path: logical_id for logical_id, path in local_assets.items()}
     options = {
@@ -126,20 +138,79 @@ def _confined_argv(
     }
     result: list[str] = []
     seen: set[str] = set()
+    seen_sequences: set[str] = set()
     index = 0
     while index < len(argv):
         value = argv[index]
         if value == "-i":
-            if index + 1 >= len(argv) or argv[index + 1] not in by_path:
+            path = argv[index + 1] if index + 1 < len(argv) else None
+            if path in sequence_inputs:
+                result.extend(("-f", "image2", "-pattern_type", "sequence",
+                               "-c:v", "png", "-protocol_whitelist", "file"))
+                seen.update(sequence_inputs[path])
+                seen_sequences.add(path)
+            elif path in by_path:
+                logical_id = by_path[path]
+                result.extend(options[logical_id])
+                seen.add(logical_id)
+            else:
                 raise RuntimeError("compiled render input escaped the accepted asset set")
-            logical_id = by_path[argv[index + 1]]
-            result.extend(options[logical_id])
-            seen.add(logical_id)
         result.append(value)
         index += 1
-    if seen != set(local_assets):
+    if seen != set(local_assets) or seen_sequences != set(sequence_inputs):
         raise RuntimeError("compiled render inputs do not match the accepted asset set")
     return tuple(result)
+
+
+def _stage_late_label_inputs(stack, context, requirements, readers, *, scratch_limit):
+    manifest = {entry["logical_id"]: entry for entry in context.packet["manifest"]}
+    dimensions = {}
+    for logical_id in requirements.png_logical_ids:
+        entry = manifest[logical_id]
+        reader = readers[logical_id]
+        if os.fstat(reader.fileno()).st_size != entry["size_bytes"]:
+            raise RuntimeError("late-label PNG size differs from its manifest")
+        data = os.pread(reader.fileno(), entry["size_bytes"] + 1, 0)
+        dimensions[logical_id] = validate_png_bytes(
+            data, expected_sha256=entry["sha256"],
+            expected_size_bytes=entry["size_bytes"])
+        del data
+    validate_late_label_dimensions(_canonical(context.packet), dimensions)
+    if not requirements.sequences:
+        return {}
+    staged_size = sum(manifest[logical_id]["size_bytes"]
+                      for sequence in requirements.sequences
+                      for logical_id in sequence.logical_ids)
+    if staged_size > scratch_limit:
+        raise RuntimeError("late-label sequences exceed the published scratch limit")
+    root = Path(context.output_path + ".late-label")
+    root.mkdir(mode=0o700, exist_ok=False)
+    stack.callback(shutil.rmtree, root)
+    sequence_inputs = {}
+    for sequence in requirements.sequences:
+        pattern = late_label_sequence_path(context.output_path, sequence.key)
+        directory = Path(pattern).parent
+        directory.mkdir(mode=0o700, exist_ok=False)
+        for index, logical_id in enumerate(sequence.logical_ids):
+            entry = manifest[logical_id]
+            digest = hashlib.sha256()
+            offset = 0
+            descriptor = os.open(directory / f"{index:04d}.png",
+                                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600)
+            with os.fdopen(descriptor, "wb") as output:
+                while offset < entry["size_bytes"]:
+                    chunk = os.pread(readers[logical_id].fileno(),
+                                     min(1024 * 1024, entry["size_bytes"] - offset), offset)
+                    if not chunk:
+                        raise RuntimeError("late-label PNG changed during staging")
+                    output.write(chunk)
+                    digest.update(chunk)
+                    offset += len(chunk)
+            if digest.hexdigest() != entry["sha256"]:
+                raise RuntimeError("late-label PNG changed during staging")
+        sequence_inputs[pattern] = sequence.logical_ids
+    return sequence_inputs
 
 
 def _closed(document: Any, keys: set[str], name: str) -> dict[str, Any]:
@@ -259,13 +330,26 @@ class InstalledRenderAuthorityLoader:
 
     def _descriptors(self, document: dict[str, Any], packet: dict[str, Any] | None):
         try:
+            descriptor_root = self.root
+            if hashlib.sha256((descriptor_root / "PROFILE.json").read_bytes()).hexdigest() != document["profile_digest"]:
+                descriptor_root = self.root / "late-label"
             raw = {
-                name: (self.root / filename).read_bytes()
+                name: (descriptor_root / filename).read_bytes()
                 for name, filename in self._DESCRIPTOR_NAMES.items()
             }
             profile = validate_render_profile_descriptor(raw["profile"])
             tools = validate_render_tool_descriptor(raw["tools"])
             compiler = validate_render_compiler_descriptor(raw["compiler"])
+            profile_document = decode_render_json(raw["profile"])
+            compiler_document = decode_render_json(raw["compiler"])
+            late_labels = (profile.format == "studio.render.profile.v3"
+                           and profile.implementation == "story-classic-late-label-v3")
+            if late_labels != (compiler_document["implementation"] == "hub-final-render-late-label-v3"):
+                return None
+            if (packet is not None and not late_labels
+                    and any(op["kind"] == "late_label_stage"
+                            for op in packet["recipe"]["operations"])):
+                return None
             if (
                 profile.digest != document["profile_digest"]
                 or tools.digest != document["tools_digest"]
@@ -280,11 +364,36 @@ class InstalledRenderAuthorityLoader:
             # The existing descriptor validators above own every descriptor key and value rule.
             # Decode only after they accept so execution never grows a second descriptor schema.
             tool_document = decode_render_json(raw["tools"])
-            compiler_document = decode_render_json(raw["compiler"])
-            profile_document = decode_render_json(raw["profile"])
             return tool_document, compiler_document, profile_document
         except (OSError, TypeError, ValueError, KeyError):
             return None
+
+    def late_labels_allowed(self, authority: InstalledRenderAuthority,
+                            packet: dict[str, Any]) -> bool:
+        qualification = authority.qualification
+        descriptors = self._descriptors({
+            "profile_digest": qualification.profile_digest,
+            "tools_digest": qualification.tools_digest,
+            "compiler_digest": qualification.compiler_digest,
+        }, packet)
+        return bool(descriptors is not None
+                    and descriptors[2]["format"] == "studio.render.profile.v3"
+                    and descriptors[2]["implementation"] == "story-classic-late-label-v3"
+                    and descriptors[1]["implementation"] == "hub-final-render-late-label-v3")
+
+    def compiler_for(self, authority: InstalledRenderAuthority, packet=None):
+        qualification = authority.qualification
+        descriptors = self._descriptors({
+            "profile_digest": qualification.profile_digest,
+            "tools_digest": qualification.tools_digest,
+            "compiler_digest": qualification.compiler_digest,
+        }, packet)
+        if descriptors is None:
+            raise RuntimeError("installed render compiler descriptors no longer match")
+        if descriptors[1]["implementation"] == "hub-final-render-v1":
+            from .render_legacy_v1.final_render_compiler import compile_final_render_packet as legacy_compile
+            return legacy_compile
+        return compile_final_render_packet
 
     def _manifest_matches(self, files: dict[str, Any]) -> bool:
         manifest = self._read(self.root / "MANIFEST.json", self._MANIFEST_KEYS, "tool manifest")
@@ -512,12 +621,14 @@ class InstalledRenderAuthorityLoader:
                     != (files["ffprobe"]["size_bytes"], files["ffprobe"]["sha256"])
             ):
                 return None
+            source_root = Path(__file__).parent
+            if compiler_descriptor["implementation"] == "hub-final-render-v1":
+                source_root = source_root / "render_legacy_v1"
             source_hashes = {
                 "python_runtime_sha256": _sha(Path(sys.executable))[1],
-                "render_hash_sha256": _sha(Path(__file__).with_name("render_hash_v1.py"))[1],
-                "render_contract_sha256": _sha(Path(__file__).with_name("render_contract.py"))[1],
-                "final_render_compiler_sha256": _sha(
-                    Path(__file__).with_name("final_render_compiler.py"))[1],
+                "render_hash_sha256": _sha(source_root / "render_hash_v1.py")[1],
+                "render_contract_sha256": _sha(source_root / "render_contract.py")[1],
+                "final_render_compiler_sha256": _sha(source_root / "final_render_compiler.py")[1],
             }
             if any(compiler_descriptor[key] != value for key, value in source_hashes.items()):
                 return None
@@ -602,7 +713,7 @@ class InstalledRenderAuthorityLoader:
         # is left when there is no measured one.
         return self._unqualified_authority()
 
-    def probe_authority(self) -> InstalledRenderAuthority | None:
+    def probe_authority(self, *, late_labels: bool = False) -> InstalledRenderAuthority | None:
         """The installed, identity-checked tools an encode probe runs under, or None.
 
         A probe names the digests of the tools that are actually pinned whether or not this
@@ -611,15 +722,46 @@ class InstalledRenderAuthorityLoader:
         source-hash validation a measured authority passes. The tier fields carry the
         pinned compiler's own default and are not part of a probe's identity (the probe
         tuple and the evidence decide those). The result grants nothing: it is never
-        production_eligible and is never written anywhere.
+        production_eligible and is never written anywhere. `late_labels=True` reads the
+        bundled late-label v3 triple instead of the v1 root, so a scoped probe's identity
+        carries the v3 pins and never the legacy ones.
         """
         pair = render_encode.primary_pair(render_encode.DEFAULT_OPT_IN_ENCODE)
         if pair is None:
             return None
-        document = self._installed_document(pair[0], pair[1], False)
+        document = self._installed_document(pair[0], pair[1], False, late_labels=late_labels)
         if document is None:
             return None
         return self._authority(document, production=False)
+
+    def late_label_profile_digest(self) -> str | None:
+        """The installed late-label v3 profile digest, or None while it is unusable."""
+        try:
+            descriptor = validate_render_profile_descriptor(
+                (self.root / "late-label" / "PROFILE.json").read_bytes())
+        except (OSError, TypeError, ValueError):
+            return None
+        return descriptor.digest if descriptor.format == "studio.render.profile.v3" else None
+
+    def late_label_snapshot(
+        self, packet: dict[str, Any] | None = None,
+    ) -> InstalledRenderAuthority | None:
+        """Production authority for the late-label v3 scope only.
+
+        The scope has no unmeasured opt-in and never falls back to the v1 root's records:
+        only this Mac's own enabled/ record validated against the installed v3 triple
+        grants production, so a v1 grant, proof or opt-in can never answer as v3.
+        """
+        installed = self.late_label_profile_digest()
+        if installed is None:
+            return None
+        document = self._enabled()
+        if document is None:
+            return None
+        authority = self._authority(document, packet, production=True)
+        if authority is None or authority.qualification.profile_digest != installed:
+            return None
+        return authority
 
     def _intent(self) -> dict[str, Any] | None:
         intent = self._record(self._INTENT_KEYS, "qualify.json")
@@ -643,23 +785,27 @@ class InstalledRenderAuthorityLoader:
 
     def _installed_document(
         self, selected_tier: str, exact_encoder: str, font_support: bool,
-        min_available_memory_bytes: int | None = None,
+        min_available_memory_bytes: int | None = None, *, late_labels: bool = False,
     ) -> dict[str, Any] | None:
         """Hub, not the operator, derives everything but the run settings from installed files.
 
         The memory floor defaults to the profile's own process-tree limit: the Hub never
         offers capacity to a Mac that could not hold the most the profile allows one render
-        to use.
+        to use. `late_labels=True` reads the bundled `render-tools/late-label` triple;
+        anything unreadable or not an actual v3 profile there fails closed.
         """
         hardware_class = self._own_class()
         if hardware_class is None:
             return None
+        descriptor_root = self.root / "late-label" if late_labels else self.root
         try:
             raw = {
-                name: (self.root / filename).read_bytes()
+                name: (descriptor_root / filename).read_bytes()
                 for name, filename in self._DESCRIPTOR_NAMES.items()
             }
             profile = validate_render_profile_descriptor(raw["profile"])
+            if late_labels and profile.format != "studio.render.profile.v3":
+                return None
             tools = validate_render_tool_descriptor(raw["tools"])
             compiler = validate_render_compiler_descriptor(raw["compiler"])
             tool_document = decode_render_json(raw["tools"])
@@ -851,7 +997,21 @@ class InstalledRenderAuthorityLoader:
         })
         return self._authority(document, packet, production=True)
 
+    def _late_label_packet(self, packet: dict[str, Any]) -> bool:
+        """True when this packet claims the installed late-label v3 profile digest."""
+        installed = self.late_label_profile_digest()
+        if installed is None:
+            return False
+        try:
+            return packet["recipe"]["profile_digest"] == installed
+        except (KeyError, TypeError):
+            return False
+
     def authority_for_packet(self, packet: dict[str, Any]) -> InstalledRenderAuthority | None:
+        # A submitting packet selects its profile's own scope: a v3 packet reads only the
+        # v3 records, never the v1 probe/opt-in paths and never their snapshot fallback.
+        if self._late_label_packet(packet):
+            return self.late_label_snapshot(packet)
         return self._probed_authority((packet.get("recipe") or {}).get("encode"), packet)
 
     def execution_for_encode(self, encode: dict[str, Any]) -> dict[str, Any] | None:
@@ -1128,6 +1288,25 @@ class InstalledRenderAuthorityLoader:
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return False
         return True
+
+
+class LateLabelProbeScope:
+    """The loader view an encode probe runs under in the late-label v3 scope.
+
+    The scoped control builds its identity from these two lookups only: the bundled v3
+    tools and, when this Mac has one, its granted v3 record. Probe keys mix in those
+    digests, so the shared record and evidence directories isolate v1 and v3 proofs by
+    construction, and the v1 opt-in grant is unreachable from this scope.
+    """
+
+    def __init__(self, loader: InstalledRenderAuthorityLoader) -> None:
+        self._loader = loader
+
+    def snapshot(self) -> InstalledRenderAuthority | None:
+        return self._loader.late_label_snapshot()
+
+    def probe_authority(self) -> InstalledRenderAuthority | None:
+        return self._loader.probe_authority(late_labels=True)
 
 
 _configured_executor = None
@@ -1567,6 +1746,33 @@ class RenderExecutor:
         attempt_deadline = started + authority.bounds.max_wall_seconds
         measured: dict[str, Any] = {"peak_rss_bytes": 0, "min_free_bytes": None}
         try:
+            packet_raw = _canonical(context.packet)
+            requirements = late_label_input_requirements(packet_raw) if any(
+                op.get("kind") == "late_label_stage"
+                for op in context.packet["recipe"].get("operations", [])) else None
+            compiler = self._compile
+            compile_options = {}
+            if (compiler is compile_final_render_packet
+                    and isinstance(self._authority, InstalledRenderAuthorityLoader)):
+                if self._authority.late_labels_allowed(authority, context.packet):
+                    compile_options["late_labels_allowed"] = True
+                if requirements is None or compile_options.get("late_labels_allowed") is True:
+                    compiler = self._authority.compiler_for(authority, context.packet)
+            if requirements is not None:
+                if compile_options.get("late_labels_allowed") is not True:
+                    raise RenderJobUnavailable(
+                        "late_label_profile_required: late labels require matched v3 profile/compiler pins")
+                expected_workspace = (self.runtime.root / "jobs" / context.hub_job_id
+                                      / context.attempt_id)
+                if (Path(context.workspace) != expected_workspace
+                        or Path(context.output_path).parent != expected_workspace):
+                    raise RuntimeError("late-label staging requires a Hub-owned workspace")
+                for directory in (expected_workspace.parent.parent,
+                                  expected_workspace.parent, expected_workspace):
+                    info = directory.lstat()
+                    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                            or stat.S_IMODE(info.st_mode) & 0o022):
+                        raise RuntimeError("late-label staging requires a Hub-owned workspace")
             with ExitStack() as stack:
                 readers = {
                     logical_id: _asset_stream(stack.enter_context(
@@ -1577,8 +1783,17 @@ class RenderExecutor:
                     logical_id: f"/dev/fd/{reader.fileno()}"
                     for logical_id, reader in readers.items()
                 }
-                packet_raw = _canonical(context.packet)
-                plan = self._compile(packet_raw, local_assets, context.output_path)
+                sequence_inputs = (
+                    _stage_late_label_inputs(
+                        stack, context, requirements, readers,
+                        scratch_limit=authority.profile_execution_bounds["scratch_reserve_bytes"])
+                    if requirements is not None else {})
+                plan = compiler(packet_raw, local_assets, context.output_path, **compile_options)
+                expected_generated = {
+                    sequence.key for sequence in requirements.sequences
+                } if requirements is not None else set()
+                if {key for key, _index in getattr(plan, "generated_inputs", ())} != expected_generated:
+                    raise RuntimeError("compiled render sequence inventory differs from staging")
                 tier = next(
                     (tier for tier in plan.tiers if tier.label == authority.selected_tier), None)
                 if tier is None or authority.exact_encoder not in tier.argv:
@@ -1586,7 +1801,8 @@ class RenderExecutor:
                 if tier.drops_burned_in_features:
                     raise RuntimeError("qualified render tier would drop requested features")
                 confined = _confined_argv(
-                    tuple(tier.argv), context.packet, local_assets, readers)
+                    tuple(tier.argv), context.packet, local_assets, readers,
+                    sequence_inputs=sequence_inputs)
                 argv = (
                     str(authority.ffmpeg), "-nostdin", *confined,
                 )
@@ -2171,3 +2387,57 @@ class RenderExecutor:
                 "entries": [entry["requested_encode"] for entry in entries],
             }
         return row
+
+    def late_label_capability(self) -> tuple[dict[str, Any] | None, str | None]:
+        """The closed v3 worker row for the late-label capabilities contract.
+
+        Returns ``(row, None)`` or ``(None, reason)``. A scoped nonproduction row with zero
+        capacity is publishable, but only from the genuinely installed v3 triple: the row
+        carries the v3 pins, never the v1 opt-in evidence or v1 encode-support keys, and
+        capacity opens only when this Mac's own granted v3 record exists.
+        """
+        loader = self._authority
+        snapshot = getattr(loader, "late_label_snapshot", None)
+        probe = getattr(loader, "probe_authority", None)
+        if not (callable(snapshot) and callable(probe)):
+            return None, "this Hub cannot read the late-label v3 render scope"
+        try:
+            installed = probe(late_labels=True)
+        except TypeError:
+            return None, "this Hub cannot read the late-label v3 render scope"
+        if installed is None:
+            return None, "the installed late-label v3 descriptor triple is missing or invalid"
+        granted = snapshot()
+        authority = granted if granted is not None else installed
+        admission_allowed = self._admission_allowed()
+        busy = self.machine in self.broker.busy_machines()
+        ready = bool(
+            granted is not None
+            and self._has_memory(granted)
+            and admission_allowed
+            and not busy
+        )
+        row = {
+            "operation": "video.final_render",
+            "physical_machine_id": self.machine,
+            "hardware_class": authority.qualification.hardware_class,
+            "profile_digest": authority.qualification.profile_digest,
+            "tools_digest": authority.qualification.tools_digest,
+            "compiler_digest": authority.qualification.compiler_digest,
+            "qualification_digest": authority.qualification.qualification_digest,
+            "selected_tier": authority.selected_tier,
+            "exact_encoder": authority.exact_encoder,
+            "font_support": authority.font_support,
+            "bounds": asdict(authority.bounds),
+            "profile_execution_bounds": json.loads(
+                _canonical(authority.profile_execution_bounds)),
+            "production_eligible": bool(
+                granted is not None and granted.qualification.production_eligible),
+            "production_enabled": granted is not None,
+            "available_capacity": {"slots": int(ready), "slots_total": 1},
+            "qualification_candidates": [],
+        }
+        from . import registry
+        if registry.render_while_paused(self.machine):
+            row["render_while_paused"] = True
+        return row, None

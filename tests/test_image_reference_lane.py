@@ -14,6 +14,7 @@ attached.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from hashlib import sha256
 import io
 import json
@@ -32,9 +33,12 @@ from components import model_packages
 from components.image.app.backend import loading_mode
 from components.image.app.backend.generation import (FLUX2_KLEIN, MODEL_ID, MODEL_REVISION,
                                                      QWEN_IMAGE_21_TURBO, Z_IMAGE_TURBO,
-                                                     GenerationManager, lane_parameters,
+                                                     GenerationManager, lane_contract,
+                                                     lane_parameters,
                                                      lane_policy, loading_modes, memory_plan,
-                                                     plan_configuration, reference_mode,
+                                                     plan_configuration, reference_count_facts,
+                                                     reference_counts, reference_max,
+                                                     reference_mode,
                                                      reference_mode_values, validate_request)
 from components.image.app.backend.main import create_app, edit_lane
 from tests.test_image_standalone import HOST_BYTES, RUNTIME_ID, TOKEN, tiny_manifest
@@ -199,13 +203,15 @@ class ReferenceLaneTests(LaneHarness, unittest.TestCase):
     def test_more_references_than_the_model_takes_are_refused_before_a_job_is_queued(self):
         too_many = [('1.png', png_bytes(), 'image/png'),
                     ('2.png', png_bytes(), 'image/png'),
-                    ('3.png', png_bytes(), 'image/png')]
+                    ('3.png', png_bytes(), 'image/png'),
+                    ('4.png', png_bytes(), 'image/png'),
+                    ('5.png', png_bytes(), 'image/png')]
         with patch('components.image.app.backend.main._host_eligibility',
                    return_value={'eligible': True, 'macos': '26.6.2'}):
             response = self.post_edit(too_many)
         self.assertEqual(response.status_code, 422, response.text)
-        self.assertIn('between 1 and 2 reference images', response.text)
-        self.assertIn('this request had 3', response.text)
+        self.assertIn('between 1 and 4 reference images', response.text)
+        self.assertIn('this request had 5', response.text)
         self.assertEqual(self.manager.list(), [])
         self.assertEqual(list(self.manager.inputs.iterdir()), [])
 
@@ -246,7 +252,7 @@ class ReferenceLaneTests(LaneHarness, unittest.TestCase):
                          validate_request({'repo': MODEL_ID, 'prompt': 'x'}))
         # An explicit `mode='txt2img'` cannot downgrade a request that carries references, and
         # an explicit `mode='edit'` with none is refused rather than silently rendering text.
-        with self.assertRaisesRegex(ValueError, 'between 1 and 2 reference images'):
+        with self.assertRaisesRegex(ValueError, 'between 1 and 4 reference images'):
             validate_request({'repo': MODEL_ID, 'prompt': 'x'}, mode='edit')
 
     def test_the_catalog_advertises_edit_for_the_configuration_this_mac_runs(self):
@@ -506,3 +512,160 @@ class QwenTurboEditLaneTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'does not accept mask_image'):
                 wrapper.generate_image(seed=1, prompt='p', num_inference_steps=8, guidance=1.0,
                                        mask_image='a-mask')
+
+
+def model_with_count_rows(base, **rows_by_mode):
+    """`base` with extra measured rows appended to named modes — the shape the calibration
+    receipt fills in later, built here from stated numbers so a test never needs a live run."""
+    modes = {}
+    for name, block in base.reference_limits['modes'].items():
+        extra = rows_by_mode.get(name)
+        modes[name] = ({**block, 'measured': list(block['measured']) + [extra]}
+                       if extra else block)
+    return replace(base, reference_limits={**base.reference_limits, 'modes': modes})
+
+
+class EngineOwnedCapTests(unittest.TestCase):
+    """`max` is the engine's cap, published whether or not every count has run (owner, 2026-11-05)."""
+
+    def test_klein_publishes_four_and_validates_to_it(self):
+        self.assertEqual(FLUX2_KLEIN.reference_limits['max'], 4)
+        self.assertEqual(reference_max(FLUX2_KLEIN), 4)
+        with tempfile.TemporaryDirectory() as folder:
+            paths = []
+            for index in range(5):
+                path = Path(folder) / f'{index}.png'
+                path.write_bytes(png_bytes())
+                paths.append(str(path))
+            params = validate_request({'repo': FLUX2_KLEIN.repo, 'prompt': 'x',
+                                       'reference_images': paths[:4]})
+            self.assertEqual(len(params['reference_images']), 4)
+            with self.assertRaisesRegex(ValueError, 'between 1 and 4 reference images'):
+                validate_request({'repo': FLUX2_KLEIN.repo, 'prompt': 'x',
+                                  'reference_images': paths})
+        contract = lane_contract(FLUX2_KLEIN)
+        parameter = next(item for item in contract['parameters']
+                         if item['name'] == 'reference_images')
+        self.assertEqual(parameter['max_items'], 4)
+        self.assertEqual(contract['references']['max'], 4)
+
+    def test_qwen_publishes_ten_from_mflux_or_the_rows_own_fallback(self):
+        # mflux absent → the row's documented fallback; mflux present → MAX_REFERENCES (10 today).
+        self.assertEqual(QWEN_IMAGE_21_TURBO.reference_limits['max'], 10)
+        self.assertEqual(reference_max(QWEN_IMAGE_21_TURBO), 10)
+        self.assertEqual(lane_contract(QWEN_IMAGE_21_TURBO)['references']['max'], 10)
+
+    def test_a_future_model_inherits_its_engine_constant_without_an_edit_here(self):
+        stub = types.ModuleType('fake_reference_cap_engine')
+        stub.MAX_REFERENCES = 7
+        row = replace(QWEN_IMAGE_21_TURBO,
+                      reference_limits={**QWEN_IMAGE_21_TURBO.reference_limits,
+                                        'max': 3,
+                                        'max_engine_constant':
+                                            'fake_reference_cap_engine:MAX_REFERENCES'})
+        with patch.dict(sys.modules, {'fake_reference_cap_engine': stub}):
+            self.assertEqual(reference_max(row), 7, 'the engine wins over the row fallback')
+        absent = replace(QWEN_IMAGE_21_TURBO,
+                         reference_limits={**QWEN_IMAGE_21_TURBO.reference_limits,
+                                           'max': 3,
+                                           'max_engine_constant':
+                                               'no_such_engine_module_xyz:MAX_REFERENCES'})
+        self.assertEqual(reference_max(absent), 3, 'no engine → the row number, honestly')
+
+
+class PublishedCountsTests(unittest.TestCase):
+    """The contract's `counts` block publishes each count's recorded row only (owner, 2026-11-05):
+    floors and timeouts are null until a row carries them as its own adopted fields, and the mode
+    blocks remain the mode-scoped policy the runtime enforces."""
+
+    def test_counts_one_and_two_publish_their_recorded_measurements_only(self):
+        references = lane_contract(FLUX2_KLEIN)['references']
+        counts = references['counts']
+        self.assertEqual(sorted(counts), ['1', '2'])
+        self.assertEqual(counts['2']['default']['seconds'], 151.56)
+        self.assertEqual(counts['2']['default']['peak_gb'], 12.02)
+        # No row carries a floor or timeout, so none is published — deriving one from a peak
+        # is exactly what the owner refused.
+        for mode in ('default', 'bounded-staged', 'bounded-streamed'):
+            self.assertIsNone(counts['2'][mode]['min_total_memory_gb'])
+            self.assertIsNone(counts['2'][mode]['min_free_memory_gb'])
+            self.assertIsNone(counts['2'][mode]['timeout_floor_s'])
+        # The mode-scoped policy is untouched and never relabelled count-specific evidence.
+        self.assertEqual(references['min_total_memory_gb'],
+                         reference_mode_values(FLUX2_KLEIN, 'default')['min_total_memory_gb'])
+        self.assertEqual(references['timeout_floor_s'],
+                         reference_mode_values(FLUX2_KLEIN, 'default')['timeout_floor_s'])
+        self.assertNotIn('3', counts, 'an unmeasured count is absent, never a row of guesses')
+
+    def test_adopted_row_fields_are_published_verbatim_and_nothing_is_derived(self):
+        grown = model_with_count_rows(
+            FLUX2_KLEIN,
+            **{'bounded-staged': {'references': 3, 'reference_pixels': 1024, 'seconds': 300.0,
+                                  'peak_gb': 6.5, 'swap_delta_mb': 0.0,
+                                  'min_total_memory_gb': 12.0, 'timeout_floor_s': 950.0}})
+        counts = reference_counts(grown)
+        adopted = counts['3']['bounded-staged']
+        self.assertEqual(adopted['seconds'], 300.0)
+        self.assertEqual(adopted['min_total_memory_gb'], 12.0)
+        self.assertEqual(adopted['timeout_floor_s'], 950.0)
+        # The same count's default configuration never ran: null, not a number borrowed from
+        # another count or from the block.
+        self.assertIsNone(counts['3']['default'])
+        # Counts 1-2 are unchanged by the extra row.
+        self.assertEqual(counts['2']['default']['seconds'], 151.56)
+        self.assertIsNone(counts['2']['default']['min_total_memory_gb'])
+
+    def test_qwens_counts_derive_nothing_either(self):
+        references = lane_contract(QWEN_IMAGE_21_TURBO,
+                                   total_memory_bytes=16 * 1024 ** 3)['references']
+        self.assertEqual(references['max'], 10)
+        counts = references['counts']
+        self.assertEqual(counts['2']['bounded-staged']['seconds'], 182.96)
+        self.assertIsNone(counts['2']['bounded-staged']['min_total_memory_gb'])
+        self.assertIsNone(counts['2']['default']['timeout_floor_s'])
+        # The mode-scoped policy still publishes the bounded block's own measured floor.
+        self.assertEqual(references['min_total_memory_gb'],
+                         reference_mode_values(QWEN_IMAGE_21_TURBO,
+                                               'bounded-staged')['min_total_memory_gb'])
+
+class PerCountDeadlineHarness(unittest.TestCase):
+    """A manager on a 16 GiB Mac: per-count timeout activation is deferred, so the deadline
+    keeps the tier's mode-scoped published floor (owner, 2026-11-05)."""
+
+    total_memory_bytes = 16 * 1024 ** 3
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.library = root / 'models'
+        self.library.mkdir()
+        self.data = root / 'data' / 'image'
+        self.data.mkdir(parents=True)
+        self.manifest, contents = tiny_manifest()
+        source = root / 'source'
+        for relative, content in contents.items():
+            target = source / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        self.folder = model_packages.import_folder(self.manifest, source, self.library)
+        self.manager = GenerationManager(
+            self.data, self.library, self.manifest, RUNTIME_ID,
+            manifests=[self.manifest], total_memory_bytes=self.total_memory_bytes)
+
+    def test_an_unmeasured_count_keeps_the_tiers_published_floor(self):
+        # No count-specific timeout is wired in: three references take the same 900 s mode
+        # floor two references take, from the bounded-staged block this Mac's tier selects.
+        self.assertEqual(self.manager._deadline_s(
+            {'repo': MODEL_ID, 'steps': 4,
+             'reference_images': ['a.png', 'b.png', 'c.png']}, 'edit'), 900.0)
+        self.assertEqual(self.manager._deadline_s(
+            {'repo': MODEL_ID, 'steps': 4,
+             'reference_images': ['a.png', 'b.png']}, 'edit'), 900.0)
+
+    def test_no_row_carries_a_timeout_and_none_is_invented(self):
+        self.assertIsNone(reference_count_facts(FLUX2_KLEIN, 'bounded-staged', 2)
+                          ['timeout_floor_s'])
+        self.assertIsNone(reference_count_facts(FLUX2_KLEIN, 'bounded-staged', 3))
+        self.assertEqual(reference_mode_values(FLUX2_KLEIN, 'bounded-staged')
+                         ['timeout_floor_s'], 900.0)

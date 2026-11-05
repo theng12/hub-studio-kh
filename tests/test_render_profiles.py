@@ -86,6 +86,8 @@ class RenderProfileTests(unittest.TestCase):
         self.assertEqual(profile.digest, PROFILE_SHA256)
         self.assertEqual(profile.tools_artifact_sha256, TOOL_SHA256)
         self.assertEqual(profile.compiler_artifact_sha256, COMPILER_SHA256)
+        self.assertEqual(profile.format, "studio.render.profile.v1")
+        self.assertEqual(profile.implementation, "story-classic-no-font-v1")
         with self.assertRaises(FrozenInstanceError):
             tools.digest = "0" * 64
 
@@ -127,6 +129,46 @@ class RenderProfileTests(unittest.TestCase):
             with self.subTest(mutation=mutation):
                 self.assert_invalid(validate_render_compiler_descriptor,
                                     changed(COMPILER_RAW, mutation))
+
+    def test_retained_v1_sources_match_the_unchanged_packaged_compiler(self):
+        root = HERE.parent
+        descriptor = json.loads((root / "packaging/render-authority/COMPILER.json").read_bytes())
+        legacy = root / "components/hub/backend/render_legacy_v1"
+        for name, key in (("render_contract.py", "render_contract_sha256"),
+                          ("final_render_compiler.py", "final_render_compiler_sha256"),
+                          ("render_hash_v1.py", "render_hash_sha256")):
+            with self.subTest(name=name):
+                self.assertEqual(hashlib.sha256((legacy / name).read_bytes()).hexdigest(),
+                                 descriptor[key])
+
+    def test_late_label_descriptors_keep_exact_versions_and_digest_identity(self):
+        compiler_value = json.loads(COMPILER_RAW)
+        compiler_value["implementation"] = "hub-final-render-late-label-v3"
+        compiler_bytes = raw(compiler_value)
+        compiler = validate_render_compiler_descriptor(compiler_bytes)
+        self.assertEqual(compiler.digest, hashlib.sha256(compiler_bytes).hexdigest())
+        profile_value = json.loads(PROFILE_RAW)
+        profile_value.update(
+            format="studio.render.profile.v3",
+            implementation="story-classic-late-label-v3",
+            combination_set="retained-classic-late-label-candidate-v3",
+            compiler_artifact_sha256=compiler.digest,
+        )
+        profile_bytes = raw(profile_value)
+        profile = validate_render_profile_descriptor(profile_bytes)
+        self.assertEqual(profile.digest, hashlib.sha256(profile_bytes).hexdigest())
+        self.assertEqual(profile.format, "studio.render.profile.v3")
+        self.assertEqual(profile.implementation, "story-classic-late-label-v3")
+        self.assertTrue(match_render_profile_dependencies(
+            packet_raw(profile_digest=profile.digest), profile,
+            validate_render_tool_descriptor(TOOL_RAW), compiler).descriptor_match)
+        for key, invalid in (("format", "studio.render.profile.v1"),
+                             ("implementation", "story-classic-no-font-v1"),
+                             ("combination_set", "retained-classic-no-font-candidate-v1"),
+                             ("production_eligible", True)):
+            with self.subTest(key=key):
+                self.assert_invalid(validate_render_profile_descriptor,
+                                    raw(dict(profile_value, **{key: invalid})))
 
     def test_profile_refuses_unknown_missing_policy_and_production_true(self):
         mutations = (

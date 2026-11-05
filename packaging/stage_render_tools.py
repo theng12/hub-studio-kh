@@ -91,6 +91,23 @@ PRODUCTION_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
 )
 
 
+_LATE_LABEL_DIRECTORY = Path(__file__).resolve().parent / "render-authority-late-label"
+LATE_LABEL_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
+    _AuthorityPin(
+        "PROFILE.json", _LATE_LABEL_DIRECTORY / "PROFILE.json", 976,
+        "b39f239092d8854be82b4a99df0cd591f9cdef05553d7741765b35ac72ca2b3c",
+    ),
+    _AuthorityPin(
+        "TOOLS.json", _LATE_LABEL_DIRECTORY / "TOOLS.json", 796,
+        "98c25ae582d4ee43ee1cf665192365149f8d9f860c229a0be9da131df43eba8a",
+    ),
+    _AuthorityPin(
+        "COMPILER.json", _LATE_LABEL_DIRECTORY / "COMPILER.json", 458,
+        "8eb1f962735692144ef8f3627ee8080d0d338c6295781bcde3550d6eef7834e3",
+    ),
+)
+
+
 @dataclass(frozen=True)
 class RenderToolsStageResult:
     state: str
@@ -587,8 +604,11 @@ def _stage_render_authority_into(
     scratch_root: Path,
     mode: RenderAuthorityMode,
     pins: Sequence[_AuthorityPin],
+    *, late_labels: bool = False,
 ) -> RenderAuthorityStageResult:
     """Stage one closed authority state beside the unchanged two-tool manifest."""
+    if late_labels and mode != "descriptor-only":
+        raise ValueError("late-label authority stages descriptors only")
     fixed = _validate_authority_pins(mode, pins)
     if mode == "tool-only":
         return RenderAuthorityStageResult(staged_paths=())
@@ -596,7 +616,7 @@ def _stage_render_authority_into(
     resources_root = Path(resources_root).expanduser().absolute()
     scratch_root = Path(scratch_root).expanduser().absolute()
     resources_fd = os.open(resources_root, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
-    tools_fd = scratch_root_fd = scratch_fd = scratch_vector_fd = vector_fd = None
+    tools_fd = parent_tools_fd = scratch_root_fd = scratch_fd = scratch_vector_fd = vector_fd = None
     try:
         visible = resources_root.lstat()
         opened = os.fstat(resources_fd)
@@ -611,7 +631,8 @@ def _stage_render_authority_into(
         scratch_root_fd = _open_private_root(scratch_root)
         if os.fstat(tools_fd).st_dev != os.fstat(scratch_root_fd).st_dev:
             raise ValueError("authority scratch and destination must be on the same filesystem")
-        scratch_fd = _mkdir_open(scratch_root_fd, AUTHORITY_SCRATCH_LEAF)
+        scratch_leaf = AUTHORITY_SCRATCH_LEAF + ("-late-label" if late_labels else "")
+        scratch_fd = _mkdir_open(scratch_root_fd, scratch_leaf)
         if mode == "sealed-candidate":
             scratch_vector_fd = _mkdir_open(scratch_fd, "qualification-vectors")
 
@@ -630,6 +651,16 @@ def _stage_render_authority_into(
 
         staged: list[Path] = []
         tools_root = resources_root / "render-tools"
+        if late_labels:
+            profile_document = json.loads(raw["PROFILE.json"])
+            compiler_document = json.loads(raw["COMPILER.json"])
+            if (profile_document["format"] != "studio.render.profile.v3"
+                    or profile_document["implementation"] != "story-classic-late-label-v3"
+                    or compiler_document["implementation"] != "hub-final-render-late-label-v3"):
+                raise ValueError("late-label staging requires the exact v3 descriptor pair")
+            parent_tools_fd = tools_fd
+            tools_fd = _mkdir_open(parent_tools_fd, "late-label")
+            tools_root /= "late-label"
         for pin in fixed[:3]:
             os.link(
                 pin.relative_path, pin.relative_path,
@@ -648,7 +679,8 @@ def _stage_render_authority_into(
         return RenderAuthorityStageResult(staged_paths=tuple(staged))
     finally:
         for fd in (
-            vector_fd, scratch_vector_fd, scratch_fd, scratch_root_fd, tools_fd, resources_fd,
+            vector_fd, scratch_vector_fd, scratch_fd, scratch_root_fd, tools_fd,
+            parent_tools_fd, resources_fd,
         ):
             if fd is not None:
                 os.close(fd)

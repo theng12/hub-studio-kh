@@ -732,6 +732,33 @@ class ImageStandaloneTests(unittest.TestCase):
     # with its own numbers, a request is validated against the entry it names, and the job
     # loads that entry's class from that entry's installed package.
 
+    def test_each_requested_model_publishes_and_enforces_its_prompt_limit(self):
+        expected = {
+            'AITRADER/FLUX2-klein-4B-mlx-4bit': 1900,
+            'mflux-community/qwen-image-2-1-turbo-mflux-q4': 8000,
+            'mlx-community/Qwen-Image-2.1-mflux-q4': 8000,
+            'filipstrand/Z-Image-Turbo-mflux-4bit': 2000,
+        }
+        with patch('components.image.app.backend.main._host_eligibility',
+                   return_value={'eligible': True, 'macos': '26.6.2'}):
+            response = self.client.get('/api/catalog', headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        listed = {entry['repo']: entry for entry in response.json()['models']}
+        for repo, maximum in expected.items():
+            with self.subTest(repo=repo):
+                row = listed[repo]
+                self.assertEqual(row['max_prompt_characters'], maximum)
+                prompt_parameter = next(parameter for parameter in
+                                        row['lane_contract']['parameters']
+                                        if parameter['name'] == 'prompt')
+                self.assertEqual(prompt_parameter['max_characters'], maximum)
+                prompt = 'ក' * maximum
+                self.assertEqual(validate_request({'repo': repo, 'prompt': prompt})['prompt'],
+                                 prompt)
+                with self.assertRaisesRegex(ValueError,
+                                            f'Prompt must contain 1–{maximum} characters'):
+                    validate_request({'repo': repo, 'prompt': prompt + 'ក'})
+
     def test_catalog_lists_every_registered_model_with_its_own_numbers(self):
         with patch('components.image.app.backend.main._host_eligibility',
                    return_value={'eligible': True, 'macos': '26.6.2'}):
@@ -769,7 +796,7 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertEqual(z_image['model_revision'], Z_IMAGE_TURBO.revision)
         self.assertTrue(z_image['guidance_ignored'])
         self.assertEqual(z_image['generation_limits']['min_steps'], 2)
-        self.assertEqual(z_image['max_prompt_characters'], 4000)
+        self.assertEqual(z_image['max_prompt_characters'], 2000)
         # Each entry carries its own qualified geometry. This fixture installs the two mflux
         # packages; Qwen remains visible but unavailable until its separate pack/runtime exists.
         from components.image.app.backend.generation import size_presets

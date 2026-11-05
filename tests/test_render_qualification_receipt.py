@@ -68,7 +68,7 @@ class QualificationReceiptAuthorityTests(unittest.TestCase):
         }
         tool_raw = compact(tool_descriptor)
         (self.tools_root / "TOOLS.json").write_bytes(tool_raw)
-        backend = ROOT / "components/hub/backend"
+        backend = ROOT / "components/hub/backend/render_legacy_v1"
         file_sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
         compiler_descriptor = {
             "format": "studio.render.compiler.v1",

@@ -758,6 +758,45 @@ class RenderToolsStagingTests(unittest.TestCase):
         self.assertFalse((self.tools_root / "qualification-vectors").exists())
         self.assertFalse((self.tools_root / "QUALIFICATION.json").exists())
 
+    def test_late_label_triple_stages_alongside_unchanged_legacy(self) -> None:
+        _, _, tool_pins = self.fixtures()
+        self.stage(tool_pins)
+        self.stage_authority("descriptor-only", stage_render_tools.PRODUCTION_AUTHORITY_PINS)
+        legacy = {pin.relative_path: (self.tools_root / pin.relative_path).read_bytes()
+                  for pin in stage_render_tools.PRODUCTION_AUTHORITY_PINS}
+        manifest = (self.tools_root / "MANIFEST.json").read_bytes()
+        pins = stage_render_tools.LATE_LABEL_AUTHORITY_PINS
+        result = stage_render_tools._stage_render_authority_into(
+            self.staged_root / "Contents/Resources", self.scratch_root, "descriptor-only", pins, late_labels=True)
+        self.assertEqual(len(result.staged_paths), 3)
+        for pin in pins:
+            self.assertEqual(pin.size_bytes, len(pin.source.read_bytes()))
+            self.assertEqual(pin.sha256, sha256(pin.source.read_bytes()))
+            self.assertEqual((self.tools_root / "late-label" / pin.relative_path).read_bytes(),
+                             pin.source.read_bytes())
+        for name, data in legacy.items():
+            self.assertEqual((self.tools_root / name).read_bytes(), data)
+        self.assertEqual((self.tools_root / "MANIFEST.json").read_bytes(), manifest)
+        compiler = json.loads((self.tools_root / "late-label/COMPILER.json").read_bytes())
+        for key, name in (("final_render_compiler_sha256", "final_render_compiler.py"),
+                          ("render_contract_sha256", "render_contract.py"),
+                          ("render_hash_sha256", "render_hash_v1.py")):
+            self.assertEqual(compiler[key], sha256((ROOT / "components/hub/backend" / name).read_bytes()))
+        self.assertFalse((self.tools_root / "late-label/QUALIFICATION.json").exists())
+
+    def test_late_label_staging_refuses_v1_and_non_descriptor_modes(self) -> None:
+        _, _, tool_pins = self.fixtures()
+        self.stage(tool_pins)
+        with self.assertRaisesRegex(ValueError, "exact v3 descriptor pair"):
+            stage_render_tools._stage_render_authority_into(
+                self.staged_root / "Contents/Resources", self.scratch_root, "descriptor-only",
+                stage_render_tools.PRODUCTION_AUTHORITY_PINS, late_labels=True)
+        self.assertFalse((self.tools_root / "late-label").exists())
+        with self.assertRaisesRegex(ValueError, "descriptors only"):
+            stage_render_tools._stage_render_authority_into(
+                self.staged_root / "Contents/Resources", self.scratch_root, "sealed-candidate",
+                stage_render_tools.LATE_LABEL_AUTHORITY_PINS, late_labels=True)
+
     def test_stage_voice_and_the_stager_publish_one_authority_mode_vocabulary(self) -> None:
         spec = importlib.util.spec_from_file_location(
             "studiohub_stage_voice_modes", ROOT / "packaging/stage_voice.py"

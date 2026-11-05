@@ -178,6 +178,10 @@ def main() -> int:
     parser.add_argument('--receipt', type=Path, required=True)
     parser.add_argument('--source-reference', type=Path, default=SOURCE_REFERENCE)
     parser.add_argument('--max-references', type=int, default=2)
+    parser.add_argument('--min-references', type=int, default=1,
+                        help='first reference count to run (default 1); pass 3 with '
+                             '--max-references to measure only the counts above what the '
+                             '2026-10-26 receipt already recorded')
     parser.add_argument('--dimensions', type=int, nargs='+', default=[1024])
     parser.add_argument('--host-gb', type=float, default=None,
                         help='pretend this Mac has N GiB, to measure the configuration the worker '
@@ -186,6 +190,8 @@ def main() -> int:
                         help='the machine-wide loading_mode setting to run under')
     parser.add_argument('--label-prefix', default='')
     arguments = parser.parse_args()
+    if not 1 <= arguments.min_references <= arguments.max_references:
+        parser.error('reference counts must satisfy 1 <= min-references <= max-references')
     if bool(arguments.models_dir) == bool(arguments.clone_from):
         parser.error('pass exactly one of --models-dir (disposable) or --clone-from (real library)')
 
@@ -240,7 +246,7 @@ def main() -> int:
 
     for pixels in arguments.dimensions:
         reference = reference_file(reference_dir, arguments.source_reference, pixels)
-        for count in range(1, arguments.max_references + 1):
+        for count in range(arguments.min_references, arguments.max_references + 1):
             run_job(manager, model, f'{arguments.label_prefix}{arguments.model} {count}x{pixels}',
                     [str(reference)] * count, pixels, receipt=receipt,
                     host_gb=arguments.host_gb)

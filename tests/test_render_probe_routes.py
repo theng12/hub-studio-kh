@@ -15,14 +15,16 @@ from components.hub.backend import auth
 class ProbeRoutesTests(unittest.TestCase):
     def setUp(self):
         self.events = []
+        self.probe_attempts = []
         self.encode = dict(DEFAULT_OPT_IN_ENCODE, requested_effort="hardware", bitrate_kbps=8000)
         state = lambda encode: {"format": "studio.render.encode-probe-state.v1",
                                 "requested_encode": encode, "state": "supported",
                                 "probe_key": "a" * 64, "reason": None,
                                 "evidence": {}, "authority_digest": "b" * 64}
 
-        async def probe(encode):
+        async def probe(encode, attempt=None):
             self.events.append("probe")
+            self.probe_attempts.append(attempt)
             return state(encode)
 
         control = SimpleNamespace(inspect=state, probe=probe)
@@ -68,9 +70,31 @@ class ProbeRoutesTests(unittest.TestCase):
             "format": "studio.render.encode-probe-request.v1", "requested_encode": self.encode})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.events, ["probe", "migrate"])
+        self.assertEqual(self.probe_attempts, [None])
+
+    def test_a_deliberate_attempt_identity_is_forwarded_to_the_control(self):
+        response = self.client.post(self.path, headers=self.headers, json={
+            "format": "studio.render.encode-probe-request.v1",
+            "requested_encode": self.encode, "attempt": "retry-1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.events, ["probe", "migrate"])
+        self.assertEqual(self.probe_attempts, ["retry-1"])
+
+    def test_a_malformed_attempt_identity_is_refused_before_the_control(self):
+        for attempt in ("", None, "x" * 65, 7, "line\nbreak"):
+            with self.subTest(attempt=attempt):
+                response = self.client.post(self.path, headers=self.headers, json={
+                    "format": "studio.render.encode-probe-request.v1",
+                    "requested_encode": self.encode, "attempt": attempt})
+                self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.probe_attempts, [])
 
     def test_auth_and_duplicate_query_fail_before_control(self):
         self.assertEqual(self.client.post(self.path, json={}).status_code, 401)
+        self.assertEqual(self.client.post(self.path, json={
+            "format": "studio.render.encode-probe-request.v1",
+            "requested_encode": self.encode, "attempt": "retry-1"}).status_code, 401)
         duplicate = [("requested_encode", json.dumps(self.encode))] * 2
         self.assertEqual(self.client.get(self.path, headers=self.headers,
                                          params=duplicate).status_code, 400)

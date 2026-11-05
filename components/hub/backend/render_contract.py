@@ -15,6 +15,8 @@ _HEX_COLOR = re.compile(r"#[0-9A-F]{6}\Z")
 _MAX_SAFE = 9007199254740991
 _FPS = frozenset((5, 24, 25, 30, 60))
 _DECODERS = frozenset(("png", "mjpeg", "webp", "gif", "bmp", "tiff"))
+_LATE_LABEL_MOTIONS = frozenset(("none", "pop", "slide", "float", "pulse", "wipe", "line-draw"))
+_LATE_LABEL_CONTRACT = "studio.render.late-label.v3"
 _STAGES = (
     "overlay_layer",
     "classic_color_grade",
@@ -23,9 +25,11 @@ _STAGES = (
     "aged_archive_film",
     "classic_letterbox",
     "presentation_frame",
+    "late_label_stage",
     "logo",
 )
-_ROLES = frozenset(("base_video", "premixed_audio", "overlay", "frame_background", "logo"))
+_ROLES = frozenset(("base_video", "premixed_audio", "overlay", "frame_background",
+                    "logo", "cue_label"))
 
 
 def _invalid(reason):
@@ -138,7 +142,94 @@ def _add_ref(refs, logical_id, role):
     refs[logical_id] = role
 
 
-def _operation(value, duration, refs, index):
+def _late_label_asset(value, expected, refs, path):
+    logical_id = _asset_ref(value, path)
+    if logical_id != expected:
+        _invalid(path + " does not use its ordinal asset name")
+    _add_ref(refs, logical_id, "cue_label")
+
+
+def _late_label_sequence(operation, key, path, fps, refs, op_index, purpose):
+    reveal = operation[key]
+    if reveal is None:
+        return None
+    sequence = _exact(reveal, ("duration_sec", "frames"), path)
+    if sequence["duration_sec"] != .3:
+        _invalid(path + ".duration_sec is unsupported")
+    frames = sequence["frames"]
+    if type(frames) is not list:
+        _invalid(path + ".frames must be an array")
+    expected = max(2, math.ceil(fps * .3) + 1)
+    if len(frames) != expected:
+        _invalid(path + ".frames has wrong count")
+    for index, raw in enumerate(frames):
+        frame_path = path + ".frames[" + str(index) + "]"
+        item = _exact(raw, ("asset", "progress"), frame_path)
+        _late_label_asset(
+            item["asset"],
+            f"cue_{op_index:04d}_{purpose}{index:04d}",
+            refs, frame_path + ".asset",
+        )
+        progress = _number(item["progress"], frame_path + ".progress")
+        if progress != index / (expected - 1):
+            _invalid(frame_path + ".progress is unsupported")
+
+
+def _late_label_operation(operation, duration, fps, refs, path, index):
+    item = _exact(operation, ("kind", "contract", "cue_id", "enable", "placement",
+                              "motion", "label", "reveal", "line", "line_reveal"), path)
+    if item["contract"] != _LATE_LABEL_CONTRACT or type(item["contract"]) is not str:
+        _invalid(path + ".contract is unsupported")
+    if _ID.fullmatch(_text(item["cue_id"], path + ".cue_id")) is None:
+        _invalid(path + ".cue_id is invalid")
+    if index > 9999:
+        _invalid(path + " exceeds supported ordinal assets")
+
+    gate = _exact(item["enable"], ("start_sec", "end_sec"), path + ".enable")
+    start = _number(gate["start_sec"], path + ".enable.start_sec")
+    end = _number(gate["end_sec"], path + ".enable.end_sec")
+    if start < 0 or start >= end or end > duration:
+        _invalid(path + ".enable is out of range")
+
+    placement = _exact(item["placement"], ("x_px", "y_px"), path + ".placement")
+    _integer_range(placement["x_px"], 0, _MAX_SAFE, path + ".placement.x_px")
+    _integer_range(placement["y_px"], 0, _MAX_SAFE, path + ".placement.y_px")
+
+    motion = _exact(item["motion"], ("kind", "entrance_sec"), path + ".motion")
+    kind = _one_of(motion["kind"], _LATE_LABEL_MOTIONS, path + ".motion.kind")
+    if motion["entrance_sec"] != .3:
+        _invalid(path + ".motion.entrance_sec is unsupported")
+
+    label = item["label"]
+    if label is None:
+        if kind != "wipe":
+            _invalid(path + ".label is required")
+    else:
+        if kind == "wipe":
+            _invalid(path + ".label is unsupported for motion")
+        closed = _exact(label, ("asset",), path + ".label")
+        _late_label_asset(closed["asset"], f"cue_{index:04d}_label", refs,
+                          path + ".label.asset")
+
+    _late_label_sequence(item, "reveal", path + ".reveal", fps, refs, index, "r")
+    if (kind == "wipe") != (item["reveal"] is not None):
+        _invalid(path + ".reveal does not match motion")
+
+    line = item["line"]
+    if line is not None:
+        closed = _exact(line, ("asset",), path + ".line")
+        _late_label_asset(closed["asset"], f"cue_{index:04d}_line", refs,
+                          path + ".line.asset")
+
+    _late_label_sequence(item, "line_reveal", path + ".line_reveal", fps, refs,
+                         index, "lr")
+    if (kind == "line-draw") != (item["line_reveal"] is not None):
+        _invalid(path + ".line_reveal does not match motion")
+    if line is not None and item["line_reveal"] is not None:
+        _invalid(path + " cannot contain both line and line_reveal")
+
+
+def _operation(value, duration, fps, refs, index):
     path = "recipe.operations[" + str(index) + "]"
     operation = _object(value, path)
     kind = _text(operation.get("kind"), path + ".kind")
@@ -222,6 +313,8 @@ def _operation(value, duration, refs, index):
             _input_mode(closed["input_mode"], path + ".background.input_mode")
         else:
             _invalid(path + ".background.kind is unsupported")
+    elif kind == "late_label_stage":
+        _late_label_operation(operation, duration, fps, refs, path, index)
     else:
         item = _exact(operation, ("kind", "asset", "opacity", "scale", "anchor",
                                   "margin_px", "gate"), path)
@@ -267,13 +360,19 @@ def _validate(value):
         _invalid("recipe.operations must be an array")
     last_stage = -1
     seen = set()
+    cue_ids = set()
     for index, item in enumerate(recipe["operations"]):
-        stage = _operation(item, duration, refs, index)
+        stage = _operation(item, duration, fps, refs, index)
         if stage < last_stage:
             _invalid("recipe.operations stage order is invalid")
         kind = item["kind"]
-        if kind != "overlay_layer" and kind in seen:
+        if kind not in ("overlay_layer", "late_label_stage") and kind in seen:
             _invalid("recipe.operations repeats singleton " + kind)
+        if kind == "late_label_stage":
+            cue_id = item["cue_id"]
+            if cue_id in cue_ids:
+                _invalid("recipe.operations repeats cue_id " + cue_id)
+            cue_ids.add(cue_id)
         seen.add(kind)
         last_stage = stage
 

@@ -2360,7 +2360,8 @@ _MAX_RENDER_RELAY_RESPONSE = 8 * 1024 * 1024
 
 
 def _render_relay_segment(operation: str, identity: str) -> str:
-    if operation in {"submit", "encode_probe_get", "encode_probe_post", "output_settings_capabilities"}:
+    if operation in {"submit", "encode_probe_get", "encode_probe_post",
+                     "output_settings_capabilities", "late_label_capabilities"}:
         if identity:
             raise ValueError("this operation does not accept a render identity")
         return ""
@@ -2393,6 +2394,7 @@ async def relay_final_render(
     headers: dict[str, str] | None = None,
     size_bytes: int | None = None,
     requested_encode: str | None = None,
+    requested_contract: str | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> RenderRelayResponse:
     """Relay one fixed final-render operation to one joined node; no caller path or host."""
@@ -2409,6 +2411,7 @@ async def relay_final_render(
         "encode_probe_get": "/api/hub/final-renders/encode-probes",
         "encode_probe_post": "/api/hub/final-renders/encode-probes",
         "output_settings_capabilities": "/api/hub/final-renders/output-settings/capabilities",
+        "late_label_capabilities": "/api/hub/final-renders/capabilities",
         "key_get": f"/api/hub/final-renders/by-idempotency-key/{segment}",
         "key_cancel": f"/api/hub/final-renders/by-idempotency-key/{segment}/cancel",
         "status": f"/api/hub/final-renders/{segment}",
@@ -2419,7 +2422,7 @@ async def relay_final_render(
     methods = {
         "blob_put": "PUT", "blob_status": "GET", "submit": "POST",
         "encode_probe_get": "GET", "encode_probe_post": "POST",
-        "output_settings_capabilities": "GET",
+        "output_settings_capabilities": "GET", "late_label_capabilities": "GET",
         "key_get": "GET", "key_cancel": "POST", "status": "GET",
         "cancel": "POST", "output": "GET", "ack": "POST",
     }
@@ -2441,6 +2444,18 @@ async def relay_final_render(
         params = {"requested_encode": requested_encode}
     elif requested_encode is not None:
         raise ValueError("requested_encode is only valid on probe discovery")
+    if requested_contract is not None:
+        if (type(requested_contract) is not str or not requested_contract
+                or len(requested_contract.encode("utf-8")) > 256):
+            raise ValueError("one bounded requested_contract is required")
+        if operation == "late_label_capabilities":
+            params = {"requested_contract": requested_contract}
+        elif operation in {"encode_probe_get", "encode_probe_post"}:
+            params = {**(params or {}), "requested_contract": requested_contract}
+        else:
+            raise ValueError("requested_contract is only valid on a scoped render query")
+    elif operation == "late_label_capabilities":
+        raise ValueError("late-label capabilities requires requested_contract")
     requested_range = None
     if operation == "output":
         range_value = next((value for key, value in request_headers.items()

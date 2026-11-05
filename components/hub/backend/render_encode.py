@@ -154,13 +154,15 @@ def supported_encode(selected_tier: str | None,
 
 def packet_is_supported(packet: Mapping[str, Any], raw_packet: bytes,
                         selected_tier: str | None,
-                        exact_encoder: str | None) -> bool:
+                        exact_encoder: str | None, *,
+                        late_labels_allowed: bool = False) -> bool:
     """Compile this exact packet and apply the executor's tier rule to it."""
     if not selected_tier or not exact_encoder:
         return False
     try:
         plan = compile_final_render_packet(
-            raw_packet, _placeholder_assets(packet), "/dev/fd/9")
+            raw_packet, _placeholder_assets(packet), "/dev/fd/9",
+            late_labels_allowed=late_labels_allowed)
     except (UnsupportedFinalRenderCombination, TypeError, ValueError):
         return False
     return tier_supports(selected_tier, exact_encoder, plan.tiers)

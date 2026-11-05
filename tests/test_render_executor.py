@@ -22,7 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from components.hub.backend import render_encode  # noqa: E402
-from components.hub.backend.final_render_compiler import EncodeTier, FinalRenderPlan  # noqa: E402
+from components.hub.backend.final_render_compiler import (  # noqa: E402
+    EncodeTier, FinalRenderPlan, compile_final_render_packet,
+)
 from components.hub.backend.render_hash_v1 import render_hash  # noqa: E402
 from components.hub.backend.render_executor import (  # noqa: E402
     InstalledRenderAuthority,
@@ -33,6 +35,7 @@ from components.hub.backend.render_executor import (  # noqa: E402
 from components.hub.backend.render_jobs import (  # noqa: E402
     ProcessIdentity,
     RenderExecutionContext,
+    RenderJobUnavailable,
     RuntimeQualification,
     ValidatedOutputReceipt,
 )
@@ -377,7 +380,7 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         }
         tool_raw = compact(tool_descriptor)
         (tools_root / "TOOLS.json").write_bytes(tool_raw)
-        backend = ROOT / "components/hub/backend"
+        backend = ROOT / "components/hub/backend/render_legacy_v1"
         file_sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
         compiler_descriptor = {
             "format": "studio.render.compiler.v1",
@@ -494,6 +497,87 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(loader.qualification_permit(
             "unknown", "site-a:node-a:fleet", b"{}", {}))
         self.assertFalse(loader.write_receipt({}, self.INTENT_ID, {}))
+
+    def test_v1_authority_selects_retained_compiler_and_preserves_its_plan(self) -> None:
+        loader, document, packet = self.candidate_loader()
+        authority = loader._authority(document, packet)
+        self.assertIsNotNone(authority)
+        compiler = loader.compiler_for(authority)
+        self.assertEqual(compiler.__module__,
+                         "components.hub.backend.render_legacy_v1.final_render_compiler")
+        assets = {row["logical_id"]: str(self.root / row["safe_name"])
+                  for row in packet["manifest"]}
+        output = str(self.root / "legacy-output.mp4")
+        legacy = compiler(self.compact(packet), assets, output)
+        current = compile_final_render_packet(self.compact(packet), assets, output)
+        self.assertEqual([tier.argv for tier in legacy.tiers],
+                         [tier.argv for tier in current.tiers])
+        self.assertIsNone(loader.snapshot(), "compiler selection grants no production authority")
+
+    def test_v1_late_label_refusal_precedes_asset_or_job_staging(self) -> None:
+        loader, document, packet = self.candidate_loader()
+        authority = loader._authority(document, packet)
+        self.assertIsNotNone(authority)
+        packet["recipe"]["operations"].append({"kind": "late_label_stage"})
+        runtime, assets = mock.Mock(), mock.Mock()
+        service = RenderService(runtime, assets, None, loader)
+        with mock.patch.object(loader, "snapshot", return_value=authority):
+            with self.assertRaisesRegex(RenderJobUnavailable, "late_label_profile_required"):
+                service._require_supported_encode(packet, self.compact(packet).decode(), None)
+        assets.assert_not_called()
+        self.assertEqual(assets.method_calls, [])
+        self.assertEqual(runtime.method_calls, [])
+
+    def test_only_exact_matched_v3_descriptors_allow_late_labels(self) -> None:
+        loader, document, packet = self.candidate_loader()
+        legacy_authority = loader._authority(document, packet)
+        self.assertIsNotNone(legacy_authority)
+        self.assertFalse(loader.late_labels_allowed(legacy_authority, packet))
+        legacy_packet = copy.deepcopy(packet)
+        late_root = loader.root / "late-label"
+        late_root.mkdir()
+        compiler = json.loads((loader.root / "COMPILER.json").read_bytes())
+        compiler["implementation"] = "hub-final-render-late-label-v3"
+        backend = ROOT / "components/hub/backend"
+        for name, key in (("render_contract.py", "render_contract_sha256"),
+                          ("final_render_compiler.py", "final_render_compiler_sha256"),
+                          ("render_hash_v1.py", "render_hash_sha256")):
+            compiler[key] = hashlib.sha256((backend / name).read_bytes()).hexdigest()
+        compiler_raw = self.compact(compiler)
+        (late_root / "COMPILER.json").write_bytes(compiler_raw)
+        profile = json.loads((loader.root / "PROFILE.json").read_bytes())
+        profile.update(format="studio.render.profile.v3",
+                       implementation="story-classic-late-label-v3",
+                       combination_set="retained-classic-late-label-candidate-v3",
+                       compiler_artifact_sha256=hashlib.sha256(compiler_raw).hexdigest())
+        profile_raw = self.compact(profile)
+        (late_root / "PROFILE.json").write_bytes(profile_raw)
+        (late_root / "TOOLS.json").write_bytes((loader.root / "TOOLS.json").read_bytes())
+        document.update(profile_digest=hashlib.sha256(profile_raw).hexdigest(),
+                        compiler_digest=hashlib.sha256(compiler_raw).hexdigest())
+        document["qualification_digest"] = loader._record_digest(document)
+        packet["recipe"]["profile_digest"] = document["profile_digest"]
+        packet["recipe_digest"] = render_hash("recipe", packet["recipe"])
+        packet["packet_digest"] = render_hash("packet", {
+            "recipe_digest": packet["recipe_digest"],
+            "manifest_digest": packet["manifest_digest"],
+        })
+        authority = loader._authority(document, packet)
+        self.assertIsNotNone(authority)
+        self.assertTrue(loader.late_labels_allowed(authority, packet))
+        assets = {row["logical_id"]: str(self.root / row["safe_name"])
+                  for row in packet["manifest"]}
+        output = str(self.root / "no-label-output.mp4")
+        legacy_plan = loader.compiler_for(legacy_authority, legacy_packet)(
+            self.compact(legacy_packet), assets, output)
+        late_plan = loader.compiler_for(authority, packet)(
+            self.compact(packet), assets, output, late_labels_allowed=True)
+        self.assertEqual([tier.argv for tier in legacy_plan.tiers],
+                         [tier.argv for tier in late_plan.tiers])
+        wrong = copy.deepcopy(packet)
+        wrong["recipe"]["profile_digest"] = "0" * 64
+        self.assertFalse(loader.late_labels_allowed(authority, wrong))
+        self.assertIsNone(loader.snapshot(), "descriptor support enables no production grant")
 
     def test_candidate_capability_is_exact_and_separate_from_production_capacity(self) -> None:
         loader, document, packet = self.candidate_loader()

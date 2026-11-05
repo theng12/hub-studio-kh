@@ -5,14 +5,21 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
 import math
 import re
 from typing import Literal
+import zlib
 
 from .render_contract import validate_render_packet_syntax
 
 TierCondition = Literal["always", "never", "libx265_einval"]
 _FINAL_AAC_ARGS = ("-c:a", "aac", "-b:a", "384k")
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_PNG_BLOCK = 64 * 1024
+# Validation safety ceiling, not a published capability bound: decoding never
+# allocates a full image, and a declared raw image beyond this is refused early.
+_PNG_MAX_RAW_BYTES = 64 * 1024 * 1024
 _PRESETS = {
     "none": (0, 1, 1, 0, 0),
     "warm-night": (-0.05, 1.1, 0.9, 0.15, 0),
@@ -48,6 +55,22 @@ class FinalRenderPlan:
     tiers: tuple[EncodeTier, ...]
     requested_burn_ins: tuple[str, ...]
     input_uses: tuple[tuple[str, int], ...]
+    generated_inputs: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True)
+class LateLabelSequence:
+    """Receiver-owned image2 sequence staging requirement; never a sender path."""
+    key: str
+    logical_ids: tuple[str, ...]
+    working_fps: int
+    start_sec: float
+
+
+@dataclass(frozen=True)
+class LateLabelInputRequirements:
+    sequences: tuple[LateLabelSequence, ...]
+    png_logical_ids: tuple[str, ...]
 
 
 class UnsupportedFinalRenderCombination(ValueError):
@@ -99,6 +122,271 @@ def _build_gate_enable(start: int | float, end: int | float) -> str:
     else:
         return ""
     return f":enable='{expression}'"
+
+
+def _late_gate_enable(start: int | float, end: int | float) -> str:
+    return (f":enable='between(t,{_js_fixed(start, 3)},"
+            f"{_js_fixed(end, 3)})'")
+
+
+def _late_label_operations(packet: Mapping[str, object]) -> tuple[tuple[int, Mapping[str, object]], ...]:
+    return tuple(
+        (index, operation)
+        for index, operation in enumerate(packet["recipe"]["operations"])
+        if operation["kind"] == "late_label_stage"
+    )
+
+
+def late_label_input_requirements(raw: bytes) -> LateLabelInputRequirements | None:
+    """Exact private PNG IDs and ordered sequence requirements for the receiver."""
+    packet = validate_render_packet_syntax(raw)
+    operations = _late_label_operations(packet)
+    if not operations:
+        return None
+    canvas = packet["recipe"]["canvas"]
+    sequences = []
+    png_ids: list[str] = []
+    seen: set[str] = set()
+
+    def take(logical_id: str) -> None:
+        if logical_id not in seen:
+            seen.add(logical_id)
+            png_ids.append(logical_id)
+
+    for op_index, operation in operations:
+        label = operation["label"]
+        if label is not None:
+            take(label["asset"]["logical_id"])
+        line = operation["line"]
+        if line is not None:
+            take(line["asset"]["logical_id"])
+        for key, purpose in (("reveal", "r"), ("line_reveal", "lr")):
+            sequence = operation[key]
+            if sequence is None:
+                continue
+            logical_ids = tuple(item["asset"]["logical_id"]
+                                for item in sequence["frames"])
+            for logical_id in logical_ids:
+                take(logical_id)
+            sequences.append(LateLabelSequence(
+                key=f"cue_{op_index:04d}_{purpose}",
+                logical_ids=logical_ids,
+                working_fps=int(canvas["working_fps"]),
+                start_sec=float(operation["enable"]["start_sec"]),
+            ))
+    return LateLabelInputRequirements(tuple(sequences), tuple(png_ids))
+
+
+def validate_png_bytes(
+    data: bytes,
+    *,
+    expected_sha256: str | None = None,
+    expected_size_bytes: int | None = None,
+    expected_width: int | None = None,
+    expected_height: int | None = None,
+) -> tuple[int, int]:
+    """Validate closed RGBA PNG bytes, CRCs and bounded decoded scanline framing."""
+    if type(data) not in (bytes, bytearray, memoryview):
+        raise ValueError("Invalid late-label PNG: bytes required")
+    value = bytes(data)
+    if expected_size_bytes is not None and len(value) != expected_size_bytes:
+        raise ValueError("Invalid late-label PNG: size mismatch")
+    if expected_sha256 is not None and hashlib.sha256(value).hexdigest() != expected_sha256:
+        raise ValueError("Invalid late-label PNG: sha256 mismatch")
+    if not value.startswith(_PNG_SIGNATURE):
+        raise ValueError("Invalid late-label PNG: signature mismatch")
+
+    offset = len(_PNG_SIGNATURE)
+    dimensions: tuple[int, int] | None = None
+    row_bytes = expected_raw = decoded = 0
+    decoder = None
+    idat_started = False
+    idat_ended = False
+
+    def inflate(payload: bytes) -> None:
+        nonlocal decoded
+        piece = payload
+        while piece and decoder is not None:
+            try:
+                output = decoder.decompress(piece, _PNG_BLOCK)
+            except zlib.error as exc:
+                raise ValueError("Invalid late-label PNG: compression") from exc
+            if output:
+                first_filter = (-decoded) % row_bytes
+                if any(filter_type > 4
+                       for filter_type in output[first_filter::row_bytes]):
+                    raise ValueError("Invalid late-label PNG: scanline filter")
+                decoded += len(output)
+                if decoded > expected_raw:
+                    raise ValueError("Invalid late-label PNG: expands beyond dimensions")
+            if decoder.unused_data:
+                raise ValueError("Invalid late-label PNG: trailing compressed data")
+            tail = decoder.unconsumed_tail
+            if tail == piece and not output:
+                raise ValueError("Invalid late-label PNG: compression did not progress")
+            piece = tail
+
+    while offset + 12 <= len(value):
+        length = int.from_bytes(value[offset:offset + 4], "big")
+        chunk_type = value[offset + 4:offset + 8]
+        end = offset + 12 + length
+        data_start = offset + 8
+        if (length > 2**31 - 1 or len(chunk_type) != 4
+                or any(not (65 <= byte <= 90 or 97 <= byte <= 122)
+                       for byte in chunk_type)
+                or end > len(value)):
+            raise ValueError("Invalid late-label PNG: invalid chunk")
+        if chunk_type in (b"acTL", b"fcTL", b"fdAT", b"PLTE", b"tRNS"):
+            raise ValueError("Invalid late-label PNG: animation or palette chunk")
+        if (not chunk_type[0] & 32
+                and chunk_type not in (b"IHDR", b"IDAT", b"IEND")):
+            raise ValueError("Invalid late-label PNG: unknown critical chunk")
+        if chunk_type == b"IHDR":
+            if dimensions is not None or offset != len(_PNG_SIGNATURE) or length != 13:
+                raise ValueError("Invalid late-label PNG: IHDR is not first or closed")
+        elif chunk_type == b"IDAT":
+            if dimensions is None or idat_ended:
+                raise ValueError("Invalid late-label PNG: noncontiguous IDAT")
+        elif idat_started:
+            idat_ended = True
+
+        stored_crc = int.from_bytes(value[data_start + length:end], "big")
+        crc = zlib.crc32(chunk_type)
+        position = data_start
+        remaining = length
+        while remaining:
+            block = value[position:position + min(_PNG_BLOCK, remaining)]
+            crc = zlib.crc32(block, crc)
+            position += len(block)
+            remaining -= len(block)
+        if crc != stored_crc:
+            raise ValueError("Invalid late-label PNG: chunk CRC")
+
+        if chunk_type == b"IHDR":
+            payload = value[data_start:data_start + length]
+            width = int.from_bytes(payload[0:4], "big")
+            height = int.from_bytes(payload[4:8], "big")
+            facts = tuple(payload[8:13])
+            if width < 1 or height < 1 or facts != (8, 6, 0, 0, 0):
+                raise ValueError("Invalid late-label PNG: unsupported decoded facts")
+            row_bytes = width * 4 + 1
+            expected_raw = row_bytes * height
+            if expected_raw > _PNG_MAX_RAW_BYTES:
+                raise ValueError("Invalid late-label PNG: dimensions exceed bounded decode")
+            dimensions = (width, height)
+        elif chunk_type == b"IDAT":
+            if decoder is None:
+                decoder = zlib.decompressobj()
+                idat_started = True
+            position = data_start
+            remaining = length
+            while remaining:
+                block = value[position:position + min(_PNG_BLOCK, remaining)]
+                inflate(block)
+                position += len(block)
+                remaining -= len(block)
+        elif chunk_type == b"IEND":
+            if dimensions is None or not idat_started:
+                raise ValueError("Invalid late-label PNG: missing IDAT")
+            if (length != 0 or end != len(value)
+                    or decoder is None or not decoder.eof or decoder.unused_data
+                    or decoded != expected_raw):
+                raise ValueError("Invalid late-label PNG: incomplete IEND")
+            width, height = dimensions
+            if expected_width is not None and width != expected_width:
+                raise ValueError("Invalid late-label PNG: width mismatch")
+            if expected_height is not None and height != expected_height:
+                raise ValueError("Invalid late-label PNG: height mismatch")
+            return dimensions
+        offset = end
+    raise ValueError("Invalid late-label PNG: missing IEND")
+
+
+def validate_late_label_dimensions(
+    raw: bytes, dimensions: Mapping[str, tuple[int, int]],
+) -> None:
+    """Validate receiver-read PNG dimensions against closed cue placement rules."""
+    _validate_late_label_dimensions(
+        validate_render_packet_syntax(raw), dimensions)
+
+
+def late_label_sequence_path(output_path: str, key: str) -> str:
+    """Receiver-private contiguous image2 pattern; sender bytes never supply it."""
+    if type(output_path) is not str or not output_path or "\0" in output_path:
+        raise ValueError("Invalid final render output path")
+    if type(key) is not str or re.fullmatch(r"cue_[0-9]{4}_(?:r|lr)", key) is None:
+        raise ValueError("Invalid late-label sequence key")
+    return output_path + ".late-label/" + key + "/%04d.png"
+
+
+def _validate_late_label_dimensions(
+    packet: Mapping[str, object], dimensions: Mapping[str, tuple[int, int]],
+) -> None:
+    operations = _late_label_operations(packet)
+    required: set[str] = set()
+    for _, operation in operations:
+        for key in ("label", "line"):
+            item = operation[key]
+            if item is not None:
+                required.add(item["asset"]["logical_id"])
+        for key in ("reveal", "line_reveal"):
+            item = operation[key]
+            if item is not None:
+                required.update(frame["asset"]["logical_id"]
+                                for frame in item["frames"])
+    if set(dimensions) != required:
+        raise ValueError("Invalid late-label PNG dimension inventory")
+    canvas = packet["recipe"]["canvas"]
+    width = int(canvas["width"])
+    height = int(canvas["height"])
+
+    def require(logical_id: str, expected: tuple[int, int] | None = None,
+                path: str = "") -> tuple[int, int]:
+        if logical_id not in dimensions:
+            raise ValueError("Invalid late-label PNG: missing " + path)
+        size = dimensions[logical_id]
+        if (type(size) is not tuple or len(size) != 2
+                or any(type(value) is not int or value < 1 for value in size)):
+            raise ValueError("Invalid late-label PNG: invalid " + path)
+        if expected is not None and size != expected:
+            raise ValueError("Invalid late-label PNG: incompatible " + path)
+        return size
+
+    for op_index, operation in operations:
+        path = f"late_label_stage[{op_index}]"
+        sizes: list[tuple[int, int]] = []
+        label = operation["label"]
+        if label is not None:
+            sizes.append(require(label["asset"]["logical_id"], path=path + ".label"))
+        reveal = operation["reveal"]
+        if reveal is not None:
+            frame_size = None
+            for frame in reveal["frames"]:
+                logical_id = frame["asset"]["logical_id"]
+                frame_size = require(logical_id, frame_size, path + ".reveal")
+            if frame_size is not None:
+                sizes.append(frame_size)
+        if sizes:
+            label_width, label_height = sizes[0]
+            if (operation["placement"]["x_px"] + label_width > width
+                    or operation["placement"]["y_px"] + label_height > height):
+                raise ValueError("Invalid late-label PNG: placement exceeds canvas")
+        line = operation["line"]
+        if line is not None:
+            require(line["asset"]["logical_id"], (width, height), path + ".line")
+        line_reveal = operation["line_reveal"]
+        if line_reveal is not None:
+            frame_size: tuple[int, int] | None = None
+            for frame in line_reveal["frames"]:
+                frame_size = require(frame["asset"]["logical_id"],
+                                     (width, height) if frame_size is None else frame_size,
+                                     path + ".line_reveal")
+        if label is not None and reveal is not None:
+            label_size = dimensions[label["asset"]["logical_id"]]
+            for frame in reveal["frames"]:
+                if dimensions[frame["asset"]["logical_id"]] != label_size:
+                    raise ValueError(
+                        "Invalid late-label PNG: reveal frames differ from label")
 
 
 def _build_input_args(media_path: str, mode: Mapping[str, object]) -> tuple[str, ...]:
@@ -435,6 +723,110 @@ def _build_logo_filters(
     return tuple(filters), output
 
 
+def _late_overlay_statement(
+    video_label: str,
+    source_label: str,
+    output_label: str,
+    operation: Mapping[str, object],
+    *,
+    x: str,
+    y: str,
+    start_sec: float,
+    end_sec: float,
+    motion: str,
+) -> str:
+    scale = None
+    eval_frame = False
+    if motion == "pop":
+        scale = (f"if(lt(t,{_js_fixed(start_sec + .3, 3)}),"
+                 f"0.8+0.25*sin((t-{_js_fixed(start_sec, 3)})/0.3*3.14159),1)")
+        eval_frame = True
+    elif motion == "pulse":
+        scale = f"1+0.05*sin((t-{_js_fixed(start_sec, 3)})*6.28)"
+        eval_frame = True
+    elif motion == "slide":
+        x = (f"{operation['placement']['x_px']}-w*(1-(t-"
+             f"{_js_fixed(start_sec, 3)})/0.3)")
+    elif motion == "float":
+        y = (f"{operation['placement']['y_px']}+"
+             f"sin((t-{_js_fixed(start_sec, 3)})*2)*3")
+    options = [f"overlay=x={x}:y={y}:eof_action=repeat"]
+    if scale is not None:
+        options.append(f"scale='{scale}'")
+    if eval_frame:
+        options.append("eval=frame")
+    options.append(_late_gate_enable(start_sec, end_sec).lstrip(":"))
+    return f"{video_label}{source_label}{','.join(options)}{output_label}"
+
+
+def _build_late_label_filters(
+    video_label: str,
+    alloc_label: Callable[[], str],
+    operation: Mapping[str, object],
+    input_indices: Mapping[str, int],
+    sequence_indices: Mapping[str, int],
+    op_index: int,
+    fps: int,
+) -> tuple[tuple[str, ...], str]:
+    del fps
+    start = float(operation["enable"]["start_sec"])
+    end = float(operation["enable"]["end_sec"])
+    motion = str(operation["motion"]["kind"])
+    x = str(operation["placement"]["x_px"])
+    y = str(operation["placement"]["y_px"])
+    filters: list[str] = []
+    current = video_label
+
+    line = operation["line"]
+    line_reveal = operation["line_reveal"]
+    if line_reveal is not None:
+        source = alloc_label()
+        index = sequence_indices[f"cue_{op_index:04d}_lr"]
+        filters.append(
+            f"[{index}:v]setpts=PTS+{_js_fixed(start, 3)}/TB{source}")
+        output = alloc_label()
+        filters.append(_late_overlay_statement(
+            current, source, output, operation, x="0", y="0",
+            start_sec=start, end_sec=end, motion=motion,
+        ))
+        current = output
+    elif line is not None:
+        source = alloc_label()
+        index = input_indices[line["asset"]["logical_id"]]
+        filters.append(f"[{index}:v]format=rgba{source}")
+        output = alloc_label()
+        filters.append(_late_overlay_statement(
+            current, source, output, operation, x="0", y="0",
+            start_sec=start, end_sec=end, motion=motion,
+        ))
+        current = output
+
+    reveal = operation["reveal"]
+    label = operation["label"]
+    if reveal is not None:
+        source = alloc_label()
+        index = sequence_indices[f"cue_{op_index:04d}_r"]
+        filters.append(
+            f"[{index}:v]setpts=PTS+{_js_fixed(start, 3)}/TB{source}")
+        output = alloc_label()
+        filters.append(_late_overlay_statement(
+            current, source, output, operation, x=x, y=y,
+            start_sec=start, end_sec=end, motion=motion,
+        ))
+        current = output
+    elif label is not None:
+        source = alloc_label()
+        index = input_indices[label["asset"]["logical_id"]]
+        filters.append(f"[{index}:v]format=rgba{source}")
+        output = alloc_label()
+        filters.append(_late_overlay_statement(
+            current, source, output, operation, x=x, y=y,
+            start_sec=start, end_sec=end, motion=motion,
+        ))
+        current = output
+    return tuple(filters), current
+
+
 def _describe_burn_ins(operations: list[dict]) -> tuple[str, ...]:
     kinds = {operation["kind"] for operation in operations}
     result = []
@@ -569,12 +961,17 @@ def _checked_assets(packet: Mapping[str, object], local_assets: Mapping[str, str
 
 def _compile_validated_packet(
     packet: Mapping[str, object], local_assets: Mapping[str, str], output_path: str,
+    *, late_labels_allowed: bool = False,
 ) -> FinalRenderPlan:
+    late_operations = _late_label_operations(packet)
+    if late_operations and late_labels_allowed is not True:
+        raise UnsupportedFinalRenderCombination("late_label_profile_not_allowed")
     assets = _checked_assets(packet, local_assets, output_path)
     recipe = packet["recipe"]
     operations = recipe["operations"]
     width = int(recipe["canvas"]["width"])
     height = int(recipe["canvas"]["height"])
+    fps = int(recipe["canvas"]["working_fps"])
     gate = recipe["effects_gate"]
     has_gate = gate["start_sec"] is not None or gate["end_sec"] is not None
     logo = next((item for item in operations if item["kind"] == "logo"), None)
@@ -593,12 +990,21 @@ def _compile_validated_packet(
 
     argv = ["-y"]
     input_uses = []
+    generated_inputs = []
 
     def add_input(reference: Mapping[str, str], mode: Mapping[str, object]) -> int:
-        index = len(input_uses)
+        index = len(input_uses) + len(generated_inputs)
         logical_id = reference["logical_id"]
         argv.extend(_build_input_args(assets[logical_id], mode))
         input_uses.append((logical_id, index))
+        return index
+
+    def add_generated_input(key: str, fps_value: int) -> int:
+        index = len(input_uses) + len(generated_inputs)
+        pattern = late_label_sequence_path(output_path, key)
+        argv.extend(("-framerate", str(fps_value), "-f", "image2",
+                     "-start_number", "0", "-i", pattern))
+        generated_inputs.append((key, index))
         return index
 
     add_input(recipe["base_video"], {"kind": "single"})
@@ -612,6 +1018,22 @@ def _compile_validated_packet(
     if frame is not None and frame["background"]["kind"] == "asset":
         frame_index = add_input(frame["background"]["asset"],
                                 frame["background"]["input_mode"])
+
+    cue_indices: dict[str, int] = {}
+    sequence_indices: dict[str, int] = {}
+    for op_index, operation in late_operations:
+        for key in ("label", "line"):
+            item = operation[key]
+            if item is not None:
+                logical_id = item["asset"]["logical_id"]
+                if logical_id not in cue_indices:
+                    cue_indices[logical_id] = add_input(
+                        item["asset"], {"kind": "loop_still", "decoder": "png"})
+        for purpose, key in (("r", "reveal"), ("lr", "line_reveal")):
+            sequence = operation[key]
+            if sequence is not None:
+                stage_key = f"cue_{op_index:04d}_{purpose}"
+                sequence_indices[stage_key] = add_generated_input(stage_key, fps)
 
     filters = []
     next_label = 0
@@ -684,9 +1106,16 @@ def _compile_validated_packet(
             filters.extend(_build_frame_filters(
                 video_label, f"[{frame_index}:v]" if frame_index >= 0 else None,
                 output, prefix, width, height,
-                int(recipe["canvas"]["working_fps"]), operation,
+                fps, operation,
             ))
             video_label = output
+        elif kind == "late_label_stage":
+            op_index = operations.index(operation)
+            parts, video_label = _build_late_label_filters(
+                video_label, alloc_label, operation, cue_indices,
+                sequence_indices, op_index, fps,
+            )
+            filters.extend(parts)
         else:
             logo_config = {
                 "position": operation["anchor"], "opacity": operation["opacity"],
@@ -708,11 +1137,18 @@ def _compile_validated_packet(
         assets[recipe["premixed_audio"]["logical_id"]],
         recipe["target_duration_sec"], output_path,
     )
-    return FinalRenderPlan(tiers, _describe_burn_ins(operations), tuple(input_uses))
+    return FinalRenderPlan(
+        tiers, _describe_burn_ins(operations), tuple(input_uses),
+        tuple(generated_inputs),
+    )
 
 
 def compile_final_render_packet(
     raw: bytes, local_assets: Mapping[str, str], output_path: str,
+    *, late_labels_allowed: bool = False,
 ) -> FinalRenderPlan:
     packet = validate_render_packet_syntax(raw)
-    return _compile_validated_packet(packet, local_assets, output_path)
+    return _compile_validated_packet(
+        packet, local_assets, output_path,
+        late_labels_allowed=late_labels_allowed,
+    )

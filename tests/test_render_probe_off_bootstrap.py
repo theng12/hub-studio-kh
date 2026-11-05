@@ -40,8 +40,8 @@ class OffNodeProbeBootstrapTests(OptInFixture):
         # The loader reads this node's probes through the control it owns.
         self.loader.encode_probe_control = self.control
 
-    def probe(self, encode=None):
-        return asyncio.run(self.control.probe(encode or ENCODE))
+    def probe(self, encode=None, *, attempt=None):
+        return asyncio.run(self.control.probe(encode or ENCODE, attempt=attempt))
 
     def installed_digest(self, name: str) -> str:
         return hashlib.sha256((self.tools_root / name).read_bytes()).hexdigest()
@@ -70,6 +70,24 @@ class OffNodeProbeBootstrapTests(OptInFixture):
         self.assertIsNone(authority.opt_in)
         self.assertIs(authority.qualification.production_eligible, False)
         # A successful probe writes probes, never a grant: still off, still unexecutable.
+        self.assertIsNone(self.loader.snapshot())
+        self.assertFalse((self.data_root / "render-authority/opt-in").exists())
+        self.assertFalse((self.data_root / "render-authority/enabled").exists())
+        self.assertIsNone(self.loader.execution_for_encode(ENCODE))
+        self.assertFalse(self.loader.opt_in_state()["accept_unqualified"])
+
+    def test_a_deliberate_retry_on_an_off_node_still_enables_nothing(self):
+        self.runner.encoder_code = 1
+        self.runner.encoder_stderr = b"first failure detail"
+        first = self.probe()
+        self.assertEqual(first["state"], "unsupported")
+        self.runner = FakeRunner()
+        self.control._runner_callable = self.runner
+        retried = self.probe(attempt="retry-1")
+        self.assertEqual(retried["state"], "supported")
+        self.assertEqual(len(self.runner.calls), 2,
+                         "the retry ran once, one encode and one ffprobe")
+        # Off stays off: the retry's evidence grants nothing, as a first probe would.
         self.assertIsNone(self.loader.snapshot())
         self.assertFalse((self.data_root / "render-authority/opt-in").exists())
         self.assertFalse((self.data_root / "render-authority/enabled").exists())

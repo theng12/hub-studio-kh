@@ -1,0 +1,1086 @@
+{
+  "id": "studio.render.late-label.v3.fixtures",
+  "contract": "late-label-v1.schema.json (same directory)",
+  "date": "2026-11-05",
+  "note": "Frozen acceptance cases plus concrete operation vectors. These are not execution proof; app tests compile/run them after the382 gate exits.",
+  "fixtures": [
+    {
+      "id": "LL-F01",
+      "target": "electron/server/__tests__/final-render-export.test.ts",
+      "name": "capability absent refuses loudly",
+      "setup": "opts with 1 image-backed cue; discovery record without late_labels",
+      "expect": "describeFinalRenderExport -> { kind: 'local-only', reason: 'contextual_cues' }; no operations, no cue assets"
+    },
+    {
+      "id": "LL-F02",
+      "target": "electron/server/__tests__/final-render-export.test.ts",
+      "name": "capability present exports stage in decided order",
+      "setup": "discovery.late_labels = { format, motions:[all] }; 2 image cues (one pop still, one wipe)",
+      "expect": "exportable; each op kind 'late_label_stage' with contract id; array order has every late op after 'presentation_frame' op and before 'logo' op; source_requirements carry role 'cue_label' bound 1:1 to op asset_refs (bijection)"
+    },
+    {
+      "id": "LL-F03",
+      "target": "electron/server/__tests__/final-render-export.test.ts",
+      "name": "legacy drawtext templates -> distinct loud refusal",
+      "setup": "cues with template documentary-label / map-pin / archival-caption / chapter-plate, capability present",
+      "expect": "reason 'contextual_cues_drawtext' (distinct from 'contextual_cues'); never exportable, never partially staged — named gap, loud local"
+    },
+    {
+      "id": "LL-F04",
+      "target": "electron/server/__tests__/final-render-export.test.ts",
+      "name": "unknown template id refuses, no partial coverage",
+      "setup": "cue.template not in {label:*} and not one of the four legacy ids; capability present",
+      "expect": "local-only with its own named reason; zero cue ops in any result"
+    },
+    {
+      "id": "LL-F05",
+      "target": "electron/server/__tests__/final-render-recipe.test.ts",
+      "name": "stage order + exact fields + repeatability",
+      "setup": "valid recipe variants",
+      "expect": "late op before presentation_frame -> 'stage order is invalid'; between frame and logo -> accepted; unknown extra field in op -> exact() rejection; two cue ops accepted (singleton exemption) while 'logo' twice still rejected; enable.end_sec > target_duration_sec -> rejected"
+    },
+    {
+      "id": "LL-F06",
+      "target": "electron/server/__tests__/final-render-recipe.test.ts",
+      "name": "ref-role bijection for cue assets",
+      "setup": "op asset_ref pointing at a manifest entry with role 'overlay'; and inverse: cue_label entry with no referencing op",
+      "expect": "both invalid; matching role cue_label + reference -> valid"
+    },
+    {
+      "id": "LL-F07",
+      "target": "electron/server/__tests__/final-render-recipe.test.ts",
+      "name": "safe_name bound for long cue ids",
+      "setup": "generated stem from a 63-char cue_id exceeding 64 chars without truncation rule; and the truncated+8hex form",
+      "expect": "untruncated name rejected by SAFE_NAME; deterministic truncated form (<=64, unique) accepted"
+    },
+    {
+      "id": "LL-F08",
+      "target": "electron/server/__tests__/final-render-recipe.test.ts",
+      "name": "reveal frame list exact arithmetic",
+      "setup": "working_fps 25, duration_sec 0.3 -> L must be max(2, ceil(25*0.3)+1) = 9; variants with L=8, L=10, progress jumps, non-ordered progress",
+      "expect": "9 accepted; 8/10 rejected; progress must equal i/(L-1) ascending; wrong count rejected by name"
+    },
+    {
+      "id": "LL-F09",
+      "target": "electron/server/__tests__/final-render-compiler.test.ts",
+      "name": "compiler emits every motion + primary clock/EOF",
+      "setup": "one packet per motion kind: none, pop, slide, float, pulse, wipe, line-draw (+pointing line, +line without reveal)",
+      "expect": "eof_action=repeat; primary video controls EOF. Pop/pulse loop at working_fps and retain local shortest=1 (shortest input is primary video; cue is infinite). Finite PNG sequences and static/offset-only inputs must NOT use shortest=1, so reveal EOF never truncates primary. Final output remains bounded by target duration. Receiver creates a private trusted image2 sequence by copying/linking the explicitly ordered validated PNG refs to locally generated contiguous filenames; only receiver-generated paths/pattern are passed to FFmpeg. Sender never supplies pattern/path. Input framerate=working_fps; frame i PTS=i/working_fps+enable.start_sec, so final frame begins at (L-1)/fps (may exceed0.3 at nonintegral fps*0.3). Preserve this local discrete timing; do not resample or stretch. contextualCueCount must be nonzero."
+    },
+    {
+      "id": "LL-F10",
+      "target": "electron/server/__tests__/label-motion.test.ts",
+      "name": "real-binary acceptance across all motions (Hub-requested)",
+      "setup": "drive the exact compiled filter strings for all six motion kinds + no-motion through FFmpeg on a short primary clip",
+      "expect": "graph starts (no init-eval frame-variable refusal), completes, holds reveal last frame to EOF, output duration equals input (no shortest hang)"
+    },
+    {
+      "id": "LL-F11",
+      "target": "electron/server/__tests__/private-render-owner-admission.test.ts",
+      "name": "limits refuse pre-accept naming the published figure",
+      "setup": "cue set whose assets exceed the discovery-published max_assets / max_total_input_bytes (values injected from a stubbed capabilities record)",
+      "expect": "preparePrivateFinalRenderDescriptor returns null; output_lines sentence names the exact published figure and says the video stays local; no intent staged"
+    },
+    {
+      "id": "LL-F12",
+      "target": "electron/server/__tests__/private-render-owner-admission.test.ts",
+      "name": "pinned lineage overrides pre-accept fallback",
+      "setup": "known staged intent present + capability absent (or limits breach)",
+      "expect": "throws 'Existing private final render lineage requires recovery before local rendering' — reconcile pinned node/key before local; never a quiet local render"
+    },
+    {
+      "id": "LL-F13",
+      "target": "electron/server/__tests__/label-design-render.test.ts",
+      "name": "PNG encoding facts",
+      "setup": "renderLabelDesign still; wipe frame 0 and frame L-1; line still; line frame L-1",
+      "expect": "all 8-bit RGBA non-interlaced (color type 6); wipe frames share the still's exact WxH; frame 0 fully transparent; frame L-1 content identical to still; line frames full canvas WxH"
+    },
+    {
+      "id": "LL-F14",
+      "target": "electron/server/__tests__/private-render-client.test.ts",
+      "name": "capability record parse closed",
+      "setup": "late_labels present with exact fields; with an unknown extra field; malformed motions list",
+      "expect": "Exact scoped record accepted; unknown fields/malformed motions/unsolicited record fail closed as discovery validation error; no intent staged and loud local unless known lineage demands reconciliation."
+    }
+  ],
+  "gaps_one_line": [
+    "Actual compiler/tool artifact hashes are produced from builds; existing descriptor dependency/digest checks remain mandatory.",
+    "Legacy drawtext cue raster parity is unqualified; those compositions stay local with contextual_cues_drawtext.",
+    "Existing subtitle, scene-effect and episode-stack guards remain; label-stage support makes no whole-renderer parity claim."
+  ],
+  "hashes": "see report: raw UTF-8 SHA-256 of this file and late-label-v1.schema.json",
+  "vectors": [
+    {
+      "id": "positive-none",
+      "valid": true,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "none",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      }
+    },
+    {
+      "id": "positive-pop",
+      "valid": true,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "pop",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      }
+    },
+    {
+      "id": "positive-slide",
+      "valid": true,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "slide",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      }
+    },
+    {
+      "id": "positive-float",
+      "valid": true,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "float",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      }
+    },
+    {
+      "id": "positive-pulse",
+      "valid": true,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "pulse",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      }
+    },
+    {
+      "id": "positive-wipe",
+      "valid": true,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "wipe",
+          "entrance_sec": 0.3
+        },
+        "label": null,
+        "reveal": {
+          "duration_sec": 0.3,
+          "frames": [
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0000"
+              },
+              "progress": 0.0
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0001"
+              },
+              "progress": 0.125
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0002"
+              },
+              "progress": 0.25
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0003"
+              },
+              "progress": 0.375
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0004"
+              },
+              "progress": 0.5
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0005"
+              },
+              "progress": 0.625
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0006"
+              },
+              "progress": 0.75
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0007"
+              },
+              "progress": 0.875
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0008"
+              },
+              "progress": 1.0
+            }
+          ]
+        },
+        "line": null,
+        "line_reveal": null
+      }
+    },
+    {
+      "id": "positive-line-draw",
+      "valid": true,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "line-draw",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": {
+          "duration_sec": 0.3,
+          "frames": [
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_lr0000"
+              },
+              "progress": 0.0
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_lr0001"
+              },
+              "progress": 0.125
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_lr0002"
+              },
+              "progress": 0.25
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_lr0003"
+              },
+              "progress": 0.375
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_lr0004"
+              },
+              "progress": 0.5
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_lr0005"
+              },
+              "progress": 0.625
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_lr0006"
+              },
+              "progress": 0.75
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_lr0007"
+              },
+              "progress": 0.875
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_lr0008"
+              },
+              "progress": 1.0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "negative-unknown-field",
+      "valid": false,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "none",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null,
+        "raw_filter": "null"
+      },
+      "reason": "unknown field"
+    },
+    {
+      "id": "negative-line-draw-no-line",
+      "valid": false,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "line-draw",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      },
+      "reason": "missing line_reveal"
+    },
+    {
+      "id": "negative-reversed-time",
+      "valid": false,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 1
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "none",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      },
+      "reason": "end before start"
+    },
+    {
+      "id": "negative-past-duration",
+      "valid": false,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 7
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "none",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      },
+      "reason": "end beyond target"
+    },
+    {
+      "id": "negative-wrong-role",
+      "valid": false,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "overlay",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "none",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      },
+      "reason": "manifest role mismatch"
+    },
+    {
+      "id": "positive-end-equals-target",
+      "valid": true,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 5,
+          "end_sec": 6
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "none",
+          "entrance_sec": 0.3
+        },
+        "label": {
+          "asset": {
+            "type": "asset_ref",
+            "logical_id": "cue_0000_label"
+          }
+        },
+        "reveal": null,
+        "line": null,
+        "line_reveal": null
+      }
+    },
+    {
+      "id": "negative-short-reveal",
+      "valid": false,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "wipe",
+          "entrance_sec": 0.3
+        },
+        "label": null,
+        "reveal": {
+          "duration_sec": 0.3,
+          "frames": [
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0000"
+              },
+              "progress": 0.0
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0001"
+              },
+              "progress": 0.125
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0002"
+              },
+              "progress": 0.25
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0003"
+              },
+              "progress": 0.375
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0004"
+              },
+              "progress": 0.5
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0005"
+              },
+              "progress": 0.625
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0006"
+              },
+              "progress": 0.75
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0007"
+              },
+              "progress": 0.875
+            }
+          ]
+        },
+        "line": null,
+        "line_reveal": null
+      },
+      "reason": "short-reveal"
+    },
+    {
+      "id": "negative-wrong-progress",
+      "valid": false,
+      "context": {
+        "canvas": {
+          "width": 1280,
+          "height": 720,
+          "working_fps": 25
+        },
+        "target_duration_sec": 6,
+        "label_dimensions": {
+          "width": 240,
+          "height": 80
+        },
+        "asset_role": "cue_label",
+        "before": "presentation_frame",
+        "after": "logo"
+      },
+      "operation": {
+        "kind": "late_label_stage",
+        "contract": "studio.render.late-label.v3",
+        "cue_id": "cue_01",
+        "enable": {
+          "start_sec": 2.125,
+          "end_sec": 4.875
+        },
+        "placement": {
+          "x_px": 120,
+          "y_px": 160
+        },
+        "motion": {
+          "kind": "wipe",
+          "entrance_sec": 0.3
+        },
+        "label": null,
+        "reveal": {
+          "duration_sec": 0.3,
+          "frames": [
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0000"
+              },
+              "progress": 0.0
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0001"
+              },
+              "progress": 0.9
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0002"
+              },
+              "progress": 0.25
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0003"
+              },
+              "progress": 0.375
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0004"
+              },
+              "progress": 0.5
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0005"
+              },
+              "progress": 0.625
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0006"
+              },
+              "progress": 0.75
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0007"
+              },
+              "progress": 0.875
+            },
+            {
+              "asset": {
+                "type": "asset_ref",
+                "logical_id": "cue_0000_r0008"
+              },
+              "progress": 1.0
+            }
+          ]
+        },
+        "line": null,
+        "line_reveal": null
+      },
+      "reason": "wrong-progress"
+    }
+  ],
+  "capability_vectors": [
+    {
+      "id": "scoped-exact",
+      "requested_contract": "studio.render.late-label.v3",
+      "record": {
+        "format": "studio.render.late-label.v3",
+        "motions": [
+          "none",
+          "pop",
+          "slide",
+          "float",
+          "pulse",
+          "wipe",
+          "line-draw"
+        ]
+      },
+      "valid": true
+    },
+    {
+      "id": "unsolicited",
+      "requested_contract": null,
+      "record": {
+        "format": "studio.render.late-label.v3",
+        "motions": [
+          "none",
+          "pop",
+          "slide",
+          "float",
+          "pulse",
+          "wipe",
+          "line-draw"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "id": "legacy-absent",
+      "requested_contract": "studio.render.late-label.v3",
+      "record": null,
+      "valid": true,
+      "export": "local-only contextual_cues"
+    }
+  ]
+}

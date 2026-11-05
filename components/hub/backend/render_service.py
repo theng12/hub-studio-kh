@@ -39,6 +39,24 @@ _JOB_ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]{0,127}\Z")
 _ATTEMPT_ID = re.compile(r"[0-9a-f]{32}\Z")
 _log = logging.getLogger("studiohub.final_render")
 
+# The Gateway-ACKed wire for scoped late-label publication: one exact requested_contract,
+# one closed envelope. The query alone chooses the scope, so a duplicated or unknown
+# contract is refused rather than defaulted - a wrong scope would publish or probe under
+# digests the client did not ask for.
+LATE_LABEL_CONTRACT = "studio.render.late-label.v3"
+LATE_LABEL_CAPABILITIES_FORMAT = "studio.render.hub-late-label-capabilities.v1"
+
+
+def _requested_contract(request: Request) -> str | None:
+    """The single exact contract this query selects, or None when it selects none."""
+    if "requested_contract" not in request.query_params:
+        return None
+    values = request.query_params.getlist("requested_contract")
+    if len(values) != 1 or values[0] != LATE_LABEL_CONTRACT:
+        raise HTTPException(
+            400, "one exact late-label requested_contract query value is required")
+    return values[0]
+
 
 def _reference_id(owner_scope: str, dispatch_key: str) -> str:
     """One reference per accepted render job: all of its inputs share one identity.
@@ -200,6 +218,15 @@ class RenderService:
         """
         available, authority = self._admission_authority(
             qualification_vector, packet, expected_binding)
+        from .render_executor import InstalledRenderAuthorityLoader
+        late_labels_allowed = bool(
+            authority is not None
+            and isinstance(self.authority_loader, InstalledRenderAuthorityLoader)
+            and self.authority_loader.late_labels_allowed(authority, packet))
+        if (any(op["kind"] == "late_label_stage" for op in packet["recipe"]["operations"])
+                and not late_labels_allowed):
+            raise RenderJobUnavailable(
+                "late_label_profile_required: late labels require matched v3 profile/compiler pins")
         if not available:
             # A loader double without the installer lookup. `runtime.accept` still
             # refuses a missing authority before any row, so nothing is accepted here.
@@ -208,7 +235,8 @@ class RenderService:
             raise RenderJobUnavailable(
                 "no installed render authority is available on this machine")
         if not packet_is_supported(packet, packet_json.encode("utf-8"),
-                                   authority.selected_tier, authority.exact_encoder):
+                                   authority.selected_tier, authority.exact_encoder,
+                                   late_labels_allowed=late_labels_allowed):
             raise RenderJobUnavailable(
                 "encode is not supported by the qualified render machine")
 
@@ -625,8 +653,9 @@ def register_routes(
             raise HTTPException(409 if exc.code == "UPLOAD_CONFLICT" else 400,
                                 exc.detail) from exc
 
-    def probe_control():
-        control = getattr(service.authority_loader, "encode_probe_control", None)
+    def probe_control(scoped: bool = False):
+        name = "late_label_encode_probe_control" if scoped else "encode_probe_control"
+        control = getattr(service.authority_loader, name, None)
         if control is None:
             raise HTTPException(503, "encode probe control is unavailable")
         return control
@@ -640,7 +669,11 @@ def register_routes(
             raise ValueError("requested_encode must be one exact six-field tuple")
         return encode
 
-    def probe_state(encode, state):
+    def probe_state(encode, state, scoped: bool = False):
+        if scoped:
+            # No stored v3 encode grant exists to bind, and the v1 grant must never answer
+            # for this scope: a scoped probe publishes support and evidence only.
+            return {**state, "execution_authority": None}
         selector = getattr(service.authority_loader, "execution_for_encode", None)
         execution = selector(encode) if callable(selector) and state["state"] == "supported" else None
         if (execution is not None and execution["encode_authority"]["authority_digest"]
@@ -651,8 +684,10 @@ def register_routes(
     @app.get("/api/hub/final-renders/encode-probes")
     async def inspect_encode_probe(request: Request):
         scope(request)
+        scoped = _requested_contract(request) is not None
         values = request.query_params.getlist("requested_encode")
-        if set(request.query_params) != {"requested_encode"} or len(values) != 1:
+        if (set(request.query_params) - {"requested_contract"} != {"requested_encode"}
+                or len(values) != 1):
             raise HTTPException(400, "one requested_encode query value is required")
         if len(values[0].encode("utf-8")) > _MAX_ACK_BYTES:
             raise HTTPException(413, "requested_encode is too large")
@@ -660,27 +695,38 @@ def register_routes(
             encode = probe_encode(values[0])
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, "invalid requested_encode") from exc
-        return probe_state(encode, probe_control().inspect(encode))
+        return probe_state(encode, probe_control(scoped).inspect(encode), scoped)
 
     @app.post("/api/hub/final-renders/encode-probes")
     async def start_encode_probe(request: Request):
         scope(request)
+        scoped = _requested_contract(request) is not None
         from .render_hash_v1 import decode_render_json
+        from .render_encode_probes import is_attempt_identity
         try:
             value = decode_render_json(await _bounded_body(request, _MAX_ACK_BYTES))
-            if (type(value) is not dict or set(value) != {"format", "requested_encode"}
+            if (type(value) is not dict
+                    or set(value) not in ({"format", "requested_encode"},
+                                          {"format", "requested_encode", "attempt"})
                     or value["format"] != "studio.render.encode-probe-request.v1"):
                 raise ValueError("invalid probe control request")
             encode = probe_encode(json.dumps(value["requested_encode"]))
+            # A deliberate retry carries a client-supplied stable attempt identity; an
+            # omitted one is the normal idempotent probe of this tuple.
+            if "attempt" in value and not is_attempt_identity(value["attempt"]):
+                raise ValueError("invalid attempt identity")
+            attempt = value["attempt"] if "attempt" in value else None
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, "invalid encode probe request") from exc
-        result = await probe_control().probe(encode)
-        if result["state"] == "supported":
+        result = await probe_control(scoped).probe(encode, attempt=attempt)
+        if result["state"] == "supported" and not scoped:
+            # Grant migration binds v1 opt-in evidence to the v1 control's entries; a scoped
+            # probe has its own proof namespace and no v3 grant to migrate into.
             try:
                 service.authority_loader.migrate_probed_grant()
             except ValueError as exc:
                 raise HTTPException(409, "probe completed but the grant could not be migrated") from exc
-        return probe_state(encode, result)
+        return probe_state(encode, result, scoped)
 
     @app.get("/api/hub/final-renders/capability")
     async def render_capability(request: Request):
@@ -692,6 +738,37 @@ def register_routes(
         """
         scope(request)
         return service.executor.capability() if service.executor is not None else None
+
+    @app.get("/api/hub/final-renders/capabilities")
+    async def late_label_capabilities(request: Request):
+        """This Mac's late-label v3 publication for one exact requested contract.
+
+        The envelope is closed and read-only: `worker` is the full v3-scoped worker row
+        when the installed triple can vouch for it, otherwise null with a loud `reason`.
+        Nothing here writes state; the query names the contract and an unknown or
+        duplicated one is refused rather than defaulted.
+        """
+        scope(request)
+        if (set(request.query_params) != {"requested_contract"}
+                or _requested_contract(request) is None):
+            raise HTTPException(
+                400, "one exact late-label requested_contract query value is required")
+        worker: dict[str, Any] | None = None
+        reason: str | None = "this Hub has no final render executor"
+        getter = (
+            getattr(service.executor, "late_label_capability", None)
+            if service.executor is not None else None)
+        if callable(getter):
+            worker, reason = getter()
+        if worker is None and not reason:
+            reason = "this Mac cannot offer late-label v3 rendering"
+        return {
+            "format": LATE_LABEL_CAPABILITIES_FORMAT,
+            "requested_contract": LATE_LABEL_CONTRACT,
+            "server_time": int(time.time()),
+            "worker": worker,
+            "reason": reason if worker is None else None,
+        }
 
     @app.put("/api/hub/final-renders/blobs/{sha256}")
     async def put_blob(sha256: str, request: Request):
@@ -846,7 +923,7 @@ def register_relay_routes(
 ) -> None:
     """Register the fixed controller-to-node mirror without accepting a caller URL/path."""
     async def answer(node_id, operation, identity, request, *, limit, size_bytes=None,
-                     requested_encode=None):
+                     requested_encode=None, requested_contract=None):
         _actor(request, hub_token, fleet_token, settings)
         body = await _bounded_body(request, limit) if request.method in {"POST", "PUT"} else b""
         names = {
@@ -854,7 +931,10 @@ def register_relay_routes(
             "if-match", "idempotency-key", "x-studio-render-qualification-vector",
         }
         headers = {name: value for name, value in request.headers.items() if name in names}
-        extra = {"requested_encode": requested_encode} if requested_encode is not None else {}
+        extra = {key: value for key, value in (
+            ("requested_encode", requested_encode),
+            ("requested_contract", requested_contract),
+        ) if value is not None}
         result = await relay(
             node_id, operation, identity=identity, body=body,
             headers=headers, size_bytes=size_bytes, **extra,
@@ -868,15 +948,29 @@ def register_relay_routes(
 
     @app.get("/api/hub/fleet/nodes/{node_id}/final-renders/encode-probes")
     async def relay_probe_get(node_id: str, request: Request):
+        contract = _requested_contract(request)
         values = request.query_params.getlist("requested_encode")
-        if set(request.query_params) != {"requested_encode"} or len(values) != 1:
+        if (set(request.query_params) - {"requested_contract"} != {"requested_encode"}
+                or len(values) != 1):
             raise HTTPException(400, "one requested_encode query value is required")
         return await answer(node_id, "encode_probe_get", "", request, limit=0,
-                            requested_encode=values[0])
+                            requested_encode=values[0], requested_contract=contract)
 
     @app.post("/api/hub/fleet/nodes/{node_id}/final-renders/encode-probes")
     async def relay_probe_post(node_id: str, request: Request):
-        return await answer(node_id, "encode_probe_post", "", request, limit=_MAX_ACK_BYTES)
+        contract = _requested_contract(request)
+        return await answer(node_id, "encode_probe_post", "", request, limit=_MAX_ACK_BYTES,
+                            requested_contract=contract)
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/final-renders/capabilities")
+    async def relay_late_label_capabilities(node_id: str, request: Request):
+        """Relay the scoped capabilities read over the one registered node path."""
+        if (set(request.query_params) != {"requested_contract"}
+                or _requested_contract(request) is None):
+            raise HTTPException(
+                400, "one exact late-label requested_contract query value is required")
+        return await answer(node_id, "late_label_capabilities", "", request, limit=0,
+                            requested_contract=LATE_LABEL_CONTRACT)
 
     @app.put("/api/hub/fleet/nodes/{node_id}/final-renders/blobs/{sha256}")
     async def relay_blob_put(node_id: str, sha256: str, request: Request):

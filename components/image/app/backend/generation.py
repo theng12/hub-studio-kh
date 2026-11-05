@@ -288,7 +288,7 @@ FLUX2_KLEIN = ImageModel(
     defaults={'aspect_ratio': '16:9', 'resolution': '1K', 'steps': 4,
               'guidance': 1.0, 'seed': -1},
     limits={'min_steps': 2, 'max_steps': 100, 'min_guidance': 0.0, 'max_guidance': 30.0,
-            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
+            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 1900},
     # Free memory needed before start; owner chose 2.8 GB on 2026-10-02 for headroom - measured 8 GB M1+M2 runs started cleanly from 3.76 GB free
     # (3.76-4.14 GB free; peak 2.16-2.68 GB; ~0 swap). This is the free memory a job needs to begin, NOT its peak. This row is the one home for
     # that number: the Hub reads it through `workload_policy.required_free_memory_gb` and keeps no copy of its own, so an edit here is the edit
@@ -389,12 +389,13 @@ FLUX2_KLEIN = ImageModel(
                              ('transformer', ('transformer_blocks',
                                               'single_transformer_blocks'), True))),
     reference_limits={
-        # Measured through this worker on the host named in `measured_on`; the receipt is
-        # `reference_limits['source']`. Published limits are the ones that ran and fit: two
-        # references at 1024 px. Larger references and more of them were not run on this lane,
-        # and a number nobody ran is not published.
+        # `max` is the engine's cap, not a measurement (owner, 2026-11-05): the maker documents
+        # four references for FLUX.2 Klein 4-bit's edit conditioning, and mflux's flux2 edit lane
+        # exposes no count constant (only `MAX_REFERENCE_AREA`), so four is published whether or
+        # not every count has run. Per-count routing stays deferred until approved rows carry
+        # measured floors; execution keeps the existing mode policy unchanged.
         'min': 1,
-        'max': 2,
+        'max': 4,
         'max_dimension': 1024,
         'modes': {
             # The model's own configuration: every component resident at once. 12.0 GB peak.
@@ -477,7 +478,7 @@ Z_IMAGE_TURBO = ImageModel(
     defaults={'aspect_ratio': '16:9', 'resolution': '1K', 'steps': 9,
               'guidance': 1.0, 'seed': -1},
     limits={'min_steps': 2, 'max_steps': 100, 'min_guidance': 0.0, 'max_guidance': 30.0,
-            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
+            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 2000},
     memory=MemoryPolicy(low_ram_below_bytes=Z_IMAGE_LOW_RAM_BELOW_BYTES,
                         low_ram_cache_limit_gb=BOUNDED_CACHE_LIMIT_GB,
                         stream_below_bytes=STREAM_BELOW_BYTES,
@@ -605,7 +606,7 @@ QWEN_IMAGE_21_LOW_RAM = ImageModel(
     defaults={'aspect_ratio': '1:1', 'resolution': '1K', 'steps': 20,
               'guidance': 1.0, 'seed': -1},
     limits={'min_steps': 1, 'max_steps': 50, 'min_guidance': 0.0, 'max_guidance': 20.0,
-            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
+            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 8000},
     memory=MemoryPolicy(single_mode_reason=(
         'This candidate always uses prompt materialization, cache zero, tiled VAE and eviction.')),
     qualification={
@@ -652,7 +653,7 @@ QWEN_IMAGE_21_TURBO = ImageModel(
     defaults={'aspect_ratio': '1:1', 'resolution': '1K', 'steps': 8,
               'guidance': 1.0, 'seed': -1},
     limits={'min_steps': 8, 'max_steps': 8, 'min_guidance': 1.0, 'max_guidance': 1.0,
-            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 4000},
+            'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 8000},
     memory=MemoryPolicy(single_mode_reason=(
         'This model always uses prompt materialization, zero cache, tiled VAE decoding and '
         'encoder/transformer eviction.')),
@@ -693,11 +694,13 @@ QWEN_IMAGE_21_TURBO = ImageModel(
         low_ram_below_bytes=QWEN_EDIT_BOUNDED_BELOW_BYTES,
         low_ram_cache_limit_gb=1.0),
     reference_limits={
-        # What ran and fit through this worker: one and two references at 1024 px. mflux's own
-        # hard cap on this pipeline is 10 (`MAX_REFERENCES`); this row publishes only what was
-        # measured on it.
+        # `max` is the engine's cap, read from mflux at runtime through `max_engine_constant`
+        # (`MAX_REFERENCES` is 10 today); the 10 below is only the row's own fallback for when
+        # mflux is not importable, and RAM never lowers it (owner, 2026-11-05).
         'min': 1,
-        'max': 2,
+        'max': 10,
+        'max_engine_constant': (
+            'mflux.models.qwen21.variants.edit.qwen_image_21_edit:MAX_REFERENCES'),
         'max_dimension': 1024,
         'modes': {
             # The model's own configuration: nothing evicted, nothing tiled. 24.2 GB peak, and a
@@ -913,6 +916,78 @@ def reference_mode_values(model: ImageModel, mode: str) -> dict:
     modes = (model.reference_limits or {}).get('modes') or {}
     values = modes.get(mode)
     return values if isinstance(values, dict) else {}
+
+
+def reference_max(model: ImageModel) -> int:
+    """The engine's own cap on reference images for this model's edit lane.
+
+    A row may declare ``max_engine_constant`` (``module:ATTRIBUTE``); the engine's number wins
+    over the row's fallback, so a future model inherits its engine's cap with no edit here.
+    Where the engine states no constant, the row's documented number stands — FLUX.2 Klein
+    4-bit's four is the maker's documented maximum (mflux's flux2 edit lane exposes only
+    ``MAX_REFERENCE_AREA``, no count).
+    """
+    limits = model.reference_limits or {}
+    constant = limits.get('max_engine_constant')
+    if isinstance(constant, str) and constant:
+        module_name, _, attribute = constant.partition(':')
+        try:
+            value = getattr(importlib.import_module(module_name), attribute, None)
+        except Exception:  # noqa: BLE001 - an absent engine falls back to the row's own number
+            value = None
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return int(limits['max'])
+
+
+def reference_count_facts(model: ImageModel, mode: str, count: int) -> dict | None:
+    """One count's row in one configuration, as recorded — ``None`` when nobody ran it.
+
+    Publishes only what the row itself states: the recorded measurement (``seconds``,
+    ``peak_gb``, ``swap_delta_mb``) and any floor or timeout the row carries as its own
+    adopted fields (``min_total_memory_gb``, ``min_free_memory_gb``, ``timeout_floor_s``).
+    A field nobody recorded is ``None`` — this function derives nothing (owner, 2026-11-05):
+    floors and deadlines stay the mode blocks' own mode-scoped policy until per-count rows
+    carry measured ones, and an unmeasured count is ``None`` here, never a formula's output.
+    """
+    limits = model.reference_limits or {}
+    block = (limits.get('modes') or {}).get(mode)
+    if not isinstance(block, dict):
+        return None
+    row = next((entry for entry in (block.get('measured') or [])
+                if isinstance(entry, dict) and entry.get('references') == count), None)
+    if row is None:
+        return None
+
+    def recorded(key):
+        return float(row[key]) if _is_number(row.get(key)) else None
+
+    return {
+        'references': count,
+        'mode': mode,
+        'seconds': recorded('seconds'),
+        'peak_gb': recorded('peak_gb'),
+        'swap_delta_mb': recorded('swap_delta_mb'),
+        'min_total_memory_gb': recorded('min_total_memory_gb'),
+        'min_free_memory_gb': recorded('min_free_memory_gb'),
+        'timeout_floor_s': recorded('timeout_floor_s'),
+        'source': limits.get('source'),
+    }
+
+
+def reference_counts(model: ImageModel) -> dict:
+    """Every measured count's recorded row per configuration, keyed by count (``{}`` when none)."""
+    modes = (model.reference_limits or {}).get('modes') or {}
+    counts = sorted({entry['references']
+                     for block in modes.values() if isinstance(block, dict)
+                     for entry in (block.get('measured') or [])
+                     if isinstance(entry, dict) and _is_number(entry.get('references'))})
+    published = {}
+    for count in counts:
+        published[str(int(count))] = {
+            name: reference_count_facts(model, name, int(count))
+            for name in modes}
+    return published
 
 
 def memory_plan(model: ImageModel, total_memory_bytes: int,
@@ -1433,8 +1508,9 @@ def _reference_parameter(model: ImageModel) -> list[dict]:
     limits = model.reference_limits
     if not limits:
         return []
+    maximum = reference_max(model)
     return [{'name': 'reference_images', 'type': 'array', 'required': False,
-             'min_items': limits['min'], 'max_items': limits['max'],
+             'min_items': limits['min'], 'max_items': maximum,
              'media_types': list(REFERENCE_MEDIA_TYPES), 'request_only': True,
              'note': ('character/reference images for the edit lane, in order; each is sent as '
                       f'one multipart "images" part to POST /api/generate/edit, at most '
@@ -1507,9 +1583,10 @@ def _validate_references(model: ImageModel, references: list[str]) -> list[str]:
         raise ValueError('Reference images, LoRAs, negative prompt and quantization are unavailable')
     if not model.edit_model_class:
         raise ValueError(f'{model.label} has no reference-image (edit) lane')
-    if not limits['min'] <= len(references) <= limits['max']:
+    maximum = reference_max(model)
+    if not limits['min'] <= len(references) <= maximum:
         raise ValueError(
-            f'{model.label} takes between {limits["min"]} and {limits["max"]} reference images; '
+            f'{model.label} takes between {limits["min"]} and {maximum} reference images; '
             f'this request had {len(references)}')
     for entry in references:
         path = Path(entry)
@@ -1548,7 +1625,7 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None) -> dict:
     if any(raw.get(key) for key in ('image_path', 'lora_names', 'lora_paths',
                                      'negative_prompt', 'quantize')):
         allowed = (f'; this model takes {model.reference_limits["min"]}-'
-                   f'{model.reference_limits["max"]} reference images'
+                   f'{reference_max(model)} reference images'
                    if model.reference_limits else '')
         raise ValueError('LoRAs, negative prompt and quantization are unavailable' + allowed)
 
@@ -1710,13 +1787,18 @@ def _reference_contract(model: ImageModel, total_memory_bytes: int | None = None
         # The multipart part name `POST /api/generate/edit` accepts, one part per reference.
         'field': 'images',
         'min': limits['min'],
-        'max': limits['max'],
+        # The engine's cap (owner, 2026-11-05), not the largest count anyone happened to run.
+        'max': reference_max(model),
         'max_dimension': limits['max_dimension'],
         'media_types': list(REFERENCE_MEDIA_TYPES),
         # Reference images ride in the multipart body, never inside the prompt character budget.
         'counts_against_prompt': False,
         # The configuration this Mac runs for the lane, and its measured numbers.
         'mode': mode,
+        # Every measured count's own per-configuration floors and timeout (owner, 2026-11-05):
+        # the scheduler reads what this Mac would need for the count it is about to send, and a
+        # count nobody ran is `null` in every configuration — an unknown, never a number.
+        'counts': reference_counts(model),
         'runtime_seconds': {
             'measured': list(measured.get('measured') or []),
             'measured_on': measured.get('measured_on') or limits.get('measured_on'),
@@ -2230,7 +2312,8 @@ class GenerationManager:
         encode and is not the same figure, so applying one lane's history to the other's deadline
         would size it from the wrong measurement. An edit job's floor is the floor of the
         configuration this Mac will run — the bounded mode's measured, longer figure on a small
-        Mac, so its first render is not killed by the general 900 s floor.
+        Mac, so its first render is not killed by the general 900 s floor. Per-count timeout
+        activation is deferred until per-count rows carry measured floors (owner, 2026-11-05).
         """
         model = MODELS[params['repo']]
         floor = IMAGE_DEADLINE_FLOOR_S

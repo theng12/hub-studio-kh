@@ -18,7 +18,7 @@ from .generation import (MAX_REFERENCE_BYTES, MEDIA_TYPE_BY_SUFFIX, MODEL_ID, MO
                          QUALIFIED_MINIMUM_MEMORY_BYTES, GenerationManager, defaults_in_force,
                          final_matches, lane_contract, lane_parameters, loading_modes,
                          missing_runtime_model_reason, reference_image_media_type,
-                         reference_mode, reference_mode_values, size_presets)
+                         reference_max, reference_mode, reference_mode_values, size_presets)
 
 from components import app_version, model_defaults
 
@@ -412,12 +412,15 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                          loading_mode.current(manager.data))
         if not lane['available']:
             raise HTTPException(409, lane['reason'])
-        # Refuse an over-count before staging a single byte; the same numbers validate_request
-        # enforces, named in the same sentence.
+        # Refuse an over-count before staging a single byte; the engine's cap, named in the
+        # same sentence validate_request enforces. Per-count routing activation is deferred
+        # until approved rows carry measured floors (owner, 2026-11-05): counts inside the cap
+        # run under the existing mode policy exactly as counts 1-2 do today.
         limits = model.reference_limits
-        if len(images or []) > limits['max']:
+        maximum = reference_max(model)
+        if len(images or []) > maximum:
             raise HTTPException(
-                422, f'{model.label} takes between {limits["min"]} and {limits["max"]} reference '
+                422, f'{model.label} takes between {limits["min"]} and {maximum} reference '
                      f'images; this request had {len(images or [])}')
         job_id = uuid4().hex
         directory = manager.inputs / job_id

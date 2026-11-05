@@ -382,8 +382,8 @@ class FinalRenderCompilerTests(unittest.TestCase):
             elif isinstance(node, ast.ImportFrom):
                 imports.add(("." * node.level) + (node.module or ""))
         self.assertLessEqual(imports, {
-            "__future__", "collections.abc", "dataclasses", "decimal", "math",
-            "re", "typing", ".render_contract",
+            "__future__", "collections.abc", "dataclasses", "decimal", "hashlib",
+            "math", "re", "typing", "zlib", ".render_contract",
         })
         for forbidden in ("subprocess", "os.", "pathlib", "socket", "requests",
                           "urllib", "render_assets", "broker", "auth", "route"):

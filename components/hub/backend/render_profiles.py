@@ -81,6 +81,8 @@ class ProfileDescriptor:
     digest: str
     compiler_artifact_sha256: Optional[str]
     tools_artifact_sha256: Optional[str]
+    format: str
+    implementation: str
 
 
 @dataclass(frozen=True)
@@ -204,7 +206,8 @@ def validate_render_compiler_descriptor(raw):
     """Validate exact receiver-owned compiler descriptor bytes and return their identity."""
     value = _exact(_decode(raw, "compiler"), _COMPILER_KEYS, "compiler", "compiler")
     _literal(value["format"], "studio.render.compiler.v1", "compiler", "format")
-    _literal(value["implementation"], "hub-final-render-v1", "compiler", "implementation")
+    if value["implementation"] not in ("hub-final-render-v1", "hub-final-render-late-label-v3"):
+        _invalid("compiler", "implementation is unsupported")
     for key in (
         "python_runtime_sha256",
         "render_hash_sha256",
@@ -218,11 +221,14 @@ def validate_render_compiler_descriptor(raw):
 def validate_render_profile_descriptor(raw):
     """Validate the frozen non-production candidate profile shape and byte identity."""
     value = _exact(_decode(raw, "profile"), _PROFILE_KEYS, "profile", "profile")
+    late_labels = value["format"] == "studio.render.profile.v3"
     for key, expected in (
-        ("format", "studio.render.profile.v1"),
-        ("implementation", "story-classic-no-font-v1"),
+        ("format", "studio.render.profile.v3" if late_labels else "studio.render.profile.v1"),
+        ("implementation", "story-classic-late-label-v3" if late_labels
+         else "story-classic-no-font-v1"),
         ("recipe_namespace", "studio.render.final.v1"),
-        ("combination_set", "retained-classic-no-font-candidate-v1"),
+        ("combination_set", "retained-classic-late-label-candidate-v3" if late_labels
+         else "retained-classic-no-font-candidate-v1"),
         ("tier_policy", "story-final-chain-v1"),
         ("output_policy", "story-final-output-v1"),
     ):
@@ -242,6 +248,8 @@ def validate_render_profile_descriptor(raw):
         hashlib.sha256(raw).hexdigest(),
         compiler_digest,
         tools_digest,
+        value["format"],
+        value["implementation"],
     )
 
 

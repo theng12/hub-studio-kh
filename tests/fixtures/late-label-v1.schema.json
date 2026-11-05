@@ -1,0 +1,548 @@
+{
+  "id": "studio.render.late-label.v3",
+  "title": "Late-label stage closed contract, freeze revision 1",
+  "date": "2026-11-05",
+  "baseline": "story-studio-kh release-383 worktree, 23466af",
+  "id_version_note": "v3 chosen deliberately: studio.render.final.v2 / profile.v2 are reserved by the rev-4 output-settings negotiation, so every ID minted here skips v2.",
+  "integrates_with": {
+    "recipe_namespace_unchanged": "studio.render.final.v1",
+    "recipe_shape_unchanged": "operations[] + manifest[] with recipe_digest/manifest_digest/packet_digest; manifest entries remain exactly {logical_id, safe_name, role, sha256, size_bytes} with ref-role bijection",
+    "stage_decision": "new operation kind 'late_label_stage' inserted in STAGES AFTER 'presentation_frame' and BEFORE 'logo'; additive entry + additive singleton-allowlist exemption (kind is repeatable, one operation per cue, unlike the singleton kinds)",
+    "local_reference": "electron/server/generators/video.ts sections 6c (7507-7604) and 7 stay authoritative and unmoved: cues burn after frame/subtitles, before logo; no local reorder",
+    "profile_descriptor_id": "studio.render.profile.v3 (repinned profile/tools/compiler digests ship with the stage; sameDescriptorPins then matches only builds carrying the stage)",
+    "digest_rule": "packet/recipe/manifest digests keep render-hash-v1 typed binary canonicalization — domain 'studio.render.hash.v1\\0<kind>\\0', C(value) encoding — NEVER JSON-stringify canonical SHA. (The freeze hashes of THIS file are plain UTF-8 SHA-256 of the file bytes.)",
+    "profile_literals": {
+      "format": "studio.render.profile.v3",
+      "implementation": "story-classic-late-label-v3",
+      "recipe_namespace": "studio.render.final.v1",
+      "combination_set": "retained-classic-late-label-candidate-v3",
+      "tier_policy": "story-final-chain-v1",
+      "output_policy": "story-final-output-v1"
+    },
+    "compiler_literals": {
+      "format": "studio.render.compiler.v1",
+      "implementation": "hub-final-render-late-label-v3"
+    },
+    "descriptor_shape": "Profile/compiler keys unchanged from v1; only the listed literals and real artifact/dependency hashes change. production_eligible stays false. Qualification fields remain exact evidence or null; protocol support grants no admission. No v2 output-settings changes."
+  },
+  "capability": {
+    "field": "FinalRenderCapabilities.late_labels (optional, closed record, exact fields)",
+    "record": {
+      "format": "studio.render.late-label.v3",
+      "motions": [
+        "none",
+        "pop",
+        "slide",
+        "float",
+        "pulse",
+        "wipe",
+        "line-draw"
+      ]
+    },
+    "negotiation": "Story adds requested_contract=studio.render.late-label.v3 to GET /v1/final-renders/capabilities only for cue compositions. Gateway accepts one exact requested_contract string; duplicates/unknown values refuse. Only that scoped response may include late_labels and the v3 profile/compiler pair. No-query/old clients keep the existing response and v1 profile. Older Gateway ignoring the query returns no late_labels: loud local fallback. Story rejects unsolicited late_labels, malformed records, wrong format, duplicate/missing/unknown motions. Existing identity/freshness/digest/pin checks remain mandatory."
+  },
+  "operation": {
+    "kind": "late_label_stage",
+    "contract_field": "studio.render.late-label.v3",
+    "exact_fields": [
+      "kind",
+      "contract",
+      "cue_id",
+      "enable",
+      "placement",
+      "motion",
+      "label",
+      "reveal",
+      "line",
+      "line_reveal"
+    ],
+    "fields": {
+      "kind": {
+        "const": "late_label_stage"
+      },
+      "contract": {
+        "const": "studio.render.late-label.v3"
+      },
+      "cue_id": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+        "note": "Story derives it from the reviewed cue id (lowercase, sanitized); it is packet identity only — no episode/preset/plan data rides here (AGENTS §4/§5)"
+      },
+      "enable": {
+        "exact": [
+          "start_sec",
+          "end_sec"
+        ],
+        "start_sec": {
+          "type": "number",
+          "min": 0,
+          "max_exclusive": "target_duration_sec"
+        },
+        "end_sec": {
+          "type": "number",
+          "gt": "start_sec",
+          "max": "target_duration_sec"
+        },
+        "clock": "COMPOSED clock — Story applies sceneTimelineOffsetSec before the packet exists; the reviewed window itself is never mutated"
+      },
+      "placement": {
+        "exact": [
+          "x_px",
+          "y_px"
+        ],
+        "x_px": {
+          "type": "integer",
+          "min": 0
+        },
+        "y_px": {
+          "type": "integer",
+          "min": 0
+        },
+        "fit_rule": "x_px + label_width <= canvas.width AND y_px + label_height <= canvas.height, checked at staging where asset dimensions are known; resolution to pixels replaces drawtext's per-frame text_w/text_h anchors",
+        "line_note": "leader-line assets are full-canvas and overlay at 0,0 — they carry no placement"
+      },
+      "motion": {
+        "exact": [
+          "kind",
+          "entrance_sec"
+        ],
+        "kind": {
+          "enum": [
+            "none",
+            "pop",
+            "slide",
+            "float",
+            "pulse",
+            "wipe",
+            "line-draw"
+          ]
+        },
+        "entrance_sec": {
+          "type": "number",
+          "const": 0.3,
+          "note": "Exact current local entrance; no new user setting."
+        }
+      },
+      "label": {
+        "type": "object|null",
+        "exact": [
+          "asset"
+        ],
+        "asset": {
+          "asset_ref": true,
+          "role": "cue_label"
+        },
+        "rule": "required for every motion EXCEPT wipe; null exactly when motion == 'wipe' (the reveal frames carry the label)"
+      },
+      "reveal": {
+        "type": "object|null",
+        "exact": [
+          "duration_sec",
+          "frames"
+        ],
+        "duration_sec": {
+          "type": "number",
+          "const": 0.3
+        },
+        "frames": {
+          "item_exact": [
+            "asset",
+            "progress"
+          ],
+          "length": "L = max(2, ceil(working_fps * duration_sec) + 1)  — the exact count writeLabelRevealFrames produces",
+          "progress": "i / (L - 1) for index i in order; order is the play order",
+          "asset": {
+            "asset_ref": true,
+            "role": "cue_label"
+          }
+        },
+        "rule": "required exactly when motion == 'wipe'; null otherwise"
+      },
+      "line": {
+        "type": "object|null",
+        "exact": [
+          "asset"
+        ],
+        "asset": {
+          "asset_ref": true,
+          "role": "cue_label",
+          "geometry": "full canvas WxH, overlaid at 0,0"
+        },
+        "rule": "present only for a pointing design with a usable target; mutually exclusive with line_reveal; Story drops line-draw to pop pre-packet when no target exists (labelCueForRender), so a line-draw op without a line never reaches the wire"
+      },
+      "line_reveal": {
+        "type": "object|null",
+        "exact": [
+          "duration_sec",
+          "frames"
+        ],
+        "frames": "same L/progress rule as reveal; full-canvas frames",
+        "rule": "required exactly when motion == 'line-draw'; null otherwise",
+        "duration_sec": {
+          "type": "number",
+          "const": 0.3
+        }
+      },
+      "per_cue_invariants": [
+        "motion 'wipe'  => label null, reveal non-null",
+        "motion 'line-draw' => label non-null, reveal null, line null, line_reveal non-null",
+        "any other motion => reveal null, line_reveal null, label non-null",
+        "at most one of line and line_reveal is non-null (both may be null)",
+        "one operation per cue; cue_id unique within the recipe"
+      ]
+    },
+    "gate_note": "recipe.effects_gate does NOT apply to late_label_stage; the op's own enable window is the only timing authority (matches local: cue suppression comes from cue timestamps, not a filter gate)"
+  },
+  "assets_and_manifest": {
+    "role_extension": "FinalRenderAssetRole += 'cue_label' (additive; ref-role bijection enforced by the existing manifest validator)",
+    "safe_name": "unchanged SAFE_NAME regex ^(?<id>[a-z][a-z0-9_-]{0,63})\\.(mp4|mov|webm|wav|png|jpg|webp|gif|bmp|tiff)$ — .png already legal",
+    "naming_rule": "For operation index c and frame index i, logical_id = cue_<c as 4 decimal digits>_<purpose> where purpose is label, line, r<i as4digits>, lr<i as4digits>. c/i must fit 0000..9999; otherwise refuse before intent. safe_name=logical_id+.png. IDs are independent of user cue_id; uniqueness and SAFE_NAME bounds are checked, never assumed. No stored cue is rewritten.",
+    "transfer": "explicit bounded asset refs only — no wildcard/pattern filenames (no %04d), no node paths, no font files, no raw FFmpeg strings anywhere in the packet",
+    "per_motion_inventory": {
+      "none|pop|slide|float|pulse": "1 label png (+1 line png when pointing)",
+      "wipe": "L reveal pngs (L = max(2, ceil(working_fps*duration_sec)+1)) (+1 line png when pointing)",
+      "line-draw": "1 label png + L full-canvas line reveal pngs",
+      "worst_case_assets": "All existing recipe source requirements plus sum(per-cue inventory). Count unique manifest entries, including overlays, logo and frame assets, not merely base+audio."
+    }
+  },
+  "png_encoding": {
+    "color_type": 6,
+    "bit_depth": 8,
+    "interlace": 0,
+    "alpha": "straight RGBA, no palette, no APNG animation chunks",
+    "label_still": "the transparent PNG renderLabelDesign already produces (sharp/Pango, local font pool thumbnail-fonts.ts — fonts never cross the wire)",
+    "wipe_frames": "every frame the SAME width x height as the label still: content = left-prefix crop of width round(W*progress) composited on a transparent canvas of full size (frame 0 fully transparent, frame L-1 byte-identical in content to the still)",
+    "line_still": "full-canvas W x H transparent PNG (renderLeaderLine output)",
+    "line_reveal_frames": "full-canvas W x H transparent PNGs, stroke grows with progress; frame L-1 = complete line",
+    "sha256": "hex sha256 over the exact file bytes, as today",
+    "validation": "Validate byte hash/size plus decoded PNG facts and dimensions before use. Repeated refs with incompatible expected dimensions refuse. All frames of a reveal have equal dimensions."
+  },
+  "clock_and_eof": {
+    "enable": "evaluated against the PRIMARY video input's timestamp t: between(t, start_sec, end_sec) — same value local emits after the offset is applied",
+    "still_inputs": "repeated still (loop_still, decoder png); scale motions (pop/pulse) require per-frame evaluation and looping at working_fps — compiler-internal, never wire fields",
+    "overlay_end": "eof_action=repeat; primary video controls EOF. Pop/pulse loop at working_fps and retain local shortest=1 (shortest input is primary video; cue is infinite). Finite PNG sequences and static/offset-only inputs must NOT use shortest=1, so reveal EOF never truncates primary. Final output remains bounded by target duration.",
+    "reveal_start": "reveal/line-reveal frame 0 begins exactly at enable.start_sec (local sets reveal_start=start for wipe and setpts-shifts line-draw by the same composed start); frames advance at recipe canvas.working_fps",
+    "exit": "hard off at enable.end_sec — the image-label path has no alpha ramp (the drawtext alpha/slide exit belongs to the legacy lane, out of scope)",
+    "reveal_assembly": "Receiver creates a private trusted image2 sequence by copying/linking the explicitly ordered validated PNG refs to locally generated contiguous filenames; only receiver-generated paths/pattern are passed to FFmpeg. Sender never supplies pattern/path. Input framerate=working_fps; frame i PTS=i/working_fps+enable.start_sec, so final frame begins at (L-1)/fps (may exceed0.3 at nonintegral fps*0.3). Preserve this local discrete timing; do not resample or stretch.",
+    "rounding": "Enable and reveal-start expressions use toFixed(3), matching current local helper. Motion/placement formulas below are normative; use FFmpeg expression escaping from existing helpers."
+  },
+  "limits_accounting": {
+    "rule": "all bounds are read live from FinalRenderCapabilities.execution_bounds at admission; nothing here is a new published number",
+    "max_operations": "existing ops + 1 per cue must be <= published max_operations",
+    "max_assets": "Count every existing source requirement plus every distinct cue asset; total must be <= published max_assets.",
+    "max_asset_bytes / max_total_input_bytes": "per-file and summed sizes checked against the published figures before any intent is staged",
+    "max_pixel_frames / max_duration_sec / canvas / fps": "unchanged — the stage adds no output frames",
+    "breach_behavior": "pre-accept refusal: render stays local with the existing loud sentence pattern naming the exact published figure the packet exceeded (limit shown, AGENTS §1); the pinned-lineage rule still overrides (known lineage => throw until reconciled)",
+    "gap": "the exact published max_assets/max_asset_bytes values were not read in this read-only pass — they are live capability data; the formulas above bind to whatever the Gateway publishes."
+  },
+  "refusal_and_fallback": {
+    "pre_accept": "any refusal before staging returns local with one loud output_lines reason; if a staged lineage is known (pinned intent + descriptor pins), the fallback THROWS until the pinned node/key is reconciled",
+    "post_accept": "definite refusal => phase 'refused' => local; uncertain POST outcome => phase 'send_unknown' => THROWS until lookupFinalRenderByKey settles it; unknown never renders local",
+    "reasons": {
+      "contextual_cues": "capability absent/unreadable, or any cue shape outside this contract — today's reason, kept",
+      "contextual_cues_drawtext": "NEW, distinct, loud: a cue using one of the four legacy drawtext templates (documentary-label, map-pin, archival-caption, chapter-plate) — stays local; never silently skipped, never partially staged",
+      "late_label_bounds": "NEW: this stage would exceed a published execution bound (figure named in the sentence)",
+      "contextual_cues_unknown_template": "Unknown template; no partial cue staging."
+    }
+  },
+  "digest_and_freeze": {
+    "runtime_digests": "render-hash-v1 typed binary canonicalization for recipe/manifest/packet (see integrates_with.digest_rule)",
+    "freeze_hashes": "plain UTF-8 SHA-256 of the two freeze files, reported alongside them"
+  },
+  "scope_honesty": {
+    "in_scope": "image-backed 'label:' cues only: still PNG, leader line, motions none/pop/slide/float/pulse/wipe/line-draw, composed-clock enable, remote via the one paired Gateway",
+    "out_of_scope_and_still_local": [
+      "four legacy drawtext templates — investigation result: feasible later by reusing label-design-render.ts (sharp/Pango + local font pool) to render transparent cue PNGs, but glyph rasterization cannot be byte-identical to FFmpeg drawtext, so historical local look would not be preserved; redesign explicitly NOT part of this freeze",
+      "subtitles, scene effects, episode stack: their existing refusals stand — a working late-label stage does NOT imply those lanes render remotely"
+    ],
+    "parity_claim": "this contract covers label-stage parity only; it claims no whole-renderer parity"
+  },
+  "dependencies_note": "no schema validator installed (no Ajv/jsonschema) and none to be added — lead validates the two files with bounded structural checks",
+  "freeze_revision": 1,
+  "motion_formulas": {
+    "none": {},
+    "pop": {
+      "scale": "if(lt(t,END),0.8+0.25*sin((t-START)/0.3*3.14159),1)"
+    },
+    "slide": {
+      "x_offset": "if(lt(t,END),-LABEL_WIDTH*(1-(t-START)/0.3),0)"
+    },
+    "float": {
+      "y_offset": "sin((t-START)*2)*3"
+    },
+    "pulse": {
+      "scale": "1+0.05*sin((t-START)*6.28)"
+    },
+    "substitution": "START=enable.start_sec.toFixed(3); END=(enable.start_sec+0.3).toFixed(3); base placement unchanged (scale uses top-left anchor, no implicit recenter). Leader line is composited before label at0,0; cues preserve reviewed array order."
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:studio:render:late-label:v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "contract",
+    "cue_id",
+    "enable",
+    "placement",
+    "motion",
+    "label",
+    "reveal",
+    "line",
+    "line_reveal"
+  ],
+  "$defs": {
+    "asset_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "logical_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "asset_ref"
+        },
+        "logical_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        }
+      }
+    },
+    "asset_object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset"
+      ],
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/asset_ref"
+        }
+      }
+    },
+    "reveal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "duration_sec",
+        "frames"
+      ],
+      "properties": {
+        "duration_sec": {
+          "const": 0.3
+        },
+        "frames": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 19,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "asset",
+              "progress"
+            ],
+            "properties": {
+              "asset": {
+                "$ref": "#/$defs/asset_ref"
+              },
+              "progress": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "kind": {
+      "const": "late_label_stage"
+    },
+    "contract": {
+      "const": "studio.render.late-label.v3"
+    },
+    "cue_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "enable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start_sec",
+        "end_sec"
+      ],
+      "properties": {
+        "start_sec": {
+          "type": "number",
+          "minimum": 0
+        },
+        "end_sec": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x_px",
+        "y_px"
+      ],
+      "properties": {
+        "x_px": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "y_px": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "motion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "entrance_sec"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "none",
+            "pop",
+            "slide",
+            "float",
+            "pulse",
+            "wipe",
+            "line-draw"
+          ]
+        },
+        "entrance_sec": {
+          "const": 0.3
+        }
+      }
+    },
+    "label": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/asset_object"
+        }
+      ]
+    },
+    "reveal": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/reveal"
+        }
+      ]
+    },
+    "line": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/asset_object"
+        }
+      ]
+    },
+    "line_reveal": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/reveal"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "motion": {
+            "properties": {
+              "kind": {
+                "const": "wipe"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "label": {
+            "type": "null"
+          },
+          "reveal": {
+            "$ref": "#/$defs/reveal"
+          },
+          "line_reveal": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "label": {
+            "$ref": "#/$defs/asset_object"
+          },
+          "reveal": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "motion": {
+            "properties": {
+              "kind": {
+                "const": "line-draw"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "line": {
+            "type": "null"
+          },
+          "line_reveal": {
+            "$ref": "#/$defs/reveal"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "line_reveal": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "context_validation": [
+    "All numbers finite and integral magnitudes safe; ID/ref names unique/bijective; manifests exactly match roles cue_label and explicit PNG names.",
+    "0 <= start < end <= target duration. cue_id unique per recipe. Stage order frame -> late labels -> logo; repeated late labels permitted.",
+    "For each reveal: L=max(2,ceil(working_fps*0.3)+1), length=L, progress at index i equals i/(L-1). working_fps belongs to existing set5,24,25,30,60.",
+    "PNG dimensions bound placement/full-canvas line facts; enforce live execution bounds over ALL assets/operations.",
+    "Unknown capabilities fail closed as discovery error, not measured unsupported. No packet intent or asset upload before support/bounds validation; known lineage still requires original-key reconciliation."
+  ]
+}

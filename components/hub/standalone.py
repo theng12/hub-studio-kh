@@ -36,7 +36,7 @@ from .backend import auth, broker, cloud_guard, control_plane, ledger, model_ids
 from .backend import app_release, chat_deadline, chat_jobs, peers, release_sync, shared_voices, startup_control, transcription_jobs, update_drain, vocabulary
 from .backend import render_executor as render_executor_module, render_service
 from .backend.render_assets import RenderAssetStore
-from .backend.render_executor import InstalledRenderAuthorityLoader, RenderExecutor
+from .backend.render_executor import InstalledRenderAuthorityLoader, LateLabelProbeScope, RenderExecutor
 from .backend.render_encode_probes import EncodeProbeControl
 from .backend.render_jobs import RenderJobRuntime
 from .backend.monitor import StudioMonitor, is_cached
@@ -1475,6 +1475,16 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         hardware_identity=resource_stats.hardware_identity,
     )
     installed_authority.encode_probe_control = encode_probe_control
+    # The scoped v3 control shares the probe record/evidence directories (probe keys mix in
+    # its v3 identity, so the two scopes cannot see each other's proofs) and the one physical
+    # hold recovery above already restores every record under its own recorded owner.
+    late_label_probe_control = EncodeProbeControl(
+        data_root, loader=LateLabelProbeScope(installed_authority),
+        executor=final_render_executor,
+        node_id=installed_authority.physical_node_id,
+        hardware_identity=resource_stats.hardware_identity,
+    )
+    installed_authority.late_label_encode_probe_control = late_label_probe_control
     final_render_service = render_service.RenderService(
         render_runtime, render_assets_store, final_render_executor, installed_authority,
         trash_root=output_storage.trash_root)
@@ -1578,7 +1588,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             yield
         finally:
             final_render_executor.begin_shutdown()
-            await encode_probe_control.stop()
+            await _asyncio.gather(
+                encode_probe_control.stop(), late_label_probe_control.stop())
             if start_background:
                 if storage_sweep is not None:
                     storage_sweep.cancel()

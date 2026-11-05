@@ -12,6 +12,10 @@ The rules this module keeps:
   vector, so a changed tool, a changed compiler or a changed vector is a different probe.
 * One POST never runs two probes for one identity. A second POST for an identity that is
   already recorded adopts that record instead.
+* A deliberate retry is a new client-supplied attempt identity: it runs under a new durable
+  key while every earlier attempt stays on disk as history. A replayed POST adopts its own
+  attempt's record, an unresolved earlier attempt is never bypassed, and the proved evidence
+  stays at the tuple's canonical probe key, where grants and supported entries read it.
 * A crash keeps the record pending and keeps the physical hold. A probe whose outcome cannot
   be proved is never released, and no process is ever signalled on a guess.
 * Evidence exists only after a real encode that the pinned ffprobe validated. Nothing here
@@ -138,6 +142,14 @@ def _is_digest(value: Any) -> bool:
 def _is_text(value: Any, maximum: int = 256) -> bool:
     return (type(value) is str and 0 < len(value) <= maximum
             and value.isascii() and value.isprintable())
+
+
+_ATTEMPT_MAX_CHARS = 64
+
+
+def is_attempt_identity(value: Any) -> bool:
+    """One client-supplied attempt identity: bounded printable ASCII, or not one."""
+    return _is_text(value, _ATTEMPT_MAX_CHARS)
 
 
 def _closed_encode(value: Any) -> dict[str, Any] | None:
@@ -309,6 +321,21 @@ class EncodeProbeControl:
             "compiler_digest": identity["compiler_digest"],
             "probe_vector_digest": identity["probe_vector_digest"],
         }
+
+    def _attempt_key(self, encode: Mapping[str, Any], identity: Mapping[str, Any],
+                     attempt: str | None) -> str:
+        """The key one POST runs under: the canonical key, or it bound to an attempt.
+
+        The same attempt identity always derives the same key, so a replayed POST adopts
+        the same durable record and can never spawn a second process. The attempt is not
+        part of the canonical probe key: proved evidence, grants and supported entries
+        stay keyed to the tuple alone.
+        """
+        if attempt is None:
+            return self._probe_key(encode, identity)
+        material = self._key_material(encode, identity)
+        material["attempt"] = attempt
+        return _digest(material)
 
     def _evidence_key_material(self, evidence: Mapping[str, Any]) -> dict[str, Any]:
         """The key material of a stored evidence record, as it was measured.
@@ -618,19 +645,30 @@ class EncodeProbeControl:
         if identity is None:
             return self._state(closed, "unmeasured", None,
                                "this Mac has no installed render authority to probe with")
-        probe_key = self._probe_key(closed, identity)
-        evidence = self._read_evidence(probe_key)
+        canonical = self._probe_key(closed, identity)
+        evidence = self._read_evidence(canonical)
         if evidence is not None:
-            return self._state(closed, "supported", probe_key, None, evidence)
-        result = self._read_result(probe_key)
+            return self._state(closed, "supported", canonical, None, evidence)
+        attempts = self._attempts(canonical)
+        for key, _record in attempts:
+            if self._read_result(key) is None:
+                # No settled outcome and no evidence: an unknown outcome stays
+                # pending, whatever any later attempt may claim.
+                diagnostic = self._read_result(key, pending=True)
+                return self._state(closed, "pending", key,
+                                   diagnostic["reason"] if diagnostic is not None else
+                                   "the probe is running or its outcome is unknown")
+        if attempts:
+            # The newest settled attempt: a deliberate retry's fresh diagnostics.
+            key, _record = attempts[-1]
+            result = self._read_result(key)
+            if result is not None:
+                return self._state(closed, result["state"], key, result["reason"])
+        result = self._read_result(canonical)
         if result is not None:
-            return self._state(closed, result["state"], probe_key, result["reason"])
-        if self._read_record(probe_key) is not None:
-            diagnostic = self._read_result(probe_key, pending=True)
-            return self._state(closed, "pending", probe_key,
-                               diagnostic["reason"] if diagnostic is not None else
-                               "the probe is running or its outcome is unknown")
-        return self._state(closed, "unmeasured", probe_key,
+            # A tuple-level compiler refusal, recorded without ever running an attempt.
+            return self._state(closed, result["state"], canonical, result["reason"])
+        return self._state(closed, "unmeasured", canonical,
                            "no probe has been run for this tuple on this node")
 
     def supported_entries(self) -> list[dict[str, Any]]:
@@ -694,6 +732,30 @@ class EncodeProbeControl:
             if _is_digest(key):
                 keys.append(key)
         return keys
+
+    def _attempts(self, canonical: str) -> list[tuple[str, dict[str, Any]]]:
+        """Every durable attempt of this exact probe, oldest first.
+
+        An attempt is a probe record whose stored identity still hashes to this probe's
+        canonical key; a changed node, tool, compiler or vector is a different probe and
+        is never an attempt of this one. Nothing is ever removed from this history.
+        """
+        found: list[tuple[str, dict[str, Any]]] = []
+        for key in self._record_keys():
+            record = self._read_record(key)
+            if record is None:
+                continue
+            try:
+                if self._probe_key(record["requested_encode"],
+                                   record["identity"]) != canonical:
+                    continue
+            except (KeyError, TypeError, ValueError):
+                continue
+            found.append((key, record))
+        found.sort(key=lambda item: (
+            item[1]["created_at"] if type(item[1].get("created_at")) is int else 0,
+            item[0]))
+        return found
 
     # --- running ------------------------------------------------------------------------
 
@@ -877,11 +939,15 @@ class EncodeProbeControl:
     def _runner(self) -> Callable[..., ProbeRun]:
         return self._runner_callable or self._default_runner
 
-    async def probe(self, encode: Mapping[str, Any]) -> dict[str, Any]:
+    async def probe(self, encode: Mapping[str, Any], *,
+                    attempt: str | None = None) -> dict[str, Any]:
         """Run one probe for this exact tuple, or answer with what is already known.
 
-        This is the only thing that may start a process. A tuple that is already
-        recorded is adopted, never run twice.
+        This is the only thing that may start a process. One attempt identity runs at
+        most once: a replayed POST adopts that attempt's record, and a deliberate retry
+        is a new client-supplied attempt identity, allowed only once every earlier
+        attempt has a settled outcome. An unresolved earlier attempt is never bypassed,
+        and the physical hold still admits only one probe on this Mac at a time.
         """
         closed = _closed_encode(encode)
         if closed is None:
@@ -890,57 +956,88 @@ class EncodeProbeControl:
                  "crf": 0, "quality_cpu_preset": "", "bitrate_kbps": None},
                 "unmeasured", None,
                 "the requested encode is not the closed six-field form")
+        if attempt is not None and not is_attempt_identity(attempt):
+            return self._state(closed, "unmeasured", None,
+                               "the attempt identity is not one bounded printable text")
         identity = self._identity(closed)
         if identity is None:
             return self._state(closed, "unmeasured", None,
                                "this Mac has no installed render authority to probe with")
-        probe_key = self._probe_key(closed, identity)
+        canonical = self._probe_key(closed, identity)
+        attempt_key = self._attempt_key(closed, identity, attempt)
         with self._lock:
-            existing = self._read_record(probe_key)
-            if existing is not None:
+            # Proved support and this attempt's own record are adopted first: a replayed
+            # POST never spawns, and the evidence belongs to the tuple, not to an attempt.
+            if self._read_evidence(canonical) is not None:
                 return self.inspect(closed)
-            owner = self._owner(probe_key)
+            if self._read_record(attempt_key) is not None:
+                result = self._read_result(attempt_key) if attempt is not None else None
+                if result is not None:
+                    return self._state(closed, result["state"], attempt_key, result["reason"])
+                return self.inspect(closed)
+            if attempt is None and self._read_result(canonical) is not None:
+                # A compiler refusal already occupies the canonical result filename.
+                return self.inspect(closed)
+            history = self._attempts(canonical)
+            others = [key for key, _record in history if key != attempt_key]
+            if others and attempt is None:
+                # A normal POST keeps its adoption semantics: it never starts a new run
+                # once any attempt of this tuple exists.
+                return self.inspect(closed)
+            for key in others:
+                if self._read_result(key) is None:
+                    # An unresolved earlier attempt is never bypassed.
+                    return self.inspect(closed)
+            owner = self._owner(attempt_key)
             allowed, reason = self._admission_ok(owner)
             if not allowed:
-                return self._state(closed, "unmeasured", probe_key, reason)
+                return self._state(closed, "unmeasured", attempt_key, reason)
             authority = self._authority()
             if authority is None:
-                return self._state(closed, "unmeasured", probe_key,
+                return self._state(closed, "unmeasured", attempt_key,
                                    "this Mac has no installed render authority to probe with")
             if not self._has_memory(authority):
-                return self._state(closed, "unmeasured", probe_key,
+                return self._state(closed, "unmeasured", attempt_key,
                                    "this Mac does not have the memory this profile needs")
             tools = self._tool_paths()
             if tools is None:
-                return self._state(closed, "unmeasured", probe_key,
+                return self._state(closed, "unmeasured", attempt_key,
                                    "the pinned tools are not installed")
             plan_error = self._plan_error(closed, tools)
             if plan_error is not None:
-                self._write_result(probe_key, "unsupported", plan_error)
-                return self.inspect(closed)
+                # The compiler's refusal is a fact about the tuple, not a run: it is
+                # recorded at the canonical key with no attempt record and no process.
+                if not self._write_result(canonical, "unsupported", plan_error):
+                    return self._state(closed, "unmeasured", canonical,
+                                       "the compiler refusal could not be saved on this Mac")
+                return self._state(closed, "unsupported", canonical, plan_error)
             # The physical hold comes first: it is the broker's in-memory lease, and a
             # crash loses it, so nothing durable depends on it having been taken.
             held = self._acquire(owner)
             if not held:
-                return self._state(closed, "unmeasured", probe_key,
+                return self._state(closed, "unmeasured", attempt_key,
                                    "this Mac is busy and cannot hold the probe")
             # The record is written before the spawn: a crash after the spawn still
-            # leaves a durable pending probe, and a second POST adopts it.
+            # leaves a durable pending attempt, and a replayed POST adopts it.
             record = {
                 "format": RECORD_FORMAT,
-                "probe_key": probe_key,
+                "probe_key": attempt_key,
                 "requested_encode": dict(closed),
                 "identity": dict(identity),
                 "owner": owner,
-                "created_at": int(self._clock()),
+                # Logical creation time also orders retries across clock corrections;
+                # retain the v1 shape so older recovery can still restore every hold.
+                "created_at": max(int(self._clock()), 1 + max(
+                    (row["created_at"] for _key, row in history
+                     if type(row.get("created_at")) is int), default=0)),
             }
             if not self._write_record(record):
                 self._release(owner)
-                return self._state(closed, "unmeasured", probe_key,
+                return self._state(closed, "unmeasured", attempt_key,
                                    "the probe record could not be saved on this Mac")
         try:
             run = asyncio.create_task(asyncio.to_thread(
-                self._run_probe, closed, probe_key, tools, owner))
+                self._run_probe, closed, attempt_key, tools, owner))
             self._runs.add(run)
             run.add_done_callback(self._runs.discard)
             outcome = await asyncio.shield(run)
@@ -949,21 +1046,25 @@ class EncodeProbeControl:
             raise
         if outcome["state"] == "pending":
             reason = outcome["reason"]
-            if not self._write_result(probe_key, "pending", reason, pending=True):
+            if not self._write_result(attempt_key, "pending", reason, pending=True):
                 reason = "the pending diagnostic could not be saved: " + reason
-            return self._state(closed, "pending", probe_key, reason)
+            return self._state(closed, "pending", attempt_key, reason)
         if outcome["state"] == "supported":
-            # The evidence is the record of a support; no second outcome is written.
-            if not self._write_evidence(probe_key, outcome["evidence"]):
+            # The evidence is the record of a support, at the tuple's canonical key;
+            # no second outcome is written.
+            if not self._write_evidence(canonical, outcome["evidence"]):
                 self._release(owner)
-                return self._state(closed, "unmeasured", probe_key,
+                return self._state(closed, "unmeasured", attempt_key,
                                    "the probe result could not be saved on this Mac")
-        elif not self._write_result(probe_key, outcome["state"], outcome["reason"]):
             self._release(owner)
-            return self._state(closed, "unmeasured", probe_key,
+            return self.inspect(closed)
+        if not self._write_result(attempt_key, outcome["state"], outcome["reason"]):
+            self._release(owner)
+            return self._state(closed, "unmeasured", attempt_key,
                                "the probe outcome could not be saved on this Mac")
         self._release(owner)
-        return self.inspect(closed)
+        # This attempt's own settled outcome, exactly as it was retained.
+        return self._state(closed, outcome["state"], attempt_key, outcome["reason"])
 
     def _plan_for(self, encode: Mapping[str, Any]) -> Any:
         """The pinned helper's plan for one tuple, or None when it refuses it."""
@@ -1057,7 +1158,7 @@ class EncodeProbeControl:
         except Exception:  # noqa: BLE001 - another owner keeps the hold
             return
 
-    def _run_probe(self, closed: Mapping[str, Any], probe_key: str,
+    def _run_probe(self, closed: Mapping[str, Any], attempt_key: str,
                    tools: tuple[Path, Path], owner: str) -> dict[str, Any]:
         """The bounded run itself, off the event loop."""
         authority = self._authority()
@@ -1068,7 +1169,7 @@ class EncodeProbeControl:
             wall = min(wall, float(getattr(bounds, "max_wall_seconds", wall)))
             output_limit = min(output_limit, int(getattr(bounds, "output_limit_bytes",
                                                         output_limit)))
-        scratch = self._scratch_for(probe_key)
+        scratch = self._scratch_for(attempt_key)
         runner = self._runner()
         # The probe runs inside the profile's own process-tree memory bound, and its
         # scratch is capped while it runs, not only after it finished.
@@ -1094,7 +1195,7 @@ class EncodeProbeControl:
                 if identity is not None:
                     raise RuntimeError("the probe phase reported more than one process")
                 identity = value
-                saved = self._write_launch(probe_key, value, owner, phase)
+                saved = self._write_launch(attempt_key, value, owner, phase)
                 if not saved:
                     raise RuntimeError("the probe process identity could not be saved")
 
@@ -1228,12 +1329,12 @@ class EncodeProbeControl:
     # --- recovery -----------------------------------------------------------------------
 
     async def recover_and_restore_physical_holds(self) -> list[dict[str, Any]]:
-        """Recover the durable probes after a restart.
+        """Recover the durable probe attempts after a restart.
 
-        A probe whose process cannot still run is resolved as unmeasured and its hold
-        is released. A probe whose process may still run keeps its hold and stays
-        pending: an unknown outcome is never released, and no process is ever signalled
-        on a guess.
+        Every attempt's record is recovered under its own key. An attempt whose process
+        cannot still run is resolved as unmeasured and its hold is released. An attempt
+        whose process may still run keeps its hold and stays pending: an unknown outcome
+        is never released, and no process is ever signalled on a guess.
         """
         recovered: list[dict[str, Any]] = []
         for probe_key in self._record_keys():
@@ -1242,7 +1343,12 @@ class EncodeProbeControl:
                 continue
             if self._read_result(probe_key) is not None:
                 continue
-            if self._read_evidence(probe_key) is not None:
+            try:
+                canonical = self._probe_key(record["requested_encode"],
+                                            record["identity"])
+            except (KeyError, TypeError, ValueError):
+                canonical = None
+            if canonical is not None and self._read_evidence(canonical) is not None:
                 # The probe already finished and proved its tuple; nothing is pending.
                 continue
             owner = str(record.get("owner") or self._owner(probe_key))

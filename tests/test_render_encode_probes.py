@@ -184,16 +184,17 @@ class ProbeControlFixture(unittest.TestCase):
         self.runner = FakeRunner()
         self.node = NODE
         self.paused = False
+        self.now = 1_000
         self.control = EncodeProbeControl(
             self.data_root, loader=self.loader, executor=self.executor,
             node_id=lambda: self.node,
             hardware_identity=lambda: {"chip": "Apple M4", "memory_gb": 16},
             admission_allowed=lambda: not self.paused,
-            runner=self.runner, expected_uid=os.getuid(), clock=lambda: 1_000,
+            runner=self.runner, expected_uid=os.getuid(), clock=lambda: self.now,
             scratch_root=self.root / "scratch")
 
-    def probe(self, encode=None):
-        return asyncio.run(self.control.probe(encode or ENCODE))
+    def probe(self, encode=None, *, attempt=None):
+        return asyncio.run(self.control.probe(encode or ENCODE, attempt=attempt))
 
     def inspect(self, encode=None):
         return self.control.inspect(encode or ENCODE)
@@ -461,6 +462,174 @@ class ProbeTests(ProbeControlFixture):
                   if entry["requested_encode"]["requested_codec"] == "h265"]
         self.assertEqual(len(grants), 1)
         self.assertIsNone(grants[0]["evidence"]["selected_tier"])
+
+
+class DeliberateRetryTests(ProbeControlFixture):
+    """A deliberate retry is a new attempt key; every earlier attempt stays as history."""
+
+    def _failing_runner(self, stderr: bytes) -> FakeRunner:
+        runner = FakeRunner(encoder_code=1, encoder_stderr=stderr)
+        self.control._runner_callable = runner
+        return runner
+
+    def test_a_deliberate_retry_runs_a_new_attempt_and_keeps_the_old_history(self):
+        first_runner = self._failing_runner(b"first failure detail")
+        first = self.probe(attempt="retry-1")
+        self.assertEqual(first["state"], "unsupported")
+        self.assertIn("first failure detail", first["reason"])
+        self.now = 2_000
+        second_runner = self._failing_runner(b"fresh failure detail")
+        second = self.probe(attempt="retry-2")
+        self.assertEqual(second["state"], "unsupported")
+        self.assertIn("fresh failure detail", second["reason"])
+        canonical = self.control._probe_key(ENCODE, self.control._identity(ENCODE))
+        self.assertNotEqual(first["probe_key"], canonical)
+        self.assertNotEqual(first["probe_key"], second["probe_key"])
+        self.assertEqual(len(first_runner.calls), 1)
+        self.assertEqual(len(second_runner.calls), 1)
+        # Both attempts are retained: no record or result is ever replaced.
+        self.assertEqual(set(self.control._record_keys()),
+                         {first["probe_key"], second["probe_key"]})
+        old = self.control._read_result(first["probe_key"])
+        self.assertIn("first failure detail", old["reason"])
+        fresh = self.control._read_result(second["probe_key"])
+        self.assertIn("fresh failure detail", fresh["reason"])
+        self.assertEqual(self.inspect()["reason"], second["reason"])
+
+    def test_latest_attempt_survives_equal_times_clock_rollback_and_restart(self):
+        identity = self.control._identity(ENCODE)
+        attempts = sorted(("retry-a", "retry-b", "retry-c"), reverse=True,
+                          key=lambda value: self.control._attempt_key(ENCODE, identity, value))
+        states = []
+        for index, attempt in enumerate(attempts):
+            self.now = 1_000 if index < 2 else 900
+            self._failing_runner(attempt.encode("ascii"))
+            state = self.probe(attempt=attempt)
+            states.append(state)
+            self.assertEqual(self.inspect()["probe_key"], state["probe_key"])
+        restarted = EncodeProbeControl(
+            self.data_root, loader=self.loader, executor=self.executor,
+            node_id=lambda: self.node,
+            hardware_identity=lambda: {"chip": "Apple M4", "memory_gb": 16},
+            admission_allowed=lambda: True, runner=FakeRunner(),
+            expected_uid=os.getuid(), clock=lambda: 800,
+            scratch_root=self.root / "scratch")
+        self.assertEqual(restarted.inspect(ENCODE)["probe_key"], states[-1]["probe_key"])
+        self.assertEqual(restarted.inspect(ENCODE)["reason"], states[-1]["reason"])
+        acquired = len(self.executor.broker.acquired)
+        replay = asyncio.run(restarted.probe(ENCODE, attempt=attempts[0]))
+        self.assertEqual(replay, states[0])
+        self.assertEqual(len(self.executor.broker.acquired), acquired)
+        self.assertEqual(restarted.inspect(ENCODE)["probe_key"], states[-1]["probe_key"])
+
+    def test_a_compiler_refusal_cannot_settle_a_later_running_bare_probe(self):
+        self.control._plan_error = lambda closed, tools: "compiler refusal"
+        refused = self.probe()
+        self.assertEqual(refused["state"], "unsupported")
+        self.assertEqual(self.control._record_keys(), [])
+        self.control._plan_error = lambda closed, tools: None
+        self.assertEqual(self.probe(), refused)
+        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(self.executor.broker.acquired, [])
+        retried = self.probe(attempt="retry-after-refusal")
+        self.assertEqual(retried["state"], "supported")
+        self.assertEqual(len(self.runner.calls), 2)
+
+    def test_replaying_one_attempt_identity_never_spawns_again(self):
+        runner = self._failing_runner(b"attempt one detail")
+        first = self.probe(attempt="retry-1")
+        self.assertEqual(first["state"], "unsupported")
+        spawns = len(runner.calls)
+        self.assertEqual(spawns, 1)
+        replay = self.probe(attempt="retry-1")
+        self.assertEqual(replay["state"], "unsupported")
+        self.assertEqual(replay["probe_key"], first["probe_key"])
+        self.assertEqual(replay["reason"], first["reason"])
+        self.assertEqual(len(runner.calls), spawns)
+        self.assertEqual(len(self.executor.broker.acquired), 1)
+        self.assertEqual(len(self.control._record_keys()), 1)
+
+    def test_a_retry_is_never_allowed_while_an_earlier_attempt_is_unresolved(self):
+        def spawn_failure(argv, timeout_seconds, workspace, on_spawn=None):
+            raise PermissionError(13, "Permission denied", "/tools/ffmpeg")
+
+        self.control._runner_callable = spawn_failure
+        first = self.probe(attempt="retry-1")
+        self.assertEqual(first["state"], "pending")
+        diagnostic = self.control._read_result(first["probe_key"], pending=True)
+        retried = self.probe(attempt="retry-2")
+        self.assertEqual(retried["state"], "pending")
+        self.assertEqual(retried["probe_key"], first["probe_key"])
+        self.assertEqual(retried["reason"], diagnostic["reason"])
+        # The unresolved attempt keeps its hold: the retry never acquires or runs.
+        self.assertEqual(len(self.executor.broker.acquired), 1)
+        self.assertEqual(self.executor.broker.released, [])
+        self.assertTrue(self.executor.broker.holds)
+        recovered = asyncio.run(self.control.recover_and_restore_physical_holds())
+        self.assertEqual(recovered, [{"probe_key": first["probe_key"], "state": "pending"}])
+        self.assertTrue(self.executor.broker.holds)
+        self.assertEqual(self.executor.broker.released, [])
+
+    def test_a_normal_post_never_starts_a_new_run_once_any_attempt_exists(self):
+        runner = self._failing_runner(b"settled failure detail")
+        first = self.probe(attempt="retry-1")
+        self.assertEqual(first["state"], "unsupported")
+        bare = self.probe()
+        self.assertEqual(bare["state"], "unsupported")
+        self.assertEqual(bare["probe_key"], first["probe_key"])
+        self.assertEqual(bare["reason"], first["reason"])
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(len(self.executor.broker.acquired), 1)
+
+    def test_a_retry_that_succeeds_publishes_the_canonical_evidence(self):
+        self._failing_runner(b"first failure detail")
+        first = self.probe(attempt="retry-1")
+        self.assertEqual(first["state"], "unsupported")
+        self.now = 2_000
+        self.control._runner_callable = FakeRunner()
+        second = self.probe(attempt="retry-2")
+        self.assertEqual(second["state"], "supported")
+        canonical = self.control._probe_key(ENCODE, self.control._identity(ENCODE))
+        self.assertEqual(second["probe_key"], canonical,
+                         "support stays at the tuple's canonical key")
+        self.assertTrue((self.data_root / "render-authority/probe-evidence"
+                         / f"{canonical}.json").is_file())
+        entries = self.control.supported_entries()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["authority_digest"], second["authority_digest"])
+        # The earlier failed attempt is still on disk as history.
+        self.assertEqual(len(self.control._record_keys()), 2)
+        self.assertIsNotNone(self.control._read_result(first["probe_key"]))
+        # A normal POST adopts the proved support without another run.
+        adopted = self.probe()
+        self.assertEqual(adopted["state"], "supported")
+        self.assertEqual(adopted["authority_digest"], second["authority_digest"])
+        self.assertEqual(len(self.control._record_keys()), 2)
+
+    def test_a_crashed_attempt_is_recovered_under_its_own_key_then_retry_runs(self):
+        identity = self.control._identity(ENCODE)
+        attempt_key = self.control._attempt_key(ENCODE, identity, "retry-1")
+        owner = self.control._owner(attempt_key)
+        self.control._write_record({
+            "format": render_encode_probes.RECORD_FORMAT,
+            "probe_key": attempt_key,
+            "requested_encode": dict(ENCODE),
+            "identity": dict(identity),
+            "owner": owner,
+            "created_at": 1_000,
+        })
+        for phase in (1, 2):
+            self.control._write_launch(attempt_key, FakeIdentity(), owner, phase)
+        recovered = asyncio.run(self.control.recover_and_restore_physical_holds())
+        self.assertEqual(recovered, [{"probe_key": attempt_key, "state": "unmeasured"}])
+        self.assertEqual(self.inspect()["state"], "unmeasured")
+        self.assertEqual(self.executor.broker.holds, {},
+                         "the settled crash released its own hold")
+        self.assertEqual(self.executor.broker.restored, [("local", owner)])
+        # The settled crash never blocks a fresh deliberate attempt.
+        state = self.probe(attempt="retry-2")
+        self.assertEqual(state["state"], "supported")
+        self.assertEqual(len(self.runner.calls), 2, "one encode and one ffprobe")
 
 
 class ProcessSafetyTests(ProbeControlFixture):
