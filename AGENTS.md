@@ -28,6 +28,9 @@
 
 ## Working rules
 
+- **Every worker commits its owned files before reporting; no uncommitted owned work remains.**
+  Every shipped release fast-forwards `main` as part of closeout.
+
 - **A fleet rollout fans out — owner, 2026-10-26: *"it shouldn't block the rest. we can just keep
   updating or installing ... we can just fan it out."*** `scripts/hub_rollout.py` publishes to every
   site in parallel, each with its own bounded gate: a busy site is re-polled on its own, an
