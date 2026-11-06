@@ -261,7 +261,8 @@ class StandaloneHubConfigTests(unittest.TestCase):
 
         self.assertEqual(lifecycle,
                          ["probe-recovery", "queue-restore", "developer-configure",
-                          "developer-recovery", "probe-stop", "probe-stop", "developer-stop"])
+                          "developer-recovery", "probe-stop", "probe-stop",
+                          "probe-stop", "developer-stop"])
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(accepted.status_code, 200)
         self.assertEqual(accepted.json()["effective"]["max_bytes"], 20_000_000_000)
