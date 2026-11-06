@@ -137,24 +137,52 @@ class EveryMacDrainsIndependently(unittest.TestCase):
         self.assertEqual(answer["state"], "draining", "a node's update must not depend on its controller")
         self.assertTrue(update_drain.draining())
 
-    def test_a_draining_controller_no_longer_holds_its_idle_nodes(self):
-        with mock.patch.object(broker, "_monitor", lambda: _GroupMonitor()), \
-             mock.patch.object(broker, "_busy", set()), \
-             mock.patch.object(broker.peers, "dispatch_ready", lambda studio, generation=None: True):
-            update_drain._set_draining(True)
-            busy = broker.busy_machines()
-            ids = [s["id"] for s in broker._eligible_studios("voice", "pool", None)]
-            refusal = _submission(_GroupMonitor())
-        self.assertIn("local", busy)
-        self.assertNotIn("node-1", busy, "each node installs when its own work is done, not when this Mac's is")
-        self.assertEqual(ids, ["node-1:voice"])
-        self.assertIsNone(refusal, "the controller keeps routing its nodes' work while it drains")
-
     def test_the_slot_route_is_open_to_the_fleet_and_to_a_node_credential(self):
         self.assertTrue(auth.fleet_path_allowed("POST", "/api/hub/fleet/update-slot"))
         self.assertTrue(auth.node_path_allowed("POST", "/api/hub/fleet/update-slot"))
         self.assertFalse(auth.fleet_path_allowed("POST", "/api/hub/update/drain"),
                          "asking a Mac to stop taking work is the owner's app alone")
+
+
+class DrainNeverStarves(unittest.TestCase):
+    """Once the controller's own work is done, nothing new starts in its group: what the nodes run for
+    it finishes and it installs. A long queue must not keep it busy for ever. This is the dispatch
+    hold for the controller's own coordinated work, not a one-at-a-time install gate."""
+
+    def setUp(self):
+        _reset()
+        self.addCleanup(_reset)
+
+    def test_the_group_is_held_once_this_macs_own_work_is_done(self):
+        with mock.patch.object(broker, "_monitor", lambda: _GroupMonitor()), \
+             mock.patch.object(broker, "_busy", {"voice-1", "node-1:voice"}), \
+             mock.patch.object(broker.peers, "dispatch_ready", lambda studio, generation=None: True):
+            self.assertFalse(broker.drain_holds_group(), "not draining: nothing is held")
+            update_drain._set_draining(True)
+            self.assertFalse(broker.drain_holds_group(), "the controller's own job still runs")
+            self.assertNotIn("node-1", broker.busy_machines())
+            broker._busy.discard("voice-1")
+            self.assertTrue(broker.drain_holds_group())
+            self.assertIn("node-1", broker.busy_machines(),
+                          "a node kept taking new work, so the controller could never install")
+            self.assertEqual(broker._eligible_studios("voice", "pool", None), [])
+
+    def test_a_held_group_refuses_a_submission_so_the_gateway_reroutes_it(self):
+        with mock.patch.object(standalone, "_model_catalog", lambda: CATALOG), \
+             mock.patch.object(standalone, "_model_state",
+                               lambda manifest, catalog, mon, lane_contracts=None: {"dispatch_state": "eligible"}), \
+             mock.patch.object(broker, "_monitor", lambda: _GroupMonitor()), \
+             mock.patch.object(broker, "_busy", set()):
+            update_drain._set_draining(True)
+            refusal = standalone._submission_readiness(ENVELOPE, _GroupMonitor())
+        self.assertEqual(refusal["code"], "MACHINE_BUSY")
+
+    def test_a_render_lease_on_this_mac_is_its_own_work(self):
+        with mock.patch.object(broker, "_monitor", lambda: _GroupMonitor()), \
+             mock.patch.object(broker, "_busy", set()), \
+             mock.patch.dict(broker._external_machine_leases, {"local": "render:1"}, clear=True):
+            update_drain._set_draining(True)
+            self.assertFalse(broker.drain_holds_group())
 
 
 if __name__ == "__main__":
