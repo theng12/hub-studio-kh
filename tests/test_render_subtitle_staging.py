@@ -130,11 +130,36 @@ class SubtitleStagingTests(unittest.TestCase):
                     legacy[path.relative_to(self.tools_root).as_posix()] = path.read_bytes()
         return legacy
 
-    def test_subtitle_authority_is_explicitly_absent_until_frozen(self) -> None:
-        self.assertIsNone(stage_render_tools.SUBTITLE_AUTHORITY_PINS)
-        self.assertFalse((ROOT / "packaging/render-authority-subtitle").exists())
+    def test_subtitle_pins_match_the_canonical_triple_and_legacy_stays_absent(self) -> None:
+        pins = stage_render_tools.SUBTITLE_AUTHORITY_PINS
+        self.assertEqual(
+            tuple(pin.relative_path for pin in pins),
+            ("PROFILE.json", "TOOLS.json", "COMPILER.json"),
+        )
+        for pin in pins:
+            self.assertEqual(pin.size_bytes, len(pin.source.read_bytes()))
+            self.assertEqual(pin.sha256, sha256(pin.source.read_bytes()))
         self.stage_legacy()
         self.assertFalse((self.tools_root / "subtitle").exists())
+
+    def test_real_canonical_subtitle_triple_stages_unchanged(self) -> None:
+        legacy = self.stage_legacy()
+        pins = stage_render_tools.SUBTITLE_AUTHORITY_PINS
+
+        result = self.stage("descriptor-only", pins, subtitles=True)
+
+        self.assertEqual(len(result.staged_paths), 3)
+        for pin in pins:
+            self.assertEqual(
+                (self.tools_root / "subtitle" / pin.relative_path).read_bytes(),
+                pin.source.read_bytes(),
+            )
+        for relative, payload in legacy.items():
+            self.assertEqual((self.tools_root / relative).read_bytes(), payload)
+        compiler = json.loads((self.tools_root / "subtitle/COMPILER.json").read_bytes())
+        self.assertEqual(compiler["format"], "studio.render.compiler.v1")
+        self.assertEqual(compiler["implementation"], "hub-final-render-subtitle-v1")
+        self.assertFalse((self.tools_root / "subtitle/qualification-vectors").exists())
 
     def test_v4_subtitle_triple_stages_beside_unchanged_legacy(self) -> None:
         legacy = self.stage_legacy()

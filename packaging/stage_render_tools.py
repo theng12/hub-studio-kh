@@ -108,22 +108,24 @@ LATE_LABEL_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
 )
 
 
-# The v4 subtitle triple is not frozen: no canonical bytes or source-committed subtitle compiler
-# exist yet, so this stays None and the bundle advertises no subtitle capability (a negative,
-# never a guessed hash or a placeholder triple). The pin-freeze worker replaces None with:
-#   SUBTITLE_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
-#       _AuthorityPin("PROFILE.json", _SUBTITLE_DIRECTORY / "PROFILE.json", <bytes>, "<sha256>"),
-#       _AuthorityPin("TOOLS.json", _SUBTITLE_DIRECTORY / "TOOLS.json", 796,
-#                     "98c25ae582d4ee43ee1cf665192365149f8d9f860c229a0be9da131df43eba8a"),
-#       _AuthorityPin("COMPILER.json", _SUBTITLE_DIRECTORY / "COMPILER.json", <bytes>, "<sha256>"),
-#   )
-# from the actual packaging/render-authority-subtitle/{PROFILE,TOOLS,COMPILER}.json bytes after
-# the render-contract and compiler source commits (the COMPILER descriptor must carry the real
-# format, implementation, python_runtime_sha256, render_hash_sha256, render_contract_sha256 and
-# final_render_compiler_sha256), then commits those canonical files. Descriptor-only: no
-# qualification vector ships for subtitles.
+# The frozen v4 subtitle triple: canonical bytes, exact identity. It reuses the unchanged TOOLS
+# bytes and pins the committed v4 render_contract/final_render_compiler sources plus the shipped
+# Python runtime. Descriptor-only: no qualification vector ships for subtitles.
 _SUBTITLE_DIRECTORY = Path(__file__).resolve().parent / "render-authority-subtitle"
-SUBTITLE_AUTHORITY_PINS: tuple[_AuthorityPin, ...] | None = None
+SUBTITLE_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
+    _AuthorityPin(
+        "PROFILE.json", _SUBTITLE_DIRECTORY / "PROFILE.json", 1064,
+        "2f888ec305ad7dac376f72e32ed184baebf78d86ddf037ed24296643886c75c0",
+    ),
+    _AuthorityPin(
+        "TOOLS.json", _SUBTITLE_DIRECTORY / "TOOLS.json", 796,
+        "98c25ae582d4ee43ee1cf665192365149f8d9f860c229a0be9da131df43eba8a",
+    ),
+    _AuthorityPin(
+        "COMPILER.json", _SUBTITLE_DIRECTORY / "COMPILER.json", 455,
+        "6fcc6879969b20b68d843b6acba82b58b14a8f4b19b70d8f6d6ba45918b677c0",
+    ),
+)
 
 
 @dataclass(frozen=True)
