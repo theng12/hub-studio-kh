@@ -5,6 +5,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 ## 0.6.223 — 2026-11-05
 
 - The menu bar dropdown shows the installed Hub version directly above Quit Hub Studio KH.
+- Rollout coverage checks both Gateway rosters, so a site known only to 1301 cannot be missed. Shared Macs are counted once; holds, pauses and offline Macs stay visible without changing their settings.
 
 - Image jobs carry the Models page’s free-memory override through to the worker, including reference-image jobs. Reference jobs still require their own measured minimum. If the swap monitor cannot be read, the job stops and explains why.
 - Invalid job requests name the field that needs fixing. A storage error during acceptance is reported before the job enters this Hub’s in-memory queue, and diagnostics retain a bounded correlation record without request content.

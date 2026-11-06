@@ -53,6 +53,13 @@ What changed:
     receipt records every read and the file's source path.
 
 Every outcome lands in one receipt: one row per site, and a table a person can read in one pass.
+Coverage also reads this Mac's and 1301's Gateway rosters before and after the rollout. Shared
+controller/member identities are counted once; online outdated/unhealthy members, missing members
+and unreadable rosters make the final exit nonzero even if this publisher's selected sites passed.
+Held, paused and offline entries stay explicit dispositions, never settings writes. Override the
+read-only origins with KH_ROLLOUT_COVERAGE_GATEWAYS or repeat --coverage-gateway; publication still
+uses only this Mac's existing Gateway. Record existing holds with --coverage-held-site.
+Use --coverage-only --version V --evidence PATH for a fresh read-only closeout without an artifact.
 
 usage: hub_rollout.py --artifact DMG --version V --build B --evidence PATH [--only-sites A,B,C]
 """
@@ -78,6 +85,8 @@ SCHEMA = 'studiohub.hub-rollout-fanout.v1'
 SITE_SCHEMA = 'studiohub.hub-rollout-fanout.site.v1'
 
 GATEWAY_URL = os.environ.get('KH_GATEWAY_URL', 'http://127.0.0.1:8787')
+COVERAGE_GATEWAYS = os.environ.get(
+    'KH_ROLLOUT_COVERAGE_GATEWAYS', GATEWAY_URL + ',http://127.0.0.1:8787')
 GATEWAY_ENV = Path(os.path.expanduser('~/Library/Application Support/gateway-kh/.env'))
 GATEWAY_DB = Path(os.path.expanduser(
     '~/Library/Application Support/gateway-kh/data/gateway.sqlite3'))
@@ -956,11 +965,74 @@ def choose_sites(locations: list[dict], only: str | None) -> list[dict]:
     return out
 
 
+def rollout_coverage(gateways: dict, version: str, held_sites=(), previous=None) -> dict:
+    """Account for every Gateway's roster; never publish or change a hold."""
+    entities, errors = {}, {}
+    for origin, gateway in gateways.items():
+        try:
+            fleet = gateway.fleet(force=True)
+            locations, machines = fleet['locations'], fleet['machines']
+            if not isinstance(locations, list) or not locations or not isinstance(machines, list):
+                raise ValueError('missing roster')
+            for location in locations:
+                site = location['id']
+                # "local" belongs to its Gateway; other controller ids are fleet identities.
+                identity = origin + '/local' if site == 'local' else site
+                members = [m for m in machines if m.get('location_id') == site]
+                for machine, row in [(None, location), *[(m['machine'], m) for m in members]]:
+                    reachable = row.get('reachable')
+                    observed_version = (row.get('version') if machine is None
+                                        else row.get('hub_version'))
+                    if site in held_sites:
+                        state = 'held'
+                    elif location.get('paused_at') or location.get('paused') is True or row.get('paused_at') or row.get('paused') is True:
+                        state = 'paused'
+                    elif location.get('reachable') is False or reachable is False:
+                        state = 'offline'
+                    elif reachable is not True or not observed_version or (machine is None and not members):
+                        state = 'unknown'
+                    elif observed_version != version:
+                        state = 'outdated'
+                    elif machine is not None and not member_is_current(row, version):
+                        state = 'unhealthy'
+                    else:
+                        state = 'current'
+                    entity = entities.setdefault((identity, machine), {
+                        'site': identity, 'machine': machine,
+                        'label': row.get('label') or machine or site, 'observations': []})
+                    entity['observations'].append({'gateway': origin, 'state': state,
+                                                   'version': observed_version})
+        except Exception as exc:  # an unreadable roster is never an empty, successful fleet
+            errors[origin] = type(exc).__name__
+    for old in (previous or {}).get('entities', []):
+        key = (old['site'], old['machine'])
+        if key not in entities:
+            entities[key] = {**old, 'observations': [
+                {'gateway': o['gateway'], 'state': 'unknown', 'version': None}
+                for o in old['observations']]}
+    rows = list(entities.values())
+    for row in rows:
+        states = {o['state'] for o in row['observations']}
+        row['gateways'] = sorted({o['gateway'] for o in row['observations']})
+        row['accounted'] = states <= {'current', 'held', 'paused', 'offline'}
+    return {'observed_at': utc_now(), 'version': version, 'gateways': list(gateways),
+            'held_sites': sorted(set(held_sites)), 'errors': errors, 'entities': rows,
+            'complete': bool(rows) and not errors and all(row['accounted'] for row in rows),
+            'settings_written': False, 'published': False}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--artifact', required=True, help='the .dmg to offer every site')
+    parser.add_argument('--artifact', help='the .dmg to offer every site')
     parser.add_argument('--version', required=True, help='the release version it carries')
-    parser.add_argument('--build', required=True, help='the build identity it carries')
+    parser.add_argument('--build', help='the build identity it carries')
+    parser.add_argument('--coverage-only', action='store_true',
+                        help='read both Gateway rosters without accepting or publishing an artifact')
+    parser.add_argument('--coverage-gateway', action='append',
+                        help='Gateway origin to account for (repeatable; defaults to '
+                             'KH_ROLLOUT_COVERAGE_GATEWAYS or this Mac plus 1301)')
+    parser.add_argument('--coverage-held-site', action='append', default=[],
+                        help='existing held site id to record, not change (repeatable)')
     parser.add_argument('--evidence', required=True,
                         help='receipt JSON to write; refused when it already exists')
     parser.add_argument('--only-sites', default=None,
@@ -985,12 +1057,25 @@ def main(argv: list[str] | None = None) -> int:
     if evidence.exists():
         raise SystemExit(f'{evidence} already exists; a receipt is never reused or overwritten')
 
+    if not args.coverage_only and (not args.artifact or not args.build):
+        parser.error('--artifact and --build are required unless --coverage-only is used')
+    gateway = Gateway()
+    origins = args.coverage_gateway if args.coverage_gateway is not None else COVERAGE_GATEWAYS.split(',')
+    coverage_gateways = {origin.strip().rstrip('/'): Gateway(base=origin.strip().rstrip('/'))
+                         for origin in origins if origin.strip()}
+    coverage_before = rollout_coverage(coverage_gateways, args.version, args.coverage_held_site)
+    if args.coverage_only:
+        evidence.parent.mkdir(parents=True, exist_ok=True)
+        with evidence.open('x') as handle:
+            handle.write(json.dumps(coverage_before, indent=2) + '\n')
+        note(f'coverage complete: {coverage_before["complete"]}; receipt: {evidence}')
+        return 0 if coverage_before['complete'] else 1
+
     artifact = Path(args.artifact)
     accepted = accept_artifact(artifact, args.version, args.build)
     note(f'artifact accepted: {accepted["name"]} {accepted["bytes"]} bytes '
          f'sha256 {accepted["sha256"]}')
 
-    gateway = Gateway()
     rollout = Rollout(gateway, accepted, artifact, args.version, args.build,
                       receipts=evidence.parent / 'hub-rollout-site-receipts',
                       force_full=args.full, allow_busy=args.allow_busy,
@@ -1013,7 +1098,10 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - the report still lands
         readback_fleet = {'error': f'{type(exc).__name__}: {exc}'}
 
+    coverage_after = rollout_coverage(coverage_gateways, args.version, args.coverage_held_site,
+                                      previous=coverage_before)
     receipt = {
+        'coverage_before': coverage_before, 'coverage_after': coverage_after,
         'schema': SCHEMA, 'tool': 'scripts/hub_rollout.py',
         'generated_at': utc_now(), 'version': args.version, 'build': args.build,
         'artifact': accepted,
@@ -1058,7 +1146,8 @@ def main(argv: list[str] | None = None) -> int:
            and not (args.paced and row.get('state') == 'offline; not published')]
     if bad:
         note('sites not verified: ' + ', '.join(f'{r["site"]} ({r["state"]})' for r in bad))
-    return 0 if not bad else 1
+    note(f'coverage complete: {coverage_after["complete"]}')
+    return 0 if not bad and coverage_after['complete'] else 1
 
 
 if __name__ == '__main__':

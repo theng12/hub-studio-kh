@@ -109,6 +109,7 @@ class FakeGateway:
         for site in self.sites.values():
             locations.append({
                 'id': site.id, 'label': site.label, 'reachable': site.reachable,
+                'version': TARGET['version'] if site.published_at is not None else '0.6.998',
                 'running_jobs': [{'id': job} for job in site.running],
                 'capacity': {'queue_depth': site.queue}, 'release': site.release,
             })
@@ -827,8 +828,9 @@ class MainTests(unittest.TestCase):
     def test_only_sites_restricts_the_fan_out(self):
         code, gateway = self.run_main(FakeSite('local', ['this-mac'], label='This Mac'),
                                       FakeSite('1100', ['1100']), only='This Mac')
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1, 'a selected stage cannot claim the whole fleet is current')
         self.assertEqual([site for site, _ in gateway.posts], ['local'])
+        self.assertFalse(json.loads(self.evidence.read_text())['coverage_after']['complete'])
 
     def test_full_asks_the_gateway_for_the_whole_image_and_records_it(self):
         # A 0.6.201 controller advertises delta but refuses a delta over half the image
@@ -872,9 +874,10 @@ class MainTests(unittest.TestCase):
         argv = ['--artifact', str(self.artifact), '--version', VERSION,
                 '--build', BUILD, '--evidence', str(self.evidence)]
         code = hub.main(argv)
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1, 'holding the release does not update online members')
         receipt = json.loads(self.evidence.read_text())
         self.assertEqual(receipt['sites'][0]['state'], 'verified')
+        self.assertFalse(receipt['coverage_after']['complete'])
         site_receipt = json.loads((self.evidence.parent / f'hub-rollout-site-receipts/1100-{VERSION}.json').read_text())
         self.assertEqual(site_receipt['code'], 'RECOVERED_HELD')
 
@@ -904,6 +907,75 @@ class MainTests(unittest.TestCase):
             hub.main(['--artifact', str(self.artifact), '--version', VERSION,
                       '--build', BUILD, '--evidence', str(self.evidence)])
         self.assertEqual(self.gateway.posts, [])
+
+
+class CoverageTests(unittest.TestCase):
+    setUp = MainTests.setUp
+    tearDown = MainTests.tearDown
+
+    def test_1301_only_site_cannot_disappear_from_completion(self):
+        primary = FakeGateway([FakeSite('1100', ['1101'])], identity=self.identity)
+        remote = FakeGateway([FakeSite('1700', ['1701', '1702'])], identity=self.identity)
+        hub.Gateway = lambda base=hub.GATEWAY_URL: primary if base == hub.GATEWAY_URL else remote
+        code = hub.main(['--artifact', str(self.artifact), '--version', VERSION,
+                         '--build', BUILD, '--evidence', str(self.evidence)])
+        self.assertEqual(code, 1)
+        after = json.loads(self.evidence.read_text())['coverage_after']
+        self.assertEqual({r['machine'] for r in after['entities'] if r['site'] == '1700'},
+                         {None, '1701', '1702'})
+        self.assertFalse(after['complete'])
+        self.assertEqual(remote.posts, [])
+
+    def test_overlapping_sites_are_accounted_once_without_republishing(self):
+        shared = FakeSite('1100', ['1101'])
+        primary = FakeGateway([shared], identity=self.identity)
+        remote = FakeGateway([shared], identity=self.identity)
+        hub.Gateway = lambda base=hub.GATEWAY_URL: primary if base == hub.GATEWAY_URL else remote
+        code = hub.main(['--artifact', str(self.artifact), '--version', VERSION,
+                         '--build', BUILD, '--evidence', str(self.evidence)])
+        after = json.loads(self.evidence.read_text())['coverage_after']
+        self.assertEqual(code, 0)
+        self.assertEqual(len(after['entities']), 2)
+        self.assertTrue(all(len(r['gateways']) == 2 for r in after['entities']))
+        self.assertEqual(len(primary.posts), 1)
+        self.assertEqual(remote.posts, [])
+
+    def test_coverage_only_preserves_paused_held_and_offline_dispositions(self):
+        gateway = FakeGateway([FakeSite('paused', ['p']), FakeSite('held', ['h']),
+                               FakeSite('offline', ['o'], reachable=False)], identity=self.identity)
+        fleet = gateway.fleet()
+        fleet['locations'][0]['paused_at'] = 123
+        before = json.dumps(fleet, sort_keys=True)
+        hub.Gateway = lambda **kwargs: SimpleNamespace(fleet=lambda force: fleet)
+        hub.accept_artifact = lambda *a: self.fail('read-only coverage accepted an artifact')
+        code = hub.main(['--coverage-only', '--version', VERSION,
+                         '--coverage-held-site', 'held', '--evidence', str(self.evidence)])
+        receipt = json.loads(self.evidence.read_text())
+        self.assertEqual(code, 0)
+        self.assertEqual({o['state'] for r in receipt['entities'] for o in r['observations']},
+                         {'paused', 'held', 'offline'})
+        self.assertEqual(json.dumps(fleet, sort_keys=True), before)
+        self.assertFalse(receipt['settings_written'])
+        self.assertFalse(receipt['published'])
+
+    def test_unreadable_roster_and_disappeared_member_remain_unknown(self):
+        gateway = FakeGateway([FakeSite('1700', ['1701'])], identity=self.identity)
+        before = hub.rollout_coverage({'1301': gateway}, VERSION)
+        fleet = gateway.fleet()
+        fleet['machines'] = []
+        after = hub.rollout_coverage({'1301': SimpleNamespace(fleet=lambda force: fleet)},
+                                     VERSION, previous=before)
+        missing = next(r for r in after['entities'] if r['machine'] == '1701')
+        self.assertEqual(missing['observations'][0]['state'], 'unknown')
+        def unreadable(force):
+            raise OSError('unavailable')
+        hub.Gateway = lambda **kwargs: SimpleNamespace(fleet=unreadable)
+        code = hub.main(['--coverage-only', '--version', VERSION,
+                         '--evidence', str(self.evidence)])
+        receipt = json.loads(self.evidence.read_text())
+        self.assertEqual(code, 1)
+        self.assertFalse(receipt['complete'])
+        self.assertTrue(receipt['errors'])
 
 
 class ReportingTests(unittest.TestCase):
