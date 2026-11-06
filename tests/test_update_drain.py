@@ -3,6 +3,9 @@
 The code is `MACHINE_BUSY` - the one the gateway already files as a location refusal
 (`LOCATION_NOT_READY`, another Mac is tried) and the broker treats as "not available right now", never
 as a failure. The drain is a lease, so a Mac that restarts, or an app that dies, resumes taking work.
+
+Every Mac installs on its own (owner 2026-11-06: fan out): a drain is never serialised against another
+Mac's, and a node never asks its controller, so no Mac waits for another one's install.
 """
 import asyncio
 import sys
@@ -24,9 +27,22 @@ class _Monitor:
     status = {"voice-1": {"status": "up"}}
 
 
+class _GroupMonitor:
+    """A controller (local voice studio) with one joined node."""
+    registry = [{"id": "voice-1", "modality": "voice", "local": True, "machine": "local"},
+                {"id": "node-1:voice", "modality": "voice", "local": False, "machine": "node-1"}]
+    status = {"voice-1": {"status": "up"}, "node-1:voice": {"status": "up"}}
+
+
 def _reset():
     update_drain._drain_until = 0.0
-    update_drain._slot = None
+
+
+def _submission(monitor):
+    with mock.patch.object(standalone, "_model_catalog", lambda: CATALOG), \
+         mock.patch.object(standalone, "_model_state",
+                           lambda manifest, catalog, mon, lane_contracts=None: {"dispatch_state": "eligible"}):
+        return standalone._submission_readiness(ENVELOPE, monitor)
 
 
 class DrainRefusesNewWork(unittest.TestCase):
@@ -34,20 +50,14 @@ class DrainRefusesNewWork(unittest.TestCase):
         _reset()
         self.addCleanup(_reset)
 
-    def _submission(self):
-        with mock.patch.object(standalone, "_model_catalog", lambda: CATALOG), \
-             mock.patch.object(standalone, "_model_state",
-                               lambda manifest, catalog, mon, lane_contracts=None: {"dispatch_state": "eligible"}):
-            return standalone._submission_readiness(ENVELOPE, _Monitor())
-
     def test_a_draining_mac_refuses_a_submission_with_the_rerouteable_code(self):
-        self.assertIsNone(self._submission())
+        self.assertIsNone(_submission(_Monitor()))
         update_drain._set_draining(True)
-        refusal = self._submission()
+        refusal = _submission(_Monitor())
         self.assertIsNotNone(refusal, "a draining Mac must refuse new work")
         self.assertEqual(refusal["code"], "MACHINE_BUSY")
 
-    def test_a_draining_mac_takes_every_machine_out_of_the_scheduler_and_peer_admission(self):
+    def test_a_draining_mac_takes_its_own_machine_out_of_the_scheduler_and_peer_admission(self):
         with mock.patch.object(broker, "_monitor", lambda: _Monitor()):
             self.assertNotIn("local", broker.busy_machines())
             update_drain._set_draining(True)
@@ -62,12 +72,17 @@ class DrainRefusesNewWork(unittest.TestCase):
         with mock.patch.object(update_drain.time, "monotonic", lambda: update_drain._drain_until + 1):
             self.assertFalse(update_drain.draining(), "a Mac whose app died must take work again")
 
-
-class _GroupMonitor:
-    """A controller (local voice studio) with one joined node."""
-    registry = [{"id": "voice-1", "modality": "voice", "local": True, "machine": "local"},
-                {"id": "node-1:voice", "modality": "voice", "local": False, "machine": "node-1"}]
-    status = {"voice-1": {"status": "up"}, "node-1:voice": {"status": "up"}}
+    def test_a_drain_is_renewed_while_it_waits_and_resumed_when_it_is_over(self):
+        first = asyncio.run(update_drain.request(True))
+        self.assertEqual(first["state"], "draining")
+        self.assertTrue(update_drain.draining())
+        expiry = update_drain._drain_until
+        with mock.patch.object(update_drain.time, "monotonic", lambda: expiry - 1):
+            self.assertEqual(asyncio.run(update_drain.request(True))["state"], "draining",
+                             "the app renews the same drain")
+        self.assertGreater(update_drain._drain_until, expiry)
+        self.assertEqual(asyncio.run(update_drain.request(False))["state"], "resumed")
+        self.assertFalse(update_drain.draining())
 
 
 class DrainingControllerKeepsServingItsNodes(unittest.TestCase):
@@ -96,19 +111,43 @@ class DrainingControllerKeepsServingItsNodes(unittest.TestCase):
         self.assertEqual(ids, ["node-1:voice"])
 
     def test_a_submission_is_accepted_while_a_node_can_serve_it(self):
-        with mock.patch.object(standalone, "_model_catalog", lambda: CATALOG), \
-             mock.patch.object(broker, "_monitor", lambda: _GroupMonitor()), \
-             mock.patch.object(standalone, "_model_state",
-                               lambda manifest, catalog, mon, lane_contracts=None: {"dispatch_state": "eligible"}):
+        with mock.patch.object(broker, "_monitor", lambda: _GroupMonitor()):
             update_drain._set_draining(True)
-            self.assertIsNone(standalone._submission_readiness(ENVELOPE, _GroupMonitor()))
-            refusal = standalone._submission_readiness(ENVELOPE, _Monitor())
+            self.assertIsNone(_submission(_GroupMonitor()))
+            refusal = _submission(_Monitor())
         self.assertEqual(refusal["code"], "MACHINE_BUSY", "a Mac with no node still refuses while it drains")
+
+
+class EveryMacDrainsIndependently(unittest.TestCase):
+    def setUp(self):
+        _reset()
+        self.addCleanup(_reset)
+
+    def test_two_holders_are_granted_where_the_old_group_slot_allowed_one(self):
+        self.assertTrue(update_drain.slot("controller", True))
+        self.assertTrue(update_drain.slot("node-1", True), "a second Mac is not made to wait")
+        self.assertTrue(update_drain.slot("node-2", True))
+        self.assertTrue(update_drain.slot("node-1", False))
+        self.assertTrue(update_drain.slot("node-2", True), "releasing never hands the slot elsewhere")
+
+    def test_a_node_drains_without_asking_its_controller(self):
+        target = ("http://controller.invalid:9", {"X-Hub-Token": "t"})
+        with mock.patch("socket.create_connection", side_effect=AssertionError("network used")):
+            answer = asyncio.run(update_drain.request(True, target))
+        self.assertEqual(answer["state"], "draining", "a node's update must not depend on its controller")
+        self.assertTrue(update_drain.draining())
+
+    def test_the_slot_route_is_open_to_the_fleet_and_to_a_node_credential(self):
+        self.assertTrue(auth.fleet_path_allowed("POST", "/api/hub/fleet/update-slot"))
+        self.assertTrue(auth.node_path_allowed("POST", "/api/hub/fleet/update-slot"))
+        self.assertFalse(auth.fleet_path_allowed("POST", "/api/hub/update/drain"),
+                         "asking a Mac to stop taking work is the owner's app alone")
 
 
 class DrainNeverStarves(unittest.TestCase):
     """Once the controller's own work is done, nothing new starts in its group: what the nodes run for
-    it finishes and it installs. A long queue must not keep it (and the group's slot) busy for ever."""
+    it finishes and it installs. A long queue must not keep it busy for ever. This is the dispatch
+    hold for the controller's own coordinated work, not a one-at-a-time install gate."""
 
     def setUp(self):
         _reset()
@@ -144,69 +183,6 @@ class DrainNeverStarves(unittest.TestCase):
              mock.patch.dict(broker._external_machine_leases, {"local": "render:1"}, clear=True):
             update_drain._set_draining(True)
             self.assertFalse(broker.drain_holds_group())
-
-
-class OneMacPerGroup(unittest.TestCase):
-    def setUp(self):
-        _reset()
-        self.addCleanup(_reset)
-
-    def test_the_slot_has_one_holder_and_is_released_by_it(self):
-        self.assertTrue(update_drain.slot("controller", True))
-        self.assertTrue(update_drain.slot("controller", True), "the holder renews")
-        self.assertFalse(update_drain.slot("node-1", True), "a node waits while the controller drains")
-        self.assertTrue(update_drain.slot("node-1", False))
-        self.assertFalse(update_drain.slot("node-1", True), "a stranger cannot release someone else's slot")
-        self.assertTrue(update_drain.slot("controller", False))
-        self.assertTrue(update_drain.slot("node-1", True))
-        self.assertFalse(update_drain.slot("controller", True), "and the controller waits for its node")
-
-    def test_a_lapsed_slot_is_free(self):
-        update_drain.slot("node-1", True)
-        with mock.patch.object(update_drain.time, "monotonic", lambda: update_drain._slot[1] + 1):
-            self.assertTrue(update_drain.slot("node-2", True), "a node that died must not hold the group")
-
-    def test_a_controller_drains_only_when_it_holds_the_slot(self):
-        update_drain.slot("node-1", True)
-        answer = asyncio.run(update_drain.request(True, None))
-        self.assertEqual(answer["state"], "waiting")
-        self.assertFalse(update_drain.draining())
-        update_drain.slot("node-1", False)
-        self.assertEqual(asyncio.run(update_drain.request(True, None))["state"], "draining")
-        self.assertTrue(update_drain.draining())
-        self.assertEqual(asyncio.run(update_drain.request(False, None))["state"], "resumed")
-        self.assertFalse(update_drain.draining())
-        self.assertTrue(update_drain.slot("node-1", True), "resuming gives the slot back")
-
-    def test_a_node_drains_only_when_its_controller_grants_the_slot(self):
-        class _Client:
-            granted = False
-            status = 200
-
-            def __init__(self, *a, **k): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *a): return False
-            async def post(self, url, json=None, headers=None):
-                self.sent = (url, json, headers)
-                return mock.Mock(status_code=_Client.status, json=lambda: {"granted": _Client.granted})
-
-        target = ("http://controller:8080", {"X-Hub-Token": "t"})
-        with mock.patch.object(update_drain.httpx, "AsyncClient", _Client):
-            self.assertEqual(asyncio.run(update_drain.request(True, target))["state"], "waiting")
-            self.assertFalse(update_drain.draining())
-            _Client.granted = True
-            self.assertEqual(asyncio.run(update_drain.request(True, target))["state"], "draining")
-            self.assertTrue(update_drain.draining())
-            # An older controller (no route) or an unreachable one must not hold an update back.
-            _reset()
-            _Client.status = 404
-            self.assertEqual(asyncio.run(update_drain.request(True, target))["state"], "draining")
-
-    def test_the_slot_route_is_open_to_the_fleet_and_to_a_node_credential(self):
-        self.assertTrue(auth.fleet_path_allowed("POST", "/api/hub/fleet/update-slot"))
-        self.assertTrue(auth.node_path_allowed("POST", "/api/hub/fleet/update-slot"))
-        self.assertFalse(auth.fleet_path_allowed("POST", "/api/hub/update/drain"),
-                         "asking a Mac to stop taking work is the owner's app alone")
 
 
 if __name__ == "__main__":

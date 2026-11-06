@@ -294,8 +294,7 @@ class StandaloneHubConfigTests(unittest.TestCase):
                 stack.enter_context(patch.object(module, name, value))
             registry._labels_cache = None
             registry._flags_cache = None
-            self.addCleanup(lambda: (setattr(update_drain, "_drain_until", 0.0),
-                                     setattr(update_drain, "_slot", None)))
+            self.addCleanup(setattr, update_drain, "_drain_until", 0.0)
             owner = {"Authorization": "Bearer same-existing-hub-token"}
             with TestClient(create_app(start_background=False)) as client:
                 self.assertEqual(client.post("/api/hub/update/drain", json={"want": True}).status_code, 401)

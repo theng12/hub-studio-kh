@@ -2663,9 +2663,10 @@ def drain_holds_group() -> bool:
     A controller's app counts the work it dispatched to its nodes as its own (its batches), and its
     relaunch would cut that work short. So once nothing runs on this Mac any more, nothing new starts
     on the nodes either: what they run finishes, the count reaches zero and the controller installs.
-    Without this a long queue kept some node busy for ever and the controller - and, holding the
-    group's one update slot, every Mac behind it - never updated (owner's rule 2026-10-03: stop new
-    work, finish current work, install; never held back because there is work).
+    Without this a long queue kept some node busy for ever and the controller never updated (owner's
+    rule 2026-10-03: stop new work, finish current work, install; never held back because there is
+    work). This is the dispatch hold for the controller's own coordinated work while it updates, not
+    a one-at-a-time install gate: every Mac installs on its own.
     """
     if not update_drain.draining():
         return False

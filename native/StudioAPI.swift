@@ -9884,9 +9884,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// gets there by itself, so the rule is **drain for update** (owner decision 2026-09-30): wait
     /// `updateDrainGrace` (ten minutes) for a natural idle; after that ask this Mac's Hub to stop taking
     /// NEW work (`MACHINE_BUSY`, which the gateway re-routes), let what runs finish - nothing is ever
-    /// stopped - then install and relaunch. Only one Mac per controller group drains at a time (the
-    /// controller holds the one slot; a node asks for it), and the drain is a lease the Hub lets lapse,
-    /// so a failed install or a dead app never leaves a Mac refusing work.
+    /// stopped - then install and relaunch. Every Mac does this on its own: two Macs never wait on
+    /// each other's install, and the drain is a lease the Hub lets lapse, so a failed install or a
+    /// dead app never leaves a Mac refusing work.
     ///
     /// **Nothing here asks a person.** The confirmation before a manual Install lives in the view
     /// (`StudioViews`), not in this path; the relaunch skips the quit prompt and force-stops a hung
@@ -9941,15 +9941,15 @@ final class NativeWorkspaceStore: ObservableObject {
     private struct DrainAnswer: Decodable { let state: String }
 
     /// Ask this Mac's Hub to stop (`true`) or resume (`false`) taking new work. The answer is
-    /// `draining`, `waiting` (another Mac in the group holds the update slot) or `resumed`; nil when
-    /// the Hub could not be asked (an older Hub has no such route - the Mac then just waits for idle).
+    /// `draining` or `resumed`; nil when the Hub could not be asked (an older Hub has no such route -
+    /// the Mac then just waits for idle, and an older Hub may answer `waiting`).
     private func requestDrain(_ want: Bool) async -> String? {
         let answer: DrainAnswer? = try? await sendJSON(["api", "hub", "update", "drain"], method: "POST", body: DrainWant(want: want))
         return answer?.state
     }
 
     /// The Hub's drain is a two-minute lease: renewed here every half minute, through the install
-    /// too (the tick does not run while installing). If the slot goes elsewhere the drain is over.
+    /// too (the tick does not run while installing). It lapses if the app dies.
     private func keepDrainAlive() {
         drainLease?.cancel()
         drainLease = Task { [weak self] in
