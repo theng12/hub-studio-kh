@@ -108,6 +108,24 @@ LATE_LABEL_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
 )
 
 
+# The v4 subtitle triple is not frozen: no canonical bytes or source-committed subtitle compiler
+# exist yet, so this stays None and the bundle advertises no subtitle capability (a negative,
+# never a guessed hash or a placeholder triple). The pin-freeze worker replaces None with:
+#   SUBTITLE_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
+#       _AuthorityPin("PROFILE.json", _SUBTITLE_DIRECTORY / "PROFILE.json", <bytes>, "<sha256>"),
+#       _AuthorityPin("TOOLS.json", _SUBTITLE_DIRECTORY / "TOOLS.json", 796,
+#                     "98c25ae582d4ee43ee1cf665192365149f8d9f860c229a0be9da131df43eba8a"),
+#       _AuthorityPin("COMPILER.json", _SUBTITLE_DIRECTORY / "COMPILER.json", <bytes>, "<sha256>"),
+#   )
+# from the actual packaging/render-authority-subtitle/{PROFILE,TOOLS,COMPILER}.json bytes after
+# the render-contract and compiler source commits (the COMPILER descriptor must carry the real
+# format, implementation, python_runtime_sha256, render_hash_sha256, render_contract_sha256 and
+# final_render_compiler_sha256), then commits those canonical files. Descriptor-only: no
+# qualification vector ships for subtitles.
+_SUBTITLE_DIRECTORY = Path(__file__).resolve().parent / "render-authority-subtitle"
+SUBTITLE_AUTHORITY_PINS: tuple[_AuthorityPin, ...] | None = None
+
+
 @dataclass(frozen=True)
 class RenderToolsStageResult:
     state: str
@@ -604,11 +622,15 @@ def _stage_render_authority_into(
     scratch_root: Path,
     mode: RenderAuthorityMode,
     pins: Sequence[_AuthorityPin],
-    *, late_labels: bool = False,
+    *, late_labels: bool = False, subtitles: bool = False,
 ) -> RenderAuthorityStageResult:
     """Stage one closed authority state beside the unchanged two-tool manifest."""
     if late_labels and mode != "descriptor-only":
         raise ValueError("late-label authority stages descriptors only")
+    if subtitles and mode != "descriptor-only":
+        raise ValueError("subtitle authority stages descriptors only")
+    if late_labels and subtitles:
+        raise ValueError("stage late-label and subtitle authority separately")
     fixed = _validate_authority_pins(mode, pins)
     if mode == "tool-only":
         return RenderAuthorityStageResult(staged_paths=())
@@ -631,7 +653,8 @@ def _stage_render_authority_into(
         scratch_root_fd = _open_private_root(scratch_root)
         if os.fstat(tools_fd).st_dev != os.fstat(scratch_root_fd).st_dev:
             raise ValueError("authority scratch and destination must be on the same filesystem")
-        scratch_leaf = AUTHORITY_SCRATCH_LEAF + ("-late-label" if late_labels else "")
+        scratch_leaf = AUTHORITY_SCRATCH_LEAF + (
+            "-late-label" if late_labels else "-subtitle" if subtitles else "")
         scratch_fd = _mkdir_open(scratch_root_fd, scratch_leaf)
         if mode == "sealed-candidate":
             scratch_vector_fd = _mkdir_open(scratch_fd, "qualification-vectors")
@@ -661,6 +684,19 @@ def _stage_render_authority_into(
             parent_tools_fd = tools_fd
             tools_fd = _mkdir_open(parent_tools_fd, "late-label")
             tools_root /= "late-label"
+        elif subtitles:
+            profile_document = json.loads(raw["PROFILE.json"])
+            compiler_document = json.loads(raw["COMPILER.json"])
+            if (profile_document["format"] != "studio.render.profile.v4"
+                    or profile_document["implementation"] != "story-classic-subtitle-v1"
+                    or profile_document["combination_set"]
+                    != "retained-classic-subtitle-candidate-v1"
+                    or compiler_document["format"] != "studio.render.compiler.v1"
+                    or compiler_document["implementation"] != "hub-final-render-subtitle-v1"):
+                raise ValueError("subtitle staging requires the exact v4 descriptor pair")
+            parent_tools_fd = tools_fd
+            tools_fd = _mkdir_open(parent_tools_fd, "subtitle")
+            tools_root /= "subtitle"
         for pin in fixed[:3]:
             os.link(
                 pin.relative_path, pin.relative_path,
