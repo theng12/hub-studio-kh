@@ -1257,11 +1257,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu()
         let openItem = NSMenuItem(title: "Open Hub Studio KH", action: #selector(openWindow), keyEquivalent: ""); openItem.target = self; menu.addItem(openItem)
         let logItem = NSMenuItem(title: "Open Engine Log", action: #selector(openLog), keyEquivalent: ""); logItem.target = self; menu.addItem(logItem)
+        let whatsNewBarItem = NSMenuItem(title: "What's New", action: #selector(showWhatsNew), keyEquivalent: ""); whatsNewBarItem.target = self; menu.addItem(whatsNewBarItem)
+        menu.addItem(.separator())
         let versionItem = NSMenuItem(title: "Hub Studio KH \(ReleaseNotes.currentVersion)", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false
         menu.addItem(versionItem)
-        let whatsNewBarItem = NSMenuItem(title: "What's New", action: #selector(showWhatsNew), keyEquivalent: ""); whatsNewBarItem.target = self; menu.addItem(whatsNewBarItem)
-        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Hub Studio KH", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
         let stateItem = NSMenuItem(title: controller.status, action: nil, keyEquivalent: "")
