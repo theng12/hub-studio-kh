@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import io
 import json
 import logging
@@ -45,16 +46,19 @@ _log = logging.getLogger("studiohub.final_render")
 # digests the client did not ask for.
 LATE_LABEL_CONTRACT = "studio.render.late-label.v3"
 LATE_LABEL_CAPABILITIES_FORMAT = "studio.render.hub-late-label-capabilities.v1"
+SUBTITLE_CONTRACT = "studio.render.subtitle.v1"
+SUBTITLE_CAPABILITIES_FORMAT = "studio.render.hub-subtitle-capabilities.v1"
+_SCOPED_CONTRACTS = (LATE_LABEL_CONTRACT, SUBTITLE_CONTRACT)
 
 
 def _requested_contract(request: Request) -> str | None:
-    """The single exact contract this query selects, or None when it selects none."""
+    """The single exact scoped contract this query selects, or None when it selects none."""
     if "requested_contract" not in request.query_params:
         return None
     values = request.query_params.getlist("requested_contract")
-    if len(values) != 1 or values[0] != LATE_LABEL_CONTRACT:
+    if len(values) != 1 or values[0] not in _SCOPED_CONTRACTS:
         raise HTTPException(
-            400, "one exact late-label requested_contract query value is required")
+            400, "one exact scoped requested_contract query value is required")
     return values[0]
 
 
@@ -219,14 +223,22 @@ class RenderService:
         available, authority = self._admission_authority(
             qualification_vector, packet, expected_binding)
         from .render_executor import InstalledRenderAuthorityLoader
+        scoped = isinstance(self.authority_loader, InstalledRenderAuthorityLoader)
         late_labels_allowed = bool(
-            authority is not None
-            and isinstance(self.authority_loader, InstalledRenderAuthorityLoader)
+            authority is not None and scoped
             and self.authority_loader.late_labels_allowed(authority, packet))
-        if (any(op["kind"] == "late_label_stage" for op in packet["recipe"]["operations"])
-                and not late_labels_allowed):
+        subtitles_allowed = bool(
+            authority is not None and scoped
+            and self.authority_loader.subtitles_allowed(authority, packet))
+        operations = packet["recipe"]["operations"]
+        if (any(op["kind"] == "late_label_stage" for op in operations)
+                and not (late_labels_allowed or subtitles_allowed)):
             raise RenderJobUnavailable(
                 "late_label_profile_required: late labels require matched v3 profile/compiler pins")
+        if (any(op["kind"] == "subtitle_stage" for op in operations)
+                and not subtitles_allowed):
+            raise RenderJobUnavailable(
+                "subtitle_profile_required: subtitles require matched v4 profile/compiler pins")
         if not available:
             # A loader double without the installer lookup. `runtime.accept` still
             # refuses a missing authority before any row, so nothing is accepted here.
@@ -234,9 +246,18 @@ class RenderService:
         if authority is None:
             raise RenderJobUnavailable(
                 "no installed render authority is available on this machine")
+        kwargs = {"late_labels_allowed": late_labels_allowed}
+        if subtitles_allowed:
+            # The preflight compiles with placeholder paths; None means plan-only.
+            if "subtitles_allowed" not in inspect.signature(
+                    packet_is_supported).parameters:
+                raise RenderJobUnavailable(
+                    "subtitle_preflight_unavailable: render_encode must forward the subtitle scope")
+            kwargs["subtitles_allowed"] = True
+            kwargs["subtitle_limits"] = authority.profile_execution_bounds
         if not packet_is_supported(packet, packet_json.encode("utf-8"),
                                    authority.selected_tier, authority.exact_encoder,
-                                   late_labels_allowed=late_labels_allowed):
+                                   **kwargs):
             raise RenderJobUnavailable(
                 "encode is not supported by the qualified render machine")
 
@@ -653,8 +674,11 @@ def register_routes(
             raise HTTPException(409 if exc.code == "UPLOAD_CONFLICT" else 400,
                                 exc.detail) from exc
 
-    def probe_control(scoped: bool = False):
-        name = "late_label_encode_probe_control" if scoped else "encode_probe_control"
+    def probe_control(contract: str | None = None):
+        name = (
+            "subtitle_encode_probe_control" if contract == SUBTITLE_CONTRACT
+            else "late_label_encode_probe_control" if contract == LATE_LABEL_CONTRACT
+            else "encode_probe_control")
         control = getattr(service.authority_loader, name, None)
         if control is None:
             raise HTTPException(503, "encode probe control is unavailable")
@@ -684,7 +708,7 @@ def register_routes(
     @app.get("/api/hub/final-renders/encode-probes")
     async def inspect_encode_probe(request: Request):
         scope(request)
-        scoped = _requested_contract(request) is not None
+        contract = _requested_contract(request)
         values = request.query_params.getlist("requested_encode")
         if (set(request.query_params) - {"requested_contract"} != {"requested_encode"}
                 or len(values) != 1):
@@ -695,12 +719,14 @@ def register_routes(
             encode = probe_encode(values[0])
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, "invalid requested_encode") from exc
-        return probe_state(encode, probe_control(scoped).inspect(encode), scoped)
+        return probe_state(encode, probe_control(contract).inspect(encode),
+                           contract is not None)
 
     @app.post("/api/hub/final-renders/encode-probes")
     async def start_encode_probe(request: Request):
         scope(request)
-        scoped = _requested_contract(request) is not None
+        contract = _requested_contract(request)
+        scoped = contract is not None
         from .render_hash_v1 import decode_render_json
         from .render_encode_probes import is_attempt_identity
         try:
@@ -718,7 +744,7 @@ def register_routes(
             attempt = value["attempt"] if "attempt" in value else None
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, "invalid encode probe request") from exc
-        result = await probe_control(scoped).probe(encode, attempt=attempt)
+        result = await probe_control(contract).probe(encode, attempt=attempt)
         if result["state"] == "supported" and not scoped:
             # Grant migration binds v1 opt-in evidence to the v1 control's entries; a scoped
             # probe has its own proof namespace and no v3 grant to migrate into.
@@ -740,31 +766,40 @@ def register_routes(
         return service.executor.capability() if service.executor is not None else None
 
     @app.get("/api/hub/final-renders/capabilities")
-    async def late_label_capabilities(request: Request):
-        """This Mac's late-label v3 publication for one exact requested contract.
+    async def scoped_capabilities(request: Request):
+        """This Mac's publication for one exact scoped render contract.
 
-        The envelope is closed and read-only: `worker` is the full v3-scoped worker row
-        when the installed triple can vouch for it, otherwise null with a loud `reason`.
+        The envelope is closed and read-only: `worker` is the full contract-scoped worker
+        row when the installed triple can vouch for it, otherwise null with a loud `reason`.
         Nothing here writes state; the query names the contract and an unknown or
-        duplicated one is refused rather than defaulted.
+        duplicated one is refused rather than defaulted. The legacy v3 late-label read is
+        byte-identical; the v4 subtitle read reuses this one route, never a new one.
         """
         scope(request)
-        if (set(request.query_params) != {"requested_contract"}
-                or _requested_contract(request) is None):
+        contract = _requested_contract(request)
+        if set(request.query_params) != {"requested_contract"} or contract is None:
             raise HTTPException(
-                400, "one exact late-label requested_contract query value is required")
+                400, "one exact scoped requested_contract query value is required")
+        if contract == SUBTITLE_CONTRACT:
+            envelope = SUBTITLE_CAPABILITIES_FORMAT
+            method = "subtitle_capability"
+            absence = "this Mac cannot offer v4 subtitle rendering"
+        else:
+            envelope = LATE_LABEL_CAPABILITIES_FORMAT
+            method = "late_label_capability"
+            absence = "this Mac cannot offer late-label v3 rendering"
         worker: dict[str, Any] | None = None
         reason: str | None = "this Hub has no final render executor"
         getter = (
-            getattr(service.executor, "late_label_capability", None)
+            getattr(service.executor, method, None)
             if service.executor is not None else None)
         if callable(getter):
             worker, reason = getter()
         if worker is None and not reason:
-            reason = "this Mac cannot offer late-label v3 rendering"
+            reason = absence
         return {
-            "format": LATE_LABEL_CAPABILITIES_FORMAT,
-            "requested_contract": LATE_LABEL_CONTRACT,
+            "format": envelope,
+            "requested_contract": contract,
             "server_time": int(time.time()),
             "worker": worker,
             "reason": reason if worker is None else None,
@@ -963,14 +998,14 @@ def register_relay_routes(
                             requested_contract=contract)
 
     @app.get("/api/hub/fleet/nodes/{node_id}/final-renders/capabilities")
-    async def relay_late_label_capabilities(node_id: str, request: Request):
+    async def relay_scoped_capabilities(node_id: str, request: Request):
         """Relay the scoped capabilities read over the one registered node path."""
-        if (set(request.query_params) != {"requested_contract"}
-                or _requested_contract(request) is None):
+        contract = _requested_contract(request)
+        if set(request.query_params) != {"requested_contract"} or contract is None:
             raise HTTPException(
-                400, "one exact late-label requested_contract query value is required")
+                400, "one exact scoped requested_contract query value is required")
         return await answer(node_id, "late_label_capabilities", "", request, limit=0,
-                            requested_contract=LATE_LABEL_CONTRACT)
+                            requested_contract=contract)
 
     @app.put("/api/hub/fleet/nodes/{node_id}/final-renders/blobs/{sha256}")
     async def relay_blob_put(node_id: str, sha256: str, request: Request):

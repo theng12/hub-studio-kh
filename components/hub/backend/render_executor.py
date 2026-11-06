@@ -51,6 +51,16 @@ from .render_profiles import (
 )
 
 
+SUBTITLE_CONTRACT = "studio.render.subtitle.v1"
+SUBTITLE_CAPABILITIES_FORMAT = "studio.render.hub-subtitle-capabilities.v1"
+_SUBTITLE_PROFILE_FORMAT = "studio.render.profile.v4"
+_SUBTITLE_PROFILE_IMPLEMENTATION = "story-classic-subtitle-v1"
+_SUBTITLE_COMPILER_IMPLEMENTATION = "hub-final-render-subtitle-v1"
+_LATE_LABEL_COMPILER_IMPLEMENTATION = "hub-final-render-late-label-v3"
+# The frozen wire order Gateway validates the optional joint marker against.
+LATE_LABEL_MOTIONS = ("none", "pop", "slide", "float", "pulse", "wipe", "line-draw")
+
+
 @dataclass(frozen=True)
 class ResourceBounds:
     max_rss_bytes: int
@@ -213,6 +223,122 @@ def _stage_late_label_inputs(stack, context, requirements, readers, *, scratch_l
     return sequence_inputs
 
 
+def _subtitle_input_ids(packet: dict[str, Any]) -> tuple[str, tuple[str, ...]] | None:
+    """The exact ASS and ascending font logical ids a subtitle stage references."""
+    stages = [op for op in packet["recipe"]["operations"]
+              if op.get("kind") == "subtitle_stage"]
+    if not stages:
+        return None
+    if len(stages) != 1:
+        raise RuntimeError("exactly one subtitle stage is required")
+    stage = stages[0]
+    if set(stage) != {"kind", "contract", "ass", "fonts"}:
+        raise RuntimeError("subtitle stage is not closed")
+    if stage["contract"] != SUBTITLE_CONTRACT:
+        raise RuntimeError("subtitle stage names an unknown contract")
+    ass = stage["ass"]
+    fonts = stage["fonts"]
+    if (type(ass) is not dict or set(ass) != {"type", "logical_id"}
+            or ass["type"] != "asset_ref" or type(ass["logical_id"]) is not str
+            or not ass["logical_id"]):
+        raise RuntimeError("subtitle stage ASS reference is invalid")
+    if type(fonts) is not list or not fonts:
+        raise RuntimeError("subtitle stage requires at least one font")
+    ids = []
+    for record in fonts:
+        if (type(record) is not dict or set(record) != {"asset", "family", "sha256"}
+                or type(record["family"]) is not str or not record["family"]
+                or re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is None):
+            raise RuntimeError("subtitle font record is invalid")
+        asset = record["asset"]
+        if (type(asset) is not dict or set(asset) != {"type", "logical_id"}
+                or asset["type"] != "asset_ref"
+                or type(asset["logical_id"]) is not str):
+            raise RuntimeError("subtitle font reference is invalid")
+        ids.append(asset["logical_id"])
+    expected = [f"subtitle_font_{index:04d}" for index in range(len(ids))]
+    if ids != expected:
+        raise RuntimeError("subtitle font ids are not contiguous and ascending")
+    return ass["logical_id"], tuple(ids)
+
+
+def _copy_verified(reader, entry: dict[str, Any], path: Path) -> None:
+    """Copy exactly the manifest bytes into a private file, proving the digest."""
+    if os.fstat(reader.fileno()).st_size != entry["size_bytes"]:
+        raise RuntimeError("subtitle asset size differs from its manifest")
+    digest = hashlib.sha256()
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        offset = 0
+        while offset < entry["size_bytes"]:
+            chunk = os.pread(reader.fileno(),
+                             min(1024 * 1024, entry["size_bytes"] - offset), offset)
+            if not chunk:
+                raise RuntimeError("subtitle asset changed during staging")
+            output.write(chunk)
+            digest.update(chunk)
+            offset += len(chunk)
+    if digest.hexdigest() != entry["sha256"]:
+        raise RuntimeError("subtitle asset changed during staging")
+
+
+def _stage_subtitle_inputs(stack, context, ids, readers, *, limits):
+    """Stage the ASS document and every font as private real files.
+
+    FFmpeg's subtitles filter needs a font directory, so unlike late-label PNGs these
+    cannot stay on `/dev/fd`: the sender's names never become paths, the bytes are read
+    from the accepted asset handles, and everything lands inside the job's attempt folder.
+    """
+    try:
+        bounds_version = limits["bounds_version"]
+        fonts_limit = limits["max_subtitle_fonts"]
+        font_bytes_limit = limits["max_subtitle_font_bytes"]
+        ass_bytes_limit = limits["max_subtitle_ass_bytes"]
+        asset_bytes_limit = limits["max_asset_bytes"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError("subtitle profile bounds are missing") from exc
+    if (bounds_version != 2
+            or any(type(value) is not int or value < 1
+                   for value in (fonts_limit, font_bytes_limit,
+                                 ass_bytes_limit, asset_bytes_limit))):
+        raise RuntimeError("subtitle profile bounds are not the published v2 shape")
+    # MIN(role ceiling, max_asset_bytes): the shared asset cap still applies.
+    font_bytes_limit = min(font_bytes_limit, asset_bytes_limit)
+    ass_bytes_limit = min(ass_bytes_limit, asset_bytes_limit)
+    ass_id, font_ids = ids
+    manifest = {entry["logical_id"]: entry for entry in context.packet["manifest"]}
+    if len(font_ids) > fonts_limit:
+        raise RuntimeError("subtitle font count exceeds the published limit")
+    try:
+        ass_entry = manifest[ass_id]
+        font_entries = [manifest[logical_id] for logical_id in font_ids]
+    except KeyError as exc:
+        raise RuntimeError("subtitle assets are missing from the manifest") from exc
+    if (ass_entry["role"] != "subtitle_ass"
+            or ass_entry["size_bytes"] > ass_bytes_limit):
+        raise RuntimeError("subtitle ASS asset is invalid or over the published limit")
+    if (any(entry["size_bytes"] > font_bytes_limit for entry in font_entries)
+            or any(entry["role"] != "subtitle_font" for entry in font_entries)):
+        raise RuntimeError("subtitle fonts are invalid or over the published limit")
+
+    root = Path(context.output_path + ".subtitle")
+    root.mkdir(mode=0o700, exist_ok=False)
+    stack.callback(shutil.rmtree, root)
+    fonts_dir = root / "fonts"
+    fonts_dir.mkdir(mode=0o700, exist_ok=False)
+    ass_path = root / "subtitle.ass"
+    _copy_verified(readers[ass_id], ass_entry, ass_path)
+    paths = {ass_id: str(ass_path)}
+    for index, (logical_id, entry) in enumerate(zip(font_ids, font_entries)):
+        suffix = Path(entry["safe_name"]).suffix.lower()
+        if suffix not in {".ttf", ".otf"}:
+            raise RuntimeError("subtitle font has an unsupported extension")
+        path = fonts_dir / f"{index:04d}{suffix}"
+        _copy_verified(readers[logical_id], entry, path)
+        paths[logical_id] = str(path)
+    return paths, str(fonts_dir)
+
+
 def _closed(document: Any, keys: set[str], name: str) -> dict[str, Any]:
     if type(document) is not dict or set(document) != keys:
         raise ValueError(f"{name} is not closed")
@@ -328,11 +454,27 @@ class InstalledRenderAuthorityLoader:
         return (hardware_class
                 if re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,63}", hardware_class) else None)
 
+    def _descriptor_root(self, profile_digest: str) -> Path | None:
+        """The installed triple whose PROFILE bytes are exactly the row's pin.
+
+        The roots are the existing legacy, late-label and subtitle install slots; a
+        missing or unreadable slot is simply not this pin. The digest never chooses a
+        scope, so a copied descriptor cannot make one scope answer for another.
+        """
+        for name in ("", "late-label", "subtitle"):
+            root = self.root / name if name else self.root
+            try:
+                if hashlib.sha256((root / "PROFILE.json").read_bytes()).hexdigest() == profile_digest:
+                    return root
+            except OSError:
+                continue
+        return None
+
     def _descriptors(self, document: dict[str, Any], packet: dict[str, Any] | None):
         try:
-            descriptor_root = self.root
-            if hashlib.sha256((descriptor_root / "PROFILE.json").read_bytes()).hexdigest() != document["profile_digest"]:
-                descriptor_root = self.root / "late-label"
+            descriptor_root = self._descriptor_root(document["profile_digest"])
+            if descriptor_root is None:
+                return None
             raw = {
                 name: (descriptor_root / filename).read_bytes()
                 for name, filename in self._DESCRIPTOR_NAMES.items()
@@ -342,13 +484,27 @@ class InstalledRenderAuthorityLoader:
             compiler = validate_render_compiler_descriptor(raw["compiler"])
             profile_document = decode_render_json(raw["profile"])
             compiler_document = decode_render_json(raw["compiler"])
-            late_labels = (profile.format == "studio.render.profile.v3"
-                           and profile.implementation == "story-classic-late-label-v3")
-            if late_labels != (compiler_document["implementation"] == "hub-final-render-late-label-v3"):
+            compiler_implementation = compiler_document["implementation"]
+            subtitles = (
+                profile.format == _SUBTITLE_PROFILE_FORMAT
+                and profile.implementation == _SUBTITLE_PROFILE_IMPLEMENTATION)
+            late_labels = (
+                profile.format == "studio.render.profile.v3"
+                and profile.implementation == "story-classic-late-label-v3")
+            if subtitles:
+                # The v4 triple is the same worker serving both markers; it is never inferred
+                # from a late-label triple whose compiler only knows v3.
+                if compiler_implementation != _SUBTITLE_COMPILER_IMPLEMENTATION:
+                    return None
+            elif late_labels != (
+                    compiler_implementation == _LATE_LABEL_COMPILER_IMPLEMENTATION):
                 return None
-            if (packet is not None and not late_labels
-                    and any(op["kind"] == "late_label_stage"
-                            for op in packet["recipe"]["operations"])):
+            kinds = set()
+            if packet is not None:
+                kinds = {op["kind"] for op in packet["recipe"]["operations"]}
+            if "late_label_stage" in kinds and not (late_labels or subtitles):
+                return None
+            if "subtitle_stage" in kinds and not subtitles:
                 return None
             if (
                 profile.digest != document["profile_digest"]
@@ -376,10 +532,31 @@ class InstalledRenderAuthorityLoader:
             "tools_digest": qualification.tools_digest,
             "compiler_digest": qualification.compiler_digest,
         }, packet)
-        return bool(descriptors is not None
-                    and descriptors[2]["format"] == "studio.render.profile.v3"
-                    and descriptors[2]["implementation"] == "story-classic-late-label-v3"
-                    and descriptors[1]["implementation"] == "hub-final-render-late-label-v3")
+        if descriptors is None:
+            return False
+        profile = descriptors[2]
+        # The v4 subtitle triple executes the combined packet's late-label stage in the same
+        # compiler; a v3 triple keeps its own exact rule.
+        if (profile["format"] == _SUBTITLE_PROFILE_FORMAT
+                and profile["implementation"] == _SUBTITLE_PROFILE_IMPLEMENTATION):
+            return descriptors[1]["implementation"] == _SUBTITLE_COMPILER_IMPLEMENTATION
+        return (profile["format"] == "studio.render.profile.v3"
+                and profile["implementation"] == "story-classic-late-label-v3"
+                and descriptors[1]["implementation"] == _LATE_LABEL_COMPILER_IMPLEMENTATION)
+
+    def subtitles_allowed(self, authority: InstalledRenderAuthority,
+                          packet: dict[str, Any]) -> bool:
+        qualification = authority.qualification
+        descriptors = self._descriptors({
+            "profile_digest": qualification.profile_digest,
+            "tools_digest": qualification.tools_digest,
+            "compiler_digest": qualification.compiler_digest,
+        }, packet)
+        return bool(
+            descriptors is not None
+            and descriptors[2]["format"] == _SUBTITLE_PROFILE_FORMAT
+            and descriptors[2]["implementation"] == _SUBTITLE_PROFILE_IMPLEMENTATION
+            and descriptors[1]["implementation"] == _SUBTITLE_COMPILER_IMPLEMENTATION)
 
     def compiler_for(self, authority: InstalledRenderAuthority, packet=None):
         qualification = authority.qualification
@@ -393,6 +570,13 @@ class InstalledRenderAuthorityLoader:
         if descriptors[1]["implementation"] == "hub-final-render-v1":
             from .render_legacy_v1.final_render_compiler import compile_final_render_packet as legacy_compile
             return legacy_compile
+        if descriptors[1]["implementation"] == _LATE_LABEL_COMPILER_IMPLEMENTATION:
+            frozen = Path(__file__).parent / "render_late_label_v3"
+            if frozen.is_dir():
+                from .render_late_label_v3.final_render_compiler import (
+                    compile_final_render_packet as late_label_compile,
+                )
+                return late_label_compile
         return compile_final_render_packet
 
     def _manifest_matches(self, files: dict[str, Any]) -> bool:
@@ -624,6 +808,13 @@ class InstalledRenderAuthorityLoader:
             source_root = Path(__file__).parent
             if compiler_descriptor["implementation"] == "hub-final-render-v1":
                 source_root = source_root / "render_legacy_v1"
+            elif compiler_descriptor["implementation"] == _LATE_LABEL_COMPILER_IMPLEMENTATION:
+                # The v3 wire is frozen at its release bytes. The v4 work edits the live
+                # compiler/contract, so v3 validates from its own copy once that copy is
+                # installed; without it the live root is still read, exactly as before.
+                frozen_v3 = source_root / "render_late_label_v3"
+                if frozen_v3.is_dir():
+                    source_root = frozen_v3
             source_hashes = {
                 "python_runtime_sha256": _sha(Path(sys.executable))[1],
                 "render_hash_sha256": _sha(source_root / "render_hash_v1.py")[1],
@@ -713,7 +904,8 @@ class InstalledRenderAuthorityLoader:
         # is left when there is no measured one.
         return self._unqualified_authority()
 
-    def probe_authority(self, *, late_labels: bool = False) -> InstalledRenderAuthority | None:
+    def probe_authority(self, *, late_labels: bool = False,
+                        subtitles: bool = False) -> InstalledRenderAuthority | None:
         """The installed, identity-checked tools an encode probe runs under, or None.
 
         A probe names the digests of the tools that are actually pinned whether or not this
@@ -723,13 +915,17 @@ class InstalledRenderAuthorityLoader:
         pinned compiler's own default and are not part of a probe's identity (the probe
         tuple and the evidence decide those). The result grants nothing: it is never
         production_eligible and is never written anywhere. `late_labels=True` reads the
-        bundled late-label v3 triple instead of the v1 root, so a scoped probe's identity
-        carries the v3 pins and never the legacy ones.
+        bundled late-label v3 triple and `subtitles=True` the bundled v4 subtitle triple
+        instead of the v1 root, so a scoped probe's identity carries that scope's pins and
+        never the legacy ones.
         """
+        if late_labels and subtitles:
+            return None
         pair = render_encode.primary_pair(render_encode.DEFAULT_OPT_IN_ENCODE)
         if pair is None:
             return None
-        document = self._installed_document(pair[0], pair[1], False, late_labels=late_labels)
+        document = self._installed_document(
+            pair[0], pair[1], subtitles, late_labels=late_labels, subtitles=subtitles)
         if document is None:
             return None
         return self._authority(document, production=False)
@@ -742,6 +938,37 @@ class InstalledRenderAuthorityLoader:
         except (OSError, TypeError, ValueError):
             return None
         return descriptor.digest if descriptor.format == "studio.render.profile.v3" else None
+
+    def subtitle_profile_digest(self) -> str | None:
+        """The installed v4 subtitle profile digest, or None while it is unusable."""
+        try:
+            descriptor = validate_render_profile_descriptor(
+                (self.root / "subtitle" / "PROFILE.json").read_bytes())
+        except (OSError, TypeError, ValueError):
+            return None
+        return (descriptor.digest
+                if descriptor.format == _SUBTITLE_PROFILE_FORMAT
+                and descriptor.implementation == _SUBTITLE_PROFILE_IMPLEMENTATION else None)
+
+    def subtitle_snapshot(
+        self, packet: dict[str, Any] | None = None,
+    ) -> InstalledRenderAuthority | None:
+        """Production authority for the v4 subtitle scope only.
+
+        Like the late-label scope there is no unmeasured opt-in and no v1 fallback: only
+        this Mac's own enabled/ record validated against the installed v4 triple grants
+        production, so a v1 or v3 grant can never answer as subtitles.
+        """
+        installed = self.subtitle_profile_digest()
+        if installed is None:
+            return None
+        document = self._enabled()
+        if document is None:
+            return None
+        authority = self._authority(document, packet, production=True)
+        if authority is None or authority.qualification.profile_digest != installed:
+            return None
+        return authority
 
     def late_label_snapshot(
         self, packet: dict[str, Any] | None = None,
@@ -786,30 +1013,50 @@ class InstalledRenderAuthorityLoader:
     def _installed_document(
         self, selected_tier: str, exact_encoder: str, font_support: bool,
         min_available_memory_bytes: int | None = None, *, late_labels: bool = False,
+        subtitles: bool = False,
     ) -> dict[str, Any] | None:
         """Hub, not the operator, derives everything but the run settings from installed files.
 
         The memory floor defaults to the profile's own process-tree limit: the Hub never
         offers capacity to a Mac that could not hold the most the profile allows one render
-        to use. `late_labels=True` reads the bundled `render-tools/late-label` triple;
-        anything unreadable or not an actual v3 profile there fails closed.
+        to use. `late_labels=True` reads the bundled `render-tools/late-label` triple and
+        `subtitles=True` the `render-tools/subtitle` v4 triple; anything unreadable or not
+        exactly that scope fails closed, so an absent packaging step is a negative, never
+        invented pins.
         """
+        if late_labels and subtitles:
+            return None
         hardware_class = self._own_class()
         if hardware_class is None:
             return None
-        descriptor_root = self.root / "late-label" if late_labels else self.root
+        if subtitles:
+            descriptor_root = self.root / "subtitle"
+        elif late_labels:
+            descriptor_root = self.root / "late-label"
+        else:
+            descriptor_root = self.root
         try:
             raw = {
                 name: (descriptor_root / filename).read_bytes()
                 for name, filename in self._DESCRIPTOR_NAMES.items()
             }
             profile = validate_render_profile_descriptor(raw["profile"])
-            if late_labels and profile.format != "studio.render.profile.v3":
+            profile_document = decode_render_json(raw["profile"])
+            if late_labels and (profile.format != "studio.render.profile.v3"
+                                or profile_document["implementation"]
+                                != "story-classic-late-label-v3"):
+                return None
+            if subtitles and (profile.format != _SUBTITLE_PROFILE_FORMAT
+                              or profile_document["implementation"]
+                              != _SUBTITLE_PROFILE_IMPLEMENTATION):
                 return None
             tools = validate_render_tool_descriptor(raw["tools"])
             compiler = validate_render_compiler_descriptor(raw["compiler"])
+            compiler_document = decode_render_json(raw["compiler"])
+            if subtitles and compiler_document["implementation"] != _SUBTITLE_COMPILER_IMPLEMENTATION:
+                return None
             tool_document = decode_render_json(raw["tools"])
-            profile_bounds = decode_render_json(raw["profile"])["execution_bounds"]
+            profile_bounds = profile_document["execution_bounds"]
             document = {
                 "format": "studio.render.qualification-receipt.v1",
                 "production_eligible": False,
@@ -1007,9 +1254,22 @@ class InstalledRenderAuthorityLoader:
         except (KeyError, TypeError):
             return False
 
+    def _subtitle_packet(self, packet: dict[str, Any]) -> bool:
+        """True when this packet claims the installed v4 subtitle profile digest."""
+        installed = self.subtitle_profile_digest()
+        if installed is None:
+            return False
+        try:
+            return packet["recipe"]["profile_digest"] == installed
+        except (KeyError, TypeError):
+            return False
+
     def authority_for_packet(self, packet: dict[str, Any]) -> InstalledRenderAuthority | None:
-        # A submitting packet selects its profile's own scope: a v3 packet reads only the
-        # v3 records, never the v1 probe/opt-in paths and never their snapshot fallback.
+        # A submitting packet selects its profile's own scope: a v4 subtitle packet reads
+        # only the v4 records, and a v3 packet only the v3 records, never the v1
+        # probe/opt-in paths and never their snapshot fallback.
+        if self._subtitle_packet(packet):
+            return self.subtitle_snapshot(packet)
         if self._late_label_packet(packet):
             return self.late_label_snapshot(packet)
         return self._probed_authority((packet.get("recipe") or {}).get("encode"), packet)
@@ -1307,6 +1567,24 @@ class LateLabelProbeScope:
 
     def probe_authority(self) -> InstalledRenderAuthority | None:
         return self._loader.probe_authority(late_labels=True)
+
+
+class SubtitleProbeScope:
+    """The loader view an encode probe runs under in the v4 subtitle scope.
+
+    Same isolation as the late-label scope: the control's identity is built from the
+    bundled v4 triple and this Mac's own granted v4 record only, so v1 and v3 proofs and
+    grants are unreachable from it.
+    """
+
+    def __init__(self, loader: InstalledRenderAuthorityLoader) -> None:
+        self._loader = loader
+
+    def snapshot(self) -> InstalledRenderAuthority | None:
+        return self._loader.subtitle_snapshot()
+
+    def probe_authority(self) -> InstalledRenderAuthority | None:
+        return self._loader.probe_authority(subtitles=True)
 
 
 _configured_executor = None
@@ -1747,48 +2025,74 @@ class RenderExecutor:
         measured: dict[str, Any] = {"peak_rss_bytes": 0, "min_free_bytes": None}
         try:
             packet_raw = _canonical(context.packet)
+            operations = context.packet["recipe"].get("operations", [])
             requirements = late_label_input_requirements(packet_raw) if any(
-                op.get("kind") == "late_label_stage"
-                for op in context.packet["recipe"].get("operations", [])) else None
+                op.get("kind") == "late_label_stage" for op in operations) else None
+            subtitle_ids = _subtitle_input_ids(context.packet) if any(
+                op.get("kind") == "subtitle_stage" for op in operations) else None
             compiler = self._compile
             compile_options = {}
             if (compiler is compile_final_render_packet
                     and isinstance(self._authority, InstalledRenderAuthorityLoader)):
                 if self._authority.late_labels_allowed(authority, context.packet):
                     compile_options["late_labels_allowed"] = True
-                if requirements is None or compile_options.get("late_labels_allowed") is True:
+                if subtitle_ids is not None:
+                    if not self._authority.subtitles_allowed(authority, context.packet):
+                        raise RenderJobUnavailable(
+                            "subtitle_profile_required: subtitles require matched v4 "
+                            "profile/compiler pins")
+                    compile_options["subtitles_allowed"] = True
+                if (requirements is None
+                        or compile_options.get("late_labels_allowed") is True) and (
+                        subtitle_ids is None
+                        or compile_options.get("subtitles_allowed") is True):
                     compiler = self._authority.compiler_for(authority, context.packet)
-            if requirements is not None:
-                if compile_options.get("late_labels_allowed") is not True:
-                    raise RenderJobUnavailable(
-                        "late_label_profile_required: late labels require matched v3 profile/compiler pins")
+            if requirements is not None and compile_options.get("late_labels_allowed") is not True:
+                raise RenderJobUnavailable(
+                    "late_label_profile_required: late labels require matched v3 profile/compiler pins")
+            if subtitle_ids is not None and compile_options.get("subtitles_allowed") is not True:
+                raise RenderJobUnavailable(
+                    "subtitle_profile_required: subtitles require matched v4 profile/compiler pins")
+            if requirements is not None or subtitle_ids is not None:
                 expected_workspace = (self.runtime.root / "jobs" / context.hub_job_id
                                       / context.attempt_id)
                 if (Path(context.workspace) != expected_workspace
                         or Path(context.output_path).parent != expected_workspace):
-                    raise RuntimeError("late-label staging requires a Hub-owned workspace")
+                    raise RuntimeError("scoped render staging requires a Hub-owned workspace")
                 for directory in (expected_workspace.parent.parent,
                                   expected_workspace.parent, expected_workspace):
                     info = directory.lstat()
                     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
                             or stat.S_IMODE(info.st_mode) & 0o022):
-                        raise RuntimeError("late-label staging requires a Hub-owned workspace")
+                        raise RuntimeError("scoped render staging requires a Hub-owned workspace")
             with ExitStack() as stack:
                 readers = {
                     logical_id: _asset_stream(stack.enter_context(
                         self.assets.open_reader(context.owner_scope, handle)))
                     for logical_id, handle in context.assets.items()
                 }
+                staged_ids = (
+                    {subtitle_ids[0], *subtitle_ids[1]} if subtitle_ids is not None else set())
                 local_assets = {
                     logical_id: f"/dev/fd/{reader.fileno()}"
                     for logical_id, reader in readers.items()
+                    if logical_id not in staged_ids
                 }
                 sequence_inputs = (
                     _stage_late_label_inputs(
                         stack, context, requirements, readers,
                         scratch_limit=authority.profile_execution_bounds["scratch_reserve_bytes"])
                     if requirements is not None else {})
-                plan = compiler(packet_raw, local_assets, context.output_path, **compile_options)
+                subtitle_paths = {}
+                if subtitle_ids is not None:
+                    subtitle_paths, fonts_dir = _stage_subtitle_inputs(
+                        stack, context, subtitle_ids, readers,
+                        limits=authority.profile_execution_bounds)
+                    compile_options["subtitle_fonts_dir"] = fonts_dir
+                    compile_options["subtitle_limits"] = authority.profile_execution_bounds
+                plan = compiler(
+                    packet_raw, {**local_assets, **subtitle_paths},
+                    context.output_path, **compile_options)
                 expected_generated = {
                     sequence.key for sequence in requirements.sequences
                 } if requirements is not None else set()
@@ -2436,6 +2740,67 @@ class RenderExecutor:
             "production_enabled": granted is not None,
             "available_capacity": {"slots": int(ready), "slots_total": 1},
             "qualification_candidates": [],
+        }
+        from . import registry
+        if registry.render_while_paused(self.machine):
+            row["render_while_paused"] = True
+        return row, None
+
+    def subtitle_capability(self) -> tuple[dict[str, Any] | None, str | None]:
+        """The closed v4 worker row for the subtitle capabilities contract.
+
+        Returns ``(row, None)`` or ``(None, reason)``. Only the genuinely installed v4
+        triple can produce a row, so an absent packaging step is a measured negative: no
+        v1/v3 filter, opt-in evidence, encode-support key or fabricated digest is ever
+        reused. Capacity opens only from this Mac's own granted v4 record. The optional
+        ``late_labels`` marker is published only from that same triple, which is what
+        makes it valid for a combined packet rather than a fleet union.
+        """
+        loader = self._authority
+        snapshot = getattr(loader, "subtitle_snapshot", None)
+        probe = getattr(loader, "probe_authority", None)
+        if not (callable(snapshot) and callable(probe)):
+            return None, "this Hub cannot read the v4 subtitle render scope"
+        try:
+            installed = probe(subtitles=True)
+        except TypeError:
+            return None, "this Hub cannot read the v4 subtitle render scope"
+        if installed is None:
+            return None, "the installed v4 subtitle descriptor triple is missing or invalid"
+        granted = snapshot()
+        authority = granted if granted is not None else installed
+        admission_allowed = self._admission_allowed()
+        busy = self.machine in self.broker.busy_machines()
+        ready = bool(
+            granted is not None
+            and self._has_memory(granted)
+            and admission_allowed
+            and not busy
+        )
+        row = {
+            "operation": "video.final_render",
+            "physical_machine_id": self.machine,
+            "hardware_class": authority.qualification.hardware_class,
+            "profile_digest": authority.qualification.profile_digest,
+            "tools_digest": authority.qualification.tools_digest,
+            "compiler_digest": authority.qualification.compiler_digest,
+            "qualification_digest": authority.qualification.qualification_digest,
+            "selected_tier": authority.selected_tier,
+            "exact_encoder": authority.exact_encoder,
+            "font_support": authority.font_support,
+            "bounds": asdict(authority.bounds),
+            "profile_execution_bounds": json.loads(
+                _canonical(authority.profile_execution_bounds)),
+            "production_eligible": bool(
+                granted is not None and granted.qualification.production_eligible),
+            "production_enabled": granted is not None,
+            "available_capacity": {"slots": int(ready), "slots_total": 1},
+            "qualification_candidates": [],
+            "subtitles": {"format": SUBTITLE_CONTRACT},
+            "late_labels": {
+                "format": "studio.render.late-label.v3",
+                "motions": list(LATE_LABEL_MOTIONS),
+            },
         }
         from . import registry
         if registry.render_while_paused(self.machine):

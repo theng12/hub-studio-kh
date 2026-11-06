@@ -200,7 +200,8 @@ class ScopedCase(unittest.TestCase):
         late.mkdir()
         # Production ships the same TOOLS bytes in both roots; mirror that exactly.
         (late / "TOOLS.json").write_bytes(tool_raw)
-        compiler_v3 = compact(_fake_compiler("hub-final-render-late-label-v3", backend))
+        compiler_v3 = compact(_fake_compiler(
+            "hub-final-render-late-label-v3", backend / "render_late_label_v3"))
         (late / "COMPILER.json").write_bytes(compiler_v3)
         profile_v3 = compact(_fake_profile(
             fmt="studio.render.profile.v3", implementation="story-classic-late-label-v3",
@@ -719,7 +720,7 @@ class RelayScopeTests(unittest.TestCase):
 
 
 class ProbeShutdownTests(unittest.TestCase):
-    def test_lifespan_fences_and_drains_both_probe_scopes(self) -> None:
+    def test_lifespan_fences_and_drains_all_probe_scopes(self) -> None:
         import os
         from contextlib import ExitStack
         from unittest.mock import patch
@@ -741,8 +742,8 @@ class ProbeShutdownTests(unittest.TestCase):
             stack.enter_context(patch.object(EncodeProbeControl, "stop", stop))
             client = fixture.Routes.client(self, stack)
             self.assertEqual(client.get("/api/health").status_code, 200)
-        self.assertEqual(len(stopped), 2)
-        self.assertIsNot(stopped[0], stopped[1])
+        self.assertEqual(len(stopped), 3)
+        self.assertEqual(len({id(control) for control in stopped}), 3)
         self.assertTrue(all(control._closing.is_set() for control in stopped))
 
 
