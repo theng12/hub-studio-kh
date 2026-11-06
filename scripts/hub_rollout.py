@@ -255,7 +255,7 @@ class Gateway:
             self.base + path, method=method,
             data=json.dumps(body).encode() if body is not None else None,
             headers={'Authorization': 'Bearer ' + key, 'X-API-Key': key,
-                     'Content-Type': 'application/json'})
+                     'Content-Type': 'application/json', 'X-Gateway-Origin': self.base})
         try:
             with urllib.request.urlopen(request, timeout=timeout) as answer:
                 return answer.status, json.loads(answer.read() or b'null')

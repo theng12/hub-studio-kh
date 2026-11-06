@@ -29,6 +29,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
@@ -760,6 +761,49 @@ class PauseTests(Harness):
         # The tool's own surface has no writer at all.
         self.assertFalse([name for name in dir(hub.Gateway)
                           if name.startswith(('set_', 'write_', 'resume', 'unpause'))])
+
+
+class GatewayOriginTests(unittest.TestCase):
+    """Every call names the origin it is actually bound to, with the auth it already had."""
+
+    class Answer:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'null'
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='hub-rollout-origin-test-'))
+        self.env = self.tmp / '.env'
+        self.env.write_text('GATEWAY_API_KEY=test-key\n')
+        self.request = None
+
+    def call(self, base, path='/admin/api/fleet'):
+        def urlopen(request, timeout=None):
+            self.request = request
+            return self.Answer()
+        with mock.patch.object(hub.urllib.request, 'urlopen', urlopen):
+            return hub.Gateway(base=base, env=self.env).call('GET', path)
+
+    def test_default_origin_is_bound_with_the_existing_auth(self):
+        status, body = self.call(hub.GATEWAY_URL + '/')
+        self.assertEqual((status, body), (200, None))
+        self.assertEqual(self.request.get_header('X-gateway-origin'), hub.GATEWAY_URL)
+        self.assertEqual(self.request.get_header('Authorization'), 'Bearer test-key')
+        self.assertEqual(self.request.get_header('X-api-key'), 'test-key')
+
+    def test_an_explicit_remote_base_names_its_own_origin_not_this_mac(self):
+        remote = 'http://127.0.0.1:8787'
+        self.call(remote + '/')
+        self.assertEqual(self.request.get_header('X-gateway-origin'), remote)
+        self.assertNotEqual(self.request.get_header('X-gateway-origin'), hub.GATEWAY_URL)
+        self.assertEqual(self.request.full_url, remote + '/admin/api/fleet')
 
 
 class MainTests(unittest.TestCase):
