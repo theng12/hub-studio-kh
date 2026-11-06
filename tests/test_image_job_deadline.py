@@ -91,7 +91,8 @@ class JobDeadlineTests(unittest.TestCase):
                 manager.jobs[f"old{index}"] = {
                     "id": f"old{index}", "state": "done", "params": {"repo": LOW.repo},
                     "steps": 16, "duration_seconds": 16 * 60.0, "finished_at": index}
-            with patch.object(g, "host_chip", return_value="Apple M4"):
+            with patch.object(g, "host_chip", return_value="Apple M4"), \
+                    patch.object(g, "_reclaimable_available_gb", return_value=64.0):
                 job = manager.submit({"repo": LOW.repo, "prompt": "a temple", "steps": 20})
             self.assertEqual(job["deadline_s"], 120 + 1.5 * 20 * 60.0)
 
