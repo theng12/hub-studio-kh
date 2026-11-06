@@ -10,7 +10,7 @@ lapse, and the Mac takes work again:
   here is refused the same way (``standalone._submission_readiness``). ``MACHINE_BUSY`` is the code the
   gateway already re-routes as a location refusal (``LOCATION_NOT_READY``) and the broker already treats
   as "not available right now", never as a failure. Running work is never touched, and a controller's
-  joined nodes keep taking work.
+  joined nodes keep taking work until this Mac's own work finishes.
 
 A node does not ask its controller: every Mac that wants a drain gets one, so an update never waits on
 another Mac or on a controller that cannot answer. The authenticated

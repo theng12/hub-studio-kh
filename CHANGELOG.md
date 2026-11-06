@@ -2,6 +2,16 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.224 — 2026-11-06
+
+- App updates no longer wait their turn: each Mac finishes its own running work, then installs on its own. The controller no longer reserves one shared update slot.
+- Remote subtitle rendering support is prepared for a later release. It is not live-qualified yet and is not claimed to work in production.
+
+### Technical notes
+
+- Source pins: update fanout `bf5b567` (prior lead `86` on `f8812e6`, then `13` drain plus `1` route fixes, actual exit 0; independent re-review `a169c585bf7980af1` PASS, finding closed, and the actual ponytail invocation audited). The correction restores the controller's own dispatch hold and its three starvation tests; the shared update slot is removed with the legacy route granting every holder, and the node HTTP controller ask is removed. Native final own-idle checks are preserved. Remote subtitles `c845857` (compiler `1af52fc`, executor `9ef6271`, staging `bd3b746` plus freeze `9186892`, encode `bc89548` plus the correction); 205 focused tests actual exit 0 and independent review `a3ca4a8343e182bf8` PASS. The canonical v4 triple is unchanged.
+- Prepared remote subtitle rendering support only; live Gateway EN/KM real-pixel proof is absent and production support is not claimed. The `update_drain.py` qualifier is documentation only. Full 0.6.224 gate not started; no build, install, real-inference proof, push, tag or release.
+
 ## 0.6.223 — 2026-11-05
 
 - The menu bar dropdown shows the installed Hub version directly above Quit Hub Studio KH.
