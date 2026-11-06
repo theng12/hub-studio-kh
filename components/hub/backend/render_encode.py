@@ -152,18 +152,67 @@ def supported_encode(selected_tier: str | None,
     return {"format": FORMAT, "entries": [dict(item) for item in deduped]}
 
 
+# The frozen v4 subtitle ceilings. A profile may state less; it may never widen these,
+# and the per-role limits are additionally capped by the overall asset/total bounds.
+_SUBTITLE_LIMIT_CAPS = {
+    "max_subtitle_fonts": 8,
+    "max_subtitle_font_bytes": 33554432,
+    "max_subtitle_ass_bytes": 4194304,
+}
+
+
+def _subtitle_preflight_ok(packet: Mapping[str, Any],
+                           limits: Mapping[str, Any] | None) -> bool:
+    """Declared-size checks for plan-only preflight; no asset is ever opened."""
+    subtitle = next((item for item in packet["recipe"]["operations"]
+                     if item["kind"] == "subtitle_stage"), None)
+    if subtitle is None:
+        return True
+    if type(limits) is not dict:
+        return False
+    effective: dict[str, int] = {}
+    for key, cap in _SUBTITLE_LIMIT_CAPS.items():
+        value = limits.get(key)
+        if type(value) is not int or value <= 0:
+            return False
+        effective[key] = min(value, cap)
+    for key in ("max_asset_bytes", "max_total_input_bytes"):
+        value = limits.get(key)
+        if type(value) is not int or value <= 0:
+            return False
+        effective[key] = value
+    font_limit = min(effective["max_subtitle_font_bytes"], effective["max_asset_bytes"])
+    ass_limit = min(effective["max_subtitle_ass_bytes"], effective["max_asset_bytes"])
+    manifest = {entry["logical_id"]: entry for entry in packet["manifest"]}
+    if len(subtitle["fonts"]) > effective["max_subtitle_fonts"]:
+        return False
+    if manifest[subtitle["ass"]["logical_id"]]["size_bytes"] > ass_limit:
+        return False
+    if any(manifest[font["asset"]["logical_id"]]["size_bytes"] > font_limit
+           for font in subtitle["fonts"]):
+        return False
+    total = sum(entry["size_bytes"] for entry in manifest.values())
+    return total <= effective["max_total_input_bytes"]
+
+
 def packet_is_supported(packet: Mapping[str, Any], raw_packet: bytes,
                         selected_tier: str | None,
                         exact_encoder: str | None, *,
-                        late_labels_allowed: bool = False) -> bool:
+                        late_labels_allowed: bool = False,
+                        subtitles_allowed: bool = False,
+                        subtitle_limits: Mapping[str, Any] | None = None) -> bool:
     """Compile this exact packet and apply the executor's tier rule to it."""
     if not selected_tier or not exact_encoder:
         return False
     try:
+        if subtitles_allowed and not _subtitle_preflight_ok(packet, subtitle_limits):
+            return False
         plan = compile_final_render_packet(
             raw_packet, _placeholder_assets(packet), "/dev/fd/9",
-            late_labels_allowed=late_labels_allowed)
-    except (UnsupportedFinalRenderCombination, TypeError, ValueError):
+            late_labels_allowed=late_labels_allowed,
+            subtitles_allowed=subtitles_allowed,
+            subtitle_limits=subtitle_limits)
+    except (KeyError, IndexError, UnsupportedFinalRenderCombination, TypeError, ValueError):
         return False
     return tier_supports(selected_tier, exact_encoder, plan.tiers)
 
