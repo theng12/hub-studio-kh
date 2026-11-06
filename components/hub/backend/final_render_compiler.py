@@ -1,4 +1,4 @@
-"""Pure deterministic final-pass construction for a closed render packet."""
+"""Deterministic final-pass construction for a closed render packet."""
 
 from __future__ import annotations
 
@@ -31,6 +31,21 @@ _PRESETS = {
     "noir": (-0.1, 1.4, 0, 0, 0),
 }
 _RATIOS = {"2.35:1": 2.35, "2.00:1": 2.0, "1.85:1": 1.85}
+_SUBTITLE_SECTION = re.compile(r"\[([^\[\]]+)\]\Z")
+_SUBTITLE_TIME = re.compile(r"(\d+):([0-5]\d):([0-5]\d)\.(\d{2})\Z")
+_SUBTITLE_FN = re.compile(r"\\fn([^\\}]*)")
+_SUBTITLE_TABLE_TAG = re.compile(rb"[A-Za-z0-9 /]{4}\Z")
+_SUBTITLE_SECTIONS = ("Script Info", "V4+ Styles", "Events")
+_SUBTITLE_REJECTED_KEYS = frozenset((
+    "video file", "audio file", "video files", "audio files", "import", "include"))
+_SUBTITLE_STYLE_FORMAT = (
+    "Name", "Fontname", "Fontsize", "PrimaryColour", "SecondaryColour",
+    "OutlineColour", "BackColour", "Bold", "Italic", "Underline", "StrikeOut",
+    "ScaleX", "ScaleY", "Spacing", "Angle", "BorderStyle", "Outline", "Shadow",
+    "Alignment", "MarginL", "MarginR", "MarginV", "Encoding")
+_SUBTITLE_EVENT_FORMAT = (
+    "Layer", "Start", "End", "Style", "Name", "MarginL", "MarginR", "MarginV",
+    "Effect", "Text")
 
 
 @dataclass(frozen=True)
@@ -71,6 +86,14 @@ class LateLabelSequence:
 class LateLabelInputRequirements:
     sequences: tuple[LateLabelSequence, ...]
     png_logical_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SubtitleInputRequirements:
+    """Receiver-owned ASS/font staging requirement; never a sender path."""
+    ass_logical_id: str
+    font_logical_ids: tuple[str, ...]
+    font_families: tuple[str, ...]
 
 
 class UnsupportedFinalRenderCombination(ValueError):
@@ -175,6 +198,313 @@ def late_label_input_requirements(raw: bytes) -> LateLabelInputRequirements | No
                 start_sec=float(operation["enable"]["start_sec"]),
             ))
     return LateLabelInputRequirements(tuple(sequences), tuple(png_ids))
+
+
+def subtitle_input_requirements(raw: bytes) -> SubtitleInputRequirements | None:
+    """Exact private ASS/font IDs and ordered families for the receiver."""
+    packet = validate_render_packet_syntax(raw)
+    operation = next((item for item in packet["recipe"]["operations"]
+                      if item["kind"] == "subtitle_stage"), None)
+    if operation is None:
+        return None
+    return SubtitleInputRequirements(
+        operation["ass"]["logical_id"],
+        tuple(font["asset"]["logical_id"] for font in operation["fonts"]),
+        tuple(font["family"] for font in operation["fonts"]),
+    )
+
+
+def _subtitle_refuse(reason):
+    raise ValueError("Invalid subtitle input: " + reason)
+
+
+def _subtitle_limits(value):
+    if type(value) is not dict:
+        _subtitle_refuse("bounds must be an object")
+    limits = []
+    for key in ("max_subtitle_fonts", "max_subtitle_font_bytes", "max_subtitle_ass_bytes",
+                "max_asset_bytes", "max_total_input_bytes"):
+        item = value.get(key)
+        if type(item) is not int or item <= 0 or item > 9007199254740991:
+            _subtitle_refuse("bounds." + key + " must be a positive safe integer")
+        limits.append(item)
+    return tuple(limits)
+
+
+def _subtitle_seconds(stamp):
+    match = _SUBTITLE_TIME.fullmatch(stamp)
+    if match is None:
+        _subtitle_refuse("ASS timestamp is malformed")
+    hours, minutes, seconds, centis = (int(group) for group in match.groups())
+    return hours * 3600 + minutes * 60 + seconds + centis / 100
+
+
+def _subtitle_script_info(lines, canvas):
+    play = {}
+    seen = set()
+    for line in lines:
+        key, colon, value = line.partition(":")
+        key = key.strip()
+        if not colon or not key:
+            _subtitle_refuse("ASS Script Info line is malformed")
+        if key.casefold() in seen:
+            _subtitle_refuse("ASS repeats a Script Info key")
+        seen.add(key.casefold())
+        if key.lower() in _SUBTITLE_REJECTED_KEYS:
+            _subtitle_refuse("ASS Script Info references an external file")
+        if key in ("PlayResX", "PlayResY"):
+            if not value.strip().isdigit() or int(value.strip()) < 1:
+                _subtitle_refuse("ASS PlayRes is invalid")
+            play[key] = int(value.strip())
+    if play.get("PlayResX") != canvas.get("width") or play.get("PlayResY") != canvas.get("height"):
+        _subtitle_refuse("ASS PlayRes does not match the recipe canvas")
+
+
+def _subtitle_styles(lines, families):
+    names = set()
+    fields = None
+    for line in lines:
+        key, colon, value = line.partition(":")
+        if not colon:
+            _subtitle_refuse("ASS style line is malformed")
+        if key == "Comment":
+            continue
+        if key == "Format":
+            if fields is not None:
+                _subtitle_refuse("ASS repeats its style Format")
+            fields = tuple(part.strip() for part in value.split(","))
+            if fields != _SUBTITLE_STYLE_FORMAT:
+                _subtitle_refuse("ASS style Format is unsupported")
+            continue
+        if key != "Style" or fields is None:
+            _subtitle_refuse("ASS style section line is unsupported")
+        parts = [part.strip() for part in value.split(",")]
+        if len(parts) != len(fields):
+            _subtitle_refuse("ASS style field count is malformed")
+        record = dict(zip(fields, parts))
+        name, fontname = record["Name"], record["Fontname"]
+        if not name or name in names:
+            _subtitle_refuse("ASS style name is invalid or repeated")
+        if fontname not in families:
+            _subtitle_refuse("ASS style references an unsupplied font family")
+        for field in _SUBTITLE_STYLE_FORMAT[2:]:
+            item = record[field]
+            if field.endswith("Colour"):
+                if re.fullmatch(r"&H[0-9a-fA-F]{8}", item) is None:
+                    _subtitle_refuse("ASS style colour is malformed")
+            else:
+                try:
+                    number = float(item)
+                except ValueError:
+                    _subtitle_refuse("ASS style number is malformed")
+                if not math.isfinite(number):
+                    _subtitle_refuse("ASS style number is nonfinite")
+        names.add(name)
+    if fields is None or not names:
+        _subtitle_refuse("ASS has no usable styles")
+    return names
+
+
+def _subtitle_events(lines, style_names, families, duration):
+    fields = None
+    dialogues = 0
+    for line in lines:
+        key, colon, value = line.partition(":")
+        if not colon:
+            _subtitle_refuse("ASS event line is malformed")
+        if key == "Comment":
+            continue
+        if key == "Format":
+            if fields is not None:
+                _subtitle_refuse("ASS repeats its event Format")
+            fields = tuple(part.strip() for part in value.split(","))
+            if fields != _SUBTITLE_EVENT_FORMAT:
+                _subtitle_refuse("ASS event Format is unsupported")
+            continue
+        if key in ("Video", "Audio"):
+            _subtitle_refuse("ASS references an external media file")
+        if key != "Dialogue" or fields is None:
+            _subtitle_refuse("ASS event section line is unsupported")
+        parts = value.split(",", len(_SUBTITLE_EVENT_FORMAT) - 1)
+        if len(parts) != len(_SUBTITLE_EVENT_FORMAT):
+            _subtitle_refuse("ASS dialogue field count is malformed")
+        record = dict(zip(_SUBTITLE_EVENT_FORMAT, (part.strip() for part in parts)))
+        start = _subtitle_seconds(record["Start"])
+        end = _subtitle_seconds(record["End"])
+        if start < 0 or start >= end or end > duration + 1e-6:
+            _subtitle_refuse("ASS dialogue is outside the recipe duration")
+        if record["Style"] not in style_names:
+            _subtitle_refuse("ASS dialogue references an unknown style")
+        for family in _SUBTITLE_FN.findall(record["Text"]):
+            if family.strip() and family.strip() not in families:
+                _subtitle_refuse("ASS dialogue selects an unsupplied font family")
+        dialogues += 1
+    if fields is None or dialogues == 0:
+        _subtitle_refuse("ASS has no dialogue events")
+
+
+def _validate_subtitle_ass(data, canvas, duration, families):
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Invalid subtitle input: ASS must be UTF-8") from exc
+    if "\0" in text:
+        _subtitle_refuse("ASS must be NUL-free")
+    if not families:
+        _subtitle_refuse("ASS font families are invalid")
+    sections = []
+    current = None
+    content = {name: [] for name in _SUBTITLE_SECTIONS}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";"):
+            continue
+        if stripped.startswith("["):
+            header = _SUBTITLE_SECTION.fullmatch(stripped)
+            if header is None:
+                _subtitle_refuse("ASS section header is malformed")
+            name = header.group(1)
+            if name not in _SUBTITLE_SECTIONS:
+                _subtitle_refuse("ASS section " + name + " is unsupported")
+            if name in sections:
+                _subtitle_refuse("ASS repeats section " + name)
+            sections.append(name)
+            current = name
+            continue
+        if current is None:
+            _subtitle_refuse("ASS has content before its first section")
+        content[current].append(stripped)
+    if tuple(sections) != _SUBTITLE_SECTIONS:
+        _subtitle_refuse("ASS sections are incomplete or out of order")
+    _subtitle_script_info(content["Script Info"], canvas)
+    style_names = _subtitle_styles(content["V4+ Styles"], set(families))
+    _subtitle_events(content["Events"], style_names, set(families), duration)
+
+
+def _subtitle_sfnt_names(blob):
+    if len(blob) < 6:
+        _subtitle_refuse("font name table is truncated")
+    string_offset = int.from_bytes(blob[4:6], "big")
+    count = int.from_bytes(blob[2:4], "big")
+    if int.from_bytes(blob[0:2], "big") > 1 or not 6 + 12 * count <= string_offset <= len(blob):
+        _subtitle_refuse("font name table is malformed")
+    names = set()
+    for index in range(count):
+        base = 6 + 12 * index
+        platform = int.from_bytes(blob[base:base + 2], "big")
+        encoding = int.from_bytes(blob[base + 2:base + 4], "big")
+        name_id = int.from_bytes(blob[base + 6:base + 8], "big")
+        length = int.from_bytes(blob[base + 8:base + 10], "big")
+        offset = int.from_bytes(blob[base + 10:base + 12], "big")
+        if name_id not in (1, 16):
+            continue
+        start = string_offset + offset
+        if start + length > len(blob):
+            _subtitle_refuse("font name record is out of bounds")
+        raw = blob[start:start + length]
+        if platform in (0, 3):
+            if length % 2:
+                _subtitle_refuse("font name record is malformed")
+            try:
+                value = raw.decode("utf-16-be")
+            except UnicodeDecodeError as exc:
+                raise ValueError("Invalid subtitle input: font name record is malformed") from exc
+        elif platform == 1 and encoding == 0:
+            value = raw.decode("mac_roman")
+        else:
+            continue
+        if value:
+            names.add(value)
+    return names
+
+
+def _validate_subtitle_font(data, family):
+    if type(family) is not str or not family or family.startswith((".", "/", "\\")):
+        _subtitle_refuse("font family is invalid")
+    if len(data) < 12 or data[:4] not in (b"\x00\x01\x00\x00", b"OTTO"):
+        _subtitle_refuse("font must be TTF or OTF")
+    count = int.from_bytes(data[4:6], "big")
+    if count < 1 or 12 + 16 * count > len(data):
+        _subtitle_refuse("font table directory is invalid")
+    name_span = None
+    spans = []
+    tags = set()
+    for index in range(count):
+        base = 12 + 16 * index
+        tag = data[base:base + 4]
+        offset = int.from_bytes(data[base + 8:base + 12], "big")
+        length = int.from_bytes(data[base + 12:base + 16], "big")
+        if _SUBTITLE_TABLE_TAG.fullmatch(tag) is None or tag in tags:
+            _subtitle_refuse("font table tag is invalid or repeated")
+        tags.add(tag)
+        if (offset < 12 + 16 * count or offset % 4 or offset + length > len(data)
+                or any(offset < end and offset + length > start for start, end in spans)):
+            _subtitle_refuse("font table is out of bounds or overlaps")
+        spans.append((offset, offset + length))
+        if tag == b"name":
+            name_span = (offset, length)
+    if name_span is None:
+        _subtitle_refuse("font has no verifiable family name table")
+    names = _subtitle_sfnt_names(data[name_span[0]:name_span[0] + name_span[1]])
+    if family not in names:
+        _subtitle_refuse("font family does not match its name table")
+
+
+def _subtitle_bytes(path, entry, label, limit):
+    if type(path) is not str or not path.startswith("/") or "\0" in path:
+        _subtitle_refuse(label + " path is not absolute")
+    size = entry["size_bytes"]
+    if size > limit:
+        _subtitle_refuse(label + " exceeds its bound")
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(size + 1)
+    except OSError as exc:
+        raise ValueError("Invalid subtitle input: " + label + " is unreadable") from exc
+    if len(data) != size:
+        _subtitle_refuse(label + " size mismatch")
+    if hashlib.sha256(data).hexdigest() != entry["sha256"]:
+        _subtitle_refuse(label + " sha256 mismatch")
+    return data
+
+
+def _filter_path(value):
+    if type(value) is not str or not value.startswith("/") or "\0" in value:
+        raise ValueError("Invalid subtitle input: private path is not absolute")
+    for character in ("\\", ":", ",", "'", "[", "]", ";", " "):
+        value = value.replace(character, "\\" + character)
+    return value
+
+
+def _validate_subtitle_inputs(packet, assets, fonts_dir, limits):
+    """Validate staged ASS/font bytes; None fonts_dir means plan-only preflight."""
+    if fonts_dir is None:
+        return
+    if type(fonts_dir) is not str or not fonts_dir.startswith("/") or "\0" in fonts_dir:
+        _subtitle_refuse("fonts directory is not absolute")
+    max_fonts, font_limit, ass_limit, max_asset_bytes, max_total = _subtitle_limits(limits)
+    font_limit = min(font_limit, max_asset_bytes)
+    ass_limit = min(ass_limit, max_asset_bytes)
+    operation = next(item for item in packet["recipe"]["operations"]
+                     if item["kind"] == "subtitle_stage")
+    if len(operation["fonts"]) > max_fonts:
+        _subtitle_refuse("font count exceeds its bound")
+    manifest = {entry["logical_id"]: entry for entry in packet["manifest"]}
+    if sum(entry["size_bytes"] for entry in manifest.values()) > max_total:
+        _subtitle_refuse("declared inputs exceed the total input bound")
+    ass_id = operation["ass"]["logical_id"]
+    ass = _subtitle_bytes(assets[ass_id], manifest[ass_id], "ASS", ass_limit)
+    families = tuple(font["family"] for font in operation["fonts"])
+    _validate_subtitle_ass(ass, packet["recipe"]["canvas"],
+                           packet["recipe"]["target_duration_sec"], families)
+    prefix = fonts_dir.rstrip("/") + "/"
+    for font in operation["fonts"]:
+        logical_id = font["asset"]["logical_id"]
+        path = assets[logical_id]
+        if type(path) is not str or not path.startswith(prefix) or "\0" in path:
+            _subtitle_refuse("font path is outside the private fonts directory")
+        data = _subtitle_bytes(path, manifest[logical_id], "font", font_limit)
+        _validate_subtitle_font(data, font["family"])
 
 
 def validate_png_bytes(
@@ -848,6 +1178,8 @@ def _describe_burn_ins(operations: list[dict]) -> tuple[str, ...]:
         result.append("letterbox")
     if "presentation_frame" in kinds:
         result.append("frame")
+    if "subtitle_stage" in kinds:
+        result.append("subtitles")
     overlays = [operation for operation in operations if operation["kind"] == "overlay_layer"]
     if overlays:
         suffix = " incl. chroma key" if any(item["chroma"] is not None for item in overlays) else ""
@@ -967,7 +1299,8 @@ def _checked_assets(packet: Mapping[str, object], local_assets: Mapping[str, str
 
 def _compile_validated_packet(
     packet: Mapping[str, object], local_assets: Mapping[str, str], output_path: str,
-    *, late_labels_allowed: bool = False,
+    *, late_labels_allowed: bool = False, subtitles_allowed: bool = False,
+    subtitle_fonts_dir: str | None = None, subtitle_limits: Mapping[str, object] | None = None,
 ) -> FinalRenderPlan:
     late_operations = _late_label_operations(packet)
     if late_operations and late_labels_allowed is not True:
@@ -975,6 +1308,11 @@ def _compile_validated_packet(
     assets = _checked_assets(packet, local_assets, output_path)
     recipe = packet["recipe"]
     operations = recipe["operations"]
+    subtitle = next((item for item in operations if item["kind"] == "subtitle_stage"), None)
+    if subtitle is not None:
+        if subtitles_allowed is not True:
+            raise UnsupportedFinalRenderCombination("subtitle_profile_not_allowed")
+        _validate_subtitle_inputs(packet, assets, subtitle_fonts_dir, subtitle_limits)
     width = int(recipe["canvas"]["width"])
     height = int(recipe["canvas"]["height"])
     fps = int(recipe["canvas"]["working_fps"])
@@ -1115,6 +1453,14 @@ def _compile_validated_packet(
                 fps, operation,
             ))
             video_label = output
+        elif kind == "subtitle_stage":
+            output = alloc_label()
+            fonts_dir = subtitle_fonts_dir if subtitle_fonts_dir is not None else "/subtitle-fonts"
+            ass_path = assets[operation["ass"]["logical_id"]]
+            filters.append(
+                f"{video_label}ass=filename={_filter_path(ass_path)}:"
+                f"fontsdir={_filter_path(fonts_dir)}{output}")
+            video_label = output
         elif kind == "late_label_stage":
             op_index = operations.index(operation)
             parts, video_label = _build_late_label_filters(
@@ -1143,6 +1489,8 @@ def _compile_validated_packet(
         assets[recipe["premixed_audio"]["logical_id"]],
         recipe["target_duration_sec"], output_path,
     )
+    if subtitle is not None:
+        tiers = tuple(tier for tier in tiers if not tier.drops_burned_in_features)
     return FinalRenderPlan(
         tiers, _describe_burn_ins(operations), tuple(input_uses),
         tuple(generated_inputs),
@@ -1151,10 +1499,14 @@ def _compile_validated_packet(
 
 def compile_final_render_packet(
     raw: bytes, local_assets: Mapping[str, str], output_path: str,
-    *, late_labels_allowed: bool = False,
+    *, late_labels_allowed: bool = False, subtitles_allowed: bool = False,
+    subtitle_fonts_dir: str | None = None, subtitle_limits: Mapping[str, object] | None = None,
 ) -> FinalRenderPlan:
     packet = validate_render_packet_syntax(raw)
     return _compile_validated_packet(
         packet, local_assets, output_path,
         late_labels_allowed=late_labels_allowed,
+        subtitles_allowed=subtitles_allowed,
+        subtitle_fonts_dir=subtitle_fonts_dir,
+        subtitle_limits=subtitle_limits,
     )
