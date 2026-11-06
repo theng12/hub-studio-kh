@@ -864,7 +864,11 @@ final class FixtureProtocol: URLProtocol {
                 finish((200, "application/json", encoded))
                 return
             }
-            if parts.count >= 2, parts[0] == "local" {
+            // Only the pull marker makes this a replay: an unmarked read of `/nodes/local/...`
+            // (the app reading its own Developer Mode setting) must fall through to the real
+            // route below, exactly as the Hub answers it.
+            if parts.count >= 2, parts[0] == "local",
+               request.value(forHTTPHeaderField: "X-StudioHub-Pull") != nil {
                 // A command replayed on this Mac's OWN Hub. The path is the controller's own
                 // request path, and the credential must be this Mac's Hub token - never the
                 // controller's Fleet token, which is not this Mac's to present.
