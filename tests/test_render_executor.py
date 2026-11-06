@@ -538,7 +538,7 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         late_root.mkdir()
         compiler = json.loads((loader.root / "COMPILER.json").read_bytes())
         compiler["implementation"] = "hub-final-render-late-label-v3"
-        backend = ROOT / "components/hub/backend"
+        backend = ROOT / "components/hub/backend/render_late_label_v3"
         for name, key in (("render_contract.py", "render_contract_sha256"),
                           ("final_render_compiler.py", "final_render_compiler_sha256"),
                           ("render_hash_v1.py", "render_hash_sha256")):

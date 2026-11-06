@@ -781,7 +781,8 @@ class RenderToolsStagingTests(unittest.TestCase):
         for key, name in (("final_render_compiler_sha256", "final_render_compiler.py"),
                           ("render_contract_sha256", "render_contract.py"),
                           ("render_hash_sha256", "render_hash_v1.py")):
-            self.assertEqual(compiler[key], sha256((ROOT / "components/hub/backend" / name).read_bytes()))
+            self.assertEqual(compiler[key], sha256(
+                (ROOT / "components/hub/backend/render_late_label_v3" / name).read_bytes()))
         self.assertFalse((self.tools_root / "late-label/QUALIFICATION.json").exists())
 
     def test_late_label_staging_refuses_v1_and_non_descriptor_modes(self) -> None:

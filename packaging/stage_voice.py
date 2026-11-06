@@ -927,6 +927,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         from stage_render_tools import (
             LATE_LABEL_AUTHORITY_PINS,
             PRODUCTION_AUTHORITY_PINS,
+            SUBTITLE_AUTHORITY_PINS,
             _stage_render_authority_into,
             _stage_render_tools_into,
         )
@@ -940,6 +941,12 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
             _stage_render_authority_into(
                 resources, scratch, 'descriptor-only', LATE_LABEL_AUTHORITY_PINS,
                 late_labels=True)
+            # None until the v4 canonical triple is frozen: no subtitle directory then, so the
+            # installed bundle reports the capability as absent rather than unverified.
+            if SUBTITLE_AUTHORITY_PINS is not None:
+                _stage_render_authority_into(
+                    resources, scratch, 'descriptor-only', SUBTITLE_AUTHORITY_PINS,
+                    subtitles=True)
         # The manifest and descriptors were hard-linked out of scratch; keeping it would leave a
         # dot-directory in the output folder whose links hold the same ~264 MB alive.
         shutil.rmtree(scratch, ignore_errors=True)

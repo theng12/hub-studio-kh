@@ -64,6 +64,11 @@ _BOUND_KEYS = (
     "cumulative_wall_seconds",
 )
 _BOUND_INTEGER_KEYS = _BOUND_KEYS[3:]
+_SUBTITLE_BOUND_INTEGER_KEYS = (
+    "max_subtitle_fonts",
+    "max_subtitle_font_bytes",
+    "max_subtitle_ass_bytes",
+)
 
 
 @dataclass(frozen=True)
@@ -145,12 +150,14 @@ def _positive_number(value, kind, path):
     return value
 
 
-def _bounds(value):
+def _bounds(value, subtitles=False):
     if value is None:
         return
+    subtitle_keys = set(_SUBTITLE_BOUND_INTEGER_KEYS) if subtitles else set()
     if type(value) is dict and "bounds_version" in value:
         bounds = _exact(value, (set(_BOUND_KEYS) - {"canvas_pairs"})
-                        | {"bounds_version", "canvas_range"}, "profile", "execution_bounds")
+                        | {"bounds_version", "canvas_range"} | subtitle_keys,
+                        "profile", "execution_bounds")
         if type(bounds["bounds_version"]) is not int or bounds["bounds_version"] != 2:
             _invalid("profile", "execution_bounds.bounds_version is unsupported")
         canvas = _exact(bounds["canvas_range"], ("max_edge", "max_pixels"),
@@ -159,6 +166,8 @@ def _bounds(value):
             _positive_int(canvas[key], "profile", "execution_bounds.canvas_range." + key)
         if canvas["max_edge"] < 2 or canvas["max_edge"] % 2 or canvas["max_pixels"] < 4:
             _invalid("profile", "execution_bounds.canvas_range cannot admit an even canvas")
+    elif subtitles:
+        _invalid("profile", "execution_bounds must be the subtitle v2 shape")
     else:
         bounds = _exact(value, _BOUND_KEYS, "profile", "execution_bounds")
         pairs = bounds["canvas_pairs"]
@@ -178,7 +187,7 @@ def _bounds(value):
         _positive_int(value, "profile", "execution_bounds.working_fps[" + str(index) + "]")
     _positive_number(bounds["max_duration_sec"], "profile",
                      "execution_bounds.max_duration_sec")
-    for key in _BOUND_INTEGER_KEYS:
+    for key in (*_BOUND_INTEGER_KEYS, *subtitle_keys):
         _positive_int(bounds[key], "profile", "execution_bounds." + key)
 
 
@@ -206,7 +215,9 @@ def validate_render_compiler_descriptor(raw):
     """Validate exact receiver-owned compiler descriptor bytes and return their identity."""
     value = _exact(_decode(raw, "compiler"), _COMPILER_KEYS, "compiler", "compiler")
     _literal(value["format"], "studio.render.compiler.v1", "compiler", "format")
-    if value["implementation"] not in ("hub-final-render-v1", "hub-final-render-late-label-v3"):
+    if value["implementation"] not in (
+            "hub-final-render-v1", "hub-final-render-late-label-v3",
+            "hub-final-render-subtitle-v1"):
         _invalid("compiler", "implementation is unsupported")
     for key in (
         "python_runtime_sha256",
@@ -221,14 +232,23 @@ def validate_render_compiler_descriptor(raw):
 def validate_render_profile_descriptor(raw):
     """Validate the frozen non-production candidate profile shape and byte identity."""
     value = _exact(_decode(raw, "profile"), _PROFILE_KEYS, "profile", "profile")
-    late_labels = value["format"] == "studio.render.profile.v3"
+    formats = {
+        "studio.render.profile.v1": (
+            "story-classic-no-font-v1", "retained-classic-no-font-candidate-v1"),
+        "studio.render.profile.v3": (
+            "story-classic-late-label-v3", "retained-classic-late-label-candidate-v3"),
+        "studio.render.profile.v4": (
+            "story-classic-subtitle-v1", "retained-classic-subtitle-candidate-v1"),
+    }
+    implementation = formats.get(value["format"])
+    if implementation is None:
+        _invalid("profile", "format is unsupported")
+    subtitles = value["format"] == "studio.render.profile.v4"
     for key, expected in (
-        ("format", "studio.render.profile.v3" if late_labels else "studio.render.profile.v1"),
-        ("implementation", "story-classic-late-label-v3" if late_labels
-         else "story-classic-no-font-v1"),
+        ("format", value["format"]),
+        ("implementation", implementation[0]),
         ("recipe_namespace", "studio.render.final.v1"),
-        ("combination_set", "retained-classic-late-label-candidate-v3" if late_labels
-         else "retained-classic-no-font-candidate-v1"),
+        ("combination_set", implementation[1]),
         ("tier_policy", "story-final-chain-v1"),
         ("output_policy", "story-final-output-v1"),
     ):
@@ -237,7 +257,9 @@ def validate_render_profile_descriptor(raw):
         value["compiler_artifact_sha256"], "profile", "compiler_artifact_sha256")
     tools_digest = _optional_sha256(
         value["tools_artifact_sha256"], "profile", "tools_artifact_sha256")
-    _bounds(value["execution_bounds"])
+    if subtitles and value["execution_bounds"] is None:
+        _invalid("profile", "execution_bounds is required for the subtitle profile")
+    _bounds(value["execution_bounds"], subtitles=subtitles)
     _optional_sha256(value["hardware_qualification_record_sha256"], "profile",
                      "hardware_qualification_record_sha256")
     _optional_sha256(value["fidelity_record_sha256"], "profile",

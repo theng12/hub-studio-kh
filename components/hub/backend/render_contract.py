@@ -9,7 +9,8 @@ from .render_hash_v1 import decode_render_json, render_hash
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _ID = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
-_SAFE_NAME = re.compile(r"([a-z][a-z0-9_-]{0,63})\.(mp4|mov|webm|wav|png|jpg|webp|gif|bmp|tiff)\Z")
+_SAFE_NAME = re.compile(
+    r"([a-z][a-z0-9_-]{0,63})\.(mp4|mov|webm|wav|png|jpg|webp|gif|bmp|tiff|ass|ttf|otf)\Z")
 _COLOR = re.compile(r"(?:#[0-9A-F]{6}|black)\Z")
 _HEX_COLOR = re.compile(r"#[0-9A-F]{6}\Z")
 _MAX_SAFE = 9007199254740991
@@ -17,6 +18,7 @@ _FPS = frozenset((5, 24, 25, 30, 60))
 _DECODERS = frozenset(("png", "mjpeg", "webp", "gif", "bmp", "tiff"))
 _LATE_LABEL_MOTIONS = frozenset(("none", "pop", "slide", "float", "pulse", "wipe", "line-draw"))
 _LATE_LABEL_CONTRACT = "studio.render.late-label.v3"
+_SUBTITLE_CONTRACT = "studio.render.subtitle.v1"
 _STAGES = (
     "overlay_layer",
     "classic_color_grade",
@@ -25,11 +27,12 @@ _STAGES = (
     "aged_archive_film",
     "classic_letterbox",
     "presentation_frame",
+    "subtitle_stage",
     "late_label_stage",
     "logo",
 )
 _ROLES = frozenset(("base_video", "premixed_audio", "overlay", "frame_background",
-                    "logo", "cue_label"))
+                    "logo", "cue_label", "subtitle_ass", "subtitle_font"))
 
 
 def _invalid(reason):
@@ -229,7 +232,36 @@ def _late_label_operation(operation, duration, fps, refs, path, index):
         _invalid(path + " cannot contain both line and line_reveal")
 
 
-def _operation(value, duration, fps, refs, index):
+def _subtitle_operation(operation, refs, path, font_shas):
+    item = _exact(operation, ("kind", "contract", "ass", "fonts"), path)
+    if type(item["contract"]) is not str or item["contract"] != _SUBTITLE_CONTRACT:
+        _invalid(path + ".contract is unsupported")
+    if _asset_ref(item["ass"], path + ".ass") != "subtitle_ass":
+        _invalid(path + ".ass does not use its ordinal asset name")
+    _add_ref(refs, "subtitle_ass", "subtitle_ass")
+    fonts = item["fonts"]
+    if type(fonts) is not list or not fonts:
+        _invalid(path + ".fonts must be a nonempty array")
+    for index, raw in enumerate(fonts):
+        font_path = path + ".fonts[" + str(index) + "]"
+        if index > 9999:
+            _invalid(font_path + " exceeds indexed font naming bounds")
+        font = _exact(raw, ("asset", "family", "sha256"), font_path)
+        logical_id = _asset_ref(font["asset"], font_path + ".asset")
+        if logical_id != f"subtitle_font_{index:04d}":
+            _invalid(font_path + ".asset does not use its indexed font name")
+        family = _text(font["family"], font_path + ".family")
+        if (not family or family.startswith(".") or "/" in family or "\\" in family
+                or family.lower().endswith((".ttf", ".otf", ".ttc"))):
+            _invalid(font_path + ".family is invalid")
+        sha256 = _text(font["sha256"], font_path + ".sha256")
+        if _SHA256.fullmatch(sha256) is None:
+            _invalid(font_path + ".sha256 is invalid")
+        _add_ref(refs, logical_id, "subtitle_font")
+        font_shas[logical_id] = sha256
+
+
+def _operation(value, duration, fps, refs, index, font_shas):
     path = "recipe.operations[" + str(index) + "]"
     operation = _object(value, path)
     kind = _text(operation.get("kind"), path + ".kind")
@@ -313,6 +345,8 @@ def _operation(value, duration, fps, refs, index):
             _input_mode(closed["input_mode"], path + ".background.input_mode")
         else:
             _invalid(path + ".background.kind is unsupported")
+    elif kind == "subtitle_stage":
+        _subtitle_operation(operation, refs, path, font_shas)
     elif kind == "late_label_stage":
         _late_label_operation(operation, duration, fps, refs, path, index)
     else:
@@ -340,6 +374,7 @@ def _validate(value):
     if _SHA256.fullmatch(_text(recipe["profile_digest"], "recipe.profile_digest")) is None:
         _invalid("recipe.profile_digest is invalid")
     refs = {}
+    font_shas = {}
     _add_ref(refs, _asset_ref(recipe["base_video"], "recipe.base_video"), "base_video")
     _add_ref(refs, _asset_ref(recipe["premixed_audio"], "recipe.premixed_audio"), "premixed_audio")
     canvas = _exact(recipe["canvas"], ("width", "height", "working_fps"), "recipe.canvas")
@@ -362,7 +397,7 @@ def _validate(value):
     seen = set()
     cue_ids = set()
     for index, item in enumerate(recipe["operations"]):
-        stage = _operation(item, duration, fps, refs, index)
+        stage = _operation(item, duration, fps, refs, index, font_shas)
         if stage < last_stage:
             _invalid("recipe.operations stage order is invalid")
         kind = item["kind"]
@@ -411,6 +446,16 @@ def _validate(value):
             _invalid(path + ".safe_name is invalid")
         names.add(safe_name)
         role = _one_of(entry["role"], _ROLES, path + ".role")
+        if match.group(2) in ("ass", "ttf", "otf") and role not in (
+                "subtitle_ass", "subtitle_font"):
+            _invalid(path + " subtitle extension requires its exact subtitle role")
+        if role == "subtitle_ass" and safe_name != logical_id + ".ass":
+            _invalid(path + " subtitle_ass must be an explicit ASS")
+        if role == "subtitle_font":
+            if match.group(2) not in ("ttf", "otf"):
+                _invalid(path + " subtitle_font must be an explicit TTF/OTF")
+            if font_shas.get(logical_id) != entry["sha256"]:
+                _invalid(path + " font record sha256 does not match the manifest")
         if refs.get(logical_id) != role:
             _invalid(path + " does not match an exact recipe reference")
         if _SHA256.fullmatch(_text(entry["sha256"], path + ".sha256")) is None:
