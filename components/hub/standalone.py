@@ -3062,7 +3062,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.post("/api/hub/fleet/update-slot")
     def update_slot(body: dict[str, Any], request: Request) -> dict[str, Any]:
-        """A group member asks this controller for the group's one update slot."""
+        """An older group member asks for an update slot. Every holder is granted - there is no
+        shared slot any more, so this route exists only for those apps."""
         from .backend import auth as hub_auth
         holder = str(hub_auth._fleet_actor(request).get("node_id") or "fleet")
         return {"granted": update_drain.slot(holder, bool(body.get("want")))}
