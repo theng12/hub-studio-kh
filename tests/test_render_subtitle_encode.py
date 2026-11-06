@@ -2,8 +2,8 @@
 """Subtitle preflight forwarding in render_encode.packet_is_supported.
 
 The v4 executor passes subtitles_allowed and the profile's execution bounds; the
-predicate must compile the real packet with them, refuse missing/wider bounds, and
-still behave exactly as before for legacy callers.
+predicate must compile the real packet with them, refuse missing/malformed bounds,
+follow the supplied ceilings, and still behave exactly as before for legacy callers.
 """
 from __future__ import annotations
 
@@ -65,21 +65,28 @@ class SubtitleEncodePreflightTests(unittest.TestCase):
         for key in ("max_subtitle_fonts", "max_subtitle_font_bytes",
                     "max_subtitle_ass_bytes", "max_asset_bytes",
                     "max_total_input_bytes"):
-            for value in (None, 0, -1, True, "8"):
+            for value in (None, 0, -1, True, "8", 9007199254740992):
                 limits = dict(BOUNDS, **{key: value})
                 with self.subTest(key=key, value=value):
                     self.assertFalse(self.supported(
                         subtitles_allowed=True, subtitle_limits=limits))
 
-    def test_a_wider_profile_cannot_widen_the_frozen_subtitle_caps(self):
-        packet = with_declared_size(self.packet, "subtitle_font_0000", 40_000_000)
+    def test_consumer_follows_the_selected_profile_ceiling(self):
+        # Nine font records are admitted only because the supplied profile says 9.
+        packet = build_packet(fonts=tuple(("Anton", None) for _ in range(9)))
+        wider = dict(BOUNDS, max_subtitle_fonts=9)
+        self.assertTrue(self.supported(
+            packet, subtitles_allowed=True, subtitle_limits=wider))
+        # The canonical v4 profile pins 8, and that supplied ceiling is enforced.
         self.assertFalse(self.supported(
-            packet, subtitles_allowed=True,
-            subtitle_limits=dict(BOUNDS, max_subtitle_font_bytes=64 * 1024 * 1024)))
+            packet, subtitles_allowed=True, subtitle_limits=BOUNDS))
+        # Declared ASS size follows the supplied ceiling, not a second table.
         packet = with_declared_size(self.packet, "subtitle_ass", 5_000_000)
-        self.assertFalse(self.supported(
+        self.assertTrue(self.supported(
             packet, subtitles_allowed=True,
             subtitle_limits=dict(BOUNDS, max_subtitle_ass_bytes=8 * 1024 * 1024)))
+        self.assertFalse(self.supported(
+            packet, subtitles_allowed=True, subtitle_limits=BOUNDS))
 
     def test_overall_asset_bound_is_a_min_cap(self):
         packet = with_declared_size(self.packet, "subtitle_font_0000", 2_000_000)

@@ -152,13 +152,11 @@ def supported_encode(selected_tier: str | None,
     return {"format": FORMAT, "entries": [dict(item) for item in deduped]}
 
 
-# The frozen v4 subtitle ceilings. A profile may state less; it may never widen these,
-# and the per-role limits are additionally capped by the overall asset/total bounds.
-_SUBTITLE_LIMIT_CAPS = {
-    "max_subtitle_fonts": 8,
-    "max_subtitle_font_bytes": 33554432,
-    "max_subtitle_ass_bytes": 4194304,
-}
+# The selected v4 PROFILE supplies every subtitle ceiling; this consumer only checks
+# that the numbers are usable and applies the overall asset/total bounds as min-caps.
+_SUBTITLE_LIMIT_KEYS = ("max_subtitle_fonts", "max_subtitle_font_bytes",
+                        "max_subtitle_ass_bytes", "max_asset_bytes",
+                        "max_total_input_bytes")
 
 
 def _subtitle_preflight_ok(packet: Mapping[str, Any],
@@ -171,14 +169,9 @@ def _subtitle_preflight_ok(packet: Mapping[str, Any],
     if type(limits) is not dict:
         return False
     effective: dict[str, int] = {}
-    for key, cap in _SUBTITLE_LIMIT_CAPS.items():
+    for key in _SUBTITLE_LIMIT_KEYS:
         value = limits.get(key)
-        if type(value) is not int or value <= 0:
-            return False
-        effective[key] = min(value, cap)
-    for key in ("max_asset_bytes", "max_total_input_bytes"):
-        value = limits.get(key)
-        if type(value) is not int or value <= 0:
+        if type(value) is not int or value <= 0 or value > 9007199254740991:
             return False
         effective[key] = value
     font_limit = min(effective["max_subtitle_font_bytes"], effective["max_asset_bytes"])
