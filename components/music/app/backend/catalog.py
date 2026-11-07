@@ -346,7 +346,7 @@ CATALOG: tuple[ModelEntry, ...] = (
         # Every value here is one the three measured runs used: mode off, the port's standard
         # 32 ODE steps, its default guidance, and the 8-bit AR. 36 s is that run's length.
         defaults={"mode": "off", "duration_seconds": 36, "steps": 32, "guidance_scale": 1.0,
-                  "precision": "8bit", "seed": -1},
+                  "precision": "8bit", "seed": -1, "vocal_language": "en"},
         limits={
             "min_duration_seconds": 8,
             "max_duration_seconds": 360,
