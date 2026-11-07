@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import hmac
+import json
 import os
 from pathlib import Path
 import platform
@@ -19,8 +20,8 @@ from .generation import (MAX_REFERENCE_BYTES, MEDIA_TYPE_BY_SUFFIX, MODEL_ID, MO
                          effective_reference_max, effective_reference_policy, final_matches,
                          lane_contract, lane_parameters, loading_modes,
                          missing_runtime_model_reason, reference_image_media_type,
-                         reference_limit_table, reference_policy_row, reference_max, reference_mode,
-                         reference_mode_values, size_presets)
+                         reference_limit_table, reference_policy_admission, reference_policy_row,
+                         reference_max, reference_mode, reference_mode_values, size_presets)
 
 from components import app_version, model_defaults
 
@@ -403,7 +404,8 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                     guidance: float | None = Form(default=None),
                     seed: int | None = Form(default=None),
                     output_format: str | None = Form(default=None),
-                    memory_floor_gb: float | None = Form(default=None)) -> dict:
+                    memory_floor_gb: float | None = Form(default=None),
+                    reference_policy: str | None = Form(default=None)) -> dict:
         """Reference-to-image: N reference images plus a prompt, one scene image out.
 
         Multipart, mirroring `/api/generate/txt2img`: one repeated `images` part per reference, in
@@ -428,12 +430,28 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
             raise HTTPException(409, lane['reason'])
         # Refuse an over-count before staging a single byte - the same effective cap the contract
         # publishes and `validate_request` enforces (table cell for this node's tier, clamped to
-        # the engine's cap), named in the same sentence.
+        # the engine's cap), named in the same sentence. A present Hub policy is the authority:
+        # an owner override may raise the count above the published table cap, and the policy's
+        # own effective value (clamped to the engine ceiling) is what this route must apply.
         limits = model.reference_limits
-        maximum = effective_reference_max(model, manager.total_memory_bytes)
-        if not maximum:
-            raise HTTPException(409, effective_reference_policy(
-                model, 'edit', manager.total_memory_bytes)['reason'])
+        policy_value = None
+        if reference_policy is not None:
+            try:
+                policy_value = json.loads(reference_policy)
+            except ValueError as exc:
+                raise HTTPException(422, 'reference_policy must be a JSON object') from exc
+            try:
+                admission = reference_policy_admission(
+                    model, 'edit', images or [], manager.total_memory_bytes,
+                    manager.destination_node_id, policy_value)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            maximum = admission['max_reference_images']
+        else:
+            maximum = effective_reference_max(model, manager.total_memory_bytes)
+            if not maximum:
+                raise HTTPException(409, effective_reference_policy(
+                    model, 'edit', manager.total_memory_bytes)['reason'])
         if len(images or []) > maximum:
             raise HTTPException(
                 422, f'{model.label} takes between {limits["min"]} and {maximum} reference '
@@ -467,6 +485,8 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                                 ('memory_floor_gb', memory_floor_gb)):
                 if value is not None:
                     raw[name] = value
+            if reference_policy is not None:
+                raw['reference_policy'] = policy_value
             return {'job': manager.submit(raw, mode='edit', job_id=job_id)}
         except HTTPException:
             shutil.rmtree(directory, ignore_errors=True)
@@ -647,5 +667,7 @@ def from_environment() -> FastAPI:
                           data, library, manifest, identity,
                           manifests=manifests, manifest_errors=errors,
                           qualification_package=os.environ.get(
-                              'STUDIOHUB_IMAGE_QUALIFICATION_PACKAGE')),
+                              'STUDIOHUB_IMAGE_QUALIFICATION_PACKAGE'),
+                          destination_node_id=os.environ.get(
+                              'STUDIOHUB_DESTINATION_NODE_ID') or None),
                       os.environ['STUDIOHUB_FLEET_TOKEN'])
