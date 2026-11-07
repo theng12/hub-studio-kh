@@ -375,6 +375,33 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(write.status_code, 200, write.text)
         self.assertEqual(write.json()["effective_min_total_memory_gb"], 12.0)
 
+    def test_unknown_host_memory_keeps_model_wide_ram_and_never_fabricates_a_tier(self) -> None:
+        from components.hub.backend import monitor
+        # The central physical_tier(None) fix is not in this worktree yet. Simulate its one rule
+        # (unknown bytes -> unknown tier) so this pins the route now and keeps passing after it.
+        real_tier = memory_admission.physical_tier
+        with mock.patch.object(standalone, "_admission_total_memory_bytes", lambda: None), \
+             mock.patch.object(memory_admission, "physical_tier",
+                               lambda total: None if total is None else real_tier(total)):
+            headers = {"X-Hub-Token": self.token}
+            wide = self.request("GET", "/api/hub/fleet/nodes/local/memory/admission",
+                                params={"model": MODEL}, headers=headers)
+            self.assertEqual(wide.status_code, 200, wide.text)
+            body = wide.json()
+            self.assertEqual(body["effective_min_total_memory_gb"], 8.0)
+            inventory = monitor._memory_admission_inventory(
+                MODEL, ROW, node_id="machine-a", total_memory_bytes=None)
+            self.assertEqual(body["revision"], inventory["ram"]["model_wide"]["revision"],
+                             "the model-wide GET token must match the inventory top token")
+
+            mode = self.request("GET", "/api/hub/fleet/nodes/local/memory/admission",
+                                params={"model": MODEL, "mode": "edit"}, headers=headers)
+            self.assertEqual(mode.status_code, 200, mode.text)
+            policy = mode.json()["reference_policy"]
+            self.assertFalse(policy["available"])
+            self.assertNotIn("physical_tier", policy, "unknown bytes must not band as '<8'")
+            self.assertIn("reason", policy)
+
     def test_a_non_controller_answers_not_controller_instead_of_relaying(self) -> None:
         with mock.patch.object(standalone.control_plane, "load_settings",
                                lambda: {"role": "agent"}):

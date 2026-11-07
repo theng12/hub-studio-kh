@@ -483,10 +483,17 @@ _FLEET_ADMISSION_KEYS = {"model", "mode", "min_free_memory_gb", "min_total_memor
 _REFERENCE_FIELDS = {"allowed", "max_reference_images", "swap_allowance_gb"}
 
 
-def _admission_total_memory_bytes() -> int:
-    """This Mac's physical memory, the input `memory_admission.physical_tier` bands."""
-    import psutil
-    return int(psutil.virtual_memory().total)
+def _admission_total_memory_bytes() -> int | None:
+    """This Mac's physical memory, or ``None`` when telemetry cannot be read.
+
+    ``None`` is the honest unknown: the model-wide RAM answer still publishes, and the core
+    resolves the mode reference policy as unavailable rather than banding unknown bytes ``<8``.
+    """
+    try:
+        import psutil
+        return int(psutil.virtual_memory().total)
+    except Exception:  # noqa: BLE001 - telemetry failure is an answer, not a 500
+        return None
 
 
 def _fleet_admission_refusal(code: str, field: str, detail: str, node: str,
