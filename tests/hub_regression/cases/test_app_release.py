@@ -19,7 +19,8 @@ SCHEMA = "studiohub.app-release.v1"
 # What GET /api/hub/release says about the delta update when no manifest is held. `artifact` says
 # whether a disk image can be installed for the held release: with none held there is nothing that
 # must be built from files, so the app may ask for an image.
-NO_DELTA = {"schema": "studiohub.file-manifest.v1", "manifest": False, "artifact": True}
+# With no installed app there is no validated baseline, so the fixed Hub reports no capability.
+NO_DELTA = None
 
 
 @pytest.fixture

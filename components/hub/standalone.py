@@ -2869,11 +2869,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         controller takes manifest-only pushes (a gateway that finds no ``delta`` key
         pushes the whole disk image), whether it holds this release's manifest, and
         (``artifact``) whether the app may install the disk image instead.
+        ``delta`` is null when this Hub has no validated baseline of its own
+        installed bytes - not running from an installed app, no identity file,
+        or a tree it cannot measure - which a gateway reads as no capability,
+        exactly like a Hub old enough never to have sent the key.
         ``last_sync`` is the last controller poll's own conclusion (``ok``,
         ``error``, ``result``, ``at``) so a Mac being refused an update can say why.
         """
+        from .backend import release_delta
         trusted = app_release.trusted_publisher()
         release = app_release.load_release()
+        # The capability is only honest once this Mac has measured its own installed bytes.
+        baseline = release_delta.validated_installed_baseline()
         return {
             "release": release,
             "trusted_publisher": None if trusted is None else {
@@ -2881,14 +2888,16 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "fingerprint": trusted.get("fingerprint"),
                 "public_key": trusted.get("public_key"),
             },
-            "delta": {"schema": app_release.fm.SCHEMA,
-                      "manifest": app_release.held_manifest(release) is not None,
-                      # A release carrying `files_sha256` was pushed as files and left no disk
-                      # image anywhere in the chain - a node relays to a controller that holds
-                      # none - so "fall back to the image" is a guaranteed 404 on it. Anything
-                      # else was pushed as an image, which a node relays from its controller.
-                      "artifact": app_release.ARTIFACT_FILE.is_file()
-                      or "files_sha256" not in (release or {})},
+            "delta": (None if baseline is None else {
+                "schema": app_release.fm.SCHEMA,
+                "manifest": app_release.held_manifest(release) is not None,
+                # A release carrying `files_sha256` was pushed as files and left no disk
+                # image anywhere in the chain - a node relays to a controller that holds
+                # none - so "fall back to the image" is a guaranteed 404 on it. Anything
+                # else was pushed as an image, which a node relays from its controller.
+                "artifact": app_release.ARTIFACT_FILE.is_file()
+                or "files_sha256" not in (release or {}),
+            }),
             "last_sync": release_sync.last_sync_report(),
         }
 

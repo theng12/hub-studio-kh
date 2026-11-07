@@ -154,12 +154,15 @@ def test_manifest_only_push_answers_with_the_blobs_still_to_send(hub, tmp_path):
     assert answer["descriptor"]["files_sha256"] == descriptor["files_sha256"]
     assert answer["descriptor"]["controller_signature"]
     assert not app_release.ARTIFACT_FILE.exists(), "a manifest-only release holds no disk image"
-    # And the release is readable, with its delta marker and the key a node pins.
+    # And the release is readable, with its delta marker and the key a node pins. The marker is
+    # only reported against a validated baseline of the installed app's actual bytes.
+    _installed_app(tmp_path, FILES_A)
     read = hub.get("/api/hub/release", headers=_fleet_headers()).json()
     assert read["release"]["build"] == "abc1234"
     assert read["delta"]["manifest"] is True
     assert read["delta"]["artifact"] is False, "a release pushed as files has no disk image to install"
     assert read["trusted_publisher"]["public_key"]
+    os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
 
     sizes = _send_all(hub, blobs, answer["need"])
     assert hub.get("/api/hub/release/need", headers=_fleet_headers()).json() == {"need": []}
@@ -237,6 +240,7 @@ def test_a_release_pushed_as_a_disk_image_still_works_beside_the_manifest_one(hu
     assert response.status_code == 200
     assert "need" not in response.json(), "the legacy answer keeps its shape"
     assert app_release.ARTIFACT_FILE.read_bytes() == artifact
+    _installed_app(tmp_path, FILES_A)
     read = hub.get("/api/hub/release", headers=_fleet_headers()).json()
     assert read["delta"]["artifact"] is True, "an image push leaves an image to install"
     # A neither-artifact-nor-manifest push is not a release.
@@ -247,6 +251,7 @@ def test_a_release_pushed_as_a_disk_image_still_works_beside_the_manifest_one(hu
     assert not app_release.ARTIFACT_FILE.exists()
     read = hub.get("/api/hub/release", headers=_fleet_headers()).json()
     assert read["delta"]["artifact"] is False, "the old image is not served as the new release"
+    os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
 
 
 # ── serving ────────────────────────────────────────────────────────────────
@@ -412,9 +417,16 @@ def _controller_answers(hub, seed, tmp_path, *, build="abc1234"):
     need = _push(hub, body).json()["need"]
     _send_all(hub, blobs, need)
     headers = _fleet_headers()
+    # The mocked controller is a real one: running from an installed app with a measured
+    # baseline, which is the only state where a Hub reports the delta capability at all.
+    _installed_app(tmp_path, FILES_A)
+    try:
+        release_answer = hub.get("/api/hub/release", headers=headers).json()
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
     answers = {
         "/api/version": {"version": "0.6.99", "build": build},
-        "/api/hub/release": hub.get("/api/hub/release", headers=headers).json(),
+        "/api/hub/release": release_answer,
     }
     raw = {"/api/hub/release/files": hub.get("/api/hub/release/files", headers=headers).content}
     for name in body["file_manifest"]["groups"]:
@@ -543,7 +555,7 @@ def _installed_app(tmp_path, files, *, with_manifest=True):
     from components.hub.backend import file_manifest as fm
     app = _tree(tmp_path / "Applications" / "Studio Hub.app", files)
     if with_manifest:
-        fm.write(app)
+        fm.write(app, destination=app / fm.DIR_REL)
     os.environ["STUDIOHUB_RELEASE_MANIFEST"] = str(app / R / "release-manifest.json")
     return app
 
@@ -711,8 +723,14 @@ def _node_holding(hub, tmp_path, new_files, **over):
     _d, body, entries, blobs = _release(seed, new_files, tmp_path, **over)
     _trust(hub, seed)
     _push(hub, body)
+    # As above: the answers stand in for a controller running from an installed app.
+    _installed_app(tmp_path, FILES_A)
+    try:
+        release_answer = hub.get("/api/hub/release", headers=_fleet_headers()).json()
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
     answers = {"/api/version": {"version": "0.6.99", "build": "abc1234"},
-               "/api/hub/release": hub.get("/api/hub/release", headers=_fleet_headers()).json()}
+               "/api/hub/release": release_answer}
     raw = {"/api/hub/release/files": hub.get("/api/hub/release/files", headers=_fleet_headers()).content}
     for name in body["file_manifest"]["groups"]:
         raw[f"/api/hub/release/files/{name}"] = hub.get(f"/api/hub/release/files/{name}", headers=_fleet_headers()).content
@@ -852,8 +870,14 @@ def test_a_node_fetches_missing_blobs_from_its_controller_by_sha(hub, tmp_path, 
     descriptor, body, entries, blobs = _release(seed, new_files, tmp_path)
     _trust(hub, seed)
     _push(hub, body)
+    # As above: the answers stand in for a controller running from an installed app.
+    _installed_app(tmp_path, FILES_A)
+    try:
+        release_answer = hub.get("/api/hub/release", headers=_fleet_headers()).json()
+    finally:
+        os.environ.pop("STUDIOHUB_RELEASE_MANIFEST", None)
     answers = {"/api/version": {"version": "0.6.99", "build": "abc1234"},
-               "/api/hub/release": hub.get("/api/hub/release", headers=_fleet_headers()).json()}
+               "/api/hub/release": release_answer}
     raw = {"/api/hub/release/files": hub.get("/api/hub/release/files", headers=_fleet_headers()).content}
     for name in body["file_manifest"]["groups"]:
         raw[f"/api/hub/release/files/{name}"] = hub.get(f"/api/hub/release/files/{name}", headers=_fleet_headers()).content
