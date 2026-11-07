@@ -814,6 +814,45 @@ def archive_failed_stage(output: Path) -> Path:
     return destination
 
 
+def stage_hub_render_authority(
+    resources: Path, render_authority: RenderAuthorityMode, render_pins: tuple,
+) -> None:
+    """Stage the pinned render tools and every closed authority descriptor into a Hub bundle."""
+    from stage_render_tools import (
+        CUE_OVERLAY_AUTHORITY_PINS,
+        LATE_LABEL_AUTHORITY_PINS,
+        PRODUCTION_AUTHORITY_PINS,
+        SUBTITLE_AUTHORITY_PINS,
+        _stage_render_authority_into,
+        _stage_render_tools_into,
+    )
+    scratch = Path(tempfile.mkdtemp(
+        prefix='.studiohub-render-tools-', dir=resources.parent))
+    scratch.chmod(0o700)
+    try:
+        _stage_render_tools_into(resources, scratch, render_pins)
+        _stage_render_authority_into(
+            resources, scratch, render_authority, PRODUCTION_AUTHORITY_PINS)
+        if render_authority == 'tool-only':
+            return
+        _stage_render_authority_into(
+            resources, scratch, 'descriptor-only', LATE_LABEL_AUTHORITY_PINS,
+            late_labels=True)
+        # None until the v4 canonical triple is frozen: no subtitle directory then, so the
+        # installed bundle reports the capability as absent rather than unverified.
+        if SUBTITLE_AUTHORITY_PINS is not None:
+            _stage_render_authority_into(
+                resources, scratch, 'descriptor-only', SUBTITLE_AUTHORITY_PINS,
+                subtitles=True)
+        _stage_render_authority_into(
+            resources, scratch, 'descriptor-only', CUE_OVERLAY_AUTHORITY_PINS,
+            cue_overlays=True)
+    finally:
+        # The manifest and descriptors were hard-linked out of scratch; keeping it would leave a
+        # dot-directory in the output folder whose links hold the same ~264 MB alive.
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
           include_hub: bool = False, image_runtime: Path | None = None,
           unqualified_image_runtime: str | None = None,
@@ -1055,32 +1094,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
             'The staged bundle is missing modules its own code imports, so a worker would die at '
             f'startup. Failed bundle preserved at {saved}. Add the new files to git and stage again:\n  ' + '\n  '.join(gaps))
     if include_hub:
-        from stage_render_tools import (
-            LATE_LABEL_AUTHORITY_PINS,
-            PRODUCTION_AUTHORITY_PINS,
-            SUBTITLE_AUTHORITY_PINS,
-            _stage_render_authority_into,
-            _stage_render_tools_into,
-        )
-        scratch = Path(tempfile.mkdtemp(
-            prefix='.studiohub-render-tools-', dir=output.parent))
-        scratch.chmod(0o700)
-        _stage_render_tools_into(resources, scratch, render_pins)
-        _stage_render_authority_into(
-            resources, scratch, render_authority, PRODUCTION_AUTHORITY_PINS)
-        if render_authority != 'tool-only':
-            _stage_render_authority_into(
-                resources, scratch, 'descriptor-only', LATE_LABEL_AUTHORITY_PINS,
-                late_labels=True)
-            # None until the v4 canonical triple is frozen: no subtitle directory then, so the
-            # installed bundle reports the capability as absent rather than unverified.
-            if SUBTITLE_AUTHORITY_PINS is not None:
-                _stage_render_authority_into(
-                    resources, scratch, 'descriptor-only', SUBTITLE_AUTHORITY_PINS,
-                    subtitles=True)
-        # The manifest and descriptors were hard-linked out of scratch; keeping it would leave a
-        # dot-directory in the output folder whose links hold the same ~264 MB alive.
-        shutil.rmtree(scratch, ignore_errors=True)
+        stage_hub_render_authority(resources, render_authority, render_pins)
     # The KH Updater agent kit travels inside the Hub. It is staged only when both halves are
     # handed in - the credential-free kit and the owner's publisher descriptor - because a
     # bundle that carried one without the other could not enrol, and the descriptor is the

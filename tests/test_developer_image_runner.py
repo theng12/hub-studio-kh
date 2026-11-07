@@ -516,6 +516,56 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(caps[0].wire["settings_bounds"]["reference_count"]["maximum"], 4)
         self.assertEqual(caps[0].wire["intrinsic_reference_max"], 10)
 
+    def test_memory_modes_projects_bounded_staged_from_reference_memory(self):
+        # Single-mode text lane + bounded edit policy (e.g. Qwen Image 2.1 Turbo).
+        qwen_style = types.SimpleNamespace(
+            memory=types.SimpleNamespace(low_ram_below_bytes=None, single_mode_reason="always bounded"),
+            reference_memory=types.SimpleNamespace(low_ram_below_bytes=18_525_000_000))
+        self.assertEqual(runner._memory_modes(qwen_style), ["default", "bounded-staged"])
+
+        # Bounded text lane policy (e.g. FLUX.2 Klein).
+        klein_style = types.SimpleNamespace(
+            memory=types.SimpleNamespace(low_ram_below_bytes=12_000_000_000),
+            reference_memory=None)
+        self.assertEqual(runner._memory_modes(klein_style), ["default", "bounded-staged"])
+
+        # Single-mode only, neither lane bounded.
+        single_mode = types.SimpleNamespace(
+            memory=types.SimpleNamespace(low_ram_below_bytes=None),
+            reference_memory=None)
+        self.assertEqual(runner._memory_modes(single_mode), ["default"])
+
+        # Dict row shape with dict policies.
+        dict_row = {
+            "memory": {"low_ram_below_bytes": None},
+            "reference_memory": {"low_ram_below_bytes": 51_539_607_552},
+        }
+        self.assertEqual(runner._memory_modes(dict_row), ["default", "bounded-staged"])
+
+    def test_settings_validation_accepts_bounded_staged_when_offered(self):
+        settings = {
+            "width_px": 32, "height_px": 32, "steps": 4, "guidance": 1.0, "seed": 42,
+            "memory_mode": "bounded-staged", "reference_count": 1, "prompt_characters": 20,
+            "fixture_set_id": "developer-image-basic-v1",
+            "prompt_sha256": runner.prompt_sha256("pattern", 20),
+        }
+        bounds = {
+            "width_px": {"minimum": 32, "maximum": 32},
+            "height_px": {"minimum": 32, "maximum": 32},
+            "dimension_multiple": 32,
+            "steps": {"minimum": 1, "maximum": 10},
+            "guidance": {"minimum": 0.0, "maximum": 2.0},
+            "seed": {"minimum": 0, "maximum": 100},
+            "reference_count": {"minimum": 0, "maximum": 2},
+            "prompt_characters": {"minimum": 0, "maximum": 100},
+        }
+        # Accepted when bounded-staged is offered.
+        runner._validate_settings(settings, bounds, ["default", "bounded-staged"], {"1:1": (32, 32)})
+        # Refused when bounded-staged is not offered.
+        with self.assertRaises(runner.RunnerRefusal) as ctx:
+            runner._validate_settings(settings, bounds, ["default"], {"1:1": (32, 32)})
+        self.assertEqual(ctx.exception.code, "invalid_request")
+
     def test_effective_sample_interval_is_recorded(self):
         self.assertEqual(runner._effective_sample_interval_ms(20, 5), 250)
         self.assertEqual(runner._effective_sample_interval_ms(250, 3600), 900)

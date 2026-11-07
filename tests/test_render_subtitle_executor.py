@@ -7,8 +7,16 @@ import copy
 import hashlib
 from dataclasses import replace
 from pathlib import Path
+import sys
 import unittest
 from unittest import mock
+import zlib
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(ROOT / "tests") not in sys.path:
+    sys.path.insert(0, str(ROOT / "tests"))
 
 import test_render_executor as fixtures
 from test_render_executor import FakeAssets, FakeBroker, FakeProcess, FakeRuntime
@@ -28,6 +36,17 @@ FONT = b"\x00\x01\x00\x00fake-sfnt-font-bytes"
 def raw(value):
     import json
     return json.dumps(value, separators=(",", ":")).encode()
+
+
+def make_png(width, height):
+    def chunk(kind, payload):
+        crc = zlib.crc32(kind + payload).to_bytes(4, "big")
+        return len(payload).to_bytes(4, "big") + kind + payload + crc
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", width.to_bytes(4, "big") + height.to_bytes(4, "big")
+                    + bytes((8, 6, 0, 0, 0)))
+            + chunk(b"IDAT", zlib.compress((b"\0" + b"\xff" * (width * 4)) * height))
+            + chunk(b"IEND", b""))
 
 
 class SubtitleExecutorTests(unittest.IsolatedAsyncioTestCase):
@@ -210,6 +229,73 @@ class SubtitleExecutorTests(unittest.IsolatedAsyncioTestCase):
                 ("subtitle_ass", ("subtitle_font_0000",)),
                 {entry["logical_id"]: mock.Mock(fileno=lambda: 0)
                  for entry in context.packet["manifest"]}, limits=bounds)
+
+    async def test_combined_late_label_and_subtitle_execution(self):
+        executor, context, authority, assets, packet = self.setup_run()
+        # 1. Modify safe_names to be contract-compliant
+        for entry in packet["manifest"]:
+            if entry["logical_id"] == "subtitle_ass":
+                entry["safe_name"] = "subtitle_ass.ass"
+            elif entry["logical_id"] == "subtitle_font_0000":
+                entry["safe_name"] = "subtitle_font_0000.ttf"
+        # 2. Create valid late-label PNG for the 128x96 canvas
+        png_bytes = make_png(40, 30)
+        packet["recipe"]["operations"].append({
+            "kind": "late_label_stage", "contract": "studio.render.late-label.v3",
+            "cue_id": "cue1", "enable": {"start_sec": 0.4, "end_sec": 1.5},
+            "placement": {"x_px": 10, "y_px": 10},
+            "motion": {"kind": "none", "entrance_sec": 0.3},
+            "label": {"asset": {"type": "asset_ref", "logical_id": "cue_0001_label"}},
+            "reveal": None, "line": None, "line_reveal": None,
+        })
+        packet["manifest"].append({
+            "logical_id": "cue_0001_label", "safe_name": "cue_0001_label.png",
+            "role": "cue_label", "sha256": hashlib.sha256(png_bytes).hexdigest(),
+            "size_bytes": len(png_bytes),
+        })
+        packet["manifest"].sort(key=lambda entry: entry["logical_id"])
+        packet["recipe_digest"] = render_hash("recipe", packet["recipe"])
+        packet["manifest_digest"] = render_hash("manifest", packet["manifest"])
+        packet["packet_digest"] = render_hash("packet", {
+            "recipe_digest": packet["recipe_digest"],
+            "manifest_digest": packet["manifest_digest"]})
+        # 3. Inject asset file handle
+        handle = "11111111111111111111111111111111"
+        path = self.root / handle
+        path.write_bytes(png_bytes)
+        assets._mock_wraps.files[handle] = path
+        new_assets = dict(context.assets, cue_0001_label=handle)
+        context = replace(context, packet=packet, assets=new_assets,
+                          accepted_request_sha256=hashlib.sha256(
+                              raw({"packet": packet, "assets": new_assets})).hexdigest())
+        executor._authority.late_labels_allowed.return_value = True
+        executor._authority.subtitles_allowed.return_value = True
+        # 4. Compile combined plan and run
+        def combined_compiler(ctx):
+            def compile_packet(packet_raw, assets_map, output_path, **options):
+                self.seen.update(
+                    options=options,
+                    has_cue="cue_0001_label" in assets_map,
+                    has_ass="subtitle_ass" in assets_map)
+                base = assets_map["base"]
+                audio = assets_map["audio"]
+                label = assets_map["cue_0001_label"]
+                argv = ("-i", base, "-i", audio, "-i", label,
+                        "-c:v", "h264_videotoolbox", str(output_path))
+                return FinalRenderPlan(
+                    tiers=(EncodeTier("hardware-h264", argv),),
+                    requested_burn_ins=("subtitles", "late_labels"),
+                    input_uses=(), generated_inputs=())
+            return compile_packet
+        executor._authority.compiler_for.return_value = combined_compiler(context)
+        await executor._run(context, authority, "test-owner")
+        self.assertEqual(executor.runtime.job["state"], "output_ready")
+        self.assertTrue(self.seen["options"]["late_labels_allowed"])
+        self.assertTrue(self.seen["options"]["subtitles_allowed"])
+        self.assertTrue(self.seen["has_cue"])
+        self.assertTrue(self.seen["has_ass"])
+        self.assertFalse(Path(context.output_path + ".subtitle").exists())
+        self.assertFalse(Path(context.output_path + ".late-label").exists())
 
 
 if __name__ == "__main__":

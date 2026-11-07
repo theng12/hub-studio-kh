@@ -34,10 +34,14 @@ GenStudio's global ownership decisions.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import tempfile
+import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 
 from . import model_ids, workload_policy
@@ -46,6 +50,26 @@ from .registry import DATA_DIR
 
 SETTINGS_FILE = DATA_DIR / "memory_admission_overrides.json"
 DEFAULT_MIN_FREE_MEMORY_GB = 2.0
+
+# The execution modes the fleet memory-admission wire names (proposal.r5, mode vocabulary).
+MODES = ("txt2img", "edit")
+
+
+class TierUnknown(ValueError):
+    """The physical tier cannot be resolved because the published table is unreadable."""
+
+# One lock guards every read-modify-write: the legacy local writes, the fleet CAS compare and
+# write, and revision computation. Re-entrant because a CAS `change` calls the writers below.
+_LOCK = threading.RLock()
+
+# The published reference table is data, not a Python import: importing the Image worker's
+# `generation` module would pull PIL, mflux and the model registry into the Hub process. The
+# table is the same file `generation.reference_tier`/`effective_reference_policy` read, so the
+# Hub resolves the identical physical band and published rows without that import.
+REFERENCE_LIMITS_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "components" / "image" / "app" / "backend" / "reference-limits.json"
+)
 
 # These are measured fleet defaults for the *total* memory tier, intentionally allowed to be less
 # conservative than a worker catalog. FLUX.2 Klein 4B MLX 4-bit has completed thousands of
@@ -155,7 +179,7 @@ def requirement_gb(model: str, catalog_entry: dict, *,
     the edit floor.
     """
     key = _normalized(model or catalog_entry.get("repo"))
-    override = _read().get(key) if use_override else None
+    override, _scope = _ram_override(key, mode) if use_override else (None, None)
     if override:
         gb, source = override["min_total_memory_gb"], "operator_override"
     elif (measured := _FLEET_DEFAULTS.get(key)):
@@ -217,6 +241,83 @@ def _number(value) -> float | None:
     return result if result >= 0 else None
 
 
+def _clean_cell(value) -> dict | None:
+    """One stored/published reference cell with only the fields it actually states.
+
+    ``false``, ``0`` and ``0.0`` survive verbatim; a null or absent field means "no statement",
+    never a coerced zero.
+    """
+    if not isinstance(value, dict):
+        return None
+    cell: dict = {}
+    if type(value.get("allowed")) is bool:
+        cell["allowed"] = value["allowed"]
+    maximum = value.get("max_reference_images")
+    if isinstance(maximum, int) and not isinstance(maximum, bool) and maximum >= 0:
+        cell["max_reference_images"] = maximum
+    swap = value.get("swap_allowance_gb")
+    if (isinstance(swap, (int, float)) and not isinstance(swap, bool)
+            and math.isfinite(swap) and swap >= 0):
+        cell["swap_allowance_gb"] = float(swap)
+    if not cell:
+        return None
+    cell["updated_at"] = _number(value.get("updated_at")) or 0.0
+    return cell
+
+
+def _clean_mode_cells(raw: dict) -> dict:
+    """One tier's mode -> {generic, counts} view, dropping cells that state nothing."""
+    cleaned: dict = {}
+    for mode in MODES:
+        block = raw.get(mode)
+        if not isinstance(block, dict):
+            continue
+        generic = _clean_cell(block.get("generic"))
+        counts: dict[str, dict] = {}
+        raw_counts = block.get("counts")
+        if isinstance(raw_counts, dict):
+            for count, cell in raw_counts.items():
+                try:
+                    number = int(count)
+                except (TypeError, ValueError):
+                    continue
+                cell = _clean_cell(cell)
+                if number >= 1 and cell is not None:
+                    counts[str(number)] = cell
+        if generic is not None or counts:
+            cleaned[mode] = {"generic": generic, "counts": counts}
+    return cleaned
+
+
+def _reference_record(key: str, value: dict) -> dict | None:
+    """A stored reference record, or ``None`` when it states nothing usable.
+
+    Storage keeps every physical tier's settings under its own tier block, so a write on one
+    tier never discards or reinterprets another tier's values. The older shape (``cells`` keyed
+    by mode under one record-level ``tier_gb``) still loads: it is read as that tier's block.
+    """
+    tier = value.get("tier_gb")
+    if isinstance(tier, bool) or not isinstance(tier, (str, int)):
+        return None
+    raw_cells = value.get("cells")
+    if not isinstance(raw_cells, dict):
+        return None
+    if any(mode in raw_cells for mode in MODES):
+        by_tier = {str(tier): _clean_mode_cells(raw_cells)}
+    else:
+        by_tier = {str(level): _clean_mode_cells(block)
+                   for level, block in raw_cells.items() if isinstance(block, dict)}
+    by_tier = {level: cells for level, cells in by_tier.items() if cells}
+    if not by_tier:
+        return None
+    return {
+        "model": str(value.get("model") or key.split("::", 1)[0]),
+        "tier_gb": str(tier),
+        "cells": by_tier,
+        "updated_at": _number(value.get("updated_at")) or 0.0,
+    }
+
+
 def _read() -> dict[str, dict]:
     global _cache
     if _cache is not None:
@@ -230,17 +331,50 @@ def _read() -> dict[str, dict]:
         for key, value in raw.items():
             if not isinstance(key, str) or not isinstance(value, dict):
                 continue
+            normalized = _normalized(key)
+            if normalized.endswith("::reference"):
+                record = _reference_record(normalized, value)
+                if record is not None:
+                    _cache[normalized] = record
+                continue
             total = _number(value.get("min_total_memory_gb"))
             free = _number(value.get("min_free_memory_gb"))
+            # The pair filter is for legacy/mode RAM records only; reference records above are
+            # not RAM and must not be discarded by it.
             if total is None or free is None:
                 continue
-            _cache[_normalized(key)] = {
+            mode = value.get("mode")
+            if mode is not None and mode not in MODES:
+                continue
+            record = {
                 "model": str(value.get("model") or key),
                 "min_total_memory_gb": total,
                 "min_free_memory_gb": free,
                 "updated_at": _number(value.get("updated_at")) or 0.0,
             }
+            if mode is not None:
+                record["mode"] = mode
+            _cache[normalized] = record
     return _cache
+
+
+def _ram_override(model_key: str, mode: str | None) -> tuple[dict | None, str | None]:
+    """The RAM override that feeds this scope, and its label.
+
+    A mode read prefers the ``model::mode`` record, then the model-wide legacy record, so a
+    surviving model-wide override is reported as ``override_scope: 'model'`` (legacy fallback),
+    never as a mode-specific setting. A model-wide read only ever uses the legacy record.
+    """
+    records = _read()
+    if mode:
+        record = records.get(f"{model_key}::{mode}")
+        if isinstance(record, dict) and record.get("mode") == mode:
+            return record, "mode"
+    record = records.get(model_key)
+    if isinstance(record, dict) and "mode" not in record:
+        return record, "model"
+    return None, None
+
 
 
 def _write(values: dict[str, dict]) -> None:
@@ -308,7 +442,7 @@ def describe(model: str, catalog_entry: dict, mode: str | None = None) -> dict:
     default_free = max(DEFAULT_MIN_FREE_MEMORY_GB, qualified_free or 0.0)
     if editing and reference_free is not None:
         default_free = max(default_free, reference_free)
-    override = _read().get(key)
+    override, override_scope = _ram_override(key, mode)
     required_total, total_source = requirement_gb(model, catalog_entry, mode=mode)
     effective_total = required_total or 0.0
     base_free = override["min_free_memory_gb"] if override else default_free
@@ -377,29 +511,46 @@ def describe(model: str, catalog_entry: dict, mode: str | None = None) -> dict:
         "fleet_default_measured": fleet_default is not None,
         "default_reason": default_reason,
         "overridden": override is not None,
+        # Which record feeds this answer: a mode record, the model-wide legacy fallback, or
+        # nothing (published values only). The screen must never present a model-wide number as
+        # a mode-specific one.
+        "override_scope": override_scope,
         "updated_at": override.get("updated_at") if override else None,
     }
 
 
 def set_override(model: str, *, min_total_memory_gb: float,
-                 min_free_memory_gb: float, catalog_entry: dict) -> dict:
+                 min_free_memory_gb: float, catalog_entry: dict,
+                 mode: str | None = None) -> dict:
+    """Write one RAM override: the model-wide legacy record (default) or a mode record.
+
+    The local Models-screen route keeps calling this without ``mode`` and writes the same
+    legacy record it always has. The fleet route passes ``mode``; a mode reset never touches
+    the model-wide record and vice versa.
+    """
     key = _normalized(model)
     if not key:
         raise ValueError("model is required")
-    values = dict(_read())
-    values[key] = {
-        "model": model,
-        "min_total_memory_gb": float(min_total_memory_gb),
-        "min_free_memory_gb": float(min_free_memory_gb),
-        "updated_at": time.time(),
-    }
-    _write(values)
+    if mode is not None and mode not in MODES:
+        raise ValueError(f"mode must be one of {', '.join(MODES)}")
     global _cache
-    _cache = values
-    return describe(model, catalog_entry)
+    with _LOCK:
+        values = dict(_read())
+        record = {
+            "model": model,
+            "min_total_memory_gb": float(min_total_memory_gb),
+            "min_free_memory_gb": float(min_free_memory_gb),
+            "updated_at": time.time(),
+        }
+        if mode is not None:
+            record["mode"] = mode
+        values[f"{key}::{mode}" if mode else key] = record
+        _write(values)
+        _cache = values
+    return describe(model, catalog_entry, mode=mode)
 
 
-def worker_free_floor_gb(model: str) -> float | None:
+def worker_free_floor_gb(model: str, mode: str | None = None) -> float | None:
     """The live-free floor the Voice worker's own preflight must use in place of its own row: the
     operator's override, else ``None`` (the worker reads the model's row itself).
 
@@ -409,29 +560,492 @@ def worker_free_floor_gb(model: str) -> float | None:
     8 GB Mac (3.3-3.5 GB free) would refuse every job it was sent. The worker now reads the same
     row the Hub does (``components/voice/app/backend/generation.py``, ``_required_free_memory_gb``),
     so the row needs no forwarding and the two guards agree by construction. An override is
-    site-local and is on no row, so it is the one number that still has to travel."""
-    key = _normalized(model)
-    override = _read().get(key)
+    site-local and is on no row, so it is the one number that still has to travel.
+
+    ``mode`` is optional: absent keeps the model-wide legacy answer every existing caller uses;
+    present prefers that mode's record and falls back to the model-wide record."""
+    override, _scope = _ram_override(_normalized(model), mode)
     return override["min_free_memory_gb"] if override else None
 
 
-def reset_override(model: str, catalog_entry: dict) -> dict:
+def reset_override(model: str, catalog_entry: dict, mode: str | None = None) -> dict:
+    """Clear the declared RAM record for this scope only; no reset sequence number exists.
+
+    Without ``mode`` this is the legacy model-wide clear (API unchanged). With ``mode`` it
+    removes only ``model::mode``; a surviving model-wide record then reads as
+    ``override_scope: 'model'``. Reference rows are never touched.
+    """
     key = _normalized(model)
-    values = dict(_read())
-    values.pop(key, None)
-    if values:
-        _write(values)
-    else:
-        try:
-            SETTINGS_FILE.unlink()
-        except FileNotFoundError:
-            pass
+    if mode is not None and mode not in MODES:
+        raise ValueError(f"mode must be one of {', '.join(MODES)}")
     global _cache
-    _cache = values
-    return describe(model, catalog_entry)
+    with _LOCK:
+        values = dict(_read())
+        values.pop(f"{key}::{mode}" if mode else key, None)
+        if values:
+            _write(values)
+        else:
+            try:
+                SETTINGS_FILE.unlink()
+            except FileNotFoundError:
+                pass
+        _cache = values
+    return describe(model, catalog_entry, mode=mode)
+
+
+@lru_cache(maxsize=1)
+def _reference_limit_table() -> dict | None:
+    """The published per-tier reference table, or ``None`` when this install cannot read it.
+
+    This is the same file the Image worker resolves through ``generation.reference_tier`` and
+    ``generation.effective_reference_policy``; reading the data here keeps the Hub free of the
+    worker's heavy import while using the one published authority. A missing/unreadable table
+    makes the readback ``available: false`` (loud), never an empty object and never a guess.
+    """
+    try:
+        table = json.loads(REFERENCE_LIMITS_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(table, dict) or table.get("schema") != "studiohub.image-reference-limits.v1":
+        return None
+    return table
+
+
+def physical_tier(total_memory_bytes: int | None) -> str | None:
+    """The physical band this host falls in (``'8' | '16' | '24' | '32' | '<8'``).
+
+    Identical arithmetic to ``generation.reference_tier``: decimal fleet bytes -> binary GiB,
+    rounded, placed in the first published band it clears. ``None`` means the published table is
+    unreadable, so no band is known and a reference write must be refused (never guessed).
+    """
+    table = _reference_limit_table()
+    if table is None:
+        return None
+    if (total_memory_bytes is None or isinstance(total_memory_bytes, bool)
+            or not isinstance(total_memory_bytes, (int, float))
+            or not math.isfinite(total_memory_bytes) or total_memory_bytes <= 0):
+        # Missing/invalid host telemetry is an unknown tier, never an invented '<8'.
+        return None
+    gib = round(total_memory_bytes / 1024 ** 3)
+    bands: set[int] = set()
+    for row in (table or {}).get("rows") or []:
+        for tier in (row.get("tiers") or {}):
+            try:
+                bands.add(int(tier))
+            except (TypeError, ValueError):
+                continue
+    for floor in sorted(bands, reverse=True):
+        if gib >= floor:
+            return str(floor)
+    return "<8"
+
+
+def _published_reference_rows(model: str) -> list[dict]:
+    table = _reference_limit_table()
+    if table is None:
+        return []
+    wanted = {str(model), _normalized(model)}
+    return [row for row in table.get("rows") or []
+            if isinstance(row, dict)
+            and (row.get("model_id") in wanted or row.get("package_id") in wanted)]
+
+
+def _published_cell(row: dict | None, tier: str) -> dict | None:
+    if not isinstance(row, dict):
+        return None
+    cell = (row.get("tiers") or {}).get(tier)
+    return _clean_cell(cell)
+
+
+def _override_cells(model: str, mode: str, tier: str) -> tuple:
+    """The stored overrides for this model/mode at this tier, plus per-row stale flags.
+
+    Other tiers' blocks stay stored but are never applied here. A row with no current-tier
+    setting but a setting on another tier reports ``stale_tier_ignored`` for that row.
+    """
+    record = _read().get(f"{_normalized(model)}::reference")
+    if not isinstance(record, dict):
+        return None, {}, False, set()
+    by_tier = record.get("cells") or {}
+    block = (by_tier.get(tier) or {}).get(mode)
+    generic = block.get("generic") if isinstance(block, dict) else None
+    counts: dict[int, dict] = {}
+    for count, cell in ((block or {}).get("counts") or {}).items():
+        try:
+            number = int(count)
+        except (TypeError, ValueError):
+            continue
+        if number >= 1 and isinstance(cell, dict):
+            counts[number] = cell
+    stale_generic = False
+    stale_counts: set[int] = set()
+    for level, cells in by_tier.items():
+        if level == tier:
+            continue
+        other = (cells or {}).get(mode)
+        if not isinstance(other, dict):
+            continue
+        if other.get("generic"):
+            stale_generic = True
+        for count in other.get("counts") or {}:
+            try:
+                number = int(count)
+            except (TypeError, ValueError):
+                continue
+            if number not in counts:
+                stale_counts.add(number)
+    return generic, counts, (generic is None and stale_generic), stale_counts
+
+
+def _intrinsic_cap(rows: list[dict], table: dict) -> tuple[int | None, str | None]:
+    package = next((row.get("package_id") for row in rows if row.get("package_id")), None)
+    entry = (table.get("engine_intrinsic_cap") or {}).get(package) if package else None
+    if isinstance(entry, dict):
+        value = entry.get("max")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value, None
+    return None, "the engine intrinsic cap is unknown for this model; no clamp was applied"
+
+
+def reference_policy(model: str, mode: str, total_memory_bytes: int | None, *,
+                     model_default: dict | None = None) -> dict:
+    """The effective reference rows for one (model, mode, this Mac's physical tier).
+
+    Resolution order per row and per field (proposal.r5): exact-count override, exact published
+    row, generic override, generic published row, model default. A generic override never
+    answers for a count that has an exact published row or an exact override. ``false``, ``0``
+    and ``0.0`` survive verbatim; a field no rung states stays ``null`` with its reason.
+
+    ``model_default`` is the Image worker's own fallback (``generation.reference_max`` / no
+    lane) for a model absent from the table; r5's source vocabulary has no separate default
+    label, so those values report as ``published`` while the ``published`` row stays null.
+    """
+    table = _reference_limit_table()
+    if table is None:
+        return {"available": False,
+                "reason": ("the published reference limits table is not readable at "
+                           f"{REFERENCE_LIMITS_PATH}")}
+    if mode not in MODES:
+        return {"available": False,
+                "reason": f"mode {mode!r} is not one of {', '.join(MODES)}"}
+    tier = physical_tier(total_memory_bytes)
+    if tier is None:
+        return {"available": False,
+                "reason": ("the host total memory is unknown; the physical tier cannot be "
+                           "resolved")}
+    rows = [row for row in _published_reference_rows(model) if row.get("mode") == mode]
+    generic_published = next((row for row in rows if row.get("reference_count") is None), None)
+    published = {
+        row["reference_count"]: row for row in rows
+        if isinstance(row.get("reference_count"), int)
+        and not isinstance(row.get("reference_count"), bool)
+        and row["reference_count"] >= 1
+    }
+    generic_cell = _published_cell(generic_published, tier)
+    exact_cells = {count: _published_cell(row, tier) for count, row in published.items()}
+    generic_override, override_counts, stale_generic, stale_counts = _override_cells(
+        model, mode, tier)
+    intrinsic, intrinsic_reason = _intrinsic_cap(rows, table)
+    default_cell = _clean_cell(model_default) if isinstance(model_default, dict) else None
+
+    def one(count: int | None, exact_override: dict | None,
+            exact_published: dict | None) -> dict:
+        rungs: list[tuple[str, dict | None]] = []
+        if count is not None:
+            rungs += [("override", exact_override), ("published", exact_published)]
+        rungs += [("override", generic_override), ("published", generic_cell)]
+        if default_cell is not None:
+            rungs.append(("published", default_cell))
+
+        def pick(field: str) -> tuple:
+            for source, cell in rungs:
+                if isinstance(cell, dict) and field in cell:
+                    return cell[field], source, None
+            return (None, "absent",
+                    f"no override, published row or model default states {field} for "
+                    f"reference_count {count} at physical tier {tier!r}")
+
+        allowed, allowed_source, allowed_reason = pick("allowed")
+        maximum, max_source, max_reason = pick("max_reference_images")
+        swap, swap_source, swap_reason = pick("swap_allowance_gb")
+        clamped_reason = None
+        if isinstance(maximum, int) and intrinsic is not None and maximum > intrinsic:
+            maximum = intrinsic
+            clamped_reason = f"clamped to the engine intrinsic cap {intrinsic}"
+        sources = {"allowed": allowed_source,
+                   "max_reference_images": max_source,
+                   "swap_allowance_gb": swap_source}
+        return {
+            "reference_count": count,
+            "effective": {"allowed": allowed, "max_reference_images": maximum,
+                          "swap_allowance_gb": swap},
+            "sources": sources,
+            "unknown_reasons": {"allowed": allowed_reason,
+                                "max_reference_images": max_reason,
+                                "swap_allowance_gb": swap_reason},
+            "published": (published.get(count) if count is not None else generic_published),
+            "override": exact_override if count is not None else generic_override,
+            "max_intrinsic": intrinsic,
+            "intrinsic_unknown_reason": intrinsic_reason,
+            "clamped_reason": clamped_reason,
+            "overridden": "override" in sources.values(),
+            "stale_tier_ignored": (stale_generic if count is None else count in stale_counts),
+        }
+
+    counts = sorted(set(published) | set(override_counts))
+    return {
+        "available": True,
+        "physical_tier": tier,
+        "physical_tier_gb": int(tier) if tier != "<8" else None,
+        "total_memory_bytes": (int(total_memory_bytes)
+                               if isinstance(total_memory_bytes, (int, float))
+                               and not isinstance(total_memory_bytes, bool) else None),
+        "mode": mode,
+        "intrinsic_max": intrinsic,
+        "intrinsic_unknown_reason": intrinsic_reason,
+        "rows": [one(None, None, None)]
+        + [one(count, override_counts.get(count), exact_cells.get(count)) for count in counts],
+    }
+
+
+def set_reference_override(model: str, mode: str, reference_count: int | None,
+                           value: dict | None, *, total_memory_bytes: int) -> None:
+    """Write or clear exactly one reference row on this Mac; sibling rows are untouched.
+
+    ``reference_count`` is ``None`` for the generic row or a strict positive int for an exact
+    row. ``value`` ``None`` clears the selected row; an absent field retains its stored value
+    and an explicit ``null`` clears only that field. Other tiers' settings stay stored and
+    restorable; only the current tier's selected identity is mutated.
+    """
+    key = _normalized(model)
+    if not key:
+        raise ValueError("model is required")
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {', '.join(MODES)}")
+    if (reference_count is not None
+            and (isinstance(reference_count, bool)
+                 or not isinstance(reference_count, int) or reference_count < 1)):
+        raise ValueError("reference_count must be null or a positive integer")
+    if (isinstance(total_memory_bytes, bool)
+            or not isinstance(total_memory_bytes, (int, float)) or total_memory_bytes < 0):
+        raise ValueError("total_memory_bytes is required to resolve the physical tier")
+    if _reference_limit_table() is None:
+        raise TierUnknown(
+            "TIER_UNKNOWN: the published reference limits table is unreadable")
+    tier = physical_tier(total_memory_bytes)
+    if tier is None:
+        raise TierUnknown(
+            "TIER_UNKNOWN: the published reference limits table is unreadable")
+    updates: dict = {}
+    if value is not None:
+        if not isinstance(value, dict):
+            raise ValueError("reference value must be an object or null")
+        unknown = set(value) - {"allowed", "max_reference_images", "swap_allowance_gb"}
+        if unknown:
+            raise ValueError(f"unknown reference field(s): {', '.join(sorted(unknown))}")
+        if not value:
+            raise ValueError("reference value is empty")
+        if ("allowed" in value and value["allowed"] is not None
+                and type(value["allowed"]) is not bool):
+            raise ValueError("allowed must be a boolean or null")
+        if ("max_reference_images" in value and value["max_reference_images"] is not None
+                and (isinstance(value["max_reference_images"], bool)
+                     or not isinstance(value["max_reference_images"], int)
+                     or value["max_reference_images"] < 0)):
+            raise ValueError("max_reference_images must be an integer >= 0 or null")
+        swap = value.get("swap_allowance_gb")
+        if (swap is not None and (isinstance(swap, bool) or not isinstance(swap, (int, float))
+                                  or not math.isfinite(swap) or swap < 0)):
+            raise ValueError("swap_allowance_gb must be a finite number >= 0 or null")
+        updates = {field: (float(value[field]) if field == "swap_allowance_gb"
+                           and value[field] is not None else value[field])
+                   for field in ("allowed", "max_reference_images", "swap_allowance_gb")
+                   if field in value}
+    global _cache
+    with _LOCK:
+        values = json.loads(json.dumps(_read()))
+        record_key = f"{key}::reference"
+        record = values.get(record_key)
+        if not isinstance(record, dict):
+            record = {"model": model, "tier_gb": tier, "cells": {}, "updated_at": 0.0}
+        by_tier = record.setdefault("cells", {})
+        tier_cells = by_tier.setdefault(tier, {})
+        block = tier_cells.setdefault(mode, {"generic": None, "counts": {}})
+        selected = (block.get("generic") if reference_count is None
+                    else (block.get("counts") or {}).get(str(reference_count)))
+        if value is None:
+            cell = None
+        else:
+            # A partial write changes only the fields it names; an explicit null clears only
+            # that field, and a cell left with no fields is the selected row's clear.
+            cell = dict(selected) if isinstance(selected, dict) else {}
+            cell.pop("updated_at", None)
+            for field, field_value in updates.items():
+                if field_value is None:
+                    cell.pop(field, None)
+                else:
+                    cell[field] = field_value
+            if cell:
+                cell["updated_at"] = time.time()
+            else:
+                cell = None
+        if reference_count is None:
+            block["generic"] = cell
+        else:
+            counts = block.setdefault("counts", {})
+            if cell is None:
+                counts.pop(str(reference_count), None)
+            else:
+                counts[str(reference_count)] = cell
+        if not block.get("generic") and not block.get("counts"):
+            tier_cells.pop(mode, None)
+        if not tier_cells:
+            by_tier.pop(tier, None)
+        if not by_tier:
+            values.pop(record_key, None)
+        else:
+            record["tier_gb"] = tier
+            record["updated_at"] = time.time()
+            values[record_key] = record
+        _write(values)
+        _cache = values
+
+
+_REVISION_COVERS_MODEL = ["node_id", "model", "mode", "ram_effective", "ram_sources",
+                          "override_scope", "model_wide_fallback", "published_ram"]
+_REVISION_COVERS_MODE = _REVISION_COVERS_MODEL + ["physical_tier", "reference_rows"]
+
+
+class RevisionConflict(Exception):
+    """The expected revision no longer describes this scope; ``current`` is the fresh state."""
+
+    def __init__(self, current: dict):
+        super().__init__("revision conflict")
+        self.current = current
+
+
+def _bound_state(description: dict, model_key: str, mode: str | None,
+                 reference: dict | None, node_id: str) -> dict:
+    """The effective state a revision token binds; updated_at and write order are excluded."""
+    state = {
+        "node_id": node_id,
+        "model": model_key,
+        "mode": mode,
+        "ram_effective": {
+            "min_total_memory_gb": description["effective_min_total_memory_gb"],
+            "min_free_memory_gb": description["effective_min_free_memory_gb"],
+        },
+        "ram_sources": {
+            "min_total_source": description["min_total_source"],
+            "min_free_source": description["min_free_source"],
+        },
+        "override_scope": description["override_scope"],
+        "published_ram": {
+            "catalog_min_total_memory_gb": description["catalog_min_total_memory_gb"],
+            "catalog_min_free_memory_gb": description["catalog_min_free_memory_gb"],
+            "default_min_total_memory_gb": description["default_min_total_memory_gb"],
+            "default_min_free_memory_gb": description["default_min_free_memory_gb"],
+            "reference_min_total_memory_gb": description["reference_min_total_memory_gb"],
+            "reference_min_free_memory_gb": description["reference_min_free_memory_gb"],
+        },
+        "model_wide_fallback": None,
+    }
+    if mode and description["override_scope"] == "model":
+        record = _read().get(model_key)
+        if isinstance(record, dict) and "mode" not in record:
+            state["model_wide_fallback"] = {
+                "min_total_memory_gb": record["min_total_memory_gb"],
+                "min_free_memory_gb": record["min_free_memory_gb"],
+            }
+    if reference is not None:
+        if reference.get("available"):
+            state["physical_tier"] = {
+                "tier": reference["physical_tier"],
+                "tier_gb": reference["physical_tier_gb"],
+                "total_memory_bytes": reference["total_memory_bytes"],
+            }
+            state["reference_rows"] = reference["rows"]
+        else:
+            # An unreadable table is an honest unavailable state, not a crash and not a guess.
+            state["physical_tier"] = {"tier": None, "tier_gb": None,
+                                      "total_memory_bytes": None}
+            state["reference_rows"] = {"available": False,
+                                       "reason": reference.get("reason")}
+    return state
+
+
+def _without_timestamps(value):
+    """Strip ``updated_at`` at every depth: write time is not part of the effective state."""
+    if isinstance(value, dict):
+        return {key: _without_timestamps(item) for key, item in value.items()
+                if key != "updated_at"}
+    if isinstance(value, list):
+        return [_without_timestamps(item) for item in value]
+    return value
+
+
+def _revision(state: dict) -> str:
+    payload = json.dumps(_without_timestamps(state), sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def effective_state(model: str, catalog_entry: dict, *, node_id: str,
+                    mode: str | None = None, total_memory_bytes: int | None = None,
+                    model_default: dict | None = None) -> dict:
+    """One readback: the existing describe spread plus override_scope, reference_policy (mode
+    only), the state token and the groups that token covers.
+
+    This is the small function the fleet route, catalog inventory and submit/dispatch consumers
+    call, so they all resolve one effective policy. No route accepts writes until its enforcers
+    are wired; this module only exposes the shared resolver.
+    """
+    if mode is not None and mode not in MODES:
+        raise ValueError(f"mode must be one of {', '.join(MODES)}")
+    description = describe(model, catalog_entry, mode=mode)
+    model_key = _normalized(model or catalog_entry.get("repo"))
+    reference = (reference_policy(model, mode, total_memory_bytes,
+                                  model_default=model_default) if mode else None)
+    state = _bound_state(description, model_key, mode, reference, str(node_id))
+    payload = dict(description)
+    if reference is not None:
+        payload["reference_policy"] = reference
+    payload["revision"] = _revision(state)
+    payload["revision_covers"] = list(
+        _REVISION_COVERS_MODE if mode else _REVISION_COVERS_MODEL)
+    return payload
+
+
+def compare_and_write(model: str, catalog_entry: dict, *, node_id: str,
+                      expected_revision: str, mode: str | None = None,
+                      total_memory_bytes: int | None = None,
+                      model_default: dict | None = None, change) -> dict:
+    """Compare the scope token, then run ``change`` and return the fresh readback.
+
+    Compare and write are one critical section under the module lock, the same lock every local
+    legacy write takes, so a fleet CAS and a local Models-screen write cannot interleave. A
+    mismatch raises :class:`RevisionConflict` carrying the current state. There is no sequence
+    number and no replay.
+    """
+    if (not isinstance(expected_revision, str) or len(expected_revision) != 64
+            or any(char not in "0123456789abcdef" for char in expected_revision)):
+        raise ValueError("expected_revision must be 64 lowercase hex characters")
+    if not callable(change):
+        raise ValueError("change must be callable")
+    with _LOCK:
+        current = effective_state(model, catalog_entry, node_id=node_id, mode=mode,
+                                  total_memory_bytes=total_memory_bytes,
+                                  model_default=model_default)
+        if expected_revision != current["revision"]:
+            raise RevisionConflict(current)
+        change()
+        return effective_state(model, catalog_entry, node_id=node_id, mode=mode,
+                                total_memory_bytes=total_memory_bytes,
+                                model_default=model_default)
 
 
 def reset_for_tests() -> None:
     global _cache, _manifest_cache
     _cache = None
     _manifest_cache = None
+    _reference_limit_table.cache_clear()

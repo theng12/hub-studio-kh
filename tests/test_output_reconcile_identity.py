@@ -76,6 +76,27 @@ def counting(path):
 with patch.object(output_storage, '_sha256', counting):
     output_storage.enforce(machine='m', max_bytes=10**9, retention_days=1, now=1.5 * 10**5)
 assert [name for name in hashed if name.startswith('steady')] == [], hashed
+
+# 5. Foreign identity rejection: unmanaged foreign path is rejected, and enforce leaves foreign machine output untouched.
+foreign_out = root / 'foreign_out'; foreign_out.mkdir()
+foreign_file = foreign_out / 'unmanaged.png'; foreign_file.write_bytes(b'outside')
+rejected = output_storage.register_finalized_output(
+    machine='m', studio='image', job_id='rejected', managed_output_roots=[str(out)],
+    output_path=str(foreign_file), generated_at=1, batch_id='rejected', item_index=0,
+    bytes=len(b'outside'), sha256=hashlib.sha256(b'outside').hexdigest())
+assert rejected is None, 'foreign unmanaged path was not rejected'
+
+foreign_kept = add('foreign_kept.png', b'f' * 20, batch='foreign_batch')
+with ledger._conn() as conn:
+    conn.execute("UPDATE output_groups SET machine='foreign-host' WHERE batch_id='foreign_batch'")
+
+output_storage.enforce(machine='m', max_bytes=0, retention_days=0, now=1.5 * 10**5)
+assert foreign_kept.exists(), 'foreign machine output was deleted by local enforce'
+with ledger._conn() as conn:
+    foreign_group = conn.execute("SELECT machine, state FROM output_groups WHERE batch_id='foreign_batch'").fetchone()
+    assert foreign_group['machine'] == 'foreign-host', 'foreign machine identity was altered'
+    assert foreign_group['state'] == 'finalized', 'foreign machine output state was modified'
+
 print('ok')
 '''
 

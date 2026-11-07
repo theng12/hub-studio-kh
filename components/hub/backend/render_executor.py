@@ -56,6 +56,11 @@ SUBTITLE_CAPABILITIES_FORMAT = "studio.render.hub-subtitle-capabilities.v1"
 _SUBTITLE_PROFILE_FORMAT = "studio.render.profile.v4"
 _SUBTITLE_PROFILE_IMPLEMENTATION = "story-classic-subtitle-v1"
 _SUBTITLE_COMPILER_IMPLEMENTATION = "hub-final-render-subtitle-v1"
+_CUE_OVERLAY_CONTRACT = "studio.render.cue-overlay.v1"
+_CUE_OVERLAY_PROFILE_FORMAT = "studio.render.profile.v5"
+_CUE_OVERLAY_PROFILE_IMPLEMENTATION = "story-classic-cue-overlay-v1"
+_CUE_OVERLAY_COMPILER_IMPLEMENTATION = "hub-final-render-cue-overlay-v1"
+_CUE_OVERLAY_CAPABILITIES_FORMAT = "studio.render.hub-cue-overlay-capabilities.v1"
 _LATE_LABEL_COMPILER_IMPLEMENTATION = "hub-final-render-late-label-v3"
 # The frozen wire order Gateway validates the optional joint marker against.
 LATE_LABEL_MOTIONS = ("none", "pop", "slide", "float", "pulse", "wipe", "line-draw")
@@ -125,7 +130,7 @@ def _input_options(entry: dict[str, Any], stream: Any) -> tuple[str, ...]:
     if role in {"logo", "frame_background", "overlay", "cue_label"} and suffix == ".png" and (
             header.startswith(b"\x89PNG\r\n\x1a\n")):
         return ("-f", "png_pipe", "-protocol_whitelist", "file,pipe")
-    if role == "overlay" and suffix == ".webm" and header.startswith(b"\x1aE\xdf\xa3"):
+    if role in {"overlay", "cue_overlay"} and suffix == ".webm" and header.startswith(b"\x1aE\xdf\xa3"):
         return ("-f", "matroska,webm", "-protocol_whitelist", "file,pipe")
     raise RuntimeError(f"render asset {entry.get('logical_id', '')} has an unsupported format")
 
@@ -457,11 +462,11 @@ class InstalledRenderAuthorityLoader:
     def _descriptor_root(self, profile_digest: str) -> Path | None:
         """The installed triple whose PROFILE bytes are exactly the row's pin.
 
-        The roots are the existing legacy, late-label and subtitle install slots; a
+        The roots are the existing legacy, late-label, subtitle and cue-overlay install slots; a
         missing or unreadable slot is simply not this pin. The digest never chooses a
         scope, so a copied descriptor cannot make one scope answer for another.
         """
-        for name in ("", "late-label", "subtitle"):
+        for name in ("", "late-label", "subtitle", "cue-overlay"):
             root = self.root / name if name else self.root
             try:
                 if hashlib.sha256((root / "PROFILE.json").read_bytes()).hexdigest() == profile_digest:
@@ -485,13 +490,19 @@ class InstalledRenderAuthorityLoader:
             profile_document = decode_render_json(raw["profile"])
             compiler_document = decode_render_json(raw["compiler"])
             compiler_implementation = compiler_document["implementation"]
+            cue_overlays = (
+                profile.format == _CUE_OVERLAY_PROFILE_FORMAT
+                and profile.implementation == _CUE_OVERLAY_PROFILE_IMPLEMENTATION)
             subtitles = (
                 profile.format == _SUBTITLE_PROFILE_FORMAT
                 and profile.implementation == _SUBTITLE_PROFILE_IMPLEMENTATION)
             late_labels = (
                 profile.format == "studio.render.profile.v3"
                 and profile.implementation == "story-classic-late-label-v3")
-            if subtitles:
+            if cue_overlays:
+                if compiler_implementation != _CUE_OVERLAY_COMPILER_IMPLEMENTATION:
+                    return None
+            elif subtitles:
                 # The v4 triple is the same worker serving both markers; it is never inferred
                 # from a late-label triple whose compiler only knows v3.
                 if compiler_implementation != _SUBTITLE_COMPILER_IMPLEMENTATION:
@@ -502,9 +513,11 @@ class InstalledRenderAuthorityLoader:
             kinds = set()
             if packet is not None:
                 kinds = {op["kind"] for op in packet["recipe"]["operations"]}
-            if "late_label_stage" in kinds and not (late_labels or subtitles):
+            if "late_label_stage" in kinds and not (late_labels or subtitles or cue_overlays):
                 return None
-            if "subtitle_stage" in kinds and not subtitles:
+            if "subtitle_stage" in kinds and not (subtitles or cue_overlays):
+                return None
+            if "cue_overlay_stage" in kinds and not cue_overlays:
                 return None
             if (
                 profile.digest != document["profile_digest"]
@@ -535,8 +548,11 @@ class InstalledRenderAuthorityLoader:
         if descriptors is None:
             return False
         profile = descriptors[2]
-        # The v4 subtitle triple executes the combined packet's late-label stage in the same
+        # The v5 cue-overlay or v4 subtitle triple executes the combined packet's late-label stage in the same
         # compiler; a v3 triple keeps its own exact rule.
+        if (profile["format"] == _CUE_OVERLAY_PROFILE_FORMAT
+                and profile["implementation"] == _CUE_OVERLAY_PROFILE_IMPLEMENTATION):
+            return descriptors[1]["implementation"] == _CUE_OVERLAY_COMPILER_IMPLEMENTATION
         if (profile["format"] == _SUBTITLE_PROFILE_FORMAT
                 and profile["implementation"] == _SUBTITLE_PROFILE_IMPLEMENTATION):
             return descriptors[1]["implementation"] == _SUBTITLE_COMPILER_IMPLEMENTATION
@@ -552,11 +568,29 @@ class InstalledRenderAuthorityLoader:
             "tools_digest": qualification.tools_digest,
             "compiler_digest": qualification.compiler_digest,
         }, packet)
+        if descriptors is None:
+            return False
+        if (descriptors[2]["format"] == _CUE_OVERLAY_PROFILE_FORMAT
+                and descriptors[2]["implementation"] == _CUE_OVERLAY_PROFILE_IMPLEMENTATION):
+            return descriptors[1]["implementation"] == _CUE_OVERLAY_COMPILER_IMPLEMENTATION
         return bool(
-            descriptors is not None
-            and descriptors[2]["format"] == _SUBTITLE_PROFILE_FORMAT
+            descriptors[2]["format"] == _SUBTITLE_PROFILE_FORMAT
             and descriptors[2]["implementation"] == _SUBTITLE_PROFILE_IMPLEMENTATION
             and descriptors[1]["implementation"] == _SUBTITLE_COMPILER_IMPLEMENTATION)
+
+    def cue_overlays_allowed(self, authority: InstalledRenderAuthority,
+                             packet: dict[str, Any]) -> bool:
+        qualification = authority.qualification
+        descriptors = self._descriptors({
+            "profile_digest": qualification.profile_digest,
+            "tools_digest": qualification.tools_digest,
+            "compiler_digest": qualification.compiler_digest,
+        }, packet)
+        return bool(
+            descriptors is not None
+            and descriptors[2]["format"] == _CUE_OVERLAY_PROFILE_FORMAT
+            and descriptors[2]["implementation"] == _CUE_OVERLAY_PROFILE_IMPLEMENTATION
+            and descriptors[1]["implementation"] == _CUE_OVERLAY_COMPILER_IMPLEMENTATION)
 
     def compiler_for(self, authority: InstalledRenderAuthority, packet=None):
         qualification = authority.qualification
@@ -577,6 +611,15 @@ class InstalledRenderAuthorityLoader:
                     compile_final_render_packet as late_label_compile,
                 )
                 return late_label_compile
+        if descriptors[1]["implementation"] == _SUBTITLE_COMPILER_IMPLEMENTATION:
+            frozen_v4 = Path(__file__).parent / "render_subtitle_v4"
+            if frozen_v4.is_dir():
+                from .render_subtitle_v4.final_render_compiler import (
+                    compile_final_render_packet as subtitle_compile,
+                )
+                return subtitle_compile
+        if descriptors[1]["implementation"] == _CUE_OVERLAY_COMPILER_IMPLEMENTATION:
+            return compile_final_render_packet
         return compile_final_render_packet
 
     def _manifest_matches(self, files: dict[str, Any]) -> bool:
@@ -815,6 +858,13 @@ class InstalledRenderAuthorityLoader:
                 frozen_v3 = source_root / "render_late_label_v3"
                 if frozen_v3.is_dir():
                     source_root = frozen_v3
+            elif compiler_descriptor["implementation"] == _SUBTITLE_COMPILER_IMPLEMENTATION:
+                # The v4 wire is frozen at its release bytes. The v5 work edits the live
+                # compiler/contract, so v4 validates from its own copy once that copy is
+                # installed; without it the live root is still read, exactly as before.
+                frozen_v4 = source_root / "render_subtitle_v4"
+                if frozen_v4.is_dir():
+                    source_root = frozen_v4
             source_hashes = {
                 "python_runtime_sha256": _sha(Path(sys.executable))[1],
                 "render_hash_sha256": _sha(source_root / "render_hash_v1.py")[1],
@@ -905,7 +955,8 @@ class InstalledRenderAuthorityLoader:
         return self._unqualified_authority()
 
     def probe_authority(self, *, late_labels: bool = False,
-                        subtitles: bool = False) -> InstalledRenderAuthority | None:
+                        subtitles: bool = False,
+                        cue_overlays: bool = False) -> InstalledRenderAuthority | None:
         """The installed, identity-checked tools an encode probe runs under, or None.
 
         A probe names the digests of the tools that are actually pinned whether or not this
@@ -915,17 +966,18 @@ class InstalledRenderAuthorityLoader:
         pinned compiler's own default and are not part of a probe's identity (the probe
         tuple and the evidence decide those). The result grants nothing: it is never
         production_eligible and is never written anywhere. `late_labels=True` reads the
-        bundled late-label v3 triple and `subtitles=True` the bundled v4 subtitle triple
-        instead of the v1 root, so a scoped probe's identity carries that scope's pins and
-        never the legacy ones.
+        bundled late-label v3 triple, `subtitles=True` the bundled v4 subtitle triple, and
+        `cue_overlays=True` the bundled v5 cue-overlay triple instead of the v1 root, so a scoped probe's
+        identity carries that scope's pins and never the legacy ones.
         """
-        if late_labels and subtitles:
+        if sum((bool(late_labels), bool(subtitles), bool(cue_overlays))) > 1:
             return None
         pair = render_encode.primary_pair(render_encode.DEFAULT_OPT_IN_ENCODE)
         if pair is None:
             return None
         document = self._installed_document(
-            pair[0], pair[1], subtitles, late_labels=late_labels, subtitles=subtitles)
+            pair[0], pair[1], subtitles or cue_overlays,
+            late_labels=late_labels, subtitles=subtitles, cue_overlays=cue_overlays)
         if document is None:
             return None
         return self._authority(document, production=False)
@@ -950,6 +1002,17 @@ class InstalledRenderAuthorityLoader:
                 if descriptor.format == _SUBTITLE_PROFILE_FORMAT
                 and descriptor.implementation == _SUBTITLE_PROFILE_IMPLEMENTATION else None)
 
+    def cue_overlay_profile_digest(self) -> str | None:
+        """The installed v5 cue overlay profile digest, or None while it is unusable."""
+        try:
+            descriptor = validate_render_profile_descriptor(
+                (self.root / "cue-overlay" / "PROFILE.json").read_bytes())
+        except (OSError, TypeError, ValueError):
+            return None
+        return (descriptor.digest
+                if descriptor.format == _CUE_OVERLAY_PROFILE_FORMAT
+                and descriptor.implementation == _CUE_OVERLAY_PROFILE_IMPLEMENTATION else None)
+
     def subtitle_snapshot(
         self, packet: dict[str, Any] | None = None,
     ) -> InstalledRenderAuthority | None:
@@ -960,6 +1023,26 @@ class InstalledRenderAuthorityLoader:
         production, so a v1 or v3 grant can never answer as subtitles.
         """
         installed = self.subtitle_profile_digest()
+        if installed is None:
+            return None
+        document = self._enabled()
+        if document is None:
+            return None
+        authority = self._authority(document, packet, production=True)
+        if authority is None or authority.qualification.profile_digest != installed:
+            return None
+        return authority
+
+    def cue_overlay_snapshot(
+        self, packet: dict[str, Any] | None = None,
+    ) -> InstalledRenderAuthority | None:
+        """Production authority for the v5 cue overlay scope only.
+
+        Like the subtitle scope there is no unmeasured opt-in and no v1 fallback: only
+        this Mac's own enabled/ record validated against the installed v5 triple grants
+        production, so a v1, v3 or v4 grant can never answer as cue overlay.
+        """
+        installed = self.cue_overlay_profile_digest()
         if installed is None:
             return None
         document = self._enabled()
@@ -1013,23 +1096,26 @@ class InstalledRenderAuthorityLoader:
     def _installed_document(
         self, selected_tier: str, exact_encoder: str, font_support: bool,
         min_available_memory_bytes: int | None = None, *, late_labels: bool = False,
-        subtitles: bool = False,
+        subtitles: bool = False, cue_overlays: bool = False,
     ) -> dict[str, Any] | None:
         """Hub, not the operator, derives everything but the run settings from installed files.
 
         The memory floor defaults to the profile's own process-tree limit: the Hub never
         offers capacity to a Mac that could not hold the most the profile allows one render
-        to use. `late_labels=True` reads the bundled `render-tools/late-label` triple and
-        `subtitles=True` the `render-tools/subtitle` v4 triple; anything unreadable or not
+        to use. `late_labels=True` reads the bundled `render-tools/late-label` triple,
+        `subtitles=True` the `render-tools/subtitle` v4 triple, and `cue_overlays=True`
+        the `render-tools/cue-overlay` v5 triple; anything unreadable or not
         exactly that scope fails closed, so an absent packaging step is a negative, never
         invented pins.
         """
-        if late_labels and subtitles:
+        if sum((bool(late_labels), bool(subtitles), bool(cue_overlays))) > 1:
             return None
         hardware_class = self._own_class()
         if hardware_class is None:
             return None
-        if subtitles:
+        if cue_overlays:
+            descriptor_root = self.root / "cue-overlay"
+        elif subtitles:
             descriptor_root = self.root / "subtitle"
         elif late_labels:
             descriptor_root = self.root / "late-label"
@@ -1050,10 +1136,16 @@ class InstalledRenderAuthorityLoader:
                               or profile_document["implementation"]
                               != _SUBTITLE_PROFILE_IMPLEMENTATION):
                 return None
+            if cue_overlays and (profile.format != _CUE_OVERLAY_PROFILE_FORMAT
+                                 or profile_document["implementation"]
+                                 != _CUE_OVERLAY_PROFILE_IMPLEMENTATION):
+                return None
             tools = validate_render_tool_descriptor(raw["tools"])
             compiler = validate_render_compiler_descriptor(raw["compiler"])
             compiler_document = decode_render_json(raw["compiler"])
             if subtitles and compiler_document["implementation"] != _SUBTITLE_COMPILER_IMPLEMENTATION:
+                return None
+            if cue_overlays and compiler_document["implementation"] != _CUE_OVERLAY_COMPILER_IMPLEMENTATION:
                 return None
             tool_document = decode_render_json(raw["tools"])
             profile_bounds = profile_document["execution_bounds"]
@@ -1587,6 +1679,24 @@ class SubtitleProbeScope:
         return self._loader.probe_authority(subtitles=True)
 
 
+class CueOverlayProbeScope:
+    """The loader view an encode probe runs under in the v5 cue overlay scope.
+
+    Same isolation as the subtitle scope: the control's identity is built from the
+    bundled v5 triple and this Mac's own granted v5 record only, so v1, v3 and v4 proofs and
+    grants are unreachable from it.
+    """
+
+    def __init__(self, loader: InstalledRenderAuthorityLoader) -> None:
+        self._loader = loader
+
+    def snapshot(self) -> InstalledRenderAuthority | None:
+        return self._loader.cue_overlay_snapshot()
+
+    def probe_authority(self) -> InstalledRenderAuthority | None:
+        return self._loader.probe_authority(cue_overlays=True)
+
+
 _configured_executor = None
 
 
@@ -2030,6 +2140,7 @@ class RenderExecutor:
                 op.get("kind") == "late_label_stage" for op in operations) else None
             subtitle_ids = _subtitle_input_ids(context.packet) if any(
                 op.get("kind") == "subtitle_stage" for op in operations) else None
+            cue_overlay_ops = [op for op in operations if op.get("kind") == "cue_overlay_stage"]
             compiler = self._compile
             compile_options = {}
             if (compiler is compile_final_render_packet
@@ -2042,10 +2153,18 @@ class RenderExecutor:
                             "subtitle_profile_required: subtitles require matched v4 "
                             "profile/compiler pins")
                     compile_options["subtitles_allowed"] = True
+                if cue_overlay_ops:
+                    if not self._authority.cue_overlays_allowed(authority, context.packet):
+                        raise RenderJobUnavailable(
+                            "cue_overlay_profile_required: cue overlays require matched v5 "
+                            "profile/compiler pins")
+                    compile_options["cue_overlays_allowed"] = True
                 if (requirements is None
                         or compile_options.get("late_labels_allowed") is True) and (
                         subtitle_ids is None
-                        or compile_options.get("subtitles_allowed") is True):
+                        or compile_options.get("subtitles_allowed") is True) and (
+                        not cue_overlay_ops
+                        or compile_options.get("cue_overlays_allowed") is True):
                     compiler = self._authority.compiler_for(authority, context.packet)
             if requirements is not None and compile_options.get("late_labels_allowed") is not True:
                 raise RenderJobUnavailable(
@@ -2053,7 +2172,10 @@ class RenderExecutor:
             if subtitle_ids is not None and compile_options.get("subtitles_allowed") is not True:
                 raise RenderJobUnavailable(
                     "subtitle_profile_required: subtitles require matched v4 profile/compiler pins")
-            if requirements is not None or subtitle_ids is not None:
+            if cue_overlay_ops and compile_options.get("cue_overlays_allowed") is not True:
+                raise RenderJobUnavailable(
+                    "cue_overlay_profile_required: cue overlays require matched v5 profile/compiler pins")
+            if requirements is not None or subtitle_ids is not None or cue_overlay_ops:
                 expected_workspace = (self.runtime.root / "jobs" / context.hub_job_id
                                       / context.attempt_id)
                 if (Path(context.workspace) != expected_workspace
@@ -2071,6 +2193,36 @@ class RenderExecutor:
                         self.assets.open_reader(context.owner_scope, handle)))
                     for logical_id, handle in context.assets.items()
                 }
+                if cue_overlay_ops:
+                    from .render_cue_media import validate_cue_overlay_media, CueOverlayMediaValidationError
+                    manifest_by_id = {
+                        entry["logical_id"]: entry
+                        for entry in context.packet.get("manifest", [])
+                        if isinstance(entry, dict) and "logical_id" in entry
+                    }
+                    for cue_op in cue_overlay_ops:
+                        asset_ref = cue_op.get("asset")
+                        if (not isinstance(asset_ref, dict) or asset_ref.get("type") != "asset_ref"
+                                or not isinstance(asset_ref.get("logical_id"), str)):
+                            raise RuntimeError(f"cue overlay asset_ref is malformed")
+                        asset_id = asset_ref["logical_id"]
+                        if not asset_id or asset_id not in readers:
+                            raise RuntimeError(f"missing asset reader for cue overlay {asset_id}")
+                        stream = readers[asset_id]
+                        manifest_entry = manifest_by_id.get(asset_id)
+                        if manifest_entry is None:
+                            raise RuntimeError(f"missing manifest entry for cue overlay {asset_id}")
+                        try:
+                            validate_cue_overlay_media(
+                                authority.ffprobe,
+                                stream,
+                                recipe_canvas=context.packet["recipe"]["canvas"],
+                                time_range=cue_op["time_range"],
+                                execution_bounds=authority.profile_execution_bounds,
+                                manifest_entry=manifest_entry,
+                            )
+                        except CueOverlayMediaValidationError as exc:
+                            raise RuntimeError(f"cue overlay media rejected: {exc.reason}") from exc
                 staged_ids = (
                     {subtitle_ids[0], *subtitle_ids[1]} if subtitle_ids is not None else set())
                 local_assets = {
@@ -2796,6 +2948,66 @@ class RenderExecutor:
             "production_enabled": granted is not None,
             "available_capacity": {"slots": int(ready), "slots_total": 1},
             "qualification_candidates": [],
+            "subtitles": {"format": SUBTITLE_CONTRACT},
+            "late_labels": {
+                "format": "studio.render.late-label.v3",
+                "motions": list(LATE_LABEL_MOTIONS),
+            },
+        }
+        from . import registry
+        if registry.render_while_paused(self.machine):
+            row["render_while_paused"] = True
+        return row, None
+
+    def cue_overlay_capability(self) -> tuple[dict[str, Any] | None, str | None]:
+        """The closed v5 worker row for the cue overlay capabilities contract.
+
+        Returns ``(row, None)`` or ``(None, reason)``. Only the genuinely installed v5
+        triple can produce a row, so an absent packaging step is a measured negative: no
+        v1/v3/v4 filter, opt-in evidence, encode-support key or fabricated digest is ever
+        reused. Capacity opens only from this Mac's own granted v5 record.
+        """
+        loader = self._authority
+        snapshot = getattr(loader, "cue_overlay_snapshot", None)
+        probe = getattr(loader, "probe_authority", None)
+        if not (callable(snapshot) and callable(probe)):
+            return None, "this Hub cannot read the v5 cue overlay render scope"
+        try:
+            installed = probe(cue_overlays=True)
+        except TypeError:
+            return None, "this Hub cannot read the v5 cue overlay render scope"
+        if installed is None:
+            return None, "the installed v5 cue overlay descriptor triple is missing or invalid"
+        granted = snapshot()
+        authority = granted if granted is not None else installed
+        admission_allowed = self._admission_allowed()
+        busy = self.machine in self.broker.busy_machines()
+        ready = bool(
+            granted is not None
+            and self._has_memory(granted)
+            and admission_allowed
+            and not busy
+        )
+        row = {
+            "operation": "video.final_render",
+            "physical_machine_id": self.machine,
+            "hardware_class": authority.qualification.hardware_class,
+            "profile_digest": authority.qualification.profile_digest,
+            "tools_digest": authority.qualification.tools_digest,
+            "compiler_digest": authority.qualification.compiler_digest,
+            "qualification_digest": authority.qualification.qualification_digest,
+            "selected_tier": authority.selected_tier,
+            "exact_encoder": authority.exact_encoder,
+            "font_support": authority.font_support,
+            "bounds": asdict(authority.bounds),
+            "profile_execution_bounds": json.loads(
+                _canonical(authority.profile_execution_bounds)),
+            "production_eligible": bool(
+                granted is not None and granted.qualification.production_eligible),
+            "production_enabled": granted is not None,
+            "available_capacity": {"slots": int(ready), "slots_total": 1},
+            "qualification_candidates": [],
+            "cue_overlays": {"format": _CUE_OVERLAY_CONTRACT},
             "subtitles": {"format": SUBTITLE_CONTRACT},
             "late_labels": {
                 "format": "studio.render.late-label.v3",

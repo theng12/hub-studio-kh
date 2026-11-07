@@ -978,6 +978,19 @@ def reference_tier(total_memory_bytes: int | None) -> str:
     return '<8'
 
 
+def reference_intrinsic_max(model: ImageModel) -> int | None:
+    """The engine's **known** intrinsic cap from the published table, or None when unknown.
+
+    A row's own ``max`` is an owner limit, never an engine bound, so it is deliberately not a
+    fallback here: an unknown intrinsic cap must not become the old owner number.
+    """
+    entry = reference_limit_table().get('engine_intrinsic_cap', {}).get(model.package_id) or {}
+    maximum = entry.get('max')
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
+        return None
+    return maximum
+
+
 def reference_policy_row(model: ImageModel, mode: str, count: int | None = None) -> dict | None:
     """The published row for this model, job mode and exact reference count."""
     return next((row for row in reference_limit_table()['rows']
@@ -1729,14 +1742,112 @@ def reference_image_media_type(path) -> tuple[str, str]:
     return media_type, REFERENCE_SUFFIX_BY_MEDIA_TYPE[media_type]
 
 
+_REFERENCE_POLICY_FIELDS = ('model', 'mode', 'node_id', 'physical_tier', 'reference_count',
+                            'revision', 'effective')
+_REFERENCE_POLICY_EFFECTIVE_FIELDS = ('allowed', 'max_reference_images', 'swap_allowance_gb')
+_REFERENCE_POLICY_ABSENT = object()
+
+
+def reference_policy_admission(model: ImageModel, mode: str, references: list[str],
+                               total_memory_bytes: int | None,
+                               destination_node_id: str | None,
+                               policy: object) -> dict:
+    """The Hub's INTERNAL reference_policy snapshot, checked against this destination.
+
+    Present means exact (Gateway ACK 2026-11-07): the model, mode, destination node and physical
+    tier must describe this worker and this request, and the effective values must be usable as
+    stated. A mismatch is refused by name; only an absent field keeps the old local resolver.
+    """
+    if not isinstance(policy, dict):
+        raise ValueError('reference_policy must be an object')
+    missing = [name for name in _REFERENCE_POLICY_FIELDS if name not in policy]
+    unknown = sorted(set(policy) - set(_REFERENCE_POLICY_FIELDS))
+    if missing or unknown:
+        raise ValueError('reference_policy must carry exactly '
+                         + ', '.join(_REFERENCE_POLICY_FIELDS)
+                         + (f'; missing {", ".join(missing)}' if missing else '')
+                         + (f'; unknown {", ".join(unknown)}' if unknown else ''))
+    if policy['model'] != model.repo:
+        raise ValueError(f'reference_policy is for model {policy["model"]!r}, not {model.repo!r}')
+    if policy['mode'] != mode:
+        raise ValueError(f'reference_policy is for mode {policy["mode"]!r}, not {mode!r}')
+    if not isinstance(destination_node_id, str) or not destination_node_id:
+        raise ValueError('reference_policy was supplied but this worker has no destination '
+                         'machine identity')
+    if policy['node_id'] != destination_node_id:
+        raise ValueError(f'reference_policy is for node {policy["node_id"]!r}, not this worker '
+                         f'({destination_node_id!r})')
+    if (total_memory_bytes is None or isinstance(total_memory_bytes, bool)
+            or not isinstance(total_memory_bytes, (int, float))
+            or not math.isfinite(total_memory_bytes) or total_memory_bytes <= 0):
+        # Missing/invalid host telemetry is an unknown tier, never an invented '<8'.
+        raise ValueError('reference_policy physical tier is unknown: this worker could not read '
+                         'its total memory')
+    tier = reference_tier(total_memory_bytes)
+    if policy['physical_tier'] != tier:
+        raise ValueError(f'reference_policy is for the {policy["physical_tier"]!r} physical tier; '
+                         f'this Mac is {tier!r}')
+    count = policy['reference_count']
+    if count is not None and (isinstance(count, bool) or not isinstance(count, int) or count < 1):
+        raise ValueError('reference_policy reference_count must be null or a positive integer')
+    if count is not None and count != len(references):
+        raise ValueError(f'reference_policy selects {count} reference images; this request has '
+                         f'{len(references)}')
+    revision = policy['revision']
+    # The revision is the Hub policy state's 64-hex token; this worker has no local copy to
+    # compare it with, so format is the only exact check it can make.
+    if (not isinstance(revision, str) or len(revision) != 64
+            or any(character not in '0123456789abcdef' for character in revision)):
+        raise ValueError('reference_policy revision must be 64 lowercase hex characters')
+    effective = policy['effective']
+    if not isinstance(effective, dict):
+        raise ValueError('reference_policy effective must be an object')
+    missing = [name for name in _REFERENCE_POLICY_EFFECTIVE_FIELDS if name not in effective]
+    unknown = sorted(set(effective) - set(_REFERENCE_POLICY_EFFECTIVE_FIELDS))
+    if missing or unknown:
+        raise ValueError('reference_policy effective must carry exactly '
+                         + ', '.join(_REFERENCE_POLICY_EFFECTIVE_FIELDS)
+                         + (f'; missing {", ".join(missing)}' if missing else '')
+                         + (f'; unknown {", ".join(unknown)}' if unknown else ''))
+    allowed = effective['allowed']
+    if type(allowed) is not bool:
+        raise ValueError('reference_policy effective.allowed must be true or false, not unknown')
+    if not allowed:
+        raise ValueError(f'reference_policy refuses {model.label} {mode} on this node')
+    maximum = effective['max_reference_images']
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
+        raise ValueError('reference_policy effective.max_reference_images must be a '
+                         'non-negative integer')
+    swap = effective['swap_allowance_gb']
+    if (swap is None or isinstance(swap, bool) or not isinstance(swap, (int, float))
+            or not math.isfinite(swap) or swap < 0):
+        raise ValueError('reference_policy effective.swap_allowance_gb must be a finite '
+                         'non-negative number; null is unknown')
+    if mode == 'edit':
+        limits = model.reference_limits or {}
+        # Only a known engine bound lowers the Hub cap; an unknown intrinsic stays unknown.
+        intrinsic = reference_intrinsic_max(model)
+        if intrinsic is not None:
+            maximum = min(maximum, intrinsic)
+        if len(references) < int(limits.get('min') or 1) or len(references) > maximum:
+            raise ValueError(
+                f'{model.label} takes between {limits.get("min")} and {maximum} reference '
+                f'images; this request had {len(references)}')
+    return {'max_reference_images': maximum,
+            'swap_allowance_gb': float(swap)}
+
+
 def _validate_references(model: ImageModel, references: list[str],
-                         total_memory_bytes: int | None = None) -> list[str]:
+                         total_memory_bytes: int | None = None, *,
+                         policy: object = _REFERENCE_POLICY_ABSENT,
+                         destination_node_id: str | None = None) -> list[str]:
     """Refuse a reference set this **node** cannot take, naming the published figures.
 
     One admission sentence from one resolver: the table's effective cell for this host's physical
     tier decides whether references are accepted at all and how many (owner, 2026-11-05), clamped
     to the engine's own intrinsic cap - so the count the contract publishes, the count the
-    parameter's ``max_items`` states and the count refused here can never disagree.
+    parameter's ``max_items`` states and the count refused here can never disagree. A present
+    ``reference_policy`` replaces the local cell with the Hub's exact snapshot; absence keeps it.
     """
     limits = model.reference_limits
     if not limits:
@@ -1745,14 +1856,18 @@ def _validate_references(model: ImageModel, references: list[str],
         raise ValueError('Reference images, LoRAs, negative prompt and quantization are unavailable')
     if not model.edit_model_class:
         raise ValueError(f'{model.label} has no reference-image (edit) lane')
-    cell = effective_reference_policy(model, 'edit', total_memory_bytes, len(references))
-    if not cell['allowed']:
-        raise ValueError(cell['reason'])
-    maximum = effective_reference_max(model, total_memory_bytes)
-    if not limits['min'] <= len(references) <= maximum:
-        raise ValueError(
-            f'{model.label} takes between {limits["min"]} and {maximum} reference images; '
-            f'this request had {len(references)}')
+    if policy is _REFERENCE_POLICY_ABSENT:
+        cell = effective_reference_policy(model, 'edit', total_memory_bytes, len(references))
+        if not cell['allowed']:
+            raise ValueError(cell['reason'])
+        maximum = effective_reference_max(model, total_memory_bytes)
+        if not limits['min'] <= len(references) <= maximum:
+            raise ValueError(
+                f'{model.label} takes between {limits["min"]} and {maximum} reference images; '
+                f'this request had {len(references)}')
+    else:
+        reference_policy_admission(model, 'edit', references, total_memory_bytes,
+                                   destination_node_id, policy)
     for entry in references:
         path = Path(entry)
         if not path.is_file() or path.stat().st_size == 0:
@@ -1778,7 +1893,8 @@ def _job_floor_gb(model: ImageModel, mode: str, total_memory_bytes: int | None,
 
 def _admit_job(model: ImageModel, mode: str, total_memory_bytes: int | None,
                selected: str = DEFAULT_LOADING_MODE,
-               floor_gb: float | None = None) -> str | None:
+               floor_gb: float | None = None,
+               admission: dict | None = None) -> str | None:
     """Refuse work this node's table cell turns away, or a job starting below its own floor.
 
     Three checks, in this order, each a reason rather than a guess:
@@ -1796,17 +1912,19 @@ def _admit_job(model: ImageModel, mode: str, total_memory_bytes: int | None,
     stops the job with ``host swap grew beyond allowance`` and its evidence. This pre-flight check
     only reads the cell and the floors - it publishes nothing it does not enforce.
     """
-    if mode == 'edit':
-        cell = effective_reference_policy(model, 'edit', total_memory_bytes)
-        if not cell['allowed']:
-            return cell['reason']
-    elif reference_policy_row(model, mode) is not None:
-        # txt2img is gated the same way, but only for a model the table has a row for: a model
-        # with no txt2img row (Z-Image, Qwen 2.1) is governed by its existing qualification, not
-        # by a table that does not speak about it.
-        cell = effective_reference_policy(model, mode, total_memory_bytes)
-        if not cell['allowed']:
-            return cell['reason']
+    if admission is None:
+        if mode == 'edit':
+            cell = effective_reference_policy(model, 'edit', total_memory_bytes)
+            if not cell['allowed']:
+                return cell['reason']
+        elif reference_policy_row(model, mode) is not None:
+            # txt2img is gated the same way, but only for a model the table has a row for: a model
+            # with no txt2img row (Z-Image, Qwen 2.1) is governed by its existing qualification, not
+            # by a table that does not speak about it.
+            cell = effective_reference_policy(model, mode, total_memory_bytes)
+            if not cell['allowed']:
+                return cell['reason']
+    # A present Hub policy already admitted this exact request; the local cell is not consulted.
     floor = _job_floor_gb(model, mode, total_memory_bytes, selected, floor_gb)
     available = _reclaimable_available_gb()
     if floor is not None and available is None:
@@ -1821,7 +1939,8 @@ def _admit_job(model: ImageModel, mode: str, total_memory_bytes: int | None,
 
 
 def validate_request(raw: dict, data_dir=None, mode: str | None = None,
-                     total_memory_bytes: int | None = None) -> dict:
+                     total_memory_bytes: int | None = None,
+                     destination_node_id: str | None = None) -> dict:
     """One request, resolved against the model it names and this Mac's stored defaults.
 
     ``data_dir`` is where ``model_defaults.json`` lives (the manager's state directory). A
@@ -1849,12 +1968,18 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None,
         raise ValueError(f'Only the pinned {model.label} revision is available')
     references = _reference_paths(raw)
     mode = 'edit' if (mode == 'edit' or references) else 'txt2img'
+    policy = raw['reference_policy'] if 'reference_policy' in raw else _REFERENCE_POLICY_ABSENT
     if mode == 'edit':
-        references = _validate_references(model, references, total_memory_bytes)
-    else:
+        references = _validate_references(model, references, total_memory_bytes,
+                                          policy=policy,
+                                          destination_node_id=destination_node_id)
+    elif policy is _REFERENCE_POLICY_ABSENT:
         cell = effective_reference_policy(model, mode, total_memory_bytes)
         if not cell['allowed']:
             raise ValueError(cell['reason'])
+    else:
+        reference_policy_admission(model, mode, [], total_memory_bytes,
+                                   destination_node_id, policy)
     if any(raw.get(key) for key in ('image_path', 'lora_names', 'lora_paths',
                                      'negative_prompt', 'quantize')):
         maximum = (effective_reference_max(model, total_memory_bytes)
@@ -2250,10 +2375,11 @@ class _JobMemoryGuard:
     interval_s = 1.0
 
     def __init__(self, manager: 'GenerationManager', job_id: str, model: 'ImageModel',
-                 mode: str):
+                 mode: str, swap_allowance_gb: float | None = None):
         self.manager, self.job_id, self.model, self.mode = manager, job_id, model, mode
-        self.allowance_gb = effective_reference_policy(
+        self.allowance_gb = (effective_reference_policy(
             model, mode, manager.total_memory_bytes)['swap_allowance_gb']
+            if swap_allowance_gb is None else swap_allowance_gb)
         self.baseline_mb = _host_swap_used_mb()
 
     def run(self, event: threading.Event) -> None:
@@ -2301,7 +2427,8 @@ class GenerationManager:
                  manifests: dict[str, dict] | list[dict] | None = None,
                  manifest_errors: dict[str, str] | None = None,
                  total_memory_bytes: int | None = None,
-                 qualification_package: str | None = None) -> None:
+                 qualification_package: str | None = None,
+                 destination_node_id: str | None = None) -> None:
         self.data = data
         self.outputs = data / 'outputs'
         self.outputs.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -2322,6 +2449,10 @@ class GenerationManager:
         self.qualification_package = qualification_package
         self.runtime_sha256 = runtime_sha256
         self.machine = machine
+        # The fleet destination this worker serves, resolved by the Hub launcher. Kept apart
+        # from `machine` (the stable local worker alias) so the existing health contract is
+        # unchanged; a missing value stays unknown and refuses a present reference_policy.
+        self.destination_node_id = destination_node_id
         self.total_memory_bytes = (host_memory_bytes() if total_memory_bytes is None
                                    else int(total_memory_bytes))
         self.jobs: dict[str, dict] = {}
@@ -2651,11 +2782,19 @@ class GenerationManager:
         # The worker's own state directory, so a parameter the request omits takes this Mac's
         # stored default for this model rather than the model's own.
         params = validate_request(raw, data_dir=self.data, mode=mode,
-                           total_memory_bytes=self.total_memory_bytes)
+                           total_memory_bytes=self.total_memory_bytes,
+                           destination_node_id=self.destination_node_id)
         # Resolved here rather than trusted from the caller: a caller that says edit but sends no
         # references was refused above, and a caller that sends references *is* an edit whatever
         # it called itself. The job's own `mode` is that one fact.
         mode = 'edit' if params.get('reference_images') else 'txt2img'
+        policy_admission = None
+        if 'reference_policy' in raw:
+            # `validate_request` already admitted it; this is the same normalisation for the
+            # start gate and the running-job swap guard.
+            policy_admission = reference_policy_admission(
+                MODELS[params['repo']], mode, params.get('reference_images') or [],
+                self.total_memory_bytes, self.destination_node_id, raw['reference_policy'])
         admission = self.production_admission(params['repo'])
         if not admission['allowed']:
             raise RuntimeError(f'MODEL_UNQUALIFIED: {admission["reason"]}')
@@ -2668,7 +2807,8 @@ class GenerationManager:
         # `validate_request`; running the same resolver again here means a queued-but-busy moment
         # cannot slip a job past the floor it was admitted under.
         refused = _admit_job(MODELS[params['repo']], mode, self.total_memory_bytes,
-                             loading_mode.current(self.data), params.get('memory_floor_gb'))
+                             loading_mode.current(self.data), params.get('memory_floor_gb'),
+                             admission=policy_admission)
         if refused:
             raise RuntimeError(refused)
         job_id = job_id or uuid4().hex
@@ -2683,6 +2823,8 @@ class GenerationManager:
                'memory_mode': None, 'loading_mode_setting': None, 'peak_mlx_bytes': None,
                'model_reused': None, 'memory_hooks': None,
                'worker_id': 'image', 'machine_id': self.machine, 'acknowledged': False}
+        if policy_admission is not None:
+            job['reference_admission'] = policy_admission
         if mode == 'edit':
             # The anti-silent-drop proof the Gateway checks: how many references were actually
             # attached, and which bytes, in order. Absolute paths are this worker's own state and
@@ -2898,9 +3040,11 @@ class GenerationManager:
                 if seed == -1:
                     seed = random.randint(0, model.limits['max_seed'])
                 mode = job.get('mode', 'txt2img')
+                policy_admission = job.get('reference_admission')
                 refused = _admit_job(model, mode, self.total_memory_bytes,
                                      loading_mode.current(self.data),
-                                     job['params'].get('memory_floor_gb'))
+                                     job['params'].get('memory_floor_gb'),
+                                     admission=policy_admission)
                 if refused:
                     raise RuntimeError(refused)
                 # `_JobMemoryGuard` then watches this job for the hard stops, because the inference
@@ -2911,7 +3055,8 @@ class GenerationManager:
                 # `_record_failure` keeps them, so a stop is never reported as an operator cancel
                 # and never as a success. The baseline is this job's own start; the growth is
                 # host-wide during this job's window, not a claim all of it belongs to this job.
-                guard = _JobMemoryGuard(self, job_id, model, mode)
+                guard = _JobMemoryGuard(self, job_id, model, mode,
+                                        (policy_admission or {}).get('swap_allowance_gb'))
                 if guard.baseline_mb is None:
                     # No baseline means no enforcement; fail before the model loads, not green.
                     reason = ('host swap baseline could not be read before the model loaded; '

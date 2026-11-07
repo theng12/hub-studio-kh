@@ -37,7 +37,7 @@ from . import (artifact_metadata, automatic_recovery, cloud_guard, execution_ass
 from . import routing as routing_rule
 from .memory_control import FleetMemoryControl, SUPPORTED_MODALITIES
 from .peers import studio_request
-from .monitor import is_cached
+from .monitor import is_cached, _local_node_id
 from .registry import DATA_DIR, assigned_image_model, base_url, label_for, machine_enabled, studio_enabled
 from .resources import host_stats
 from . import stall
@@ -90,6 +90,11 @@ def _multipart_fields(body: dict) -> dict:
             out[k] = ",".join(str(x) for x in v)
         elif v is not None:
             out[k] = str(v)
+    # The Hub's internal reference policy travels as JSON, never as a Python repr. It is set
+    # only from the selected producer's snapshot; a caller-supplied value is dropped earlier.
+    policy = body.get("reference_policy")
+    if isinstance(policy, dict):
+        out["reference_policy"] = json.dumps(policy, separators=(",", ":"))
     return out
 
 
@@ -133,6 +138,183 @@ def _reference_limits(entry: dict | None) -> dict:
     return references if isinstance(references, dict) else {}
 
 
+# The producer's `hub_memory_admission` annotation is the one authority for a node's reference
+# policy. Its absence is the older-producer path (lane contract only); its presence is validated
+# strictly below and never replaced by a controller-side guess.
+_REFERENCE_POLICY_ABSENT = object()
+
+
+def _reference_destination_id(studio: dict) -> str:
+    """The resolved machine id a job is dispatched to - never this Hub's ``local`` alias."""
+    studio = studio or {}
+    if peers.is_local_studio(studio):
+        return _local_node_id()
+    return str(studio.get("machine") or "")
+
+
+def _aggregate_reference_policy(studio: dict, model: str):
+    """The producer's annotated row from the cache-only aggregate catalog, or ``_ABSENT``.
+
+    Local rows are annotated by the monitor from this Mac's own telemetry and live overrides;
+    a remote row carries only what its producer published. This never asks a node for anything.
+    A readable catalog with no annotation is the older producer; an unreadable cache is unknown
+    and refuses by name, never the legacy fallback.
+    """
+    studio = studio or {}
+    try:
+        rows = _monitor().cached_aggregate_catalog().get("models") or []
+    except Exception as exc:
+        # An unreadable cache is not an older producer: nothing was observed, so the lane
+        # contract must not answer for it. Only an observed absent annotation keeps that path.
+        raise ValueError(
+            f"the producer's memory-admission snapshot is unreadable: {exc}") from exc
+    for row in rows:
+        if not isinstance(row, dict) or row.get("hub_studio") != studio.get("id"):
+            continue
+        if row.get("repo") == model or model in (row.get("aliases") or []):
+            return (row["hub_memory_admission"]
+                    if "hub_memory_admission" in row else _REFERENCE_POLICY_ABSENT)
+    return _REFERENCE_POLICY_ABSENT
+
+
+def _producer_reference_policy(studio: dict, entry: dict | None, model: str):
+    """The selected producer's own snapshot, or ``_ABSENT`` for an older annotation-less row.
+
+    The worker catalog row is preferred; the aggregate annotation answers for this Hub's own
+    rows, whose scheduling view is the raw worker catalog. A present ``None`` or malformed value
+    is returned as-is so validation can refuse it loudly instead of falling back. An unreadable
+    aggregate raises ``ValueError`` naming the unknown rather than reading as absent.
+    """
+    entry = entry or {}
+    if "hub_memory_admission" in entry:
+        return entry["hub_memory_admission"]
+    return _aggregate_reference_policy(studio, model)
+
+
+def _validated_reference_policy(snapshot, studio: dict, model: str, entry: dict | None,
+                                mode: str, count: int) -> dict:
+    """The exact ACK-shaped dispatch policy for one selected node/model/mode/count.
+
+    Every value comes from the producer's one snapshot. A present but invalid, unknown or
+    refusing policy raises ``ValueError`` with a named reason - it never falls back to the lane
+    contract or to controller-local policy. ``false`` and ``0`` keep their meaning; a required
+    value of ``null`` is unknown and refuses.
+    """
+    if not isinstance(snapshot, dict):
+        raise ValueError("the producer published an invalid memory-admission snapshot (not an object)")
+    node_id = _reference_destination_id(studio)
+    producer_node = str(snapshot.get("node_id") or "").strip().lower()
+    if not node_id or producer_node != node_id.lower():
+        raise ValueError(
+            f"the reference policy describes node {snapshot.get('node_id')!r}, not the selected "
+            f"destination {node_id!r}")
+    selected_model = str(model or "").strip()
+    producer_model = str(snapshot.get("model") or "").strip()
+    # Exact selected model only: another row's repo/model_id alias is a different identity.
+    if not producer_model or producer_model != selected_model:
+        raise ValueError(
+            f"the reference policy names model {producer_model!r}, "
+            f"not the selected {selected_model!r}")
+    reference = snapshot.get("reference")
+    view = reference.get(mode) if isinstance(reference, dict) else None
+    if not isinstance(view, dict):
+        raise ValueError(f"the producer published no reference policy for mode {mode!r}")
+    if view.get("mode") != mode:
+        raise ValueError(
+            f"the reference policy mode {view.get('mode')!r} is not the selected mode {mode!r}")
+    if view.get("available") is not True:
+        reason = view.get("reason")
+        raise ValueError(
+            "the producer's reference policy is unavailable"
+            + (f": {reason}" if isinstance(reason, str) and reason else ""))
+    tier = view.get("physical_tier")
+    if not isinstance(tier, str) or not tier:
+        raise ValueError("the producer's reference policy states no physical tier")
+    tier_gb = view.get("physical_tier_gb")
+    if tier_gb is not None and (isinstance(tier_gb, bool) or not isinstance(tier_gb, int)
+                                or str(tier_gb) != tier):
+        raise ValueError(
+            f"the reference policy tier {tier!r} disagrees with its band {tier_gb!r}")
+    revision = view.get("revision")
+    if (not isinstance(revision, str) or len(revision) != 64
+            or any(char not in "0123456789abcdef" for char in revision)):
+        raise ValueError("the producer's reference policy states no valid mode token")
+    covers = view.get("revision_covers")
+    frozen = memory_admission._REVISION_COVERS_MODE
+    if covers != frozen:
+        raise ValueError(
+            "the producer's reference policy does not cover the exact mode scope "
+            f"({', '.join(frozen)})")
+    ram = snapshot.get("ram")
+    ram_modes = ram.get("modes") if isinstance(ram, dict) else None
+    ram_view = ram_modes.get(mode) if isinstance(ram_modes, dict) else None
+    if (not isinstance(ram_view, dict) or ram_view.get("model") != producer_model
+            or ram_view.get("mode") != mode or ram_view.get("revision") != revision
+            or ram_view.get("revision_covers") != covers):
+        raise ValueError(
+            f"the reference policy revision and scope do not match the producer's own "
+            f"{mode!r} RAM snapshot")
+    rows = view.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError("the producer's reference policy states no count rows")
+    exact = next((row for row in rows if isinstance(row, dict)
+                  and type(row.get("reference_count")) is int
+                  and row.get("reference_count") == count), None)
+    generic = next((row for row in rows if isinstance(row, dict)
+                    and row.get("reference_count") is None), None)
+    row = exact if exact is not None else generic
+    if row is None:
+        raise ValueError(
+            f"the producer's reference policy has no row for {count} reference image(s) "
+            "and no generic fallback")
+    effective = row.get("effective")
+    if not isinstance(effective, dict):
+        raise ValueError("the selected reference row states no effective policy")
+    if "allowed" not in effective:
+        raise ValueError("the selected reference row does not state whether references are allowed")
+    allowed = effective["allowed"]
+    if allowed is not None and type(allowed) is not bool:
+        raise ValueError("the selected reference row's allowed value is not a boolean")
+    if allowed is None:
+        raise ValueError(
+            "the selected reference row does not state whether references are allowed (unknown)")
+    if allowed is False:
+        raise ValueError("the selected node's reference policy refuses reference images")
+    maximum = effective.get("max_reference_images")
+    if maximum is None:
+        raise ValueError(
+            "the selected reference row does not state a reference-image cap (unknown)")
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
+        raise ValueError("the selected reference row's reference-image cap is not an integer >= 0")
+    swap = effective.get("swap_allowance_gb")
+    if swap is None:
+        raise ValueError(
+            "the selected reference row does not state a swap allowance (unknown)")
+    if (isinstance(swap, bool) or not isinstance(swap, (int, float))
+            or not math.isfinite(swap) or swap < 0):
+        raise ValueError(
+            "the selected reference row's swap allowance is not a finite number >= 0")
+    intrinsic = row.get("max_intrinsic", view.get("intrinsic_max"))
+    if intrinsic is not None:
+        if isinstance(intrinsic, bool) or not isinstance(intrinsic, int) or intrinsic < 0:
+            raise ValueError("the selected reference row's intrinsic cap is invalid")
+        # The engine's intrinsic cap may only lower the Hub ceiling, never raise it.
+        maximum = min(maximum, intrinsic)
+    if maximum < count:
+        raise ValueError(
+            f"{count} reference image(s) sent; the selected node's policy allows at most {maximum}")
+    return {
+        "model": selected_model,
+        "mode": mode,
+        "node_id": node_id,
+        "physical_tier": tier,
+        "reference_count": count if exact is not None else None,
+        "revision": revision,
+        "effective": {"allowed": True, "max_reference_images": maximum,
+                      "swap_allowance_gb": swap},
+    }
+
+
 async def _image_reference_files(client: httpx.AsyncClient, entry: dict | None,
                                  refs: list, mode: str) -> list:
     """The multipart parts for an image reference job, in the order the request named them.
@@ -165,12 +347,17 @@ async def _image_reference_files(client: httpx.AsyncClient, entry: dict | None,
 
 async def _reference_dispatch(client: httpx.AsyncClient, studio: dict, batch: dict,
                               entry: dict | None, refs: list, ref_mode: str | None,
-                              supported_modes: tuple[str, ...]) -> tuple[str, str, dict, list]:
+                              supported_modes: tuple[str, ...],
+                              policy_out: dict | None = None) -> tuple[str, str, dict, list]:
     """``(mode, url, headers, files)`` for one reference job, or ``ValueError`` naming why not.
 
     One function so the decision is testable without a running dispatcher: which mode this worker
     can serve, the endpoint that serves it, and the multipart parts. A worker that advertises
     neither mode is refused here, before anything is posted.
+
+    An ``edit`` job also carries the selected node's own ``reference_policy`` snapshot. The
+    annotation is authoritative only when present; an older producer's absence keeps the lane
+    contract path exactly as it was. ``policy_out`` receives the validated dispatch field.
     """
     caps = (entry or {}).get("capabilities") or []
     mode = ref_mode or next((name for name in supported_modes if name in caps), None)
@@ -178,6 +365,13 @@ async def _reference_dispatch(client: httpx.AsyncClient, studio: dict, batch: di
         raise ValueError(
             f"model {batch.get('model')} does not support reference images "
             f"(needs {'/'.join(supported_modes)} capability)")
+    if mode == "edit":
+        snapshot = _producer_reference_policy(studio, entry, str(batch.get("model") or ""))
+        if snapshot is not _REFERENCE_POLICY_ABSENT:
+            policy = _validated_reference_policy(
+                snapshot, studio, str(batch.get("model") or ""), entry, mode, len(refs))
+            if policy_out is not None:
+                policy_out["reference_policy"] = policy
     files = await _image_reference_files(client, entry, list(refs), mode)
     path = "/api/generate/video2video" if mode == "img2video" else f"/api/generate/{mode}"
     url, headers = studio_request(studio, path)
@@ -2334,7 +2528,7 @@ def _image_mode_door_refusal(envelope: dict) -> str | None:
     return None
 
 
-def _image_reference_door_refusal(model: str) -> str | None:
+def _image_reference_door_refusal(model: str, counts: list[int] | None = None) -> str | None:
     """Refuse reference images no Mac here could serve, before queueing.
 
     Intrinsic support is read from the catalog's own `image_modes` (falling back to
@@ -2343,19 +2537,49 @@ def _image_reference_door_refusal(model: str) -> str | None:
     or below the floor is refused with the producer's own `reason` — never mislabelled as
     unsupported. No last-known row means no answer, and dispatch keeps its existing
     refusal. Cache-only (`cached_catalog_entries`): the door never waits on a worker.
+
+    When `counts` is supplied, each count must be allowed by at least one producer's own
+    ``hub_memory_admission`` snapshot. A row without that annotation is the older-producer
+    path and is unchanged. A present but invalid, unknown or refusing snapshot is loud for
+    that count; it never becomes an allow and never falls back to controller-local policy.
     """
     try:
         matches = _monitor().cached_catalog_entries(model, modality="image")
     except Exception:
         return None  # an unreadable catalog is not a reason to invent a refusal
-    entries = [m.get("entry") for m in matches if isinstance(m.get("entry"), dict)]
+    entries = [(m.get("studio"), m.get("entry")) for m in matches
+               if isinstance(m.get("entry"), dict)]
     if not entries:
         return None
     intrinsic = False
+    available = False
     unavailable_reason = None
     missing_runtime_reason = None
     label = model
-    for entry in entries:
+    wanted = list(dict.fromkeys(counts or []))
+    servable = {count: False for count in wanted}
+    policy_reasons: dict[int, str] = {}
+
+    def judge_policy(studio, entry) -> None:
+        try:
+            snapshot = _producer_reference_policy(studio, entry, model)
+        except ValueError as exc:
+            for count in wanted:
+                policy_reasons.setdefault(count, str(exc))
+            return
+        if snapshot is _REFERENCE_POLICY_ABSENT:
+            for count in wanted:
+                servable[count] = True
+            return
+        for count in wanted:
+            try:
+                _validated_reference_policy(snapshot, studio, model, entry, "edit", count)
+            except ValueError as exc:
+                policy_reasons.setdefault(count, str(exc))
+            else:
+                servable[count] = True
+
+    for studio, entry in entries:
         label = str(entry.get("label") or label)
         readiness = entry.get("readiness") or {}
         if readiness.get("state") == "no_runtime_model":
@@ -2368,27 +2592,41 @@ def _image_reference_door_refusal(model: str) -> str | None:
             if edit is None:
                 continue  # text-only row: no intrinsic support stated
             intrinsic = True
-            if edit.get("available"):
-                return None
-            unavailable_reason = unavailable_reason or edit.get("reason")
-            continue
-        # Legacy row (published before `image_modes`): the reference contract is the
-        # intrinsic statement, `capabilities` the live one.
-        contract = entry.get("lane_contract")
-        if isinstance(contract, dict) and "references" in contract:
+            if not edit.get("available"):
+                unavailable_reason = unavailable_reason or edit.get("reason")
+                continue
+        else:
+            # Legacy row (published before `image_modes`): the reference contract is the
+            # intrinsic statement, `capabilities` the live one.
+            contract = entry.get("lane_contract")
+            if not (isinstance(contract, dict) and "references" in contract):
+                continue
             intrinsic = True
-            if "edit" in (entry.get("capabilities") or []):
-                return None
-            lane = entry.get("reference_lane")
-            reason = lane.get("reason") if isinstance(lane, dict) else None
-            unavailable_reason = unavailable_reason or reason
+            if "edit" not in (entry.get("capabilities") or []):
+                lane = entry.get("reference_lane")
+                reason = lane.get("reason") if isinstance(lane, dict) else None
+                unavailable_reason = unavailable_reason or reason
+                continue
+        available = True
+        if wanted:
+            judge_policy(studio, entry)
+        elif counts is None:
+            return None  # older callers ask only whether any Mac advertises the lane
     if not intrinsic:
         if missing_runtime_reason:
             return f"Reference to image is unavailable: {missing_runtime_reason}"
         return f"{label} does not support Reference to image; Text to image only"
-    if unavailable_reason:
-        return f"Reference to image is unavailable: {unavailable_reason}"
-    return None  # intrinsic somewhere, availability undetermined — dispatch decides
+    if not available:
+        if unavailable_reason:
+            return f"Reference to image is unavailable: {unavailable_reason}"
+        return None  # intrinsic somewhere, availability undetermined — dispatch decides
+    for count in wanted:
+        if not servable[count]:
+            reason = policy_reasons.get(count)
+            return (f"Reference to image with {count} reference image(s) is unavailable"
+                    + (f": {reason}" if reason else
+                       "; no available Mac states a usable reference policy"))
+    return None
 
 
 def submission_shape_refusal(envelope: dict) -> dict[str, str] | None:
@@ -2455,7 +2693,13 @@ def _submit_batch_locked(envelope: dict) -> dict:
         if any(_image_item_refs(item.get("params") if isinstance(item.get("params"), dict)
                                 else {})
                for item in items_in):
-            reference_refusal = _image_reference_door_refusal(envelope["model"])
+            reference_counts = sorted({
+                len(_image_item_refs(item.get("params") if isinstance(item.get("params"), dict)
+                                     else {}))
+                for item in items_in
+            } - {0})
+            reference_refusal = _image_reference_door_refusal(
+                envelope["model"], reference_counts)
             if reference_refusal:
                 return {"error": reference_refusal}
     # Refuse at the door: cloud work is never queued, never accepted
@@ -5881,13 +6125,17 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
     item["last_progress_at"] = t_start
     body = dict(b["shared_params"])
     body.update(item["params"])
+    # Internal Hub field: only a producer snapshot may become dispatch authority, so a caller's
+    # own value is dropped here and the generated one is added below.
+    body.pop("reference_policy", None)
     body["repo"] = b["model"]
     body[prompt_field] = item["prompt"]
     if b["modality"] == "voice":
         body["client_request_id"] = (item.get("client_request_id")
                                      or f"studiohub:{b['id']}:{item['index']}")
     if b["modality"] in ("voice", "image"):
-        floor = memory_admission.worker_free_floor_gb(b["model"])
+        floor = memory_admission.worker_free_floor_gb(
+            b["model"], mode=(_item_mode(item) if b["modality"] == "image" else None))
         if floor is not None:   # the worker's own preflight must honour the same override / measurement
             body["memory_floor_gb"] = floor
     if item["seed"] is not None:
@@ -6029,8 +6277,11 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 else:
                     # `edit` takes every reference the request names, in order, against the count
                     # window the worker published; `img2img` keeps its single `image` part.
+                    policy: dict = {}
                     mode, url, headers, files = await _reference_dispatch(
-                        client, studio, b, entry, refs, ref_mode, ("img2img", "edit"))
+                        client, studio, b, entry, refs, ref_mode, ("img2img", "edit"),
+                        policy_out=policy)
+                    body.update(policy)
                     if requeue_if_peer_changed():
                         return
                     reservation_owner = _begin_preferred_reservation(studio, b["modality"])

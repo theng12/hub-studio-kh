@@ -22,7 +22,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote_plus, urlsplit
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -471,6 +471,235 @@ def _memory_refusal(manifest: dict[str, Any]) -> None:
         raise HTTPException(409, (
             f"Not on this Mac: {manifest['package_id']} needs a Mac with at least {float(floor):g} GB of "
             f"memory and this one has {memory_gb} GB, so it could never run here. Nothing was downloaded."))
+
+
+# **One Mac's memory admission, for the fleet route only (proposal.r5).** The local Models-screen
+# route stays model-wide and unchanged. This pair validates the fleet body strictly, resolves one
+# RAM pair/reset or one reference row, and returns the same effective readback the local screen
+# reads. Reference writes are refused here until D2/D3 consumers and D4 runtime authority are
+# wired: accepting a row nothing enforces would make the screen show a policy that is not used.
+_FLEET_ADMISSION_KEYS = {"model", "mode", "min_free_memory_gb", "min_total_memory_gb",
+                         "reference", "reference_count", "expected_revision"}
+_REFERENCE_FIELDS = {"allowed", "max_reference_images", "swap_allowance_gb"}
+
+
+def _admission_total_memory_bytes() -> int | None:
+    """This Mac's physical memory, or ``None`` when telemetry cannot be read.
+
+    ``None`` is the honest unknown: the model-wide RAM answer still publishes, and the core
+    resolves the mode reference policy as unavailable rather than banding unknown bytes ``<8``.
+    """
+    try:
+        import psutil
+        return int(psutil.virtual_memory().total)
+    except Exception:  # noqa: BLE001 - telemetry failure is an answer, not a 500
+        return None
+
+
+def _fleet_admission_refusal(code: str, field: str, detail: str, node: str,
+                             node_id: str) -> JSONResponse:
+    return JSONResponse({"ok": False, "code": code, "field": field, "detail": detail,
+                         "node": node, "node_id": node_id}, status_code=400)
+
+
+def _fleet_memory_admission_read(*, model: str, mode: str | None, entry: dict | None,
+                                 node: str, node_id: str) -> JSONResponse:
+    from .backend import memory_admission
+    if not model:
+        return _fleet_admission_refusal("MISSING_MODEL", "model", "model is required",
+                                        node, node_id)
+    if mode is not None and mode not in memory_admission.MODES:
+        return _fleet_admission_refusal(
+            "BAD_MODE", "mode", "mode must be one of txt2img, edit", node, node_id)
+    if entry is None:
+        raise HTTPException(404, "unknown model")
+    state = memory_admission.effective_state(
+        model, entry, node_id=node_id, mode=mode,
+        total_memory_bytes=_admission_total_memory_bytes(), model_default=None)
+    return JSONResponse({"ok": True, "node": node, "node_id": node_id, **state})
+
+
+def _fleet_memory_admission_write(*, body: dict, entry: dict | None, node: str,
+                                  node_id: str, total_memory_bytes: int) -> JSONResponse:
+    from .backend import memory_admission
+    def fail(code: str, field: str, detail: str) -> JSONResponse:
+        return _fleet_admission_refusal(code, field, detail, node, node_id)
+
+    unknown = set(body) - _FLEET_ADMISSION_KEYS
+    if unknown:
+        name = sorted(unknown)[0]
+        return fail("UNKNOWN_FIELD", name, f"{name} is not accepted on this route")
+    revision = body.get("expected_revision")
+    if (not isinstance(revision, str) or len(revision) != 64
+            or any(char not in "0123456789abcdef" for char in revision)):
+        return fail("BAD_VALUE", "expected_revision",
+                    "expected_revision must be 64 lowercase hex characters")
+    model = str(body.get("model") or "").strip()
+    if not model:
+        return fail("MODEL_REQUIRED", "model", "model is required")
+    mode = body.get("mode")
+    if mode is not None and mode not in memory_admission.MODES:
+        return fail("BAD_MODE", "mode", "mode must be one of txt2img, edit")
+    if mode is None and ("reference" in body or "reference_count" in body):
+        return fail("BAD_MODE_CONTEXT", "mode",
+                    "reference and reference_count require mode (txt2img or edit)")
+
+    has_free = "min_free_memory_gb" in body
+    has_total = "min_total_memory_gb" in body
+    free = body.get("min_free_memory_gb")
+    total = body.get("min_total_memory_gb")
+    ram_reset = ram_write = False
+    if has_free or has_total:
+        # A present numeric value is validated before the pair/reset shape is classified, so an
+        # invalid number is named as one instead of reading as a missing or mixed pair.
+        for field, present, value in (("min_free_memory_gb", has_free, free),
+                                      ("min_total_memory_gb", has_total, total)):
+            if present and value is not None and (
+                    isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                return fail("BAD_VALUE", field,
+                            f"{field} must be a finite number >= 0")
+        if has_free and free is None:
+            if total is None:
+                ram_reset = True
+            else:
+                return fail("RAM_RESET_MIXED", "min_total_memory_gb",
+                            "a reset sends both memory values null or absent")
+        elif not has_free or not has_total or total is None:
+            return fail("RAM_PAIR_REQUIRED", "min_total_memory_gb",
+                        "a numeric RAM write requires both min_free_memory_gb and "
+                        "min_total_memory_gb")
+        else:
+            ram_write = True
+
+    reference_present = "reference" in body
+    count_present = "reference_count" in body
+    if count_present and not reference_present:
+        return fail("REFERENCE_COUNT_WITHOUT_REFERENCE", "reference_count",
+                    "reference_count is only valid with reference")
+    if reference_present and not count_present:
+        return fail("REFERENCE_COUNT_REQUIRED", "reference_count",
+                    "send reference_count: null for the generic row or an exact count")
+    if reference_present:
+        count = body.get("reference_count")
+        if count is not None and (isinstance(count, bool)
+                                  or not isinstance(count, int) or count < 1):
+            return fail("BAD_REFERENCE_COUNT", "reference_count",
+                        "reference_count must be null or a positive integer")
+        value = body.get("reference")
+        if value is not None:
+            if not isinstance(value, dict):
+                return fail("BAD_VALUE", "reference", "reference must be an object or null")
+            unknown_reference = set(value) - _REFERENCE_FIELDS
+            if unknown_reference:
+                name = sorted(unknown_reference)[0]
+                return fail("UNKNOWN_FIELD", name, f"{name} is not a reference field")
+            if not value:
+                return fail("REFERENCE_EMPTY", "reference",
+                            "reference must name a field, or be null to clear the row")
+            allowed = value.get("allowed")
+            if "allowed" in value and allowed is not None and type(allowed) is not bool:
+                return fail("BAD_VALUE", "allowed", "allowed must be a boolean or null")
+            maximum = value.get("max_reference_images")
+            if ("max_reference_images" in value and maximum is not None
+                    and (isinstance(maximum, bool) or not isinstance(maximum, int)
+                         or maximum < 0)):
+                return fail("BAD_VALUE", "max_reference_images",
+                            "max_reference_images must be an integer >= 0 or null")
+            swap = value.get("swap_allowance_gb")
+            if ("swap_allowance_gb" in value and swap is not None
+                    and (isinstance(swap, bool) or not isinstance(swap, (int, float))
+                         or not math.isfinite(swap) or swap < 0)):
+                return fail("BAD_VALUE", "swap_allowance_gb",
+                            "swap_allowance_gb must be a finite number >= 0 or null")
+        # D2/D3 consumers and D4 runtime authority are not wired yet: refuse loudly.
+        return fail("TIER_UNKNOWN", "reference",
+                    "reference writes are unavailable until the published reference table and "
+                    "its Hub consumers are wired (D2-D4); nothing was written")
+
+    if not (has_free or has_total or reference_present):
+        return fail("NOTHING_TO_WRITE", "", "send a RAM pair, a RAM reset, or a reference")
+    if entry is None:
+        raise HTTPException(404, "unknown model")
+
+    def change() -> None:
+        if ram_reset:
+            memory_admission.reset_override(model, entry, mode=mode)
+        else:
+            memory_admission.set_override(
+                model, min_total_memory_gb=float(total),
+                min_free_memory_gb=float(free), catalog_entry=entry, mode=mode)
+
+    try:
+        state = memory_admission.compare_and_write(
+            model, entry, node_id=node_id, expected_revision=revision, mode=mode,
+            total_memory_bytes=total_memory_bytes, model_default=None, change=change)
+    except memory_admission.RevisionConflict as conflict:
+        current = conflict.current
+        return JSONResponse({"ok": False, "code": "REVISION_CONFLICT", "node": node,
+                             "node_id": node_id, "current_revision": current.get("revision"),
+                             "admission": current}, status_code=409)
+    except ValueError as exc:
+        return fail("BAD_VALUE", "", str(exc))
+    return JSONResponse({"ok": True, "node": node, "node_id": node_id, **state})
+
+
+def _annotate_worker_catalog(monitor: StudioMonitor, worker: dict, content: bytes,
+                             content_type: str) -> bytes:
+    """Carry the producer's r5 inventory onto this Mac's raw worker catalog rows.
+
+    A controller reads a remote node's peer `/studio/<modality>/api/catalog` through this proxy.
+    Without the annotation that row loses the producer's policy and the controller falls back to
+    the older ABSENT path. The aggregate catalog already annotates local rows from one node
+    identity and one host total; that exact snapshot is reused, so the remote row carries the
+    same token the aggregate GET answers with. A row the aggregate has not seen yet is computed
+    with the same helper and identity, never with the caller's or controller's values.
+    """
+    from .backend import memory_admission, monitor as monitor_module
+    if str(worker.get("machine") or "local") != "local":
+        return content
+    if "json" not in (content_type or "").lower():
+        return content
+    try:
+        catalog = json.loads(content)
+    except (TypeError, ValueError):
+        return content
+    rows = catalog.get("models") if isinstance(catalog, dict) else None
+    if not isinstance(rows, list) or not memory_admission.applies_to(worker.get("modality")):
+        return content
+    try:
+        aggregate = monitor.cached_aggregate_catalog().get("models") or []
+    except Exception:  # noqa: BLE001 - an unavailable cache is the fallback path, not a 500
+        aggregate = []
+    by_model = {}
+    for row in aggregate:
+        if isinstance(row, dict) and row.get("hub_studio") == worker.get("id"):
+            by_model.setdefault(row.get("repo"), row)
+    node_id = monitor_module._local_node_id()
+    total_bytes = monitor_module._local_total_memory_bytes()
+    health = ((monitor.status.get(worker.get("id")) or {}).get("health") or {})
+    memory = health.get("memory") if isinstance(health, dict) else None
+    total_gb = memory.get("total_gb") if isinstance(memory, dict) else None
+    if not isinstance(total_gb, (int, float)) or isinstance(total_gb, bool):
+        from .backend import hardware_profiles
+        total_gb = (hardware_profiles.machine_hardware_profile(
+            worker.get("machine", "local")) or {}).get("memory_gb")
+    changed = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        model = str(row.get("repo") or row.get("model_id") or "")
+        if not model:
+            continue
+        source = by_model.get(row.get("repo")) or by_model.get(row.get("model_id"))
+        if source is not None and "hub_memory_admission" in source:
+            row["hub_memory_admission"] = source["hub_memory_admission"]
+        else:
+            annotated = memory_admission.publish_floor(dict(row), total_gb)
+            row["hub_memory_admission"] = monitor_module._memory_admission_inventory(
+                model, annotated, node_id=node_id, total_memory_bytes=total_bytes)
+        changed = True
+    return json.dumps(catalog, separators=(",", ":")).encode() if changed else content
 
 
 def _library_may_be_moved_from(what: str) -> bool:
@@ -1259,6 +1488,162 @@ def _request_models(body: bytes, content_type: str) -> list[str]:
     except (ValueError, AttributeError):
         return []
     return [str(m).strip() for m in named if str(m).strip()] if isinstance(named, list) else []
+
+
+_PEER_REFERENCE_EDIT_PATH = "api/generate/edit"
+
+
+def _peer_reference_decision(worker: dict[str, Any], model: str, reference_count: int,
+                             supplied: object) -> tuple[dict[str, Any] | None, dict | None]:
+    """This Mac's own reference policy for one peer edit submit: (refusal, exact policy).
+
+    A controller's ``reference_policy`` is not trusted: only this node's current producer
+    snapshot decides whether references are allowed and how many. ``supplied`` is that caller
+    field (or the broker's absent sentinel). An older producer with no annotation and no supplied
+    field keeps its existing path and returns no policy. A supplied field cannot be verified
+    against a node that publishes no policy, so it is refused rather than believed. An unreadable
+    catalog is unknown, never an absent annotation. A valid submit returns the one exact
+    ACK-shaped policy this node forwards, never the caller's bytes.
+    """
+    try:
+        snapshot = broker._producer_reference_policy(worker, None, model)
+    except Exception as exc:  # noqa: BLE001 - an unprovable policy is unknown, not absent
+        return {"code": "REFERENCE_POLICY_UNKNOWN",
+                "detail": f"this node's producer reference policy is unknown: {exc}"}, None
+    if snapshot is broker._REFERENCE_POLICY_ABSENT:
+        if supplied is broker._REFERENCE_POLICY_ABSENT:
+            return None, None
+        return {"code": "REFERENCE_POLICY_UNKNOWN",
+                "detail": "this node publishes no reference policy to verify the supplied one"}, None
+    try:
+        policy = broker._validated_reference_policy(
+            snapshot, worker, model, None, "edit", reference_count)
+    except ValueError as exc:
+        return {"code": "REFERENCE_POLICY_REFUSED", "detail": str(exc)}, None
+    if supplied is not broker._REFERENCE_POLICY_ABSENT and supplied != policy:
+        return {"code": "REFERENCE_POLICY_MISMATCH",
+                "detail": "the supplied reference policy is not this node's current producer "
+                          "snapshot"}, None
+    return None, policy
+
+
+def _peer_reference_refusal(worker: dict[str, Any], model: str, reference_count: int,
+                            supplied: object) -> dict[str, Any] | None:
+    """The refusal half of :func:`_peer_reference_decision`, for refusal-only callers."""
+    return _peer_reference_decision(worker, model, reference_count, supplied)[0]
+
+
+def _multipart_field(body: bytes, content_type: str, name: str, value: str) -> bytes | None:
+    """Insert or replace one text form field in a raw request body, touching nothing else.
+
+    The door must hand the worker this node's exact producer policy without re-encoding the
+    caller's uploads, so every file byte and the reference count survive unchanged.
+    """
+    kind = (content_type or "").split(";", 1)[0].strip().lower()
+    encoded = value.encode()
+    if kind == "application/x-www-form-urlencoded":
+        key = quote_plus(name).encode()
+        pairs = [pair for pair in body.split(b"&") if pair and pair.split(b"=", 1)[0] != key]
+        pairs.append(key + b"=" + quote_plus(value).encode())
+        return b"&".join(pairs)
+    if kind != "multipart/form-data":
+        return None
+    boundary = ""
+    for parameter in content_type.split(";")[1:]:
+        key, _, val = parameter.strip().partition("=")
+        if key.lower() == "boundary":
+            boundary = val.strip().strip('"')
+    if not boundary:
+        return None
+    delimiter = b"--" + boundary.encode()
+    starts = []
+    at = body.find(delimiter)
+    while at != -1:
+        starts.append(at)
+        at = body.find(delimiter, at + len(delimiter))
+    if not starts:
+        return None
+    name_bytes = name.encode()
+    pieces: list[bytes] = []
+    cursor = 0
+    replaced = False
+    for index, start in enumerate(starts[:-1]):
+        headers_end = body.find(b"\r\n\r\n", start + len(delimiter), starts[index + 1])
+        if headers_end == -1:
+            continue
+        headers = body[start + len(delimiter):headers_end]
+        match = re.search(rb'name\s*=\s*"?([^";\r\n]+)"?', headers)
+        if match is None or match.group(1) != name_bytes:
+            continue
+        # The worker's form parser reads a repeated field as its last part, so every matching
+        # part is replaced: no caller value can outrank this node's policy.
+        content_start = headers_end + 4
+        next_delimiter = starts[index + 1]
+        content_end = (next_delimiter - 2
+                       if body[next_delimiter - 2:next_delimiter] == b"\r\n"
+                       else next_delimiter)
+        pieces.append(body[cursor:content_start])
+        pieces.append(encoded)
+        cursor = content_end
+        replaced = True
+    if replaced:
+        pieces.append(body[cursor:])
+        return b"".join(pieces)
+    first = starts[0] + len(delimiter)
+    part = (b'Content-Disposition: form-data; name="' + name_bytes + b'"\r\n\r\n'
+            + encoded + b"\r\n" + delimiter)
+    if body[first:first + 2] == b"\r\n":
+        insert_at = first + 2
+        part += b"\r\n"  # the next original part's headers need their own CRLF
+    else:  # an empty form is just its closing delimiter
+        insert_at = first
+        part = b"\r\n" + part
+    return body[:insert_at] + part + body[insert_at:]
+
+
+async def _peer_reference_door(worker: dict[str, Any], request: Request, path: str,
+                               content_type: str) -> tuple[dict[str, Any] | None, bytes | None]:
+    """The reference check for a peer Image edit submit, from its existing multipart body.
+
+    Returns the refusal and, when this node has a producer policy to forward, the body that
+    carries it. ``None`` keeps the caller's body byte for byte, which is the older-producer path.
+    """
+    if (request.method != "POST" or str(worker.get("modality") or "") != "image"
+            or path.strip("/") != _PEER_REFERENCE_EDIT_PATH):
+        return None, None
+    kind = (content_type or "").split(";", 1)[0].strip().lower()
+    if kind not in {"multipart/form-data", "application/x-www-form-urlencoded"}:
+        return None, None
+    try:
+        body = await request.body()
+        form = await request.form()
+    except Exception:  # noqa: BLE001 - the worker refuses the malformed body it cannot parse
+        return None, None
+    try:
+        model = str(form.get("model") or form.get("repo") or "").strip()
+        count = len(form.getlist("images"))
+        supplied: object = broker._REFERENCE_POLICY_ABSENT
+        if "reference_policy" in form:
+            raw = form.get("reference_policy")
+            try:
+                supplied = json.loads(raw) if isinstance(raw, str) else None
+            except ValueError:
+                supplied = None
+            if not isinstance(supplied, dict):
+                return {"code": "REFERENCE_POLICY_REFUSED",
+                        "detail": "reference_policy must be a JSON object"}, None
+    finally:
+        await form.close()  # spooled uploads would otherwise leak their temp file
+    refusal, policy = _peer_reference_decision(worker, model, count, supplied)
+    if refusal is not None or policy is None:
+        return refusal, None
+    forwarded = _multipart_field(body, content_type, "reference_policy",
+                                 json.dumps(policy))
+    if forwarded is None:
+        return {"code": "REFERENCE_POLICY_UNKNOWN",
+                "detail": "this node could not attach its producer reference policy to the "
+                          "forwarded body"}, None
+    return None, forwarded
 
 
 def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
@@ -4135,6 +4520,60 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             return JSONResponse(error.body, status_code=error.status)
         return JSONResponse(answer)
 
+    @app.get("/api/hub/fleet/nodes/{node_id}/memory/admission")
+    async def fleet_node_memory_admission_read(node_id: str, model: str = "",
+                                               mode: str | None = None) -> JSONResponse:
+        """One Mac's memory admission from the Gateway: answered here for this Mac, relayed to a
+        joined node. The local Models-screen route is separate and stays model-wide."""
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        machine_id = fleet.this_machine()["id"].lower()
+        if wanted not in ("local", machine_id):
+            if control_plane.load_settings().get("role") != "controller":
+                return JSONResponse({"ok": False, "code": "NOT_CONTROLLER",
+                                     "detail": "this Mac is not a controller, so it has no "
+                                               "nodes to reach"}, status_code=404)
+            try:
+                answer = await fleet.relay_memory_admission(
+                    wanted, "GET", query={"model": model, "mode": mode})
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+            return JSONResponse(answer)
+        wanted_model = str(model or "").strip()
+        wanted_mode = mode or None
+        entry = None
+        if wanted_model and (wanted_mode is None or wanted_mode in ("txt2img", "edit")):
+            entry = _admission_entry(wanted_model)
+        return _fleet_memory_admission_read(model=wanted_model, mode=wanted_mode, entry=entry,
+                                            node=wanted, node_id=machine_id)
+
+    @app.put("/api/hub/fleet/nodes/{node_id}/memory/admission")
+    async def fleet_node_memory_admission_write(node_id: str,
+                                                body: dict[str, Any]) -> JSONResponse:
+        """Set or reset one Mac's RAM pair, or (once wired) one reference row, on that Mac."""
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        machine_id = fleet.this_machine()["id"].lower()
+        if wanted not in ("local", machine_id):
+            if control_plane.load_settings().get("role") != "controller":
+                return JSONResponse({"ok": False, "code": "NOT_CONTROLLER",
+                                     "detail": "this Mac is not a controller, so it has no "
+                                               "nodes to reach"}, status_code=404)
+            try:
+                answer = await fleet.relay_memory_admission(wanted, "PUT", body)
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+            pending = isinstance(answer, dict) and answer.get("outcome") == "pending"
+            return JSONResponse(answer, status_code=202 if pending else 200)
+        model = str(body.get("model") or "").strip()
+        mode = body.get("mode")
+        entry = None
+        if model and (mode is None or mode in ("txt2img", "edit")):
+            entry = _admission_entry(model)
+        return _fleet_memory_admission_write(body=body, entry=entry, node=wanted,
+                                             node_id=machine_id,
+                                             total_memory_bytes=_admission_total_memory_bytes())
+
     # **Remote final rendering, allowed per Mac from the Gateway (owner, 2026-10-23).** The setting
     # is this Mac's own - it is the one that offers the capacity - so it is kept here, and the
     # controller relays the Gateway's change to it with the Fleet token, the way Lite Mode is.
@@ -4944,6 +5383,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(503, f"{worker_id.title()} worker is unavailable")
         body = await request.body()
         content_type = request.headers.get("content-type") or ""
+        refusal, forwarded = await _peer_reference_door(worker, request, path, content_type)
+        if refusal is not None:
+            return _peer_refusal_response(refusal)
+        if forwarded is not None:
+            body = forwarded
         policy = _peer_lease_policy(path) if request.method == "POST" else None
         machine = str(worker.get("machine") or "local")
         if request.method == "POST" and f"{modality}/{path.strip('/')}" in _PEER_UNLEASED_PATHS:
@@ -5224,7 +5668,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         for name in ("content-type", "content-disposition", "x-content-sha256"):
             if name in upstream.headers:
                 passthrough[name] = upstream.headers[name]
-        return Response(content=upstream.content, status_code=upstream.status_code,
+        content = upstream.content
+        if request.method == "GET" and path.strip("/") == "catalog":
+            content = _annotate_worker_catalog(
+                monitor, worker, content, upstream.headers.get("content-type") or "")
+        return Response(content=content, status_code=upstream.status_code,
                         headers=passthrough)
 
     async def _relay_chat_to_node(request: Request, record) -> Response | None:

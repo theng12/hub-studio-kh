@@ -293,13 +293,18 @@ def worker_specs(release: dict, data: Path, runtime: Path, resources: Path) -> l
 
 def worker_command(spec: dict, resources: Path, data: Path, models: Path,
                    token_file: Path, ready_file: Path, parent_pid: int,
-                   *, offline: bool, port: int = 0) -> list[str]:
+                   *, offline: bool, port: int = 0,
+                   destination_node_id: str | None = None) -> list[str]:
     command = [
         str(spec['python']), '-I', '-B', str(resources / f"{spec['id']}_worker.py"),
         '--data-dir', str(data), '--models-dir', str(models),
         '--ready-file', str(ready_file), '--parent-pid', str(parent_pid),
         '--hub-token-file', str(token_file), *spec.get('extra_args', []),
     ]
+    # The Image worker is the one that admits reference work; it needs the resolved destination
+    # identity to check the Hub's exact reference_policy snapshot (Gateway ACK 2026-11-07).
+    if destination_node_id and spec['id'] == 'image':
+        command += ['--destination-node-id', destination_node_id]
     if port:
         command += ['--port', str(port)]
     if offline:
@@ -566,6 +571,17 @@ def main():
     from components.hub.backend.auth import load_token
     load_token()
     token = read_private_token(token_file, data)
+    # This Mac's fleet key, from the same control-plane settings `fleet_nodes.this_machine()`
+    # reads, resolved once in the launcher context and forwarded to the Image worker only. A
+    # reduced bundle without the control plane has no identity to forward: the Image worker then
+    # treats a present reference_policy as unverifiable and refuses it, while an absent one keeps
+    # the old resolver.
+    try:
+        from components.hub.backend import control_plane
+        destination_node_id = str(
+            control_plane.load_settings().get('controller_id') or '').strip() or None
+    except ImportError:
+        destination_node_id = None
     try:
         specs = worker_specs(release, data, runtime, RESOURCES)
     except ValueError as exc:
@@ -580,7 +596,8 @@ def main():
         child['ready'].unlink(missing_ok=True)
         command = worker_command(
             child['spec'], RESOURCES, data, models, token_file, child['ready'],
-            os.getpid(), offline=args.offline, port=port)
+            os.getpid(), offline=args.offline, port=port,
+            destination_node_id=destination_node_id)
         child['process'] = subprocess.Popen(command, cwd=data,
             env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'})
         child['pgid'] = child['process'].pid

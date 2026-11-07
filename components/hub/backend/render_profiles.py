@@ -217,7 +217,7 @@ def validate_render_compiler_descriptor(raw):
     _literal(value["format"], "studio.render.compiler.v1", "compiler", "format")
     if value["implementation"] not in (
             "hub-final-render-v1", "hub-final-render-late-label-v3",
-            "hub-final-render-subtitle-v1"):
+            "hub-final-render-subtitle-v1", "hub-final-render-cue-overlay-v1"):
         _invalid("compiler", "implementation is unsupported")
     for key in (
         "python_runtime_sha256",
@@ -239,11 +239,13 @@ def validate_render_profile_descriptor(raw):
             "story-classic-late-label-v3", "retained-classic-late-label-candidate-v3"),
         "studio.render.profile.v4": (
             "story-classic-subtitle-v1", "retained-classic-subtitle-candidate-v1"),
+        "studio.render.profile.v5": (
+            "story-classic-cue-overlay-v1", "retained-classic-cue-overlay-candidate-v1"),
     }
     implementation = formats.get(value["format"])
     if implementation is None:
         _invalid("profile", "format is unsupported")
-    subtitles = value["format"] == "studio.render.profile.v4"
+    subtitles = value["format"] in ("studio.render.profile.v4", "studio.render.profile.v5")
     for key, expected in (
         ("format", value["format"]),
         ("implementation", implementation[0]),

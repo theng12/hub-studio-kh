@@ -2218,6 +2218,82 @@ async def relay_work_policy(node_id: str, method: str, body: object = None, *,
     return {"ok": True, "node": wanted, "work_policy": answer}
 
 
+async def relay_memory_admission(node_id: str, method: str, body: object = None, *,
+                                 query: dict[str, Any] | None = None,
+                                 client: httpx.AsyncClient | None = None) -> dict[str, Any]:
+    """Read or change one joined Mac's memory admission **on that Mac**.
+
+    The target answers with its own effective state; the controller never re-derives it. A PUT
+    is queued only when the dial provably never sent the request (connect failure); any later
+    failure is ``outcome: unknown`` and is never queued or replayed, because the write may have
+    applied. A GET is never queued.
+    """
+    wanted = str(node_id or "").strip().lower()
+    node = _read().get(wanted)
+    if node is None:
+        raise StartupRelayError(404, {"ok": False, "code": "UNKNOWN_NODE",
+                                      "detail": f"this controller has no joined Mac {node_id!r}"})
+    if method not in {"GET", "PUT"}:
+        raise ValueError("memory-admission relay supports GET or PUT")
+    path = f"/api/hub/fleet/nodes/{wanted}/memory/admission"
+    if method == "GET":
+        pairs = [("model", str((query or {}).get("model") or ""))]
+        if (query or {}).get("mode") is not None:
+            pairs.append(("mode", str(query["mode"])))
+        path = path + "?" + "&".join(f"{key}={quote(value, safe='')}"
+                                     for key, value in pairs)
+    owned = client is None
+    if owned:
+        client = _probe_client()
+    try:
+        response = await client.request(
+            method, f"{node.get('address') or ''}{path}",
+            json=body if method == "PUT" else None, timeout=PROBE_TIMEOUT)
+    except httpx.HTTPError as exc:
+        reason = _unreachable_reason(exc)
+        if method == "GET":
+            raise StartupRelayError(502, {
+                "ok": False, "code": "NODE_UNREACHABLE", "reason": reason,
+                "detail": "that Mac did not answer, so its memory admission was not read"}) from exc
+        if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+            held = await _queue_for_unreachable(wanted, "PUT", path, payload=body,
+                                                kind="memory_admission")
+            if isinstance(held, StartupRelayError):
+                # r5 says pending for both a held write and the target's own 202.
+                raise StartupRelayError(held.status, {**held.body, "outcome": "pending"}) from exc
+            if held is not None:
+                return {**held, "node": wanted}
+            raise StartupRelayError(502, {
+                "ok": False, "code": "NODE_UNREACHABLE", "reason": reason,
+                "detail": "that Mac did not answer and is not checking in, so nothing was "
+                          "sent or queued"}) from exc
+        raise StartupRelayError(502, {
+            "ok": False, "code": "NODE_UNREACHABLE", "outcome": "unknown", "reason": reason,
+            "detail": "that Mac did not answer after the request may have been sent; nothing "
+                      "was queued or replayed"}) from exc
+    finally:
+        if owned:
+            await client.aclose()
+    try:
+        answer = response.json()
+    except ValueError:
+        answer = {}
+    if response.status_code == 200 and isinstance(answer, dict):
+        return answer
+    if response.status_code == 202 and isinstance(answer, dict):
+        return {**answer, "outcome": "pending"}
+    if response.status_code in (400, 409) and isinstance(answer, dict):
+        # A CAS conflict must stay a 409 with its fresh readback; a 400 keeps code/field/detail.
+        raise StartupRelayError(response.status_code, answer)
+    if response.status_code in (401, 403, 404, 405):
+        raise StartupRelayError(502, {
+            "ok": False, "code": "NODE_REFUSED",
+            "detail": "that Mac refused: its Studio Hub is older than this route, or it holds "
+                      "a different Fleet token. Update it first."})
+    raise StartupRelayError(502, {"ok": False, "code": "NODE_ERROR",
+                                  "detail": f"that Mac answered HTTP {response.status_code}"})
+
+
 async def relay_render_authority(node_id: str, method: str, body: object = None, *,
                                 client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """Read or change one joined Mac's final-render opt-in **on that Mac**.

@@ -128,6 +128,25 @@ SUBTITLE_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
 )
 
 
+# The v5 cue-overlay triple: the unchanged TOOLS bytes, the frozen v4 execution bounds, and the
+# committed cue-capable compiler sources. Descriptor-only, production_eligible false.
+_CUE_OVERLAY_DIRECTORY = Path(__file__).resolve().parent / "render-authority-cue-overlay"
+CUE_OVERLAY_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
+    _AuthorityPin(
+        "PROFILE.json", _CUE_OVERLAY_DIRECTORY / "PROFILE.json", 1070,
+        "1392c3cc2bc120ee69c041c13805c2ac20fb1ef874a06122789e428281d58b41",
+    ),
+    _AuthorityPin(
+        "TOOLS.json", _CUE_OVERLAY_DIRECTORY / "TOOLS.json", 796,
+        "98c25ae582d4ee43ee1cf665192365149f8d9f860c229a0be9da131df43eba8a",
+    ),
+    _AuthorityPin(
+        "COMPILER.json", _CUE_OVERLAY_DIRECTORY / "COMPILER.json", 458,
+        "7e2fe995ec738e42c5745416bd68ee160dba4de44245ad78068da55fb94f2296",
+    ),
+)
+
+
 @dataclass(frozen=True)
 class RenderToolsStageResult:
     state: str
@@ -625,14 +644,17 @@ def _stage_render_authority_into(
     mode: RenderAuthorityMode,
     pins: Sequence[_AuthorityPin],
     *, late_labels: bool = False, subtitles: bool = False,
+    cue_overlays: bool = False,
 ) -> RenderAuthorityStageResult:
     """Stage one closed authority state beside the unchanged two-tool manifest."""
     if late_labels and mode != "descriptor-only":
         raise ValueError("late-label authority stages descriptors only")
     if subtitles and mode != "descriptor-only":
         raise ValueError("subtitle authority stages descriptors only")
-    if late_labels and subtitles:
-        raise ValueError("stage late-label and subtitle authority separately")
+    if cue_overlays and mode != "descriptor-only":
+        raise ValueError("cue-overlay authority stages descriptors only")
+    if sum((bool(late_labels), bool(subtitles), bool(cue_overlays))) > 1:
+        raise ValueError("stage late-label, subtitle and cue-overlay authority separately")
     fixed = _validate_authority_pins(mode, pins)
     if mode == "tool-only":
         return RenderAuthorityStageResult(staged_paths=())
@@ -656,7 +678,7 @@ def _stage_render_authority_into(
         if os.fstat(tools_fd).st_dev != os.fstat(scratch_root_fd).st_dev:
             raise ValueError("authority scratch and destination must be on the same filesystem")
         scratch_leaf = AUTHORITY_SCRATCH_LEAF + (
-            "-late-label" if late_labels else "-subtitle" if subtitles else "")
+            "-late-label" if late_labels else "-subtitle" if subtitles else "-cue-overlay" if cue_overlays else "")
         scratch_fd = _mkdir_open(scratch_root_fd, scratch_leaf)
         if mode == "sealed-candidate":
             scratch_vector_fd = _mkdir_open(scratch_fd, "qualification-vectors")
@@ -699,6 +721,19 @@ def _stage_render_authority_into(
             parent_tools_fd = tools_fd
             tools_fd = _mkdir_open(parent_tools_fd, "subtitle")
             tools_root /= "subtitle"
+        elif cue_overlays:
+            profile_document = json.loads(raw["PROFILE.json"])
+            compiler_document = json.loads(raw["COMPILER.json"])
+            if (profile_document["format"] != "studio.render.profile.v5"
+                    or profile_document["implementation"] != "story-classic-cue-overlay-v1"
+                    or profile_document["combination_set"]
+                    != "retained-classic-cue-overlay-candidate-v1"
+                    or compiler_document["format"] != "studio.render.compiler.v1"
+                    or compiler_document["implementation"] != "hub-final-render-cue-overlay-v1"):
+                raise ValueError("cue-overlay staging requires the exact v5 descriptor pair")
+            parent_tools_fd = tools_fd
+            tools_fd = _mkdir_open(parent_tools_fd, "cue-overlay")
+            tools_root /= "cue-overlay"
         for pin in fixed[:3]:
             os.link(
                 pin.relative_path, pin.relative_path,

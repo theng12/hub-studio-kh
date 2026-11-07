@@ -19,6 +19,7 @@ _DECODERS = frozenset(("png", "mjpeg", "webp", "gif", "bmp", "tiff"))
 _LATE_LABEL_MOTIONS = frozenset(("none", "pop", "slide", "float", "pulse", "wipe", "line-draw"))
 _LATE_LABEL_CONTRACT = "studio.render.late-label.v3"
 _SUBTITLE_CONTRACT = "studio.render.subtitle.v1"
+_CUE_OVERLAY_CONTRACT = "studio.render.cue-overlay.v1"
 _STAGES = (
     "overlay_layer",
     "classic_color_grade",
@@ -32,7 +33,7 @@ _STAGES = (
     "logo",
 )
 _ROLES = frozenset(("base_video", "premixed_audio", "overlay", "frame_background",
-                    "logo", "cue_label", "subtitle_ass", "subtitle_font"))
+                    "logo", "cue_label", "subtitle_ass", "subtitle_font", "cue_overlay"))
 
 
 def _invalid(reason):
@@ -261,14 +262,63 @@ def _subtitle_operation(operation, refs, path, font_shas):
         font_shas[logical_id] = sha256
 
 
-def _operation(value, duration, fps, refs, index, font_shas):
+def _cue_overlay_operation(operation, duration, path, index, canvas_width, canvas_height):
+    item = _exact(operation, ("kind", "contract", "cue_id", "time_range", "asset",
+                              "fade", "slide"), path)
+    if type(item["contract"]) is not str or item["contract"] != _CUE_OVERLAY_CONTRACT:
+        _invalid(path + ".contract is unsupported")
+    cue_id = _text(item["cue_id"], path + ".cue_id")
+    if _ID.fullmatch(cue_id) is None:
+        _invalid(path + ".cue_id is invalid")
+    if index > 9999:
+        _invalid(path + " exceeds supported ordinal assets")
+
+    time_range = _exact(item["time_range"], ("start_sec", "end_sec"), path + ".time_range")
+    start = _number(time_range["start_sec"], path + ".time_range.start_sec")
+    end = _number(time_range["end_sec"], path + ".time_range.end_sec")
+    if start < 0 or end <= start or end > duration:
+        _invalid(path + ".time_range is out of range")
+
+    asset = _exact(item["asset"], ("type", "logical_id"), path + ".asset")
+    if asset["type"] != "asset_ref":
+        _invalid(path + ".asset.type must be asset_ref")
+    expected_logical_id = f"cue_overlay_{index:04d}"
+    if asset["logical_id"] != expected_logical_id:
+        _invalid(path + ".asset does not use its ordinal asset name")
+
+    fade = item["fade"]
+    if fade is not None:
+        f = _exact(fade, ("in_sec", "out_sec"), path + ".fade")
+        in_sec = _number(f["in_sec"], path + ".fade.in_sec")
+        out_sec = _number(f["out_sec"], path + ".fade.out_sec")
+        if in_sec < 0 or out_sec < 0 or (in_sec + out_sec) > (end - start):
+            _invalid(path + ".fade values are invalid or exceed duration")
+
+    slide = item["slide"]
+    if slide is not None:
+        s = _exact(slide, ("axis", "offset_px", "start_sec", "duration_sec"), path + ".slide")
+        _one_of(s["axis"], ("x", "y"), path + ".slide.axis")
+        offset = _integer(s["offset_px"], path + ".slide.offset_px")
+        limit = canvas_width if s["axis"] == "x" else canvas_height
+        if abs(offset) > limit:
+            _invalid(path + ".slide.offset_px exceeds canvas")
+        s_start = _number(s["start_sec"], path + ".slide.start_sec")
+        s_dur = _number(s["duration_sec"], path + ".slide.duration_sec")
+        if s_start < start or s_start >= end or s_dur <= 0 or (s_start + s_dur) > end:
+            _invalid(path + ".slide timing is out of range")
+
+
+def _operation(value, duration, fps, refs, index, font_shas, canvas_width, canvas_height):
     path = "recipe.operations[" + str(index) + "]"
     operation = _object(value, path)
     kind = _text(operation.get("kind"), path + ".kind")
-    try:
-        stage = _STAGES.index(kind)
-    except ValueError:
-        _invalid(path + ".kind is unsupported")
+    if kind == "cue_overlay_stage":
+        stage = _STAGES.index("late_label_stage")
+    else:
+        try:
+            stage = _STAGES.index(kind)
+        except ValueError:
+            _invalid(path + ".kind is unsupported")
 
     if kind == "overlay_layer":
         item = _exact(operation, ("kind", "asset", "input_mode", "opacity", "sizing",
@@ -349,6 +399,9 @@ def _operation(value, duration, fps, refs, index, font_shas):
         _subtitle_operation(operation, refs, path, font_shas)
     elif kind == "late_label_stage":
         _late_label_operation(operation, duration, fps, refs, path, index)
+    elif kind == "cue_overlay_stage":
+        _cue_overlay_operation(operation, duration, path, index, canvas_width, canvas_height)
+        _add_ref(refs, f"cue_overlay_{index:04d}", "cue_overlay")
     else:
         item = _exact(operation, ("kind", "asset", "opacity", "scale", "anchor",
                                   "margin_px", "gate"), path)
@@ -397,13 +450,13 @@ def _validate(value):
     seen = set()
     cue_ids = set()
     for index, item in enumerate(recipe["operations"]):
-        stage = _operation(item, duration, fps, refs, index, font_shas)
+        stage = _operation(item, duration, fps, refs, index, font_shas, width, height)
         if stage < last_stage:
             _invalid("recipe.operations stage order is invalid")
         kind = item["kind"]
-        if kind not in ("overlay_layer", "late_label_stage") and kind in seen:
+        if kind not in ("overlay_layer", "late_label_stage", "cue_overlay_stage") and kind in seen:
             _invalid("recipe.operations repeats singleton " + kind)
-        if kind == "late_label_stage":
+        if kind in ("late_label_stage", "cue_overlay_stage"):
             cue_id = item["cue_id"]
             if cue_id in cue_ids:
                 _invalid("recipe.operations repeats cue_id " + cue_id)
@@ -446,6 +499,11 @@ def _validate(value):
             _invalid(path + ".safe_name is invalid")
         names.add(safe_name)
         role = _one_of(entry["role"], _ROLES, path + ".role")
+        if role == "cue_overlay":
+            if match.group(2) != "webm":
+                _invalid(path + " cue_overlay role must have .webm extension")
+            if re.fullmatch(r"cue_overlay_[0-9]{4}\Z", logical_id) is None:
+                _invalid(path + " cue_overlay logical_id must match ordinal pattern")
         if match.group(2) in ("ass", "ttf", "otf") and role not in (
                 "subtitle_ass", "subtitle_font"):
             _invalid(path + " subtitle extension requires its exact subtitle role")

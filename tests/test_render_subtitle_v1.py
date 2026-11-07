@@ -386,6 +386,20 @@ class SubtitleProfileDescriptorTests(unittest.TestCase):
             frozen = root / "components/hub/backend/render_late_label_v3" / name
             self.assertEqual(descriptor[key], hashlib.sha256(frozen.read_bytes()).hexdigest())
 
+    def test_frozen_v4_sources_keep_the_immutable_subtitle_pins(self):
+        from components.hub.backend.render_subtitle_v4 import final_render_compiler
+        self.assertTrue(callable(final_render_compiler.compile_final_render_packet))
+        root = HERE.parent
+        descriptor = json.loads(
+            (root / "packaging/render-authority-subtitle/COMPILER.json").read_bytes())
+        for key, name in (
+            ("final_render_compiler_sha256", "final_render_compiler.py"),
+            ("render_contract_sha256", "render_contract.py"),
+            ("render_hash_sha256", "render_hash_v1.py"),
+        ):
+            frozen = root / "components/hub/backend/render_subtitle_v4" / name
+            self.assertEqual(descriptor[key], hashlib.sha256(frozen.read_bytes()).hexdigest())
+
     COMPILER = {
         "format": "studio.render.compiler.v1",
         "implementation": "hub-final-render-subtitle-v1",

@@ -501,9 +501,16 @@ def _settings_bounds(row: Any, *, reference_input_max: int | None = None) -> dic
 
 
 def _memory_modes(row: Any) -> list[str]:
-    memory = _row_value(row, "memory")
-    bounded = getattr(memory, "low_ram_below_bytes", None) if memory is not None else None
-    return ["default", "bounded-staged"] if bounded is not None else ["default"]
+    policies = (_row_value(row, "memory"), _row_value(row, "reference_memory"))
+    for policy in policies:
+        if policy is None:
+            continue
+        bounded = (policy.get("low_ram_below_bytes")
+                   if isinstance(policy, dict)
+                   else getattr(policy, "low_ram_below_bytes", None))
+        if bounded is not None:
+            return ["default", "bounded-staged"]
+    return ["default"]
 
 
 def _manifest_index(manifests_dir: Path) -> dict[str, tuple[dict, str]]:

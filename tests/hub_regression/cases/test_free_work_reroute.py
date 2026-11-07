@@ -444,7 +444,8 @@ def test_failed_original_finalization_keeps_the_replacement_execution(
     monkeypatch.setattr(broker.asyncio, "sleep", pause)
     monkeypatch.setattr(ledger, "record_asset", asset)
     monkeypatch.setattr(ledger, "save_batch", save)
-    monkeypatch.setattr(broker.memory_admission, "worker_free_floor_gb", lambda *args: None)
+    monkeypatch.setattr(broker.memory_admission, "worker_free_floor_gb",
+                        lambda *args, mode=None: None)
 
     async def scenario():
         rerun = asyncio.create_task(broker._run_item(Client(), batch, item, second))
