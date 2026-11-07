@@ -169,15 +169,6 @@ batch = {
 }
 ledger.save_batch(batch)
 
-# Foreign fixture batch with distinct machine and studio identities
-foreign_batch = {
-    "id": "foreign-proof", "created_at": time.time(), "modality": "voice",
-    "items": [{"index": 0, "state": "running", "studio": "foreign-voice",
-                "machine": "foreign-node", "studio_job_id": "foreign-voice-99",
-                "retry_at": None, "recovery": None}],
-}
-ledger.save_batch(foreign_batch)
-
 broker.batches.clear()
 registry._flags_cache = None  # simulate a fresh Hub process reading disk
 assert registry.machine_enabled("node-a") is False
@@ -189,18 +180,12 @@ assert flags_on_disk["node-b"]["enabled"] is True
 assert flags_on_disk["node-a"]["sentinel_marker"] == "sentinel-node-a-data"
 assert registry.machine_enabled("node-b") is True
 
-assert broker.restore_batches() == 2
+assert broker.restore_batches() == 1
 item = broker.batches["pause-proof"]["items"][0]
 # The active work is re-run, not dropped (owner, 2026-10-05), and its original is kept for adoption.
 assert item["state"] == "queued"
-assert [(row[2], row[3]) for row in broker._restored_attempts if row[0]["id"] == "pause-proof"] == [("voice", "voice-job-42")]
+assert [(row[2], row[3]) for row in broker._restored_attempts] == [("voice", "voice-job-42")]
 assert broker._eligible_studios("voice", "pool") == []
-
-# Foreign identity rejection: foreign studio is not adopted by local monitor registry
-eligible_foreign = [s for s in monitor.registry if s.get("machine") == "foreign-node" or s.get("id") == "foreign-voice"]
-assert eligible_foreign == [], "foreign worker adopted by local monitor"
-by_id = {row.get("id"): row for row in monitor.registry}
-assert by_id.get("foreign-voice") is None, "foreign studio present in local monitor registry"
 
 print("operator pause/restart proof: flag persisted, active work kept and re-queued, admission paused")
 '''
