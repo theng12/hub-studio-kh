@@ -128,6 +128,25 @@ SUBTITLE_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
 )
 
 
+# The v5 cue-overlay triple: the unchanged TOOLS bytes, the frozen v4 execution bounds, and the
+# committed cue-capable compiler sources. Descriptor-only, production_eligible false.
+_CUE_OVERLAY_DIRECTORY = Path(__file__).resolve().parent / "render-authority-cue-overlay"
+CUE_OVERLAY_AUTHORITY_PINS: tuple[_AuthorityPin, ...] = (
+    _AuthorityPin(
+        "PROFILE.json", _CUE_OVERLAY_DIRECTORY / "PROFILE.json", 1070,
+        "1392c3cc2bc120ee69c041c13805c2ac20fb1ef874a06122789e428281d58b41",
+    ),
+    _AuthorityPin(
+        "TOOLS.json", _CUE_OVERLAY_DIRECTORY / "TOOLS.json", 796,
+        "98c25ae582d4ee43ee1cf665192365149f8d9f860c229a0be9da131df43eba8a",
+    ),
+    _AuthorityPin(
+        "COMPILER.json", _CUE_OVERLAY_DIRECTORY / "COMPILER.json", 458,
+        "7e2fe995ec738e42c5745416bd68ee160dba4de44245ad78068da55fb94f2296",
+    ),
+)
+
+
 @dataclass(frozen=True)
 class RenderToolsStageResult:
     state: str
