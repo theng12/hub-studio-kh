@@ -10,18 +10,22 @@ No Hub app, real network, filesystem model library or inference is used.
 """
 from __future__ import annotations
 
+import asyncio
 import atexit
 import copy
+import gc
 import json
 import math
 import os
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
 import httpx
+from fastapi import FastAPI, File, Form, UploadFile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -66,6 +70,73 @@ def multipart_field(content: bytes, content_type: str, name: str):
         if marker in headers:
             return json.loads(rest)
     return None
+
+
+def multipart_body(parts: list[tuple[str, bytes, str | None, str | None]],
+                   boundary: str) -> bytes:
+    """A raw multipart body in the exact part order given: (name, value, filename, type)."""
+    out = b""
+    for name, value, filename, content_type in parts:
+        out += b"--" + boundary.encode() + b"\r\n"
+        out += b'Content-Disposition: form-data; name="' + name.encode() + b'"'
+        if filename is not None:
+            out += b'; filename="' + filename.encode() + b'"\r\nContent-Type: '
+            out += (content_type or "application/octet-stream").encode()
+        out += b"\r\n\r\n" + value + b"\r\n"
+    return out + b"--" + boundary.encode() + b"--\r\n"
+
+
+def request_for(raw: bytes, content_type: str):
+    """A Starlette Request over one fixed body, as the proxy receives it."""
+    from starlette.requests import Request
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    return Request({"type": "http", "method": "POST", "path": "/api/generate/edit",
+                    "headers": [(b"content-type", content_type.encode())],
+                    "query_string": b""}, receive)
+
+
+async def parsed_form(raw: bytes, content_type: str):
+    """Parse a forwarded body with Starlette's real multipart parser.
+
+    A naive ``split(b"--boundary")`` hides a missing CRLF between a delimiter and the next
+    part's headers; this parser is the one the worker uses, so it is the one that must agree.
+    """
+    request = request_for(raw, content_type)
+    form = await request.form()
+    try:
+        fields: dict[str, str] = {}
+        files: list[tuple[str, str, bytes]] = []
+        for key, value in form.multi_items():
+            if isinstance(value, str):
+                fields[key] = value  # last wins, exactly as the worker reads it
+            else:
+                files.append((key, value.filename, await value.read()))
+        return fields, files
+    finally:
+        await form.close()
+
+
+def worker_signature_app():
+    """The exact Form/File signature of the Image worker's edit route."""
+    app = FastAPI()
+
+    @app.post("/api/generate/edit")
+    def submit_edit(prompt: str = Form(...), repo: str = Form(...),
+                    images: list[UploadFile] | None = File(default=None),
+                    reference_policy: str | None = Form(default=None)) -> dict:
+        return {"repo": repo, "prompt": prompt,
+                "images": [upload.filename for upload in images or []],
+                "policy": reference_policy}
+
+    return app
 
 
 class PeerCatalogAnnotationTests(unittest.TestCase):
@@ -225,6 +296,36 @@ class PeerReferenceDoorTests(unittest.TestCase):
         refused = self.refusal(2)
         self.assertEqual(refused["code"], "REFERENCE_POLICY_UNKNOWN")
 
+    def test_an_upload_over_the_spool_limit_is_closed_by_the_door(self) -> None:
+        from starlette.datastructures import FormData
+        self.monitor(self.snapshot())
+        closed = []
+        original_close = FormData.close
+
+        async def close(form) -> None:
+            closed.append(True)
+            await original_close(form)
+
+        patch = mock.patch.object(FormData, "close", close)
+        patch.start()
+        self.addCleanup(patch.stop)
+        boundary = "PeerLargeUpload"
+        content_type = f"multipart/form-data; boundary={boundary}"
+        raw = multipart_body([
+            ("repo", MODEL.encode(), None, None),
+            ("images", b"z" * (1024 * 1024 + 1), "big.bin", "application/octet-stream"),
+        ], boundary)
+        request = request_for(raw, content_type)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            refusal, forwarded = asyncio.run(standalone._peer_reference_door(
+                self.worker, request, "api/generate/edit", content_type))
+            gc.collect()
+        self.assertIsNone(refusal)
+        self.assertIsNotNone(forwarded)
+        self.assertTrue(closed, "the door must close the parsed FormData")
+        self.assertEqual([w for w in caught if issubclass(w.category, ResourceWarning)], [])
+
 
 class PolicyMonitor:
     def __init__(self, rows: list[dict]):
@@ -285,6 +386,30 @@ class PeerReferenceProxyTests(unittest.TestCase):
             data["reference_policy"] = json.dumps(policy)
         return self.client.post("/studio/image/api/generate/edit", files=files, data=data,
                                 headers={"X-Hub-Token": self.token})
+
+    def edit_raw(self, raw: bytes, boundary: str):
+        return self.client.post("/studio/image/api/generate/edit", content=raw,
+                                headers={"X-Hub-Token": self.token,
+                                         "Content-Type": f"multipart/form-data; boundary={boundary}"})
+
+    def forwarded(self):
+        self.assertEqual(len(self.fake.calls), 1)
+        sent = self.fake.calls[0]
+        fields, files = asyncio.run(parsed_form(sent["content"],
+                                                sent["headers"]["Content-Type"]))
+        return sent, fields, files
+
+    def assert_worker_signature_accepts(self, sent: dict, expected: dict) -> None:
+        from fastapi.testclient import TestClient
+        answer = TestClient(worker_signature_app()).post(
+            "/api/generate/edit", content=sent["content"],
+            headers={"content-type": sent["headers"]["Content-Type"]})
+        self.assertEqual(answer.status_code, 200, answer.text)
+        body = answer.json()
+        self.assertEqual(body["repo"], MODEL)
+        self.assertEqual(body["prompt"], "a quiet harbour")
+        self.assertEqual(body["images"], ["ref0.png", "ref1.png"])
+        self.assertEqual(json.loads(body["policy"]), expected)
 
     def test_a_valid_edit_reaches_the_worker_with_its_file_bytes_intact(self) -> None:
         response = self.edit(2)
@@ -356,6 +481,13 @@ class PeerReferenceProxyTests(unittest.TestCase):
         self.assertEqual(sent["content"].count(b'name="reference_policy"'), 1)
         for index in range(5):
             self.assertEqual(sent["content"].count(b"\x89PNG-ref-%d" % index), 1)
+        fields, files = asyncio.run(parsed_form(sent["content"],
+                                                sent["headers"]["Content-Type"]))
+        self.assertEqual(fields["repo"], MODEL)
+        self.assertEqual(fields["prompt"], "a quiet harbour")
+        self.assertEqual(json.loads(fields["reference_policy"]), expected)
+        self.assertEqual(files, [("images", f"ref{index}.png", b"\x89PNG-ref-%d" % index)
+                                 for index in range(5)])
 
     def test_a_supplied_valid_policy_is_replaced_by_the_exact_producer_policy(self) -> None:
         expected = broker._validated_reference_policy(
@@ -380,6 +512,77 @@ class PeerReferenceProxyTests(unittest.TestCase):
         self.assertNotIn(b'name="reference_policy"', sent["content"])
         self.assertIn(b"\x89PNG-ref-0", sent["content"])
         self.assertIn(b"\x89PNG-ref-1", sent["content"])
+
+    def test_the_forwarded_body_parses_with_the_real_parser_in_normal_order(self) -> None:
+        expected = broker._validated_reference_policy(
+            self.snapshot, self.monitor.registry[0], MODEL, None, "edit", 2)
+        response = self.edit(2)
+        self.assertEqual(response.status_code, 200, response.text)
+        sent, fields, files = self.forwarded()
+        self.assertEqual(fields["repo"], MODEL)
+        self.assertEqual(fields["prompt"], "a quiet harbour")
+        self.assertEqual(json.loads(fields["reference_policy"]), expected)
+        self.assertEqual(files, [("images", "ref0.png", b"\x89PNG-ref-0"),
+                                 ("images", "ref1.png", b"\x89PNG-ref-1")])
+        self.assert_worker_signature_accepts(sent, expected)
+
+    def test_the_forwarded_body_parses_with_the_real_parser_when_files_come_first(self) -> None:
+        expected = broker._validated_reference_policy(
+            self.snapshot, self.monitor.registry[0], MODEL, None, "edit", 2)
+        boundary = "PeerFileFirst"
+        raw = multipart_body([
+            ("images", b"\x89PNG-ref-0", "ref0.png", "image/png"),
+            ("repo", MODEL.encode(), None, None),
+            ("prompt", b"a quiet harbour", None, None),
+            ("images", b"\x89PNG-ref-1", "ref1.png", "image/png"),
+        ], boundary)
+        response = self.edit_raw(raw, boundary)
+        self.assertEqual(response.status_code, 200, response.text)
+        sent, fields, files = self.forwarded()
+        self.assertEqual(fields["repo"], MODEL)
+        self.assertEqual(fields["prompt"], "a quiet harbour")
+        self.assertEqual(json.loads(fields["reference_policy"]), expected)
+        self.assertEqual(files, [("images", "ref0.png", b"\x89PNG-ref-0"),
+                                 ("images", "ref1.png", b"\x89PNG-ref-1")])
+        self.assert_worker_signature_accepts(sent, expected)
+
+    def test_a_repeated_caller_field_is_replaced_at_every_part(self) -> None:
+        expected = broker._validated_reference_policy(
+            self.snapshot, self.monitor.registry[0], MODEL, None, "edit", 2)
+        boundary = "PeerRepeated"
+        raw = multipart_body([
+            ("repo", MODEL.encode(), None, None),
+            ("prompt", b"a quiet harbour", None, None),
+            ("reference_policy", b'{"forged": true}', None, None),
+            ("images", b"\x89PNG-ref-0", "ref0.png", "image/png"),
+            ("reference_policy", json.dumps(expected).encode(), None, None),
+            ("images", b"\x89PNG-ref-1", "ref1.png", "image/png"),
+        ], boundary)
+        response = self.edit_raw(raw, boundary)
+        self.assertEqual(response.status_code, 200, response.text)
+        sent, fields, files = self.forwarded()
+        self.assertEqual(fields["repo"], MODEL)
+        self.assertEqual(json.loads(fields["reference_policy"]), expected)
+        self.assertNotIn(b"forged", sent["content"])
+        self.assertEqual(sent["content"].count(b'name="reference_policy"'), 2)
+        self.assertEqual(files, [("images", "ref0.png", b"\x89PNG-ref-0"),
+                                 ("images", "ref1.png", b"\x89PNG-ref-1")])
+        self.assert_worker_signature_accepts(sent, expected)
+
+    def test_the_worker_signature_reads_a_repeated_field_as_its_last_part(self) -> None:
+        from fastapi.testclient import TestClient
+        boundary = "PeerRepeatedRead"
+        raw = multipart_body([
+            ("repo", MODEL.encode(), None, None),
+            ("prompt", b"a quiet harbour", None, None),
+            ("reference_policy", b'{"which": "first"}', None, None),
+            ("reference_policy", b'{"which": "last"}', None, None),
+        ], boundary)
+        answer = TestClient(worker_signature_app()).post(
+            "/api/generate/edit", content=raw,
+            headers={"content-type": f"multipart/form-data; boundary={boundary}"})
+        self.assertEqual(answer.status_code, 200, answer.text)
+        self.assertEqual(json.loads(answer.json()["policy"]), {"which": "last"})
 
 
 class FakeWorkerResponse:

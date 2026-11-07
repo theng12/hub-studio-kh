@@ -1564,6 +1564,9 @@ def _multipart_field(body: bytes, content_type: str, name: str, value: str) -> b
     if not starts:
         return None
     name_bytes = name.encode()
+    pieces: list[bytes] = []
+    cursor = 0
+    replaced = False
     for index, start in enumerate(starts[:-1]):
         headers_end = body.find(b"\r\n\r\n", start + len(delimiter), starts[index + 1])
         if headers_end == -1:
@@ -1572,19 +1575,26 @@ def _multipart_field(body: bytes, content_type: str, name: str, value: str) -> b
         match = re.search(rb'name\s*=\s*"?([^";\r\n]+)"?', headers)
         if match is None or match.group(1) != name_bytes:
             continue
-        # shortcut: only the first matching part is replaced; FastAPI reads the first part, so a
-        # repeated field cannot outrank this node's policy - remove all parts if that changes.
+        # The worker's form parser reads a repeated field as its last part, so every matching
+        # part is replaced: no caller value can outrank this node's policy.
         content_start = headers_end + 4
         next_delimiter = starts[index + 1]
         content_end = (next_delimiter - 2
                        if body[next_delimiter - 2:next_delimiter] == b"\r\n"
                        else next_delimiter)
-        return body[:content_start] + encoded + body[content_end:]
+        pieces.append(body[cursor:content_start])
+        pieces.append(encoded)
+        cursor = content_end
+        replaced = True
+    if replaced:
+        pieces.append(body[cursor:])
+        return b"".join(pieces)
     first = starts[0] + len(delimiter)
-    part = (b'Content-Disposition: form-data; name="' + name.encode() + b'"\r\n\r\n'
+    part = (b'Content-Disposition: form-data; name="' + name_bytes + b'"\r\n\r\n'
             + encoded + b"\r\n" + delimiter)
     if body[first:first + 2] == b"\r\n":
         insert_at = first + 2
+        part += b"\r\n"  # the next original part's headers need their own CRLF
     else:  # an empty form is just its closing delimiter
         insert_at = first
         part = b"\r\n" + part
@@ -1605,25 +1615,29 @@ async def _peer_reference_door(worker: dict[str, Any], request: Request, path: s
     if kind not in {"multipart/form-data", "application/x-www-form-urlencoded"}:
         return None, None
     try:
+        body = await request.body()
         form = await request.form()
     except Exception:  # noqa: BLE001 - the worker refuses the malformed body it cannot parse
         return None, None
-    model = str(form.get("model") or form.get("repo") or "").strip()
-    count = len(form.getlist("images"))
-    supplied: object = broker._REFERENCE_POLICY_ABSENT
-    if "reference_policy" in form:
-        raw = form.get("reference_policy")
-        try:
-            supplied = json.loads(raw) if isinstance(raw, str) else None
-        except ValueError:
-            supplied = None
-        if not isinstance(supplied, dict):
-            return {"code": "REFERENCE_POLICY_REFUSED",
-                    "detail": "reference_policy must be a JSON object"}, None
+    try:
+        model = str(form.get("model") or form.get("repo") or "").strip()
+        count = len(form.getlist("images"))
+        supplied: object = broker._REFERENCE_POLICY_ABSENT
+        if "reference_policy" in form:
+            raw = form.get("reference_policy")
+            try:
+                supplied = json.loads(raw) if isinstance(raw, str) else None
+            except ValueError:
+                supplied = None
+            if not isinstance(supplied, dict):
+                return {"code": "REFERENCE_POLICY_REFUSED",
+                        "detail": "reference_policy must be a JSON object"}, None
+    finally:
+        await form.close()  # spooled uploads would otherwise leak their temp file
     refusal, policy = _peer_reference_decision(worker, model, count, supplied)
     if refusal is not None or policy is None:
         return refusal, None
-    forwarded = _multipart_field(await request.body(), content_type, "reference_policy",
+    forwarded = _multipart_field(body, content_type, "reference_policy",
                                  json.dumps(policy))
     if forwarded is None:
         return {"code": "REFERENCE_POLICY_UNKNOWN",
