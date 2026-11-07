@@ -556,7 +556,10 @@ def _installed_app(tmp_path, files, *, with_manifest=True):
     app = _tree(tmp_path / "Applications" / "Studio Hub.app", files)
     if with_manifest:
         fm.write(app, destination=app / fm.DIR_REL)
+    from components.hub.backend import release_delta
     os.environ["STUDIOHUB_RELEASE_MANIFEST"] = str(app / R / "release-manifest.json")
+    # Warm the measured baseline here so capability probes answer from bytes, not a thread.
+    release_delta.validated_installed_baseline()
     return app
 
 

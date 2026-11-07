@@ -2871,16 +2871,20 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         (``artifact``) whether the app may install the disk image instead.
         ``delta`` is null when this Hub has no validated baseline of its own
         installed bytes - not running from an installed app, no identity file,
-        or a tree it cannot measure - which a gateway reads as no capability,
-        exactly like a Hub old enough never to have sent the key.
+        or a tree it cannot measure, or while its bytes are still being measured
+        for the first time - which a gateway reads as no capability, exactly
+        like a Hub old enough never to have sent the key.
         ``last_sync`` is the last controller poll's own conclusion (``ok``,
         ``error``, ``result``, ``at``) so a Mac being refused an update can say why.
         """
         from .backend import release_delta
         trusted = app_release.trusted_publisher()
         release = app_release.load_release()
-        # The capability is only honest once this Mac has measured its own installed bytes.
-        baseline = release_delta.validated_installed_baseline()
+        # A cold measurement takes about 20 s - as long as a gateway's probe timeout - so the
+        # probe answers null at once while one background measurement runs; the capability is
+        # published only after the installed bytes are actually measured (never, if they
+        # cannot be).
+        measured = release_delta.baseline_ready()
         return {
             "release": release,
             "trusted_publisher": None if trusted is None else {
@@ -2888,7 +2892,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "fingerprint": trusted.get("fingerprint"),
                 "public_key": trusted.get("public_key"),
             },
-            "delta": (None if baseline is None else {
+            "delta": (None if not measured else {
                 "schema": app_release.fm.SCHEMA,
                 "manifest": app_release.held_manifest(release) is not None,
                 # A release carrying `files_sha256` was pushed as files and left no disk

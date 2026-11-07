@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -157,6 +158,79 @@ class BaselineTests(unittest.TestCase):
         staged, _summary = rd.stage(app, new_entries, index["files_sha256"], get_blob)
         self.assertEqual((staged / NATIVE).read_bytes(), original)
         self.assertEqual(fm.scan(staged), new_entries)
+
+
+class ProbeTests(unittest.TestCase):
+    """The capability probe must never wait for a cold measurement (about 20 s on a real app,
+    as long as a gateway's probe timeout), must not start a second one, and must tell the
+    truth about a failed measurement."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="studiohub-probe-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.data = load_fixture()
+        rd._installed_cache.clear()
+        rd._probe_failed = None
+        rd._probe_thread = None
+        self.addCleanup(rd._installed_cache.clear)
+        self.addCleanup(setattr, rd, "_probe_failed", None)
+        self.addCleanup(setattr, rd, "_probe_thread", None)
+
+    def test_probes_answer_at_once_measure_once_and_only_then_report_capability(self) -> None:
+        app = make_fixture_app(self.tmp / "probe", self.data)
+        real_scan = fm.scan
+        calls: list = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def held_scan(root, **kwargs):
+            calls.append(root)
+            started.set()
+            release.wait(2)     # a blocking implementation would sit here and fail below
+            return real_scan(root, **kwargs)
+
+        with mock.patch.dict(os.environ, {"STUDIOHUB_RELEASE_MANIFEST": str(app / IDENTITY)}), \
+                mock.patch.object(fm, "scan", side_effect=held_scan):
+            self.assertFalse(rd.baseline_ready())       # first probe: null at once
+            self.assertTrue(started.wait(5))            # its single measurement is running
+            self.assertFalse(rd.baseline_ready())       # concurrent probe: still null
+            self.assertEqual(len(calls), 1, "concurrent probes must not start a second scan")
+            release.set()
+            thread = rd._probe_thread
+            self.assertIsNotNone(thread)
+            thread.join(timeout=5)
+            self.assertTrue(rd.baseline_ready())        # the capability only after success
+            self.assertEqual(len(calls), 1)
+
+    def test_a_failed_measurement_stays_null_until_the_identity_changes(self) -> None:
+        app = make_fixture_app(self.tmp / "fail", self.data)
+        calls: list = []
+        failed = threading.Event()
+
+        def broken_scan(root, **kwargs):
+            calls.append(root)
+            failed.set()
+            raise fm.ManifestError("the tree cannot be measured")
+
+        with mock.patch.dict(os.environ, {"STUDIOHUB_RELEASE_MANIFEST": str(app / IDENTITY)}), \
+                mock.patch.object(fm, "scan", side_effect=broken_scan):
+            self.assertFalse(rd.baseline_ready())
+            self.assertTrue(failed.wait(5))
+            thread = rd._probe_thread
+            self.assertIsNotNone(thread)
+            thread.join(timeout=5)
+            self.assertFalse(rd.baseline_ready())       # stays null ...
+            self.assertFalse(rd.baseline_ready())
+            self.assertEqual(len(calls), 1)             # ... without rescanning
+        # The installed identity changes: the failure no longer speaks for this app, and the
+        # real measurement earns the capability.
+        (app / IDENTITY).write_bytes(b'{"version":"0.6.224","installed":true}')
+        with mock.patch.dict(os.environ, {"STUDIOHUB_RELEASE_MANIFEST": str(app / IDENTITY)}):
+            self.assertFalse(rd.baseline_ready())       # launches the new measurement
+            thread = rd._probe_thread
+            self.assertIsNotNone(thread)
+            thread.join(timeout=5)
+            self.assertTrue(rd.baseline_ready())
 
 
 if __name__ == "__main__":
