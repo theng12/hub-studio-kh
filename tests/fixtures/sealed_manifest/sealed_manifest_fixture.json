@@ -1,0 +1,132 @@
+{
+  "contract": {
+    "name": "sealed-manifest-sidecar",
+    "version": "1.0.0",
+    "schema": "studiohub.file-manifest.v1",
+    "purpose": "Provide deterministic file-manifest closure for code-signed macOS app bundles without circular modification of sealed resources"
+  },
+  "sidecar_specification": {
+    "dmg_layout": {
+      "app_bundle": "Studio Hub.app",
+      "sidecar_dir": "file-manifest",
+      "index_path": "file-manifest/index.json",
+      "core_tsv_gz_path": "file-manifest/core.tsv.gz"
+    },
+    "consumer_lookup_rules": [
+      {
+        "priority": 1,
+        "location": "mounted_dmg_root / 'file-manifest'",
+        "scope": "Sealed post-0.6.224 releases (manifest generated post-seal as DMG sidecar)",
+        "sealed_closure": true
+      },
+      {
+        "priority": 2,
+        "location": "app_bundle / 'Contents/Resources/file-manifest'",
+        "scope": "Legacy pre-seal releases (backward compatibility)",
+        "sealed_closure": false
+      }
+    ]
+  },
+  "valid_sealed_release": {
+    "app_files": {
+      "Contents/Info.plist": {
+        "kind": "f",
+        "executable": false,
+        "size": 144,
+        "sha256": "d7378a37a224030b514f9194facb228c99924ce2b21c1cc879d61887441d76ff",
+        "content_b64": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHBsaXN0IHZlcnNpb249IjEuMCI+PGRpY3Q+PGtleT5DRkJ1bmRsZUlkZW50aWZpZXI8L2tleT48c3RyaW5nPmNvbS5zdHVkaW9odWIua2g8L3N0cmluZz48L2RpY3Q+PC9wbGlzdD4K"
+      },
+      "Contents/MacOS/StudioHub": {
+        "kind": "f",
+        "executable": true,
+        "size": 84,
+        "sha256": "fa074129e41617d52964c68af23d0b0eecb0a32d13ae2e865cd94aefc3b19aa4",
+        "content_b64": "yv66vgAAAAIBAAAHAAAAAwAANDAwMFBPU1RfU0VBTF9NQUNIX09fQklOQVJZX0RBVEFfV0lUSF9FTUJFRERFRF9DT0RFU0lHTkFUVVJFX1NMT1QK"
+      },
+      "Contents/Resources/version.txt": {
+        "kind": "f",
+        "executable": false,
+        "size": 8,
+        "sha256": "711ceb6e700609fe97291ce9451ac58008ae17798819338fc1f0932dcef2cdfd",
+        "content_b64": "MC42LjIyNQo="
+      },
+      "Contents/_CodeSignature/CodeResources": {
+        "kind": "f",
+        "executable": false,
+        "size": 163,
+        "sha256": "07aeb8c9c8e15d32651245cdd47996f1e138fb2a49c2c56e0f649c3ad6610560",
+        "content_b64": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHBsaXN0IHZlcnNpb249IjEuMCI+PGRpY3Q+PGtleT5maWxlczI8L2tleT48ZGljdD48a2V5PkNvbnRlbnRzL0luZm8ucGxpc3Q8L2tleT48ZGF0YT5jMlZoYkdWazwvZGF0YT48L2RpY3Q+PC9kaWN0PjwvcGxpc3Q+Cg=="
+      }
+    },
+    "manifest_index": {
+      "schema": "studiohub.file-manifest.v1",
+      "files_sha256": "9499506939680266558013f0da10f4efe629346a619f9e1b5d3c3ab28d4ba781",
+      "files_count": 4,
+      "files_bytes": 399,
+      "groups": {
+        "core": {
+          "sha256": "76d034e025a76dabbed86a3488b86fb79c045d2ccad81942dac472a92ab8a4cf",
+          "files": 4,
+          "bytes": 399,
+          "prefix": ""
+        }
+      }
+    },
+    "manifest_tsv": {
+      "core": "f\t0\t144\td7378a37a224030b514f9194facb228c99924ce2b21c1cc879d61887441d76ff\tContents/Info.plist\nf\t1\t84\tfa074129e41617d52964c68af23d0b0eecb0a32d13ae2e865cd94aefc3b19aa4\tContents/MacOS/StudioHub\nf\t0\t8\t711ceb6e700609fe97291ce9451ac58008ae17798819338fc1f0932dcef2cdfd\tContents/Resources/version.txt\nf\t0\t163\t07aeb8c9c8e15d32651245cdd47996f1e138fb2a49c2c56e0f649c3ad6610560\tContents/_CodeSignature/CodeResources\n"
+    },
+    "manifest_tsv_gz_b64": {
+      "core": "H4sIAAAAAAAC/0WQu04kQQxF4+JjGNvlejgmYQOExHwAcrns1Uir7tV0D+LzaQiYzPcG51w5EiRkTrPl1jU3JWLIMApyCAqH2iDqJiLE5jQIDc16k1mx98aMs9WI9LQuuy/7dvqzxPr4/99l2x8iYeqcQqExkjhjxTYLSWWrXYPyhAHuNkAzTczq5L0Wm8LqYXmgqPKd/aL2ej6d99u8rM+3cQgg9dQQzUf1BlBBwqWRHI1wQbXSAbo6tia9o+TcwzBADp95kM2Yd/6bb+vtar6dPvy6Xdblcf/cfyxYc4KmPo5XWHcsM1MtSHyMndxEaqDjAR+kLEZWqkPU48w6a0UoFe6e96d1+vnyd9H9dvXTd/pVP3wBmXBOI5MBAAA="
+    },
+    "hashes": {
+      "files_sha256": "9499506939680266558013f0da10f4efe629346a619f9e1b5d3c3ab28d4ba781",
+      "core_uncompressed_tsv_sha256": "76d034e025a76dabbed86a3488b86fb79c045d2ccad81942dac472a92ab8a4cf",
+      "core_tsv_gz_sha256": "1d70a275657e47422a1a14099917ad538c38d61659bb9598cac18ae1f120f4f3"
+    }
+  },
+  "stale_224_baseline_case": {
+    "description": "Hub 0.6.224 generated manifest pre-seal, leaving stale native executable digest and unlisted _CodeSignature/CodeResources on disk",
+    "installed_app_disk_hashes": {
+      "Contents/MacOS/StudioHub": "fa074129e41617d52964c68af23d0b0eecb0a32d13ae2e865cd94aefc3b19aa4",
+      "Contents/_CodeSignature/CodeResources": "07aeb8c9c8e15d32651245cdd47996f1e138fb2a49c2c56e0f649c3ad6610560"
+    },
+    "embedded_224_manifest_records": {
+      "Contents/MacOS/StudioHub": {
+        "declared_sha256": "74e8d65bbf6833d9c3fcad135b71c7d01234aa656e83894c9d61cfeb3507e285",
+        "stale_reason": "Mach-O rewritten by codesign after manifest was generated"
+      },
+      "Contents/_CodeSignature/CodeResources": {
+        "declared_sha256": null,
+        "stale_reason": "Created by codesign after manifest was generated"
+      }
+    },
+    "evaluation_verdict": "UNTRUSTED_BASELINE",
+    "wire_probe_response": {
+      "release": {
+        "version": "0.6.224",
+        "files_sha256": "stale224fileshash"
+      },
+      "trusted_publisher": {
+        "public_key": "4444444444444444444444444444444444444444444444444444444444444444",
+        "publisher_id": "gatewaykh"
+      },
+      "delta": null,
+      "last_sync": {
+        "ok": true,
+        "result": "untrusted_224_baseline_delta_disabled"
+      }
+    },
+    "gateway_handling": {
+      "probe_check": "delta is None -> capable = False",
+      "decision": "planned = 'full' (since capable is False)",
+      "fallback_action": "push_full_dmg (existing whole DMG fallback)"
+    }
+  },
+  "corrupted_bytes_case": {
+    "target_file": "Contents/MacOS/StudioHub",
+    "expected_sha256": "fa074129e41617d52964c68af23d0b0eecb0a32d13ae2e865cd94aefc3b19aa4",
+    "corrupted_sha256": "eb4c2e92da68c8cfb6d9f714a50b11db1b7db1c030a0f81dd264d1e2f93f15f6",
+    "corrupted_b64": "yv66vgAAAAIBAAAHAAAAAwAANDAwMFBPU1RfU0VBTF9NQUNIX09fQklOQVJZX0RBVEFfV0lUSF9FTUJFRERFRF9DT0RFU0lHTkFUVVJFX1NMT1gK",
+    "expected_verdict": "REJECTED_DIGEST_MISMATCH"
+  }
+}

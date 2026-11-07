@@ -1,0 +1,184 @@
+CROSS-APP CONTRACT: SEALED APP FILE MANIFEST AS DMG SIDECAR
+============================================================
+Date: 2026-11-07
+Branch: fix/sealed-manifest-20261107
+Base: 91c069b
+Contract State: PROPOSED - PENDING GATEWAY AGREEMENT (NO PRODUCT CODE UNTIL ACK)
+
+1. BACKGROUND & PROBLEM STATEMENT (PROVEN BY 0.6.224 PACKAGE-R3-BLOCKED.JSON)
+-----------------------------------------------------------------------------
+In Studio Hub release 0.6.224, app bundle manifest generation took place before
+outer bundle code signing. macOS ad-hoc deep code signing (`codesign --force
+--deep --sign -`) rewrites the native Mach-O executable header/signature slot
+(`Contents/MacOS/StudioHub`) and writes `Contents/_CodeSignature/CodeResources`.
+Consequently:
+  - Generating the manifest BEFORE deep seal leaves stale native hashes and
+    omits `CodeResources`.
+  - Regenerating the manifest AFTER deep seal modifies files inside the sealed
+    bundle (`Contents/Resources/file-manifest/index.json` and `*.tsv.gz`), causing
+    `codesign --verify --deep --strict` to fail with exit 1 ("a sealed resource
+    is missing or invalid").
+  - The circular dependency cannot be resolved inside the bundle without either
+    excluding native binaries / signatures (which breaks delta integrity) or
+    moving the manifest outside the sealed bundle.
+
+2. THE SMALLEST COMPLETE ARCHITECTURAL SOLUTION
+-----------------------------------------------
+The manifest is placed OUTSIDE the sealed `.app` bundle as a DMG SIDECAR:
+  - Inside the DMG volume root:
+      <dmg_mount_root>/Studio Hub.app/
+      <dmg_mount_root>/file-manifest/
+          index.json
+          core.tsv.gz
+          runtime-<name>.tsv.gz (if applicable)
+  - `Studio Hub.app` contains NO `file-manifest/` directory inside `Contents/Resources/`.
+  - Code signing executes `--force --deep --strict` on `Studio Hub.app` cleanly.
+  - Manifest generation runs AFTER signing has completed, scanning the signed bundle.
+  - Because `file-manifest/` is written outside the `.app`, the code signature of
+    `Studio Hub.app` is untouched and `codesign --verify --deep --strict` exits 0.
+
+3. SCHEMA & FIELD SPECIFICATION (UNCHANGED WIRE PROTOCOL)
+---------------------------------------------------------
+Schema identifier remains: "studiohub.file-manifest.v1"
+No fields added, no fields removed, wire encoding identical.
+
+A. index.json Schema:
+{
+  "schema": "studiohub.file-manifest.v1",
+  "files_sha256": "<64-hex lowercase sha256>",
+  "files_count": <integer>,
+  "files_bytes": <integer>,
+  "groups": {
+    "<group_name>": {
+      "sha256": "<64-hex uncompressed tsv sha256>",
+      "files": <integer>,
+      "bytes": <integer>,
+      "prefix": "<path prefix or empty string>"
+    }
+  }
+}
+
+B. Group TSV Format (uncompressed, gzipped as <name>.tsv.gz with level 9, mtime=0):
+Format per line:
+  kind \t executable \t size \t sha256_or_symlink_target \t relpath \n
+Sorted deterministically by utf-8 bytes of relpath.
+  - kind: "f" (regular file) or "l" (symlink)
+  - executable: "1" (owner-executable) or "0"
+  - size: file size in bytes ("0" for symlink)
+  - sha256: 64-hex digest of file bytes (or link target for "l")
+  - relpath: path relative to app root (e.g. "Contents/MacOS/StudioHub")
+
+4. COMPLETE FILE HASH & SIGNATURE CLOSURE
+-----------------------------------------
+The sidecar manifest lists 100% of the files in the sealed app:
+  - `Contents/MacOS/StudioHub` is listed with its final post-seal Mach-O digest.
+  - `Contents/_CodeSignature/CodeResources` is listed with its final digest.
+  - `files_sha256` commits to every group TSV digest:
+      SHA256( "".join(f"{name}\0{group_shas[name]}\n" for name in sorted(group_shas)) )
+  - Descriptor and DMG whole hash guard the entire release artifact.
+  - No signature or executable exclusions exist. Full integrity is preserved.
+
+5. CONSUMER LOOKUP ORDER (GATEWAY & HUB)
+----------------------------------------
+When reading a file manifest from a mounted release disk image:
+  Priority 1 (Preferred / Sealed Releases):
+    <dmg_mount_root>/file-manifest/index.json
+    <dmg_mount_root>/file-manifest/<group>.tsv.gz
+  Priority 2 (Legacy Fallback / Pre-0.6.225 Releases):
+    <dmg_mount_root>/Studio Hub.app/Contents/Resources/file-manifest/index.json
+    <dmg_mount_root>/Studio Hub.app/Contents/Resources/file-manifest/<group>.tsv.gz
+  Priority 3 (Refusal):
+    If neither location contains `index.json`, raise `ReleaseError(400, "RELEASE_NO_MANIFEST")`.
+
+6. UNTRUSTED 0.6.224 BASELINE REJECTION & WHOLE-DMG FALLBACK
+------------------------------------------------------------
+Why 0.6.224 Baseline is Untrusted:
+  - In 0.6.224, `Contents/MacOS/StudioHub` on disk has post-seal digest `55f41363...`
+    while its embedded manifest declared `b282910d...`.
+  - In 0.6.224, `Contents/_CodeSignature/CodeResources` exists on disk but is unlisted
+    in the embedded manifest.
+  - A node running 0.6.224 therefore possesses a corrupted/stale baseline.
+
+Hub Baseline Evaluation:
+  - Hub checks its installed app against its installed manifest.
+  - If native executable digest mismatches or code signature resources are unlisted,
+    the baseline is classified as `UNTRUSTED_BASELINE`.
+
+Wire Protocol & Gateway Resolution (No New Routes, Uses Existing Semantics):
+  - In `GET /api/hub/release`, a Hub running with an untrusted baseline publishes:
+      "delta": null
+  - Gateway's `_probe(base, token)` checks:
+      capable = isinstance(delta, dict) and delta.get("schema") == MANIFEST_SCHEMA
+    Since `delta` is null, `capable` evaluates to `False`.
+  - Gateway's `publish()` calculates:
+      planned = "full" if force_full or not (capable and manifest and delta_descriptor) else "delta"
+    Because `capable` is `False`, `planned` is "full".
+  - Gateway executes `push(url, token, descriptor, dmg_path)` sending the whole DMG.
+  - Boundary: Gateway `push_delta` whole-image fallback only triggers on missing 404/405
+    or absent capability (other responses are final refusals). Emitting `delta: null`
+    cleanly triggers whole-DMG installation before `push_delta` is ever invoked.
+
+7. COMPATIBILITY WITH OLD CLIENTS
+---------------------------------
+  - Older Hub nodes receiving a full DMG install `Studio Hub.app` directly from DMG root.
+  - Gateway updated with Priority 1 sidecar lookup transparently supports new releases
+    while retaining Priority 2 legacy embedded lookup for older DMGs.
+  - Older Gateway instances that don't know the sidecar location find no embedded manifest
+    and cleanly fall back to whole-DMG push (`planned = "full"`), avoiding corrupt deltas.
+
+8. AFFECTED FILES (POST-AGREEMENT IMPLEMENTATION PLAN)
+------------------------------------------------------
+Hub Repository (Current worktree: fix/sealed-manifest-20261107):
+  1. `packaging/stage_voice.py`:
+     - Stage app bundle without `Contents/Resources/file-manifest`.
+     - Execute deep ad-hoc code sign on `Studio Hub.app`.
+     - Write manifest into DMG staging root under `file-manifest/`.
+  2. `packaging/make_dmg.py`:
+     - Include `file-manifest/` sidecar beside `Studio Hub.app` in DMG creation.
+  3. `components/hub/backend/file_manifest.py`:
+     - Update `walk()` to reflect that manifest directory is outside `.app`.
+  4. `components/hub/backend/release_delta.py`:
+     - Add baseline trust validator detecting native/signature mismatch.
+     - Support sidecar directory in `installed_manifest()`.
+  5. `components/hub/standalone.py`:
+     - In `GET /api/hub/release`, omit `delta` capability if installed baseline is untrusted.
+
+Gateway Repository (For Gateway team implementation):
+  1. `gateway/release_publisher.py`:
+     - In `load_manifest(root: Path)`, implement Priority 1 sidecar lookup:
+       check `root / "file-manifest"` before `app / "Contents/Resources/file-manifest"`.
+
+9. TEST FIXTURE SPECIFICATION & VERIFICATION
+--------------------------------------------
+Fixture path: `tests/fixtures/sealed_manifest/sealed_manifest_fixture.json`
+Self-check script: `tests/fixtures/sealed_manifest/selfcheck.py`
+
+Fixture Hashes:
+  files_sha256: 9499506939680266558013f0da10f4efe629346a619f9e1b5d3c3ab28d4ba781
+  core_tsv_sha256: 76d034e025a76dabbed86a3488b86fb79c045d2ccad81942dac472a92ab8a4cf
+  core_tsv_gz_sha256: 1d70a275657e47422a1a14099917ad538c38d61659bb9598cac18ae1f120f4f3
+
+Fixture File Hashes:
+  Contents/Info.plist (144 B):
+    d7378a37a224030b514f9194facb228c99924ce2b21c1cc879d61887441d76ff
+  Contents/MacOS/StudioHub (84 B):
+    fa074129e41617d52964c68af23d0b0eecb0a32d13ae2e865cd94aefc3b19aa4
+  Contents/Resources/version.txt (8 B):
+    711ceb6e700609fe97291ce9451ac58008ae17798819338fc1f0932dcef2cdfd
+  Contents/_CodeSignature/CodeResources (163 B):
+    07aeb8c9c8e15d32651245cdd47996f1e138fb2a49c2c56e0f649c3ad6610560
+
+How Each App Asserts Same Fixture:
+  - Both Hub test suites and Gateway test suites can load `sealed_manifest_fixture.json`
+    using standard Python `json.loads` without requiring package cross-imports.
+  - Hub asserts:
+      1. Manifest generation produces identical `files_sha256` and group TSV.
+      2. App bundle scanner captures native binary and signature files.
+      3. Stale 224 baseline detection flags native hash mismatch & unlisted CodeResources.
+  - Gateway asserts:
+      1. `load_manifest(mount_root)` successfully resolves `mount_root / "file-manifest"`.
+      2. `Manifest.files["files_sha256"]` matches `94995069...`.
+      3. When probe returns `delta: None` (224 baseline), Gateway chooses `push_full`.
+
+Self-Check Exit Status: 0 (Validated via `tests/fixtures/sealed_manifest/selfcheck.py`)
+No product code has been modified; waiting for Gateway field agreement.
