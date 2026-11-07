@@ -720,12 +720,12 @@ def _validate_late_label_dimensions(
 
 
 def _build_input_args(media_path: str, mode: Mapping[str, object]) -> tuple[str, ...]:
-    if mode["kind"] == "single":
-        return ("-i", media_path)
-    if mode["kind"] == "loop_stream":
-        return ("-stream_loop", "-1", "-i", media_path)
     decoder = mode.get("decoder")
     prefix = ("-c:v", str(decoder)) if decoder else ()
+    if mode["kind"] == "single":
+        return (*prefix, "-i", media_path)
+    if mode["kind"] == "loop_stream":
+        return (*prefix, "-stream_loop", "-1", "-i", media_path)
     return (*prefix, "-loop", "1", "-i", media_path)
 
 
@@ -1437,7 +1437,7 @@ def _compile_validated_packet(
         logical_id = operation["asset"]["logical_id"]
         if logical_id not in cue_overlay_indices:
             cue_overlay_indices[logical_id] = add_input(
-                operation["asset"], {"kind": "single"})
+                operation["asset"], {"kind": "single", "decoder": "libvpx-vp9"})
     for op_index, operation in late_operations:
         for key in ("label", "line"):
             item = operation[key]

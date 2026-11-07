@@ -2201,7 +2201,11 @@ class RenderExecutor:
                         if isinstance(entry, dict) and "logical_id" in entry
                     }
                     for cue_op in cue_overlay_ops:
-                        asset_id = cue_op.get("asset")
+                        asset_ref = cue_op.get("asset")
+                        if (not isinstance(asset_ref, dict) or asset_ref.get("type") != "asset_ref"
+                                or not isinstance(asset_ref.get("logical_id"), str)):
+                            raise RuntimeError(f"cue overlay asset_ref is malformed")
+                        asset_id = asset_ref["logical_id"]
                         if not asset_id or asset_id not in readers:
                             raise RuntimeError(f"missing asset reader for cue overlay {asset_id}")
                         stream = readers[asset_id]
