@@ -37,6 +37,8 @@ class RecoverableDmgFiles(unittest.TestCase):
             stage_spec = importlib.util.spec_from_file_location('dmg_stage_digest', ROOT / 'packaging/stage_voice.py')
             stage = importlib.util.module_from_spec(stage_spec)
             stage_spec.loader.exec_module(stage)
+            stage.sign_app(app)
+            stage.write_file_manifest(app)
             app.with_name(app.name + '.tree-sha256').write_text(stage.tree_digest(app) + '\n')
             module.validate_stage(app)
             (app / 'Contents/Info.plist').write_text('changed payload')

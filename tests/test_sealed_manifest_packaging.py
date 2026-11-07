@@ -1,0 +1,263 @@
+"""Focused packaging tests for code-signed bundles with sidecar manifests.
+
+Verifies:
+  1. Actual Hub manifest producer against the sealed-manifest contract fixture.
+  2. Real Mach-O ad-hoc deep code signing with post-seal sidecar manifest.
+  3. Strict codesign deep verification exits 0 on sealed bundle.
+  4. Native Mach-O and CodeResources closure in sidecar manifest.
+  5. Tampered Mach-O, CodeResources, or sidecar rejected by validate_stage.
+  6. Legacy embedded file-manifest refused by validate_stage.
+  7. DMG build copies sidecar to volume root while preserving strict codesign seal.
+"""
+from __future__ import annotations
+
+import base64
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_PATH = ROOT / "tests/fixtures/sealed_manifest/sealed_manifest_fixture.json"
+SYSTEM_MACHO = Path("/usr/bin/true")
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class SealedManifestPackagingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.stage_voice = load_module("test_stage_voice", ROOT / "packaging/stage_voice.py")
+        cls.make_dmg = load_module("test_make_dmg", ROOT / "packaging/make_dmg.py")
+        cls.file_manifest = load_module("test_file_manifest", ROOT / "components/hub/backend/file_manifest.py")
+
+    def test_actual_producer_against_contract_fixture(self):
+        """Hub's actual file_manifest.scan and build match the contract fixture exactly."""
+        fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        valid = fixture["valid_sealed_release"]
+        app_files = valid["app_files"]
+        expected_hashes = valid["hashes"]
+
+        with tempfile.TemporaryDirectory(prefix="hub-producer-fixture-") as temp_dir:
+            app_dir = Path(temp_dir) / "Studio Hub.app"
+            for rel, info in app_files.items():
+                dest = app_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(base64.b64decode(info["content_b64"]))
+                if info["executable"]:
+                    os.chmod(dest, 0o755)
+
+            # Measure with actual Hub scanner and builder
+            scanned = self.file_manifest.scan(app_dir)
+            index, tsv = self.file_manifest.build(scanned)
+
+            self.assertEqual(index["schema"], "studiohub.file-manifest.v1")
+            self.assertEqual(index["files_sha256"], expected_hashes["files_sha256"])
+            self.assertEqual(index["files_count"], 4)
+            self.assertEqual(
+                index["groups"]["core"]["sha256"],
+                expected_hashes["core_uncompressed_tsv_sha256"],
+            )
+            self.assertEqual(
+                tsv["core"].decode("utf-8"),
+                valid["manifest_tsv"]["core"],
+            )
+
+            # Check index validation and group verification
+            checked_index = self.file_manifest.check_index(index)
+            self.assertEqual(checked_index["files_sha256"], expected_hashes["files_sha256"])
+            entries = self.file_manifest.check_group(index, "core", tsv["core"])
+            self.assertEqual(len(entries), 4)
+
+    def _create_real_signed_app(self, temp_dir: Path) -> Path:
+        """Create a minimal staged bundle using a real system Mach-O binary and sign it."""
+        app = temp_dir / "Studio Hub.app"
+        macos_dir = app / "Contents/MacOS"
+        macos_dir.mkdir(parents=True)
+        # Copy a real tiny system Mach-O binary
+        shutil.copyfile(SYSTEM_MACHO, macos_dir / "StudioHub")
+        (macos_dir / "StudioHub").chmod(0o755)
+
+        info_plist = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+            '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+            '<plist version="1.0"><dict>'
+            '<key>CFBundleExecutable</key><string>StudioHub</string>'
+            '<key>CFBundleIdentifier</key><string>local.studiohub.test</string>'
+            '<key>CFBundleName</key><string>Studio Hub</string>'
+            '<key>CFBundleShortVersionString</key><string>0.6.225</string>'
+            '</dict></plist>\n'
+        )
+        (app / "Contents/Info.plist").write_text(info_plist)
+        (app / "Contents/Resources").mkdir(parents=True)
+        (app / "Contents/Resources/version.txt").write_text("0.6.225\n")
+
+        # 1. Sign
+        self.stage_voice.sign_app(app)
+
+        # 2. Generate sidecar manifest
+        self.stage_voice.write_file_manifest(app)
+
+        # 3. Record tree digest
+        app.with_name(app.name + ".tree-sha256").write_text(
+            self.stage_voice.tree_digest(app) + "\n"
+        )
+        return app
+
+    def test_real_macho_ad_hoc_signing_and_sidecar_closure(self):
+        """Prove post-seal manifest app strict deep is 0 and every actual signed file indexed."""
+        with tempfile.TemporaryDirectory(prefix="macho-seal-test-") as temp_dir:
+            app = self._create_real_signed_app(Path(temp_dir))
+
+            # 1. codesign --verify --deep --strict exits 0
+            verify = subprocess.run(
+                ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(verify.returncode, 0, f"codesign failed: {verify.stderr}")
+
+            # 2. No file-manifest inside the app bundle
+            self.assertFalse((app / "Contents/Resources/file-manifest").exists())
+
+            # 3. Sidecar directory exists alongside app
+            sidecar = app.with_name(app.name + ".file-manifest")
+            self.assertTrue(sidecar.is_dir())
+            self.assertTrue((sidecar / "index.json").is_file())
+            self.assertTrue((sidecar / "core.tsv.gz").is_file())
+
+            # 4. Native executable and CodeResources indexed with closure
+            index, groups = self.file_manifest.load_dir(sidecar)
+            flattened = self.file_manifest.flatten(groups)
+            self.assertIn("Contents/MacOS/StudioHub", flattened)
+            self.assertIn("Contents/_CodeSignature/CodeResources", flattened)
+            self.assertEqual(flattened["Contents/MacOS/StudioHub"][0], "f")
+            self.assertTrue(flattened["Contents/MacOS/StudioHub"][1])  # executable
+
+            # 5. validate_stage passes cleanly
+            self.make_dmg.validate_stage(app)
+
+    def test_mutate_native_macho_rejected(self):
+        """Mutating signed Mach-O fails codesign verify and validate_stage."""
+        with tempfile.TemporaryDirectory(prefix="mutate-native-") as temp_dir:
+            app = self._create_real_signed_app(Path(temp_dir))
+            # Mutate native binary
+            native = app / "Contents/MacOS/StudioHub"
+            content = bytearray(native.read_bytes())
+            content[0x200] ^= 0x55
+            native.write_bytes(bytes(content))
+
+            # codesign fails
+            ver = subprocess.run(
+                ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(ver.returncode, 0)
+
+            # validate_stage fails
+            with self.assertRaises(ValueError):
+                self.make_dmg.validate_stage(app)
+
+    def test_mutate_code_signature_rejected(self):
+        """Mutating Contents/_CodeSignature/CodeResources fails validate_stage."""
+        with tempfile.TemporaryDirectory(prefix="mutate-sig-") as temp_dir:
+            app = self._create_real_signed_app(Path(temp_dir))
+            sig = app / "Contents/_CodeSignature/CodeResources"
+            self.assertTrue(sig.is_file())
+            sig.write_text("<plist>tampered</plist>\n")
+
+            ver = subprocess.run(
+                ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(ver.returncode, 0)
+
+            with self.assertRaises(ValueError):
+                self.make_dmg.validate_stage(app)
+
+    def test_mutate_sidecar_manifest_rejected(self):
+        """Tampering with sidecar manifest index or group fails validate_stage."""
+        with tempfile.TemporaryDirectory(prefix="mutate-sidecar-") as temp_dir:
+            app = self._create_real_signed_app(Path(temp_dir))
+            sidecar = app.with_name(app.name + ".file-manifest")
+            index_file = sidecar / "index.json"
+            data = json.loads(index_file.read_text())
+            data["files_sha256"] = "0" * 64
+            index_file.write_text(json.dumps(data))
+
+            with self.assertRaises(ValueError):
+                self.make_dmg.validate_stage(app)
+
+    def test_legacy_embedded_manifest_refused(self):
+        """App bundle with legacy embedded file-manifest is refused."""
+        with tempfile.TemporaryDirectory(prefix="legacy-embedded-") as temp_dir:
+            app = self._create_real_signed_app(Path(temp_dir))
+            embedded = app / "Contents/Resources/file-manifest"
+            embedded.mkdir(parents=True)
+            (embedded / "index.json").write_text("{}")
+
+            with self.assertRaisesRegex(ValueError, "embedded file-manifest"):
+                self.make_dmg.validate_stage(app)
+
+    def test_build_dmg_copies_sidecar_to_volume_root(self):
+        """make_dmg.build copies sidecar to DMG root and preserves code signature seal."""
+        with tempfile.TemporaryDirectory(prefix="dmg-build-test-") as temp_dir:
+            td = Path(temp_dir)
+            app = self._create_real_signed_app(td)
+
+            dist_dir = ROOT / "dist"
+            dist_dir.mkdir(parents=True, exist_ok=True)
+            dmg_path = dist_dir / "Studio Hub Test 0.6.225.dmg"
+
+            try:
+                self.make_dmg.build(app, dmg_path)
+                self.assertTrue(dmg_path.is_file())
+
+                # Mount read-only and verify volume layout
+                mount = Path(tempfile.mkdtemp(prefix="shub-dmg-mount-"))
+                try:
+                    subprocess.run(
+                        ["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse",
+                         "-noautoopen", "-mountpoint", str(mount), str(dmg_path)],
+                        check=True, capture_output=True, text=True,
+                    )
+                    mounted_app = mount / "Studio Hub.app"
+                    mounted_sidecar = mount / "file-manifest"
+
+                    self.assertTrue(mounted_app.is_dir())
+                    self.assertTrue(mounted_sidecar.is_dir())
+                    self.assertTrue((mounted_sidecar / "index.json").is_file())
+                    self.assertFalse((mounted_app / "Contents/Resources/file-manifest").exists())
+
+                    # Strict deep codesign verify on mounted app MUST be 0
+                    ver = subprocess.run(
+                        ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(mounted_app)],
+                        capture_output=True, text=True,
+                    )
+                    self.assertEqual(ver.returncode, 0, f"mounted codesign failed: {ver.stderr}")
+
+                    # Sidecar closure on mounted bundle
+                    index, groups = self.file_manifest.load_dir(mounted_sidecar)
+                    flattened = self.file_manifest.flatten(groups)
+                    scanned = self.file_manifest.scan(mounted_app)
+                    self.assertEqual(flattened, scanned)
+                finally:
+                    subprocess.run(["/usr/bin/hdiutil", "detach", str(mount)], capture_output=True)
+                    if mount.is_dir():
+                        mount.rmdir()
+            finally:
+                if dmg_path.exists():
+                    dmg_path.unlink()
+
+
+if __name__ == "__main__":
+    unittest.main()

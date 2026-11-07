@@ -168,12 +168,32 @@ def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
     return digest.hexdigest()
 
 
-def write_file_manifest(app: Path) -> dict:
-    """Write ``Contents/Resources/file-manifest/`` into a staged app; returns its index.
+def sign_app(app: Path) -> None:
+    """Execute deep ad-hoc code sign on the staged .app bundle and verify strictly."""
+    app = Path(app).resolve()
+    subprocess.run(
+        ['/usr/bin/codesign', '--force', '--deep', '--sign', '-', '--timestamp=none', str(app)],
+        check=True, capture_output=True, text=True,
+    )
+    subprocess.run(
+        ['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)],
+        check=True, capture_output=True, text=True,
+    )
+
+
+def write_file_manifest(app: Path, destination: Path | None = None) -> dict:
+    """Write sidecar ``file-manifest/`` directory for a staged app; returns its index.
 
     The format lives in the Hub's own ``file_manifest`` module - the same code the Hub uses to read
     it - loaded by path because `components.hub.backend` is not importable from here.
     """
+    if destination is None:
+        destination = app.with_name(app.name + '.file-manifest')
+    if destination == app / 'Contents/Resources/file-manifest':
+        raise ValueError(
+            'Writing file-manifest inside the app bundle breaks code signing seals. '
+            'Use external sidecar destination instead.'
+        )
     import importlib.util
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
@@ -183,7 +203,7 @@ def write_file_manifest(app: Path) -> dict:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    return module.write(app)
+    return module.write(app, destination=destination)
 
 
 def strip_runtime_tests(runtime: Path) -> dict:
@@ -978,8 +998,11 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     # The manifest is excluded from its own payload hash to avoid recursion.
     release['payload_sha256'] = tree_digest(contents)
     (resources / 'release-manifest.json').write_text(json.dumps(release, indent=2) + '\n')
-    # The per-file manifest that lets a Mac fetch only the files that changed. Written last so it
-    # lists release-manifest.json too, and *after* payload_sha256 so that hash cannot depend on it.
+    # Deep ad-hoc seal the app bundle before manifest generation and tree digest.
+    sign_app(output)
+    # The per-file manifest that lets a Mac fetch only the files that changed. Written as a
+    # sidecar directory outside the app bundle AFTER code signing so the seal covers native
+    # binaries and CodeResources without being invalidated.
     write_file_manifest(output)
     output.with_name(output.name + '.tree-sha256').write_text(tree_digest(output) + '\n')
     return output

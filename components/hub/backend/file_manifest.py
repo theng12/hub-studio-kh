@@ -216,10 +216,11 @@ def index_bytes(index: Mapping) -> bytes:
     return (json.dumps(index, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
-def write(app_root: Path, entries: Mapping[str, Entry] | None = None) -> dict:
-    """Write ``file-manifest/`` into the bundle and return the index."""
+def write(app_root: Path, entries: Mapping[str, Entry] | None = None, *,
+          destination: Path | None = None) -> dict:
+    """Write ``file-manifest/`` into destination (default sidecar app.file-manifest) and return the index."""
     index, tsv = build(scan(app_root) if entries is None else entries)
-    directory = app_root / DIR_REL
+    directory = destination if destination is not None else app_root.with_name(app_root.name + ".file-manifest")
     directory.mkdir(parents=True, exist_ok=True)
     for name, data in tsv.items():
         (directory / f"{name}.tsv.gz").write_bytes(gzip_bytes(data))
