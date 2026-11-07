@@ -244,12 +244,10 @@ class ReferenceDispatchPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at most 0"):
             dispatch(image_row(snap=snap), [reference()], policy_out={})
 
-    def test_a_null_swap_allowance_is_preserved_in_the_dispatch_field(self):
+    def test_a_null_swap_allowance_is_refused_as_unknown(self):
         snap = snapshot(rows=[row(None, maximum=2, swap=None)])
-        policy: dict = {}
-        dispatch(image_row(snap=snap), [reference()], policy_out=policy)
-        self.assertIsNone(policy["reference_policy"]["effective"]["swap_allowance_gb"])
-        self.assertIn("swap_allowance_gb", policy["reference_policy"]["effective"])
+        with self.assertRaisesRegex(ValueError, "does not state a swap allowance"):
+            dispatch(image_row(snap=snap), [reference()], policy_out={})
 
     def test_a_snapshot_for_another_node_is_refused(self):
         snap = snapshot(node_id="node-b")
@@ -418,7 +416,7 @@ class MultipartAndDispatchCallSiteTests(unittest.TestCase):
         self.assertEqual(json.loads(fields["reference_policy"]), field)
         self.assertNotIn("'", fields["reference_policy"][:2], "never a Python repr")
 
-    def _run_item(self, entry, params, monkeypatch_floor=None):
+    def _run_item(self, entry, params, monkeypatch_floor=None, stop=True):
         item = {
             "index": 0, "prompt": "proof", "params": params, "seed": -1,
             "state": "running", "tries": 1, "studio": "image@node-a",
@@ -438,7 +436,7 @@ class MultipartAndDispatchCallSiteTests(unittest.TestCase):
             def cached_aggregate_catalog(self):
                 return {"models": []}
 
-        client = RecordingClient(stop=True)
+        client = RecordingClient(stop=stop)
         patches = [
             mock.patch.object(broker, "_catalog_entry", catalog_entry),
             mock.patch.object(broker, "_monitor", lambda: Monitor()),
@@ -480,6 +478,14 @@ class MultipartAndDispatchCallSiteTests(unittest.TestCase):
         self.assertNotEqual(policy["node_id"], "attacker")
         self.assertEqual(calls, [(MODEL, "edit")], "the free floor is forwarded mode-aware")
         self.assertEqual(item["state"], "error")
+
+    def test_the_real_dispatch_refuses_a_null_swap_before_posting(self):
+        snap = snapshot(rows=[row(None, maximum=2, swap=None)])
+        client, item = self._run_item(
+            image_row(snap=snap), {"reference_images": [reference()]}, stop=False)
+        self.assertEqual(client.posts, [], "an unknown swap allowance must not reach the worker")
+        self.assertEqual(item["state"], "error")
+        self.assertIn("does not state a swap allowance", item["error"])
 
     def test_without_a_snapshot_a_caller_policy_never_reaches_the_worker(self):
         attacker = {"node_id": "attacker", "effective": {"allowed": True,

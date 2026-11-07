@@ -197,7 +197,8 @@ def _validated_reference_policy(snapshot, studio: dict, model: str, entry: dict 
 
     Every value comes from the producer's one snapshot. A present but invalid, unknown or
     refusing policy raises ``ValueError`` with a named reason - it never falls back to the lane
-    contract or to controller-local policy. ``false``, ``0`` and ``null`` keep their meaning.
+    contract or to controller-local policy. ``false`` and ``0`` keep their meaning; a required
+    value of ``null`` is unknown and refuses.
     """
     if not isinstance(snapshot, dict):
         raise ValueError("the producer published an invalid memory-admission snapshot (not an object)")
@@ -286,8 +287,11 @@ def _validated_reference_policy(snapshot, studio: dict, model: str, entry: dict 
     if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
         raise ValueError("the selected reference row's reference-image cap is not an integer >= 0")
     swap = effective.get("swap_allowance_gb")
-    if swap is not None and (isinstance(swap, bool) or not isinstance(swap, (int, float))
-                             or not math.isfinite(swap) or swap < 0):
+    if swap is None:
+        raise ValueError(
+            "the selected reference row does not state a swap allowance (unknown)")
+    if (isinstance(swap, bool) or not isinstance(swap, (int, float))
+            or not math.isfinite(swap) or swap < 0):
         raise ValueError(
             "the selected reference row's swap allowance is not a finite number >= 0")
     intrinsic = row.get("max_intrinsic", view.get("intrinsic_max"))
