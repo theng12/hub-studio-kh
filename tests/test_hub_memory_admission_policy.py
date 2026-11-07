@@ -324,14 +324,49 @@ class PhysicalTierTests(AdmissionPolicyCase):
 
     def test_band_matches_the_image_resolver(self) -> None:
         from components.image.app.backend import generation
-        samples = (6 * 1024 ** 3, TIER_8, TIER_16, 24 * 1024 ** 3, 32 * 1024 ** 3,
-                   34.36e9, None)
+        samples = (6 * 1024 ** 3, TIER_8, TIER_16, 24 * 1024 ** 3, 32 * 1024 ** 3, 34.36e9)
         for value in samples:
             with self.subTest(bytes=value):
                 self.assertEqual(memory_admission.physical_tier(value),
                                  generation.reference_tier(value))
         self.assertEqual(memory_admission.physical_tier(6 * 1024 ** 3), "<8")
         self.assertEqual(memory_admission.physical_tier(34.36e9), "32")
+
+    def test_an_unknown_host_total_is_not_invented_into_a_tier(self) -> None:
+        for value in (None, 0, -1, True, "16", float("nan"), float("inf")):
+            with self.subTest(total=value):
+                self.assertIsNone(memory_admission.physical_tier(value))
+        policy = memory_admission.reference_policy(MODEL, "edit", None)
+        self.assertIs(policy["available"], False)
+        self.assertIn("total memory is unknown", policy["reason"])
+        state = memory_admission.effective_state(
+            MODEL, ROW, node_id="local", mode="edit", total_memory_bytes=None)
+        self.assertIs(state["reference_policy"]["available"], False)
+        self.assertRegex(state["revision"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            state["revision"],
+            memory_admission.effective_state(
+                MODEL, ROW, node_id="local", mode="edit",
+                total_memory_bytes=None)["revision"],
+            "the unavailable mode state must have a stable token")
+        # Model-wide RAM does not need a physical tier and stays available.
+        memory_admission.set_override(
+            MODEL, min_total_memory_gb=12, min_free_memory_gb=3, catalog_entry=ROW)
+        model_wide = memory_admission.effective_state(
+            MODEL, ROW, node_id="local", total_memory_bytes=None)
+        self.assertEqual(model_wide["effective_min_total_memory_gb"], 12.0)
+        self.assertEqual(model_wide["effective_min_free_memory_gb"], 3.0)
+        self.assertRegex(model_wide["revision"], r"^[0-9a-f]{64}$")
+
+    def test_an_unknown_total_refuses_a_reference_write_without_a_file(self) -> None:
+        for value in (None, 0, -1, True, "16", float("nan"), float("inf")):
+            with self.subTest(total=value):
+                with self.assertRaises(ValueError):
+                    memory_admission.set_reference_override(
+                        MODEL, "edit", 2, {"allowed": True},
+                        total_memory_bytes=value)
+        self.assertFalse(self.settings.exists(),
+                         "an unknown-tier write must leave nothing behind")
 
     def test_a_cell_written_on_another_tier_is_ignored_as_absent(self) -> None:
         memory_admission.set_reference_override(

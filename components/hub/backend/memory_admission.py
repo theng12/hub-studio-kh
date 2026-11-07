@@ -621,7 +621,12 @@ def physical_tier(total_memory_bytes: int | None) -> str | None:
     table = _reference_limit_table()
     if table is None:
         return None
-    gib = round((total_memory_bytes or 0) / 1024 ** 3)
+    if (total_memory_bytes is None or isinstance(total_memory_bytes, bool)
+            or not isinstance(total_memory_bytes, (int, float))
+            or not math.isfinite(total_memory_bytes) or total_memory_bytes <= 0):
+        # Missing/invalid host telemetry is an unknown tier, never an invented '<8'.
+        return None
+    gib = round(total_memory_bytes / 1024 ** 3)
     bands: set[int] = set()
     for row in (table or {}).get("rows") or []:
         for tier in (row.get("tiers") or {}):
@@ -726,8 +731,8 @@ def reference_policy(model: str, mode: str, total_memory_bytes: int | None, *,
     tier = physical_tier(total_memory_bytes)
     if tier is None:
         return {"available": False,
-                "reason": ("the published reference limits table is not readable at "
-                           f"{REFERENCE_LIMITS_PATH}")}
+                "reason": ("the host total memory is unknown; the physical tier cannot be "
+                           "resolved")}
     rows = [row for row in _published_reference_rows(model) if row.get("mode") == mode]
     generic_published = next((row for row in rows if row.get("reference_count") is None), None)
     published = {
