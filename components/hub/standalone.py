@@ -22,7 +22,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote_plus, urlsplit
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -1493,52 +1493,121 @@ def _request_models(body: bytes, content_type: str) -> list[str]:
 _PEER_REFERENCE_EDIT_PATH = "api/generate/edit"
 
 
-def _peer_reference_refusal(worker: dict[str, Any], model: str, reference_count: int,
-                            supplied: object) -> dict[str, Any] | None:
-    """This Mac's own reference policy for one peer edit submit, or ``None`` to forward it.
+def _peer_reference_decision(worker: dict[str, Any], model: str, reference_count: int,
+                             supplied: object) -> tuple[dict[str, Any] | None, dict | None]:
+    """This Mac's own reference policy for one peer edit submit: (refusal, exact policy).
 
     A controller's ``reference_policy`` is not trusted: only this node's current producer
     snapshot decides whether references are allowed and how many. ``supplied`` is that caller
     field (or the broker's absent sentinel). An older producer with no annotation and no supplied
-    field keeps its existing path. A supplied field cannot be verified against a node that
-    publishes no policy, so it is refused rather than believed. An unreadable catalog is unknown,
-    never an absent annotation.
+    field keeps its existing path and returns no policy. A supplied field cannot be verified
+    against a node that publishes no policy, so it is refused rather than believed. An unreadable
+    catalog is unknown, never an absent annotation. A valid submit returns the one exact
+    ACK-shaped policy this node forwards, never the caller's bytes.
     """
     try:
         snapshot = broker._producer_reference_policy(worker, None, model)
     except Exception as exc:  # noqa: BLE001 - an unprovable policy is unknown, not absent
         return {"code": "REFERENCE_POLICY_UNKNOWN",
-                "detail": f"this node's producer reference policy is unknown: {exc}"}
+                "detail": f"this node's producer reference policy is unknown: {exc}"}, None
     if snapshot is broker._REFERENCE_POLICY_ABSENT:
         if supplied is broker._REFERENCE_POLICY_ABSENT:
-            return None
+            return None, None
         return {"code": "REFERENCE_POLICY_UNKNOWN",
-                "detail": "this node publishes no reference policy to verify the supplied one"}
+                "detail": "this node publishes no reference policy to verify the supplied one"}, None
     try:
         policy = broker._validated_reference_policy(
             snapshot, worker, model, None, "edit", reference_count)
     except ValueError as exc:
-        return {"code": "REFERENCE_POLICY_REFUSED", "detail": str(exc)}
+        return {"code": "REFERENCE_POLICY_REFUSED", "detail": str(exc)}, None
     if supplied is not broker._REFERENCE_POLICY_ABSENT and supplied != policy:
         return {"code": "REFERENCE_POLICY_MISMATCH",
                 "detail": "the supplied reference policy is not this node's current producer "
-                          "snapshot"}
-    return None
+                          "snapshot"}, None
+    return None, policy
+
+
+def _peer_reference_refusal(worker: dict[str, Any], model: str, reference_count: int,
+                            supplied: object) -> dict[str, Any] | None:
+    """The refusal half of :func:`_peer_reference_decision`, for refusal-only callers."""
+    return _peer_reference_decision(worker, model, reference_count, supplied)[0]
+
+
+def _multipart_field(body: bytes, content_type: str, name: str, value: str) -> bytes | None:
+    """Insert or replace one text form field in a raw request body, touching nothing else.
+
+    The door must hand the worker this node's exact producer policy without re-encoding the
+    caller's uploads, so every file byte and the reference count survive unchanged.
+    """
+    kind = (content_type or "").split(";", 1)[0].strip().lower()
+    encoded = value.encode()
+    if kind == "application/x-www-form-urlencoded":
+        key = quote_plus(name).encode()
+        pairs = [pair for pair in body.split(b"&") if pair and pair.split(b"=", 1)[0] != key]
+        pairs.append(key + b"=" + quote_plus(value).encode())
+        return b"&".join(pairs)
+    if kind != "multipart/form-data":
+        return None
+    boundary = ""
+    for parameter in content_type.split(";")[1:]:
+        key, _, val = parameter.strip().partition("=")
+        if key.lower() == "boundary":
+            boundary = val.strip().strip('"')
+    if not boundary:
+        return None
+    delimiter = b"--" + boundary.encode()
+    starts = []
+    at = body.find(delimiter)
+    while at != -1:
+        starts.append(at)
+        at = body.find(delimiter, at + len(delimiter))
+    if not starts:
+        return None
+    name_bytes = name.encode()
+    for index, start in enumerate(starts[:-1]):
+        headers_end = body.find(b"\r\n\r\n", start + len(delimiter), starts[index + 1])
+        if headers_end == -1:
+            continue
+        headers = body[start + len(delimiter):headers_end]
+        match = re.search(rb'name\s*=\s*"?([^";\r\n]+)"?', headers)
+        if match is None or match.group(1) != name_bytes:
+            continue
+        # shortcut: only the first matching part is replaced; FastAPI reads the first part, so a
+        # repeated field cannot outrank this node's policy - remove all parts if that changes.
+        content_start = headers_end + 4
+        next_delimiter = starts[index + 1]
+        content_end = (next_delimiter - 2
+                       if body[next_delimiter - 2:next_delimiter] == b"\r\n"
+                       else next_delimiter)
+        return body[:content_start] + encoded + body[content_end:]
+    first = starts[0] + len(delimiter)
+    part = (b'Content-Disposition: form-data; name="' + name.encode() + b'"\r\n\r\n'
+            + encoded + b"\r\n" + delimiter)
+    if body[first:first + 2] == b"\r\n":
+        insert_at = first + 2
+    else:  # an empty form is just its closing delimiter
+        insert_at = first
+        part = b"\r\n" + part
+    return body[:insert_at] + part + body[insert_at:]
 
 
 async def _peer_reference_door(worker: dict[str, Any], request: Request, path: str,
-                               content_type: str) -> dict[str, Any] | None:
-    """The reference check for a peer Image edit submit, from its existing multipart body."""
+                               content_type: str) -> tuple[dict[str, Any] | None, bytes | None]:
+    """The reference check for a peer Image edit submit, from its existing multipart body.
+
+    Returns the refusal and, when this node has a producer policy to forward, the body that
+    carries it. ``None`` keeps the caller's body byte for byte, which is the older-producer path.
+    """
     if (request.method != "POST" or str(worker.get("modality") or "") != "image"
             or path.strip("/") != _PEER_REFERENCE_EDIT_PATH):
-        return None
+        return None, None
     kind = (content_type or "").split(";", 1)[0].strip().lower()
     if kind not in {"multipart/form-data", "application/x-www-form-urlencoded"}:
-        return None
+        return None, None
     try:
         form = await request.form()
     except Exception:  # noqa: BLE001 - the worker refuses the malformed body it cannot parse
-        return None
+        return None, None
     model = str(form.get("model") or form.get("repo") or "").strip()
     count = len(form.getlist("images"))
     supplied: object = broker._REFERENCE_POLICY_ABSENT
@@ -1550,8 +1619,17 @@ async def _peer_reference_door(worker: dict[str, Any], request: Request, path: s
             supplied = None
         if not isinstance(supplied, dict):
             return {"code": "REFERENCE_POLICY_REFUSED",
-                    "detail": "reference_policy must be a JSON object"}
-    return _peer_reference_refusal(worker, model, count, supplied)
+                    "detail": "reference_policy must be a JSON object"}, None
+    refusal, policy = _peer_reference_decision(worker, model, count, supplied)
+    if refusal is not None or policy is None:
+        return refusal, None
+    forwarded = _multipart_field(await request.body(), content_type, "reference_policy",
+                                 json.dumps(policy))
+    if forwarded is None:
+        return {"code": "REFERENCE_POLICY_UNKNOWN",
+                "detail": "this node could not attach its producer reference policy to the "
+                          "forwarded body"}, None
+    return None, forwarded
 
 
 def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
@@ -4471,7 +4549,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 answer = await fleet.relay_memory_admission(wanted, "PUT", body)
             except fleet.StartupRelayError as error:
                 return JSONResponse(error.body, status_code=error.status)
-            return JSONResponse(answer)
+            pending = isinstance(answer, dict) and answer.get("outcome") == "pending"
+            return JSONResponse(answer, status_code=202 if pending else 200)
         model = str(body.get("model") or "").strip()
         mode = body.get("mode")
         entry = None
@@ -5290,9 +5369,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(503, f"{worker_id.title()} worker is unavailable")
         body = await request.body()
         content_type = request.headers.get("content-type") or ""
-        if (refusal := await _peer_reference_door(
-                worker, request, path, content_type)) is not None:
+        refusal, forwarded = await _peer_reference_door(worker, request, path, content_type)
+        if refusal is not None:
             return _peer_refusal_response(refusal)
+        if forwarded is not None:
+            body = forwarded
         policy = _peer_lease_policy(path) if request.method == "POST" else None
         machine = str(worker.get("machine") or "local")
         if request.method == "POST" and f"{modality}/{path.strip('/')}" in _PEER_UNLEASED_PATHS:

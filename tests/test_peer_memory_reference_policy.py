@@ -21,6 +21,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import httpx
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -33,7 +35,7 @@ _WORKERS.write_text(json.dumps([]))
 os.environ.setdefault("STUDIOHUB_WORKERS_FILE", str(_WORKERS))
 
 from components.hub import standalone  # noqa: E402
-from components.hub.backend import broker, memory_admission, monitor as monitor_module  # noqa: E402
+from components.hub.backend import broker, fleet_nodes, memory_admission, monitor as monitor_module  # noqa: E402
 
 MODEL = "AITRADER/FLUX2-klein-4B-mlx-4bit"
 ROW = {"repo": MODEL, "min_total_memory_gb": 8.0}
@@ -53,6 +55,17 @@ class FakeMonitor:
 
 def catalog_bytes(*rows: dict) -> bytes:
     return json.dumps({"models": list(rows)}).encode()
+
+
+def multipart_field(content: bytes, content_type: str, name: str):
+    """The JSON value of one forwarded multipart text field, or ``None`` when it is absent."""
+    boundary = content_type.split("boundary=", 1)[1].split(";", 1)[0].strip().strip('"')
+    marker = b'name="' + name.encode() + b'"'
+    for chunk in content.split(b"--" + boundary.encode())[1:]:
+        headers, _, rest = chunk.partition(b"\r\n\r\n")
+        if marker in headers:
+            return json.loads(rest)
+    return None
 
 
 class PeerCatalogAnnotationTests(unittest.TestCase):
@@ -321,11 +334,52 @@ class PeerReferenceProxyTests(unittest.TestCase):
         self.assertEqual(response.json()["code"], "REFERENCE_POLICY_UNKNOWN")
         self.assertEqual(self.fake.calls, [])
 
+    def test_an_absent_caller_policy_is_forwarded_as_the_exact_producer_policy(self) -> None:
+        memory_admission.set_reference_override(
+            MODEL, "edit", None,
+            {"allowed": True, "max_reference_images": 5, "swap_allowance_gb": 0},
+            total_memory_bytes=TIER_16)
+        snapshot = monitor_module._memory_admission_inventory(
+            MODEL, ROW, node_id="machine-a", total_memory_bytes=TIER_16)
+        self.monitor.cached_aggregate_catalog = lambda: {"models": [{
+            "repo": MODEL, "hub_studio": "image", "hub_memory_admission": snapshot}]}
+        response = self.edit(5)
+        self.assertEqual(response.status_code, 200, response.text)
+        sent = self.fake.calls[0]
+        expected = broker._validated_reference_policy(
+            snapshot, self.monitor.registry[0], MODEL, None, "edit", 5)
+        self.assertEqual(expected["effective"]["max_reference_images"], 5,
+                         "the raised Hub override must reach the forwarded policy")
+        self.assertEqual(multipart_field(sent["content"], sent["headers"]["Content-Type"],
+                                         "reference_policy"), expected)
+        self.assertIn(json.dumps(expected).encode(), sent["content"])
+        self.assertEqual(sent["content"].count(b'name="reference_policy"'), 1)
+        for index in range(5):
+            self.assertEqual(sent["content"].count(b"\x89PNG-ref-%d" % index), 1)
+
+    def test_a_supplied_valid_policy_is_replaced_by_the_exact_producer_policy(self) -> None:
+        expected = broker._validated_reference_policy(
+            self.snapshot, self.monitor.registry[0], MODEL, None, "edit", 2)
+        response = self.edit(2, json.loads(json.dumps(expected, sort_keys=True)))
+        self.assertEqual(response.status_code, 200, response.text)
+        sent = self.fake.calls[0]
+        self.assertEqual(sent["content"].count(b'name="reference_policy"'), 1,
+                         "a supplied field is replaced, never appended beside the caller's")
+        self.assertEqual(multipart_field(sent["content"], sent["headers"]["Content-Type"],
+                                         "reference_policy"), expected)
+        self.assertIn(json.dumps(expected).encode(), sent["content"])
+        self.assertIn(b"\x89PNG-ref-0", sent["content"])
+        self.assertIn(b"\x89PNG-ref-1", sent["content"])
+
     def test_an_older_absent_annotation_keeps_the_existing_forward(self) -> None:
         self.monitor.cached_aggregate_catalog = lambda: {"models": []}
         response = self.edit(2)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(len(self.fake.calls), 1)
+        sent = self.fake.calls[0]
+        self.assertNotIn(b'name="reference_policy"', sent["content"])
+        self.assertIn(b"\x89PNG-ref-0", sent["content"])
+        self.assertIn(b"\x89PNG-ref-1", sent["content"])
 
 
 class FakeWorkerResponse:
@@ -346,6 +400,42 @@ class FakeWorkerClient:
 
 async def _never_waiting(*_args, **_kwargs) -> bool:
     return False
+
+
+class FleetMemoryWriteStatusTests(unittest.TestCase):
+    """The outer fleet PUT route keeps the relay's pending outcome at 202."""
+
+    def setUp(self) -> None:
+        from components.hub.backend import peers
+        self.token = peers.fleet_token()
+        self.app = standalone.create_app(start_background=False)
+
+    def request(self, answer: dict):
+        async def run():
+            transport = httpx.ASGITransport(app=self.app, client=("100.64.0.9", 51234))
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://fixture-hub") as client:
+                return await client.request(
+                    "PUT", "/api/hub/fleet/nodes/node-a/memory/admission",
+                    headers={"X-Hub-Token": self.token},
+                    json={"model": MODEL, "expected_revision": "a" * 64})
+        import asyncio
+        with mock.patch.object(standalone.control_plane, "load_settings",
+                               lambda: {"role": "controller"}), \
+                mock.patch.object(fleet_nodes, "this_machine",
+                                  lambda: {"id": "machine-a"}), \
+                mock.patch.object(fleet_nodes, "relay_memory_admission",
+                                  mock.AsyncMock(return_value=answer)):
+            return asyncio.run(run())
+
+    def test_a_pending_relay_answer_is_202(self) -> None:
+        response = self.request({"ok": True, "outcome": "pending", "queued": True})
+        self.assertEqual(response.status_code, 202, response.text)
+        self.assertEqual(response.json()["outcome"], "pending")
+
+    def test_a_settled_relay_answer_stays_200(self) -> None:
+        response = self.request({"ok": True, "outcome": "applied"})
+        self.assertEqual(response.status_code, 200, response.text)
 
 
 class FleetMemoryWriteValidationTests(unittest.TestCase):
