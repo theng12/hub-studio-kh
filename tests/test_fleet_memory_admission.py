@@ -452,9 +452,7 @@ class RouteTests(unittest.TestCase):
         answer = self.request("PUT", "/api/hub/fleet/nodes/node-a/memory/admission",
                               headers={"X-Hub-Token": self.token},
                               json={"model": MODEL, "expected_revision": "a" * 64})
-        # The relay body says pending; the outer route (standalone.py) returns it as 200 because
-        # it passes no status. Pinned here so the gap is visible until that owner fixes it.
-        self.assertEqual(answer.status_code, 200, answer.text)
+        self.assertEqual(answer.status_code, 202, answer.text)
         self.assertEqual(answer.json()["outcome"], "pending")
         self.assertEqual(len(client.calls), 1)
 
