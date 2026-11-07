@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import gc
 import hashlib
 import io
 import json
@@ -371,6 +372,40 @@ class RenderAssetStoreTest(unittest.TestCase):
     def upload(self, owner: str, data: bytes, *, step: int = 31 * KiB) -> dict:
         return self.upload_with(self.store, owner, data, step=step)
 
+    def direct_store(self, root: Path) -> RenderAssetStore:
+        # Deliberately not self.open_store: that list keeps the store alive until tearDown.
+        return RenderAssetStore(root, max_chunk_bytes=64 * KiB, max_asset_bytes=16 * MiB,
+                                reserve_bytes=2 * MiB, free_bytes=self.free)
+
+    def test_abandoned_store_releases_its_descriptors_after_collection(self) -> None:
+        baseline = len(os.listdir("/dev/fd"))
+        store = self.direct_store(self.sandbox / "abandoned-lifetime")
+        self.assertTrue(store._held)
+        self.assertGreater(len(os.listdir("/dev/fd")), baseline)
+        del store
+        gc.collect()
+        self.assertLessEqual(len(os.listdir("/dev/fd")), baseline)
+
+    def test_explicit_close_keeps_reused_descriptors_open_after_collection(self) -> None:
+        store = self.direct_store(self.sandbox / "closed-lifetime")
+        held = set(store._held)
+        store.close()
+        probes = []
+        try:
+            for _ in range(len(held) + 8):
+                probe = os.open(os.devnull, os.O_RDONLY)
+                probes.append(probe)
+                if probe in held:
+                    break
+            self.assertTrue(set(probes) & held)
+            del store
+            gc.collect()
+            for probe in probes:
+                os.fstat(probe)
+        finally:
+            for probe in probes:
+                os.close(probe)
+
     def test_digest_status_is_scoped_read_only_and_never_creates_missing_upload(self) -> None:
         payload = b"published bytes"
         descriptor = self.upload("owner-a", payload)
@@ -477,8 +512,10 @@ class RenderAssetStoreTest(unittest.TestCase):
         self.assertEqual(stray.read_bytes(), b"unknown")
         self.store.close()
         (self.root / "unknown-file").write_bytes(b"unknown")
+        baseline = len(os.listdir("/dev/fd"))
         with self.assertRaises(RenderAssetError) as caught:
             self.open_store()
+        self.assertLessEqual(len(os.listdir("/dev/fd")), baseline)
         self.assertEqual((caught.exception.code, caught.exception.detail),
                          ("STORE_UNSAFE", "render asset store is unsafe"))
 
@@ -2209,6 +2246,7 @@ class RenderAssetStoreTest(unittest.TestCase):
                         restarted.upload_status("owner", begun["upload_id"])["state"],
                         "recovery_required",
                     )
+                    restarted.close()
                     self.assertEqual(evidence.read_bytes(), data)
 
     def test_verified_assembly_and_missing_lookup_persist_known_recovery(self) -> None:

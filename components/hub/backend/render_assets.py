@@ -10,6 +10,7 @@ import stat
 import threading
 import time
 import uuid
+import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -363,6 +364,15 @@ def _identity(info: os.stat_result) -> tuple[int, int]:
     return info.st_dev, info.st_ino
 
 
+def _close_descriptors(descriptors: list[int]) -> None:
+    # Pop before close so an explicit close, a failed constructor and a late finalizer cannot close a reused fd.
+    while descriptors:
+        try:
+            os.close(descriptors.pop())
+        except OSError:
+            pass
+
+
 @contextmanager
 def _scan_entries(descriptor: int) -> Iterator[Iterator[os.DirEntry]]:
     # Filter before validation, emptiness checks, recovery and retirement accounting.
@@ -473,6 +483,8 @@ class RenderAssetStore:
         self._open_readers: set[_ReaderLease] = set()
         self._closed = False
         self._held: list[int] = []
+        # The callback holds the list, never self, so an abandoned store releases its fds without keeping the store alive.
+        self._finalizer = weakref.finalize(self, _close_descriptors, self._held)
         self._initializing = True
         try:
             self._parent_fd = self._hold(self._ensure_directory_chain(self._parent_path))
