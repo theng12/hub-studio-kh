@@ -70,12 +70,26 @@ class Stub:
         return mock.Mock(status_code=200)
 
 
-def dispatch(row, refs, *, modality="image", ref_mode=None, modes=("img2img", "edit")):
+class AggregateMonitor:
+    """A readable aggregate catalog; a matching row without the annotation is an older producer."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def cached_aggregate_catalog(self):
+        return {"models": self.rows}
+
+
+def dispatch(row, refs, *, modality="image", ref_mode=None, modes=("img2img", "edit"),
+             aggregate=None):
     client = Stub()
     studio = {"id": "image@local", "machine": "local", "modality": modality}
     batch = {"id": "b", "modality": modality, "model": MODEL}
-    with mock.patch.object(broker, "studio_request",
-                           lambda _studio, path: ("http://worker" + path, {"h": "1"})):
+    rows = ([{"hub_studio": studio["id"], "repo": MODEL}]
+            if aggregate is None else aggregate)
+    with mock.patch.object(broker, "_monitor", lambda: AggregateMonitor(rows)), \
+            mock.patch.object(broker, "studio_request",
+                              lambda _studio, path: ("http://worker" + path, {"h": "1"})):
         return asyncio.run(broker._reference_dispatch(
             client, studio, batch, row, refs, ref_mode, modes))
 
@@ -101,6 +115,22 @@ class ImageReferenceDispatchTests(unittest.TestCase):
     def test_an_edit_worker_that_publishes_no_count_window_is_refused(self):
         with self.assertRaisesRegex(ValueError, "publishes no reference count window"):
             dispatch(image_row(references=False), [reference(b"a")])
+
+    def test_an_unreadable_aggregate_catalog_is_refused_not_read_as_absent(self):
+        class Unreadable:
+            def cached_aggregate_catalog(self):
+                raise OSError("aggregate cache is unreadable")
+
+        client = Stub()
+        studio = {"id": "image@local", "machine": "local", "modality": "image"}
+        batch = {"id": "b", "modality": "image", "model": MODEL}
+        with mock.patch.object(broker, "_monitor", lambda: Unreadable()):
+            with self.assertRaisesRegex(ValueError,
+                                        "memory-admission snapshot is unreadable"):
+                asyncio.run(broker._reference_dispatch(
+                    client, studio, batch, image_row(), [reference(b"a")], None,
+                    ("img2img", "edit")))
+        self.assertEqual(client.posts, [])
 
     def test_a_worker_without_the_capability_is_refused_before_any_post(self):
         client = Stub()
