@@ -285,10 +285,6 @@ class UnknownHostMemoryTests(InventoryCase):
         for mode in memory_admission.MODES:
             core = memory_admission.effective_state(
                 MODEL, row, node_id=LOCAL_NODE, mode=mode, total_memory_bytes=None)
-            if core["reference_policy"]["available"] is not False:
-                self.skipTest(
-                    "core still bands unknown bytes as '<8'; the unknown-RAM assertion "
-                    "activates with core a8ea40138e01ba931 (unavailable:false)")
             self.assertEqual(inventory["ram"]["modes"][mode], core,
                              "unknown bytes must keep the authoritative core token")
             reference = inventory["reference"][mode]
