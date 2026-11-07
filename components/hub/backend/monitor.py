@@ -294,6 +294,61 @@ def transcription_studios(registry: list[dict], status: dict | None = None) -> l
             if reports_transcription(studio, _health_for(status, studio.get("id")))]
 
 
+def _local_node_id() -> str:
+    """This Mac's fleet key: the ``node_id`` a GET on this Hub answers with."""
+    from . import fleet_nodes
+    return str(fleet_nodes.this_machine()["id"]).lower()
+
+
+def _local_total_memory_bytes() -> int | None:
+    """This Mac's physical memory in bytes, or ``None`` when the host cannot be read.
+
+    The reference tier is derived from this number by the same arithmetic the Image worker's
+    ``reference_tier`` uses. It is deliberately this Mac's own telemetry: a controller never
+    applies its own RAM to another node's rows.
+    """
+    try:
+        import psutil
+        return int(psutil.virtual_memory().total)
+    except Exception:
+        return None
+
+
+def _memory_admission_inventory(model: str, entry: dict, *, node_id: str,
+                                total_memory_bytes: int | None) -> dict:
+    """The frozen r5 inventory for one local row.
+
+    The top-level token is the model-wide ``(node_id, model)`` scope. Each ``ram.modes[mode]``
+    view and the matching ``reference[mode]`` view are the same ``effective_state`` a GET with
+    that mode answers with, so their token and ``revision_covers`` are bit-for-bit identical.
+    One mode token is shared by its RAM view and every count row; no token is inferred or
+    copied across scopes.
+    """
+    from . import memory_admission
+    with memory_admission._LOCK:
+        model_wide = memory_admission.effective_state(model, entry, node_id=node_id)
+        modes: dict[str, dict] = {}
+        reference: dict[str, dict] = {}
+        for mode in memory_admission.MODES:
+            view = memory_admission.effective_state(
+                model, entry, node_id=node_id, mode=mode,
+                total_memory_bytes=total_memory_bytes)
+            modes[mode] = view
+            reference[mode] = dict(
+                view["reference_policy"],
+                revision=view["revision"],
+                revision_covers=view["revision_covers"],
+            )
+    return {
+        "revision": model_wide["revision"],
+        "revision_covers": model_wide["revision_covers"],
+        "node_id": node_id,
+        "model": model,
+        "ram": {"model_wide": model_wide, "modes": modes},
+        "reference": reference,
+    }
+
+
 class StudioMonitor:
     def __init__(self, *, catalog_state_path: Path | None = None):
         self.registry: list[dict] = load_registry()
@@ -1038,6 +1093,12 @@ class StudioMonitor:
         path before reaching this point.
         """
         models, per_studio = [], {}
+        # One identity per assembly: every local studio's row describes this same Mac.
+        local_identity = None
+        if any(studio.get("machine", "local") == "local" for studio in self.registry):
+            local_bytes = _local_total_memory_bytes()
+            if local_bytes is not None:
+                local_identity = (_local_node_id(), local_bytes)
         for studio, catalog in zip(self.registry, results):
             sid = studio["id"]
             if catalog is None:
@@ -1068,6 +1129,13 @@ class StudioMonitor:
                 from . import hardware_profiles
                 profile = hardware_profiles.machine_hardware_profile(studio.get("machine", "local"))
                 total_gb = (profile or {}).get("memory_gb")
+            # The r5 inventory describes the policy in force on the node that publishes the row.
+            # Only this Hub's own rows are annotated: a remote row is the remote producer's
+            # answer, and applying this controller's settings or RAM to it would fabricate a
+            # policy that node never stated. A remote row that already carries the annotation
+            # keeps it, because `dict(m)` preserves the producer's bytes.
+            inventory_identity = (
+                local_identity if studio.get("machine", "local") == "local" else None)
             for m in entries:
                 # The tier and verdict published are the floor dispatch enforces, not the worker's
                 # own literal (VoxCPM2 4-bit read 16 GB here while the Hub ran it on 8 GB).
@@ -1086,6 +1154,15 @@ class StudioMonitor:
                 if free_policy is not None:
                     annotated["hub_free_memory_gb"] = free_policy["effective_min_free_memory_gb"]
                     annotated["hub_free_memory_source"] = free_policy["min_free_source"]
+                if inventory_identity is not None and memory_admission.applies_to(
+                        studio.get("modality")):
+                    # Resolved fresh on every read from the live override file under the core
+                    # lock, so a write is visible on the next catalog read with no cached copy.
+                    annotated["hub_memory_admission"] = _memory_admission_inventory(
+                        str(m.get("repo") or m.get("model_id") or ""), annotated,
+                        node_id=inventory_identity[0],
+                        total_memory_bytes=inventory_identity[1],
+                    )
                 # Do not federate obsolete hosted-lane metadata. Render's raw
                 # dispatch hint remains in its direct worker catalog, where the
                 # broker reads it, but the Hub's public aggregate is local-only.
