@@ -2,6 +2,24 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.226 — 2026-11-08
+
+- Edit reference-image limits now come from the Mac that owns the model. The same mode- and count-scoped memory policy is enforced when the Hub accepts the job, when a peer Mac receives it, and in the Image worker, so a controller cannot raise or invent another Mac's limits.
+- Fleet memory answers stay honest. A Mac whose RAM total cannot be read reports unknown instead of a made-up lowest tier, and a relayed memory-admission write that is still queued reports pending instead of success.
+- Forwarded multipart uploads stay intact and the peer form is always closed, so reference images are not folded into the policy value and a spooled upload cannot leak.
+- Render asset stores release their file descriptors even when a store is abandoned, so a long run no longer exhausts the descriptor table.
+- Cue-overlay v5 ships only as a candidate: its descriptor, media validator and executor path are packaged with `production_eligible=false`. This is not cue production support, and there is no real paired MP4 proof or measured hardware/Developer Mode qualification.
+
+### Technical notes
+
+- Candidate only: full release gate passed at `e1c5430` R3 with all five stages exit 0, but packaging, local installation, updater feed publication and fleet rollout are NOT DONE. Release target 0.6.226 is subject to Developer release go; do not claim shipped.
+- Gate evidence `_orchestra/hub-lead/fleet-batch-20261107/full-gate-e1c5430-r3-20261108/lead-verified-pass.json`: source `e1c5430126e8f0f222d4aa7b8026d4951255e297`, source clean; image-smoke 0, native 0, unittest 0 (3998 run, 32 skipped, 0 failures, 0 errors), regressions 0 (462 passed), voice 0 (1021 passed, 28 skipped).
+- Producer reference policy (`08fce7b`, `0c3171c`, `b8855a1`, `8480a31`, `86f22b3`, `98d53e7`, `7aafead`, `cc1dd9b`, `9c777bd`, `7afee4b`, `c515c42`, `f6d0050`): mode-scoped RAM records and per-count reference overrides resolve against the published table and the physical tier; one validated ACK-shaped producer snapshot is carried through submit admission, the peer catalog proxy, the peer door and the Image worker; unknown, unreadable, borrowed, off or mismatching policies are refused by name, and the engine intrinsic cap only lowers the ceiling.
+- Unknown memory and pending relay (`489a7c8`, `a8ea83d`, `9ce0164`, `4d41f7c`, `c5f367d`): an unreadable host total is an unknown physical tier with a named unavailable reference view rather than a fabricated `<8` tier; a held memory-admission relay returns 202 with `outcome: pending`, no readback and no replay.
+- Closed forwarding (`a46d3cb`): the inserted reference policy ends with CRLF and the parsed peer `FormData` is closed in a `finally`, so every matching policy part is replaced and the remaining multipart body stays parseable.
+- Abandoned render stores (`e1c5430`): `weakref.finalize` on the held-descriptor list releases the nine directory descriptors; explicit close, constructor failure and late finalizer stay idempotent and cannot close a reused fd. The abandoned-store fd test fails pre-fix (22 vs 13 fds) and passes post-fix; all 81 `RenderAssetStoreTest` cases pass.
+- Cue-overlay v5 candidate (`3f13bb8`, `0df12ff`, `ec5cfd6`, `5ff5537`, `9bedfd9`, `e009c03`, `1226d84`): frozen v4 subtitle source bytes are preserved under `render_subtitle_v4`; the v5 PROFILE has `production_eligible=false` with null fidelity and hardware qualification records; the receiver validator derives 16 media facts and refuses false alpha, VFR jitter, extra streams and bounds violations; the executor admits `cue_overlay` VP9-alpha WebM under the same closed argv checks. Candidate packaging/runtime only: no cue production support, no real paired MP4 proof, and no measured hardware or Developer Mode qualification.
+
 ## 0.6.225 — 2026-11-07
 
 - App updates run safe update checks so upgrading from 0.6.224 uses a full image first via the paired Gateway.
