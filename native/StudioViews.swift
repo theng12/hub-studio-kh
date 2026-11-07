@@ -3157,24 +3157,6 @@ struct StudioContent: View {
         }
     }
 
-    /// The seven owner-accepted YuE2 vocal languages: English default, Mandarin, Cantonese, Japanese,
-    /// Korean, Spanish, and Russian.
-    struct YuE2LanguageOption: Hashable, Identifiable {
-        let code: String
-        let label: String
-        var id: String { code }
-    }
-
-    static let yue2Languages: [YuE2LanguageOption] = [
-        .init(code: "en", label: "English"),
-        .init(code: "zh", label: "Mandarin"),
-        .init(code: "yue", label: "Cantonese"),
-        .init(code: "ja", label: "Japanese"),
-        .init(code: "ko", label: "Korean"),
-        .init(code: "es", label: "Spanish"),
-        .init(code: "ru", label: "Russian")
-    ]
-
     /// The Music controls the Hub publishes for this model, and nothing else.
     ///
     /// Each control appears only when this model's own entry names a default or a bound for it:
@@ -3267,15 +3249,20 @@ struct StudioContent: View {
                             .lineLimit(3...6).textFieldStyle(.roundedBorder)
                     }
                     LabeledRow(label: "Vocal language") {
-                        if selectedMusicModel?.family == "yue2" {
+                        if let supportedOptions = selectedMusicModel?.laneParameter("vocal_language")?.options,
+                           !supportedOptions.isEmpty {
+                            let defaultLanguage = configuration.defaults.vocalLanguage ?? "en"
+                            let current = workspace.musicSettings?.vocalLanguage ?? defaultLanguage
+                            let effective = current.isEmpty ? defaultLanguage : current
+                            let options = supportedOptions.contains(effective) ? supportedOptions : supportedOptions + [effective]
                             Picker("Vocal language", selection: Binding(
                                 get: {
-                                    let current = workspace.musicSettings?.vocalLanguage ?? configuration.defaults.vocalLanguage ?? "en"
-                                    return current.isEmpty ? "en" : current
+                                    let val = workspace.musicSettings?.vocalLanguage ?? defaultLanguage
+                                    return val.isEmpty ? defaultLanguage : val
                                 },
                                 set: { workspace.musicSettings?.vocalLanguage = $0 })) {
-                                ForEach(Self.yue2Languages) { item in
-                                    Text(item.label).tag(item.code)
+                                ForEach(options, id: \.self) { code in
+                                    Text(Locale.current.localizedString(forLanguageCode: code) ?? code).tag(code)
                                 }
                             }
                             .labelsHidden()

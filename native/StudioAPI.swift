@@ -12152,7 +12152,7 @@ private struct CatalogModel: Decodable {
             shift: published.shift ?? limits.minShift,
             seed: published.seed ?? limits.minSeed,
             instrumental: published.instrumental, lyrics: published.lyrics,
-            vocalLanguage: published.vocalLanguage ?? (family == "yue2" ? "en" : nil)))
+            vocalLanguage: published.vocalLanguage))
         return NativeMusicConfiguration(defaults: defaults, limits: limits)
     }
 }

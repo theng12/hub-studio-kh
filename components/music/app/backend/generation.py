@@ -472,17 +472,12 @@ def lane_parameters(model: catalog.ModelEntry) -> list[dict]:
     ]
     for extra in _CONTRACT_EXTRAS.get(model.runtime, ()):
         entry = dict(extra)
-        if entry.get("required"):
+        if entry.get("required") or entry.get("request_only"):
             # **A required parameter is per-request content, so it has no default.** YuE2's lyrics
             # are the case: the engine sings, an empty sheet is refused by name, and publishing a
             # default for it would offer the operator a value the lane never accepts as a choice.
             # The video lane already states this rule for its own `prompt`.
             entry.pop("default", None)
-        elif entry.get("request_only"):
-            # Per-request content that declares an explicit contract default (e.g. vocal_language "en")
-            # preserves it without reading stored model_defaults.json.
-            if "default" not in entry and extra["name"] in model.defaults:
-                entry["default"] = _default(model, extra["name"])
         else:
             entry["default"] = _default(model, extra["name"])
         parameters.append(entry)

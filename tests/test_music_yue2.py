@@ -341,7 +341,7 @@ class ValidatorTests(unittest.TestCase):
         language = {p["name"]: p for p in generation.lane_parameters(self.model)}["vocal_language"]
         self.assertTrue(language["request_only"])
         self.assertEqual(language["enum"], ["en", "zh", "yue", "ja", "ko", "es", "ru"])
-        self.assertEqual(language["default"], "en")
+        self.assertNotIn("default", language)
 
     def test_an_empty_lyric_sheet_is_refused_by_name(self):
         with self.assertRaises(ValueError) as caught:
