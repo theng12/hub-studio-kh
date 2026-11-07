@@ -77,16 +77,29 @@ def _safe_fd(asset: Any) -> tuple[int, bool]:
     """Obtain a safe file descriptor from a stream, reader, int, or vetted path.
 
     Returns (fd, needs_close). Refuses unverified string shapes, URLs, or symlink paths.
+    Enforces that opened assets are regular files.
     """
     if hasattr(asset, "fileno") and callable(asset.fileno):
         fd = int(asset.fileno())
         if fd < 0:
             raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, "negative asset descriptor")
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, f"asset descriptor {fd} is not a regular file")
+        except OSError as exc:
+            raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, f"cannot stat asset descriptor {fd}: {exc}") from exc
         return fd, False
 
     if isinstance(asset, int):
         if asset < 0:
             raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, "negative asset descriptor")
+        try:
+            st = os.fstat(asset)
+            if not stat.S_ISREG(st.st_mode):
+                raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, f"asset descriptor {asset} is not a regular file")
+        except OSError as exc:
+            raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, f"cannot stat asset descriptor {asset}: {exc}") from exc
         return asset, False
 
     if isinstance(asset, (str, Path)):
@@ -98,13 +111,27 @@ def _safe_fd(asset: Any) -> tuple[int, bool]:
         if raw_str.startswith("/dev/fd/"):
             try:
                 fd_num = int(raw_str[len("/dev/fd/"):])
+                if fd_num < 0:
+                    raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, "negative asset descriptor")
+                try:
+                    st = os.fstat(fd_num)
+                    if not stat.S_ISREG(st.st_mode):
+                        raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, f"asset descriptor {fd_num} is not a regular file")
+                except OSError as exc:
+                    raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, f"cannot stat asset descriptor {fd_num}: {exc}") from exc
                 return fd_num, False
             except ValueError:
                 raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, "malformed /dev/fd path")
 
-        path = Path(asset).resolve()
+        path = Path(asset)
+        if path.is_symlink():
+            raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, "symlink asset paths are forbidden")
         try:
             fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                os.close(fd)
+                raise CueOverlayMediaValidationError(REFUSAL_MEDIA_UNSUPPORTED, f"asset {path} is not a regular file")
         except (OSError, FileNotFoundError) as exc:
             raise CueOverlayMediaValidationError(
                 REFUSAL_MEDIA_UNSUPPORTED, f"cannot open asset path securely: {exc}") from exc
@@ -121,7 +148,7 @@ def _measure_stream(fd: int) -> tuple[int, str]:
         raise CueOverlayMediaValidationError(
             REFUSAL_MEDIA_UNSUPPORTED, f"cannot stat asset descriptor {fd}: {exc}") from exc
 
-    if not stat.S_ISREG(st.st_mode) and not stat.S_ISFIFO(st.st_mode):
+    if not stat.S_ISREG(st.st_mode):
         raise CueOverlayMediaValidationError(
             REFUSAL_MEDIA_UNSUPPORTED, f"asset descriptor {fd} is not a regular file")
 
@@ -185,6 +212,15 @@ def probe_cue_overlay_media(
         raise CueOverlayMediaValidationError(
             REFUSAL_MEDIA_UNSUPPORTED, f"ffprobe execution failed: {exc}") from exc
     finally:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+        except OSError:
+            pass
+        if hasattr(asset, "seek") and callable(asset.seek):
+            try:
+                asset.seek(0)
+            except Exception:
+                pass
         if needs_close:
             try:
                 os.close(fd)
@@ -418,11 +454,21 @@ def validate_cue_overlay_media(
     """
     fd, needs_close = _safe_fd(asset)
     try:
+        max_asset_bytes = execution_bounds.get("max_asset_bytes")
         if manifest_entry is not None:
             expected_size = manifest_entry.get("size_bytes")
+            if isinstance(max_asset_bytes, int) and expected_size is not None and expected_size > max_asset_bytes:
+                raise CueOverlayMediaValidationError(
+                    REFUSAL_BOUNDS,
+                    f"manifest size {expected_size} exceeds max_asset_bytes {max_asset_bytes}",
+                )
             expected_sha = manifest_entry.get("sha256")
             actual_size, actual_sha = _measure_stream(fd)
-
+            if isinstance(max_asset_bytes, int) and actual_size > max_asset_bytes:
+                raise CueOverlayMediaValidationError(
+                    REFUSAL_BOUNDS,
+                    f"staged size {actual_size} exceeds max_asset_bytes {max_asset_bytes}",
+                )
             if expected_size is not None and actual_size != expected_size:
                 raise CueOverlayMediaValidationError(
                     REFUSAL_MEDIA_INTEGRITY,
@@ -435,7 +481,13 @@ def validate_cue_overlay_media(
                 )
             manifest_size = actual_size
         else:
-            manifest_size = 0
+            actual_size, _ = _measure_stream(fd)
+            if isinstance(max_asset_bytes, int) and actual_size > max_asset_bytes:
+                raise CueOverlayMediaValidationError(
+                    REFUSAL_BOUNDS,
+                    f"staged size {actual_size} exceeds max_asset_bytes {max_asset_bytes}",
+                )
+            manifest_size = actual_size
 
         working_fps = recipe_canvas.get("working_fps")
         probe = probe_cue_overlay_media(
@@ -455,6 +507,15 @@ def validate_cue_overlay_media(
 
         return probe
     finally:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+        except OSError:
+            pass
+        if hasattr(asset, "seek") and callable(asset.seek):
+            try:
+                asset.seek(0)
+            except Exception:
+                pass
         if needs_close:
             try:
                 os.close(fd)

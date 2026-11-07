@@ -48,7 +48,9 @@ LATE_LABEL_CONTRACT = "studio.render.late-label.v3"
 LATE_LABEL_CAPABILITIES_FORMAT = "studio.render.hub-late-label-capabilities.v1"
 SUBTITLE_CONTRACT = "studio.render.subtitle.v1"
 SUBTITLE_CAPABILITIES_FORMAT = "studio.render.hub-subtitle-capabilities.v1"
-_SCOPED_CONTRACTS = (LATE_LABEL_CONTRACT, SUBTITLE_CONTRACT)
+CUE_OVERLAY_CONTRACT = "studio.render.cue-overlay.v1"
+CUE_OVERLAY_CAPABILITIES_FORMAT = "studio.render.hub-cue-overlay-capabilities.v1"
+_SCOPED_CONTRACTS = (LATE_LABEL_CONTRACT, SUBTITLE_CONTRACT, CUE_OVERLAY_CONTRACT)
 
 
 def _requested_contract(request: Request) -> str | None:
@@ -784,10 +786,16 @@ def register_routes(
             envelope = SUBTITLE_CAPABILITIES_FORMAT
             method = "subtitle_capability"
             absence = "this Mac cannot offer v4 subtitle rendering"
-        else:
+        elif contract == CUE_OVERLAY_CONTRACT:
+            envelope = CUE_OVERLAY_CAPABILITIES_FORMAT
+            method = "cue_overlay_capability"
+            absence = "this Mac cannot offer cue-overlay v5 rendering"
+        elif contract == LATE_LABEL_CONTRACT:
             envelope = LATE_LABEL_CAPABILITIES_FORMAT
             method = "late_label_capability"
             absence = "this Mac cannot offer late-label v3 rendering"
+        else:
+            raise HTTPException(400, "requested_contract is unsupported")
         worker: dict[str, Any] | None = None
         reason: str | None = "this Hub has no final render executor"
         getter = (

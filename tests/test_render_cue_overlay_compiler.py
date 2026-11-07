@@ -10,6 +10,12 @@ import sys
 import tempfile
 import unittest
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "tests") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+
 from components.audio_encode import find_tool
 from components.hub.backend.render_executor import InstalledRenderAuthorityLoader
 from components.hub.backend.render_subtitle_v4.final_render_compiler import (
@@ -232,9 +238,9 @@ class CueOverlayCompilerTests(unittest.TestCase):
             self.assertEqual(descriptor[key], hashlib.sha256(frozen.read_bytes()).hexdigest())
 
     def test_frozen_v4_loader_and_compiler_dispatch(self):
-        from test_render_subtitle_scoped import ScopedCase
-        from test_render_subtitle_executor import make_png, FONT, ASS
-        from test_render_subtitle_v1 import build_packet, raw as sub_raw, LIMITS as SUB_LIMITS
+        from tests.test_render_subtitle_scoped import ScopedCase
+        from tests.test_render_subtitle_executor import make_png, FONT, ASS
+        from tests.test_render_subtitle_v1 import build_packet, raw as sub_raw, LIMITS as SUB_LIMITS
         case = ScopedCase()
         case.setUp()
         try:

@@ -7,9 +7,16 @@ import copy
 import hashlib
 from dataclasses import replace
 from pathlib import Path
+import sys
 import unittest
 from unittest import mock
 import zlib
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(ROOT / "tests") not in sys.path:
+    sys.path.insert(0, str(ROOT / "tests"))
 
 import test_render_executor as fixtures
 from test_render_executor import FakeAssets, FakeBroker, FakeProcess, FakeRuntime

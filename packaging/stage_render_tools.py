@@ -625,14 +625,17 @@ def _stage_render_authority_into(
     mode: RenderAuthorityMode,
     pins: Sequence[_AuthorityPin],
     *, late_labels: bool = False, subtitles: bool = False,
+    cue_overlays: bool = False,
 ) -> RenderAuthorityStageResult:
     """Stage one closed authority state beside the unchanged two-tool manifest."""
     if late_labels and mode != "descriptor-only":
         raise ValueError("late-label authority stages descriptors only")
     if subtitles and mode != "descriptor-only":
         raise ValueError("subtitle authority stages descriptors only")
-    if late_labels and subtitles:
-        raise ValueError("stage late-label and subtitle authority separately")
+    if cue_overlays and mode != "descriptor-only":
+        raise ValueError("cue-overlay authority stages descriptors only")
+    if sum((bool(late_labels), bool(subtitles), bool(cue_overlays))) > 1:
+        raise ValueError("stage late-label, subtitle and cue-overlay authority separately")
     fixed = _validate_authority_pins(mode, pins)
     if mode == "tool-only":
         return RenderAuthorityStageResult(staged_paths=())
@@ -656,7 +659,7 @@ def _stage_render_authority_into(
         if os.fstat(tools_fd).st_dev != os.fstat(scratch_root_fd).st_dev:
             raise ValueError("authority scratch and destination must be on the same filesystem")
         scratch_leaf = AUTHORITY_SCRATCH_LEAF + (
-            "-late-label" if late_labels else "-subtitle" if subtitles else "")
+            "-late-label" if late_labels else "-subtitle" if subtitles else "-cue-overlay" if cue_overlays else "")
         scratch_fd = _mkdir_open(scratch_root_fd, scratch_leaf)
         if mode == "sealed-candidate":
             scratch_vector_fd = _mkdir_open(scratch_fd, "qualification-vectors")
@@ -699,6 +702,19 @@ def _stage_render_authority_into(
             parent_tools_fd = tools_fd
             tools_fd = _mkdir_open(parent_tools_fd, "subtitle")
             tools_root /= "subtitle"
+        elif cue_overlays:
+            profile_document = json.loads(raw["PROFILE.json"])
+            compiler_document = json.loads(raw["COMPILER.json"])
+            if (profile_document["format"] != "studio.render.profile.v5"
+                    or profile_document["implementation"] != "story-classic-cue-overlay-v1"
+                    or profile_document["combination_set"]
+                    != "retained-classic-cue-overlay-candidate-v1"
+                    or compiler_document["format"] != "studio.render.compiler.v1"
+                    or compiler_document["implementation"] != "hub-final-render-cue-overlay-v1"):
+                raise ValueError("cue-overlay staging requires the exact v5 descriptor pair")
+            parent_tools_fd = tools_fd
+            tools_fd = _mkdir_open(parent_tools_fd, "cue-overlay")
+            tools_root /= "cue-overlay"
         for pin in fixed[:3]:
             os.link(
                 pin.relative_path, pin.relative_path,
