@@ -550,6 +550,15 @@ def _fleet_memory_admission_write(*, body: dict, entry: dict | None, node: str,
     total = body.get("min_total_memory_gb")
     ram_reset = ram_write = False
     if has_free or has_total:
+        # A present numeric value is validated before the pair/reset shape is classified, so an
+        # invalid number is named as one instead of reading as a missing or mixed pair.
+        for field, present, value in (("min_free_memory_gb", has_free, free),
+                                      ("min_total_memory_gb", has_total, total)):
+            if present and value is not None and (
+                    isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                return fail("BAD_VALUE", field,
+                            f"{field} must be a finite number >= 0")
         if has_free and free is None:
             if total is None:
                 ram_reset = True
@@ -562,13 +571,6 @@ def _fleet_memory_admission_write(*, body: dict, entry: dict | None, node: str,
                         "min_total_memory_gb")
         else:
             ram_write = True
-        if ram_write:
-            for field, value in (("min_free_memory_gb", free),
-                                 ("min_total_memory_gb", total)):
-                if (isinstance(value, bool) or not isinstance(value, (int, float))
-                        or not math.isfinite(value) or value < 0):
-                    return fail("BAD_VALUE", field,
-                                f"{field} must be a finite number >= 0")
 
     reference_present = "reference" in body
     count_present = "reference_count" in body
@@ -1486,6 +1488,70 @@ def _request_models(body: bytes, content_type: str) -> list[str]:
     except (ValueError, AttributeError):
         return []
     return [str(m).strip() for m in named if str(m).strip()] if isinstance(named, list) else []
+
+
+_PEER_REFERENCE_EDIT_PATH = "api/generate/edit"
+
+
+def _peer_reference_refusal(worker: dict[str, Any], model: str, reference_count: int,
+                            supplied: object) -> dict[str, Any] | None:
+    """This Mac's own reference policy for one peer edit submit, or ``None`` to forward it.
+
+    A controller's ``reference_policy`` is not trusted: only this node's current producer
+    snapshot decides whether references are allowed and how many. ``supplied`` is that caller
+    field (or the broker's absent sentinel). An older producer with no annotation and no supplied
+    field keeps its existing path. A supplied field cannot be verified against a node that
+    publishes no policy, so it is refused rather than believed. An unreadable catalog is unknown,
+    never an absent annotation.
+    """
+    try:
+        snapshot = broker._producer_reference_policy(worker, None, model)
+    except Exception as exc:  # noqa: BLE001 - an unprovable policy is unknown, not absent
+        return {"code": "REFERENCE_POLICY_UNKNOWN",
+                "detail": f"this node's producer reference policy is unknown: {exc}"}
+    if snapshot is broker._REFERENCE_POLICY_ABSENT:
+        if supplied is broker._REFERENCE_POLICY_ABSENT:
+            return None
+        return {"code": "REFERENCE_POLICY_UNKNOWN",
+                "detail": "this node publishes no reference policy to verify the supplied one"}
+    try:
+        policy = broker._validated_reference_policy(
+            snapshot, worker, model, None, "edit", reference_count)
+    except ValueError as exc:
+        return {"code": "REFERENCE_POLICY_REFUSED", "detail": str(exc)}
+    if supplied is not broker._REFERENCE_POLICY_ABSENT and supplied != policy:
+        return {"code": "REFERENCE_POLICY_MISMATCH",
+                "detail": "the supplied reference policy is not this node's current producer "
+                          "snapshot"}
+    return None
+
+
+async def _peer_reference_door(worker: dict[str, Any], request: Request, path: str,
+                               content_type: str) -> dict[str, Any] | None:
+    """The reference check for a peer Image edit submit, from its existing multipart body."""
+    if (request.method != "POST" or str(worker.get("modality") or "") != "image"
+            or path.strip("/") != _PEER_REFERENCE_EDIT_PATH):
+        return None
+    kind = (content_type or "").split(";", 1)[0].strip().lower()
+    if kind not in {"multipart/form-data", "application/x-www-form-urlencoded"}:
+        return None
+    try:
+        form = await request.form()
+    except Exception:  # noqa: BLE001 - the worker refuses the malformed body it cannot parse
+        return None
+    model = str(form.get("model") or form.get("repo") or "").strip()
+    count = len(form.getlist("images"))
+    supplied: object = broker._REFERENCE_POLICY_ABSENT
+    if "reference_policy" in form:
+        raw = form.get("reference_policy")
+        try:
+            supplied = json.loads(raw) if isinstance(raw, str) else None
+        except ValueError:
+            supplied = None
+        if not isinstance(supplied, dict):
+            return {"code": "REFERENCE_POLICY_REFUSED",
+                    "detail": "reference_policy must be a JSON object"}
+    return _peer_reference_refusal(worker, model, count, supplied)
 
 
 def _peer_admission_refusal(worker: dict[str, Any], monitor: StudioMonitor,
@@ -5224,6 +5290,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             raise HTTPException(503, f"{worker_id.title()} worker is unavailable")
         body = await request.body()
         content_type = request.headers.get("content-type") or ""
+        if (refusal := await _peer_reference_door(
+                worker, request, path, content_type)) is not None:
+            return _peer_refusal_response(refusal)
         policy = _peer_lease_policy(path) if request.method == "POST" else None
         machine = str(worker.get("machine") or "local")
         if request.method == "POST" and f"{modality}/{path.strip('/')}" in _PEER_UNLEASED_PATHS:
