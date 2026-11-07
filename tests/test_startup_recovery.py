@@ -144,13 +144,20 @@ from types import SimpleNamespace
 
 from components.hub.backend import broker, ledger, registry
 
+# 1. Populate unrelated sentinel settings before pausing node-a
+initial_flags = {
+    "node-a": {"enabled": True, "sentinel_marker": "sentinel-node-a-data"},
+    "node-b": {"enabled": True, "priority_order": ["chat"], "sentinel_custom": "sentinel-node-b-data"},
+}
+registry.FLAGS_FILE.write_text(json.dumps(initial_flags, indent=2) + "\n")
+registry._flags_cache = None
+
 workers = [{"id": "voice", "modality": "voice", "machine": "node-a",
             "host": "127.0.0.1", "port": 51001, "local": True}]
 monitor = SimpleNamespace(registry=workers, status={"voice": {"status": "up"}})
 broker.configure_monitor(monitor)
 broker.batches.clear()
 broker._busy.clear()
-registry._flags_cache = None
 registry.set_machine_enabled("node-a", False)
 assert json.loads(registry.FLAGS_FILE.read_text())["node-a"]["enabled"] is False
 
@@ -161,15 +168,40 @@ batch = {
                 "retry_at": None, "recovery": None}],
 }
 ledger.save_batch(batch)
+
+# Foreign fixture batch with distinct machine and studio identities
+foreign_batch = {
+    "id": "foreign-proof", "created_at": time.time(), "modality": "voice",
+    "items": [{"index": 0, "state": "running", "studio": "foreign-voice",
+                "machine": "foreign-node", "studio_job_id": "foreign-voice-99",
+                "retry_at": None, "recovery": None}],
+}
+ledger.save_batch(foreign_batch)
+
 broker.batches.clear()
 registry._flags_cache = None  # simulate a fresh Hub process reading disk
 assert registry.machine_enabled("node-a") is False
-assert broker.restore_batches() == 1
+
+# Unrelated sentinel settings survive restart without reset
+flags_on_disk = json.loads(registry.FLAGS_FILE.read_text())
+assert flags_on_disk["node-b"]["sentinel_custom"] == "sentinel-node-b-data"
+assert flags_on_disk["node-b"]["enabled"] is True
+assert flags_on_disk["node-a"]["sentinel_marker"] == "sentinel-node-a-data"
+assert registry.machine_enabled("node-b") is True
+
+assert broker.restore_batches() == 2
 item = broker.batches["pause-proof"]["items"][0]
 # The active work is re-run, not dropped (owner, 2026-10-05), and its original is kept for adoption.
 assert item["state"] == "queued"
-assert [(row[2], row[3]) for row in broker._restored_attempts] == [("voice", "voice-job-42")]
+assert [(row[2], row[3]) for row in broker._restored_attempts if row[0]["id"] == "pause-proof"] == [("voice", "voice-job-42")]
 assert broker._eligible_studios("voice", "pool") == []
+
+# Foreign identity rejection: foreign studio is not adopted by local monitor registry
+eligible_foreign = [s for s in monitor.registry if s.get("machine") == "foreign-node" or s.get("id") == "foreign-voice"]
+assert eligible_foreign == [], "foreign worker adopted by local monitor"
+by_id = {row.get("id"): row for row in monitor.registry}
+assert by_id.get("foreign-voice") is None, "foreign studio present in local monitor registry"
+
 print("operator pause/restart proof: flag persisted, active work kept and re-queued, admission paused")
 '''
             env = os.environ.copy()
