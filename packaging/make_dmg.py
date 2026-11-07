@@ -40,13 +40,59 @@ def preserve(path: Path, project: Path, bucket: str) -> Path | None:
 
 
 def validate_stage(app: Path) -> None:
-    """Keep the existing unsigned bundle/delta format; verify every staged byte and link."""
+    """Verify staged .app code signature, recorded tree digest, and sidecar manifest closure."""
+    app = Path(app).resolve()
+    if not (app / 'Contents/Info.plist').is_file():
+        raise ValueError('source must be a staged .app bundle')
+    if (app / 'Contents/Resources/file-manifest').exists():
+        raise ValueError(
+            'app bundle contains legacy embedded file-manifest; manifest must be outside '
+            'sealed bundle as a sidecar directory'
+        )
+
+    # 1. Verify recorded tree digest
+    tree_file = app.with_name(app.name + '.tree-sha256')
+    if not tree_file.is_file():
+        raise ValueError(f'missing tree-sha256 file: {tree_file}')
+    expected = tree_file.read_text().strip()
+
     spec = importlib.util.spec_from_file_location('dmg_stage_voice', ROOT / 'packaging/stage_voice.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    expected = app.with_name(app.name + '.tree-sha256').read_text().strip()
     if module.tree_digest(app) != expected:
         raise ValueError('staged app content differs from its recorded tree digest')
+
+    # 2. Verify app code seal
+    verify = subprocess.run(
+        ['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)],
+        capture_output=True, text=True,
+    )
+    if verify.returncode != 0:
+        raise ValueError(f'staged app code signature verification failed: {verify.stderr.strip()}')
+
+    # 3. Verify sidecar manifest closure
+    manifest_dir = app.with_name(app.name + '.file-manifest')
+    if not manifest_dir.is_dir():
+        manifest_dir = app.parent / 'file-manifest'
+    if not manifest_dir.is_dir():
+        raise ValueError(f'staged app has no sidecar file-manifest directory: {manifest_dir}')
+
+    fm_spec = importlib.util.spec_from_file_location(
+        'studiohub_file_manifest',
+        ROOT / 'components/hub/backend/file_manifest.py',
+    )
+    fm = importlib.util.module_from_spec(fm_spec)
+    fm_spec.loader.exec_module(fm)
+
+    try:
+        index, groups = fm.load_dir(manifest_dir)
+    except Exception as exc:
+        raise ValueError(f'invalid sidecar file-manifest: {exc}') from exc
+
+    scanned = fm.scan(app)
+    flattened = fm.flatten(groups)
+    if scanned != flattened:
+        raise ValueError('staged app content differs from its sidecar manifest closure')
 
 
 def build(app: Path, output: Path) -> None:
@@ -56,6 +102,9 @@ def build(app: Path, output: Path) -> None:
     if output.parent.resolve() != (ROOT / 'dist').resolve() or output.suffix != '.dmg':
         raise ValueError('DMG output must be in this project dist folder')
     validate_stage(app)
+    manifest_dir = app.with_name(app.name + '.file-manifest')
+    if not manifest_dir.is_dir():
+        manifest_dir = app.parent / 'file-manifest'
     output.parent.mkdir(parents=True, exist_ok=True)
     for old in sorted(output.parent.glob('*.dmg')):
         print('Previous installer preserved:', preserve(old, ROOT, 'dist'))
@@ -65,9 +114,11 @@ def build(app: Path, output: Path) -> None:
     complete = False
     try:
         subprocess.run(['/bin/cp', '-cRp', str(app), str(scratch / 'Studio Hub.app')], check=True)
+        subprocess.run(['/bin/cp', '-cRp', str(manifest_dir), str(scratch / 'file-manifest')], check=True)
         # hdiutil's image copier and another Mac must read owner-only auxiliary runtime tools.
         # Content/link identity and the manifest's executable flags remain unchanged.
         subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / 'Studio Hub.app')], check=True)
+        subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / 'file-manifest')], check=True)
         (scratch / 'Applications').symlink_to('/Applications', target_is_directory=True)
         subprocess.run(['diskutil', 'image', 'create', 'from', '--volumeName', 'Hub Studio KH',
                         '--format', 'UDZO', str(scratch), str(output)], check=True)

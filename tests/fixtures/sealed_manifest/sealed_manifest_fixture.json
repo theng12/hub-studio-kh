@@ -1,0 +1,276 @@
+{
+  "contract": {
+    "name": "sealed-manifest-sidecar",
+    "version": "2.0.0",
+    "schema": "studiohub.file-manifest.v1",
+    "purpose": "Provide deterministic file-manifest closure for code-signed macOS app bundles without circular modification of sealed resources",
+    "state": "PROPOSED v2 - GATEWAY AGREEMENT IN PRINCIPLE 2026-11-07; Gateway awaits exact v2 fixture hash before coding. No product code until that ACK.",
+    "wire_change": "none - no new wire field, route or status invented"
+  },
+  "sidecar_specification": {
+    "dmg_layout": {
+      "app_bundle": "Studio Hub.app",
+      "sidecar_dir": "file-manifest",
+      "index_path": "file-manifest/index.json",
+      "core_tsv_gz_path": "file-manifest/core.tsv.gz"
+    },
+    "consumer_lookup_rules": [
+      {
+        "priority": 1,
+        "location": "mounted_dmg_root / 'file-manifest'",
+        "scope": "Sealed post-0.6.224 releases (manifest generated post-seal as DMG sidecar)",
+        "sealed_closure": true
+      },
+      {
+        "priority": 2,
+        "location": "app_bundle / 'Contents/Resources/file-manifest'",
+        "scope": "Legacy pre-seal releases (backward compatibility)",
+        "sealed_closure": false
+      }
+    ]
+  },
+  "valid_sealed_release": {
+    "app_files": {
+      "Contents/Info.plist": {
+        "kind": "f",
+        "executable": false,
+        "size": 144,
+        "sha256": "d7378a37a224030b514f9194facb228c99924ce2b21c1cc879d61887441d76ff",
+        "content_b64": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHBsaXN0IHZlcnNpb249IjEuMCI+PGRpY3Q+PGtleT5DRkJ1bmRsZUlkZW50aWZpZXI8L2tleT48c3RyaW5nPmNvbS5zdHVkaW9odWIua2g8L3N0cmluZz48L2RpY3Q+PC9wbGlzdD4K"
+      },
+      "Contents/MacOS/StudioHub": {
+        "kind": "f",
+        "executable": true,
+        "size": 84,
+        "sha256": "fa074129e41617d52964c68af23d0b0eecb0a32d13ae2e865cd94aefc3b19aa4",
+        "content_b64": "yv66vgAAAAIBAAAHAAAAAwAANDAwMFBPU1RfU0VBTF9NQUNIX09fQklOQVJZX0RBVEFfV0lUSF9FTUJFRERFRF9DT0RFU0lHTkFUVVJFX1NMT1QK"
+      },
+      "Contents/Resources/version.txt": {
+        "kind": "f",
+        "executable": false,
+        "size": 8,
+        "sha256": "711ceb6e700609fe97291ce9451ac58008ae17798819338fc1f0932dcef2cdfd",
+        "content_b64": "MC42LjIyNQo="
+      },
+      "Contents/_CodeSignature/CodeResources": {
+        "kind": "f",
+        "executable": false,
+        "size": 163,
+        "sha256": "07aeb8c9c8e15d32651245cdd47996f1e138fb2a49c2c56e0f649c3ad6610560",
+        "content_b64": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHBsaXN0IHZlcnNpb249IjEuMCI+PGRpY3Q+PGtleT5maWxlczI8L2tleT48ZGljdD48a2V5PkNvbnRlbnRzL0luZm8ucGxpc3Q8L2tleT48ZGF0YT5jMlZoYkdWazwvZGF0YT48L2RpY3Q+PC9kaWN0PjwvcGxpc3Q+Cg=="
+      }
+    },
+    "manifest_index": {
+      "schema": "studiohub.file-manifest.v1",
+      "files_sha256": "9499506939680266558013f0da10f4efe629346a619f9e1b5d3c3ab28d4ba781",
+      "files_count": 4,
+      "files_bytes": 399,
+      "groups": {
+        "core": {
+          "sha256": "76d034e025a76dabbed86a3488b86fb79c045d2ccad81942dac472a92ab8a4cf",
+          "files": 4,
+          "bytes": 399,
+          "prefix": ""
+        }
+      }
+    },
+    "manifest_tsv": {
+      "core": "f\t0\t144\td7378a37a224030b514f9194facb228c99924ce2b21c1cc879d61887441d76ff\tContents/Info.plist\nf\t1\t84\tfa074129e41617d52964c68af23d0b0eecb0a32d13ae2e865cd94aefc3b19aa4\tContents/MacOS/StudioHub\nf\t0\t8\t711ceb6e700609fe97291ce9451ac58008ae17798819338fc1f0932dcef2cdfd\tContents/Resources/version.txt\nf\t0\t163\t07aeb8c9c8e15d32651245cdd47996f1e138fb2a49c2c56e0f649c3ad6610560\tContents/_CodeSignature/CodeResources\n"
+    },
+    "manifest_tsv_gz_b64": {
+      "core": "H4sIAAAAAAAC/0WQu04kQQxF4+JjGNvlejgmYQOExHwAcrns1Uir7tV0D+LzaQiYzPcG51w5EiRkTrPl1jU3JWLIMApyCAqH2iDqJiLE5jQIDc16k1mx98aMs9WI9LQuuy/7dvqzxPr4/99l2x8iYeqcQqExkjhjxTYLSWWrXYPyhAHuNkAzTczq5L0Wm8LqYXmgqPKd/aL2ej6d99u8rM+3cQgg9dQQzUf1BlBBwqWRHI1wQbXSAbo6tia9o+TcwzBADp95kM2Yd/6bb+vtar6dPvy6Xdblcf/cfyxYc4KmPo5XWHcsM1MtSHyMndxEaqDjAR+kLEZWqkPU48w6a0UoFe6e96d1+vnyd9H9dvXTd/pVP3wBmXBOI5MBAAA="
+    },
+    "hashes": {
+      "files_sha256": "9499506939680266558013f0da10f4efe629346a619f9e1b5d3c3ab28d4ba781",
+      "core_uncompressed_tsv_sha256": "76d034e025a76dabbed86a3488b86fb79c045d2ccad81942dac472a92ab8a4cf",
+      "core_tsv_gz_sha256": "1d70a275657e47422a1a14099917ad538c38d61659bb9598cac18ae1f120f4f3"
+    }
+  },
+  "stale_224_baseline_case": {
+    "description": "Hub 0.6.224 generated manifest pre-seal, leaving stale native executable digest and unlisted _CodeSignature/CodeResources on disk",
+    "installed_app_disk_hashes": {
+      "Contents/MacOS/StudioHub": "fa074129e41617d52964c68af23d0b0eecb0a32d13ae2e865cd94aefc3b19aa4",
+      "Contents/_CodeSignature/CodeResources": "07aeb8c9c8e15d32651245cdd47996f1e138fb2a49c2c56e0f649c3ad6610560"
+    },
+    "embedded_224_manifest_records": {
+      "Contents/MacOS/StudioHub": {
+        "declared_sha256": "74e8d65bbf6833d9c3fcad135b71c7d01234aa656e83894c9d61cfeb3507e285",
+        "stale_reason": "Mach-O rewritten by codesign after manifest was generated"
+      },
+      "Contents/_CodeSignature/CodeResources": {
+        "declared_sha256": null,
+        "stale_reason": "Created by codesign after manifest was generated"
+      }
+    },
+    "evaluation_verdict": "UNTRUSTED_BASELINE",
+    "gateway_handling": {
+      "probe_check": "delta is None -> capable = False",
+      "decision": "planned = 'full' (since capable is False)",
+      "fallback_action": "push_full_dmg (existing whole DMG fallback)"
+    },
+    "expected_decision": "full via existing whole-DMG path (AC1)",
+    "capability_note": "actual delta dict may be present and capable=True; the baseline rule still forces full",
+    "unit_data_only": true
+  },
+  "corrupted_bytes_case": {
+    "target_file": "Contents/MacOS/StudioHub",
+    "expected_sha256": "fa074129e41617d52964c68af23d0b0eecb0a32d13ae2e865cd94aefc3b19aa4",
+    "corrupted_sha256": "eb4c2e92da68c8cfb6d9f714a50b11db1b7db1c030a0f81dd264d1e2f93f15f6",
+    "corrupted_b64": "yv66vgAAAAIBAAAHAAAAAwAANDAwMFBPU1RfU0VBTF9NQUNIX09fQklOQVJZX0RBVEFfV0lUSF9FTUJFRERFRF9DT0RFU0lHTkFUVVJFX1NMT1gK",
+    "expected_verdict": "REJECTED_DIGEST_MISMATCH"
+  },
+  "delta_eligibility": {
+    "status": "AGREED_IN_PRINCIPLE_2026-11-07 - AWAITING EXACT V2 FIXTURE HASH BEFORE GATEWAY CODING",
+    "baseline_identity": {
+      "source": "strict actual running version from GET /api/version",
+      "never_from": "held/target release.version; a held future version never qualifies a running baseline",
+      "record_build_proof": true,
+      "runtime_exact_build_allowlist": false
+    },
+    "first_shipped_fixed_release_threshold": {
+      "version": "0.6.225",
+      "label": "PROPOSED - frozen at release; not a live claim until release freeze"
+    },
+    "rules": [
+      "running 0.6.224 or older -> existing whole-DMG path (full)",
+      "unknown, malformed, ambiguous or prerelease identity -> full fail-closed via existing whole-DMG path",
+      "known RELEASED fixed-or-later running baseline AND existing delta capability dict -> delta eligible",
+      "capability is the existing delta dict; Hub emits it only after validating and rescanning installed bytes",
+      "no new wire field, route or status"
+    ],
+    "trust_gate": {
+      "AppUpdateKey_untrusted": "publisher-key trust gate, NOT baseline evaluation; key, hash and signature guards unchanged"
+    }
+  },
+  "actual_224_wire": {
+    "status": "ACTUAL_SHAPE_FROM_AUTHENTICATED_CAPTURES - executing 0.6.224 / d5632c6; no live network call",
+    "api_version_running": "0.6.224",
+    "delta": {
+      "schema": "studiohub.file-manifest.v1",
+      "manifest": true,
+      "artifact": true
+    },
+    "existing_probe_capable": true,
+    "contract_decision": "full - running baseline below first shipped fixed threshold; held future release.version does not qualify"
+  },
+  "gateway_reader_observations": {
+    "fixture_sha256": "8ccf88021f8637d7232a72cb87ee14c1aedd8f29bab9712b25e6a9b2c517c99e",
+    "status": "PROPOSED_NOT_FROZEN - actual reader run; fake bytes exercise reader only, not codesign; no live/network calls",
+    "sidecar_only": {
+      "accepted": false,
+      "code": "RELEASE_NO_MANIFEST",
+      "note": "sidecar reader absent from stock Gateway"
+    },
+    "legacy": {
+      "accepted": true,
+      "files_sha256": "9499506939680266558013f0da10f4efe629346a619f9e1b5d3c3ab28d4ba781",
+      "files_count": 4,
+      "files_bytes": 399,
+      "blob_count": 4
+    },
+    "corrupt_native_legacy": {
+      "accepted": true,
+      "note": "KNOWN BUG - reader does not verify app file bytes against manifest"
+    },
+    "corrupt_group_legacy": {
+      "accepted": false,
+      "code": "RELEASE_MANIFEST_INVALID"
+    }
+  },
+  "acceptance_cases": [
+    {
+      "id": "AC1",
+      "name": "actual running 224 baseline",
+      "given": "GET /api/version reports running 0.6.224 (authenticated capture shape) AND existing delta capability dict {schema,manifest,artifact} is present",
+      "expected_decision": "full via existing whole-DMG path; no delta upload",
+      "basis": "running baseline below first_shipped_fixed_release_threshold; held/target release 0.6.225 must not mask running 224",
+      "check_kind": "DATA_ONLY_STATIC",
+      "gateway_test": "PENDING - actual Gateway test not run by this fixture"
+    },
+    {
+      "id": "AC2",
+      "name": "unknown/malformed/ambiguous baseline identity",
+      "given": "executing baseline identity from /api/version is unknown, malformed or ambiguous",
+      "expected_decision": "full fail-closed via existing whole-DMG path",
+      "basis": "baseline_identity.source is strict; anything not a known released version fails closed",
+      "check_kind": "DATA_ONLY_STATIC",
+      "gateway_test": "PENDING - actual Gateway test not run by this fixture"
+    },
+    {
+      "id": "AC3",
+      "name": "prerelease baseline identity",
+      "given": "executing baseline identity is a prerelease (e.g. 0.6.225-rc.1) or any non-released identity, even when numerically >= threshold",
+      "expected_decision": "full fail-closed via existing whole-DMG path",
+      "basis": "only a known RELEASED fixed-or-later identity qualifies",
+      "check_kind": "DATA_ONLY_STATIC",
+      "gateway_test": "PENDING - actual Gateway test not run by this fixture"
+    },
+    {
+      "id": "AC4",
+      "name": "known released fixed-or-later baseline with capability",
+      "given": "GET /api/version reports a known RELEASED fixed-or-later running baseline (>= first_shipped_fixed_release_threshold, 0.6.225 PROPOSED until release freeze) AND existing delta capability dict is present (Hub emits it only after validating/rescanning installed bytes)",
+      "expected_decision": "delta eligible",
+      "basis": "strict running version + existing capability suffice; build proof recorded, no runtime exact-build allowlist; no new wire field",
+      "check_kind": "DATA_ONLY_STATIC",
+      "gateway_test": "PENDING - actual Gateway test not run by this fixture"
+    },
+    {
+      "id": "AC5",
+      "name": "preferred sidecar valid wins",
+      "given": "DMG root file-manifest/ is valid and legacy embedded manifest is also present",
+      "expected_decision": "preferred sidecar accepted",
+      "basis": "consumer lookup priority 1",
+      "check_kind": "DATA_ONLY_STATIC",
+      "gateway_test": "PENDING - actual Gateway test not run by this fixture"
+    },
+    {
+      "id": "AC6",
+      "name": "corrupt preferred sidecar refuses",
+      "given": "DMG root file-manifest/ is malformed or corrupt while a valid legacy embedded manifest exists",
+      "expected_decision": "REFUSE - do not fall back to legacy",
+      "basis": "preferred location faults are final; priority 2 only applies when priority 1 is absent",
+      "check_kind": "DATA_ONLY_STATIC",
+      "gateway_test": "PENDING - actual Gateway test not run by this fixture"
+    },
+    {
+      "id": "AC7",
+      "name": "corrupt native or CodeResources rejects before push",
+      "given": "actual on-disk native executable or _CodeSignature/CodeResources digest differs from the manifest record",
+      "expected_decision": "reject BEFORE push",
+      "basis": "byte closure check against manifest; actual hash compare",
+      "check_kind": "DATA_ONLY_STATIC",
+      "gateway_test": "PENDING - actual Gateway test not run by this fixture"
+    },
+    {
+      "id": "AC8",
+      "name": "corrupted group rejects",
+      "given": "group TSV bytes do not match the sha256 the index names",
+      "expected_decision": "reject",
+      "basis": "index commits to group digest",
+      "check_kind": "DATA_ONLY_STATIC",
+      "gateway_test": "PENDING - actual Gateway test not run by this fixture"
+    },
+    {
+      "id": "AC9",
+      "name": "legacy only with valid byte closure",
+      "given": "legacy embedded manifest path is used (no sidecar) and app file bytes match every manifest record",
+      "expected_decision": "accepted only when full byte closure holds",
+      "basis": "same closure rules as sidecar; no signature or executable exclusions",
+      "check_kind": "DATA_ONLY_STATIC",
+      "gateway_test": "PENDING - actual Gateway test not run by this fixture"
+    }
+  ],
+  "corrupted_signature_case": {
+    "target_file": "Contents/_CodeSignature/CodeResources",
+    "expected_sha256": "07aeb8c9c8e15d32651245cdd47996f1e138fb2a49c2c56e0f649c3ad6610560",
+    "corrupted_sha256": "749ec6c34015ce8530fd7ac6c248b60402cac3ebfa52d08216d0f93137142d5a",
+    "corrupted_b64": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHBsaXN0IHZlcnNpb249IjEuMCI+PGRpY3Q+PGtleT5maWxlWDI8L2tleT48ZGljdD48a2V5PkNvbnRlbnRzL0luZm8ucGxpc3Q8L2tleT48ZGF0YT5jMlZoYkdWazwvZGF0YT48L2RpY3Q+PC9kaWN0PjwvcGxpc3Q+Cg==",
+    "expected_verdict": "REJECTED_DIGEST_MISMATCH"
+  },
+  "open_followthrough": [
+    "installed new-release sidecar consumer persistence/rescan: EXPLICIT OPEN - no field decision invented",
+    "actual codesign qualification: PENDING packaging worker proof; fixture bytes are fake and prove nothing about codesign",
+    "producer staging path: packaging worker's implementation choice",
+    "Gateway coding: awaits exact v2 fixture hash"
+  ]
+}

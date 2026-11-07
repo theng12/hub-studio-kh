@@ -51,7 +51,8 @@ def make_app(root: Path, files: dict[str, tuple[bytes, bool]],
         (app / rel).parent.mkdir(parents=True, exist_ok=True)
         os.symlink(destination, app / rel)
     if manifest:
-        fm.write(app)
+        # The installed app's own shape: the manifest of the release it was built from, inside it.
+        fm.write(app, destination=app / fm.DIR_REL)
     if readonly:
         for directory in sorted((p for p in app.rglob("*") if p.is_dir() and not p.is_symlink()),
                                 key=lambda p: len(p.parts), reverse=True):
@@ -259,10 +260,9 @@ class StageTests(Fixture):
         self.assertEqual(set(calls), fetched)
         self.assertEqual(sorted(p.name for p in staged.parent.iterdir()), [staged.name],
                          "the staging directory holds only the app once it is done")
-        # The next update needs to know what this app contains.
-        index, groups = fm.load_dir(staged / fm.DIR_REL)
-        self.assertEqual(index["files_sha256"], self.new_index["files_sha256"])
-        self.assertEqual(fm.flatten(groups), self.new_entries)
+        # The next update needs no manifest inside the app: it measures the installed bytes.
+        # The staged app must carry none - a manifest written post-seal would break the signature.
+        self.assertFalse((staged / fm.DIR_REL).exists())
 
     def test_the_executable_bit_change_and_the_removed_and_new_directories(self) -> None:
         staged, _ = self.stage()
@@ -335,7 +335,12 @@ class StageTests(Fixture):
         self._writable(self.old)
         os.symlink(outside, self.old / R / "alias")
         rd._installed_cache.clear()
-        entries = dict(self.new_entries, **{R + "alias/x": ("f", False, 1, hashlib.sha256(b"x").hexdigest())})
+        # The plan removes installed entries the release does not list (an unlisted link would
+        # simply be unlinked, touching nothing outside), so the guard under test is the one
+        # that refuses to write through a parent the release itself keeps as a symlink.
+        entries = dict(self.new_entries, **{
+            R + "alias": ("l", False, 0, str(outside)),
+            R + "alias/x": ("f", False, 1, hashlib.sha256(b"x").hexdigest())})
         table = {hashlib.sha256(b"x").hexdigest(): b"x"}
 
         good = fetcher_from(self.new)
@@ -433,10 +438,15 @@ class StageTests(Fixture):
 
 
 class InstalledTests(Fixture):
-    def test_the_installed_app_is_read_from_its_own_manifest_else_hashed_once(self) -> None:
+    def test_the_installed_app_is_measured_from_its_bytes_not_its_embedded_manifest(self) -> None:
         rd._installed_cache.clear()
-        with mock.patch.object(fm, "scan", side_effect=AssertionError("must not hash")):
-            self.assertEqual(rd.installed_entries(self.old), fm.flatten(fm.load_dir(self.old / fm.DIR_REL)[1]))
+        # An embedded manifest never stands in for the bytes, however well-formed it is: the
+        # measurement runs, and here - where the fixture's records are accurate - agrees with it.
+        with mock.patch.object(fm, "scan", wraps=fm.scan) as measured:
+            entries = rd.installed_entries(self.old)
+        measured.assert_called_once_with(self.old)
+        self.assertEqual(entries, fm.scan(self.old))
+        self.assertEqual(entries, fm.flatten(fm.load_dir(self.old / fm.DIR_REL)[1]))
         bare = make_app(self.tmp / "bare", OLD_FILES, OLD_LINKS, readonly=False)
         rd._installed_cache.clear()
         self.assertEqual(rd.installed_entries(bare), fm.scan(bare))

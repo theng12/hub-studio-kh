@@ -342,8 +342,10 @@ _CONTRACT_EXTRAS: dict[str, tuple[dict, ...]] = {
          "note": "this engine sings; there is no instrumental switch"},
         {"name": "vocal_language", "type": "string", "required": False,
          "request_only": True, "max_characters": 32,
+         "enum": ["en", "zh", "yue", "ja", "ko", "es", "ru"],
          "note": "Language name or code, added to style; supply lyrics in the same language. "
-                 "Sung language quality has not been confirmed by listening."},
+                 "The owner accepted English, Mandarin, Cantonese, Japanese, Korean, Spanish, "
+                 "and Russian clips."},
         {"name": "precision", "type": "string", "required": False,
          "enum": ["8bit", "bf16", "4bit"],
          "note": "8bit is the measured configuration; 4bit needs a conversion this package does "

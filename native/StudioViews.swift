@@ -3249,10 +3249,29 @@ struct StudioContent: View {
                             .lineLimit(3...6).textFieldStyle(.roundedBorder)
                     }
                     LabeledRow(label: "Vocal language") {
-                        TextField("Language code, e.g. en", text: Binding(
-                            get: { workspace.musicSettings?.vocalLanguage ?? configuration.defaults.vocalLanguage ?? "" },
-                            set: { workspace.musicSettings?.vocalLanguage = $0 }))
-                            .textFieldStyle(.roundedBorder)
+                        if let supportedOptions = selectedMusicModel?.laneParameter("vocal_language")?.options,
+                           !supportedOptions.isEmpty {
+                            let defaultLanguage = configuration.defaults.vocalLanguage ?? "en"
+                            let current = workspace.musicSettings?.vocalLanguage ?? defaultLanguage
+                            let effective = current.isEmpty ? defaultLanguage : current
+                            let options = supportedOptions.contains(effective) ? supportedOptions : supportedOptions + [effective]
+                            Picker("Vocal language", selection: Binding(
+                                get: {
+                                    let val = workspace.musicSettings?.vocalLanguage ?? defaultLanguage
+                                    return val.isEmpty ? defaultLanguage : val
+                                },
+                                set: { workspace.musicSettings?.vocalLanguage = $0 })) {
+                                ForEach(options, id: \.self) { code in
+                                    Text(Locale.current.localizedString(forLanguageCode: code) ?? code).tag(code)
+                                }
+                            }
+                            .labelsHidden()
+                        } else {
+                            TextField("Language code, e.g. en", text: Binding(
+                                get: { workspace.musicSettings?.vocalLanguage ?? configuration.defaults.vocalLanguage ?? "" },
+                                set: { workspace.musicSettings?.vocalLanguage = $0 }))
+                                .textFieldStyle(.roundedBorder)
+                        }
                     }
                 }
             } else {

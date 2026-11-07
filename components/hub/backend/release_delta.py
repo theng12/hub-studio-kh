@@ -18,6 +18,7 @@ import os
 import shutil
 import stat
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -49,6 +50,9 @@ class DeltaRefused(Exception):
 # ── the installed app ──────────────────────────────────────────────────────
 
 _installed_cache: dict[tuple, dict[str, fm.Entry]] = {}
+_probe_lock = threading.Lock()
+_probe_thread: threading.Thread | None = None
+_probe_failed: tuple | None = None   # identity key whose measurement failed: null until it changes
 
 
 def installed_app_root() -> Path | None:
@@ -64,29 +68,80 @@ def installed_app_root() -> Path | None:
     return resources.parent.parent
 
 
-def installed_manifest(app: Path) -> tuple[dict, dict[str, dict[str, fm.Entry]]] | None:
+def _identity_stamp(app: Path) -> int | None:
+    """The installed identity's mtime, or None when the file the app was started with is gone."""
     try:
-        return fm.load_dir(app / fm.DIR_REL)
-    except fm.ManifestError:
+        return (app / "Contents/Resources/release-manifest.json").stat().st_mtime_ns
+    except OSError:
         return None
 
 
 def installed_entries(app: Path) -> dict[str, fm.Entry]:
-    """What the installed app contains: its own manifest, or - for the first release that has
-    none - one full hash of the tree (about 20 s for 90,000 files), remembered until it changes."""
-    try:
-        stamp = (app / "Contents/Resources/release-manifest.json").stat().st_mtime_ns
-    except OSError:
-        stamp = 0
+    """What the installed app contains: its actual bytes, hashed once per installed identity
+    (its ``release-manifest.json``; about 20 s for 90,000 files) and remembered until that
+    identity changes.
+
+    The app's own embedded manifest is never the answer: 0.6.224 generated it pre-seal, so its
+    records can name a digest the native no longer has and omit files codesign created after it.
+    shortcut: a file edited after this measurement stays invisible until the identity changes;
+    stage() clears the cache before it measures the bytes it clones, and every reuse still has
+    to pass verify_tree's or the fetch check's sha256 before anything is installed."""
+    stamp = _identity_stamp(app) or 0
     key = (str(app), stamp)
     cached = _installed_cache.get(key)
     if cached is not None:
         return cached
-    found = installed_manifest(app)
-    entries = fm.flatten(found[1]) if found else fm.scan(app)
+    entries = fm.scan(app)
     _installed_cache.clear()
     _installed_cache[key] = entries
     return entries
+
+
+def validated_installed_baseline() -> dict[str, fm.Entry] | None:
+    """The installed app's measured bytes, or None when this Hub cannot prove a baseline: it is
+    not running from an installed app, its identity file is gone, or its tree cannot be read.
+    The only state in which a delta capability may be offered."""
+    app = installed_app_root()
+    if app is None or _identity_stamp(app) is None:
+        return None
+    try:
+        return installed_entries(app)
+    except (fm.ManifestError, OSError):
+        return None
+
+
+def baseline_ready() -> bool:
+    """Whether a validated baseline exists for this probe, without ever waiting for one.
+
+    A cold measurement of a real app takes about 20 s - as long as a gateway's probe timeout -
+    so this answers False at once and ensures exactly one background measurement is running;
+    it fills the cache this then answers from. A failed measurement stays False (no rescan
+    loop) until the installed identity changes."""
+    app = installed_app_root()
+    if app is None:
+        return False
+    stamp = _identity_stamp(app)
+    if stamp is None:
+        return False
+    key = (str(app), stamp)
+    global _probe_thread
+    with _probe_lock:
+        if key == _probe_failed:
+            return False
+        if key in _installed_cache:
+            return True
+        if _probe_thread is None or not _probe_thread.is_alive():
+            _probe_thread = threading.Thread(target=_measure_baseline, args=(key,),
+                                             name="baseline-measure", daemon=True)
+            _probe_thread.start()
+        return False
+
+
+def _measure_baseline(key: tuple) -> None:
+    global _probe_failed
+    if validated_installed_baseline() is None:
+        with _probe_lock:
+            _probe_failed = key
 
 
 _by_sha_cache: list = []   # [(entries, by_sha)], valid while `installed_entries` hands back the same dict
@@ -333,6 +388,9 @@ def stage(installed: Path, new: Mapping[str, fm.Entry], files_sha256: str, get_b
             raise DeltaRefused("unsafe", str(exc)) from exc
         if entry[0] == "l":
             _check_link(rel, entry[3])
+    # The plan is built from a fresh measurement of the bytes about to be cloned: a view cached
+    # before a file was edited would reuse it without the edit ever being read.
+    _installed_cache.clear()
     old = installed_entries(installed)
     plan = Plan(old, new)
     have = installed_by_sha(installed)
@@ -388,14 +446,16 @@ def stage(installed: Path, new: Mapping[str, fm.Entry], files_sha256: str, get_b
                 _remove(staged, rel, dirs)
         report("verifying", total, total)
         verify_tree(staged, new, set(plan.write))
-        # The manifest directory is not listed in itself, but it is how the next update finds out
-        # what this app contains, so it is rewritten from the release and must reproduce the
-        # digest the descriptor signed.
+        # The installed app's manifest directory describes the bytes this delta just replaced,
+        # and a manifest written post-seal would break the signature anyway: the staged app
+        # carries none, and the next update measures the installed bytes themselves.
         stale = staged / fm.DIR_REL
         dirs.writable(stale.parent)
         if stale.exists():
             _rmtree_force(stale)
-        if fm.write(staged, new)["files_sha256"] != files_sha256:
+        # What the descriptor signed must be what the release's entries serialize to - checked
+        # in memory; verify_tree above already proved the staged bytes are those entries.
+        if fm.build(new)[0]["files_sha256"] != files_sha256:
             raise DeltaRefused("corrupt", "the staged app does not reproduce the signed files_sha256")
     except BaseException:
         dirs.restore()

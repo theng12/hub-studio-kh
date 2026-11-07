@@ -6023,6 +6023,8 @@ struct NativeAPITests {
                 && store.musicSettings?.guidanceScale == 1 && store.musicSettings?.shift == 3
                 && store.musicSettings?.seed == -1 && store.musicSettings?.instrumental == true,
                 "Music defaults must come from the runtime")
+        require(store.musicConfiguration?.defaults.vocalLanguage == "unknown",
+                "Music defaults vocalLanguage must come from published generation_defaults")
         require(store.musicConfiguration?.limits.maxDurationSeconds == 600
                 && store.musicConfiguration?.limits.maxGuidance == 30,
                 "Music limits must come from the runtime")

@@ -1,0 +1,93 @@
+CROSS-APP CONTRACT: SEALED APP FILE MANIFEST AS DMG SIDECAR (v2)
+================================================================
+Date: 2026-11-07
+Branch: fix/sealed-manifest-20261107
+Base: 91c069b
+Contract State: PROPOSED v2 - GATEWAY AGREEMENT IN PRINCIPLE 2026-11-07.
+  Gateway awaits the exact v2 fixture hash before coding. No product code
+  until that ACK. No new wire field, route or status is invented here.
+
+1. PROBLEM (proven on 0.6.224)
+-------------------------------
+Manifest generation before outer deep codesign leaves stale native digests
+and omits CodeResources; regenerating after the seal mutates sealed resources
+and fails `codesign --verify --deep --strict`. The closure cannot live inside
+the signed bundle.
+
+2. SOLUTION
+-----------
+The manifest is a DMG SIDECAR, outside the sealed app:
+  <dmg_mount_root>/Studio Hub.app/
+  <dmg_mount_root>/file-manifest/{index.json, core.tsv.gz, runtime-*.tsv.gz}
+No file-manifest/ inside Contents/Resources/. Sign first (final signed native
++ CodeResources closure), then scan and write the sidecar; no app mutation
+after seal. Codesign qualification is PENDING packaging-worker proof; nothing
+here claims codesign passed from fake fixture bytes. Producer staging path is
+the packaging worker's choice.
+
+3. SCHEMA (UNCHANGED WIRE)
+--------------------------
+"studiohub.file-manifest.v1"; index fields and group TSV line format exactly
+as in the fixture. files_sha256 = SHA256 of sorted "name\0group_sha\n" lines.
+
+4. CONSUMER LOOKUP
+------------------
+Priority 1: <root>/file-manifest/ (sealed releases).
+Priority 2: <root>/Studio Hub.app/Contents/Resources/file-manifest/ (legacy).
+Priority 3: neither -> RELEASE_NO_MANIFEST.
+A present-but-malformed/corrupt preferred sidecar REFUSES; it never falls
+back to a valid legacy copy (AC6).
+
+5. BASELINE IDENTITY & DELTA ELIGIBILITY (agreed in principle 2026-11-07)
+-------------------------------------------------------------------------
+Identity source: strict actual running version from GET /api/version.
+A held/target future release.version NEVER qualifies a running baseline.
+Threshold: first shipped fixed release = 0.6.225 (PROPOSED; freezes at
+release). Build proof is recorded; there is no runtime exact-build allowlist.
+  - running 0.6.224 or older -> full (existing whole-DMG path)
+  - unknown / malformed / ambiguous / prerelease identity -> full fail-closed
+  - known RELEASED fixed-or-later baseline + existing delta capability dict
+    -> delta eligible. Hub emits that existing capability ONLY after
+    validating and rescanning installed bytes.
+AppUpdateKey_untrusted is a publisher-key trust gate, NOT baseline
+evaluation; key/hash/signature guards are unchanged.
+
+6. ACCEPTANCE CASES (fixture metadata; DATA ONLY - actual Gateway tests PENDING)
+--------------------------------------------------------------------------------
+AC1 running 224 + actual delta dict {schema,manifest,artifact} -> full, no
+    delta upload; held 0.6.225 must not mask running 224.
+AC2 unknown/malformed/ambiguous identity -> full fail-closed.
+AC3 prerelease identity (even >= threshold) -> full fail-closed.
+AC4 known released fixed-or-later + validated existing capability -> delta eligible.
+AC5 valid preferred sidecar wins over valid legacy.
+AC6 corrupt preferred sidecar REFUSES even when valid legacy exists.
+AC7 corrupt native or CodeResources rejects BEFORE push (actual hash compare).
+AC8 corrupted group rejects (index commits to group digest).
+AC9 legacy accepted only with valid byte closure; no exclusions.
+Reader observations on fixture 8ccf880...: sidecar-only RELEASE_NO_MANIFEST
+(stock Gateway has no sidecar reader yet); legacy accepted; corrupt native
+accepted (KNOWN BUG - reader does not verify app bytes); corrupt group
+RELEASE_MANIFEST_INVALID. Stale-224 disk-vs-manifest mismatches are retained
+as unit data; the earlier fictional wire probe is replaced by the actual
+authenticated 0.6.224/d5632c6 capture shape.
+
+7. AFFECTED FILES (post-ACK implementation; none changed by this fixture)
+-------------------------------------------------------------------------
+Hub: packaging/stage_voice.py, packaging/make_dmg.py,
+components/hub/backend/file_manifest.py, release_delta.py, standalone.py.
+Gateway: gateway/release_publisher.py load_manifest sidecar priority.
+Installed new-release sidecar consumer persistence/rescan followthrough:
+EXPLICIT OPEN - no field decision invented.
+
+8. FIXTURE
+----------
+tests/fixtures/sealed_manifest/sealed_manifest_fixture.json
+tests/fixtures/sealed_manifest/selfcheck.py
+Valid release preserved (4 files, 399 B):
+  files_sha256 9499506939680266558013f0da10f4efe629346a619f9e1b5d3c3ab28d4ba781
+  core_tsv     76d034e025a76dabbed86a3488b86fb79c045d2ccad81942dac472a92ab8a4cf
+  core_tsv_gz  1d70a275657e47422a1a14099917ad538c38d61659bb9598cac18ae1f120f4f3
+One stdlib selfcheck (real Hub fm source import allowed; no Hub/service app
+  import): byte closure, tamper rejection, stale-224 unit data, AC structure.
+  It does NOT emulate Gateway fallback and does NOT claim a Gateway PASS.
+No product code modified; waiting for Gateway ACK on the exact v2 hash.

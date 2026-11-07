@@ -106,6 +106,17 @@ class TheContractCoversEveryModelTests(unittest.TestCase):
                 f"{stable.repo} forces {discarded!r} whatever is sent, so a scheduler that sends "
                 f"it would have it silently discarded")
 
+    def test_yue2_lane_contract_publishes_owner_accepted_languages(self) -> None:
+        """YuE2 publishes the 7 owner-accepted vocal languages without a contract default."""
+        yue2 = next(model for model in catalog.CATALOG
+                    if model.runtime == catalog.RUNTIME_YUE2)
+        params = {item["name"]: item for item in generation.lane_contract(yue2)["parameters"]}
+        self.assertIn("vocal_language", params)
+        lang = params["vocal_language"]
+        self.assertTrue(lang.get("request_only"))
+        self.assertEqual(lang.get("enum"), ["en", "zh", "yue", "ja", "ko", "es", "ru"])
+        self.assertNotIn("default", lang)
+
     def test_the_operation_is_the_token_the_hub_publishes(self) -> None:
         """The worker's own label differs; the contract carries the canonical token a reader joins on."""
         contract = generation.lane_contract(catalog.CATALOG[0])

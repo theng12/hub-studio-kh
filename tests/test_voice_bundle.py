@@ -546,8 +546,11 @@ class StagingTests(unittest.TestCase):
             manifest_path = resources/'release-manifest.json'
             manifest = json.loads(manifest_path.read_text())
             self.assertTrue(manifest['development_build'])
+            # payload_sha256 is the POST-sign digest excluding release-manifest.json and
+            # _CodeSignature; this fixture's native is a shell script, not a Mach-O, so the
+            # seal rewrites nothing. Real-Mach-O proof: tests/test_sealed_manifest_packaging.py.
             self.assertEqual(manifest['payload_sha256'],
-                module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json'), Path('Resources/file-manifest')}))
+                module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')}))
             with (artifact/'Contents/Info.plist').open('rb') as stream:
                 plist = plistlib.load(stream)
             self.assertEqual(plist['CFBundleExecutable'], 'StudioHubVoice')
@@ -556,7 +559,7 @@ class StagingTests(unittest.TestCase):
             self.assertEqual((base/'Proof.app.tree-sha256').read_text().strip(), module.tree_digest(artifact))
             (resources/'voice_worker.py').write_text('# changed worker')
             self.assertNotEqual(manifest['payload_sha256'],
-                module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json'), Path('Resources/file-manifest')}))
+                module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')}))
 
     def test_native_shell_stage_keeps_cli_and_creates_foreground_app(self):
         self._native_stage()
@@ -818,20 +821,25 @@ class StagingTests(unittest.TestCase):
                 self.assertFalse((resources / 'video_worker.py').exists())
                 self.assertFalse((resources / 'components/video').exists())
                 self.assertTrue((resources / 'runtimes/music-yue2/bin/python3').is_file())
+            # payload_sha256 is POST-sign (excluding release-manifest.json and
+            # _CodeSignature); fixture native is not Mach-O so the seal rewrites nothing -
+            # real-Mach-O proof in tests/test_sealed_manifest_packaging.py.
             self.assertEqual(manifest['payload_sha256'], module.tree_digest(
-                contents, exclude={Path('Resources/release-manifest.json'), Path('Resources/file-manifest')}))
+                contents, exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')}))
             # The per-file manifest a delta update is diffed against: present, self-consistent, and
             # describing exactly the bytes on disk (it lists release-manifest.json, not itself).
             hub_backend = ROOT / 'components/hub/backend'
             sys.path.insert(0, str(hub_backend.parent.parent.parent))
             from components.hub.backend import file_manifest
-            index, groups = file_manifest.load_dir(contents.parent / 'Contents/Resources/file-manifest')
+            sidecar = contents.parent.with_name(contents.parent.name + '.file-manifest')
+            index, groups = file_manifest.load_dir(sidecar)
             self.assertEqual(file_manifest.flatten(groups), file_manifest.scan(contents.parent))
             self.assertIn('Contents/Resources/release-manifest.json', file_manifest.flatten(groups))
             self.assertIn('Contents/MacOS/StudioHub', file_manifest.flatten(groups))
+            self.assertFalse((contents / 'Resources/file-manifest').exists())
             (contents / 'MacOS/StudioHub').write_bytes(b'changed-native-shell')
             self.assertNotEqual(manifest['payload_sha256'], module.tree_digest(
-                contents, exclude={Path('Resources/release-manifest.json'), Path('Resources/file-manifest')}))
+                contents, exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')}))
             return manifest
 
     def test_native_shell_stage_rejects_missing_binary(self):
