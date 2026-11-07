@@ -453,6 +453,13 @@ FLEET_ALLOWED = (
     ("GET", r"^/api/hub/resources$"),
     ("GET", r"^/api/hub/work-policy$"),
     ("POST", r"^/api/hub/work-policy$"),
+    # **One Mac's memory admission, read and written on that Mac (proposal.r5).** Exactly these
+    # two: the controller resolves and changes the target's RAM policy over the existing Fleet
+    # credential. Reference writes are refused by the route until their consumers are wired, so
+    # this grants the route, not an unenforced policy. The local Models-screen route is not in
+    # this list and keeps its loopback/session/Hub-token auth unchanged.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/memory/admission$"),
+    ("PUT", r"^/api/hub/fleet/nodes/[^/]+/memory/admission$"),
     ("GET", r"^/api/hub/capabilities$"),
     ("GET", r"^/api/hub/catalog$"),
     ("GET", r"^/api/hub/models$"),

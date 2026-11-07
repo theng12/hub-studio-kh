@@ -473,6 +473,168 @@ def _memory_refusal(manifest: dict[str, Any]) -> None:
             f"memory and this one has {memory_gb} GB, so it could never run here. Nothing was downloaded."))
 
 
+# **One Mac's memory admission, for the fleet route only (proposal.r5).** The local Models-screen
+# route stays model-wide and unchanged. This pair validates the fleet body strictly, resolves one
+# RAM pair/reset or one reference row, and returns the same effective readback the local screen
+# reads. Reference writes are refused here until D2/D3 consumers and D4 runtime authority are
+# wired: accepting a row nothing enforces would make the screen show a policy that is not used.
+_FLEET_ADMISSION_KEYS = {"model", "mode", "min_free_memory_gb", "min_total_memory_gb",
+                         "reference", "reference_count", "expected_revision"}
+_REFERENCE_FIELDS = {"allowed", "max_reference_images", "swap_allowance_gb"}
+
+
+def _admission_total_memory_bytes() -> int:
+    """This Mac's physical memory, the input `memory_admission.physical_tier` bands."""
+    import psutil
+    return int(psutil.virtual_memory().total)
+
+
+def _fleet_admission_refusal(code: str, field: str, detail: str, node: str,
+                             node_id: str) -> JSONResponse:
+    return JSONResponse({"ok": False, "code": code, "field": field, "detail": detail,
+                         "node": node, "node_id": node_id}, status_code=400)
+
+
+def _fleet_memory_admission_read(*, model: str, mode: str | None, entry: dict | None,
+                                 node: str, node_id: str) -> JSONResponse:
+    from .backend import memory_admission
+    if not model:
+        return _fleet_admission_refusal("MISSING_MODEL", "model", "model is required",
+                                        node, node_id)
+    if mode is not None and mode not in memory_admission.MODES:
+        return _fleet_admission_refusal(
+            "BAD_MODE", "mode", "mode must be one of txt2img, edit", node, node_id)
+    if entry is None:
+        raise HTTPException(404, "unknown model")
+    state = memory_admission.effective_state(
+        model, entry, node_id=node_id, mode=mode,
+        total_memory_bytes=_admission_total_memory_bytes(), model_default=None)
+    return JSONResponse({"ok": True, "node": node, "node_id": node_id, **state})
+
+
+def _fleet_memory_admission_write(*, body: dict, entry: dict | None, node: str,
+                                  node_id: str, total_memory_bytes: int) -> JSONResponse:
+    from .backend import memory_admission
+    def fail(code: str, field: str, detail: str) -> JSONResponse:
+        return _fleet_admission_refusal(code, field, detail, node, node_id)
+
+    unknown = set(body) - _FLEET_ADMISSION_KEYS
+    if unknown:
+        name = sorted(unknown)[0]
+        return fail("UNKNOWN_FIELD", name, f"{name} is not accepted on this route")
+    revision = body.get("expected_revision")
+    if (not isinstance(revision, str) or len(revision) != 64
+            or any(char not in "0123456789abcdef" for char in revision)):
+        return fail("BAD_VALUE", "expected_revision",
+                    "expected_revision must be 64 lowercase hex characters")
+    model = str(body.get("model") or "").strip()
+    if not model:
+        return fail("MODEL_REQUIRED", "model", "model is required")
+    mode = body.get("mode")
+    if mode is not None and mode not in memory_admission.MODES:
+        return fail("BAD_MODE", "mode", "mode must be one of txt2img, edit")
+    if mode is None and ("reference" in body or "reference_count" in body):
+        return fail("BAD_MODE_CONTEXT", "mode",
+                    "reference and reference_count require mode (txt2img or edit)")
+
+    has_free = "min_free_memory_gb" in body
+    has_total = "min_total_memory_gb" in body
+    free = body.get("min_free_memory_gb")
+    total = body.get("min_total_memory_gb")
+    ram_reset = ram_write = False
+    if has_free or has_total:
+        if has_free and free is None:
+            if total is None:
+                ram_reset = True
+            else:
+                return fail("RAM_RESET_MIXED", "min_total_memory_gb",
+                            "a reset sends both memory values null or absent")
+        elif not has_free or not has_total or total is None:
+            return fail("RAM_PAIR_REQUIRED", "min_total_memory_gb",
+                        "a numeric RAM write requires both min_free_memory_gb and "
+                        "min_total_memory_gb")
+        else:
+            ram_write = True
+        if ram_write:
+            for field, value in (("min_free_memory_gb", free),
+                                 ("min_total_memory_gb", total)):
+                if (isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not math.isfinite(value) or value < 0):
+                    return fail("BAD_VALUE", field,
+                                f"{field} must be a finite number >= 0")
+
+    reference_present = "reference" in body
+    count_present = "reference_count" in body
+    if count_present and not reference_present:
+        return fail("REFERENCE_COUNT_WITHOUT_REFERENCE", "reference_count",
+                    "reference_count is only valid with reference")
+    if reference_present and not count_present:
+        return fail("REFERENCE_COUNT_REQUIRED", "reference_count",
+                    "send reference_count: null for the generic row or an exact count")
+    if reference_present:
+        count = body.get("reference_count")
+        if count is not None and (isinstance(count, bool)
+                                  or not isinstance(count, int) or count < 1):
+            return fail("BAD_REFERENCE_COUNT", "reference_count",
+                        "reference_count must be null or a positive integer")
+        value = body.get("reference")
+        if value is not None:
+            if not isinstance(value, dict):
+                return fail("BAD_VALUE", "reference", "reference must be an object or null")
+            unknown_reference = set(value) - _REFERENCE_FIELDS
+            if unknown_reference:
+                name = sorted(unknown_reference)[0]
+                return fail("UNKNOWN_FIELD", name, f"{name} is not a reference field")
+            if not value:
+                return fail("REFERENCE_EMPTY", "reference",
+                            "reference must name a field, or be null to clear the row")
+            allowed = value.get("allowed")
+            if "allowed" in value and allowed is not None and type(allowed) is not bool:
+                return fail("BAD_VALUE", "allowed", "allowed must be a boolean or null")
+            maximum = value.get("max_reference_images")
+            if ("max_reference_images" in value and maximum is not None
+                    and (isinstance(maximum, bool) or not isinstance(maximum, int)
+                         or maximum < 0)):
+                return fail("BAD_VALUE", "max_reference_images",
+                            "max_reference_images must be an integer >= 0 or null")
+            swap = value.get("swap_allowance_gb")
+            if ("swap_allowance_gb" in value and swap is not None
+                    and (isinstance(swap, bool) or not isinstance(swap, (int, float))
+                         or not math.isfinite(swap) or swap < 0)):
+                return fail("BAD_VALUE", "swap_allowance_gb",
+                            "swap_allowance_gb must be a finite number >= 0 or null")
+        # D2/D3 consumers and D4 runtime authority are not wired yet: refuse loudly.
+        return fail("TIER_UNKNOWN", "reference",
+                    "reference writes are unavailable until the published reference table and "
+                    "its Hub consumers are wired (D2-D4); nothing was written")
+
+    if not (has_free or has_total or reference_present):
+        return fail("NOTHING_TO_WRITE", "", "send a RAM pair, a RAM reset, or a reference")
+    if entry is None:
+        raise HTTPException(404, "unknown model")
+
+    def change() -> None:
+        if ram_reset:
+            memory_admission.reset_override(model, entry, mode=mode)
+        else:
+            memory_admission.set_override(
+                model, min_total_memory_gb=float(total),
+                min_free_memory_gb=float(free), catalog_entry=entry, mode=mode)
+
+    try:
+        state = memory_admission.compare_and_write(
+            model, entry, node_id=node_id, expected_revision=revision, mode=mode,
+            total_memory_bytes=total_memory_bytes, model_default=None, change=change)
+    except memory_admission.RevisionConflict as conflict:
+        current = conflict.current
+        return JSONResponse({"ok": False, "code": "REVISION_CONFLICT", "node": node,
+                             "node_id": node_id, "current_revision": current.get("revision"),
+                             "admission": current}, status_code=409)
+    except ValueError as exc:
+        return fail("BAD_VALUE", "", str(exc))
+    return JSONResponse({"ok": True, "node": node, "node_id": node_id, **state})
+
+
 def _library_may_be_moved_from(what: str) -> bool:
     """True only when this Hub's data directory owns the model library (components/library_ownership.py).
 
@@ -4134,6 +4296,59 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except fleet.StartupRelayError as error:
             return JSONResponse(error.body, status_code=error.status)
         return JSONResponse(answer)
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/memory/admission")
+    async def fleet_node_memory_admission_read(node_id: str, model: str = "",
+                                               mode: str | None = None) -> JSONResponse:
+        """One Mac's memory admission from the Gateway: answered here for this Mac, relayed to a
+        joined node. The local Models-screen route is separate and stays model-wide."""
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        machine_id = fleet.this_machine()["id"].lower()
+        if wanted not in ("local", machine_id):
+            if control_plane.load_settings().get("role") != "controller":
+                return JSONResponse({"ok": False, "code": "NOT_CONTROLLER",
+                                     "detail": "this Mac is not a controller, so it has no "
+                                               "nodes to reach"}, status_code=404)
+            try:
+                answer = await fleet.relay_memory_admission(
+                    wanted, "GET", query={"model": model, "mode": mode})
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+            return JSONResponse(answer)
+        wanted_model = str(model or "").strip()
+        wanted_mode = mode or None
+        entry = None
+        if wanted_model and (wanted_mode is None or wanted_mode in ("txt2img", "edit")):
+            entry = _admission_entry(wanted_model)
+        return _fleet_memory_admission_read(model=wanted_model, mode=wanted_mode, entry=entry,
+                                            node=wanted, node_id=machine_id)
+
+    @app.put("/api/hub/fleet/nodes/{node_id}/memory/admission")
+    async def fleet_node_memory_admission_write(node_id: str,
+                                                body: dict[str, Any]) -> JSONResponse:
+        """Set or reset one Mac's RAM pair, or (once wired) one reference row, on that Mac."""
+        from .backend import fleet_nodes as fleet
+        wanted = node_id.strip().lower()
+        machine_id = fleet.this_machine()["id"].lower()
+        if wanted not in ("local", machine_id):
+            if control_plane.load_settings().get("role") != "controller":
+                return JSONResponse({"ok": False, "code": "NOT_CONTROLLER",
+                                     "detail": "this Mac is not a controller, so it has no "
+                                               "nodes to reach"}, status_code=404)
+            try:
+                answer = await fleet.relay_memory_admission(wanted, "PUT", body)
+            except fleet.StartupRelayError as error:
+                return JSONResponse(error.body, status_code=error.status)
+            return JSONResponse(answer)
+        model = str(body.get("model") or "").strip()
+        mode = body.get("mode")
+        entry = None
+        if model and (mode is None or mode in ("txt2img", "edit")):
+            entry = _admission_entry(model)
+        return _fleet_memory_admission_write(body=body, entry=entry, node=wanted,
+                                             node_id=machine_id,
+                                             total_memory_bytes=_admission_total_memory_bytes())
 
     # **Remote final rendering, allowed per Mac from the Gateway (owner, 2026-10-23).** The setting
     # is this Mac's own - it is the one that offers the capacity - so it is kept here, and the
