@@ -11,6 +11,7 @@ import json
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -166,6 +167,17 @@ class ReferencePolicyTests(AdmissionPolicyCase):
         self.assertEqual(row["sources"]["allowed"], "published")
         self.assertIsNone(row["unknown_reasons"]["allowed"])
 
+        partial = memory_admission.reference_policy(
+            "no/such-model", "edit", TIER_16, model_default={"allowed": True})
+        row = partial["rows"][0]
+        self.assertIs(row["effective"]["allowed"], True)
+        self.assertEqual(row["sources"]["allowed"], "published")
+        self.assertIsNone(row["effective"]["max_reference_images"])
+        self.assertIsNone(row["effective"]["swap_allowance_gb"])
+        self.assertTrue(row["unknown_reasons"]["max_reference_images"],
+                        "a field the model default did not supply stays unknown")
+        self.assertIsNone(row["published"])
+
     def test_unknown_stays_null_with_a_reason_not_false_or_zero(self) -> None:
         policy = memory_admission.reference_policy("no/such-model", "edit", TIER_16)
         self.assertTrue(policy["available"])
@@ -227,6 +239,44 @@ class ReferencePolicyTests(AdmissionPolicyCase):
         self.assertIs(rows[None]["effective"]["allowed"], True,
                       "a RAM reset must not clear a reference row")
 
+    def test_partial_writes_retain_absent_fields_and_null_clears_only_one(self) -> None:
+        memory_admission.set_reference_override(
+            MODEL, "edit", 2,
+            {"allowed": True, "max_reference_images": 5, "swap_allowance_gb": 1.5},
+            total_memory_bytes=TIER_16)
+        memory_admission.set_reference_override(
+            MODEL, "edit", 2, {"allowed": True}, total_memory_bytes=TIER_16)
+        row = self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_16))[2]
+        self.assertEqual(row["override"]["max_reference_images"], 5,
+                         "an absent field must retain the stored value")
+        self.assertEqual(row["override"]["swap_allowance_gb"], 1.5)
+
+        memory_admission.set_reference_override(
+            MODEL, "edit", 2, {"allowed": None}, total_memory_bytes=TIER_16)
+        row = self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_16))[2]
+        self.assertNotIn("allowed", row["override"],
+                         "an explicit null must clear only that field")
+        self.assertEqual(row["override"]["max_reference_images"], 5)
+        self.assertEqual(row["override"]["swap_allowance_gb"], 1.5)
+        self.assertEqual(row["sources"]["allowed"], "published",
+                         "the cleared field falls to the next rung")
+
+        memory_admission.set_reference_override(
+            MODEL, "edit", 2,
+            {"max_reference_images": None, "swap_allowance_gb": None},
+            total_memory_bytes=TIER_16)
+        row = self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_16))[2]
+        self.assertIsNone(row["override"], "a cell with no fields left is the row's clear")
+        self.assertEqual(row["effective"]["max_reference_images"], 3)
+        self.assertEqual(row["sources"]["max_reference_images"], "published")
+
+        memory_admission.set_reference_override(
+            MODEL, "edit", 3, {"allowed": False}, total_memory_bytes=TIER_16)
+        memory_admission.set_reference_override(
+            MODEL, "edit", 3, None, total_memory_bytes=TIER_16)
+        row = self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_16))[3]
+        self.assertIsNone(row["override"], "a top-level null clears the selected row only")
+
     def test_reference_write_validation_is_strict(self) -> None:
         for count in (0, -1, True, "2", 2.0):
             with self.subTest(count=count):
@@ -251,6 +301,27 @@ class ReferencePolicyTests(AdmissionPolicyCase):
 
 
 class PhysicalTierTests(AdmissionPolicyCase):
+    def test_missing_table_reads_unavailable_and_refuses_writes(self) -> None:
+        missing = Path(self.temp.name) / "missing-reference-limits.json"
+        with mock.patch.object(memory_admission, "REFERENCE_LIMITS_PATH", missing):
+            memory_admission._reference_limit_table.cache_clear()
+            try:
+                self.assertIsNone(memory_admission.physical_tier(TIER_16))
+                policy = memory_admission.reference_policy(MODEL, "edit", TIER_16)
+                self.assertIs(policy["available"], False)
+                self.assertTrue(policy["reason"])
+                state = memory_admission.effective_state(
+                    MODEL, ROW, node_id="local", mode="edit", total_memory_bytes=TIER_16)
+                self.assertIs(state["reference_policy"]["available"], False)
+                self.assertRegex(state["revision"], r"^[0-9a-f]{64}$")
+                with self.assertRaises(memory_admission.TierUnknown):
+                    memory_admission.set_reference_override(
+                        MODEL, "edit", 2, {"allowed": True}, total_memory_bytes=TIER_16)
+                self.assertFalse(self.settings.exists(),
+                                 "a TIER_UNKNOWN write must leave nothing behind")
+            finally:
+                memory_admission._reference_limit_table.cache_clear()
+
     def test_band_matches_the_image_resolver(self) -> None:
         from components.image.app.backend import generation
         samples = (6 * 1024 ** 3, TIER_8, TIER_16, 24 * 1024 ** 3, 32 * 1024 ** 3,
@@ -274,6 +345,72 @@ class PhysicalTierTests(AdmissionPolicyCase):
         row = memory_admission.reference_policy(MODEL, "edit", TIER_8)["rows"][0]
         self.assertFalse(row["stale_tier_ignored"])
         self.assertEqual(row["effective"]["max_reference_images"], 1)
+
+    def test_old_tier_values_stay_stored_and_restorable_across_a_new_tier_write(self) -> None:
+        memory_admission.set_reference_override(
+            MODEL, "edit", None,
+            {"allowed": True, "max_reference_images": 2}, total_memory_bytes=TIER_8)
+        memory_admission.set_reference_override(
+            MODEL, "edit", 2, {"allowed": True, "max_reference_images": 4},
+            total_memory_bytes=TIER_8)
+        memory_admission.set_reference_override(
+            MODEL, "edit", 3, {"allowed": False}, total_memory_bytes=TIER_8)
+        memory_admission.set_reference_override(
+            MODEL, "edit", 4, {"allowed": True, "max_reference_images": 1},
+            total_memory_bytes=TIER_16)
+        stored = json.loads(self.settings.read_text())[MODEL.lower() + "::reference"]
+        self.assertEqual(sorted(stored["cells"]), ["16", "8"],
+                         "a new-tier write must retain the old tier's settings")
+
+        old = self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_8))
+        self.assertEqual(old[None]["effective"]["max_reference_images"], 2)
+        self.assertEqual(old[2]["effective"]["max_reference_images"], 4)
+        self.assertFalse(old[3]["effective"]["allowed"])
+        self.assertFalse(old[None]["stale_tier_ignored"])
+
+        new = self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_16))
+        self.assertEqual(new[4]["effective"]["max_reference_images"], 1)
+        self.assertIsNone(new[2]["override"], "an old-tier exact cell applied on a new tier")
+        self.assertTrue(new[None]["stale_tier_ignored"])
+
+        # A selected reset at the new tier clears only that tier's selected row.
+        memory_admission.set_reference_override(
+            MODEL, "edit", 4, None, total_memory_bytes=TIER_16)
+        stored = json.loads(self.settings.read_text())[MODEL.lower() + "::reference"]
+        self.assertEqual(sorted(stored["cells"]), ["8"],
+                         "a new-tier reset must not remove the old tier's block")
+        old = self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_8))
+        self.assertEqual(old[None]["effective"]["max_reference_images"], 2)
+        self.assertEqual(old[2]["effective"]["max_reference_images"], 4)
+        self.assertFalse(old[3]["effective"]["allowed"])
+
+        # A reset of one sibling leaves the other old-tier settings untouched.
+        memory_admission.set_reference_override(
+            MODEL, "edit", 2, None, total_memory_bytes=TIER_8)
+        old = self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_8))
+        self.assertEqual(old[None]["effective"]["max_reference_images"], 2)
+        self.assertFalse(old[3]["effective"]["allowed"])
+
+    def test_an_older_single_tier_record_still_loads(self) -> None:
+        self.settings.write_text(json.dumps({
+            MODEL.lower() + "::reference": {
+                "model": MODEL,
+                "tier_gb": "8",
+                "cells": {"edit": {"generic": {"allowed": True,
+                                               "max_reference_images": 2,
+                                               "updated_at": 1.0},
+                                  "counts": {"2": {"allowed": False,
+                                                   "updated_at": 1.0}}}},
+                "updated_at": 1.0,
+            }
+        }))
+        memory_admission.reset_for_tests()
+        rows = self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_8))
+        self.assertEqual(rows[None]["effective"]["max_reference_images"], 2)
+        self.assertIs(rows[2]["effective"]["allowed"], False)
+        self.assertTrue(
+            self.rows(memory_admission.reference_policy(MODEL, "edit", TIER_16))[None]
+            ["stale_tier_ignored"])
 
     def test_a_write_on_a_new_tier_never_reapplies_the_stale_cells(self) -> None:
         memory_admission.set_reference_override(
@@ -317,6 +454,31 @@ class RevisionAndCasTests(AdmissionPolicyCase):
         self.assertEqual(mode["revision_covers"], memory_admission._REVISION_COVERS_MODE)
         self.assertIn("physical_tier", mode["revision_covers"])
         self.assertIn("reference_rows", mode["revision_covers"])
+
+    def test_reference_write_time_is_not_bound_and_reset_regains_the_earlier_token(self) -> None:
+        base = memory_admission.effective_state(
+            MODEL, ROW, node_id="local", mode="edit", total_memory_bytes=TIER_16)
+        self.assertIn("model_wide_fallback", base["revision_covers"])
+        memory_admission.set_reference_override(
+            MODEL, "edit", 2, {"allowed": True, "max_reference_images": 3},
+            total_memory_bytes=TIER_16)
+        first = memory_admission.effective_state(
+            MODEL, ROW, node_id="local", mode="edit", total_memory_bytes=TIER_16)
+        self.assertNotEqual(base["revision"], first["revision"])
+        time.sleep(0.01)
+        memory_admission.set_reference_override(
+            MODEL, "edit", 2, {"allowed": True, "max_reference_images": 3},
+            total_memory_bytes=TIER_16)
+        second = memory_admission.effective_state(
+            MODEL, ROW, node_id="local", mode="edit", total_memory_bytes=TIER_16)
+        self.assertEqual(first["revision"], second["revision"],
+                         "a write timestamp must not be part of the effective state")
+        memory_admission.set_reference_override(
+            MODEL, "edit", 2, None, total_memory_bytes=TIER_16)
+        cleared = memory_admission.effective_state(
+            MODEL, ROW, node_id="local", mode="edit", total_memory_bytes=TIER_16)
+        self.assertEqual(base["revision"], cleared["revision"],
+                         "a reset restoring the earlier state must regain its token")
 
     def test_a_published_table_change_flips_the_mode_token(self) -> None:
         state = memory_admission.effective_state(

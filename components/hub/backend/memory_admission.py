@@ -54,6 +54,10 @@ DEFAULT_MIN_FREE_MEMORY_GB = 2.0
 # The execution modes the fleet memory-admission wire names (proposal.r5, mode vocabulary).
 MODES = ("txt2img", "edit")
 
+
+class TierUnknown(ValueError):
+    """The physical tier cannot be resolved because the published table is unreadable."""
+
 # One lock guards every read-modify-write: the legacy local writes, the fleet CAS compare and
 # write, and revision computation. Re-entrant because a CAS `change` calls the writers below.
 _LOCK = threading.RLock()
@@ -261,21 +265,11 @@ def _clean_cell(value) -> dict | None:
     return cell
 
 
-def _reference_record(key: str, value: dict) -> dict | None:
-    """A stored reference record, or ``None`` when it states nothing usable.
-
-    The record carries one physical tier: a cell written at another tier is stale and is
-    dropped here, so it can never be applied to a tier it was not written for.
-    """
-    tier = value.get("tier_gb")
-    if isinstance(tier, bool) or not isinstance(tier, (str, int)):
-        return None
-    raw_cells = value.get("cells")
-    if not isinstance(raw_cells, dict):
-        return None
-    cells: dict = {}
+def _clean_mode_cells(raw: dict) -> dict:
+    """One tier's mode -> {generic, counts} view, dropping cells that state nothing."""
+    cleaned: dict = {}
     for mode in MODES:
-        block = raw_cells.get(mode)
+        block = raw.get(mode)
         if not isinstance(block, dict):
             continue
         generic = _clean_cell(block.get("generic"))
@@ -287,17 +281,39 @@ def _reference_record(key: str, value: dict) -> dict | None:
                     number = int(count)
                 except (TypeError, ValueError):
                     continue
-                cleaned = _clean_cell(cell)
-                if number >= 1 and cleaned is not None:
-                    counts[str(number)] = cleaned
+                cell = _clean_cell(cell)
+                if number >= 1 and cell is not None:
+                    counts[str(number)] = cell
         if generic is not None or counts:
-            cells[mode] = {"generic": generic, "counts": counts}
-    if not cells:
+            cleaned[mode] = {"generic": generic, "counts": counts}
+    return cleaned
+
+
+def _reference_record(key: str, value: dict) -> dict | None:
+    """A stored reference record, or ``None`` when it states nothing usable.
+
+    Storage keeps every physical tier's settings under its own tier block, so a write on one
+    tier never discards or reinterprets another tier's values. The older shape (``cells`` keyed
+    by mode under one record-level ``tier_gb``) still loads: it is read as that tier's block.
+    """
+    tier = value.get("tier_gb")
+    if isinstance(tier, bool) or not isinstance(tier, (str, int)):
+        return None
+    raw_cells = value.get("cells")
+    if not isinstance(raw_cells, dict):
+        return None
+    if any(mode in raw_cells for mode in MODES):
+        by_tier = {str(tier): _clean_mode_cells(raw_cells)}
+    else:
+        by_tier = {str(level): _clean_mode_cells(block)
+                   for level, block in raw_cells.items() if isinstance(block, dict)}
+    by_tier = {level: cells for level, cells in by_tier.items() if cells}
+    if not by_tier:
         return None
     return {
         "model": str(value.get("model") or key.split("::", 1)[0]),
         "tier_gb": str(tier),
-        "cells": cells,
+        "cells": by_tier,
         "updated_at": _number(value.get("updated_at")) or 0.0,
     }
 
@@ -595,13 +611,16 @@ def _reference_limit_table() -> dict | None:
     return table
 
 
-def physical_tier(total_memory_bytes: int | None) -> str:
+def physical_tier(total_memory_bytes: int | None) -> str | None:
     """The physical band this host falls in (``'8' | '16' | '24' | '32' | '<8'``).
 
     Identical arithmetic to ``generation.reference_tier``: decimal fleet bytes -> binary GiB,
-    rounded, placed in the first published band it clears.
+    rounded, placed in the first published band it clears. ``None`` means the published table is
+    unreadable, so no band is known and a reference write must be refused (never guessed).
     """
     table = _reference_limit_table()
+    if table is None:
+        return None
     gib = round((total_memory_bytes or 0) / 1024 ** 3)
     bands: set[int] = set()
     for row in (table or {}).get("rows") or []:
@@ -633,28 +652,44 @@ def _published_cell(row: dict | None, tier: str) -> dict | None:
     return _clean_cell(cell)
 
 
-def _override_cells(model: str, mode: str, tier: str) -> tuple[dict | None, dict[int, dict], bool]:
-    """The stored overrides for this model/mode at this tier, or an empty view when stale."""
+def _override_cells(model: str, mode: str, tier: str) -> tuple:
+    """The stored overrides for this model/mode at this tier, plus per-row stale flags.
+
+    Other tiers' blocks stay stored but are never applied here. A row with no current-tier
+    setting but a setting on another tier reports ``stale_tier_ignored`` for that row.
+    """
     record = _read().get(f"{_normalized(model)}::reference")
     if not isinstance(record, dict):
-        return None, {}, False
-    if str(record.get("tier_gb")) != tier:
-        # Written on a different physical tier: every cell in it is stale and is ignored as
-        # absent. It is never applied to another tier.
-        return None, {}, True
-    block = (record.get("cells") or {}).get(mode)
-    if not isinstance(block, dict):
-        return None, {}, False
-    generic = block.get("generic")
+        return None, {}, False, set()
+    by_tier = record.get("cells") or {}
+    block = (by_tier.get(tier) or {}).get(mode)
+    generic = block.get("generic") if isinstance(block, dict) else None
     counts: dict[int, dict] = {}
-    for count, cell in (block.get("counts") or {}).items():
+    for count, cell in ((block or {}).get("counts") or {}).items():
         try:
             number = int(count)
         except (TypeError, ValueError):
             continue
         if number >= 1 and isinstance(cell, dict):
             counts[number] = cell
-    return generic, counts, False
+    stale_generic = False
+    stale_counts: set[int] = set()
+    for level, cells in by_tier.items():
+        if level == tier:
+            continue
+        other = (cells or {}).get(mode)
+        if not isinstance(other, dict):
+            continue
+        if other.get("generic"):
+            stale_generic = True
+        for count in other.get("counts") or {}:
+            try:
+                number = int(count)
+            except (TypeError, ValueError):
+                continue
+            if number not in counts:
+                stale_counts.add(number)
+    return generic, counts, (generic is None and stale_generic), stale_counts
 
 
 def _intrinsic_cap(rows: list[dict], table: dict) -> tuple[int | None, str | None]:
@@ -689,6 +724,10 @@ def reference_policy(model: str, mode: str, total_memory_bytes: int | None, *,
         return {"available": False,
                 "reason": f"mode {mode!r} is not one of {', '.join(MODES)}"}
     tier = physical_tier(total_memory_bytes)
+    if tier is None:
+        return {"available": False,
+                "reason": ("the published reference limits table is not readable at "
+                           f"{REFERENCE_LIMITS_PATH}")}
     rows = [row for row in _published_reference_rows(model) if row.get("mode") == mode]
     generic_published = next((row for row in rows if row.get("reference_count") is None), None)
     published = {
@@ -699,7 +738,8 @@ def reference_policy(model: str, mode: str, total_memory_bytes: int | None, *,
     }
     generic_cell = _published_cell(generic_published, tier)
     exact_cells = {count: _published_cell(row, tier) for count, row in published.items()}
-    generic_override, override_counts, stale = _override_cells(model, mode, tier)
+    generic_override, override_counts, stale_generic, stale_counts = _override_cells(
+        model, mode, tier)
     intrinsic, intrinsic_reason = _intrinsic_cap(rows, table)
     default_cell = _clean_cell(model_default) if isinstance(model_default, dict) else None
 
@@ -744,7 +784,7 @@ def reference_policy(model: str, mode: str, total_memory_bytes: int | None, *,
             "intrinsic_unknown_reason": intrinsic_reason,
             "clamped_reason": clamped_reason,
             "overridden": "override" in sources.values(),
-            "stale_tier_ignored": stale,
+            "stale_tier_ignored": (stale_generic if count is None else count in stale_counts),
         }
 
     counts = sorted(set(published) | set(override_counts))
@@ -768,8 +808,9 @@ def set_reference_override(model: str, mode: str, reference_count: int | None,
     """Write or clear exactly one reference row on this Mac; sibling rows are untouched.
 
     ``reference_count`` is ``None`` for the generic row or a strict positive int for an exact
-    row. ``value`` ``None`` clears the selected row; a per-field ``null`` clears only that field.
-    A record written at another physical tier is replaced, never re-applied to this tier.
+    row. ``value`` ``None`` clears the selected row; an absent field retains its stored value
+    and an explicit ``null`` clears only that field. Other tiers' settings stay stored and
+    restorable; only the current tier's selected identity is mutated.
     """
     key = _normalized(model)
     if not key:
@@ -783,8 +824,14 @@ def set_reference_override(model: str, mode: str, reference_count: int | None,
     if (isinstance(total_memory_bytes, bool)
             or not isinstance(total_memory_bytes, (int, float)) or total_memory_bytes < 0):
         raise ValueError("total_memory_bytes is required to resolve the physical tier")
+    if _reference_limit_table() is None:
+        raise TierUnknown(
+            "TIER_UNKNOWN: the published reference limits table is unreadable")
     tier = physical_tier(total_memory_bytes)
-    cell = None
+    if tier is None:
+        raise TierUnknown(
+            "TIER_UNKNOWN: the published reference limits table is unreadable")
+    updates: dict = {}
     if value is not None:
         if not isinstance(value, dict):
             raise ValueError("reference value must be an object or null")
@@ -805,18 +852,38 @@ def set_reference_override(model: str, mode: str, reference_count: int | None,
         if (swap is not None and (isinstance(swap, bool) or not isinstance(swap, (int, float))
                                   or not math.isfinite(swap) or swap < 0)):
             raise ValueError("swap_allowance_gb must be a finite number >= 0 or null")
-        cell = _clean_cell(value)
-        if cell is not None:
-            cell["updated_at"] = time.time()
+        updates = {field: (float(value[field]) if field == "swap_allowance_gb"
+                           and value[field] is not None else value[field])
+                   for field in ("allowed", "max_reference_images", "swap_allowance_gb")
+                   if field in value}
     global _cache
     with _LOCK:
         values = json.loads(json.dumps(_read()))
         record_key = f"{key}::reference"
         record = values.get(record_key)
-        if not isinstance(record, dict) or str(record.get("tier_gb")) != tier:
+        if not isinstance(record, dict):
             record = {"model": model, "tier_gb": tier, "cells": {}, "updated_at": 0.0}
-        cells = record.setdefault("cells", {})
-        block = cells.setdefault(mode, {"generic": None, "counts": {}})
+        by_tier = record.setdefault("cells", {})
+        tier_cells = by_tier.setdefault(tier, {})
+        block = tier_cells.setdefault(mode, {"generic": None, "counts": {}})
+        selected = (block.get("generic") if reference_count is None
+                    else (block.get("counts") or {}).get(str(reference_count)))
+        if value is None:
+            cell = None
+        else:
+            # A partial write changes only the fields it names; an explicit null clears only
+            # that field, and a cell left with no fields is the selected row's clear.
+            cell = dict(selected) if isinstance(selected, dict) else {}
+            cell.pop("updated_at", None)
+            for field, field_value in updates.items():
+                if field_value is None:
+                    cell.pop(field, None)
+                else:
+                    cell[field] = field_value
+            if cell:
+                cell["updated_at"] = time.time()
+            else:
+                cell = None
         if reference_count is None:
             block["generic"] = cell
         else:
@@ -826,10 +893,13 @@ def set_reference_override(model: str, mode: str, reference_count: int | None,
             else:
                 counts[str(reference_count)] = cell
         if not block.get("generic") and not block.get("counts"):
-            cells.pop(mode, None)
-        if not cells:
+            tier_cells.pop(mode, None)
+        if not tier_cells:
+            by_tier.pop(tier, None)
+        if not by_tier:
             values.pop(record_key, None)
         else:
+            record["tier_gb"] = tier
             record["updated_at"] = time.time()
             values[record_key] = record
         _write(values)
@@ -837,7 +907,7 @@ def set_reference_override(model: str, mode: str, reference_count: int | None,
 
 
 _REVISION_COVERS_MODEL = ["node_id", "model", "mode", "ram_effective", "ram_sources",
-                          "override_scope", "published_ram"]
+                          "override_scope", "model_wide_fallback", "published_ram"]
 _REVISION_COVERS_MODE = _REVISION_COVERS_MODEL + ["physical_tier", "reference_rows"]
 
 
@@ -883,17 +953,35 @@ def _bound_state(description: dict, model_key: str, mode: str | None,
                 "min_free_memory_gb": record["min_free_memory_gb"],
             }
     if reference is not None:
-        state["physical_tier"] = {
-            "tier": reference["physical_tier"],
-            "tier_gb": reference["physical_tier_gb"],
-            "total_memory_bytes": reference["total_memory_bytes"],
-        }
-        state["reference_rows"] = reference["rows"]
+        if reference.get("available"):
+            state["physical_tier"] = {
+                "tier": reference["physical_tier"],
+                "tier_gb": reference["physical_tier_gb"],
+                "total_memory_bytes": reference["total_memory_bytes"],
+            }
+            state["reference_rows"] = reference["rows"]
+        else:
+            # An unreadable table is an honest unavailable state, not a crash and not a guess.
+            state["physical_tier"] = {"tier": None, "tier_gb": None,
+                                      "total_memory_bytes": None}
+            state["reference_rows"] = {"available": False,
+                                       "reason": reference.get("reason")}
     return state
 
 
+def _without_timestamps(value):
+    """Strip ``updated_at`` at every depth: write time is not part of the effective state."""
+    if isinstance(value, dict):
+        return {key: _without_timestamps(item) for key, item in value.items()
+                if key != "updated_at"}
+    if isinstance(value, list):
+        return [_without_timestamps(item) for item in value]
+    return value
+
+
 def _revision(state: dict) -> str:
-    payload = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    payload = json.dumps(_without_timestamps(state), sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
