@@ -642,6 +642,64 @@ def _fleet_memory_admission_write(*, body: dict, entry: dict | None, node: str,
     return JSONResponse({"ok": True, "node": node, "node_id": node_id, **state})
 
 
+def _annotate_worker_catalog(monitor: StudioMonitor, worker: dict, content: bytes,
+                             content_type: str) -> bytes:
+    """Carry the producer's r5 inventory onto this Mac's raw worker catalog rows.
+
+    A controller reads a remote node's peer `/studio/<modality>/api/catalog` through this proxy.
+    Without the annotation that row loses the producer's policy and the controller falls back to
+    the older ABSENT path. The aggregate catalog already annotates local rows from one node
+    identity and one host total; that exact snapshot is reused, so the remote row carries the
+    same token the aggregate GET answers with. A row the aggregate has not seen yet is computed
+    with the same helper and identity, never with the caller's or controller's values.
+    """
+    from .backend import memory_admission, monitor as monitor_module
+    if str(worker.get("machine") or "local") != "local":
+        return content
+    if "json" not in (content_type or "").lower():
+        return content
+    try:
+        catalog = json.loads(content)
+    except (TypeError, ValueError):
+        return content
+    rows = catalog.get("models") if isinstance(catalog, dict) else None
+    if not isinstance(rows, list) or not memory_admission.applies_to(worker.get("modality")):
+        return content
+    try:
+        aggregate = monitor.cached_aggregate_catalog().get("models") or []
+    except Exception:  # noqa: BLE001 - an unavailable cache is the fallback path, not a 500
+        aggregate = []
+    by_model = {}
+    for row in aggregate:
+        if isinstance(row, dict) and row.get("hub_studio") == worker.get("id"):
+            by_model.setdefault(row.get("repo"), row)
+    node_id = monitor_module._local_node_id()
+    total_bytes = monitor_module._local_total_memory_bytes()
+    health = ((monitor.status.get(worker.get("id")) or {}).get("health") or {})
+    memory = health.get("memory") if isinstance(health, dict) else None
+    total_gb = memory.get("total_gb") if isinstance(memory, dict) else None
+    if not isinstance(total_gb, (int, float)) or isinstance(total_gb, bool):
+        from .backend import hardware_profiles
+        total_gb = (hardware_profiles.machine_hardware_profile(
+            worker.get("machine", "local")) or {}).get("memory_gb")
+    changed = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        model = str(row.get("repo") or row.get("model_id") or "")
+        if not model:
+            continue
+        source = by_model.get(row.get("repo")) or by_model.get(row.get("model_id"))
+        if source is not None and "hub_memory_admission" in source:
+            row["hub_memory_admission"] = source["hub_memory_admission"]
+        else:
+            annotated = memory_admission.publish_floor(dict(row), total_gb)
+            row["hub_memory_admission"] = monitor_module._memory_admission_inventory(
+                model, annotated, node_id=node_id, total_memory_bytes=total_bytes)
+        changed = True
+    return json.dumps(catalog, separators=(",", ":")).encode() if changed else content
+
+
 def _library_may_be_moved_from(what: str) -> bool:
     """True only when this Hub's data directory owns the model library (components/library_ownership.py).
 
@@ -5446,7 +5504,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         for name in ("content-type", "content-disposition", "x-content-sha256"):
             if name in upstream.headers:
                 passthrough[name] = upstream.headers[name]
-        return Response(content=upstream.content, status_code=upstream.status_code,
+        content = upstream.content
+        if request.method == "GET" and path.strip("/") == "catalog":
+            content = _annotate_worker_catalog(
+                monitor, worker, content, upstream.headers.get("content-type") or "")
+        return Response(content=content, status_code=upstream.status_code,
                         headers=passthrough)
 
     async def _relay_chat_to_node(request: Request, record) -> Response | None:
