@@ -5,15 +5,15 @@ Plain-language changes appear first in each release and feed the app’s What’
 ## 0.6.225 — 2026-11-07
 
 - App updates run safe update checks so upgrading from 0.6.224 uses a full image first via the paired Gateway.
-- YuE2 8-bit AR and bf16 NAR vocal music generation supports seven languages (English, Chinese, Cantonese, Japanese, Korean, Spanish, Russian) with English as the default. Supported languages are selected generically from the model contract without hardcoded client lists.
+- YuE2 8-bit AR and bf16 NAR vocal music generation supports seven languages (English, Chinese, Cantonese, Japanese, Korean, Spanish, Russian) with English as the default.
 
 ### Technical notes
 
 - Candidate only: full release gate, packaging, local installation, live UI verification, and fleet rollout are NOT DONE. Release target 0.6.225 is subject to gate and release go; do not claim shipped.
 - Packaging external post-seal manifest and normalized payload (`2d4073c`): stages deep ad-hoc code-signed bundle (`--force --deep --sign - --timestamp=none`), strictly verifies code seal (`codesign --verify --deep --strict`), writes external sidecar manifest (`Studio Hub.app.file-manifest`) with complete byte closure, records post-seal stage digest in `output.tree-sha256`, and packages raw tree plus sidecar into read-only DMG root without mutating the sealed `.app`. Independent packaging verification PASS (31 passed, 1 skip, actual exit 0).
-- Installed baseline scan nonblocking (`61c8da1`): answers release capability probe without waiting for a cold scan. Independent tests PASS (40 unit passed, 1 skip, 46 route passed, actual exit 0).
+- Installed baseline scan nonblocking (`61c8da1`): answers release capability probe without waiting for a cold scan. Independent tests PASS (40 unit passed, 1 skip, 46 route passed; receipts inferred from successful summaries, no captured exit file).
 - YuE2 vocal language contract and native view repair (`91c069b`): strips contract defaults on request-only parameters in `generation.py`, retains catalog defaults `vocal_language: "en"`, validates seven-code language enum `["en", "zh", "yue", "ja", "ko", "es", "ru"]`, removes hardcoded `yue2` fallback in `native/StudioAPI.swift`, and reads decoded contract options generically in `native/StudioViews.swift`. Focused 43 tests and native Swift typechecks PASS.
-- Paired Gateway review and repair (`c0ea76c`): receipt verification report PASS (97 Python, 17 Node, 19/19 + 4/4 pending updated receipt verification).
+- Paired Gateway review and repair (`c0ea76c`): receipt verification report PASS (97 Python, 17 Node; lead independently verified 19/19 actual acceptance and 4/4 prepush with zero POST/PUT).
 
 ## 0.6.224 — 2026-11-06
 
