@@ -413,6 +413,52 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(answer.json()["code"], "NOT_CONTROLLER")
 
 
+    def _controller(self, client: FakeClient):
+        from components.hub.backend import fleet_pull
+        roster = {"node-a": {"address": "http://node.test"}}
+        return [
+            mock.patch.object(standalone.control_plane, "load_settings",
+                              lambda: {"role": "controller"}),
+            mock.patch.object(fleet_nodes, "_read", lambda: roster),
+            mock.patch.object(fleet_nodes, "_probe_client", lambda: client),
+            mock.patch.object(fleet_nodes, "checkin_alive", lambda row: True),
+            mock.patch.object(fleet_pull, "queue_json", lambda *a, **k: {"id": "c1"}),
+        ]
+
+    def test_a_held_put_is_202_pending_with_no_readback_and_no_replay(self) -> None:
+        client = FakeClient(error=httpx.ConnectError("off"))
+        patches = self._controller(client)
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        answer = self.request("PUT", "/api/hub/fleet/nodes/node-a/memory/admission",
+                              headers={"X-Hub-Token": self.token},
+                              json={"model": MODEL, "expected_revision": "a" * 64})
+        self.assertEqual(answer.status_code, 202, answer.text)
+        body = answer.json()
+        self.assertEqual(body["outcome"], "pending")
+        self.assertTrue(body["queued"])
+        self.assertNotIn("revision", body)
+        self.assertNotIn("admission", body)
+        self.assertEqual(len(client.calls), 1, "a held write is never replayed")
+
+    def test_a_target_202_is_pending_through_the_outer_route(self) -> None:
+        held = {"ok": True, "queued": True, "node": "node-a", "command": "c1", "detail": "held"}
+        client = FakeClient(FakeAnswer(202, held))
+        patches = self._controller(client)
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        answer = self.request("PUT", "/api/hub/fleet/nodes/node-a/memory/admission",
+                              headers={"X-Hub-Token": self.token},
+                              json={"model": MODEL, "expected_revision": "a" * 64})
+        # The relay body says pending; the outer route (standalone.py) returns it as 200 because
+        # it passes no status. Pinned here so the gap is visible until that owner fixes it.
+        self.assertEqual(answer.status_code, 200, answer.text)
+        self.assertEqual(answer.json()["outcome"], "pending")
+        self.assertEqual(len(client.calls), 1)
+
+
 class AllowlistTests(unittest.TestCase):
     PATH = "/api/hub/fleet/nodes/node-a/memory/admission"
 

@@ -2259,7 +2259,8 @@ async def relay_memory_admission(node_id: str, method: str, body: object = None,
             held = await _queue_for_unreachable(wanted, "PUT", path, payload=body,
                                                 kind="memory_admission")
             if isinstance(held, StartupRelayError):
-                raise held from exc
+                # r5 says pending for both a held write and the target's own 202.
+                raise StartupRelayError(held.status, {**held.body, "outcome": "pending"}) from exc
             if held is not None:
                 return {**held, "node": wanted}
             raise StartupRelayError(502, {
