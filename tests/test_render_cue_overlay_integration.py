@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -32,6 +33,18 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if str(ROOT / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT / "tests"))
+
+# Load repo namespace by path to avoid masking from installed third-party packaging package.
+_stage_render_tools_spec = importlib.util.spec_from_file_location(
+    "studiohub_stage_render_tools",
+    ROOT / "packaging" / "stage_render_tools.py",
+)
+_stage_render_tools = importlib.util.module_from_spec(_stage_render_tools_spec)
+sys.modules[_stage_render_tools_spec.name] = _stage_render_tools
+_stage_render_tools_spec.loader.exec_module(_stage_render_tools)
+
+_AuthorityPin = _stage_render_tools._AuthorityPin
+_stage_render_authority_into = _stage_render_tools._stage_render_authority_into
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -75,10 +88,6 @@ from components.hub.backend.render_service import (
     LATE_LABEL_CONTRACT,
     LATE_LABEL_CAPABILITIES_FORMAT,
     register_routes,
-)
-from packaging.stage_render_tools import (
-    _AuthorityPin,
-    _stage_render_authority_into,
 )
 
 HUB_TOKEN = "cue-overlay-hub-token"
@@ -376,43 +385,62 @@ class CueOverlayExecutorPathTests(unittest.IsolatedAsyncioTestCase):
             (fixtures.ROOT / "tests/fixtures/final-render-compiler-v1.json").read_text()
         )["f0_base_audio"]["packet"])
 
+        packet["recipe"]["base_video"] = {"type": "asset_ref", "logical_id": "audio"}
+        packet["recipe"]["premixed_audio"] = {"type": "asset_ref", "logical_id": "base"}
+
+        png_bytes = b"\x89PNG\r\n\x1a\nfake_png"
+        packet["manifest"] = [
+            {"logical_id": "audio", "safe_name": "audio.wav", "role": "base_video", "size_bytes": 100, "sha256": "0" * 64},
+            {"logical_id": "base", "safe_name": "base.mp4", "role": "premixed_audio", "size_bytes": 100, "sha256": "1" * 64},
+            {"logical_id": "cue_0000_label", "safe_name": "cue_0000_label.png", "role": "cue_label", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
+            {"logical_id": "cue_0002_label", "safe_name": "cue_0002_label.png", "role": "cue_label", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
+            {"logical_id": "cue_overlay_0001", "safe_name": "cue_overlay_0001.webm", "role": "cue_overlay", "size_bytes": webm_size, "sha256": webm_sha},
+        ]
+
         # Add mixed operations: late_label_stage -> cue_overlay_stage -> late_label_stage
         packet["recipe"]["canvas"] = {"width": 64, "height": 64, "working_fps": 5}
-        packet["recipe"]["duration"] = 1.0
+        packet["recipe"]["target_duration_sec"] = 1.0
         packet["recipe"]["operations"] = [
             {
                 "kind": "late_label_stage",
                 "contract": "studio.render.late-label.v3",
                 "cue_id": "label_first",
-                "time_range": {"start_sec": 0.0, "end_sec": 0.4},
-                "asset": "label_first",
-                "motion": "none",
+                "enable": {"start_sec": 0.0, "end_sec": 0.4},
+                "placement": {"x_px": 0, "y_px": 0},
+                "motion": {"kind": "none", "entrance_sec": 0.3},
+                "label": {"asset": {"type": "asset_ref", "logical_id": "cue_0000_label"}},
+                "reveal": None,
+                "line": None,
+                "line_reveal": None,
             },
             {
                 "kind": "cue_overlay_stage",
                 "contract": _CUE_OVERLAY_CONTRACT,
                 "cue_id": "cue_mid",
                 "time_range": {"start_sec": 0.0, "end_sec": 0.4},
-                "asset": "cue_overlay_0000",
+                "asset": {"type": "asset_ref", "logical_id": "cue_overlay_0001"},
                 "fade": {"in_sec": 0.1, "out_sec": 0.1},
-                "slide": {"direction": "none", "duration_sec": 0.0, "offset": 0},
+                "slide": {"axis": "x", "offset_px": 0, "start_sec": 0.1, "duration_sec": 0.1},
             },
             {
                 "kind": "late_label_stage",
                 "contract": "studio.render.late-label.v3",
                 "cue_id": "label_last",
-                "time_range": {"start_sec": 0.0, "end_sec": 0.4},
-                "asset": "label_last",
-                "motion": "none",
+                "enable": {"start_sec": 0.0, "end_sec": 0.4},
+                "placement": {"x_px": 0, "y_px": 0},
+                "motion": {"kind": "none", "entrance_sec": 0.3},
+                "label": {"asset": {"type": "asset_ref", "logical_id": "cue_0002_label"}},
+                "reveal": None,
+                "line": None,
+                "line_reveal": None,
             },
         ]
         png_bytes = b"\x89PNG\r\n\x1a\nfake_png"
         packet["manifest"] = [
-            {"logical_id": "base_video", "safe_name": "base.mp4", "role": "base_video", "size_bytes": 100, "sha256": "0" * 64},
-            {"logical_id": "premixed_audio", "safe_name": "audio.wav", "role": "premixed_audio", "size_bytes": 100, "sha256": "1" * 64},
-            {"logical_id": "label_first", "safe_name": "label_first.png", "role": "cue_label", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
-            {"logical_id": "cue_overlay_0000", "safe_name": "cue_overlay_0000.webm", "role": "cue_overlay", "size_bytes": webm_size, "sha256": webm_sha},
-            {"logical_id": "label_last", "safe_name": "label_last.png", "role": "cue_label", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
+            {"logical_id": "audio", "safe_name": "audio.wav", "role": "premixed_audio", "size_bytes": 100, "sha256": "1" * 64},
+            {"logical_id": "cue_0000_label", "safe_name": "cue_0000_label.png", "role": "base_video", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
+            {"logical_id": "cue_0002_label", "safe_name": "cue_0002_label.png", "role": "cue_label", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
+            {"logical_id": "cue_overlay_0001", "safe_name": "cue_overlay_0001.webm", "role": "cue_overlay", "size_bytes": webm_size, "sha256": webm_sha},
         ]
         packet["recipe_digest"] = render_hash("recipe", packet["recipe"])
         packet["manifest_digest"] = render_hash("manifest", packet["manifest"])
@@ -425,9 +453,9 @@ class CueOverlayExecutorPathTests(unittest.IsolatedAsyncioTestCase):
         files = {
             "h_video": root / "base.mp4",
             "h_audio": root / "audio.wav",
-            "h_label1": root / "l1.png",
+            "h_label1": root / "cue_0000_label.png",
             "h_cue": webm_path,
-            "h_label2": root / "l2.png",
+            "h_label2": root / "cue_0002_label.png",
         }
         files["h_video"].write_bytes(fixture.mp4_bytes())
         files["h_audio"].write_bytes(fixture.wav_bytes())
@@ -445,11 +473,11 @@ class CueOverlayExecutorPathTests(unittest.IsolatedAsyncioTestCase):
         })
 
         handles = {
-            "base_video": "h_video",
-            "premixed_audio": "h_audio",
-            "label_first": "h_label1",
-            "cue_overlay_0000": "h_cue",
-            "label_last": "h_label2",
+            "base": "h_video",
+            "audio": "h_audio",
+            "cue_0000_label": "h_label1",
+            "cue_overlay_0001": "h_cue",
+            "cue_0002_label": "h_label2",
         }
 
         authority = fixture.authority()
