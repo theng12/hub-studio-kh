@@ -97,7 +97,7 @@ class ScopedCase(unittest.TestCase):
             "payload_format": "macos-universal", "production_eligible": False,
             "files": [{"name": name, "path": f"render-tools/{name}", **self.tool_files[name]}
                       for name in ("ffmpeg", "ffprobe")]}))
-        backend = ROOT / "components/hub/backend"
+        backend = ROOT / "components/hub/backend/render_subtitle_v4"
         compiler_raw = compact({
             "format": "studio.render.compiler.v1",
             "implementation": "hub-final-render-subtitle-v1",

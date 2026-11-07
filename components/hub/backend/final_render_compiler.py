@@ -1213,9 +1213,9 @@ def _build_cue_overlay_filters(
             f"if(lt(t,{s_end_str}),{offset_px}*(1-(t-{s_start_str})/{s_dur_str}),0))"
         )
         if slide["axis"] == "x":
-            x = slide_expr
+            x = f"'{slide_expr}'"
         else:
-            y = slide_expr
+            y = f"'{slide_expr}'"
 
     output_label = alloc_label()
     options = [f"x={x}", f"y={y}", "eof_action=repeat"]

@@ -577,6 +577,13 @@ class InstalledRenderAuthorityLoader:
                     compile_final_render_packet as late_label_compile,
                 )
                 return late_label_compile
+        if descriptors[1]["implementation"] == _SUBTITLE_COMPILER_IMPLEMENTATION:
+            frozen_v4 = Path(__file__).parent / "render_subtitle_v4"
+            if frozen_v4.is_dir():
+                from .render_subtitle_v4.final_render_compiler import (
+                    compile_final_render_packet as subtitle_compile,
+                )
+                return subtitle_compile
         return compile_final_render_packet
 
     def _manifest_matches(self, files: dict[str, Any]) -> bool:
@@ -815,6 +822,13 @@ class InstalledRenderAuthorityLoader:
                 frozen_v3 = source_root / "render_late_label_v3"
                 if frozen_v3.is_dir():
                     source_root = frozen_v3
+            elif compiler_descriptor["implementation"] == _SUBTITLE_COMPILER_IMPLEMENTATION:
+                # The v4 wire is frozen at its release bytes. The v5 work edits the live
+                # compiler/contract, so v4 validates from its own copy once that copy is
+                # installed; without it the live root is still read, exactly as before.
+                frozen_v4 = source_root / "render_subtitle_v4"
+                if frozen_v4.is_dir():
+                    source_root = frozen_v4
             source_hashes = {
                 "python_runtime_sha256": _sha(Path(sys.executable))[1],
                 "render_hash_sha256": _sha(source_root / "render_hash_v1.py")[1],
