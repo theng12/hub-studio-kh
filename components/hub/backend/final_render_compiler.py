@@ -1163,6 +1163,69 @@ def _build_late_label_filters(
     return tuple(filters), current
 
 
+def _build_cue_overlay_filters(
+    video_label: str,
+    alloc_label: Callable[[], str],
+    operation: Mapping[str, object],
+    cue_overlay_indices: Mapping[str, int],
+) -> tuple[tuple[str, ...], str]:
+    start = float(operation["time_range"]["start_sec"])
+    end = float(operation["time_range"]["end_sec"])
+    logical_id = str(operation["asset"]["logical_id"])
+    input_index = cue_overlay_indices[logical_id]
+
+    statements: list[str] = []
+    source = alloc_label()
+    statements.append(f"[{input_index}:v]setpts=PTS-STARTPTS+{_js_fixed(start, 3)}/TB{source}")
+    current_overlay = source
+
+    fade = operation["fade"]
+    if fade is not None:
+        in_sec = float(fade["in_sec"])
+        out_sec = float(fade["out_sec"])
+        if in_sec > 0:
+            faded = alloc_label()
+            statements.append(
+                f"{current_overlay}fade=t=in:st={_js_fixed(start, 3)}:d={_js_fixed(in_sec, 3)}:alpha=1{faded}"
+            )
+            current_overlay = faded
+        if out_sec > 0:
+            faded = alloc_label()
+            statements.append(
+                f"{current_overlay}fade=t=out:st={_js_fixed(end - out_sec, 3)}:d={_js_fixed(out_sec, 3)}:alpha=1{faded}"
+            )
+            current_overlay = faded
+
+    slide = operation["slide"]
+    x = "0"
+    y = "0"
+    eval_frame = False
+    if slide is not None:
+        eval_frame = True
+        s_start = float(slide["start_sec"])
+        s_dur = float(slide["duration_sec"])
+        offset_px = int(slide["offset_px"])
+        s_start_str = _js_fixed(s_start, 3)
+        s_end_str = _js_fixed(s_start + s_dur, 3)
+        s_dur_str = _js_fixed(s_dur, 3)
+        slide_expr = (
+            f"if(lt(t,{s_start_str}),{offset_px},"
+            f"if(lt(t,{s_end_str}),{offset_px}*(1-(t-{s_start_str})/{s_dur_str}),0))"
+        )
+        if slide["axis"] == "x":
+            x = slide_expr
+        else:
+            y = slide_expr
+
+    output_label = alloc_label()
+    options = [f"x={x}", f"y={y}", "eof_action=repeat"]
+    if eval_frame:
+        options.append("eval=frame")
+    options.append(_late_gate_enable(start, end).lstrip(":"))
+    statements.append(f"{video_label}{current_overlay}overlay={':'.join(options)}{output_label}")
+    return tuple(statements), output_label
+
+
 def _describe_burn_ins(operations: list[dict]) -> tuple[str, ...]:
     kinds = {operation["kind"] for operation in operations}
     result = []
@@ -1300,6 +1363,7 @@ def _checked_assets(packet: Mapping[str, object], local_assets: Mapping[str, str
 def _compile_validated_packet(
     packet: Mapping[str, object], local_assets: Mapping[str, str], output_path: str,
     *, late_labels_allowed: bool = False, subtitles_allowed: bool = False,
+    cue_overlays_allowed: bool = False,
     subtitle_fonts_dir: str | None = None, subtitle_limits: Mapping[str, object] | None = None,
 ) -> FinalRenderPlan:
     late_operations = _late_label_operations(packet)
@@ -1308,6 +1372,9 @@ def _compile_validated_packet(
     assets = _checked_assets(packet, local_assets, output_path)
     recipe = packet["recipe"]
     operations = recipe["operations"]
+    cue_operations = [item for item in operations if item["kind"] == "cue_overlay_stage"]
+    if cue_operations and cue_overlays_allowed is not True:
+        raise UnsupportedFinalRenderCombination("cue_overlay_profile_not_allowed")
     subtitle = next((item for item in operations if item["kind"] == "subtitle_stage"), None)
     if subtitle is not None:
         if subtitles_allowed is not True:
@@ -1365,6 +1432,12 @@ def _compile_validated_packet(
 
     cue_indices: dict[str, int] = {}
     sequence_indices: dict[str, int] = {}
+    cue_overlay_indices: dict[str, int] = {}
+    for operation in cue_operations:
+        logical_id = operation["asset"]["logical_id"]
+        if logical_id not in cue_overlay_indices:
+            cue_overlay_indices[logical_id] = add_input(
+                operation["asset"], {"kind": "single"})
     for op_index, operation in late_operations:
         for key in ("label", "line"):
             item = operation[key]
@@ -1468,7 +1541,12 @@ def _compile_validated_packet(
                 sequence_indices, op_index, fps,
             )
             filters.extend(parts)
-        else:
+        elif kind == "cue_overlay_stage":
+            parts, video_label = _build_cue_overlay_filters(
+                video_label, alloc_label, operation, cue_overlay_indices,
+            )
+            filters.extend(parts)
+        elif kind == "logo":
             logo_config = {
                 "position": operation["anchor"], "opacity": operation["opacity"],
                 "scale": operation["scale"], "margin": operation["margin_px"],
@@ -1500,6 +1578,7 @@ def _compile_validated_packet(
 def compile_final_render_packet(
     raw: bytes, local_assets: Mapping[str, str], output_path: str,
     *, late_labels_allowed: bool = False, subtitles_allowed: bool = False,
+    cue_overlays_allowed: bool = False,
     subtitle_fonts_dir: str | None = None, subtitle_limits: Mapping[str, object] | None = None,
 ) -> FinalRenderPlan:
     packet = validate_render_packet_syntax(raw)
@@ -1507,6 +1586,7 @@ def compile_final_render_packet(
         packet, local_assets, output_path,
         late_labels_allowed=late_labels_allowed,
         subtitles_allowed=subtitles_allowed,
+        cue_overlays_allowed=cue_overlays_allowed,
         subtitle_fonts_dir=subtitle_fonts_dir,
         subtitle_limits=subtitle_limits,
     )
