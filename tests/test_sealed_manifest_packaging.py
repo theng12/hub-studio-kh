@@ -105,70 +105,73 @@ class SealedManifestPackagingTests(unittest.TestCase):
         return app
 
     def _create_real_signed_app(self, temp_dir: Path) -> Path:
-        """Create a minimal staged bundle using a real system Mach-O binary and sign it."""
+        """Stage order: deep sign, post-sign payload, manifest, re-sign, sidecar, tree."""
         app = self._build_real_app(temp_dir)
-
-        # 1. Sign
+        contents = app / "Contents"
+        exclude = {Path("Resources/release-manifest.json"), Path("_CodeSignature")}
         self.stage_voice.sign_app(app)
-
-        # 2. Generate sidecar manifest
+        payload = self.stage_voice.payload_digest(contents, exclude=exclude)
+        (contents / "Resources/release-manifest.json").write_text(
+            json.dumps({"schema": "studiohub.standalone-release",
+                        "payload_sha256": payload}))
+        self.stage_voice.sign_app(app)
+        # Recorded-vs-final payload stability asserted on the actual Mach-O, never assumed
+        self.assertEqual(payload, self.stage_voice.payload_digest(contents, exclude=exclude))
         self.stage_voice.write_file_manifest(app)
-
-        # 3. Record tree digest
         app.with_name(app.name + ".tree-sha256").write_text(
             self.stage_voice.tree_digest(app) + "\n"
         )
         return app
 
-    def test_payload_sha256_is_recorded_preseal_and_seal_stays_valid(self):
-        """payload_sha256 is the pre-seal payload digest; .tree-sha256 and the sidecar are the
-        post-seal identities. Proven with a real Mach-O, which the seal rewrites, so exclusion
-        tricks can never make the recorded payload match post-seal bytes."""
-        # stage() records the payload before writing release-manifest.json and before
-        # sign_app: a digest stored inside the sealed manifest cannot describe the seal.
+    def test_payload_sha256_is_postsign_deterministic_and_seal_stays_valid(self):
+        """payload_sha256 is the POST-SIGN digest (Developer 2026-11-07): deep sign, digest
+        over signed Contents excluding release-manifest.json and _CodeSignature with
+        LC_CODE_SIGNATURE blobs masked, write the manifest, re-sign once; recorded payload
+        must equal the final recomputation even though the re-seal rewrites the Mach-O's
+        signature bytes, and the digest must still move when real code bytes move."""
         source = (ROOT / "packaging/stage_voice.py").read_text()
+        first_sign = source.index("sign_app(output)")
         payload_at = source.index("release['payload_sha256']")
         manifest_at = source.index("release-manifest.json').write_text")
-        sign_at = source.index("sign_app(output)")
+        second_sign = source.index("sign_app(output)", payload_at)
         tree_at = source.index(".tree-sha256').write_text")
+        self.assertLess(first_sign, payload_at)
         self.assertLess(payload_at, manifest_at)
-        self.assertLess(manifest_at, sign_at)
-        self.assertLess(sign_at, tree_at)
+        self.assertLess(manifest_at, second_sign)
+        self.assertLess(second_sign, tree_at)
 
-        with tempfile.TemporaryDirectory(prefix="payload-preseal-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="payload-postsign-") as temp_dir:
             app = self._build_real_app(Path(temp_dir))
             contents = app / "Contents"
             native = contents / "MacOS/StudioHub"
-            pre_seal_native = hashlib.sha256(native.read_bytes()).hexdigest()
-            # what stage() records in release-manifest.json, before the seal exists
-            payload = self.stage_voice.tree_digest(contents)
+            exclude = {Path("Resources/release-manifest.json"), Path("_CodeSignature")}
+            native_before = hashlib.sha256(native.read_bytes()).hexdigest()
+
+            self.stage_voice.sign_app(app)  # initial final deep sign
+            native_signed = hashlib.sha256(native.read_bytes()).hexdigest()
+            # the seal rewrote the real Mach-O: fake-byte fixtures never exercise this
+            self.assertNotEqual(native_before, native_signed)
+
+            payload = self.stage_voice.payload_digest(contents, exclude=exclude)
             (contents / "Resources/release-manifest.json").write_text(
                 json.dumps({"schema": "studiohub.standalone-release",
                             "payload_sha256": payload}))
-            self.stage_voice.sign_app(app)
-            self.stage_voice.write_file_manifest(app)
-            app.with_name(app.name + ".tree-sha256").write_text(
-                self.stage_voice.tree_digest(app) + "\n"
-            )
+            self.stage_voice.sign_app(app)  # re-sign once: seal covers the manifest
+            native_resent = hashlib.sha256(native.read_bytes()).hexdigest()
+            # full re-sign byte determinism is FALSE on a real Mach-O: codesign seals the
+            # manifest into the principal's CodeDirectory, so the re-seal churns those bytes
+            self.assertNotEqual(native_signed, native_resent)
+            # ... yet the recorded payload must equal the final recomputation
+            final = self.stage_voice.payload_digest(contents, exclude=exclude)
+            self.assertEqual(payload, final)
 
-            # the seal rewrote the real Mach-O: fake-byte fixtures never exercise this
-            post_seal_native = hashlib.sha256(native.read_bytes()).hexdigest()
-            self.assertNotEqual(pre_seal_native, post_seal_native)
-
-            # exclusion-masking cannot make the pre-seal payload match post-seal reality
-            post_plain = self.stage_voice.tree_digest(
-                contents, exclude={Path("Resources/release-manifest.json")})
-            post_excluded = self.stage_voice.tree_digest(
-                contents, exclude={Path("Resources/release-manifest.json"),
-                                   Path("_CodeSignature")})
-            self.assertNotEqual(payload, post_plain)
-            self.assertNotEqual(payload, post_excluded)
-
-            # the honest post-seal identities still verify
             verify = subprocess.run(
                 ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
                 capture_output=True, text=True)
             self.assertEqual(verify.returncode, 0, verify.stderr)
+            self.stage_voice.write_file_manifest(app)
+            app.with_name(app.name + ".tree-sha256").write_text(
+                self.stage_voice.tree_digest(app) + "\n")
             self.assertEqual(
                 app.with_name(app.name + ".tree-sha256").read_text().strip(),
                 self.stage_voice.tree_digest(app))
@@ -178,13 +181,29 @@ class SealedManifestPackagingTests(unittest.TestCase):
                              self.file_manifest.scan(app))
             self.assertRegex(payload, r"^[0-9a-f]{64}$")
 
-            # why the payload cannot move after the seal: a file added to a sealed bundle
-            # invalidates it, so release-manifest.json must exist before sign_app
+            # a file added after the final seal invalidates it (no third sign exists)
             (contents / "Resources/extra-post-seal.txt").write_text("late")
             late = subprocess.run(
                 ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
                 capture_output=True, text=True)
             self.assertNotEqual(late.returncode, 0)
+
+            # anti-masking proof: mutating real Mach-O CODE bytes (outside the signature
+            # blob) must move the recorded digest - never a fake-byte-only success
+            content = bytearray(native.read_bytes())
+            content[0x200] ^= 0x55
+            native.write_bytes(bytes(content))
+            self.assertNotEqual(payload, self.stage_voice.payload_digest(
+                contents, exclude=exclude))
+
+    def test_mutate_release_metadata_rejected(self):
+        """Tampering with the sealed release-manifest.json fails validate_stage."""
+        with tempfile.TemporaryDirectory(prefix="mutate-metadata-") as temp_dir:
+            app = self._create_real_signed_app(Path(temp_dir))
+            (app / "Contents/Resources/release-manifest.json").write_text(
+                '{"tampered": true}\n')
+            with self.assertRaises(ValueError):
+                self.make_dmg.validate_stage(app)
 
     def test_real_macho_ad_hoc_signing_and_sidecar_closure(self):
         """Prove post-seal manifest app strict deep is 0 and every actual signed file indexed."""

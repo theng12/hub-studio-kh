@@ -168,6 +168,117 @@ def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
     return digest.hexdigest()
 
 
+def _thin_signature_spans(stream, offset: int, length: int) -> list[tuple[int, int]]:
+    import struct
+    if length < 32:
+        return []
+    stream.seek(offset)
+    head = stream.read(min(length, 65536))
+    magic = head[:4]
+    if magic == b'\xcf\xfa\xed\xfe':
+        endian, header = '<', 32
+    elif magic == b'\xfe\xed\xfa\xcf':
+        endian, header = '>', 32
+    elif magic == b'\xce\xfa\xed\xfe':
+        endian, header = '<', 28
+    elif magic == b'\xfe\xed\xfa\xce':
+        endian, header = '>', 28
+    else:
+        return []
+    ncmds = struct.unpack_from(endian + 'I', head, 16)[0]
+    pos = header
+    for _ in range(ncmds):
+        if pos + 8 > len(head):
+            return []
+        cmd, size = struct.unpack_from(endian + 'II', head, pos)
+        if cmd == 0x1D and pos + 16 <= len(head):
+            dataoff, datasize = struct.unpack_from(endian + 'II', head, pos + 8)
+            if datasize and 0 <= dataoff and offset + dataoff + datasize <= offset + length:
+                return [(offset + dataoff, offset + dataoff + datasize)]
+        if size < 8:
+            return []
+        pos += size
+    return []
+
+
+def _signature_spans(stream, size: int) -> list[tuple[int, int]]:
+    """Byte spans of embedded LC_CODE_SIGNATURE blobs; empty for non-Mach-O files."""
+    import struct
+    stream.seek(0)
+    prefix = stream.read(8)
+    if len(prefix) < 8:
+        return []
+    magic = prefix[:4]
+    fat64 = (b'\xca\xfe\xba\xbf', b'\xbf\xba\xfe\xca')
+    fat32 = (b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca')
+    if magic in fat32 or magic in fat64:
+        endian = '>' if magic[:2] == b'\xca\xfe' else '<'
+        step = 32 if magic in fat64 else 20
+        nfat = struct.unpack_from(endian + 'I', prefix, 4)[0]
+        table = stream.read(nfat * step)
+        spans = []
+        for i in range(nfat):
+            rec = table[i * step:(i + 1) * step]
+            if len(rec) < 16:
+                return []
+            if step == 32:
+                off, length = struct.unpack_from(endian + 'QQ', rec, 8)
+            else:
+                off, length = struct.unpack_from(endian + 'II', rec, 8)
+            if off + length > size:
+                return []
+            spans.extend(_thin_signature_spans(stream, off, length))
+        return spans
+    return _thin_signature_spans(stream, 0, size)
+
+
+def payload_digest(root: Path, exclude: set[Path] | None = None) -> str:
+    """tree_digest's mixing, except embedded LC_CODE_SIGNATURE blobs hash as zero bytes.
+
+    codesign seals release-manifest.json into the principal executable's CodeDirectory, so
+    re-signing after that file changes rewrites the signature bytes themselves; masking them
+    for this digest only is what lets a recorded payload_sha256 equal the final
+    recomputation. The signature bytes stay covered by codesign --deep --strict and by the
+    unmasked .tree-sha256 beside the app.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob('*')):
+        if exclude:
+            relative = path.relative_to(root)
+            if relative in exclude or any(parent in exclude for parent in relative.parents):
+                continue
+        if path.is_dir() and not path.is_symlink():
+            continue
+        digest.update(path.relative_to(root).as_posix().encode() + b'\0')
+        if path.is_symlink():
+            digest.update(b'link\0' + os.readlink(path).encode() + b'\0')
+            continue
+        digest.update(b'file\0')
+        size = path.stat().st_size
+        with path.open('rb') as stream:
+            spans = sorted(_signature_spans(stream, size))
+            pos = 0
+            for start, end in spans:
+                if start < pos or end <= start:
+                    continue
+                stream.seek(pos)
+                while pos < start:
+                    chunk = stream.read(min(1024 * 1024, start - pos))
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    pos += len(chunk)
+                if pos != start:
+                    break
+                digest.update(b'\0' * (end - start))
+                pos = end
+            stream.seek(pos)
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(chunk)
+        digest.update(b'\0')
+    return digest.hexdigest()
+
+
 def sign_app(app: Path) -> None:
     """Execute deep ad-hoc code sign on the staged .app bundle and verify strictly."""
     app = Path(app).resolve()
@@ -994,17 +1105,28 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     elif include_hub:
         print('NOTE: this Hub build ships no KH Updater agent kit; pass --khu-agent-kit '
               'and --khu-publisher-json to include one.', file=sys.stderr)
-    # payload_sha256 is the PRE-SEAL payload digest and must be recorded before sign_app:
-    # release-manifest.json has to be covered by the seal, and a digest stored inside the seal
-    # cannot describe the seal (the circularity that moved file-manifest outside the app).
-    # The digest is taken before release-manifest.json exists, so it never hashes itself.
-    # Deep codesign rewrites a real Mach-O executable and writes Contents/_CodeSignature, so
-    # this value intentionally does not match a post-seal recomputation; the post-seal
-    # identities are the sidecar file-manifest below and the `.tree-sha256` beside the app.
-    release['payload_sha256'] = tree_digest(contents)
-    (resources / 'release-manifest.json').write_text(json.dumps(release, indent=2) + '\n')
-    # Deep ad-hoc seal the app bundle before manifest generation and tree digest.
+    # Developer direction 2026-11-07: payload_sha256 is the POST-SIGN payload digest. The
+    # bundle is deep-signed first; the digest is taken over the signed Contents excluding
+    # release-manifest.json (it cannot hash itself) and _CodeSignature (the re-sign below
+    # regenerates it); the manifest is written and the bundle re-signed once so the seal
+    # covers it. Exactly two signs, no loop.
+    # codesign seals release-manifest.json into the principal's CodeDirectory, so the re-seal
+    # always rewrites those Mach-O bytes; payload_digest zeroes embedded LC_CODE_SIGNATURE
+    # blobs for hashing only (codesign --deep --strict and .tree-sha256 still cover them),
+    # which is what makes a recorded payload comparable to the final recomputation at all.
     sign_app(output)
+    release['payload_sha256'] = payload_digest(
+        contents, exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')})
+    (resources / 'release-manifest.json').write_text(json.dumps(release, indent=2) + '\n')
+    sign_app(output)
+    # Stability of the recorded digest across the re-seal is asserted, never assumed: any
+    # payload-byte churn outside the signature blobs stops the stage loudly here.
+    final_payload = payload_digest(
+        contents, exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')})
+    if final_payload != release['payload_sha256']:
+        raise ValueError(
+            're-sign changed payload bytes: payload_sha256 recorded '
+            f'{release["payload_sha256"]} but the sealed bundle now hashes {final_payload}')
     # The per-file manifest that lets a Mac fetch only the files that changed. Written as a
     # sidecar directory outside the app bundle AFTER code signing so the seal covers native
     # binaries and CodeResources without being invalidated.
