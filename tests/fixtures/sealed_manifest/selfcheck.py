@@ -1,27 +1,24 @@
 #!/usr/bin/env python3
-"""Standalone stdlib self-check for the sealed-manifest cross-app fixture.
+"""Stdlib self-check for the sealed-manifest cross-app fixture (v2).
 
-No imports outside Python standard library (no Hub or Gateway dependencies).
-Verifies:
-  1. Valid sealed bundle closure (native binary and signature closure).
-  2. Sidecar location vs legacy fallback lookup order.
-  3. Stale 0.6.224 baseline detection, refusal, and wire probe fallback.
-  4. Corrupted bytes detection and rejection.
+Imports the real Hub file_manifest source by path (stdlib-only module; no Hub
+or service app import). Acceptance cases are validated as DATA ONLY structure -
+this script does not emulate Gateway fallback and does not claim a Gateway PASS.
 """
 from __future__ import annotations
 
 import base64
 import gzip
 import hashlib
+import importlib.util
 import json
-import os
-import shutil
-import stat
 import sys
 import tempfile
 from pathlib import Path
 
-FIXTURE_PATH = Path(__file__).resolve().parent / "sealed_manifest_fixture.json"
+HERE = Path(__file__).resolve().parent
+FIXTURE_PATH = HERE / "sealed_manifest_fixture.json"
+FM_PATH = HERE.parents[2] / "components" / "hub" / "backend" / "file_manifest.py"
 
 
 def load_fixture() -> dict:
@@ -30,201 +27,141 @@ def load_fixture() -> dict:
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
-def verify_manifest_hash_closure(fixture: dict) -> None:
-    """Check that the manifest deterministically commits to all files in the app bundle."""
-    valid = fixture["valid_sealed_release"]
-    index = valid["manifest_index"]
-    tsv_text = valid["manifest_tsv"]["core"]
-    hashes = valid["hashes"]
-
-    # 1. Uncompressed TSV hash
-    tsv_bytes = tsv_text.encode("utf-8")
-    actual_core_sha = hashlib.sha256(tsv_bytes).hexdigest()
-    assert actual_core_sha == hashes["core_uncompressed_tsv_sha256"], (
-        f"Core TSV sha256 mismatch: {actual_core_sha} != {hashes['core_uncompressed_tsv_sha256']}"
-    )
-    assert actual_core_sha == index["groups"]["core"]["sha256"], (
-        "Index core sha256 does not match computed TSV sha256"
-    )
-
-    # 2. Gzipped TSV hash
-    gz_bytes = base64.b64decode(valid["manifest_tsv_gz_b64"]["core"])
-    actual_gz_sha = hashlib.sha256(gz_bytes).hexdigest()
-    assert actual_gz_sha == hashes["core_tsv_gz_sha256"], (
-        f"Gzip TSV sha256 mismatch: {actual_gz_sha} != {hashes['core_tsv_gz_sha256']}"
-    )
-    unpacked_tsv = gzip.decompress(gz_bytes).decode("utf-8")
-    assert unpacked_tsv == tsv_text, "Decompressed TSV does not match original"
-
-    # 3. Aggregate files_sha256 commitment
-    group_shas = {name: item["sha256"] for name, item in index["groups"].items()}
-    body = "".join(f"{name}\0{group_shas[name]}\n" for name in sorted(group_shas))
-    computed_files_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
-    assert computed_files_sha == index["files_sha256"], (
-        f"files_sha256 mismatch: {computed_files_sha} != {index['files_sha256']}"
-    )
-    assert computed_files_sha == hashes["files_sha256"], (
-        "Computed files_sha256 does not match fixture hashes"
-    )
-
-    # 4. Verify native and code signature closure
-    app_files = valid["app_files"]
-    assert "Contents/MacOS/StudioHub" in app_files, "Native executable missing from closure"
-    assert "Contents/_CodeSignature/CodeResources" in app_files, (
-        "Code signature CodeResources missing from closure"
-    )
-    assert app_files["Contents/MacOS/StudioHub"]["executable"] is True, (
-        "Native executable must be flagged executable"
-    )
-
-    # 5. Verify every entry in TSV matches app_files
-    lines = [line.split("\t") for line in tsv_text.splitlines() if line]
-    assert len(lines) == len(app_files), "TSV line count does not match file count"
-    for kind, x, size, digest, relpath in lines:
-        assert relpath in app_files, f"Unlisted path in TSV: {relpath}"
-        expected = app_files[relpath]
-        assert kind == expected["kind"]
-        assert (x == "1") == expected["executable"]
-        assert int(size) == expected["size"]
-        assert digest == expected["sha256"]
+def load_fm():
+    repo_root = str(HERE.parents[2])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    spec = importlib.util.spec_from_file_location("hub_file_manifest", FM_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load real fm source: {FM_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def test_consumer_lookup_and_closure(fixture: dict) -> None:
-    """Simulate mounted DMG and test consumer manifest lookup logic."""
+def check_valid_bytes_and_closure(fixture: dict, fm) -> None:
     valid = fixture["valid_sealed_release"]
     app_files = valid["app_files"]
-    index = valid["manifest_index"]
-    gz_bytes = base64.b64decode(valid["manifest_tsv_gz_b64"]["core"])
-
-    with tempfile.TemporaryDirectory(prefix="sealed-manifest-test-") as temp_dir:
-        mount_root = Path(temp_dir)
-        app_dir = mount_root / "Studio Hub.app"
-        sidecar_dir = mount_root / "file-manifest"
-
-        # Materialize files in app bundle
-        for rel, info in app_files.items():
-            dest = app_dir / rel
+    # Every declared byte: size + sha256 from actual base64 content.
+    with tempfile.TemporaryDirectory(prefix="sealed-fixture-app-") as tmp:
+        app_root = Path(tmp) / "Studio Hub.app"
+        for rel, row in app_files.items():
+            data = base64.b64decode(row["content_b64"], validate=True)
+            assert len(data) == row["size"], f"{rel}: size mismatch"
+            assert hashlib.sha256(data).hexdigest() == row["sha256"], f"{rel}: sha mismatch"
+            dest = app_root / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
-            content = base64.b64decode(info["content_b64"])
-            dest.write_bytes(content)
-            if info["executable"]:
-                os.chmod(dest, 0o755)
-
-        # Write sidecar outside app bundle (in DMG root)
-        sidecar_dir.mkdir(parents=True, exist_ok=True)
-        (sidecar_dir / "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
-        (sidecar_dir / "core.tsv.gz").write_bytes(gz_bytes)
-
-        # Confirm app bundle itself contains NO file-manifest
-        assert not (app_dir / "Contents/Resources/file-manifest").exists(), (
-            "file-manifest must not be written inside the sealed bundle"
+            dest.write_bytes(data)
+            if row["executable"]:
+                dest.chmod(0o755)
+            else:
+                dest.chmod(0o644)
+        # Real Hub scan/build must reproduce the fixture index and TSVs.
+        entries = fm.scan(app_root)
+        index, tsv = fm.build(entries)
+        assert index == valid["manifest_index"], "fm.build index != fixture index"
+        assert tsv["core"] == valid["manifest_tsv"]["core"].encode(), "fm.build core TSV mismatch"
+        gz = fm.gzip_bytes(tsv["core"])
+        assert hashlib.sha256(gz).hexdigest() == valid["hashes"]["core_tsv_gz_sha256"], (
+            "fm.gzip_bytes digest mismatch"
         )
+        # Real check_index / check_group accept the fixture as stored.
+        fm.check_index(json.loads(json.dumps(valid["manifest_index"])))
+        fm.check_group(valid["manifest_index"], "core", tsv["core"])
+        # Tampered native: reject by actual hash compare.
+        native = app_root / "Contents/MacOS/StudioHub"
+        bad_native = base64.b64decode(fixture["corrupted_bytes_case"]["corrupted_b64"], validate=True)
+        assert hashlib.sha256(bad_native).hexdigest() == fixture["corrupted_bytes_case"]["corrupted_sha256"]
+        assert hashlib.sha256(bad_native).hexdigest() != app_files["Contents/MacOS/StudioHub"]["sha256"]
+        native.write_bytes(bad_native)
+        tampered = fm.scan(app_root)
+        assert tampered["Contents/MacOS/StudioHub"][3] != app_files["Contents/MacOS/StudioHub"]["sha256"], (
+            "tampered native must not match manifest digest"
+        )
+        # Tampered signature: reject by actual hash compare.
+        sig = app_root / "Contents/_CodeSignature/CodeResources"
+        bad_sig = base64.b64decode(fixture["corrupted_signature_case"]["corrupted_b64"], validate=True)
+        assert hashlib.sha256(bad_sig).hexdigest() == fixture["corrupted_signature_case"]["corrupted_sha256"]
+        assert hashlib.sha256(bad_sig).hexdigest() != app_files["Contents/_CodeSignature/CodeResources"]["sha256"]
+        sig.write_bytes(bad_sig)
+        tampered = fm.scan(app_root)
+        assert tampered["Contents/_CodeSignature/CodeResources"][3] != (
+            app_files["Contents/_CodeSignature/CodeResources"]["sha256"]
+        ), "tampered signature must not match manifest digest"
+        # Corrupted group: real check_group refuses.
+        try:
+            fm.check_group(valid["manifest_index"], "core", b"wrong group\n")
+        except fm.ManifestError:
+            pass
+        else:
+            raise AssertionError("corrupted group must be refused by check_group")
 
-        # Consumer lookup resolution function
-        def resolve_manifest_dir(dmg_mount: Path) -> Path | None:
-            sidecar = dmg_mount / "file-manifest"
-            if (sidecar / "index.json").is_file():
-                return sidecar
-            legacy = dmg_mount / "Studio Hub.app/Contents/Resources/file-manifest"
-            if (legacy / "index.json").is_file():
-                return legacy
-            return None
 
-        # Check sidecar resolution (Priority 1)
-        resolved = resolve_manifest_dir(mount_root)
-        assert resolved == sidecar_dir, f"Expected sidecar resolution, got {resolved}"
-
-        # Test legacy fallback (Priority 2)
-        shutil.rmtree(sidecar_dir)
-        legacy_dir = app_dir / "Contents/Resources/file-manifest"
-        legacy_dir.mkdir(parents=True, exist_ok=True)
-        (legacy_dir / "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
-        resolved_legacy = resolve_manifest_dir(mount_root)
-        assert resolved_legacy == legacy_dir, f"Expected legacy resolution, got {resolved_legacy}"
-
-        # Test missing manifest refusal (Priority 3)
-        shutil.rmtree(legacy_dir)
-        assert resolve_manifest_dir(mount_root) is None, "Should return None when no manifest found"
-
-
-def test_stale_224_baseline_rejection(fixture: dict) -> None:
-    """Verify that a 224 baseline with stale native hash and unlisted signature is refused."""
-    stale_case = fixture["stale_224_baseline_case"]
-    actual_disk = stale_case["installed_app_disk_hashes"]
-    declared_manifest = stale_case["embedded_224_manifest_records"]
-
+def check_stale_224_unit_data(fixture: dict) -> None:
+    stale = fixture["stale_224_baseline_case"]
     mismatches = []
-    # 1. Native executable check
-    native_disk = actual_disk["Contents/MacOS/StudioHub"]
-    native_decl = declared_manifest["Contents/MacOS/StudioHub"]["declared_sha256"]
+    native_disk = stale["installed_app_disk_hashes"]["Contents/MacOS/StudioHub"]
+    native_decl = stale["embedded_224_manifest_records"]["Contents/MacOS/StudioHub"]["declared_sha256"]
     if native_disk != native_decl:
-        mismatches.append({
-            "path": "Contents/MacOS/StudioHub",
-            "type": "digest_mismatch",
-            "declared": native_decl,
-            "actual": native_disk,
-        })
-
-    # 2. Code signature presence check
-    sig_disk = actual_disk["Contents/_CodeSignature/CodeResources"]
-    sig_decl = declared_manifest["Contents/_CodeSignature/CodeResources"]["declared_sha256"]
+        mismatches.append("native_digest_mismatch")
+    sig_disk = stale["installed_app_disk_hashes"]["Contents/_CodeSignature/CodeResources"]
+    sig_decl = stale["embedded_224_manifest_records"]["Contents/_CodeSignature/CodeResources"]["declared_sha256"]
     if sig_decl is None and sig_disk is not None:
-        mismatches.append({
-            "path": "Contents/_CodeSignature/CodeResources",
-            "type": "unlisted_in_manifest",
-            "declared": None,
-            "actual": sig_disk,
-        })
-
-    assert len(mismatches) == 2, f"Expected 2 mismatches on 224 baseline, found {len(mismatches)}"
-    verdict = "UNTRUSTED_BASELINE" if mismatches else "TRUSTED_BASELINE"
-    assert verdict == stale_case["evaluation_verdict"], f"Expected {stale_case['evaluation_verdict']}, got {verdict}"
-
-    # 3. Verify wire response for untrusted baseline
-    wire = stale_case["wire_probe_response"]
-    assert wire["delta"] is None, "Untrusted baseline must publish delta: None"
-
-    # 4. Gateway fallback evaluation
-    capable = isinstance(wire.get("delta"), dict) and wire.get("delta", {}).get("schema") == fixture["schema"]
-    assert capable is False, "Gateway probe must evaluate capable as False"
-
-    planned_mode = "full" if not capable else "delta"
-    assert planned_mode == "full", "Gateway must plan full mode when capable is False"
+        mismatches.append("signature_unlisted")
+    assert len(mismatches) == 2, f"expected 2 stale mismatches, got {mismatches}"
+    assert stale["evaluation_verdict"] == "UNTRUSTED_BASELINE"
+    assert "wire_probe_response" not in stale, "fictional wire probe must be replaced"
+    assert stale["unit_data_only"] is True
+    wire = fixture["actual_224_wire"]
+    assert wire["api_version_running"] == "0.6.224"
+    assert wire["delta"] == {"schema": "studiohub.file-manifest.v1", "manifest": True, "artifact": True}
+    assert wire["existing_probe_capable"] is True
+    assert wire["contract_decision"].startswith("full")
 
 
-def test_corrupted_bytes_detection(fixture: dict) -> None:
-    """Verify that corrupted bytes in any app file are caught by digest comparison."""
-    corrupt = fixture["corrupted_bytes_case"]
-    path = corrupt["target_file"]
-    expected_sha = corrupt["expected_sha256"]
-    corrupted_bytes = base64.b64decode(corrupt["corrupted_b64"])
-    actual_sha = hashlib.sha256(corrupted_bytes).hexdigest()
-
-    assert actual_sha == corrupt["corrupted_sha256"], "Corrupted bytes sha256 mismatch"
-    assert actual_sha != expected_sha, "Corrupted bytes must differ from declared digest"
+def check_acceptance_cases_data_only(fixture: dict) -> None:
+    cases = fixture["acceptance_cases"]
+    ids = [c["id"] for c in cases]
+    assert ids == [f"AC{i}" for i in range(1, 10)], f"unexpected case ids: {ids}"
+    for case in cases:
+        assert case["check_kind"] == "DATA_ONLY_STATIC", case["id"]
+        assert case["gateway_test"].startswith("PENDING"), case["id"]
+        assert case["expected_decision"] and case["basis"], case["id"]
+    by_id = {c["id"]: c for c in cases}
+    assert "224" in by_id["AC1"]["given"] or "0.6.224" in by_id["AC1"]["given"]
+    assert "prerelease" in by_id["AC3"]["given"].lower()
+    assert by_id["AC4"]["expected_decision"] == "delta eligible"
+    assert by_id["AC6"]["expected_decision"].startswith("REFUSE")
+    delta = fixture["delta_eligibility"]
+    assert delta["first_shipped_fixed_release_threshold"]["version"] == "0.6.225"
+    assert delta["baseline_identity"]["source"].startswith("strict actual running version")
+    assert delta["baseline_identity"]["runtime_exact_build_allowlist"] is False
+    assert delta["trust_gate"]["AppUpdateKey_untrusted"].startswith("publisher-key trust gate")
+    obs = fixture["gateway_reader_observations"]
+    assert obs["sidecar_only"]["accepted"] is False
+    assert obs["corrupt_native_legacy"]["accepted"] is True  # recorded KNOWN BUG
+    assert obs["corrupt_group_legacy"]["accepted"] is False
 
 
 def main() -> int:
-    print("Loading sealed-manifest fixture...")
+    print("Loading sealed-manifest fixture (v2)...")
     fixture = load_fixture()
+    fm = load_fm()
+    print(f"  Real fm source: {FM_PATH}")
 
-    print("Checking hash closure of valid sealed release...")
-    verify_manifest_hash_closure(fixture)
-    print("  PASS: Hash closure and native/signature records verified.")
+    print("Checking valid bytes, hash closure, real fm scan/build/check...")
+    check_valid_bytes_and_closure(fixture, fm)
+    print("  PASS: byte closure + real Hub fm reproduce index/TSV; tampers rejected.")
 
-    print("Checking consumer lookup order (sidecar vs legacy fallback)...")
-    test_consumer_lookup_and_closure(fixture)
-    print("  PASS: Consumer lookup resolution verified.")
+    print("Checking stale 0.6.224 unit data (no fictional wire probe)...")
+    check_stale_224_unit_data(fixture)
+    print("  PASS: 2 unit mismatches retained; actual 224 wire shape recorded.")
 
-    print("Checking stale 0.6.224 baseline rejection & whole-DMG fallback...")
-    test_stale_224_baseline_rejection(fixture)
-    print("  PASS: Stale 224 baseline refused and Gateway fallback verified.")
+    print("Checking acceptance cases (DATA ONLY; actual Gateway test PENDING)...")
+    check_acceptance_cases_data_only(fixture)
+    print("  PASS: AC1-AC9 structure and eligibility rules verified as data.")
 
-    print("Checking corrupted bytes detection...")
-    test_corrupted_bytes_detection(fixture)
-    print("  PASS: Corrupted bytes detected and rejected.")
-
-    print("\nALL CHECKS PASSED: Fixture satisfies cross-app sealed-manifest contract.")
+    print("\nALL CHECKS PASSED (DATA ONLY - not a Gateway PASS).")
     return 0
 
 
