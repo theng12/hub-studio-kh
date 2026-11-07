@@ -323,6 +323,11 @@ def _memory_admission_inventory(model: str, entry: dict, *, node_id: str,
     that mode answers with, so their token and ``revision_covers`` are bit-for-bit identical.
     One mode token is shared by its RAM view and every count row; no token is inferred or
     copied across scopes.
+
+    ``total_memory_bytes=None`` is passed through to the core unchanged: the core owns the
+    unknown-tier answer (``physical_tier(None)`` and an unavailable ``reference_policy``), so
+    the inventory keeps the exact same token the GET route will answer with. This helper never
+    invents a tier, a reason or a second hash.
     """
     from . import memory_admission
     with memory_admission._LOCK:
@@ -1093,12 +1098,11 @@ class StudioMonitor:
         path before reaching this point.
         """
         models, per_studio = [], {}
-        # One identity per assembly: every local studio's row describes this same Mac.
+        # One identity per assembly: every local studio's row describes this same Mac. The
+        # bytes are passed through even when unreadable; the core decides what unknown means.
         local_identity = None
         if any(studio.get("machine", "local") == "local" for studio in self.registry):
-            local_bytes = _local_total_memory_bytes()
-            if local_bytes is not None:
-                local_identity = (_local_node_id(), local_bytes)
+            local_identity = (_local_node_id(), _local_total_memory_bytes())
         for studio, catalog in zip(self.registry, results):
             sid = studio["id"]
             if catalog is None:
@@ -1520,6 +1524,9 @@ class StudioMonitor:
                     "drained": drained,
                     "hardware_profile": hardware_profile,
                     "memory_admission": admission,
+                    # The row's own r5 inventory, byte-for-byte: a local row carries this
+                    # Hub's answer and a remote row carries its producer's, never re-derived.
+                    "hub_memory_admission": model.get("hub_memory_admission"),
                     "availability_reason": reason,
                     "catalog_observed_at": model.get("hub_catalog_observed_at"),
                     "catalog_age_seconds": model.get("hub_catalog_age_seconds"),

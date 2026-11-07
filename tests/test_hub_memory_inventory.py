@@ -270,5 +270,104 @@ class FalseZeroNullTests(InventoryCase):
         self.assertFalse(generic["overridden"])
 
 
+class UnknownHostMemoryTests(InventoryCase):
+    def test_unknown_host_bytes_publish_the_core_answer_with_no_fabricated_tier(self) -> None:
+        with mock.patch.object(
+                monitor_module, "_local_total_memory_bytes", return_value=None):
+            assembled = self.assemble()
+        row = self.row(assembled, "local", MODEL)
+        inventory = row["hub_memory_admission"]
+
+        wide = memory_admission.effective_state(MODEL, row, node_id=LOCAL_NODE)
+        self.assertEqual(inventory["revision"], wide["revision"])
+        self.assertEqual(inventory["ram"]["model_wide"], wide)
+
+        for mode in memory_admission.MODES:
+            core = memory_admission.effective_state(
+                MODEL, row, node_id=LOCAL_NODE, mode=mode, total_memory_bytes=None)
+            if core["reference_policy"]["available"] is not False:
+                self.skipTest(
+                    "core still bands unknown bytes as '<8'; the unknown-RAM assertion "
+                    "activates with core a8ea40138e01ba931 (unavailable:false)")
+            self.assertEqual(inventory["ram"]["modes"][mode], core,
+                             "unknown bytes must keep the authoritative core token")
+            reference = inventory["reference"][mode]
+            self.assertEqual(reference["revision"], core["revision"])
+            self.assertEqual(reference["revision_covers"], core["revision_covers"])
+            self.assertIs(reference["available"], False)
+            self.assertTrue(reference["reason"])
+            self.assertIsNone(reference.get("physical_tier"),
+                              "unknown bytes must never be banded as '<8'")
+
+
+class CandidatePropagationTests(InventoryCase):
+    def test_candidate_machine_entries_carry_the_rows_own_inventory(self) -> None:
+        from components.hub.backend import (
+            broker, capabilities, chat_jobs, hardware_profiles, model_exposure,
+            registry, transcription_jobs,
+        )
+
+        def candidate_for(model: dict) -> dict | None:
+            repo = model.get("repo")
+            if repo not in (MODEL, REMOTE_ONLY):
+                return None
+            return {
+                "internal_model_id": repo,
+                "display_name": repo,
+                "approved_operations": ["generate"],
+                "runtime_revision": "runtime-1",
+                "contract_hash": "contract-1",
+                "audit_id": "audit-1",
+                "audit_status": "passed",
+                "candidate_for_genstudio": True,
+                "audited_at": 1.0,
+                "adapter": {},
+                "controls": {},
+                "input_limits": {},
+                "output_limits": {},
+                "capacity": {"available_slots": 1},
+                "hardware": {},
+            }
+
+        with mock.patch.object(model_exposure, "candidate_summary", side_effect=candidate_for), \
+                mock.patch.object(
+                    model_exposure, "candidate_key",
+                    side_effect=lambda candidate, operation:
+                    f"{candidate['internal_model_id']}::{operation}"), \
+                mock.patch.object(model_exposure, "state_for", return_value="candidate"), \
+                mock.patch.object(broker, "machine_protection_snapshot", return_value={}), \
+                mock.patch.object(broker, "busy_studios", return_value=set()), \
+                mock.patch.object(broker, "busy_machines", return_value=set()), \
+                mock.patch.object(broker, "in_maintenance", return_value=False), \
+                mock.patch.object(chat_jobs, "busy_studios", return_value=set()), \
+                mock.patch.object(transcription_jobs, "busy_studios", return_value=set()), \
+                mock.patch.object(capabilities, "_catalog_reports_busy", return_value=False), \
+                mock.patch.object(capabilities, "_capacity_eligible", return_value=True), \
+                mock.patch.object(
+                    hardware_profiles, "machine_hardware_profile",
+                    return_value={"memory_gb": 16}), \
+                mock.patch.object(registry, "machine_enabled", return_value=True), \
+                mock.patch.object(registry, "studio_enabled", return_value=True):
+            rows = self.monitor.candidate_models()
+
+        by_model = {row["internal_model_id"]: row for row in rows}
+        expected = self.inventory(self.monitor.cached_aggregate_catalog())
+
+        local = next(entry for entry in by_model[MODEL]["machines"]
+                     if entry["machine_id"] == "local")
+        self.assertEqual(local["hub_memory_admission"], expected,
+                         "the candidate machine entry must publish the row's inventory")
+
+        remote = next(entry for entry in by_model[MODEL]["machines"]
+                      if entry["machine_id"] == "node-b")
+        self.assertIsNone(remote["hub_memory_admission"],
+                          "a remote row without an annotation must not gain a local one")
+
+        preserved = next(entry for entry in by_model[REMOTE_ONLY]["machines"]
+                         if entry["machine_id"] == "node-b")
+        self.assertEqual(preserved["hub_memory_admission"], REMOTE_ANNOTATION,
+                         "a remote producer's annotation must survive candidate assembly")
+
+
 if __name__ == "__main__":
     unittest.main()
