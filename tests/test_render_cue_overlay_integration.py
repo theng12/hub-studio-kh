@@ -21,6 +21,7 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -367,80 +368,57 @@ class CueOverlayIntegrationTests(unittest.TestCase):
 
 
 class CueOverlayExecutorPathTests(unittest.IsolatedAsyncioTestCase):
-    async def test_real_executor_cue_overlay_success_and_refusal_boundaries(self):
-        """Verify real executor: validates cue overlay via helper before FFmpeg, and refuses bad media before spawn."""
-        fixture = fixtures.RenderExecutorTests()
-        fixture.setUp()
-        root = fixture.root
+    """Real executor path: v5 admission, media refusal before spawn, and a valid cue render."""
 
-        # Generate test webm asset
-        webm_path = root / "cue_overlay_0000.webm"
-        _make_dummy_webm(webm_path)
-        webm_bytes = webm_path.read_bytes()
-        webm_sha = hashlib.sha256(webm_bytes).hexdigest()
-        webm_size = len(webm_bytes)
+    PINNED_TOOLS = Path("/Applications/Studio Hub.app/Contents/Resources/render-tools")
 
-        # Base packet
+    def setUp(self):
+        self.fixture = fixtures.RenderExecutorTests()
+        self.fixture.setUp()
+        self.root = self.fixture.root
+        for name in ("ffmpeg", "ffprobe"):
+            if not (self.PINNED_TOOLS / name).is_file():
+                self.skipTest(f"pinned render tool {name} is not installed")
+
+    def webm(self) -> Path:
+        path = self.root / "cue_overlay_0000.webm"
+        subprocess.run(
+            [str(self.PINNED_TOOLS / "ffmpeg"), "-y", "-v", "error",
+             "-f", "lavfi", "-i", "color=c=red@1.0:s=128x96:r=5:d=1.6",
+             "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
+             "-auto-alt-ref", "0", str(path)],
+            check=True)
+        return path
+
+    def setup_run(self, *, allowed=True, corrupt=False):
         packet = copy.deepcopy(json.loads(
             (fixtures.ROOT / "tests/fixtures/final-render-compiler-v1.json").read_text()
         )["f0_base_audio"]["packet"])
-
-        packet["recipe"]["base_video"] = {"type": "asset_ref", "logical_id": "audio"}
-        packet["recipe"]["premixed_audio"] = {"type": "asset_ref", "logical_id": "base"}
-
-        png_bytes = b"\x89PNG\r\n\x1a\nfake_png"
+        packet["recipe"]["encode"] = {
+            "container": "mp4", "requested_codec": "h264",
+            "requested_effort": "hardware", "quality_cpu_preset": "medium",
+            "crf": 23, "bitrate_kbps": 8000,
+        }
+        packet["recipe"]["operations"] = [{
+            "kind": "cue_overlay_stage", "contract": _CUE_OVERLAY_CONTRACT,
+            "cue_id": "cue-1", "time_range": {"start_sec": 0.5, "end_sec": 1.5},
+            "asset": {"type": "asset_ref", "logical_id": "cue_overlay_0000"},
+            "fade": None, "slide": None,
+        }]
+        cue_bytes = self.webm().read_bytes()
+        base_bytes = self.fixture.mp4_bytes()
+        audio_bytes = self.fixture.wav_bytes()
         packet["manifest"] = [
-            {"logical_id": "audio", "safe_name": "audio.wav", "role": "base_video", "size_bytes": 100, "sha256": "0" * 64},
-            {"logical_id": "base", "safe_name": "base.mp4", "role": "premixed_audio", "size_bytes": 100, "sha256": "1" * 64},
-            {"logical_id": "cue_0000_label", "safe_name": "cue_0000_label.png", "role": "cue_label", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
-            {"logical_id": "cue_0002_label", "safe_name": "cue_0002_label.png", "role": "cue_label", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
-            {"logical_id": "cue_overlay_0001", "safe_name": "cue_overlay_0001.webm", "role": "cue_overlay", "size_bytes": webm_size, "sha256": webm_sha},
-        ]
-
-        # Add mixed operations: late_label_stage -> cue_overlay_stage -> late_label_stage
-        packet["recipe"]["canvas"] = {"width": 64, "height": 64, "working_fps": 5}
-        packet["recipe"]["target_duration_sec"] = 1.0
-        packet["recipe"]["operations"] = [
-            {
-                "kind": "late_label_stage",
-                "contract": "studio.render.late-label.v3",
-                "cue_id": "label_first",
-                "enable": {"start_sec": 0.0, "end_sec": 0.4},
-                "placement": {"x_px": 0, "y_px": 0},
-                "motion": {"kind": "none", "entrance_sec": 0.3},
-                "label": {"asset": {"type": "asset_ref", "logical_id": "cue_0000_label"}},
-                "reveal": None,
-                "line": None,
-                "line_reveal": None,
-            },
-            {
-                "kind": "cue_overlay_stage",
-                "contract": _CUE_OVERLAY_CONTRACT,
-                "cue_id": "cue_mid",
-                "time_range": {"start_sec": 0.0, "end_sec": 0.4},
-                "asset": {"type": "asset_ref", "logical_id": "cue_overlay_0001"},
-                "fade": {"in_sec": 0.1, "out_sec": 0.1},
-                "slide": {"axis": "x", "offset_px": 0, "start_sec": 0.1, "duration_sec": 0.1},
-            },
-            {
-                "kind": "late_label_stage",
-                "contract": "studio.render.late-label.v3",
-                "cue_id": "label_last",
-                "enable": {"start_sec": 0.0, "end_sec": 0.4},
-                "placement": {"x_px": 0, "y_px": 0},
-                "motion": {"kind": "none", "entrance_sec": 0.3},
-                "label": {"asset": {"type": "asset_ref", "logical_id": "cue_0002_label"}},
-                "reveal": None,
-                "line": None,
-                "line_reveal": None,
-            },
-        ]
-        png_bytes = b"\x89PNG\r\n\x1a\nfake_png"
-        packet["manifest"] = [
-            {"logical_id": "audio", "safe_name": "audio.wav", "role": "premixed_audio", "size_bytes": 100, "sha256": "1" * 64},
-            {"logical_id": "cue_0000_label", "safe_name": "cue_0000_label.png", "role": "base_video", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
-            {"logical_id": "cue_0002_label", "safe_name": "cue_0002_label.png", "role": "cue_label", "size_bytes": len(png_bytes), "sha256": hashlib.sha256(png_bytes).hexdigest()},
-            {"logical_id": "cue_overlay_0001", "safe_name": "cue_overlay_0001.webm", "role": "cue_overlay", "size_bytes": webm_size, "sha256": webm_sha},
+            {"logical_id": "audio", "safe_name": "audio.wav", "role": "premixed_audio",
+             "sha256": hashlib.sha256(audio_bytes).hexdigest(),
+             "size_bytes": len(audio_bytes)},
+            {"logical_id": "base", "safe_name": "base.mp4", "role": "base_video",
+             "sha256": hashlib.sha256(base_bytes).hexdigest(),
+             "size_bytes": len(base_bytes)},
+            {"logical_id": "cue_overlay_0000", "safe_name": "cue_overlay_0000.webm",
+             "role": "cue_overlay",
+             "sha256": hashlib.sha256(cue_bytes).hexdigest(),
+             "size_bytes": len(cue_bytes)},
         ]
         packet["recipe_digest"] = render_hash("recipe", packet["recipe"])
         packet["manifest_digest"] = render_hash("manifest", packet["manifest"])
@@ -448,96 +426,96 @@ class CueOverlayExecutorPathTests(unittest.IsolatedAsyncioTestCase):
             "recipe_digest": packet["recipe_digest"],
             "manifest_digest": packet["manifest_digest"],
         })
-
-        # Asset files mapping
-        files = {
-            "h_video": root / "base.mp4",
-            "h_audio": root / "audio.wav",
-            "h_label1": root / "cue_0000_label.png",
-            "h_cue": webm_path,
-            "h_label2": root / "cue_0002_label.png",
-        }
-        files["h_video"].write_bytes(fixture.mp4_bytes())
-        files["h_audio"].write_bytes(fixture.wav_bytes())
-        files["h_label1"].write_bytes(png_bytes)
-        files["h_label2"].write_bytes(png_bytes)
-
-        # Update manifest hashes
-        packet["manifest"][0].update(size_bytes=len(files["h_video"].read_bytes()), sha256=file_sha(files["h_video"]))
-        packet["manifest"][1].update(size_bytes=len(files["h_audio"].read_bytes()), sha256=file_sha(files["h_audio"]))
-        packet["recipe_digest"] = render_hash("recipe", packet["recipe"])
-        packet["manifest_digest"] = render_hash("manifest", packet["manifest"])
-        packet["packet_digest"] = render_hash("packet", {
-            "recipe_digest": packet["recipe_digest"],
-            "manifest_digest": packet["manifest_digest"],
-        })
-
-        handles = {
-            "base": "h_video",
-            "audio": "h_audio",
-            "cue_0000_label": "h_label1",
-            "cue_overlay_0001": "h_cue",
-            "cue_0002_label": "h_label2",
-        }
-
-        authority = fixture.authority()
-        authority = mock.Mock(wraps=authority)
-        authority.selected_tier = "hardware-h264"
-        authority.exact_encoder = "h264_videotoolbox"
-        authority.bounds = SimpleNamespace(
-            max_rss_bytes=100_000_000,
-            max_wall_seconds=30,
-            min_available_memory_bytes=100_000_000,
-            output_limit_bytes=10_000_000,
+        payloads = {"audio": audio_bytes, "base": base_bytes,
+                    "cue_overlay_0000": cue_bytes}
+        files, handles = {}, {}
+        for index, entry in enumerate(packet["manifest"]):
+            handle = f"{index:032x}"
+            path = self.root / handle
+            data = payloads[entry["logical_id"]]
+            if corrupt and entry["logical_id"] == "cue_overlay_0000":
+                data = b"corrupt-non-webm"
+            path.write_bytes(data)
+            files[handle] = path
+            handles[entry["logical_id"]] = handle
+        authority = replace(
+            self.fixture.authority(),
+            profile_execution_bounds=dict(BOUNDS),
+            selected_tier="H.264 · hardware (videotoolbox, 8000 kbit/s)",
+            exact_encoder="h264_videotoolbox",
+            ffmpeg=self.PINNED_TOOLS / "ffmpeg",
+            ffprobe=self.PINNED_TOOLS / "ffprobe",
         )
-        authority.profile_execution_bounds = dict(BOUNDS)
-        authority.ffmpeg = Path("/usr/bin/ffmpeg")
-        authority.ffprobe = Path("/usr/bin/ffprobe")
-
-        # 1. Authority gating: when cue_overlays_allowed returns False -> raises RenderJobUnavailable
-        loader = mock.Mock(spec=InstalledRenderAuthorityLoader)
-        loader.late_labels_allowed.return_value = True
-        loader.subtitles_allowed.return_value = True
-        loader.cue_overlays_allowed.return_value = False
-
         events = []
-        raw_packet_bytes = json.dumps({"packet": packet, "assets": handles}, separators=(",", ":")).encode("ascii")
-        runtime = FakeRuntime(root, raw_packet_bytes, authority.qualification, events)
-        runtime.claim_launch("site:node:fleet", "job-c1", machine="local", dispatch_generation=1)
-        context = runtime.execution_context("site:node:fleet", "job-c1", "attempt-1", "test")
+        packed = json.dumps({"packet": packet, "assets": handles},
+                            separators=(",", ":")).encode("ascii")
+        runtime = FakeRuntime(self.root, packed, authority.qualification, events)
+        runtime.claim_launch("site-a:node-a:fleet", "job-1", machine="local",
+                             dispatch_generation=1)
+        context = runtime.execution_context(
+            "site-a:node-a:fleet", "job-1", "attempt-1", "test")
+        loader = mock.Mock(spec=InstalledRenderAuthorityLoader)
+        loader.late_labels_allowed.return_value = False
+        loader.subtitles_allowed.return_value = False
+        loader.cue_overlays_allowed.return_value = allowed
+        loader.compiler_for.return_value = compile_final_render_packet
+        assets = mock.Mock(wraps=FakeAssets(files))
+        self.seen = {}
+
+        async def spawn(*argv, **kwargs):
+            self.seen["argv"] = argv
+            return FakeProcess(Path(context.output_path))
+
+        def validate(ctx, auth, command_digest):
+            content = Path(ctx.output_path).read_bytes()
+            return ValidatedOutputReceipt(
+                owner_scope=ctx.owner_scope, hub_job_id=ctx.hub_job_id,
+                attempt_id=ctx.attempt_id,
+                accepted_request_sha256=ctx.accepted_request_sha256,
+                receipt_digest="5" * 64,
+                output_sha256=hashlib.sha256(content).hexdigest(),
+                output_size_bytes=len(content),
+                profile_digest=auth.qualification.profile_digest,
+                tools_digest=auth.qualification.tools_digest,
+                compiler_digest=auth.qualification.compiler_digest,
+                qualification_digest=auth.qualification.qualification_digest,
+                generated_command_digest=command_digest,
+                selected_tier=auth.selected_tier, feature_losses=())
 
         executor = RenderExecutor(
-            runtime, mock.Mock(wraps=FakeAssets(files)), loader, machine="local",
-            broker_api=FakeBroker(events),
-            spawn=mock.AsyncMock(),
-        )
+            runtime, assets, loader, machine="local", broker_api=FakeBroker(events),
+            spawn=spawn, output_validator=validate,
+            process_identity=lambda process, executable: ProcessIdentity(
+                pid=process.pid, process_group_id=process.pid,
+                start_token=f"boot:1:{executable}"),
+            group_exists=lambda _pgid: False)
 
-        with self.assertRaises(RenderJobUnavailable) as ctx:
-            await executor._run(context, authority, "site:node:fleet")
-        self.assertIn("cue_overlay_profile_required", str(ctx.exception))
-        executor.spawn.assert_not_called()
+        async def wait(process, *_args, **_kwargs):
+            await process.wait()
+            return 0, False
+        executor._wait_with_bounds = wait
+        return executor, context, authority, assets
 
-        # 2. Media validation refusal before FFmpeg spawn:
-        # Pass a corrupt/invalid asset (not VP9 WebM)
-        files["h_cue"].write_bytes(b"corrupt-non-webm-bytes")
-        loader.cue_overlays_allowed.return_value = True
-        loader.compiler_for.return_value = compile_final_render_packet
+    async def test_valid_cue_overlay_renders_and_publishes(self):
+        executor, context, authority, _assets = self.setup_run()
+        await executor._run(context, authority, context.owner_scope)
+        self.assertEqual(executor.runtime.job["state"], "output_ready")
+        command = " ".join(self.seen["argv"])
+        self.assertIn("h264_videotoolbox", command)
+        self.assertIn("matroska,webm", command)
 
-        runtime2 = FakeRuntime(root, raw_packet_bytes, authority.qualification, events)
-        runtime2.claim_launch("site:node:fleet", "job-c2", machine="local", dispatch_generation=1)
-        context2 = runtime2.execution_context("site:node:fleet", "job-c2", "attempt-1", "test")
+    async def test_authority_refusal_precedes_asset_open_and_spawn(self):
+        executor, context, authority, assets = self.setup_run(allowed=False)
+        with self.assertRaisesRegex(RenderJobUnavailable, "cue_overlay_profile_required"):
+            await executor._run(context, authority, context.owner_scope)
+        assets.open_reader.assert_not_called()
+        self.assertFalse(self.seen)
 
-        spawn_mock = mock.AsyncMock()
-        executor2 = RenderExecutor(
-            runtime2, mock.Mock(wraps=FakeAssets(files)), loader, machine="local",
-            broker_api=FakeBroker(events),
-            spawn=spawn_mock,
-        )
-
-        with self.assertRaises(RuntimeError) as ctx:
-            await executor2._run(context2, authority, "site:node:fleet")
-        self.assertIn("cue overlay media rejected", str(ctx.exception))
-        spawn_mock.assert_not_called()
+    async def test_corrupt_cue_media_is_refused_before_spawn(self):
+        executor, context, authority, _assets = self.setup_run(corrupt=True)
+        with self.assertRaisesRegex(RuntimeError, "cue overlay media rejected"):
+            await executor._run(context, authority, context.owner_scope)
+        self.assertFalse(self.seen)
 
 
 if __name__ == "__main__":

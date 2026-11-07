@@ -130,7 +130,7 @@ def _input_options(entry: dict[str, Any], stream: Any) -> tuple[str, ...]:
     if role in {"logo", "frame_background", "overlay", "cue_label"} and suffix == ".png" and (
             header.startswith(b"\x89PNG\r\n\x1a\n")):
         return ("-f", "png_pipe", "-protocol_whitelist", "file,pipe")
-    if role == "overlay" and suffix == ".webm" and header.startswith(b"\x1aE\xdf\xa3"):
+    if role in {"overlay", "cue_overlay"} and suffix == ".webm" and header.startswith(b"\x1aE\xdf\xa3"):
         return ("-f", "matroska,webm", "-protocol_whitelist", "file,pipe")
     raise RuntimeError(f"render asset {entry.get('logical_id', '')} has an unsupported format")
 
