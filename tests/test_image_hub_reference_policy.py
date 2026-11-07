@@ -133,12 +133,40 @@ class PolicyValidationTests(unittest.TestCase):
         self.refused(policy(swap=-1), 'swap_allowance_gb')
         self.refused(policy(swap='x'), 'swap_allowance_gb')
         self.refused(policy(swap=float('nan')), 'swap_allowance_gb')
+        self.refused(policy(swap=None), 'swap_allowance_gb')
+        # An actual zero is a stated guard, not unknown.
+        self.validate(value=policy(swap=0))
 
     def test_intrinsic_ceiling_only_lowers_the_hub_cap(self):
-        self.assertEqual(reference_max(MODEL), 4)
-        self.validate(value=policy(maximum=99), count=4)
-        self.refused(policy(maximum=99), 'between 1 and 4', count=5)
+        # FLUX.2 Klein 4-bit has no proved engine bound: the Hub's numeric cap is the authority.
+        self.assertIsNone(generation.reference_intrinsic_max(MODEL))
+        self.assertEqual(reference_max(MODEL), 4)  # the old owner limit, absent path only
+        self.validate(value=policy(maximum=5), count=5)
+        self.assertEqual(
+            generation.reference_policy_admission(MODEL, 'edit', self.images[:5], TOTAL, NODE,
+                                                  policy(maximum=5))['max_reference_images'], 5)
+        self.refused(policy(maximum=4), 'between 1 and 4', count=5)
         self.refused(policy(maximum=2), 'between 1 and 2', count=3)
+        # A known intrinsic cap still lowers the Hub cap: Qwen 2.1 Turbo is 10.
+        self.assertEqual(generation.reference_intrinsic_max(QWEN_IMAGE_21_TURBO), 10)
+        self.assertEqual(
+            generation.reference_policy_admission(
+                QWEN_IMAGE_21_TURBO, 'edit', self.images[:2], TOTAL, NODE,
+                policy(model=QWEN_IMAGE_21_TURBO, maximum=99))['max_reference_images'], 10)
+
+    def test_present_policy_refuses_an_unknown_host_total(self):
+        raw = {'repo': MODEL.repo, 'prompt': 'x', 'reference_images': self.images[:1],
+               'reference_policy': policy()}
+        for total in (None, 0, -1, True, float('nan'), float('inf')):
+            with self.assertRaisesRegex(ValueError, 'physical tier is unknown'):
+                validate_request(dict(raw), total_memory_bytes=total, destination_node_id=NODE)
+        # A real 6 GiB Mac is still the '<8' tier, not unknown.
+        self.assertEqual(reference_tier(6 * 1024 ** 3), '<8')
+        params = validate_request(
+            {'repo': MODEL.repo, 'prompt': 'x', 'reference_images': self.images[:1],
+             'reference_policy': policy(tier='<8')},
+            total_memory_bytes=6 * 1024 ** 3, destination_node_id=NODE)
+        self.assertEqual(params['reference_images'], self.images[:1])
 
     def test_missing_destination_identity_refuses_a_present_policy(self):
         self.refused(policy(), 'no destination machine identity', destination=None)

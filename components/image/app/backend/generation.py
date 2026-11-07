@@ -978,6 +978,19 @@ def reference_tier(total_memory_bytes: int | None) -> str:
     return '<8'
 
 
+def reference_intrinsic_max(model: ImageModel) -> int | None:
+    """The engine's **known** intrinsic cap from the published table, or None when unknown.
+
+    A row's own ``max`` is an owner limit, never an engine bound, so it is deliberately not a
+    fallback here: an unknown intrinsic cap must not become the old owner number.
+    """
+    entry = reference_limit_table().get('engine_intrinsic_cap', {}).get(model.package_id) or {}
+    maximum = entry.get('max')
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
+        return None
+    return maximum
+
+
 def reference_policy_row(model: ImageModel, mode: str, count: int | None = None) -> dict | None:
     """The published row for this model, job mode and exact reference count."""
     return next((row for row in reference_limit_table()['rows']
@@ -1764,6 +1777,12 @@ def reference_policy_admission(model: ImageModel, mode: str, references: list[st
     if policy['node_id'] != destination_node_id:
         raise ValueError(f'reference_policy is for node {policy["node_id"]!r}, not this worker '
                          f'({destination_node_id!r})')
+    if (total_memory_bytes is None or isinstance(total_memory_bytes, bool)
+            or not isinstance(total_memory_bytes, (int, float))
+            or not math.isfinite(total_memory_bytes) or total_memory_bytes <= 0):
+        # Missing/invalid host telemetry is an unknown tier, never an invented '<8'.
+        raise ValueError('reference_policy physical tier is unknown: this worker could not read '
+                         'its total memory')
     tier = reference_tier(total_memory_bytes)
     if policy['physical_tier'] != tier:
         raise ValueError(f'reference_policy is for the {policy["physical_tier"]!r} physical tier; '
@@ -1800,20 +1819,22 @@ def reference_policy_admission(model: ImageModel, mode: str, references: list[st
         raise ValueError('reference_policy effective.max_reference_images must be a '
                          'non-negative integer')
     swap = effective['swap_allowance_gb']
-    if swap is not None and (isinstance(swap, bool) or not isinstance(swap, (int, float))
-                             or not math.isfinite(swap) or swap < 0):
+    if (swap is None or isinstance(swap, bool) or not isinstance(swap, (int, float))
+            or not math.isfinite(swap) or swap < 0):
         raise ValueError('reference_policy effective.swap_allowance_gb must be a finite '
-                         'non-negative number or null')
+                         'non-negative number; null is unknown')
     if mode == 'edit':
         limits = model.reference_limits or {}
-        # The engine ceiling only ever lowers the Hub cap; it never raises one.
-        maximum = min(maximum, reference_max(model))
+        # Only a known engine bound lowers the Hub cap; an unknown intrinsic stays unknown.
+        intrinsic = reference_intrinsic_max(model)
+        if intrinsic is not None:
+            maximum = min(maximum, intrinsic)
         if len(references) < int(limits.get('min') or 1) or len(references) > maximum:
             raise ValueError(
                 f'{model.label} takes between {limits.get("min")} and {maximum} reference '
                 f'images; this request had {len(references)}')
     return {'max_reference_images': maximum,
-            'swap_allowance_gb': 0.0 if swap is None else float(swap)}
+            'swap_allowance_gb': float(swap)}
 
 
 def _validate_references(model: ImageModel, references: list[str],
