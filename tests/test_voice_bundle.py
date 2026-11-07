@@ -546,6 +546,9 @@ class StagingTests(unittest.TestCase):
             manifest_path = resources/'release-manifest.json'
             manifest = json.loads(manifest_path.read_text())
             self.assertTrue(manifest['development_build'])
+            # payload_sha256 is the PRE-seal digest; this fixture's native is a shell script,
+            # not a Mach-O, so the seal rewrites nothing and the recomputation still matches.
+            # Real-Mach-O semantics: tests/test_sealed_manifest_packaging.py.
             self.assertEqual(manifest['payload_sha256'],
                 module.tree_digest(artifact/'Contents', exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')}))
             with (artifact/'Contents/Info.plist').open('rb') as stream:
@@ -818,6 +821,8 @@ class StagingTests(unittest.TestCase):
                 self.assertFalse((resources / 'video_worker.py').exists())
                 self.assertFalse((resources / 'components/video').exists())
                 self.assertTrue((resources / 'runtimes/music-yue2/bin/python3').is_file())
+            # payload_sha256 is PRE-seal (fixture native is not Mach-O: seal rewrites nothing;
+            # real-Mach-O proof in tests/test_sealed_manifest_packaging.py).
             self.assertEqual(manifest['payload_sha256'], module.tree_digest(
                 contents, exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')}))
             # The per-file manifest a delta update is diffed against: present, self-consistent, and

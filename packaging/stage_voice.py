@@ -994,8 +994,13 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     elif include_hub:
         print('NOTE: this Hub build ships no KH Updater agent kit; pass --khu-agent-kit '
               'and --khu-publisher-json to include one.', file=sys.stderr)
-    # Hash all shipped code/resources including the worker, shell and plist.
-    # The manifest is excluded from its own payload hash to avoid recursion.
+    # payload_sha256 is the PRE-SEAL payload digest and must be recorded before sign_app:
+    # release-manifest.json has to be covered by the seal, and a digest stored inside the seal
+    # cannot describe the seal (the circularity that moved file-manifest outside the app).
+    # The digest is taken before release-manifest.json exists, so it never hashes itself.
+    # Deep codesign rewrites a real Mach-O executable and writes Contents/_CodeSignature, so
+    # this value intentionally does not match a post-seal recomputation; the post-seal
+    # identities are the sidecar file-manifest below and the `.tree-sha256` beside the app.
     release['payload_sha256'] = tree_digest(contents)
     (resources / 'release-manifest.json').write_text(json.dumps(release, indent=2) + '\n')
     # Deep ad-hoc seal the app bundle before manifest generation and tree digest.
