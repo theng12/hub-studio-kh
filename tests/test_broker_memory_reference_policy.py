@@ -33,6 +33,10 @@ MODEL = "AITRADER/FLUX2-klein-4B-mlx-4bit"
 REVISION = "a" * 64
 LOCAL_ID = "local-machine"
 _ABSENT = object()
+# The core's frozen r5 scopes: a mode token covers the model-wide groups plus its tier and rows.
+MODEL_COVERS = ["node_id", "model", "mode", "ram_effective", "ram_sources",
+                "override_scope", "model_wide_fallback", "published_ram"]
+MODE_COVERS = MODEL_COVERS + ["physical_tier", "reference_rows"]
 
 
 def reference(payload: bytes = b"x") -> dict:
@@ -72,16 +76,22 @@ def snapshot(*, node_id: str = "node-a", model: str = MODEL, mode: str = "edit",
         "intrinsic_unknown_reason": None,
         "rows": rows if rows is not None else [row(None)],
         "revision": revision,
-        "revision_covers": ["node_id", "model", "mode", "reference_rows"],
+        "revision_covers": list(MODE_COVERS),
     }
     if reason is not None:
         view["reason"] = reason
     return {
         "revision": "b" * 64,
-        "revision_covers": ["node_id", "model"],
+        "revision_covers": list(MODEL_COVERS),
         "node_id": node_id,
         "model": model,
-        "ram": {"model_wide": {}, "modes": {}},
+        "ram": {
+            "model_wide": {"revision": "b" * 64,
+                           "revision_covers": list(MODEL_COVERS)},
+            "modes": ({mode: {"model": model, "mode": mode, "revision": revision,
+                              "revision_covers": list(MODE_COVERS)}}
+                      if mode else {}),
+        },
         "reference": {mode: view} if mode else {},
     }
 
@@ -144,12 +154,42 @@ def dispatch(entry, refs, *, studio_row=None, policy_out=None,
 
 
 class ReferenceDispatchPolicyTests(unittest.TestCase):
-    def test_an_annotation_absent_row_keeps_the_lane_contract_path(self):
+    def test_an_observed_absent_annotation_keeps_the_lane_contract_path(self):
+        class Monitor:
+            def cached_aggregate_catalog(self):
+                return {"models": [{"hub_studio": "image@node-a", "repo": MODEL}]}
+
         policy: dict = {}
-        mode, url, _headers, _files = dispatch(image_row(), [reference()], policy_out=policy)
+        with mock.patch.object(broker, "_monitor", lambda: Monitor()):
+            mode, url, _headers, _files = dispatch(
+                image_row(), [reference()], policy_out=policy)
         self.assertEqual(mode, "edit")
         self.assertTrue(url.endswith("/api/generate/edit"))
         self.assertEqual(policy, {}, "no producer snapshot means no internal policy field")
+
+    def test_a_raw_entry_without_annotation_uses_the_aggregate_annotation(self):
+        class Monitor:
+            def cached_aggregate_catalog(self):
+                return {"models": [{
+                    "hub_studio": "image@node-a", "repo": MODEL,
+                    "hub_memory_admission": snapshot(rows=[row(None, maximum=2)]),
+                }]}
+
+        policy: dict = {}
+        with mock.patch.object(broker, "_monitor", lambda: Monitor()):
+            dispatch(image_row(), [reference()], policy_out=policy)
+        self.assertEqual(policy["reference_policy"]["effective"]["max_reference_images"], 2)
+
+    def test_an_unreadable_aggregate_snapshot_refuses_instead_of_allowing_legacy(self):
+        class Monitor:
+            def cached_aggregate_catalog(self):
+                raise RuntimeError("cache unavailable")
+
+        with mock.patch.object(broker, "_monitor", lambda: Monitor()):
+            with self.assertRaisesRegex(ValueError,
+                                        "memory-admission snapshot is unreadable"):
+                dispatch(image_row(), [reference(b"a"), reference(b"b"), reference(b"c")],
+                         policy_out={})
 
     def test_the_exact_count_row_is_selected_over_the_generic_row(self):
         snap = snapshot(rows=[row(None, maximum=4), row(2, maximum=2)])
@@ -226,6 +266,44 @@ class ReferenceDispatchPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "names model 'other/model'"):
             dispatch(image_row(snap=snap), [reference()], policy_out={})
 
+    def test_a_snapshot_naming_a_row_alias_instead_of_the_selected_model_is_refused(self):
+        entry = image_row(snap=snapshot(model="some/package-id"))
+        entry["model_id"] = "some/package-id"
+        with self.assertRaisesRegex(ValueError, "names model 'some/package-id'"):
+            dispatch(entry, [reference()], policy_out={})
+
+    def test_a_snapshot_missing_its_mode_coverage_is_refused(self):
+        snap = snapshot()
+        del snap["reference"]["edit"]["revision_covers"]
+        with self.assertRaisesRegex(ValueError, "does not cover the exact mode scope"):
+            dispatch(image_row(snap=snap), [reference()], policy_out={})
+
+    def test_an_empty_mode_coverage_is_refused(self):
+        snap = snapshot()
+        snap["reference"]["edit"]["revision_covers"] = []
+        with self.assertRaisesRegex(ValueError, "does not cover the exact mode scope"):
+            dispatch(image_row(snap=snap), [reference()], policy_out={})
+
+    def test_model_wide_coverage_is_not_accepted_as_mode_coverage(self):
+        snap = snapshot()
+        snap["reference"]["edit"]["revision_covers"] = list(MODEL_COVERS)
+        with self.assertRaisesRegex(ValueError, "does not cover the exact mode scope"):
+            dispatch(image_row(snap=snap), [reference()], policy_out={})
+
+    def test_a_borrowed_revision_without_its_same_mode_ram_snapshot_is_refused(self):
+        snap = snapshot()
+        snap["ram"]["modes"].pop("edit")
+        with self.assertRaisesRegex(
+                ValueError, "do not match the producer's own 'edit' RAM snapshot"):
+            dispatch(image_row(snap=snap), [reference()], policy_out={})
+
+    def test_a_reference_revision_that_differs_from_its_ram_snapshot_is_refused(self):
+        snap = snapshot()
+        snap["ram"]["modes"]["edit"]["revision"] = "c" * 64
+        with self.assertRaisesRegex(
+                ValueError, "do not match the producer's own 'edit' RAM snapshot"):
+            dispatch(image_row(snap=snap), [reference()], policy_out={})
+
     def test_a_tier_that_disagrees_with_its_band_is_refused(self):
         snap = snapshot(tier="8", tier_gb=16)
         with self.assertRaisesRegex(ValueError, "disagrees with its band"):
@@ -292,6 +370,21 @@ class SubmitDoorPolicyTests(unittest.TestCase):
     def test_an_annotation_absent_row_leaves_the_older_path_unchanged(self):
         self.assertIsNone(self.door([{"studio": studio(), "entry": image_row()}], [3]))
         self.assertIsNone(self.door([{"studio": studio(), "entry": image_row()}]))
+
+    def test_an_unreadable_aggregate_snapshot_is_loud_at_the_door(self):
+        entries = [{"studio": studio(), "entry": image_row()}]
+
+        class Monitor:
+            def cached_catalog_entries(self, model, modality=None):
+                return entries
+
+            def cached_aggregate_catalog(self):
+                raise RuntimeError("cache unavailable")
+
+        with mock.patch.object(broker, "_monitor", lambda: Monitor()):
+            error = broker._image_reference_door_refusal(MODEL, [3])
+        self.assertIn("3 reference image(s)", error)
+        self.assertIn("unreadable", error)
 
     def test_an_unknown_policy_is_loud_at_the_door(self):
         entries = [{"studio": studio(),

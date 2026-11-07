@@ -157,12 +157,17 @@ def _aggregate_reference_policy(studio: dict, model: str):
 
     Local rows are annotated by the monitor from this Mac's own telemetry and live overrides;
     a remote row carries only what its producer published. This never asks a node for anything.
+    A readable catalog with no annotation is the older producer; an unreadable cache is unknown
+    and refuses by name, never the legacy fallback.
     """
     studio = studio or {}
     try:
         rows = _monitor().cached_aggregate_catalog().get("models") or []
-    except Exception:
-        return _REFERENCE_POLICY_ABSENT
+    except Exception as exc:
+        # An unreadable cache is not an older producer: nothing was observed, so the lane
+        # contract must not answer for it. Only an observed absent annotation keeps that path.
+        raise ValueError(
+            f"the producer's memory-admission snapshot is unreadable: {exc}") from exc
     for row in rows:
         if not isinstance(row, dict) or row.get("hub_studio") != studio.get("id"):
             continue
@@ -177,7 +182,8 @@ def _producer_reference_policy(studio: dict, entry: dict | None, model: str):
 
     The worker catalog row is preferred; the aggregate annotation answers for this Hub's own
     rows, whose scheduling view is the raw worker catalog. A present ``None`` or malformed value
-    is returned as-is so validation can refuse it loudly instead of falling back.
+    is returned as-is so validation can refuse it loudly instead of falling back. An unreadable
+    aggregate raises ``ValueError`` naming the unknown rather than reading as absent.
     """
     entry = entry or {}
     if "hub_memory_admission" in entry:
@@ -201,13 +207,13 @@ def _validated_reference_policy(snapshot, studio: dict, model: str, entry: dict 
         raise ValueError(
             f"the reference policy describes node {snapshot.get('node_id')!r}, not the selected "
             f"destination {node_id!r}")
+    selected_model = str(model or "").strip()
     producer_model = str(snapshot.get("model") or "").strip()
-    known_models = {str(model or "").strip(),
-                    str((entry or {}).get("repo") or "").strip(),
-                    str((entry or {}).get("model_id") or "").strip()}
-    if not producer_model or producer_model not in known_models:
+    # Exact selected model only: another row's repo/model_id alias is a different identity.
+    if not producer_model or producer_model != selected_model:
         raise ValueError(
-            f"the reference policy names model {producer_model!r}, not the selected {model!r}")
+            f"the reference policy names model {producer_model!r}, "
+            f"not the selected {selected_model!r}")
     reference = snapshot.get("reference")
     view = reference.get(mode) if isinstance(reference, dict) else None
     if not isinstance(view, dict):
@@ -232,6 +238,21 @@ def _validated_reference_policy(snapshot, studio: dict, model: str, entry: dict 
     if (not isinstance(revision, str) or len(revision) != 64
             or any(char not in "0123456789abcdef" for char in revision)):
         raise ValueError("the producer's reference policy states no valid mode token")
+    covers = view.get("revision_covers")
+    frozen = memory_admission._REVISION_COVERS_MODE
+    if covers != frozen:
+        raise ValueError(
+            "the producer's reference policy does not cover the exact mode scope "
+            f"({', '.join(frozen)})")
+    ram = snapshot.get("ram")
+    ram_modes = ram.get("modes") if isinstance(ram, dict) else None
+    ram_view = ram_modes.get(mode) if isinstance(ram_modes, dict) else None
+    if (not isinstance(ram_view, dict) or ram_view.get("model") != producer_model
+            or ram_view.get("mode") != mode or ram_view.get("revision") != revision
+            or ram_view.get("revision_covers") != covers):
+        raise ValueError(
+            f"the reference policy revision and scope do not match the producer's own "
+            f"{mode!r} RAM snapshot")
     rows = view.get("rows")
     if not isinstance(rows, list):
         raise ValueError("the producer's reference policy states no count rows")
@@ -279,7 +300,7 @@ def _validated_reference_policy(snapshot, studio: dict, model: str, entry: dict 
         raise ValueError(
             f"{count} reference image(s) sent; the selected node's policy allows at most {maximum}")
     return {
-        "model": producer_model,
+        "model": selected_model,
         "mode": mode,
         "node_id": node_id,
         "physical_tier": tier,
@@ -2536,7 +2557,12 @@ def _image_reference_door_refusal(model: str, counts: list[int] | None = None) -
     policy_reasons: dict[int, str] = {}
 
     def judge_policy(studio, entry) -> None:
-        snapshot = _producer_reference_policy(studio, entry, model)
+        try:
+            snapshot = _producer_reference_policy(studio, entry, model)
+        except ValueError as exc:
+            for count in wanted:
+                policy_reasons.setdefault(count, str(exc))
+            return
         if snapshot is _REFERENCE_POLICY_ABSENT:
             for count in wanted:
                 servable[count] = True
