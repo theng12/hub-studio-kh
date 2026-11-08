@@ -17,18 +17,26 @@ import io
 import json
 import os
 from pathlib import Path
+import sys
 import tarfile
 import tempfile
 import unittest
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from components.hub.developer_gate_contract import (
     CONTRACT_ID,
     CONTRACT_REVISION,
+    BoundedTarFile,
+    BoundedTarInfo,
     GateContractError,
     canonical_json,
     compute_canonical_sha256,
     extract_source_archive,
     load_gate_schema,
+    open_bounded_tar,
     parse_strict_json,
     sha256_file,
     sha256_stream,
@@ -915,6 +923,97 @@ class DeveloperGateContractTests(unittest.TestCase):
             "media_type": "application/x-tar",
         }
         validate_schema(known_src, "source")
+
+    def test_bounded_tar_rejects_huge_declared_pax_metadata_without_large_read(self) -> None:
+        """Spy stream proves BoundedTarInfo rejects huge declared PAX header without reading 1 GB."""
+        # Build 512-byte tar header with PAX type 'x' and huge declared size (1 GB = 1073741824 bytes = 0o10000000000)
+        # Standard ustar header: name (100b), mode (8b), uid (8b), gid (8b), size (12b), mtime (12b), chksum (8b), typeflag (1b)
+        header = bytearray(512)
+        header[0:16] = b"pax_huge_header\0"
+        header[100:108] = b"0000644\0"
+        header[108:116] = b"0000000\0"
+        header[116:124] = b"0000000\0"
+        # 1 GB in octal: 10000000000 (11 chars + space or null)
+        header[124:136] = b"10000000000\0"
+        header[136:148] = b"00000000000\0"
+        header[148:156] = b"        "  # checksum placeholder
+        header[156] = ord("x")  # XHDTYPE
+        header[257:263] = b"ustar\0"
+        header[263:265] = b"00"
+        # Compute checksum
+        chksum = sum(header)
+        header[148:156] = f"{chksum:06o}\0 ".encode("ascii")
+
+        raw_header_bytes = bytes(header)
+
+        class SpyStream(io.RawIOBase):
+            def __init__(self, header_data: bytes) -> None:
+                self._buf = header_data
+                self._pos = 0
+                self.bytes_read = 0
+
+            def readable(self) -> bool:
+                return True
+
+            def readinto(self, b: bytearray | memoryview) -> int:
+                if self._pos >= len(self._buf):
+                    # If reader tries to read the 1GB payload, fail or track
+                    # We only provide zeros if requested, but track read volume
+                    n = min(len(b), 65536)
+                    self.bytes_read += n
+                    return n
+                avail = len(self._buf) - self._pos
+                to_copy = min(len(b), avail)
+                b[:to_copy] = self._buf[self._pos : self._pos + to_copy]
+                self._pos += to_copy
+                self.bytes_read += to_copy
+                return to_copy
+
+            def seekable(self) -> bool:
+                return True
+
+            def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+                if whence == os.SEEK_SET:
+                    self._pos = offset
+                elif whence == os.SEEK_CUR:
+                    self._pos += offset
+                return self._pos
+
+            def tell(self) -> int:
+                return self._pos
+
+        spy = io.BufferedReader(SpyStream(raw_header_bytes))  # type: ignore[arg-type]
+        with self.assertRaises(GateContractError) as ctx:
+            with open_bounded_tar(fileobj=spy, mode="r:") as tar:
+                tar.next()
+        self.assertIn("PAX metadata header exceeds size ceiling", str(ctx.exception))
+        # Proves no large read occurred: only header block was read, not 1 GB
+        self.assertLess(spy.raw.bytes_read, 128 * 1024)
+
+    def test_bounded_tar_accepts_git_archive_global_pax_comment(self) -> None:
+        """Ordinary git archive global PAX comment (commit SHA) is accepted by bounded tar."""
+        bio = io.BytesIO()
+        ti_pax = tarfile.TarInfo(name="pax_global_header")
+        ti_pax.type = tarfile.XGLTYPE
+        comment_bytes = b"52 comment=d9c950547cb119c6aa57c54f9e2014a678593692\n"
+        ti_pax.size = len(comment_bytes)
+
+        ti_file = tarfile.TarInfo(name="VERSION")
+        content = b"0.6.205\n"
+        ti_file.size = len(content)
+
+        with tarfile.open(fileobj=bio, mode="w:") as tar:
+            tar.addfile(ti_pax, io.BytesIO(comment_bytes))
+            tar.addfile(ti_file, io.BytesIO(content))
+
+        data = bio.getvalue()
+        sha = hashlib.sha256(data).hexdigest()
+        source_decl = _make_source(size=len(data), expanded=len(content), files=1, sha=sha)
+
+        dest_dir = self.tmp_path / "git_archive_extracted"
+        result = extract_source_archive(io.BytesIO(data), dest_dir, source_decl)
+        self.assertEqual(result["file_count"], 1)
+        self.assertEqual((dest_dir / "VERSION").read_bytes(), content)
 
 
 if __name__ == "__main__":

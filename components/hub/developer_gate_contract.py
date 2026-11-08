@@ -57,6 +57,34 @@ ABSOLUTE_MAX_PATH_LENGTH = 1024
 ABSOLUTE_MAX_JSON_BYTES = 4 * 1024 * 1024
 ABSOLUTE_MAX_LOG_BYTES = 32 * 1024 * 1024
 ABSOLUTE_MAX_AGGREGATE_LOG_BYTES = 128 * 1024 * 1024
+MAX_METADATA_HEADER_BYTES = 64 * 1024
+
+
+class BoundedTarInfo(tarfile.TarInfo):
+    """TarInfo subclass enforcing strict small finite metadata header byte bounds."""
+
+    def _proc_member(self, tarfile_obj: tarfile.TarFile) -> tarfile.TarInfo:
+        if self.type in (tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK):
+            if self.size > ABSOLUTE_MAX_PATH_LENGTH + 512:
+                raise GateContractError("GNU long metadata exceeds size ceiling", status=413, code="bounds")
+        elif self.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, getattr(tarfile, "SOLARIS_XHDTYPE", b"X")):
+            if self.size > MAX_METADATA_HEADER_BYTES:
+                raise GateContractError("PAX metadata header exceeds size ceiling", status=413, code="bounds")
+        elif self.type == getattr(tarfile, "GNUTYPE_SPARSE", b"S"):
+            raise GateContractError("Sparse files are forbidden", status=400, code="invalid_request")
+        return super()._proc_member(tarfile_obj)
+
+
+class BoundedTarFile(tarfile.TarFile):
+    """TarFile using BoundedTarInfo to bound metadata before reading."""
+    tarinfo = BoundedTarInfo
+
+
+def open_bounded_tar(name: str | Path | None = None, mode: str = "r:", fileobj: BinaryIO | None = None) -> BoundedTarFile:
+    """Open tar archive using BoundedTarFile to protect against metadata allocation attacks."""
+    if name is not None:
+        return BoundedTarFile.open(name=str(name), mode=mode)
+    return BoundedTarFile.open(mode=mode, fileobj=fileobj)
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -727,9 +755,9 @@ def validate_source_archive(
     max_total_members = min(max_files * 2 + 64, ABSOLUTE_MAX_MEMBERS)
 
     if isinstance(archive_path_or_stream, (str, Path)):
-        tar_ctx = tarfile.open(str(archive_path_or_stream), mode="r:")
+        tar_ctx = open_bounded_tar(name=archive_path_or_stream, mode="r:")
     else:
-        tar_ctx = tarfile.open(fileobj=archive_path_or_stream, mode="r:")
+        tar_ctx = open_bounded_tar(fileobj=archive_path_or_stream, mode="r:")
 
     file_count = 0
     expanded_bytes = 0
@@ -838,10 +866,10 @@ def extract_source_archive(
 
     # Phase 2: safely write regular files and directories using the same stream/fd
     if isinstance(archive_path_or_stream, (str, Path)):
-        tar_ctx = tarfile.open(str(archive_path_or_stream), mode="r:")
+        tar_ctx = open_bounded_tar(name=archive_path_or_stream, mode="r:")
     else:
         archive_path_or_stream.seek(0)
-        tar_ctx = tarfile.open(fileobj=archive_path_or_stream, mode="r:")
+        tar_ctx = open_bounded_tar(fileobj=archive_path_or_stream, mode="r:")
 
     file_count = 0
     expanded_bytes = 0
@@ -984,9 +1012,9 @@ def validate_result_archive(
     max_aggregate_log = min(bounds.get("result_bytes", ABSOLUTE_MAX_AGGREGATE_LOG_BYTES) if bounds else ABSOLUTE_MAX_AGGREGATE_LOG_BYTES, ABSOLUTE_MAX_AGGREGATE_LOG_BYTES)
 
     if isinstance(archive_path_or_stream, (str, Path)):
-        tar_ctx = tarfile.open(str(archive_path_or_stream), mode="r:")
+        tar_ctx = open_bounded_tar(name=archive_path_or_stream, mode="r:")
     else:
-        tar_ctx = tarfile.open(fileobj=archive_path_or_stream, mode="r:")
+        tar_ctx = open_bounded_tar(fileobj=archive_path_or_stream, mode="r:")
 
     member_map: dict[str, tarfile.TarInfo] = {}
     member_count = 0
