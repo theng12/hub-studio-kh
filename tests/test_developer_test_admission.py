@@ -358,6 +358,10 @@ class DeveloperTestAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.code, "resource_unknown")
 
         with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("gate-1", purpose="app_gate")
+        self.assertEqual(raised.exception.code, "resource_unknown")
+
+        with self.assertRaises(admission.AdmissionRefused) as raised:
             admission.reserve("gate-1", purpose="app_gate", resource_safe=False)
         self.assertEqual(raised.exception.code, "resource_unknown")
 
@@ -414,6 +418,28 @@ class DeveloperTestAdmissionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(admission.AdmissionRefused) as raised:
             admission.reserve("att-1", purpose="unsupported_purpose")
         self.assertEqual(raised.exception.code, "invalid")
+
+    def test_reserve_replay_conflicting_purpose_refuses(self) -> None:
+        owner = admission.reserve("att-replay")
+        self.assertEqual(admission.active_purpose(), "image")
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("att-replay", purpose="app_gate", resource_safe=True)
+        self.assertEqual(raised.exception.code, "busy")
+        admission.release("att-replay", confirmed=True)
+
+        gate_owner = admission.reserve_app_gate("gate-replay", resource_safe=True)
+        self.assertEqual(admission.active_purpose(), "app_gate")
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("gate-replay", purpose="image")
+        self.assertEqual(raised.exception.code, "busy")
+        admission.release("gate-replay", confirmed=True)
+
+    def test_reserve_replay_conflicting_machine_refuses(self) -> None:
+        owner = admission.reserve("att-replay", machine="local")
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("att-replay", machine="node-2")
+        self.assertEqual(raised.exception.code, "busy")
+        admission.release("att-replay", confirmed=True)
 
 
 if __name__ == "__main__":
