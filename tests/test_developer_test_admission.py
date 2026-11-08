@@ -259,6 +259,162 @@ class DeveloperTestAdmissionTests(unittest.IsolatedAsyncioTestCase):
         broker.release_external_machine("local", "render:job-a")
         self.assertNotIn("local", broker.busy_machines())
 
+    def test_app_gate_reserve_and_release(self) -> None:
+        owner = admission.reserve_app_gate("gate-1", resource_safe=True)
+        self.assertEqual(owner, "developer-test:gate-1")
+        self.assertEqual(admission.active_purpose(), "app_gate")
+        self.assertEqual(admission.active_attempt(), "gate-1")
+        self.assertEqual(broker._external_machine_leases["local"], owner)
+        self.assertEqual(admission.reserve_app_gate("gate-1", resource_safe=True), owner)
+        self.assertTrue(admission.release("gate-1", confirmed=True))
+        self.assertIsNone(admission.active_attempt())
+        self.assertIsNone(admission.active_purpose())
+        self.assertNotIn("local", broker._external_machine_leases)
+
+    def test_cross_kind_exclusion(self) -> None:
+        admission.reserve("img-1")
+        self.assertEqual(admission.active_purpose(), "image")
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-1", resource_safe=True)
+        self.assertEqual(raised.exception.code, "busy")
+        admission.release("img-1", confirmed=True)
+
+        admission.reserve_app_gate("gate-2", resource_safe=True)
+        self.assertEqual(admission.active_purpose(), "app_gate")
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("img-2")
+        self.assertEqual(raised.exception.code, "busy")
+
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-3", resource_safe=True)
+        self.assertEqual(raised.exception.code, "busy")
+        admission.release("gate-2", confirmed=True)
+
+    def test_image_behavior_unchanged_by_app_gate_support(self) -> None:
+        with mock.patch.object(registry, "function_enabled", return_value=False):
+            with self.assertRaises(admission.AdmissionRefused) as raised:
+                admission.reserve("img-1")
+            self.assertEqual(raised.exception.code, "paused")
+
+        broker.configure_monitor(SimpleNamespace(
+            registry=[{"id": "image-1", "modality": "image", "machine": "local"}], status={}))
+        with mock.patch.object(registry, "studio_enabled", return_value=False):
+            with self.assertRaises(admission.AdmissionRefused) as raised:
+                admission.reserve("img-2")
+            self.assertEqual(raised.exception.code, "paused")
+
+        owner = admission.reserve("img-3")
+        self.assertEqual(owner, "developer-test:img-3")
+        self.assertEqual(admission.active_purpose(), "image")
+        admission.release("img-3", confirmed=True)
+
+    def test_app_gate_allows_when_image_function_or_studios_are_off(self) -> None:
+        with mock.patch.object(registry, "function_enabled", return_value=False):
+            owner = admission.reserve_app_gate("gate-1", resource_safe=True)
+            self.assertEqual(owner, "developer-test:gate-1")
+            admission.release("gate-1", confirmed=True)
+
+        broker.configure_monitor(SimpleNamespace(
+            registry=[{"id": "image-1", "modality": "image", "machine": "local"}], status={}))
+        with mock.patch.object(registry, "studio_enabled", return_value=False):
+            owner = admission.reserve_app_gate("gate-2", resource_safe=True)
+            self.assertEqual(owner, "developer-test:gate-2")
+            admission.release("gate-2", confirmed=True)
+
+    def test_app_gate_refusal_when_paused_off_or_unverified(self) -> None:
+        self.setting_path.unlink()
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-1", resource_safe=True)
+        self.assertEqual(raised.exception.code, "paused")
+
+        self.write_setting(setting(False))
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-1", resource_safe=True)
+        self.assertEqual(raised.exception.code, "paused")
+
+        self.write_setting(setting(True, verified=False))
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-1", resource_safe=True)
+        self.assertEqual(raised.exception.code, "unverified")
+
+        self.write_setting(setting(True))
+        with mock.patch.object(registry, "machine_enabled", return_value=False):
+            with self.assertRaises(admission.AdmissionRefused) as raised:
+                admission.reserve_app_gate("gate-1", resource_safe=True)
+            self.assertEqual(raised.exception.code, "paused")
+
+        with mock.patch.object(peers, "standing_by", return_value=True):
+            with self.assertRaises(admission.AdmissionRefused) as raised:
+                admission.reserve_app_gate("gate-1", resource_safe=True)
+            self.assertEqual(raised.exception.code, "paused")
+
+    def test_app_gate_requires_resource_safe_failclosed(self) -> None:
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-1")
+        self.assertEqual(raised.exception.code, "resource_unknown")
+
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-1", resource_safe=False)
+        self.assertEqual(raised.exception.code, "resource_unknown")
+
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("gate-1", purpose="app_gate", resource_safe=False)
+        self.assertEqual(raised.exception.code, "resource_unknown")
+
+        self.assertEqual(broker._external_machine_leases, {})
+
+    def test_app_gate_production_preemption(self) -> None:
+        admission.reserve_app_gate("gate-1", resource_safe=True)
+        self.assertFalse(broker.acquire_external_machine("local", "render:prod-1"))
+        self.assertTrue(admission.cancel_requested("gate-1"))
+        self.assertFalse(admission.stage_allowed("gate-1"))
+
+        self.assertTrue(admission.release("gate-1", confirmed=True))
+        self.assertTrue(broker.acquire_external_machine("local", "render:prod-1"))
+        broker.release_external_machine("local", "render:prod-1")
+
+    def test_app_gate_unknown_release_retains_shared_lease(self) -> None:
+        admission.reserve_app_gate("gate-1", resource_safe=True)
+        self.assertFalse(admission.release("gate-1", confirmed=False))
+        self.assertTrue(admission.release_unknown("gate-1"))
+        self.assertEqual(broker._external_machine_leases["local"], "developer-test:gate-1")
+        self.assertIn("local", broker.busy_machines())
+
+        self.assertFalse(broker.acquire_external_machine("local", "render:prod-1"))
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("img-1")
+        self.assertEqual(raised.exception.code, "busy")
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-2", resource_safe=True)
+        self.assertEqual(raised.exception.code, "busy")
+
+        self.assertTrue(admission.release("gate-1", confirmed=True))
+        self.assertNotIn("local", broker.busy_machines())
+        self.assertFalse(admission.release_unknown("gate-1"))
+
+    def test_app_gate_cancel_requested_on_setting_off_or_node_pause(self) -> None:
+        admission.reserve_app_gate("gate-1", resource_safe=True)
+        self.assertFalse(admission.cancel_requested("gate-1"))
+
+        self.write_setting(setting(False))
+        self.assertTrue(admission.cancel_requested("gate-1"))
+
+        self.write_setting(setting(True))
+        self.assertFalse(admission.cancel_requested("gate-1"))
+
+        with mock.patch.object(registry, "function_enabled", return_value=False):
+            self.assertFalse(admission.cancel_requested("gate-1"))
+
+        with mock.patch.object(registry, "machine_enabled", return_value=False):
+            self.assertTrue(admission.cancel_requested("gate-1"))
+
+        admission.release("gate-1", confirmed=True)
+
+    def test_reserve_invalid_purpose(self) -> None:
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("att-1", purpose="unsupported_purpose")
+        self.assertEqual(raised.exception.code, "invalid")
+
 
 if __name__ == "__main__":
     unittest.main()
