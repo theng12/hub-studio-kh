@@ -78,13 +78,15 @@ def _previous_app(root: Path) -> Path:
     return target
 
 
-def _run(stage: Path, target: Path, free_kb: int | None = None) -> subprocess.CompletedProcess:
+def _run(stage: Path, target: Path, free_kb: int | None = None,
+         **overrides: str) -> subprocess.CompletedProcess:
     environment = dict(os.environ)
     environment["STUDIOHUB_INSTALL_TARGET"] = str(target)
     # Keep the real readiness markers out of it: the script clears them on a successful install.
     environment["STUDIOHUB_INSTALL_DATA"] = str(target.parent / "data")
     if free_kb is not None:
         environment["STUDIOHUB_INSTALL_FREE_KB"] = str(free_kb)
+    environment.update(overrides)
     return subprocess.run(
         ["bash", str(SCRIPT), str(stage)],
         cwd=REPO_ROOT,
@@ -94,6 +96,20 @@ def _run(stage: Path, target: Path, free_kb: int | None = None) -> subprocess.Co
         check=False,
         timeout=300,
     )
+
+
+def _fake_commands(root: Path, *, pgrep_pid: int | None) -> Path:
+    """A PATH entry whose `pgrep` answers for the test and whose `osascript` leaves a marker."""
+    bin_dir = root / "fake-bin"
+    bin_dir.mkdir()
+    pgrep = bin_dir / "pgrep"
+    pgrep.write_text("#!/bin/sh\nexit 1\n" if pgrep_pid is None else f"#!/bin/sh\necho {pgrep_pid}\n",
+                     encoding="utf-8")
+    pgrep.chmod(0o755)
+    osascript = bin_dir / "osascript"
+    osascript.write_text(f"#!/bin/sh\ntouch '{root / 'osascript-called'}'\n", encoding="utf-8")
+    osascript.chmod(0o755)
+    return bin_dir
 
 
 def _unlock(root: Path) -> None:
@@ -213,12 +229,67 @@ class TheInstallGuardsTest(unittest.TestCase):
         """
         source = SCRIPT.read_text(encoding="utf-8")
         start = source.index("== starting Studio Hub")
-        guard = source.rindex('if [ "$TARGET" = "/Applications/Studio Hub.app" ]; then', 0, start)
+        guard = source.rindex('if [ "$TARGET" = "/Applications/Studio Hub.app" ] && [ "$START" = 1 ]; then',
+                              0, start)
         self.assertGreater(guard, 0)
         # The guard must open before the launch and be the nearest one above it.
         between = source[guard:start]
         self.assertNotIn("\nfi\n", between,
                          "the relaunch sits outside the real-target guard, so a temp install starts an app")
+
+    def test_start_can_be_turned_off_and_a_running_app_is_refused_not_killed(self) -> None:
+        """Off mode must leave a running Hub alone: killing it would leave it down with no relaunch."""
+        root = Path(self.tmp.name)
+        stage = _stage(root)
+        target = _previous_app(root)
+        before = sorted(p.relative_to(target).as_posix() for p in target.rglob("*"))
+        fake_bin = _fake_commands(root, pgrep_pid=4242)
+
+        completed = _run(stage, target, STUDIOHUB_INSTALL_START="0",
+                         PATH=f"{fake_bin}:{os.environ['PATH']}")
+
+        output = completed.stdout + completed.stderr
+        self.assertNotEqual(completed.returncode, 0, output)
+        self.assertIn("refusing to install", output, output)
+        self.assertIn("4242", output, output)
+        self.assertEqual(sorted(p.relative_to(target).as_posix() for p in target.rglob("*")), before,
+                         "the running app's bundle was touched in off mode")
+        # The off branch must not reach osascript (`quit` can launch a stopped app) or kill.
+        off_block = SCRIPT.read_text(encoding="utf-8")
+        off_block = off_block[off_block.index('if [ "$START" = 0 ]; then'):]
+        off_block = off_block[:off_block.index("\nelse\n")]
+        commands = [line for line in off_block.splitlines() if not line.lstrip().startswith("#")]
+        self.assertFalse(any("osascript" in line or "kill" in line for line in commands), commands)
+
+    def test_start_off_installs_without_launching(self) -> None:
+        root = Path(self.tmp.name)
+        stage = _stage(root)
+        target = _previous_app(root)
+        fake_bin = _fake_commands(root, pgrep_pid=None)
+
+        completed = _run(stage, target, STUDIOHUB_INSTALL_START="0",
+                         PATH=f"{fake_bin}:{os.environ['PATH']}")
+
+        output = completed.stdout + completed.stderr
+        self.assertEqual(completed.returncode, 0, output)
+        self.assertNotIn("== starting Studio Hub", output, output)
+        self.assertFalse((root / "osascript-called").exists(),
+                         "off mode used osascript, whose quit can launch a stopped app")
+
+    def test_an_invalid_start_control_is_refused_before_anything_is_touched(self) -> None:
+        root = Path(self.tmp.name)
+        stage = _stage(root)
+        target = _previous_app(root)
+        before = sorted(p.relative_to(target).as_posix() for p in target.rglob("*"))
+        for value in ("yes", "2", "off"):
+            with self.subTest(value=value):
+                completed = _run(stage, target, STUDIOHUB_INSTALL_START=value)
+                output = completed.stdout + completed.stderr
+                self.assertNotEqual(completed.returncode, 0, output)
+                self.assertIn("STUDIOHUB_INSTALL_START", output, output)
+                self.assertIn("1 or 0", output, output)
+                self.assertEqual(sorted(p.relative_to(target).as_posix() for p in target.rglob("*")),
+                                 before, "the previous app was touched despite an invalid control")
 
 
 if __name__ == "__main__":

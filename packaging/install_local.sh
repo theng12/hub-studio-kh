@@ -2,6 +2,7 @@
 # Install a staged build into /Applications, and prove it landed.
 #
 #   bash packaging/install_local.sh .build/StudioHub-0644/Studio Hub.app
+#   STUDIOHUB_INSTALL_START=0 bash packaging/install_local.sh <app>   # install, leave it stopped
 #
 # The previous ad-hoc version of this step chained the swap with `|| true`, so a swap that did
 # not happen looked like a success - and a stale app with writable runtime files went
@@ -16,6 +17,13 @@ TARGET="${STUDIOHUB_INSTALL_TARGET:-/Applications/Studio Hub.app}"
 DATA="${STUDIOHUB_INSTALL_DATA:-$HOME/Library/Application Support/StudioHub Standalone}"
 TARGET_PARENT="$(dirname -- "$TARGET")"
 TRASH="${STUDIOHUB_INSTALL_TRASH:-$TARGET_PARENT/_trash}"
+# The owner may want the install without leaving the Hub running. Default stays on; a value that is
+# not 0 or 1 is refused here, before anything is stopped or swapped.
+START="${STUDIOHUB_INSTALL_START:-1}"
+case "$START" in
+  1|0) ;;
+  *) echo "STUDIOHUB_INSTALL_START must be 1 or 0, not '$START'"; exit 1 ;;
+esac
 
 present() { [ -e "$1" ] || [ -L "$1" ]; }
 archive() {
@@ -63,6 +71,15 @@ if [ "$free_kb" -lt "$needed_kb" ]; then
   exit 1
 fi
 
+if [ "$START" = 0 ]; then
+  # Off mode never quits or kills: AppleScript's `quit` can launch a stopped app, and killing the
+  # owner's running Hub would leave it down with nothing here to bring it back. Refuse instead.
+  running=$(pgrep -f "$TARGET/Contents" || true)
+  if [ -n "$running" ]; then
+    echo "refusing to install with STUDIOHUB_INSTALL_START=0: $TARGET is running (pids: $running); quit it first"
+    exit 1
+  fi
+else
 echo "== stopping any running copy"
 # `quit app "Studio Hub"` matches by *name*, so it can only ever mean the installed app: run it
 # only when that is what we are replacing. The kill loop below is matched on the target path for the
@@ -83,6 +100,7 @@ for attempt in 1 2 3; do
 done
 pids=$(pgrep -f "$TARGET/Contents" || true)
 if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; sleep 2; fi
+fi
 
 restore_previous() {
   echo "$1; restoring the previous app"
@@ -152,7 +170,7 @@ echo "== installed $STAGED_VERSION / $INSTALLED_BUILD"
 #
 # Only for the real install target, for the same reason the stop above is: an install into a temp
 # path must not start an app, which is also what keeps the guard tests from launching anything.
-if [ "$TARGET" = "/Applications/Studio Hub.app" ]; then
+if [ "$TARGET" = "/Applications/Studio Hub.app" ] && [ "$START" = 1 ]; then
   echo "== starting Studio Hub"
   open -a "$TARGET" >/dev/null 2>&1 || true
   # Wait for the **Hub**, not for the app bundle: `hub-ready.json` is written by the Hub service once
