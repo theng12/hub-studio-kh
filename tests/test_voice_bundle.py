@@ -667,6 +667,17 @@ class StagingTests(unittest.TestCase):
                 'components/vision/app/backend/main.py': '# vision fixture',
                 'packaging/vision_worker.py': '# vision worker',
             }
+            # Frozen gate assets every Hub bundle stages. The fixture repo is synthetic, so it
+            # carries the real tracked files instead of weakening the stage or skipping tests.
+            for relative in (
+                    'contracts/developer-gate-v1.schema.json',
+                    'contracts/developer-gate-v1-wire.txt',
+                    'packaging/developer-gates/library-portable.commands.json',
+                    'packaging/developer-gates/library-portable.gate.json',
+                    'packaging/developer-gates/library-portable.registry.json',
+                    'packaging/developer-gates/library-portable.dependency-manifest.json',
+                    'packaging/developer-gates/official-tools.json'):
+                files[relative] = (ROOT / relative).read_text()
             for name, content in files.items():
                 path = repo / name
                 path.parent.mkdir(parents=True, exist_ok=True)

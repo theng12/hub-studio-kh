@@ -227,6 +227,13 @@ class SealedManifestPackagingTests(unittest.TestCase):
                 capture_output=True, text=True)
             self.assertEqual(verify.returncode, 0, verify.stderr)
 
+    def test_copied_executable_authority_is_not_the_app_identity(self):
+        """An unsealed app inherits its main executable's Authority; never preserve that."""
+        with tempfile.TemporaryDirectory(prefix="copied-authority-") as temp_dir:
+            app = self._build_real_app(Path(temp_dir))
+            self.assertFalse((app / "Contents/_CodeSignature/CodeResources").exists())
+            self.assertIsNone(self.stage_voice._existing_real_identity(app))
+
     def test_real_macho_shared_identity_signing_and_sidecar_closure(self):
         """Prove post-seal manifest app strict deep is 0 and every actual signed file indexed."""
         with tempfile.TemporaryDirectory(prefix="macho-seal-test-") as temp_dir:

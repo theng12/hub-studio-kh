@@ -285,6 +285,9 @@ _MACHO_MAGICS = {
     b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca', b'\xca\xfe\xba\xbf', b'\xbf\xba\xfe\xca',
 }
 _SIGNABLE_BUNDLES = {'.app', '.appex', '.bundle', '.framework', '.xpc'}
+# codesign reports a copied executable's Authority for an unsealed bundle; these are the
+# platform signatures of Apple's own tools, never an app identity to preserve.
+_APPLE_PLATFORM_IDENTITIES = {'macOS Software Signing', 'Software Signing'}
 
 
 def _is_macho(path: Path) -> bool:
@@ -293,7 +296,13 @@ def _is_macho(path: Path) -> bool:
 
 
 def _existing_real_identity(app: Path) -> str | None:
-    """An app already signed with a real identity keeps it (owner 2026-11-08)."""
+    """An app already sealed with a real identity keeps it (owner 2026-11-08).
+
+    Only the outer bundle's own seal counts. An unsigned bundle inherits the Authority of its
+    main executable, so the fixture's copied system Mach-O would otherwise look signed.
+    """
+    if not (app / 'Contents/_CodeSignature/CodeResources').is_file():
+        return None
     probe = subprocess.run(
         ['/usr/bin/codesign', '-d', '--verbose=4', str(app)],
         capture_output=True, text=True)
@@ -302,7 +311,8 @@ def _existing_real_identity(app: Path) -> str | None:
     for line in probe.stderr.splitlines():
         if line.startswith('Authority='):
             authority = line.split('=', 1)[1].strip()
-            if authority and authority != 'adhoc':
+            if (authority and authority != 'adhoc'
+                    and authority not in _APPLE_PLATFORM_IDENTITIES):
                 return authority
     return None
 
