@@ -454,7 +454,11 @@ def stage_chat_shared_modules(resources: Path) -> None:
 
 def stage_developer_gate_assets(resources: Path) -> None:
     """Ship the frozen gate contract, commands fixture and official-tools manifest at the paths
-    their loaders resolve from `Resources/` (`parents[2]` of the staged Hub modules)."""
+    their loaders resolve from `Resources/` (`parents[2]` of the staged Hub modules).
+
+    `stop-proof.json` is the lead-verified immutable receipt copy. Until that artifact exists
+    it is not staged, and the loader stays unsupported; nothing is synthesized here.
+    """
     for relative in (
             'contracts/developer-gate-v1.schema.json',
             'contracts/developer-gate-v1-wire.txt',
@@ -462,10 +466,14 @@ def stage_developer_gate_assets(resources: Path) -> None:
             'packaging/developer-gates/library-portable.gate.json',
             'packaging/developer-gates/library-portable.registry.json',
             'packaging/developer-gates/library-portable.dependency-manifest.json',
-            'packaging/developer-gates/official-tools.json'):
+            'packaging/developer-gates/official-tools.json',
+            'packaging/developer-gates/stop-proof.json'):
+        source = ROOT / relative
+        if relative.endswith('stop-proof.json') and not source.is_file():
+            continue
         target = resources / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / relative, target)
+        shutil.copyfile(source, target)
 
 
 def _stage_hub(context: dict) -> dict | None:

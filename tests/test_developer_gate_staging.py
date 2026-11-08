@@ -158,5 +158,15 @@ class DeveloperGateStagingTests(unittest.TestCase):
         self.assertEqual(Path(real_tools.__file__).resolve(), real_tools_file)
 
 
+    def test_stop_proof_is_staged_only_when_the_verified_artifact_exists(self):
+        staged = self.resources / "packaging/developer-gates/stop-proof.json"
+        source = ROOT / "packaging/developer-gates/stop-proof.json"
+        if source.is_file():
+            self.assertEqual(staged.read_bytes(), source.read_bytes())
+        else:
+            # The lead-verified receipt has not been supplied yet; nothing is synthesized.
+            self.assertFalse(staged.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

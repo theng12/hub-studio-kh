@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from . import developer_gate_contract as contract
+from . import developer_gate_authority as authority_mod
 from . import developer_gate_inventory as inventory_mod
 from . import developer_gate_runner as gate_runner
 from . import developer_gate_store as store_mod
@@ -72,6 +73,11 @@ UNSUPPORTED_REASON = {
         "actual tool readbacks and authoritative policy/exclusion mapping is installed; "
         "production developer gates are unsupported."
     ),
+}
+
+STALE_INVENTORY_REASON = {
+    "code": "unsupported",
+    "detail": "A fresh measured inventory is required before developer gates are supported.",
 }
 
 
@@ -177,15 +183,17 @@ def _default_policy() -> dict[str, Any]:
     }
 
 
-def unsupported_authority() -> GateAuthority:
+def unsupported_authority(reason: dict[str, Any] | None = None) -> GateAuthority:
     """Default authority: verified packaged descriptors only, never production support.
 
     A missing, malformed or changed registry fails closed to the plain unsupported reason
-    and advertises no gates or tool manifests.
+    and advertises no gates or tool manifests. An explicit safe reason wins over the
+    registry's own reason so callers can say which local input failed to verify.
     """
     gates: tuple[dict[str, Any], ...] = ()
     tool_manifests: tuple[dict[str, Any], ...] = ()
-    reason = dict(UNSUPPORTED_REASON)
+    override = reason is not None
+    reason = dict(reason) if override else dict(UNSUPPORTED_REASON)
     try:
         from . import developer_gate_registry as registry_mod
         registry = registry_mod.load_packaged_registry()
@@ -194,7 +202,8 @@ def unsupported_authority() -> GateAuthority:
     else:
         gates = registry.gates
         tool_manifests = registry.tool_manifests
-        reason = dict(registry.reason)
+        if not override:
+            reason = dict(registry.reason)
     return GateAuthority(
         supported=False,
         runner=_runner_identity() or {"id": gate_runner.RUNNER_ID,
@@ -206,6 +215,32 @@ def unsupported_authority() -> GateAuthority:
         bounds=dict(DEFAULT_BOUNDS),
         reason=reason,
     )
+
+
+def _safe_authority_reason(exc: Exception) -> dict[str, str]:
+    """A useful reason without local paths or raw exception text on the wire."""
+    detail = str(exc).split(": ", 1)[0].strip()[:200]
+    return {"code": "unsupported",
+            "detail": ("Developer gate authority did not verify: " + detail)
+                      if detail else UNSUPPORTED_REASON["detail"]}
+
+
+def production_authority(root_dir: str | Path) -> GateAuthority:
+    """Load the packaged proof/registry and operator policy, or stay unsupported.
+
+    The policy is read from disk only; nothing here creates it or enables Developer Mode.
+    """
+    try:
+        node, controller = developer_tests._identities()
+        loaded = authority_mod.load_packaged_authority(root_dir, node, controller)
+    except authority_mod.AuthorityError as exc:
+        return unsupported_authority(_safe_authority_reason(exc))
+    except Exception:  # noqa: BLE001 - any missing or unverified local input stays unsupported
+        return unsupported_authority()
+    return GateAuthority(
+        supported=True, runner=dict(loaded.runner), gates=loaded.gates,
+        tool_manifests=loaded.tool_manifests, stop_proof=dict(loaded.stop_proof),
+        policy=dict(loaded.policy), bounds=dict(DEFAULT_BOUNDS))
 
 
 class DeveloperGateService:
@@ -232,7 +267,10 @@ class DeveloperGateService:
         self._recovery_lock = threading.RLock()
         self._recovery_serial = threading.Lock()
         self._recovery_running = False
-        self._authority = authority or unsupported_authority()
+        self._root_dir = Path(root_dir)
+        self._authority_injected = authority is not None
+        self._authority = (authority if authority is not None
+                           else production_authority(root_dir))
         self._store = store or store_mod.DeveloperGateStore(
             root_dir, max_workspace_bytes=max_workspace_bytes,
             max_result_spool_bytes=max_result_spool_bytes)
@@ -583,20 +621,59 @@ class DeveloperGateService:
                 self._inventory_cache = (now, copy.deepcopy(value))
         return value
 
+    def _inventory_fresh(self, inventory: Mapping[str, Any], node: str,
+                         controller: str) -> bool:
+        """A verified inventory for this pair, observed inside the advertised age bound."""
+        if (inventory.get("node_id") != node
+                or inventory.get("controller_id") != controller):
+            return False
+        try:
+            observed = datetime.strptime(
+                str(inventory.get("observed_at")), "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=timezone.utc).timestamp()
+        except (TypeError, ValueError):
+            return False
+        age = time.time() - observed
+        max_age = float(self._authority.bounds["inventory_max_age_seconds"])
+        return -max_age <= age <= max_age
+
+    def _refresh_authority(self) -> None:
+        """Re-read operator-controlled local evidence; an injected test authority is static."""
+        if self._authority_injected:
+            return
+        with self._lock:
+            self._authority = production_authority(self._root_dir)
+
     # -- capabilities ------------------------------------------------------
     def capabilities(self) -> dict[str, Any]:
+        return self._capabilities(admission=False)
+
+    def _admission_capabilities(self) -> dict[str, Any]:
+        """File-level support for admission; `_check_inventory` still refuses a stale one."""
+        return self._capabilities(admission=True)
+
+    def _capabilities(self, *, admission: bool) -> dict[str, Any]:
+        self._refresh_authority()
         node, controller = self._identity()
         setting = self._setting()
         policy = self._authority.policy or _default_policy()
+        inventory = self._inventory_value()
+        supported = bool(self._authority.supported) and (
+            admission or self._inventory_fresh(inventory, node, controller))
+        if supported:
+            reason = None
+        elif not self._authority.supported:
+            reason = self._authority.reason or dict(UNSUPPORTED_REASON)
+        else:
+            reason = dict(STALE_INVENTORY_REASON)
         caps = {
             "format": contract.CAPABILITIES_FORMAT,
             "contract": contract.CONTRACT_ID,
             "node_id": node,
             "controller_id": controller,
             "server_time": _now_iso(),
-            "supported": bool(self._authority.supported),
-            "reason": None if self._authority.supported else (
-                self._authority.reason or dict(UNSUPPORTED_REASON)),
+            "supported": supported,
+            "reason": reason,
             "runner": dict(self._authority.runner),
             "concurrency": 1,
             "setting": setting,
@@ -604,7 +681,7 @@ class DeveloperGateService:
             "stop_proof": copy.deepcopy(self._authority.stop_proof),
             "tool_manifests": [copy.deepcopy(item) for item in self._authority.tool_manifests],
             "gates": [copy.deepcopy(item) for item in self._authority.gates],
-            "inventory": self._inventory_value(),
+            "inventory": inventory,
             "admission_policy": copy.deepcopy(policy),
         }
         try:
@@ -679,7 +756,7 @@ class DeveloperGateService:
                     409, "conflict",
                     "idempotency key was already used for a different attempt identity")
             return self._status(existing)
-        caps = self.capabilities()
+        caps = self._admission_capabilities()
         try:
             request = contract.parse_strict_json(
                 raw, max_bytes=int(caps["bounds"]["json_bytes"]))
@@ -927,7 +1004,7 @@ class DeveloperGateService:
 
     def _revalidate(self, request: Mapping[str, Any], rec: dict[str, Any]) -> None:
         """Acceptance can precede a long upload: re-pin setting, policy and physical inventory now."""
-        caps = self.capabilities()
+        caps = self._admission_capabilities()
         acceptance = rec["acceptance"]
         try:
             contract.validate_request_semantics(

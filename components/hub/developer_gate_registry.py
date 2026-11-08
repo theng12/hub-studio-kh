@@ -42,6 +42,7 @@ class PackagedRegistry:
     runner: dict[str, Any]
     gates: tuple[dict[str, Any], ...]
     tool_manifests: tuple[dict[str, Any], ...]
+    runner_files: tuple[dict[str, Any], ...] = ()
     supported: bool = False
     reason: dict[str, str] = field(default_factory=lambda: dict(UNSUPPORTED_REASON))
 
@@ -257,4 +258,5 @@ def load_packaged_registry(root: str | Path | None = None) -> PackagedRegistry:
                 "sha256": entry_sha},
         gates=(gate,),
         tool_manifests=(tool_manifest,),
+        runner_files=tuple(dict(item) for item in files),
     )

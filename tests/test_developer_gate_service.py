@@ -1202,5 +1202,100 @@ class DefaultAuthorityTests(unittest.TestCase):
         self.assertEqual(authority.reason, service_mod.UNSUPPORTED_REASON)
 
 
+class ProductionAuthorityWiringTests(unittest.TestCase):
+    """The default constructor must load local evidence, never assume support."""
+
+    def setUp(self) -> None:
+        self.old_identities = developer_tests._identities
+        developer_tests._identities = lambda: (NODE, CONTROLLER)
+        self.addCleanup(setattr, developer_tests, "_identities", self.old_identities)
+
+    def _service(self, *, authority=None, inventory_provider=None):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        return service_mod.DeveloperGateService(
+            root_dir=temp.name, authority=authority, runner=fake_runner,
+            metrics=FakeMetrics(), admission=FakeAdmission(), broker=FakeBroker(),
+            inventory_provider=inventory_provider or (
+                lambda node, controller: _inventory(node, controller)))
+
+    def test_default_constructor_without_local_policy_stays_unsupported(self) -> None:
+        with mock.patch.object(developer_tests, "_identities",
+                               return_value=(NODE, CONTROLLER)):
+            service = self._service()
+        caps = service.capabilities()
+        self.assertFalse(caps["supported"])
+        self.assertEqual(caps["reason"]["code"], "unsupported")
+        self.assertIsNone(caps["stop_proof"])
+        _authority, request, _raw = _fixture()
+        with self.assertRaises(service_mod.GateServiceError) as refused:
+            service.accept(contract.canonical_json(request).encode(), "key-1",
+                           CONTROLLER, NODE, {"kind": "fleet"},
+                           {"credential": "fleet-header"})
+        self.assertEqual(refused.exception.status, 503)
+        self.assertEqual(refused.exception.code, "unsupported")
+
+    def test_configure_passes_the_developer_gates_state_root(self) -> None:
+        data = tempfile.TemporaryDirectory(prefix="studiohub-gate-data-")
+        self.addCleanup(data.cleanup)
+        with mock.patch("components.hub.standalone_config.data_dir",
+                        return_value=Path(data.name)), mock.patch.object(
+                service_mod.authority_mod, "load_packaged_authority",
+                side_effect=service_mod.authority_mod.AuthorityError(
+                    "operator policy is missing")) as loader:
+            service_mod._reset()
+            try:
+                service_mod.configure()
+            finally:
+                service_mod._reset()
+        self.assertEqual(loader.call_args.args[0],
+                         Path(data.name) / "developer-gates")
+
+    def test_policy_change_after_initial_load_is_refreshed(self) -> None:
+        base = _fixture()[0]
+        loaded = service_mod.authority_mod.LoadedAuthority(
+            runner=base.runner, gates=base.gates, tool_manifests=base.tool_manifests,
+            stop_proof=base.stop_proof, policy=base.policy)
+        with mock.patch.object(service_mod.authority_mod, "load_packaged_authority",
+                               return_value=loaded) as loader:
+            service = self._service()
+            self.assertEqual(loader.call_count, 1)
+            self.assertTrue(service.capabilities()["supported"])
+            self.assertEqual(loader.call_count, 2)
+            loader.side_effect = service_mod.authority_mod.AuthorityError(
+                "operator policy is missing")
+            caps = service.capabilities()
+            self.assertFalse(caps["supported"])
+            self.assertEqual(loader.call_count, 3)
+
+    def test_injected_authority_is_not_refreshed(self) -> None:
+        authority, _request, _raw = _fixture()
+        with mock.patch.object(service_mod.authority_mod, "load_packaged_authority",
+                               side_effect=AssertionError("must not load")) as loader:
+            service = self._service(authority=authority)
+            self.assertTrue(service.capabilities()["supported"])
+        loader.assert_not_called()
+
+    def test_supported_authority_with_stale_inventory_reports_unsupported(self) -> None:
+        authority, request, _raw = _fixture()
+
+        def stale(node, controller):
+            value = _inventory(node, controller)
+            value["observed_at"] = "2020-01-01T00:00:00Z"
+            value["internal_physical_drive"]["observed_at"] = "2020-01-01T00:00:00Z"
+            return value
+
+        service = self._service(authority=authority, inventory_provider=stale)
+        caps = service.capabilities()
+        self.assertFalse(caps["supported"])
+        self.assertEqual(caps["reason"], service_mod.STALE_INVENTORY_REASON)
+        with self.assertRaises(service_mod.GateServiceError) as refused:
+            service.accept(contract.canonical_json(request).encode(), "key-1",
+                           CONTROLLER, NODE, {"kind": "fleet"},
+                           {"credential": "fleet-header"})
+        self.assertEqual(refused.exception.status, 409)
+        self.assertEqual(refused.exception.code, "inventory_stale")
+
+
 if __name__ == "__main__":
     unittest.main()
