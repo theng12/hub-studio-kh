@@ -10,6 +10,7 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -391,11 +392,21 @@ def sign_app(app: Path) -> None:
     app = Path(app).resolve()
     identity = _signing_identity(app)
     for item in [*_signable_items(app), app]:
-        result = subprocess.run(
-            ['/usr/bin/codesign', '--force', '--sign', identity, '--timestamp=none', str(item)],
-            capture_output=True, text=True)
-        if result.returncode:
-            raise RuntimeError(f'codesign failed for {item}: {result.stderr.strip()}')
+        restore_mode = None
+        if item.is_file() and _is_macho(item):
+            info = item.stat()
+            if info.st_uid == os.getuid() and not info.st_mode & stat.S_IWUSR:
+                restore_mode = stat.S_IMODE(info.st_mode)
+                item.chmod(restore_mode | stat.S_IWUSR)
+        try:
+            result = subprocess.run(
+                ['/usr/bin/codesign', '--force', '--sign', identity, '--timestamp=none', str(item)],
+                capture_output=True, text=True)
+            if result.returncode:
+                raise RuntimeError(f'codesign failed for {item}: {result.stderr.strip()}')
+        finally:
+            if restore_mode is not None:
+                item.chmod(restore_mode)
     subprocess.run(
         ['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)],
         check=True, capture_output=True, text=True,

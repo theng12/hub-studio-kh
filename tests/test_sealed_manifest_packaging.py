@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -226,6 +227,36 @@ class SealedManifestPackagingTests(unittest.TestCase):
                 ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
                 capture_output=True, text=True)
             self.assertEqual(verify.returncode, 0, verify.stderr)
+
+    def test_readonly_macho_mode_is_restored_after_signing(self):
+        for outcome in ('success', 'failure', 'exception'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temp_dir:
+                app = self._build_real_app(Path(temp_dir))
+                nested = app / 'Contents/Resources/readonly.dylib'
+                shutil.copyfile(SYSTEM_MACHO, nested)
+                nested.chmod(0o555)
+                signed = []
+
+                def codesign(command, **kwargs):
+                    if '--sign' in command and command[-1] == str(nested):
+                        signed.append(nested.stat().st_mode & 0o7777)
+                        self.assertEqual(signed[-1], 0o755)
+                        if outcome == 'exception':
+                            raise OSError('signer unavailable')
+                        if outcome == 'failure':
+                            return subprocess.CompletedProcess(command, 1, '', 'signing failed')
+                    return subprocess.CompletedProcess(command, 0, '', '')
+
+                with mock.patch.object(self.stage_voice, '_signing_identity',
+                                       return_value='KH Studio Local Signing'), \
+                        mock.patch.object(self.stage_voice.subprocess, 'run', side_effect=codesign):
+                    if outcome == 'success':
+                        self.stage_voice.sign_app(app)
+                    else:
+                        with self.assertRaises(OSError if outcome == 'exception' else RuntimeError):
+                            self.stage_voice.sign_app(app)
+                self.assertEqual(signed, [0o755])
+                self.assertEqual(nested.stat().st_mode & 0o7777, 0o555)
 
     def test_copied_executable_authority_is_not_the_app_identity(self):
         """An unsealed app inherits its main executable's Authority; never preserve that."""
