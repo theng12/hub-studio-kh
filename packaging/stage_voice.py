@@ -295,6 +295,14 @@ def _is_macho(path: Path) -> bool:
         return stream.read(4) in _MACHO_MAGICS
 
 
+def _is_script(path: Path) -> bool:
+    """codesign signs scripts too; --deep verification treats Contents/MacOS ones as code."""
+    if not os.access(path, os.X_OK):
+        return False
+    with path.open('rb') as stream:
+        return stream.read(2) == b'#!'
+
+
 def _existing_real_identity(app: Path) -> str | None:
     """An app already sealed with a real identity keeps it (owner 2026-11-08).
 
@@ -344,8 +352,9 @@ def _signable_items(app: Path) -> list[Path]:
                         (path / relative).is_file()
                         for relative in ('Info.plist', 'Contents/Info.plist', 'Resources/Info.plist'))):
                 items.append(path)
-        elif path.is_file() and _is_macho(path):
-            items.append(path)
+        elif path.is_file():
+            if _is_macho(path) or (path.parent.name == 'MacOS' and _is_script(path)):
+                items.append(path)
     return sorted(items, key=lambda item: (-len(item.parts), item.as_posix()))
 
 

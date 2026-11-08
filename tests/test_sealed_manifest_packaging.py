@@ -234,6 +234,20 @@ class SealedManifestPackagingTests(unittest.TestCase):
             self.assertFalse((app / "Contents/_CodeSignature/CodeResources").exists())
             self.assertIsNone(self.stage_voice._existing_real_identity(app))
 
+    def test_script_executable_in_macos_is_signed_before_the_outer_seal(self):
+        """Strict deep verification treats Contents/MacOS scripts as nested code."""
+        with tempfile.TemporaryDirectory(prefix="script-sign-") as temp_dir:
+            app = self._build_real_app(Path(temp_dir))
+            script = app / "Contents/MacOS/StudioHubService"
+            script.write_text("#!/bin/sh\nexit 0\n")
+            script.chmod(0o755)
+            self.assertIn(script, self.stage_voice._signable_items(app))
+            self.stage_voice.sign_app(app)
+            verify = subprocess.run(
+                ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
+                capture_output=True, text=True)
+            self.assertEqual(verify.returncode, 0, verify.stderr)
+
     def test_real_macho_shared_identity_signing_and_sidecar_closure(self):
         """Prove post-seal manifest app strict deep is 0 and every actual signed file indexed."""
         with tempfile.TemporaryDirectory(prefix="macho-seal-test-") as temp_dir:
