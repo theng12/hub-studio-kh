@@ -20,14 +20,17 @@ import plistlib
 import subprocess
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from components.hub.developer_gate_inventory import (
+    _default_volume_id_runner,
     collect_developer_gate_inventory,
     is_internal_drive_eligible,
     probe_internal_drive,
     probe_tool_version,
     probe_toolchains,
+    probe_work_volume,
     run_bounded_process,
 )
 
@@ -542,6 +545,128 @@ class DeveloperGateInventoryTests(unittest.TestCase):
         )
         self.assertIn("internal_physical_drive", inv)
         self.assertIn("toolchains", inv)
+
+
+class WorkVolumeProbeTests(unittest.TestCase):
+    workspace = "/Volumes/Work/developer-gates/workspaces"
+    drive = {"device_id": "disk0", "physical": True, "reason": None}
+
+    @staticmethod
+    def _runner(args):
+        return _make_plist_bytes({
+            "DeviceIdentifier": "disk3s5",
+            "MountPoint": "/System/Volumes/Data",
+        })
+
+    def test_volume_id_runner_reads_the_filesystem_device(self) -> None:
+        with mock.patch("components.hub.developer_gate_inventory.run_bounded_process",
+                        return_value=(0, b"disk3s5\n", b"")) as run:
+            self.assertEqual("disk3s5", _default_volume_id_runner("/work"))
+        self.assertEqual(
+            ["/usr/bin/stat", "-f", "%Sd", "/work"], list(run.call_args.args[0]))
+
+    def test_exact_shape_uses_statvfs_on_the_resolved_work_volume(self) -> None:
+        seen = []
+
+        def statvfs(path):
+            seen.append(path)
+            return SimpleNamespace(f_frsize=4096, f_bsize=4096, f_blocks=1000, f_bavail=400)
+
+        value = probe_work_volume(
+            self.workspace, drive_info=self.drive, statvfs=statvfs,
+            volume_id_runner=lambda path: "disk3s5", runner=self._runner)
+
+        self.assertEqual(seen, [self.workspace])
+        self.assertEqual(set(value), {
+            "path", "mount_point", "volume_id", "device_id", "physical",
+            "free_bytes", "total_bytes", "observed_at", "reason"})
+        self.assertEqual(value["path"], self.workspace)
+        self.assertEqual(value["mount_point"], "/System/Volumes/Data")
+        self.assertEqual(value["volume_id"], "disk3s5")
+        self.assertEqual(value["device_id"], "disk0")
+        self.assertIs(value["physical"], True)
+        self.assertEqual(value["free_bytes"], 400 * 4096)
+        self.assertEqual(value["total_bytes"], 1000 * 4096)
+        self.assertTrue(value["observed_at"].endswith("Z"))
+        self.assertIsNone(value["reason"])
+
+    def test_measured_zero_is_zero_not_null(self) -> None:
+        value = probe_work_volume(
+            self.workspace, drive_info=self.drive, runner=self._runner,
+            volume_id_runner=lambda path: "disk3s5",
+            statvfs=lambda path: SimpleNamespace(
+                f_frsize=4096, f_bsize=4096, f_blocks=0, f_bavail=0))
+
+        self.assertEqual(value["free_bytes"], 0)
+        self.assertEqual(value["total_bytes"], 0)
+        self.assertIsNone(value["reason"])
+
+    def test_statfs_failure_is_null_with_a_reason_not_zero(self) -> None:
+        def statvfs(path):
+            raise OSError("statfs unavailable")
+
+        value = probe_work_volume(
+            self.workspace, drive_info=self.drive, statvfs=statvfs,
+            volume_id_runner=lambda path: "disk3s5", runner=self._runner)
+
+        self.assertIsNone(value["free_bytes"])
+        self.assertIsNone(value["total_bytes"])
+        self.assertEqual(value["volume_id"], "disk3s5")
+        self.assertEqual(value["reason"]["code"], "STATFS_FAILED")
+        self.assertIn("OSError", value["reason"]["detail"])
+
+    def test_volume_id_and_backing_unknown_stay_null_with_reasons(self) -> None:
+        def volume_id_runner(path):
+            raise RuntimeError("stat unavailable")
+
+        def runner(args):
+            raise RuntimeError("diskutil unavailable")
+
+        drive = {"device_id": None, "physical": None,
+                 "reason": {"code": "PROBE_FAILED", "detail": "backing probe failed"}}
+        value = probe_work_volume(
+            self.workspace, drive_info=drive, runner=runner,
+            volume_id_runner=volume_id_runner,
+            statvfs=lambda path: SimpleNamespace(
+                f_frsize=4096, f_bsize=4096, f_blocks=10, f_bavail=4))
+
+        self.assertEqual(value["free_bytes"], 4 * 4096)
+        self.assertEqual(value["total_bytes"], 10 * 4096)
+        self.assertIsNone(value["volume_id"])
+        self.assertIsNone(value["mount_point"])
+        self.assertIsNone(value["device_id"])
+        self.assertIsNone(value["physical"])
+        self.assertEqual(value["reason"]["code"], "VOLUME_ID_UNKNOWN")
+        self.assertIn("PROBE_FAILED", value["reason"]["detail"])
+
+    def test_mount_point_unknown_keeps_volume_id_and_bytes(self) -> None:
+        def runner(args):
+            raise RuntimeError("diskutil unavailable")
+
+        value = probe_work_volume(
+            self.workspace, drive_info=self.drive, runner=runner,
+            volume_id_runner=lambda path: "disk3s5",
+            statvfs=lambda path: SimpleNamespace(
+                f_frsize=4096, f_bsize=4096, f_blocks=10, f_bavail=4))
+
+        self.assertEqual(value["volume_id"], "disk3s5")
+        self.assertIsNone(value["mount_point"])
+        self.assertEqual(value["free_bytes"], 4 * 4096)
+        self.assertEqual(value["total_bytes"], 10 * 4096)
+        self.assertEqual(value["reason"]["code"], "MOUNT_POINT_UNKNOWN")
+
+    def test_known_external_backing_is_false_and_not_a_failure(self) -> None:
+        drive = {"device_id": "disk2", "physical": False,
+                 "reason": {"code": "EXTERNAL_DRIVE", "detail": "external"}}
+        value = probe_work_volume(
+            self.workspace, drive_info=drive, runner=self._runner,
+            volume_id_runner=lambda path: "disk3s5",
+            statvfs=lambda path: SimpleNamespace(
+                f_frsize=4096, f_bsize=4096, f_blocks=10, f_bavail=4))
+
+        self.assertIs(value["physical"], False)
+        self.assertEqual(value["device_id"], "disk2")
+        self.assertIsNone(value["reason"])
 
 
 if __name__ == "__main__":

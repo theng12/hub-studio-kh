@@ -316,7 +316,7 @@ _CHECKIN_KEYS = ("last_checkin_at", "checkin_version", "checkin_workstation",
 #: already follow.
 _RESOURCE_KEYS = ("host", "studios", "version", "startup", "current_job", "last_stop",
                   "workstation", "priority_order", "chat_priority", "function_enabled", "source",
-                  "developer_gate_inventory")
+                  "developer_gate_inventory", "work_volume")
 
 
 def _gate_inventory_of(value: object, node_id: str,

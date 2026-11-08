@@ -15,6 +15,17 @@ from components.hub import developer_gate_contract as contract  # noqa: E402
 from components.hub.backend import fleet_nodes  # noqa: E402
 
 NOW = "2026-11-08T00:00:00Z"
+WORK_VOLUME = {
+    "path": "/Volumes/Work/developer-gates/workspaces",
+    "mount_point": "/Volumes/Work",
+    "volume_id": "disk3s5",
+    "device_id": "disk0",
+    "physical": True,
+    "free_bytes": 0,
+    "total_bytes": 500_277_792_768,
+    "observed_at": NOW,
+    "reason": None,
+}
 
 
 def inventory(node: str = "node-1", controller: str = "ctrl-1") -> dict:
@@ -71,6 +82,18 @@ class DeveloperGateProjectionTests(unittest.TestCase):
                 self.assertNotIn(
                     "developer_gate_inventory",
                     fleet_nodes._from_snapshot(row, value), value)
+
+
+    def test_resources_retain_optional_work_volume_and_older_nodes_omit_it(self) -> None:
+        kept = fleet_nodes._resources_of(
+            {"work_volume": WORK_VOLUME, "future_key": 1}, "node-1", "ctrl-1")
+        self.assertEqual(kept["work_volume"], WORK_VOLUME)
+        self.assertNotIn("future_key", kept)
+        self.assertEqual(
+            fleet_nodes._checkin_reported({"checkin_resources": kept})["work_volume"],
+            WORK_VOLUME)
+        self.assertNotIn(
+            "work_volume", fleet_nodes._resources_of({}, "node-1", "ctrl-1"))
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from typing import Any, Callable, Mapping, Sequence
 # Nominal 512GB drive class floor (Apple 512GB SSD measures 500,277,792,768 bytes)
 MIN_INTERNAL_DRIVE_BYTES: int = 500_000_000_000
 DISKUTIL_PATH: str = "/usr/sbin/diskutil"
+STAT_PATH: str = "/usr/bin/stat"
 DEFAULT_MAX_BYTES: int = 1_048_576  # 1 MB bound on subprocess probe output
 KNOWN_TOOL_IDS: tuple[str, ...] = ("python", "node", "go", "rust", "swift", "clt")
 
@@ -133,6 +134,20 @@ def _default_diskutil_runner(args: Sequence[str], timeout: float = 5.0) -> bytes
     if code != 0 and not stdout.strip().startswith(b"<?xml"):
         raise RuntimeError(f"diskutil exited with status {code}")
     return stdout
+
+
+def _default_volume_id_runner(path: str | Path, timeout: float = 5.0) -> str:
+    code, stdout, stderr = run_bounded_process(
+        [STAT_PATH, "-f", "%Sd", str(path)],
+        timeout=timeout,
+        max_bytes=4096,
+    )
+    if code != 0:
+        raise RuntimeError(f"stat exited with status {code}")
+    value = stdout.decode(errors="replace").strip()
+    if not value or any(ch.isspace() for ch in value):
+        raise ValueError("stat reported no filesystem device")
+    return value
 
 
 def _resolve_mount_point(path: str | Path) -> str:
@@ -397,6 +412,118 @@ def probe_internal_drive(
             backing_source="unknown",
             reason={"code": "PROBE_FAILED", "detail": f"Probe error: {type(exc).__name__}"},
         )
+
+
+def probe_work_volume(
+    workspace_path: str | Path,
+    *,
+    drive_info: Mapping[str, Any] | None = None,
+    statvfs: Callable[[str | Path], Any] | None = None,
+    volume_id_runner: Callable[[str | Path], str] | None = None,
+    runner: Callable[[Sequence[str]], bytes] | None = None,
+    timeout_seconds: float = 5.0,
+) -> dict[str, Any]:
+    """Exact statfs free/total bytes and the volume/backing identity for a work root.
+
+    `free_bytes` and `total_bytes` are `f_bavail`/`f_blocks` times the fragment size from the
+    filesystem that holds `workspace_path` (the kernel resolves firmlinks). `volume_id` is that
+    filesystem's DeviceIdentifier (`disk3s5`, from `stat -f %Sd`, not the root snapshot volume);
+    `device_id`/`physical` are the backing whole disk and its physical flag, reused from
+    `probe_internal_drive` when the caller already has it. Unknown facts stay `null` with a
+    reason; a measured zero stays zero.
+    """
+    observed_at = _current_iso_z()
+    path = str(workspace_path)
+    mount_point: str | None = None
+    free_bytes: int | None = None
+    total_bytes: int | None = None
+    volume_id: str | None = None
+    device_id: str | None = None
+    physical: bool | None = None
+    failures: list[tuple[str, str]] = []
+
+    read_statvfs = statvfs or os.statvfs
+    try:
+        vfs = read_statvfs(path)
+        fragment = int(getattr(vfs, "f_frsize", 0) or getattr(vfs, "f_bsize", 0))
+        blocks = getattr(vfs, "f_blocks", None)
+        available = getattr(vfs, "f_bavail", None)
+        if (isinstance(fragment, bool) or not isinstance(fragment, int) or fragment <= 0
+                or isinstance(blocks, bool) or not isinstance(blocks, int) or blocks < 0
+                or isinstance(available, bool) or not isinstance(available, int) or available < 0):
+            raise ValueError("statvfs returned no usable block counts")
+        total_bytes = blocks * fragment
+        free_bytes = available * fragment
+    except (OSError, ValueError, TypeError) as exc:
+        failures.append(("STATFS_FAILED",
+                         f"statvfs on the work volume failed: {type(exc).__name__}"))
+
+    read_volume_id = volume_id_runner or (
+        lambda value: _default_volume_id_runner(value, timeout=timeout_seconds))
+    try:
+        candidate = read_volume_id(path)
+        if (not isinstance(candidate, str) or not candidate.strip()
+                or any(ch.isspace() for ch in candidate)):
+            raise ValueError("no filesystem device")
+        volume_id = candidate.strip()
+    except Exception as exc:  # noqa: BLE001 - a missing id is null, never a guessed one
+        failures.append(("VOLUME_ID_UNKNOWN",
+                         f"the volume DeviceIdentifier could not be read: {type(exc).__name__}"))
+
+    if volume_id is not None:
+        run_diskutil = runner or (
+            lambda args: _default_diskutil_runner(args, timeout=timeout_seconds))
+        try:
+            volume_info = plistlib.loads(run_diskutil(["info", "-plist", volume_id]))
+            if not isinstance(volume_info, Mapping) or volume_info.get("Error") is True:
+                raise ValueError("volume lookup failed")
+            reported = volume_info.get("DeviceIdentifier")
+            if (isinstance(reported, str) and reported.strip()
+                    and reported.strip() != volume_id):
+                raise ValueError("volume identity changed")
+            mount = volume_info.get("MountPoint")
+            if not isinstance(mount, str) or not mount.strip():
+                raise ValueError("volume plist has no MountPoint")
+            mount_point = mount.strip()
+        except Exception as exc:  # noqa: BLE001 - a missing mount is null, never guessed
+            failures.append(("MOUNT_POINT_UNKNOWN",
+                             f"the work volume mount could not be read: {type(exc).__name__}"))
+
+    drive = drive_info
+    if drive is None:
+        drive = probe_internal_drive(workspace_path, runner=runner,
+                                     timeout_seconds=timeout_seconds)
+    candidate_device = drive.get("device_id") if isinstance(drive, Mapping) else None
+    if isinstance(candidate_device, str) and candidate_device.strip():
+        device_id = candidate_device.strip()
+    candidate_physical = drive.get("physical") if isinstance(drive, Mapping) else None
+    if isinstance(candidate_physical, bool):
+        physical = candidate_physical
+    if device_id is None or physical is None:
+        backing_reason = drive.get("reason") if isinstance(drive, Mapping) else None
+        if isinstance(backing_reason, Mapping) and isinstance(backing_reason.get("code"), str):
+            failures.append((backing_reason["code"],
+                             str(backing_reason.get("detail")
+                                 or "the physical backing device is unknown")))
+        else:
+            failures.append(("BACKING_UNKNOWN",
+                             "the physical backing device could not be identified"))
+
+    reason = None
+    if failures:
+        reason = {"code": failures[0][0],
+                  "detail": "; ".join(f"{code}: {detail}" for code, detail in failures)}
+    return {
+        "path": path,
+        "mount_point": mount_point,
+        "volume_id": volume_id,
+        "device_id": device_id,
+        "physical": physical,
+        "free_bytes": free_bytes,
+        "total_bytes": total_bytes,
+        "observed_at": observed_at,
+        "reason": reason,
+    }
 
 
 def is_internal_drive_eligible(drive_info: Mapping[str, Any], min_bytes: int = MIN_INTERNAL_DRIVE_BYTES) -> bool:

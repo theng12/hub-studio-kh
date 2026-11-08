@@ -287,6 +287,7 @@ class DeveloperGateService:
         self._stopping = False
         self._last_recovery = 0.0
         self._inventory_cache: tuple[float, dict[str, Any]] | None = None
+        self._work_volume: tuple[float, dict[str, Any]] | None = None
         self._inventory_generation = 0
 
     # -- identity, setting, inventory -------------------------------------
@@ -333,6 +334,7 @@ class DeveloperGateService:
         with self._lock:
             self._inventory_generation += 1
             self._inventory_cache = None
+            self._work_volume = None
 
     def _trusted_tools_manifest(self) -> tuple[dict[str, Any] | None, str | None]:
         """The configured official manifest and its raw hash; unknown preparers fail closed.
@@ -534,6 +536,16 @@ class DeveloperGateService:
                 "reason": {"code": "unknown",
                            "detail": "internal physical drive could not be measured"},
             }
+        # The same backing probe already made for the inventory, so a resources poll costs one
+        # volume-identifier read, not a second physical-drive sweep. Cached with the inventory.
+        try:
+            work_volume = inventory_mod.probe_work_volume(
+                self._store.workspaces_dir, drive_info=drive)
+        except Exception:  # noqa: BLE001 - absent, never a guessed volume
+            work_volume = None
+        with self._lock:
+            self._work_volume = ((time.time(), work_volume)
+                                 if work_volume is not None else None)
         try:
             free = int(shutil.disk_usage(self._store.workspaces_dir).free)
         except OSError:
@@ -620,6 +632,18 @@ class DeveloperGateService:
             if generation == self._inventory_generation:
                 self._inventory_cache = (now, copy.deepcopy(value))
         return value
+
+    def work_volume_for_resources(self) -> dict[str, Any] | None:
+        """Exact work-volume facts measured with the inventory's own backing probe.
+
+        Returns the value cached by the most recent inventory refresh. `None` when no refresh
+        has run yet, so the optional field stays absent rather than being guessed.
+        """
+        with self._lock:
+            cached = self._work_volume
+        if cached is None or time.time() - cached[0] >= 60.0:
+            return None
+        return copy.deepcopy(cached[1])
 
     def _inventory_fresh(self, inventory: Mapping[str, Any], node: str,
                          controller: str) -> bool:
@@ -1702,6 +1726,12 @@ def inventory_for_resources() -> dict[str, Any] | None:
     with _LOCK:
         service = _SERVICE
     return None if service is None else service.inventory_for_resources()
+
+
+def work_volume_for_resources() -> dict[str, Any] | None:
+    with _LOCK:
+        service = _SERVICE
+    return None if service is None else service.work_volume_for_resources()
 
 
 def shutdown() -> dict[str, Any]:

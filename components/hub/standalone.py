@@ -2239,6 +2239,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         gate_inventory = developer_gate_service.inventory_for_resources()
         if gate_inventory is not None:
             answer["developer_gate_inventory"] = gate_inventory
+        # Exact work-volume facts from the same probe, optional and absent when unmeasured.
+        work_volume = developer_gate_service.work_volume_for_resources()
+        if work_volume is not None:
+            answer["work_volume"] = work_volume
         # The Mac's own idle-hold truth, read by its controller for group arbitration: the saved
         # preference and the bounded remaining window. An older reader ignores both fields.
         if _policy_pref:
