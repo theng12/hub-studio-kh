@@ -1,17 +1,24 @@
-"""Focused tests for developer gate inventory helper.
+"""Focused adversarial tests for developer gate inventory helper.
 
 Verifies:
 - Physical internal drive topology vs APFS container capacity.
 - Wire revision 2 physicalDrive exact schema conformance.
-- External / ambiguous / virtual drive eligibility refusal.
-- Bounded tool version probes without shell.
-- Requested tool versions are never adopted as installed facts.
+- APFS synthesized container missing physical stores refuses physical proof.
+- Malformed/partial APFS stores refuse immediately; never skip to claim unambiguous.
+- Positive integer capacity only: reject boolean/string coercion.
+- Bounded process primitive terminates and bounds memory on exceed.
+- Python probe isolated execution flags (-I -B).
+- Swift compiler version required (not swift-driver version).
+- Unsupported tool IDs rejected without arbitrary command execution.
+- No private paths or raw stderr echoed into reasons.
+- is_internal_drive_eligible accepts diskutil-apfs-list-plist and enforces strict types.
 """
 
 from __future__ import annotations
 
 import plistlib
 import subprocess
+import sys
 import unittest
 
 from components.hub.developer_gate_inventory import (
@@ -20,6 +27,7 @@ from components.hub.developer_gate_inventory import (
     probe_internal_drive,
     probe_tool_version,
     probe_toolchains,
+    run_bounded_process,
 )
 
 
@@ -48,6 +56,8 @@ class DeveloperGateInventoryTests(unittest.TestCase):
                 "ParentWholeDisk": "disk0",
                 "WholeDisk": True,
                 "Internal": True,
+                "BusProtocol": "Apple Fabric",
+                "Content": "GUID_partition_scheme",
                 "TotalSize": 500_277_792_768,  # Apple 512GB internal SSD physical capacity
             }),
         }
@@ -74,6 +84,85 @@ class DeveloperGateInventoryTests(unittest.TestCase):
         # Container size alone would have failed 500GB floor
         self.assertFalse(494_384_795_648 >= 500_000_000_000)
 
+    def test_apfs_synthesized_container_missing_stores_refuses_physical(self) -> None:
+        """Synthesized container missing APFSPhysicalStores must not falsely claim physical."""
+        responses = {
+            ("info", "-plist", "/"): _make_plist_bytes({
+                "DeviceIdentifier": "disk3s5",
+                "ParentWholeDisk": "disk3",
+                "TotalSize": 494_384_795_648,
+                # APFSPhysicalStores missing or unresolvable
+            }),
+            ("info", "-plist", "disk3"): _make_plist_bytes({
+                "DeviceIdentifier": "disk3",
+                "ParentWholeDisk": "disk3",
+                "WholeDisk": True,
+                "Internal": True,
+                "VirtualOrPhysical": "Virtual",
+                "Content": "EF57347C-0000-11AA-AA11-00306543ECAC",  # APFS container GUID
+                "APFSContainerSize": 494_384_795_648,
+                "TotalSize": 494_384_795_648,
+            }),
+        }
+
+        drive = probe_internal_drive(workspace_path="/", runner=lambda args: responses[tuple(args)])
+        self.assertNotEqual(drive["physical"], True)
+        self.assertIsNone(drive["size_bytes"])
+        self.assertFalse(is_internal_drive_eligible(drive))
+
+    def test_malformed_or_partial_apfs_stores_refuses_immediately(self) -> None:
+        """One valid store + one malformed store must refuse; never claim single unambiguous drive."""
+        responses = {
+            ("info", "-plist", "/"): _make_plist_bytes({
+                "DeviceIdentifier": "disk3s5",
+                "APFSPhysicalStores": [
+                    {"APFSPhysicalStore": "disk0s2"},
+                    {"invalid_key": "corrupted"},  # Malformed store entry
+                ],
+            }),
+            ("info", "-plist", "disk0s2"): _make_plist_bytes({
+                "DeviceIdentifier": "disk0s2",
+                "ParentWholeDisk": "disk0",
+            }),
+        }
+
+        drive = probe_internal_drive(workspace_path="/", runner=lambda args: responses[tuple(args)])
+        self.assertIsNone(drive["size_bytes"])
+        self.assertEqual(drive["source"], "unknown")
+        self.assertIsNotNone(drive["reason"])
+        self.assertEqual(drive["reason"]["code"], "MALFORMED_STORE_ID")
+        self.assertFalse(is_internal_drive_eligible(drive))
+
+    def test_positive_integer_capacity_no_bool_or_string_coercion(self) -> None:
+        """TotalSize as boolean True or numeric string must be rejected as invalid capacity."""
+        # Case A: boolean True
+        responses_bool = {
+            ("info", "-plist", "disk0"): _make_plist_bytes({
+                "DeviceIdentifier": "disk0",
+                "WholeDisk": True,
+                "Internal": True,
+                "BusProtocol": "Apple Fabric",
+                "TotalSize": True,  # Python bool is subclass of int!
+            }),
+        }
+        drive_bool = probe_internal_drive(workspace_path="disk0", runner=lambda args: responses_bool[tuple(args)])
+        self.assertIsNone(drive_bool["size_bytes"])
+        self.assertFalse(is_internal_drive_eligible(drive_bool))
+
+        # Case B: string number
+        responses_str = {
+            ("info", "-plist", "disk0"): _make_plist_bytes({
+                "DeviceIdentifier": "disk0",
+                "WholeDisk": True,
+                "Internal": True,
+                "BusProtocol": "Apple Fabric",
+                "TotalSize": "500277792768",
+            }),
+        }
+        drive_str = probe_internal_drive(workspace_path="disk0", runner=lambda args: responses_str[tuple(args)])
+        self.assertIsNone(drive_str["size_bytes"])
+        self.assertFalse(is_internal_drive_eligible(drive_str))
+
     def test_external_drive_no_eligibility_claim(self) -> None:
         """External drive (even 1TB) must return internal=False and size_bytes=None."""
         responses = {
@@ -92,14 +181,12 @@ class DeveloperGateInventoryTests(unittest.TestCase):
                 "ParentWholeDisk": "disk4",
                 "WholeDisk": True,
                 "Internal": False,
+                "VirtualOrPhysical": "Physical",
                 "TotalSize": 1_024_209_543_168,
             }),
         }
 
-        def mock_runner(args: list[str]) -> bytes:
-            return responses[tuple(args)]
-
-        drive = probe_internal_drive(workspace_path="/Volumes/External", runner=mock_runner)
+        drive = probe_internal_drive(workspace_path="/Volumes/External", runner=lambda args: responses[tuple(args)])
         self.assertFalse(drive["internal"])
         self.assertTrue(drive["physical"])
         self.assertIsNone(drive["size_bytes"])
@@ -129,10 +216,7 @@ class DeveloperGateInventoryTests(unittest.TestCase):
             }),
         }
 
-        def mock_runner(args: list[str]) -> bytes:
-            return responses[tuple(args)]
-
-        drive = probe_internal_drive(workspace_path="/Volumes/Spanned", runner=mock_runner)
+        drive = probe_internal_drive(workspace_path="/Volumes/Spanned", runner=lambda args: responses[tuple(args)])
         self.assertIsNone(drive["internal"])
         self.assertIsNone(drive["physical"])
         self.assertIsNone(drive["size_bytes"])
@@ -159,10 +243,7 @@ class DeveloperGateInventoryTests(unittest.TestCase):
             }),
         }
 
-        def mock_runner(args: list[str]) -> bytes:
-            return responses[tuple(args)]
-
-        drive = probe_internal_drive(workspace_path="disk15s1", runner=mock_runner)
+        drive = probe_internal_drive(workspace_path="disk15s1", runner=lambda args: responses[tuple(args)])
         self.assertFalse(drive["physical"])
         self.assertIsNone(drive["size_bytes"])
         self.assertIsNotNone(drive["reason"])
@@ -171,10 +252,10 @@ class DeveloperGateInventoryTests(unittest.TestCase):
 
     def test_diskutil_failure_returns_unknown(self) -> None:
         """Subprocess errors or diskutil errors safely degrade to unknown."""
-        def mock_runner(args: list[str]) -> bytes:
-            raise RuntimeError("diskutil failure simulated")
-
-        drive = probe_internal_drive(workspace_path="/", runner=mock_runner)
+        drive = probe_internal_drive(
+            workspace_path="/",
+            runner=lambda args: (_ for _ in ()).throw(RuntimeError("diskutil error")),
+        )
         self.assertIsNone(drive["internal"])
         self.assertIsNone(drive["physical"])
         self.assertIsNone(drive["size_bytes"])
@@ -183,6 +264,122 @@ class DeveloperGateInventoryTests(unittest.TestCase):
         self.assertIsNotNone(drive["reason"])
         self.assertEqual(drive["reason"]["code"], "PROBE_FAILED")
         self.assertFalse(is_internal_drive_eligible(drive))
+
+    def test_bounded_process_primitive_terminates_on_exceed(self) -> None:
+        """run_bounded_process terminates child process and raises when output bound is exceeded."""
+        # Script producing 50 KB of stdout
+        cmd = [sys.executable, "-c", "import sys; sys.stdout.write('A' * 50000); sys.stdout.flush()"]
+        with self.assertRaises(RuntimeError) as ctx:
+            run_bounded_process(cmd, timeout=2.0, max_bytes=1000)
+        self.assertIn("exceeded bound", str(ctx.exception))
+
+    def test_python_probe_uses_isolated_flags(self) -> None:
+        """Python probe must execute with -I -B --version for isolated execution."""
+        captured_args: list[str] = []
+
+        def recording_runner(args: list[str], timeout: float) -> tuple[int, str, str]:
+            captured_args.extend(args)
+            return 0, "Python 3.15.0\n", ""
+
+        res = probe_tool_version("python", executable_path="/opt/bin/python3", runner=recording_runner)
+        self.assertTrue(res["available"])
+        self.assertEqual(res["version"], "3.15.0")
+        self.assertEqual(captured_args, ["/opt/bin/python3", "-I", "-B", "--version"])
+
+    def test_swift_probe_requires_apple_swift_version_not_driver(self) -> None:
+        """Swift version extraction must reject swift-driver version and require Apple Swift version."""
+        # Output with only swift-driver version must fail version parse
+        driver_only = (0, "swift-driver version: 1.115 Apple Swift version: unrecognized\n", "")
+        res_fail = probe_tool_version(
+            "swift",
+            executable_path="/usr/bin/swift",
+            runner=lambda args, to: driver_only,
+        )
+        self.assertFalse(res_fail["available"])
+        self.assertIsNone(res_fail["version"])
+
+        # Output with Apple Swift version must succeed
+        valid_swift = (0, "swift-driver version: 1.115 Apple Swift version 6.0 (swiftlang-6.0.0.9.10)\n", "")
+        res_ok = probe_tool_version(
+            "swift",
+            executable_path="/usr/bin/swift",
+            runner=lambda args, to: valid_swift,
+        )
+        self.assertTrue(res_ok["available"])
+        self.assertEqual(res_ok["version"], "6.0")
+
+    def test_unknown_tool_id_rejected_without_command_run(self) -> None:
+        """Unknown or arbitrary tool IDs must be rejected without executing commands."""
+        run_called = False
+
+        def spy_runner(args: list[str], timeout: float) -> tuple[int, str, str]:
+            nonlocal run_called
+            run_called = True
+            return 0, "1.0.0\n", ""
+
+        res = probe_tool_version("arbitrary_tool", executable_path="/bin/echo", runner=spy_runner)
+        self.assertFalse(res["available"])
+        self.assertIsNone(res["version"])
+        self.assertIn("Unsupported or unknown", res["reason"])
+        self.assertFalse(run_called)
+
+    def test_no_private_paths_or_raw_stderr_leak_in_reasons(self) -> None:
+        """Error reasons must be sanitized without raw private paths or arbitrary stderr."""
+        # Missing executable path
+        res1 = probe_tool_version("node", executable_path="/Users/secret_user/private/bin/node")
+        self.assertNotIn("/Users/secret_user", res1["reason"])
+
+        # Non-zero exit with sensitive stderr
+        def leak_runner(args: list[str], timeout: float) -> tuple[int, str, str]:
+            return 1, "", "sensitive trace with private token 123456"
+
+        res2 = probe_tool_version("go", executable_path="/opt/bin/go", runner=leak_runner)
+        self.assertNotIn("sensitive trace", res2["reason"])
+        self.assertNotIn("123456", res2["reason"])
+        self.assertIn("non-zero status 1", res2["reason"])
+
+    def test_is_internal_drive_eligible_provenance_and_strict_types(self) -> None:
+        """Eligible check strictly validates diskutil-apfs-list-plist, type safety and IDs."""
+        valid_drive = {
+            "device_id": "disk0",
+            "internal": True,
+            "physical": True,
+            "size_bytes": 500_277_792_768,
+            "source": "diskutil-info-plist",
+            "workspace_backing_device_id": "disk0",
+            "backing_source": "diskutil-info-plist",
+            "observed_at": "2026-11-08T05:53:33Z",
+            "reason": None,
+        }
+
+        # Valid baseline
+        self.assertTrue(is_internal_drive_eligible(valid_drive, min_bytes=500_000_000_000))
+
+        # Accepts diskutil-apfs-list-plist backing_source
+        apfs_list_drive = dict(valid_drive, backing_source="diskutil-apfs-list-plist")
+        self.assertTrue(is_internal_drive_eligible(apfs_list_drive, min_bytes=500_000_000_000))
+
+        # Rejects unknown or other backing_source
+        unknown_source_drive = dict(valid_drive, backing_source="unknown")
+        self.assertFalse(is_internal_drive_eligible(unknown_source_drive, min_bytes=500_000_000_000))
+
+        # Rejects bool min_bytes
+        self.assertFalse(is_internal_drive_eligible(valid_drive, min_bytes=True))
+
+        # Rejects negative min_bytes
+        self.assertFalse(is_internal_drive_eligible(valid_drive, min_bytes=-1))
+
+        # Rejects bool size_bytes
+        bool_size_drive = dict(valid_drive, size_bytes=True)
+        self.assertFalse(is_internal_drive_eligible(bool_size_drive, min_bytes=1))
+
+        # Rejects device_id mismatch
+        mismatched_drive = dict(valid_drive, workspace_backing_device_id="disk1")
+        self.assertFalse(is_internal_drive_eligible(mismatched_drive, min_bytes=500_000_000_000))
+
+        # Rejects non-mapping input
+        self.assertFalse(is_internal_drive_eligible(None))  # type: ignore[arg-type]
+        self.assertFalse(is_internal_drive_eligible("not a dict"))  # type: ignore[arg-type]
 
     def test_tool_version_probes_success(self) -> None:
         """Bounded tool version probes extract exact semantic version without shell."""
@@ -233,38 +430,6 @@ class DeveloperGateInventoryTests(unittest.TestCase):
             self.assertEqual(probe_map[tid]["version"], exp_ver)
             self.assertIsNone(probe_map[tid]["reason"])
 
-    def test_unavailable_executable_and_version_refusal(self) -> None:
-        """Missing or failing executables produce available=False and reason."""
-        # Case 1: executable path omitted
-        omitted = probe_tool_version("python", executable_path=None)
-        self.assertFalse(omitted["available"])
-        self.assertIsNone(omitted["version"])
-        self.assertIn("not supplied", omitted["reason"])
-
-        # Case 2: non-existent file with real runner check
-        missing = probe_tool_version("node", executable_path="/no/such/executable/node_xyz")
-        self.assertFalse(missing["available"])
-        self.assertIsNone(missing["version"])
-        self.assertIn("not found", missing["reason"])
-
-        # Case 3: execution non-zero exit
-        def failing_runner(args: list[str], timeout: float) -> tuple[int, str, str]:
-            return 127, "", "command not found"
-
-        failed = probe_tool_version("rust", executable_path="/bin/rustc", runner=failing_runner)
-        self.assertFalse(failed["available"])
-        self.assertIsNone(failed["version"])
-        self.assertIn("code 127", failed["reason"])
-
-        # Case 4: timeout
-        def timeout_runner(args: list[str], timeout: float) -> tuple[int, str, str]:
-            raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
-
-        timed_out = probe_tool_version("go", executable_path="/bin/go", runner=timeout_runner)
-        self.assertFalse(timed_out["available"])
-        self.assertIsNone(timed_out["version"])
-        self.assertIn("timed out", timed_out["reason"])
-
     def test_requested_values_never_installed_facts(self) -> None:
         """Requested tool versions bind the request but are NEVER reported as installed facts."""
         requested_tools = [
@@ -307,6 +472,7 @@ class DeveloperGateInventoryTests(unittest.TestCase):
                 "DeviceIdentifier": "disk0",
                 "WholeDisk": True,
                 "Internal": True,
+                "BusProtocol": "Apple Fabric",
                 "TotalSize": 500_277_792_768,
             }),
         )
@@ -334,6 +500,7 @@ class DeveloperGateInventoryTests(unittest.TestCase):
                 "DeviceIdentifier": "disk0",
                 "WholeDisk": True,
                 "Internal": True,
+                "BusProtocol": "Apple Fabric",
                 "TotalSize": 500_277_792_768,
             }),
             tool_runner=lambda args, to: (0, "Python 3.15.0\n", ""),

@@ -8,32 +8,125 @@ caller-supplied trusted tool executables without shell or installs.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import fcntl
 import os
 from pathlib import Path
 import plistlib
 import re
+import select
 import subprocess
+import time
 from typing import Any, Callable, Mapping, Sequence
 
 MIN_INTERNAL_DRIVE_BYTES: int = 512_000_000_000
+DISKUTIL_PATH: str = "/usr/sbin/diskutil"
+DEFAULT_MAX_BYTES: int = 1_048_576  # 1 MB bound on subprocess probe output
 KNOWN_TOOL_IDS: tuple[str, ...] = ("python", "node", "go", "rust", "swift", "clt")
+
+_APFS_CONTAINER_SCHEME_GUID: str = "EF57347C-0000-11AA-AA11-00306543ECAC"
+_PHYSICAL_BUS_PROTOCOLS: frozenset[str] = frozenset({
+    "Apple Fabric",
+    "PCI-Express",
+    "NVMe",
+    "SATA",
+    "SCSI",
+    "ATAPI",
+})
 
 _TOOL_REGEXES: dict[str, re.Pattern[str]] = {
     "python": re.compile(r"Python\s+([0-9]+(?:\.[0-9]+)*(?:[a-zA-Z0-9._-]+)?)"),
     "node": re.compile(r"v?([0-9]+(?:\.[0-9]+)*(?:[a-zA-Z0-9._-]+)?)"),
     "go": re.compile(r"go version go([0-9]+(?:\.[0-9]+)*(?:[a-zA-Z0-9._-]+)?)"),
     "rust": re.compile(r"rustc\s+([0-9]+(?:\.[0-9]+)*(?:[a-zA-Z0-9._-]+)?)"),
-    "swift": re.compile(r"(?:Apple Swift version|swift-driver version:)\s+([0-9]+(?:\.[0-9]+)*(?:[a-zA-Z0-9._-]+)?)"),
+    # Swift compiler version must be Apple Swift version, never swift-driver version
+    "swift": re.compile(r"Apple Swift version\s+([0-9]+(?:\.[0-9]+)*(?:[a-zA-Z0-9._-]+)?)"),
     "clt": re.compile(r"(?:version:|version\s+|Apple clang version\s+|clang version\s+|^)\s*([0-9]+(?:\.[0-9]+)*(?:[a-zA-Z0-9._-]+)?)"),
 }
 
 
+def run_bounded_process(
+    cmd: Sequence[str],
+    timeout: float = 5.0,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+) -> tuple[int, bytes, bytes]:
+    """Execute a subprocess with strict runtime timeout and bounded output memory.
+
+    Terminates and waits for the process if output exceeds max_bytes or timeout occurs.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        shell=False,
+    )
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    stdout_size = 0
+    stderr_size = 0
+    deadline = time.monotonic() + timeout
+
+    try:
+        assert proc.stdout is not None and proc.stderr is not None
+        for pipe in (proc.stdout, proc.stderr):
+            flags = fcntl.fcntl(pipe, fcntl.F_GETFL)
+            fcntl.fcntl(pipe, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+        pipes = [proc.stdout, proc.stderr]
+        while pipes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+            rlist, _, _ = select.select(pipes, [], [], remaining)
+            if not rlist:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+            for p in rlist:
+                chunk = p.read(65536)
+                if not chunk:
+                    pipes.remove(p)
+                    continue
+                if p is proc.stdout:
+                    stdout_chunks.append(chunk)
+                    stdout_size += len(chunk)
+                else:
+                    stderr_chunks.append(chunk)
+                    stderr_size += len(chunk)
+                if stdout_size > max_bytes or stderr_size > max_bytes:
+                    _terminate_and_wait(proc)
+                    raise RuntimeError(f"Output exceeded bound of {max_bytes} bytes")
+
+        proc.wait(timeout=max(0.1, deadline - time.monotonic()))
+        return proc.returncode, b"".join(stdout_chunks), b"".join(stderr_chunks)
+    except Exception:
+        _terminate_and_wait(proc)
+        raise
+
+
+def _terminate_and_wait(proc: subprocess.Popen[bytes]) -> None:
+    try:
+        if proc.stdout is not None and not proc.stdout.closed:
+            proc.stdout.close()
+        if proc.stderr is not None and not proc.stderr.closed:
+            proc.stderr.close()
+        proc.terminate()
+        try:
+            proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=0.5)
+    except Exception:
+        pass
+
+
 def _default_diskutil_runner(args: Sequence[str], timeout: float = 5.0) -> bytes:
-    cmd = ["diskutil", *args]
-    res = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
-    if res.returncode != 0 and not res.stdout.strip().startswith(b"<?xml"):
-        raise RuntimeError(f"diskutil exited with status {res.returncode}: {res.stderr.decode(errors='replace')}")
-    return res.stdout
+    code, stdout, stderr = run_bounded_process(
+        [DISKUTIL_PATH, *args],
+        timeout=timeout,
+        max_bytes=DEFAULT_MAX_BYTES,
+    )
+    if code != 0 and not stdout.strip().startswith(b"<?xml"):
+        raise RuntimeError(f"diskutil exited with status {code}")
+    return stdout
 
 
 def _resolve_mount_point(path: str | Path) -> str:
@@ -49,6 +142,32 @@ def _resolve_mount_point(path: str | Path) -> str:
 
 def _current_iso_z() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _is_explicit_physical_whole_disk(disk_info: Mapping[str, Any]) -> bool:
+    """Verify disk is an explicit physical whole disk, not a synthesized container or partition."""
+    if not isinstance(disk_info, Mapping):
+        return False
+    if disk_info.get("WholeDisk") is not True:
+        return False
+    if disk_info.get("VirtualOrPhysical") == "Virtual" or disk_info.get("SystemImage") is True:
+        return False
+    if disk_info.get("APFSContainerReference") or disk_info.get("APFSContainerSize"):
+        return False
+    content = str(disk_info.get("Content") or "")
+    if content == _APFS_CONTAINER_SCHEME_GUID or "Apple_APFS_Container" in content:
+        return False
+
+    # Positive physical provenance
+    if disk_info.get("VirtualOrPhysical") == "Physical":
+        return True
+    if disk_info.get("BusProtocol") in _PHYSICAL_BUS_PROTOCOLS:
+        return True
+    if content in ("GUID_partition_scheme", "FDisk_partition_scheme"):
+        return True
+    if disk_info.get("SolidState") is True or disk_info.get("SMARTStatus") is not None:
+        return True
+    return False
 
 
 def probe_internal_drive(
@@ -90,45 +209,84 @@ def probe_internal_drive(
 
         raw_volume = run_diskutil(["info", "-plist", target])
         volume_info = plistlib.loads(raw_volume)
+        if not isinstance(volume_info, Mapping):
+            return _make_drive_result(
+                source="unknown",
+                backing_source="unknown",
+                reason={"code": "INVALID_PLIST", "detail": "Volume plist root is not a mapping"},
+            )
+
         if volume_info.get("Error") is True:
             resolved_target = _resolve_mount_point(target)
             if resolved_target != target:
                 raw_volume = run_diskutil(["info", "-plist", resolved_target])
                 volume_info = plistlib.loads(raw_volume)
 
-        if volume_info.get("Error") is True:
-            err_msg = volume_info.get("ErrorMessage") or "diskutil volume lookup failed"
+        if not isinstance(volume_info, Mapping) or volume_info.get("Error") is True:
             return _make_drive_result(
                 source="unknown",
                 backing_source="unknown",
-                reason={"code": "VOLUME_LOOKUP_FAILED", "detail": err_msg[:2048]},
+                reason={"code": "VOLUME_LOOKUP_FAILED", "detail": "Failed to look up volume plist"},
             )
 
         stores = volume_info.get("APFSPhysicalStores")
         backing_source = "diskutil-info-plist"
         if stores is None and volume_info.get("APFSContainerReference"):
             container_ref = volume_info["APFSContainerReference"]
-            raw_container = run_diskutil(["info", "-plist", container_ref])
-            container_info = plistlib.loads(raw_container)
-            stores = container_info.get("APFSPhysicalStores")
-
-        if stores is not None:
-            if len(stores) == 0:
+            if not isinstance(container_ref, str) or not container_ref.strip():
                 return _make_drive_result(
                     source="unknown",
                     backing_source="unknown",
-                    reason={"code": "NO_PHYSICAL_STORES", "detail": "APFS container has no physical stores"},
+                    reason={"code": "MALFORMED_CONTAINER_REF", "detail": "APFSContainerReference is not a valid string"},
+                )
+            raw_container = run_diskutil(["info", "-plist", container_ref])
+            container_info = plistlib.loads(raw_container)
+            if not isinstance(container_info, Mapping):
+                return _make_drive_result(
+                    source="unknown",
+                    backing_source="unknown",
+                    reason={"code": "CONTAINER_LOOKUP_FAILED", "detail": "APFS container plist is not a mapping"},
+                )
+            stores = container_info.get("APFSPhysicalStores")
+
+        if stores is not None:
+            if not isinstance(stores, list) or len(stores) == 0:
+                return _make_drive_result(
+                    source="unknown",
+                    backing_source="unknown",
+                    reason={"code": "NO_PHYSICAL_STORES", "detail": "APFSPhysicalStores is not a non-empty list"},
                 )
             backing_disks: set[str] = set()
             for store in stores:
+                if not isinstance(store, Mapping):
+                    return _make_drive_result(
+                        source="unknown",
+                        backing_source="unknown",
+                        reason={"code": "MALFORMED_STORE", "detail": "Physical store item is not a mapping"},
+                    )
                 store_dev = store.get("APFSPhysicalStore")
-                if not store_dev:
-                    continue
+                if not isinstance(store_dev, str) or not store_dev.strip():
+                    return _make_drive_result(
+                        source="unknown",
+                        backing_source="unknown",
+                        reason={"code": "MALFORMED_STORE_ID", "detail": "APFSPhysicalStore identifier missing or invalid"},
+                    )
                 raw_store = run_diskutil(["info", "-plist", store_dev])
                 store_info = plistlib.loads(raw_store)
+                if not isinstance(store_info, Mapping):
+                    return _make_drive_result(
+                        source="unknown",
+                        backing_source="unknown",
+                        reason={"code": "STORE_LOOKUP_FAILED", "detail": "Physical store plist is not a mapping"},
+                    )
                 whole_id = store_info.get("ParentWholeDisk") or (store_info.get("DeviceIdentifier") if store_info.get("WholeDisk") else None)
-                if whole_id:
-                    backing_disks.add(whole_id)
+                if not isinstance(whole_id, str) or not whole_id.strip():
+                    return _make_drive_result(
+                        source="unknown",
+                        backing_source="unknown",
+                        reason={"code": "UNRESOLVED_STORE", "detail": "Could not determine whole disk for store"},
+                    )
+                backing_disks.add(whole_id)
 
             if len(backing_disks) == 0:
                 return _make_drive_result(
@@ -146,7 +304,7 @@ def probe_internal_drive(
             backing_id = next(iter(backing_disks))
         else:
             whole_id = volume_info.get("ParentWholeDisk") or (volume_info.get("DeviceIdentifier") if volume_info.get("WholeDisk") else None)
-            if not whole_id:
+            if not isinstance(whole_id, str) or not whole_id.strip():
                 return _make_drive_result(
                     source="unknown",
                     backing_source="unknown",
@@ -156,29 +314,39 @@ def probe_internal_drive(
 
         raw_disk = run_diskutil(["info", "-plist", backing_id])
         disk_info = plistlib.loads(raw_disk)
+        if not isinstance(disk_info, Mapping):
+            return _make_drive_result(
+                source="unknown",
+                backing_source="unknown",
+                reason={"code": "DISK_LOOKUP_FAILED", "detail": "Backing disk plist is not a mapping"},
+            )
 
-        is_virtual = disk_info.get("VirtualOrPhysical") == "Virtual" or disk_info.get("SystemImage") is True
-        if is_virtual:
+        if not _is_explicit_physical_whole_disk(disk_info):
+            is_virtual = disk_info.get("VirtualOrPhysical") == "Virtual" or disk_info.get("SystemImage") is True
             return _make_drive_result(
                 device_id=backing_id,
-                internal=False,
-                physical=False,
+                internal=False if is_virtual else disk_info.get("Internal") if isinstance(disk_info.get("Internal"), bool) else None,
+                physical=False if is_virtual else None,
                 size_bytes=None,
-                source="diskutil-info-plist",
+                source="diskutil-info-plist" if is_virtual else "unknown",
                 workspace_backing_device_id=backing_id,
-                backing_source=backing_source,
-                reason={"code": "VIRTUAL_DRIVE", "detail": f"Backing device {backing_id} is virtual"},
+                backing_source=backing_source if is_virtual else "unknown",
+                reason={
+                    "code": "VIRTUAL_DRIVE" if is_virtual else "NOT_PHYSICAL_WHOLE_DISK",
+                    "detail": "Backing device is not a verified physical whole disk",
+                },
             )
 
         is_internal = disk_info.get("Internal")
         if is_internal is True:
-            capacity = disk_info.get("TotalSize") or disk_info.get("Size") or disk_info.get("IOKitSize")
-            if capacity and int(capacity) >= 1:
+            raw_cap = disk_info.get("TotalSize") or disk_info.get("Size") or disk_info.get("IOKitSize")
+            # Positive integer capacity required; strictly reject bool/string coercion
+            if isinstance(raw_cap, int) and not isinstance(raw_cap, bool) and raw_cap >= 1:
                 return _make_drive_result(
                     device_id=backing_id,
                     internal=True,
                     physical=True,
-                    size_bytes=int(capacity),
+                    size_bytes=raw_cap,
                     source="diskutil-info-plist",
                     workspace_backing_device_id=backing_id,
                     backing_source=backing_source,
@@ -192,7 +360,7 @@ def probe_internal_drive(
                 source="diskutil-info-plist",
                 workspace_backing_device_id=backing_id,
                 backing_source=backing_source,
-                reason={"code": "MISSING_PHYSICAL_CAPACITY", "detail": f"Backing drive {backing_id} reports no physical capacity"},
+                reason={"code": "MISSING_PHYSICAL_CAPACITY", "detail": "Backing drive reports no positive physical capacity"},
             )
         elif is_internal is False:
             return _make_drive_result(
@@ -203,7 +371,7 @@ def probe_internal_drive(
                 source="diskutil-info-plist",
                 workspace_backing_device_id=backing_id,
                 backing_source=backing_source,
-                reason={"code": "EXTERNAL_DRIVE", "detail": f"Backing drive {backing_id} is external"},
+                reason={"code": "EXTERNAL_DRIVE", "detail": "Backing drive is external"},
             )
         else:
             return _make_drive_result(
@@ -214,14 +382,14 @@ def probe_internal_drive(
                 source="unknown",
                 workspace_backing_device_id=backing_id,
                 backing_source="unknown",
-                reason={"code": "UNKNOWN_INTERNAL_STATE", "detail": f"Internal state for drive {backing_id} is unknown"},
+                reason={"code": "UNKNOWN_INTERNAL_STATE", "detail": "Internal state for drive is unknown"},
             )
 
     except Exception as exc:
         return _make_drive_result(
             source="unknown",
             backing_source="unknown",
-            reason={"code": "PROBE_FAILED", "detail": f"{type(exc).__name__}: {exc}"[:2048]},
+            reason={"code": "PROBE_FAILED", "detail": f"Probe error: {type(exc).__name__}"},
         )
 
 
@@ -229,23 +397,29 @@ def is_internal_drive_eligible(drive_info: Mapping[str, Any], min_bytes: int = M
     """Return True only when drive is verified internal physical with size_bytes >= threshold."""
     if not isinstance(drive_info, Mapping):
         return False
+    if isinstance(min_bytes, bool) or not isinstance(min_bytes, int) or min_bytes < 0:
+        return False
     if drive_info.get("internal") is not True or drive_info.get("physical") is not True:
         return False
     size = drive_info.get("size_bytes")
-    if size is None or not isinstance(size, int):
+    if isinstance(size, bool) or not isinstance(size, int) or size < 1:
         return False
-    if drive_info.get("source") != "diskutil-info-plist" or drive_info.get("backing_source") != "diskutil-info-plist":
+    if drive_info.get("source") != "diskutil-info-plist":
+        return False
+    if drive_info.get("backing_source") not in ("diskutil-info-plist", "diskutil-apfs-list-plist"):
         return False
     dev_id = drive_info.get("device_id")
     backing_id = drive_info.get("workspace_backing_device_id")
-    if not dev_id or dev_id != backing_id:
+    if not isinstance(dev_id, str) or not isinstance(backing_id, str) or not dev_id:
+        return False
+    if dev_id != backing_id:
         return False
     return size >= min_bytes
 
 
 def _default_tool_runner(args: Sequence[str], timeout: float) -> tuple[int, str, str]:
-    res = subprocess.run(args, capture_output=True, timeout=timeout, check=False, text=True)
-    return res.returncode, res.stdout, res.stderr
+    code, stdout_bytes, stderr_bytes = run_bounded_process(args, timeout=timeout, max_bytes=DEFAULT_MAX_BYTES)
+    return code, stdout_bytes.decode(errors="replace"), stderr_bytes.decode(errors="replace")
 
 
 def probe_tool_version(
@@ -256,6 +430,15 @@ def probe_tool_version(
 ) -> dict[str, Any]:
     """Probe installed version of a toolchain executable without shell or mutation."""
     tid = str(tool_id).strip()
+    tid_norm = tid.lower().replace("-", "_")
+    if tid_norm not in KNOWN_TOOL_IDS:
+        return {
+            "id": tid,
+            "version": None,
+            "available": False,
+            "reason": f"Unsupported or unknown tool ID: {tid}",
+        }
+
     if not executable_path:
         return {
             "id": tid,
@@ -273,13 +456,15 @@ def probe_tool_version(
                 "id": tid,
                 "version": None,
                 "available": False,
-                "reason": f"Executable not found or not executable: {path_str}",
+                "reason": "Executable not found or not executable",
             }
 
-    tid_norm = tid.lower().replace("-", "_")
     base_name = os.path.basename(path_str).lower()
 
-    if tid_norm == "go":
+    if tid_norm == "python":
+        # Per owner rule: Python probe must use -I -B --version for isolated execution
+        args = [path_str, "-I", "-B", "--version"]
+    elif tid_norm == "go":
         args = [path_str, "version"]
     elif tid_norm in ("clt", "clt_sdk"):
         if "pkgutil" in base_name:
@@ -307,20 +492,19 @@ def probe_tool_version(
             "id": tid,
             "version": None,
             "available": False,
-            "reason": f"Probe execution failed: {type(exc).__name__}: {exc}",
+            "reason": f"Probe execution failed: {type(exc).__name__}",
         }
 
     if exit_code != 0:
-        err_msg = (stderr or stdout).strip()[:200]
         return {
             "id": tid,
             "version": None,
             "available": False,
-            "reason": f"Executable exited with code {exit_code}: {err_msg}",
+            "reason": f"Executable exited with non-zero status {exit_code}",
         }
 
     output = stdout.strip() or stderr.strip()
-    regex = _TOOL_REGEXES.get(tid_norm) or re.compile(r"([0-9]+(?:\.[0-9]+)*(?:[a-zA-Z0-9._-]+)?)")
+    regex = _TOOL_REGEXES[tid_norm]
     match = regex.search(output)
     if match:
         return {
@@ -334,7 +518,7 @@ def probe_tool_version(
         "id": tid,
         "version": None,
         "available": False,
-        "reason": f"Failed to parse version from output: {output[:200]}",
+        "reason": "Failed to parse version from output",
     }
 
 
