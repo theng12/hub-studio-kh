@@ -52,6 +52,22 @@ COMMIT_HEX = re.compile(r"^[0-9a-f]{40}$")
 MAX_SAFE_INT = 9007199254740991
 STREAM_CHUNK_BYTES = 64 * 1024
 
+ABSOLUTE_MAX_MEMBERS = 4096
+ABSOLUTE_MAX_PATH_LENGTH = 1024
+ABSOLUTE_MAX_JSON_BYTES = 4 * 1024 * 1024
+ABSOLUTE_MAX_LOG_BYTES = 32 * 1024 * 1024
+ABSOLUTE_MAX_AGGREGATE_LOG_BYTES = 128 * 1024 * 1024
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write all bytes to file descriptor, handling potential short writes."""
+    offset = 0
+    while offset < len(data):
+        written = os.write(fd, data[offset:])
+        if written == 0:
+            raise GateContractError("Short write encountered during extraction")
+        offset += written
+
 
 class GateContractError(Exception):
     """Explicit refusal or contract violation error."""
@@ -435,10 +451,12 @@ def validate_request_semantics(
             code="unsupported",
         )
 
-    # 2. Node setting revision and enabled check
+    # 2. Node setting revision, enabled, and verified check
     setting = capabilities.get("setting", {})
     if not setting.get("enabled"):
         raise GateContractError("Node developer mode setting is disabled", status=409, code="disabled")
+    if not setting.get("verified"):
+        raise GateContractError("Node developer mode setting is unverified", status=409, code="disabled")
     if request["node_setting_revision"] != setting.get("revision"):
         raise GateContractError(
             f"Node setting revision mismatch: request={request['node_setting_revision']!r} != node={setting.get('revision')!r}",
@@ -455,6 +473,8 @@ def validate_request_semantics(
         )
 
     # 4. Admission policy revision and minimum internal physical bytes
+    # Note: caller cannot lower minimum_internal_physical_bytes below policy.
+    # Physical device actual inspection and fresh filesystem free checks remain runtime responsibility.
     policy = capabilities.get("admission_policy", {})
     if request["admission_policy_revision"] != policy.get("revision"):
         raise GateContractError(
@@ -469,31 +489,46 @@ def validate_request_semantics(
             code="conflict",
         )
 
-    # 5. Target eligibility
-    c_id = target_controller_id or capabilities.get("controller_id")
-    n_id = target_node_id or capabilities.get("node_id")
-    if c_id and n_id:
-        target_pair = {"controller_id": c_id, "node_id": n_id}
-        # excluded_targets wins
-        excluded = policy.get("excluded_targets", [])
-        if any(t.get("controller_id") == c_id and t.get("node_id") == n_id for t in excluded):
-            raise GateContractError(
-                f"Target ({c_id}, {n_id}) is explicitly excluded by admission policy",
-                status=409,
-                code="conflict",
-            )
-        allowed = policy.get("allowed_targets", [])
-        if allowed:
-            if not any(t.get("controller_id") == c_id and t.get("node_id") == n_id for t in allowed):
-                raise GateContractError(
-                    f"Target ({c_id}, {n_id}) is not in admission policy allowed_targets",
-                    status=409,
-                    code="conflict",
-                )
+    # 5. Target eligibility (exact match to capabilities and membership in allowed_targets; excluded_targets wins)
+    node_id = capabilities.get("node_id")
+    controller_id = capabilities.get("controller_id")
+    if target_node_id is not None and target_node_id != node_id:
+        raise GateContractError(
+            f"Target node_id mismatch: caller={target_node_id!r} != node={node_id!r}",
+            status=409,
+            code="conflict",
+        )
+    if target_controller_id is not None and target_controller_id != controller_id:
+        raise GateContractError(
+            f"Target controller_id mismatch: caller={target_controller_id!r} != controller={controller_id!r}",
+            status=409,
+            code="conflict",
+        )
 
-    # 6. Gate matching in advertised gates
-    gate_id = request["gate"]["id"]
+    # Check against policy target lists; excluded wins, and empty allowed_targets means none permitted
+    excluded = policy.get("excluded_targets", [])
+    if any(t.get("controller_id") == controller_id and t.get("node_id") == node_id for t in excluded):
+        raise GateContractError(
+            f"Target ({controller_id}, {node_id}) is explicitly excluded by admission policy",
+            status=409,
+            code="conflict",
+        )
+
+    allowed = policy.get("allowed_targets", [])
+    if not any(t.get("controller_id") == controller_id and t.get("node_id") == node_id for t in allowed):
+        raise GateContractError(
+            f"Target ({controller_id}, {node_id}) is not in admission policy allowed_targets",
+            status=409,
+            code="conflict",
+        )
+
+    # 6. Gate matching in advertised gates (no duplicate advertised gates)
     advertised_gates = capabilities.get("gates", [])
+    adv_gate_ids = [g.get("id") for g in advertised_gates]
+    if len(adv_gate_ids) != len(set(adv_gate_ids)):
+        raise GateContractError("Duplicate gate identifiers advertised in capabilities", status=400, code="invalid_request")
+
+    gate_id = request["gate"]["id"]
     matching_gate = next((g for g in advertised_gates if g.get("id") == gate_id), None)
     if matching_gate is None:
         raise GateContractError(f"Gate {gate_id!r} is not advertised by node", status=400, code="invalid_request")
@@ -509,9 +544,13 @@ def validate_request_semantics(
     if request["source"] != request["gate"]["source"]:
         raise GateContractError("request.source does not equal request.gate.source", status=400, code="invalid_request")
 
-    # 8. Tool manifest equality
-    tool_manifest_id = request["tool_manifest"]["id"]
+    # 8. Tool manifest equality (no duplicate advertised tool manifests)
     advertised_manifests = capabilities.get("tool_manifests", [])
+    adv_tm_ids = [tm.get("id") for tm in advertised_manifests]
+    if len(adv_tm_ids) != len(set(adv_tm_ids)):
+        raise GateContractError("Duplicate tool manifest identifiers advertised in capabilities", status=400, code="invalid_request")
+
+    tool_manifest_id = request["tool_manifest"]["id"]
     matching_tool_manifest = next((tm for tm in advertised_manifests if tm.get("id") == tool_manifest_id), None)
     if matching_tool_manifest is None:
         raise GateContractError(f"Tool manifest {tool_manifest_id!r} is not advertised by node", status=400, code="invalid_request")
@@ -540,6 +579,8 @@ def validate_request_semantics(
         raise GateContractError("Duplicate tool identifiers in tool manifest", status=400, code="invalid_request")
 
     # 9. Requested limits within gate limits and node bounds
+    # For resource ceilings, requested cannot exceed gate limits or node bounds.
+    # For safety floors (minimum_free_bytes, start_min_free_memory_bytes), caller cannot lower below gate values.
     requested = request["requested_limits"]
     gate_limits = request["gate"]["limits"]
     bounds = capabilities["bounds"]
@@ -569,6 +610,20 @@ def validate_request_semantics(
                 code="bounds",
             )
 
+    # Safety floors: caller cannot lower below gate minimums
+    if requested["minimum_free_bytes"] < gate_limits["minimum_free_bytes"]:
+        raise GateContractError(
+            f"Requested limit minimum_free_bytes={requested['minimum_free_bytes']} cannot be lower than gate limit {gate_limits['minimum_free_bytes']}",
+            status=400,
+            code="invalid_request",
+        )
+    if requested["start_min_free_memory_bytes"] < gate_limits["start_min_free_memory_bytes"]:
+        raise GateContractError(
+            f"Requested limit start_min_free_memory_bytes={requested['start_min_free_memory_bytes']} cannot be lower than gate limit {gate_limits['start_min_free_memory_bytes']}",
+            status=400,
+            code="invalid_request",
+        )
+
     # 10. Rejection of caller URLs/commands in identifiers
     for field in ("run_id", "test_id"):
         _check_no_urls_or_commands(request[field], field)
@@ -585,18 +640,20 @@ def _validate_safe_member_path(
     seen_casefold: set[str],
 ) -> str:
     """Validate relative path safety against traversal, absolute paths, and aliasing."""
+    if len(raw_name) > ABSOLUTE_MAX_PATH_LENGTH:
+        raise GateContractError("Member path length exceeds limit")
     if raw_name.startswith(("/", "\\")):
-        raise GateContractError(f"Absolute member path forbidden: {raw_name!r}")
+        raise GateContractError("Absolute member path forbidden")
     if ":" in raw_name:
-        raise GateContractError(f"Drive or stream specifier forbidden in member path: {raw_name!r}")
+        raise GateContractError("Drive or stream specifier forbidden in member path")
 
     norm = posixpath.normpath(raw_name)
     if norm == ".":
         return "."
     if norm.startswith("../") or norm == "..":
-        raise GateContractError(f"Path traversal forbidden: {raw_name!r}")
+        raise GateContractError("Path traversal forbidden")
     if norm.startswith("/"):
-        raise GateContractError(f"Path resolves to root: {raw_name!r}")
+        raise GateContractError("Path resolves to root")
 
     parts = norm.split("/")
     if any(p in ("", ".", "..") for p in parts):
@@ -645,11 +702,11 @@ def validate_source_archive(
         actual_sha, actual_size = sha256_file(p, max_bytes=max_raw_bytes)
     else:
         stream = archive_path_or_stream
-        if stream.seekable():
-            stream.seek(0)
+        if not stream.seekable():
+            raise GateContractError("Non-seekable stream not permitted for archive validation")
+        stream.seek(0)
         actual_sha, actual_size = sha256_stream(stream, max_bytes=max_raw_bytes)
-        if stream.seekable():
-            stream.seek(0)
+        stream.seek(0)
 
     if actual_size != declared_size:
         raise GateContractError(
@@ -664,9 +721,10 @@ def validate_source_archive(
             code="invalid_request",
         )
 
-    # 2. Inspect members BEFORE any write
+    # 2. Inspect members incrementally BEFORE any write
     max_files = bounds.get("source_files") if bounds else declared_source["file_count"]
     max_expanded = bounds.get("source_expanded_bytes") if bounds else declared_source["expanded_bytes"]
+    max_total_members = min(max_files * 2 + 64, ABSOLUTE_MAX_MEMBERS)
 
     if isinstance(archive_path_or_stream, (str, Path)):
         tar_ctx = tarfile.open(str(archive_path_or_stream), mode="r:")
@@ -675,11 +733,24 @@ def validate_source_archive(
 
     file_count = 0
     expanded_bytes = 0
+    total_members = 0
     seen_normalized: set[str] = set()
     seen_casefold: set[str] = set()
 
     with tar_ctx as tar:
-        for member in tar:
+        while True:
+            member = tar.next()
+            if member is None:
+                break
+
+            total_members += 1
+            if total_members > max_total_members:
+                raise GateContractError(
+                    f"Total archive members count exceeds limit ({total_members} > {max_total_members})",
+                    status=413,
+                    code="bounds",
+                )
+
             # Reject symlinks, hardlinks, specials, and sparse
             if member.issym():
                 raise GateContractError(f"Symlinks are forbidden in source archive: {member.name}")
@@ -739,74 +810,90 @@ def extract_source_archive(
 ) -> dict[str, int]:
     """Validate and safely extract source archive into a NEW empty owned directory.
 
-    All limits and safe member paths are verified BEFORE any write.
+    Holds the same file descriptor/stream and re-validates all headers during extraction.
     Never follows existing links or allows link extraction.
+    Sanitizes file permissions, removing setuid/setgid/sticky bits.
     """
     dest_path = Path(destination_dir)
 
     # Destination directory must not be a symlink
     if dest_path.is_symlink():
-        raise GateContractError(f"Destination directory must not be a symlink: {dest_path}")
+        raise GateContractError("Destination directory must not be a symlink")
 
     dest = dest_path.resolve()
 
     # Destination directory checks
     if dest.exists():
         if dest.is_symlink():
-            raise GateContractError(f"Destination directory must not be a symlink: {dest}")
+            raise GateContractError("Destination directory must not be a symlink")
         if not dest.is_dir():
-            raise GateContractError(f"Destination exists and is not a directory: {dest}")
+            raise GateContractError("Destination exists and is not a directory")
         if any(dest.iterdir()):
-            raise GateContractError(f"Destination directory must be empty: {dest}")
+            raise GateContractError("Destination directory must be empty")
     else:
         dest.mkdir(parents=True, mode=0o700)
 
     # Phase 1: validate in full before writing any file
     validate_source_archive(archive_path_or_stream, declared_source, bounds=bounds)
 
-    # Phase 2: safely write regular files and directories
+    # Phase 2: safely write regular files and directories using the same stream/fd
     if isinstance(archive_path_or_stream, (str, Path)):
         tar_ctx = tarfile.open(str(archive_path_or_stream), mode="r:")
     else:
-        if archive_path_or_stream.seekable():
-            archive_path_or_stream.seek(0)
+        archive_path_or_stream.seek(0)
         tar_ctx = tarfile.open(fileobj=archive_path_or_stream, mode="r:")
 
     file_count = 0
     expanded_bytes = 0
+    seen_normalized: set[str] = set()
+    seen_casefold: set[str] = set()
 
     open_flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     if hasattr(os, "O_NOFOLLOW"):
         open_flags |= os.O_NOFOLLOW
 
     with tar_ctx as tar:
-        for member in tar:
-            norm = posixpath.normpath(member.name)
+        while True:
+            member = tar.next()
+            if member is None:
+                break
+
+            # Re-verify member safety on pass 2
+            if not (member.isreg() or member.isdir()):
+                raise GateContractError(f"Unsupported member type on extract: {member.name}")
+            if member.issym() or member.islnk() or member.issparse() or getattr(member, "sparse", False):
+                raise GateContractError(f"Forbidden member on extract: {member.name}")
+
+            norm = _validate_safe_member_path(member.name, seen_normalized, seen_casefold)
             if norm == "." and member.isdir():
                 continue
 
             parts = norm.split("/")
-            # Traverse/create directory hierarchy ensuring no symlinks along the way
             curr = dest
             for part in parts[:-1]:
                 curr = curr / part
                 if curr.is_symlink():
-                    raise GateContractError(f"Parent directory is a symlink: {curr}")
+                    raise GateContractError("Parent directory in destination is a symlink")
                 if not curr.exists():
                     curr.mkdir(mode=0o755)
 
             if member.isdir():
                 target_dir = curr / parts[-1]
                 if target_dir.is_symlink():
-                    raise GateContractError(f"Target directory is a symlink: {target_dir}")
+                    raise GateContractError("Target directory is a symlink")
                 if not target_dir.exists():
                     target_dir.mkdir(mode=0o755)
             elif member.isreg():
                 target_file = curr / parts[-1]
                 if target_file.is_symlink():
-                    raise GateContractError(f"Target file path is a symlink: {target_file}")
+                    raise GateContractError("Target file path is a symlink")
 
-                fd = os.open(str(target_file), open_flags, 0o644)
+                # Sanitize permissions: remove setuid, setgid, sticky bits (0o7000)
+                # Ensure readable/writable by owner; preserve execute bit if present in source
+                mode = (member.mode & 0o755) | 0o644 if (member.mode & 0o111) else (member.mode & 0o644) | 0o644
+                mode &= ~0o7000
+
+                fd = os.open(str(target_file), open_flags, mode)
                 written = 0
                 try:
                     fsrc = tar.extractfile(member)
@@ -819,7 +906,7 @@ def extract_source_archive(
                         written += len(chunk)
                         if written > member.size:
                             raise GateContractError(f"Member stream exceeded declared size: {member.name}")
-                        os.write(fd, chunk)
+                        _write_all(fd, chunk)
                 finally:
                     os.close(fd)
 
@@ -828,6 +915,9 @@ def extract_source_archive(
 
                 file_count += 1
                 expanded_bytes += written
+
+    if file_count != declared_source["file_count"] or expanded_bytes != declared_source["expanded_bytes"]:
+        raise GateContractError("Source extraction budget mismatch on pass 2", status=400, code="invalid_request")
 
     return {"file_count": file_count, "expanded_bytes": expanded_bytes}
 
@@ -840,6 +930,7 @@ def extract_source_archive(
 def validate_result_archive(
     archive_path_or_stream: Path | str | BinaryIO,
     *,
+    expected_acceptance: dict[str, Any],
     expected_descriptor: dict[str, Any] | None = None,
     expected_request: dict[str, Any] | None = None,
     bounds: dict[str, Any] | None = None,
@@ -849,11 +940,14 @@ def validate_result_archive(
     Verifies:
     1. Raw archive size and SHA-256 match expected_descriptor (if provided) and stay within bounds.
     2. Plain uncompressed tar containing EXACTLY manifest.json and logs/<check-id>.log for each check.
-    3. No directories, unlisted members, duplicates, links, or aliased entries.
-    4. Manifest is strict UTF-8 JSON conforming to resultManifest schema.
-    5. Each log is strict UTF-8 and exactly matches its check's declared log_sha256 and log_bytes.
-    6. Outcome semantics (passed requires overall 0 exit code, signal null, all check 0 exits, etc.).
+    3. Incremental iteration checking sparse/links/types before reading; bounds reader ceilings.
+    4. Manifest binds immutable acceptance to expected_acceptance and canonical request SHA.
+    5. Each log is strict UTF-8 and exactly matches declared size and SHA; total logs bounded.
+    6. Outcome semantics: process release confirmed on all terminal results; passed requires
+       exact matching actual tools with available=true and complete checks with non-null duration.
     """
+    validate_schema(expected_acceptance, "acceptance")
+
     max_raw_bytes = bounds.get("result_bytes") if bounds else (expected_descriptor.get("size_bytes") if expected_descriptor else None)
 
     # 1. Compute raw hash and size
@@ -862,11 +956,11 @@ def validate_result_archive(
         actual_sha, actual_size = sha256_file(p, max_bytes=max_raw_bytes)
     else:
         stream = archive_path_or_stream
-        if stream.seekable():
-            stream.seek(0)
+        if not stream.seekable():
+            raise GateContractError("Non-seekable stream not permitted for archive validation")
+        stream.seek(0)
         actual_sha, actual_size = sha256_stream(stream, max_bytes=max_raw_bytes)
-        if stream.seekable():
-            stream.seek(0)
+        stream.seek(0)
 
     if expected_descriptor is not None:
         validate_schema(expected_descriptor, "resultDescriptor")
@@ -883,29 +977,40 @@ def validate_result_archive(
                 code="integrity_error",
             )
 
-    # 2. Open uncompressed tar
+    # 2. Incremental iteration over uncompressed tar members
+    max_members = min(bounds.get("result_files", ABSOLUTE_MAX_MEMBERS) if bounds else ABSOLUTE_MAX_MEMBERS, ABSOLUTE_MAX_MEMBERS)
+    max_json = min(bounds.get("json_bytes", ABSOLUTE_MAX_JSON_BYTES) if bounds else ABSOLUTE_MAX_JSON_BYTES, ABSOLUTE_MAX_JSON_BYTES)
+    max_single_log = min(bounds.get("log_bytes", ABSOLUTE_MAX_LOG_BYTES) if bounds else ABSOLUTE_MAX_LOG_BYTES, ABSOLUTE_MAX_LOG_BYTES)
+    max_aggregate_log = min(bounds.get("result_bytes", ABSOLUTE_MAX_AGGREGATE_LOG_BYTES) if bounds else ABSOLUTE_MAX_AGGREGATE_LOG_BYTES, ABSOLUTE_MAX_AGGREGATE_LOG_BYTES)
+
     if isinstance(archive_path_or_stream, (str, Path)):
         tar_ctx = tarfile.open(str(archive_path_or_stream), mode="r:")
     else:
         tar_ctx = tarfile.open(fileobj=archive_path_or_stream, mode="r:")
 
+    member_map: dict[str, tarfile.TarInfo] = {}
+    member_count = 0
+
     with tar_ctx as tar:
-        members = tar.getmembers()
+        while True:
+            m = tar.next()
+            if m is None:
+                break
 
-        if bounds and bounds.get("result_files") and len(members) > bounds["result_files"]:
-            raise GateContractError(
-                f"Result archive member count {len(members)} exceeds bound {bounds['result_files']}",
-                status=413,
-                code="bounds",
-            )
+            member_count += 1
+            if member_count > max_members:
+                raise GateContractError(
+                    f"Result archive member count exceeds limit ({member_count} > {max_members})",
+                    status=413,
+                    code="bounds",
+                )
 
-        member_map: dict[str, tarfile.TarInfo] = {}
-        for m in members:
-            # Wire: "no dirs/unlisted; plain uncompressed tar containing exactly manifest.json and logs/<check-id>.log"
             if m.isdir():
                 raise GateContractError(f"Directory entries forbidden in result archive: {m.name}")
             if not m.isreg():
                 raise GateContractError(f"Non-regular file forbidden in result archive: {m.name}")
+            if m.issparse() or getattr(m, "sparse", False) or m.type in (b"S", "S"):
+                raise GateContractError(f"Sparse files are forbidden in result archive: {m.name}")
             if m.name.startswith(("/", "\\")) or ".." in m.name:
                 raise GateContractError(f"Invalid member path: {m.name}")
 
@@ -921,9 +1026,9 @@ def validate_result_archive(
             raise GateContractError("Missing manifest.json in result archive")
 
         manifest_info = member_map["manifest.json"]
-        if bounds and bounds.get("json_bytes") and manifest_info.size > bounds["json_bytes"]:
+        if manifest_info.size > max_json:
             raise GateContractError(
-                f"manifest.json size {manifest_info.size} exceeds bound {bounds['json_bytes']}",
+                f"manifest.json size {manifest_info.size} exceeds bound {max_json}",
                 status=413,
                 code="bounds",
             )
@@ -932,10 +1037,35 @@ def validate_result_archive(
         if f_manifest is None:
             raise GateContractError("Could not read manifest.json from result archive")
         manifest_raw = f_manifest.read()
-        manifest = parse_strict_json(manifest_raw, max_bytes=bounds.get("json_bytes") if bounds else None)
+        manifest = parse_strict_json(manifest_raw, max_bytes=max_json)
         validate_result_manifest_schema(manifest)
 
-        # 3. Check exact member list against checks declared in manifest
+        # 3. Check exact acceptance binding and canonical hash
+        if manifest.get("acceptance") != expected_acceptance:
+            raise GateContractError(
+                f"Result manifest acceptance does not match expected acceptance: {manifest.get('acceptance')!r} != {expected_acceptance!r}",
+                status=400,
+                code="invalid_request",
+            )
+
+        if expected_request is not None:
+            canonical_req_sha = compute_canonical_sha256(expected_request)
+            if manifest["acceptance"]["request_sha256"] != canonical_req_sha:
+                raise GateContractError(
+                    f"Result acceptance request_sha256 mismatch with canonical request: {manifest['acceptance']['request_sha256']} != {canonical_req_sha}",
+                    status=400,
+                    code="invalid_request",
+                )
+            if manifest["runner"] != expected_request.get("runner"):
+                raise GateContractError("Result runner does not match accepted request")
+            if manifest["gate"] != expected_request.get("gate"):
+                raise GateContractError("Result gate does not match accepted request")
+            if manifest["source"] != expected_request.get("source"):
+                raise GateContractError("Result source does not match accepted request")
+            if manifest["tool_manifest"] != expected_request.get("tool_manifest"):
+                raise GateContractError("Result tool_manifest does not match accepted request")
+
+        # 4. Check exact member list against checks declared in manifest
         checks = manifest.get("checks", [])
         expected_names = {"manifest.json"}
         check_ids: set[str] = set()
@@ -959,7 +1089,8 @@ def validate_result_archive(
                 code="invalid_request",
             )
 
-        # 4. Verify each check log
+        # 5. Verify each check log with aggregate cap
+        aggregate_log_bytes = 0
         for c in checks:
             cid = c["id"]
             log_name = f"logs/{cid}.log"
@@ -969,9 +1100,17 @@ def validate_result_archive(
                 raise GateContractError(
                     f"Check {cid} log size mismatch: archive {log_info.size} != check {c['log_bytes']}"
                 )
-            if bounds and bounds.get("log_bytes") and log_info.size > bounds["log_bytes"]:
+            if log_info.size > max_single_log:
                 raise GateContractError(
-                    f"Check {cid} log size {log_info.size} exceeds bound {bounds['log_bytes']}",
+                    f"Check {cid} log size {log_info.size} exceeds bound {max_single_log}",
+                    status=413,
+                    code="bounds",
+                )
+
+            aggregate_log_bytes += log_info.size
+            if aggregate_log_bytes > max_aggregate_log:
+                raise GateContractError(
+                    f"Aggregate log bytes {aggregate_log_bytes} exceeds limit {max_aggregate_log}",
                     status=413,
                     code="bounds",
                 )
@@ -996,16 +1135,12 @@ def validate_result_archive(
             except UnicodeDecodeError as exc:
                 raise GateContractError(f"Check {cid} log contains invalid UTF-8: {exc}") from exc
 
-    # 5. Semantic verification of result manifest
-    if expected_request is not None:
-        if manifest["runner"] != expected_request.get("runner"):
-            raise GateContractError("Result runner does not match accepted request")
-        if manifest["gate"] != expected_request.get("gate"):
-            raise GateContractError("Result gate does not match accepted request")
-        if manifest["source"] != expected_request.get("source"):
-            raise GateContractError("Result source does not match accepted request")
-        if manifest["tool_manifest"] != expected_request.get("tool_manifest"):
-            raise GateContractError("Result tool_manifest does not match accepted request")
+    # 6. Semantic verification of process release & outcome
+    process_release = manifest.get("process_release", {})
+    if not process_release.get("confirmed"):
+        raise GateContractError("Process release confirmed is required for all terminal results")
+    if process_release.get("owned_processes_remaining") != 0:
+        raise GateContractError("Zero owned processes remaining required for process release")
 
     outcome = manifest["outcome"]
     exit_code = manifest.get("exit_code")
@@ -1017,22 +1152,42 @@ def validate_result_archive(
             raise GateContractError("Passed outcome cannot have termination_signal")
         if manifest.get("reason") is not None:
             raise GateContractError("Passed outcome cannot have reason")
-        if not manifest.get("process_release", {}).get("confirmed"):
-            raise GateContractError("Passed outcome requires process_release confirmed")
-        if manifest.get("process_release", {}).get("owned_processes_remaining") != 0:
-            raise GateContractError("Passed outcome requires 0 owned processes remaining")
 
-        gate_check_ids = set(manifest["gate"]["check_ids"])
-        manifest_check_ids = {c["id"] for c in checks}
-        if not gate_check_ids.issubset(manifest_check_ids):
+        # Toolchain verification for passed
+        actual_tools = manifest.get("actual_toolchains", [])
+        actual_ids = [t.get("id") for t in actual_tools]
+        if len(actual_ids) != len(set(actual_ids)):
+            raise GateContractError("Duplicate tool IDs in actual_toolchains")
+
+        req_tools = manifest["gate"].get("required_toolchains", [])
+        req_pins_by_id = {t["id"]: t for t in req_tools}
+        actual_by_id = {t["id"]: t for t in actual_tools}
+
+        if set(req_pins_by_id.keys()) != set(actual_by_id.keys()):
+            raise GateContractError("actual_toolchains tool IDs must exactly match gate required_toolchains")
+
+        for tid, req_pin in req_pins_by_id.items():
+            act = actual_by_id[tid]
+            if not act.get("available"):
+                raise GateContractError(f"Tool {tid} must be available=True for passed outcome")
+            if act.get("pin") != req_pin:
+                raise GateContractError(f"Tool {tid} pin does not match required toolchain pin")
+
+        # Exact check IDs matching (no extras) and non-null duration
+        gate_check_ids = list(manifest["gate"]["check_ids"])
+        manifest_check_ids = [c["id"] for c in checks]
+        if gate_check_ids != manifest_check_ids:
             raise GateContractError(
-                f"Passed outcome missing required gate checks: {gate_check_ids - manifest_check_ids}"
+                f"Passed outcome check IDs must match gate check IDs exactly in order: {manifest_check_ids} != {gate_check_ids}"
             )
+
         for c in checks:
             if c["outcome"] != "passed":
                 raise GateContractError(f"Check {c['id']} outcome is not passed ({c['outcome']})")
             if c["exit_code"] != 0:
                 raise GateContractError(f"Check {c['id']} exit code is not 0 ({c['exit_code']})")
+            if c.get("duration_seconds") is None or c["duration_seconds"] < 0:
+                raise GateContractError(f"Check {c['id']} must have non-null duration_seconds >= 0")
             if c.get("reason") is not None:
                 raise GateContractError(f"Passed check {c['id']} must not have reason")
     else:

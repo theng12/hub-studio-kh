@@ -413,6 +413,52 @@ class DeveloperGateContractTests(unittest.TestCase):
             validate_request_semantics(req, caps)
         self.assertEqual(ctx.exception.status, 409)
 
+    def test_semantic_validation_unverified_setting(self) -> None:
+        caps = _make_capabilities()
+        caps["setting"]["verified"] = False
+        req = _make_gate_request()
+        with self.assertRaises(GateContractError) as ctx:
+            validate_request_semantics(req, caps)
+        self.assertEqual(ctx.exception.status, 409)
+        self.assertIn("unverified", str(ctx.exception))
+
+    def test_semantic_validation_empty_allowed_targets_denies(self) -> None:
+        policy = _make_policy()
+        policy["allowed_targets"] = []
+        caps = _make_capabilities(policy=policy)
+        req = _make_gate_request(policy=policy)
+        with self.assertRaises(GateContractError) as ctx:
+            validate_request_semantics(req, caps)
+        self.assertEqual(ctx.exception.status, 409)
+        self.assertIn("not in admission policy allowed_targets", str(ctx.exception))
+
+    def test_semantic_validation_target_mismatch(self) -> None:
+        caps = _make_capabilities()
+        req = _make_gate_request()
+        with self.assertRaises(GateContractError) as ctx:
+            validate_request_semantics(req, caps, target_node_id="wrong-node")
+        self.assertEqual(ctx.exception.status, 409)
+        self.assertIn("Target node_id mismatch", str(ctx.exception))
+
+    def test_semantic_validation_duplicate_advertised_pins(self) -> None:
+        caps = _make_capabilities()
+        g = _make_gate()
+        caps["gates"] = [g, g]
+        req = _make_gate_request()
+        with self.assertRaises(GateContractError) as ctx:
+            validate_request_semantics(req, caps)
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertIn("Duplicate gate identifiers", str(ctx.exception))
+
+    def test_semantic_validation_safety_floors_cannot_be_lowered(self) -> None:
+        caps = _make_capabilities()
+        req = _make_gate_request()
+        req["requested_limits"]["minimum_free_bytes"] = 1  # lower than gate limit (100_000)
+        with self.assertRaises(GateContractError) as ctx:
+            validate_request_semantics(req, caps)
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertIn("minimum_free_bytes", str(ctx.exception))
+
     def test_semantic_validation_stale_setting_revision(self) -> None:
         caps = _make_capabilities()
         caps["setting"]["revision"] = "rev-newer"
@@ -568,6 +614,7 @@ class DeveloperGateContractTests(unittest.TestCase):
         with self.assertRaises(GateContractError) as ctx:
             validate_source_archive(io.BytesIO(data), source_decl)
         self.assertIn("Path traversal forbidden", str(ctx.exception))
+        self.assertNotIn("escape.txt", str(ctx.exception))
 
     def test_source_archive_rejects_absolute_path(self) -> None:
         data, files, expanded = self._create_tar_archive([
@@ -577,6 +624,7 @@ class DeveloperGateContractTests(unittest.TestCase):
         with self.assertRaises(GateContractError) as ctx:
             validate_source_archive(io.BytesIO(data), source_decl)
         self.assertIn("Absolute member path forbidden", str(ctx.exception))
+        self.assertNotIn("/etc/shadow", str(ctx.exception))
 
     def test_source_archive_rejects_duplicate_or_aliased_path(self) -> None:
         # Same path twice
@@ -670,6 +718,7 @@ class DeveloperGateContractTests(unittest.TestCase):
         }
         res = validate_result_archive(
             io.BytesIO(data),
+            expected_acceptance=manifest["acceptance"],
             expected_descriptor=descriptor,
             expected_request=req,
         )
@@ -682,7 +731,7 @@ class DeveloperGateContractTests(unittest.TestCase):
         # Add a directory entry for "logs"
         data = self._create_result_tar(manifest, logs, extra_entries=[("logs", None, tarfile.DIRTYPE)])
         with self.assertRaises(GateContractError) as ctx:
-            validate_result_archive(io.BytesIO(data))
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
         self.assertIn("Directory entries forbidden", str(ctx.exception))
 
     def test_result_archive_rejects_unlisted_members(self) -> None:
@@ -690,7 +739,7 @@ class DeveloperGateContractTests(unittest.TestCase):
         manifest, logs = _make_result_manifest(req)
         data = self._create_result_tar(manifest, logs, extra_entries=[("extra.txt", b"leak\n", tarfile.REGTYPE)])
         with self.assertRaises(GateContractError) as ctx:
-            validate_result_archive(io.BytesIO(data))
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
         self.assertIn("do not match declared manifest", str(ctx.exception))
 
     def test_result_archive_rejects_log_sha_mismatch(self) -> None:
@@ -699,7 +748,7 @@ class DeveloperGateContractTests(unittest.TestCase):
         manifest["checks"][0]["log_sha256"] = "0" * 64
         data = self._create_result_tar(manifest, logs)
         with self.assertRaises(GateContractError) as ctx:
-            validate_result_archive(io.BytesIO(data))
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
         self.assertIn("log SHA-256 mismatch", str(ctx.exception))
 
     def test_result_archive_rejects_log_invalid_utf8(self) -> None:
@@ -712,7 +761,7 @@ class DeveloperGateContractTests(unittest.TestCase):
         manifest["checks"][0]["log_sha256"] = hashlib.sha256(bad_bytes).hexdigest()
         data = self._create_result_tar(manifest, logs)
         with self.assertRaises(GateContractError) as ctx:
-            validate_result_archive(io.BytesIO(data))
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
         self.assertIn("invalid UTF-8", str(ctx.exception))
 
     def test_result_archive_rejects_passed_with_nonzero_exit(self) -> None:
@@ -720,7 +769,7 @@ class DeveloperGateContractTests(unittest.TestCase):
         manifest, logs = _make_result_manifest(req, outcome="passed", exit_code=1)
         data = self._create_result_tar(manifest, logs)
         with self.assertRaises(GateContractError) as ctx:
-            validate_result_archive(io.BytesIO(data))
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
         self.assertIn("Passed outcome must have exit_code 0", str(ctx.exception))
 
     def test_result_archive_rejects_failed_with_zero_exit(self) -> None:
@@ -728,12 +777,12 @@ class DeveloperGateContractTests(unittest.TestCase):
         manifest, logs = _make_result_manifest(req, outcome="failed", exit_code=0)
         data = self._create_result_tar(manifest, logs)
         with self.assertRaises(GateContractError) as ctx:
-            validate_result_archive(io.BytesIO(data))
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
         self.assertIn("Non-passed outcome (failed) cannot have exit_code 0", str(ctx.exception))
 
     def test_result_archive_rejects_missing_manifest(self) -> None:
         req = _make_gate_request()
-        _, logs = _make_result_manifest(req)
+        manifest, logs = _make_result_manifest(req)
         bio = io.BytesIO()
         with tarfile.open(fileobj=bio, mode="w:") as tar:
             for log_name, log_bytes in logs.items():
@@ -742,8 +791,90 @@ class DeveloperGateContractTests(unittest.TestCase):
                 tar.addfile(ti, io.BytesIO(log_bytes))
         data = bio.getvalue()
         with self.assertRaises(GateContractError) as ctx:
-            validate_result_archive(io.BytesIO(data))
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
         self.assertIn("Missing manifest.json", str(ctx.exception))
+
+    def test_result_archive_rejects_sparse_file(self) -> None:
+        req = _make_gate_request()
+        manifest, logs = _make_result_manifest(req)
+        bio = io.BytesIO()
+        with tarfile.open(fileobj=bio, mode="w:") as tar:
+            # manifest.json
+            m_bytes = canonical_json(manifest).encode("utf-8")
+            ti = tarfile.TarInfo(name="manifest.json")
+            ti.size = len(m_bytes)
+            tar.addfile(ti, io.BytesIO(m_bytes))
+            # sparse log
+            ti_sp = tarfile.TarInfo(name="logs/check-compile.log")
+            ti_sp.type = b"S"
+            ti_sp.size = 10
+            tar.addfile(ti_sp, io.BytesIO(b"\0" * 10))
+        data = bio.getvalue()
+        with self.assertRaises(GateContractError) as ctx:
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
+        self.assertIn("Sparse files are forbidden", str(ctx.exception))
+
+    def test_result_archive_rejects_acceptance_mismatch(self) -> None:
+        req = _make_gate_request()
+        manifest, logs = _make_result_manifest(req)
+        data = self._create_result_tar(manifest, logs)
+        wrong_acceptance = dict(manifest["acceptance"])
+        wrong_acceptance["attempt_id"] = "wrong-attempt-id"
+        with self.assertRaises(GateContractError) as ctx:
+            validate_result_archive(io.BytesIO(data), expected_acceptance=wrong_acceptance)
+        self.assertIn("does not match expected acceptance", str(ctx.exception))
+
+    def test_result_archive_rejects_missing_actual_tools_for_passed(self) -> None:
+        req = _make_gate_request()
+        manifest, logs = _make_result_manifest(req)
+        manifest["actual_toolchains"] = []
+        data = self._create_result_tar(manifest, logs)
+        with self.assertRaises(GateContractError) as ctx:
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
+        self.assertIn("actual_toolchains", str(ctx.exception))
+
+    def test_result_archive_rejects_aggregate_log_cap_exceeded(self) -> None:
+        req = _make_gate_request()
+        manifest, logs = _make_result_manifest(req)
+        # Create big logs
+        cid = req["gate"]["check_ids"][0]
+        big_log = b"a" * 2000
+        logs[f"logs/{cid}.log"] = big_log
+        manifest["checks"][0]["log_bytes"] = len(big_log)
+        manifest["checks"][0]["log_sha256"] = hashlib.sha256(big_log).hexdigest()
+        data = self._create_result_tar(manifest, logs)
+        with self.assertRaises(GateContractError) as ctx:
+            validate_result_archive(
+                io.BytesIO(data),
+                expected_acceptance=manifest["acceptance"],
+                bounds={"result_bytes": 100000, "log_bytes": 1000, "result_files": 10},
+            )
+        self.assertIn("exceeds bound", str(ctx.exception))
+
+    def test_result_archive_rejects_unconfirmed_process_release(self) -> None:
+        req = _make_gate_request()
+        manifest, logs = _make_result_manifest(req, outcome="failed", exit_code=1)
+        manifest["process_release"]["confirmed"] = False
+        data = self._create_result_tar(manifest, logs)
+        with self.assertRaises(GateContractError) as ctx:
+            validate_result_archive(io.BytesIO(data), expected_acceptance=manifest["acceptance"])
+        self.assertTrue(
+            "Process release confirmed is required" in str(ctx.exception)
+            or "Expected True at $.process_release.confirmed" in str(ctx.exception)
+        )
+
+    def test_result_archive_rejects_canonical_request_sha_mismatch(self) -> None:
+        req = _make_gate_request()
+        manifest, logs = _make_result_manifest(req)
+        manifest["acceptance"]["request_sha256"] = "0" * 64
+        data = self._create_result_tar(manifest, logs)
+        with self.assertRaises(GateContractError) as ctx:
+            validate_result_archive(
+                io.BytesIO(data),
+                expected_acceptance=manifest["acceptance"],
+                expected_request=req,
+            )
+        self.assertIn("mismatch with canonical request", str(ctx.exception))
 
     def test_cancel_ack_error_schemas(self) -> None:
         cancel = {
