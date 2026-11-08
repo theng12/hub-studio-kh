@@ -20,6 +20,7 @@ import plistlib
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 from components.hub.developer_gate_inventory import (
     collect_developer_gate_inventory,
@@ -280,6 +281,32 @@ class DeveloperGateInventoryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             run_bounded_process(cmd, timeout=2.0, max_bytes=1000)
         self.assertIn("exceeded bound", str(ctx.exception))
+
+    def test_run_bounded_process_closes_owned_pipes(self) -> None:
+        """Owned stdout/stderr pipes close on success and on bound-exceeded failure."""
+        real_popen = subprocess.Popen
+        created = []
+
+        def spy(*args, **kwargs):
+            proc = real_popen(*args, **kwargs)
+            created.append(proc)
+            return proc
+
+        with mock.patch("components.hub.developer_gate_inventory.subprocess.Popen", side_effect=spy):
+            code, stdout, _ = run_bounded_process([sys.executable, "-c", "print('ok')"], timeout=5.0)
+            self.assertEqual(code, 0)
+            self.assertIn(b"ok", stdout)
+            self.assertTrue(created[-1].stdout.closed)
+            self.assertTrue(created[-1].stderr.closed)
+
+            with self.assertRaises(RuntimeError):
+                run_bounded_process(
+                    [sys.executable, "-c", "import sys; sys.stdout.write('A' * 50000)"],
+                    timeout=5.0,
+                    max_bytes=1000,
+                )
+            self.assertTrue(created[-1].stdout.closed)
+            self.assertTrue(created[-1].stderr.closed)
 
     def test_python_probe_uses_isolated_flags(self) -> None:
         """Python probe must execute with -I -B --version for isolated execution."""

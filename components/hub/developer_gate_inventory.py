@@ -101,6 +101,11 @@ def run_bounded_process(
     except Exception:
         _terminate_and_wait(proc)
         raise
+    finally:
+        # Pipes are owned here; close them on every path (success included) to avoid ResourceWarning.
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None and not pipe.closed:
+                pipe.close()
 
 
 def _terminate_and_wait(proc: subprocess.Popen[bytes]) -> None:
