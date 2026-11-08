@@ -228,19 +228,21 @@ class SealedManifestPackagingTests(unittest.TestCase):
                 capture_output=True, text=True)
             self.assertEqual(verify.returncode, 0, verify.stderr)
 
-    def test_readonly_macho_mode_is_restored_after_signing(self):
+    def test_readonly_macho_and_parent_modes_are_restored_after_signing(self):
         for outcome in ('success', 'failure', 'exception'):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temp_dir:
                 app = self._build_real_app(Path(temp_dir))
                 nested = app / 'Contents/Resources/readonly.dylib'
                 shutil.copyfile(SYSTEM_MACHO, nested)
                 nested.chmod(0o555)
+                nested.parent.chmod(0o555)
                 signed = []
 
                 def codesign(command, **kwargs):
                     if '--sign' in command and command[-1] == str(nested):
-                        signed.append(nested.stat().st_mode & 0o7777)
-                        self.assertEqual(signed[-1], 0o755)
+                        signed.append((nested.stat().st_mode & 0o7777,
+                                       nested.parent.stat().st_mode & 0o7777))
+                        self.assertEqual(signed[-1], (0o755, 0o755))
                         if outcome == 'exception':
                             raise OSError('signer unavailable')
                         if outcome == 'failure':
@@ -255,8 +257,10 @@ class SealedManifestPackagingTests(unittest.TestCase):
                     else:
                         with self.assertRaises(OSError if outcome == 'exception' else RuntimeError):
                             self.stage_voice.sign_app(app)
-                self.assertEqual(signed, [0o755])
+                self.assertEqual(signed, [(0o755, 0o755)])
                 self.assertEqual(nested.stat().st_mode & 0o7777, 0o555)
+                self.assertEqual(nested.parent.stat().st_mode & 0o7777, 0o555)
+                nested.parent.chmod(0o755)
 
     def test_copied_executable_authority_is_not_the_app_identity(self):
         """An unsealed app inherits its main executable's Authority; never preserve that."""

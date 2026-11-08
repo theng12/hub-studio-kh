@@ -392,21 +392,25 @@ def sign_app(app: Path) -> None:
     app = Path(app).resolve()
     identity = _signing_identity(app)
     for item in [*_signable_items(app), app]:
-        restore_mode = None
+        restore_modes = []
         if item.is_file() and _is_macho(item):
-            info = item.stat()
-            if info.st_uid == os.getuid() and not info.st_mode & stat.S_IWUSR:
-                restore_mode = stat.S_IMODE(info.st_mode)
-                item.chmod(restore_mode | stat.S_IWUSR)
+            for path in (item, item.parent):
+                if not path.resolve().is_relative_to(app):
+                    continue
+                info = path.stat()
+                if info.st_uid == os.getuid() and not info.st_mode & stat.S_IWUSR:
+                    restore_modes.append((path, stat.S_IMODE(info.st_mode)))
         try:
+            for path, mode in restore_modes:
+                path.chmod(mode | stat.S_IWUSR)
             result = subprocess.run(
                 ['/usr/bin/codesign', '--force', '--sign', identity, '--timestamp=none', str(item)],
                 capture_output=True, text=True)
             if result.returncode:
                 raise RuntimeError(f'codesign failed for {item}: {result.stderr.strip()}')
         finally:
-            if restore_mode is not None:
-                item.chmod(restore_mode)
+            for path, mode in reversed(restore_modes):
+                path.chmod(mode)
     subprocess.run(
         ['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)],
         check=True, capture_output=True, text=True,
