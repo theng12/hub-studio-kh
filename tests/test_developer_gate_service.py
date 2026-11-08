@@ -211,12 +211,12 @@ def fake_runner(**kwargs):
 
 def _preparer(calls, *, release=None, facts=None, raise_exc=None, on_call=None):
     def prepare(tool, *, attempt_root, tools_root, identity_recorder, stage_allowed,
-                preempt_check, resource_safe, deadline_monotonic):
+                preempt_check, resource_safe, deadline_monotonic, limits=None):
         calls.append({"tool_id": tool, "attempt_root": Path(attempt_root),
                       "tools_root": Path(tools_root),
                       "identity_recorder": identity_recorder,
                       "stage_allowed": stage_allowed, "preempt_check": preempt_check,
-                      "resource_safe": resource_safe})
+                      "resource_safe": resource_safe, "limits": dict(limits or {})})
         if on_call is not None:
             on_call(tool)
         if raise_exc is not None:

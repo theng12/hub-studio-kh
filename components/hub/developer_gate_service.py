@@ -779,6 +779,7 @@ class DeveloperGateService:
                     preempt_check=lambda: admission.cancel_requested(attempt_id),
                     resource_safe=lambda: self._resource_safe(request),
                     deadline_monotonic=deadline,
+                    limits=dict(request["requested_limits"]),
                 )
             except Exception as exc:  # noqa: BLE001 - an unproven release keeps the lease
                 raise _ToolPreparationHold(
