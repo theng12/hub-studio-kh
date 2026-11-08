@@ -185,7 +185,7 @@ def reserve(attempt_id: str, *, machine: str = "local",
                                    "app gates require explicit resource_safe proof")
         safe_bool = True
     else:
-        safe_bool = bool(resource_safe)
+        safe_bool = (resource_safe is True) if is_gate else bool(resource_safe)
     from . import broker
     # Broker lock outside, admission lock inside: busy_machines() takes the broker lock (from
     # acquire) and then reads held_machines(), so the reverse order would deadlock.

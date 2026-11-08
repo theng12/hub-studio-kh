@@ -358,6 +358,18 @@ class DeveloperTestAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.code, "resource_unknown")
 
         with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-1", resource_safe="false")
+        self.assertEqual(raised.exception.code, "resource_unknown")
+
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-1", resource_safe=1)
+        self.assertEqual(raised.exception.code, "resource_unknown")
+
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve_app_gate("gate-1", resource_safe=object())
+        self.assertEqual(raised.exception.code, "resource_unknown")
+
+        with self.assertRaises(admission.AdmissionRefused) as raised:
             admission.reserve("gate-1", purpose="app_gate")
         self.assertEqual(raised.exception.code, "resource_unknown")
 
@@ -365,7 +377,24 @@ class DeveloperTestAdmissionTests(unittest.IsolatedAsyncioTestCase):
             admission.reserve("gate-1", purpose="app_gate", resource_safe=False)
         self.assertEqual(raised.exception.code, "resource_unknown")
 
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("gate-1", purpose="app_gate", resource_safe="truthy_str")
+        self.assertEqual(raised.exception.code, "resource_unknown")
+
+        with self.assertRaises(admission.AdmissionRefused) as raised:
+            admission.reserve("gate-1", purpose="app_gate", resource_safe=1)
+        self.assertEqual(raised.exception.code, "resource_unknown")
+
         self.assertEqual(broker._external_machine_leases, {})
+
+    def test_image_truthy_resource_safe_unaffected(self) -> None:
+        owner = admission.reserve("img-truthy-1", resource_safe="truthy")
+        self.assertEqual(owner, "developer-test:img-truthy-1")
+        admission.release("img-truthy-1", confirmed=True)
+
+        owner = admission.reserve("img-truthy-2", resource_safe=1)
+        self.assertEqual(owner, "developer-test:img-truthy-2")
+        admission.release("img-truthy-2", confirmed=True)
 
     def test_app_gate_production_preemption(self) -> None:
         admission.reserve_app_gate("gate-1", resource_safe=True)
