@@ -453,12 +453,13 @@ def stage_chat_shared_modules(resources: Path) -> None:
 
 
 def stage_developer_gate_assets(resources: Path) -> None:
-    """Ship the frozen gate contract and commands fixture at the paths their loaders resolve
-    from `Resources/` (`parents[2]` of the staged Hub modules)."""
+    """Ship the frozen gate contract, commands fixture and official-tools manifest at the paths
+    their loaders resolve from `Resources/` (`parents[2]` of the staged Hub modules)."""
     for relative in (
             'contracts/developer-gate-v1.schema.json',
             'contracts/developer-gate-v1-wire.txt',
-            'packaging/developer-gates/library-portable.commands.json'):
+            'packaging/developer-gates/library-portable.commands.json',
+            'packaging/developer-gates/official-tools.json'):
         target = resources / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative, target)
