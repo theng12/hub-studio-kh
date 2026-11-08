@@ -284,6 +284,11 @@ class OfficialToolPreparer:
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 _refuse(f"Accepted limit {key} is not a positive integer", code="invalid_request")
             accepted[key] = value
+        swap = limits.get("max_system_swap_growth_bytes")
+        if isinstance(swap, bool) or not isinstance(swap, int) or swap < 0:
+            _refuse("Accepted max_system_swap_growth_bytes is not a nonnegative integer",
+                    code="invalid_request")
+        accepted["max_system_swap_growth_bytes"] = swap
         return accepted
 
     def _checkpoint(self, tools_root: Path, stage_allowed: Callable[[], bool],
@@ -334,6 +339,11 @@ class OfficialToolPreparer:
                     code="resource_unknown", status=507)
         if time.monotonic() >= probe_deadline:
             _refuse("Version probe deadline expired before spawn", code="bounds", status=413)
+        try:
+            swap_baseline = int(self._metrics.swap_used_bytes())
+        except Exception as exc:  # noqa: BLE001 - unreadable swap is never a pass
+            _refuse(f"System swap is unreadable before the probe: {exc}",
+                    code="probe_failed", status=500)
         env = gate_runner._build_sanitized_env(attempt_root / "probe-env", {})
         scratch_baseline = gate_runner._measure_dir_bytes(attempt_root)
         argv = [str(executable), *VERSION_ARGV[tool_id]]
@@ -394,6 +404,7 @@ class OfficialToolPreparer:
                 if not resource_safe():
                     _refuse("Version probe resources became unsafe",
                             code="resource_unknown", status=507)
+                self._check_swap(swap_baseline, accepted["max_system_swap_growth_bytes"])
                 try:
                     rss, sampled = self._metrics.tree(process.pid)
                 except Exception as exc:  # noqa: BLE001 - unreadable is never a pass
@@ -437,6 +448,7 @@ class OfficialToolPreparer:
                     > accepted["workspace_bytes"]):
                 _refuse("Owned probe scratch exceeds the accepted workspace bound",
                         code="bounds", status=413)
+            self._check_swap(swap_baseline, accepted["max_system_swap_growth_bytes"])
             stdout = sink.text()
             version, version_line = _parse_version(stdout)
             return {
@@ -469,6 +481,17 @@ class OfficialToolPreparer:
                         pipe.close()
                     except Exception:  # noqa: BLE001
                         pass
+
+    def _check_swap(self, baseline: int, bound: int) -> None:
+        try:
+            used = int(self._metrics.swap_used_bytes())
+        except Exception as exc:  # noqa: BLE001 - unreadable swap is never a pass
+            _refuse(f"System swap became unreadable during the probe: {exc}",
+                    code="probe_failed", status=500)
+        if used - baseline > bound:
+            _refuse(
+                f"System swap grew by {used - baseline} bytes above the accepted {bound}",
+                code="bounds", status=413)
 
     @staticmethod
     def _reap_unknown(process: subprocess.Popen) -> None:

@@ -32,7 +32,25 @@ from components.hub import developer_gate_tools as tools_mod  # noqa: E402
 
 FREE = types.SimpleNamespace(free=50 * 1024**3, total=100 * 1024**3, used=50 * 1024**3)
 LIMITS = {"runtime_seconds": 30, "workspace_bytes": 10_000_000,
-          "max_process_tree_rss_bytes": 1_000_000_000}
+          "max_process_tree_rss_bytes": 1_000_000_000,
+          "max_system_swap_growth_bytes": 64 * 1024**2}
+
+
+class SwapGrowthMetrics(gate_runner.Metrics):
+    """Real identities, but swap grows after the baseline read."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def swap_used_bytes(self) -> int:
+        self.calls += 1
+        return 100 if self.calls == 1 else 200
+
+
+class SwapUnreadableMetrics(gate_runner.Metrics):
+    def swap_used_bytes(self) -> int:
+        raise RuntimeError("injected swap failure")
 
 
 class TreeFailureMetrics(gate_runner.Metrics):
@@ -274,6 +292,19 @@ class OfficialToolPreparerTests(unittest.TestCase):
             with self.assertRaises(tools_mod.OfficialToolError):
                 self.call(self.preparer(),
                           limits={**LIMITS, "workspace_bytes": 1024})
+
+    def test_system_swap_growth_beyond_the_accepted_bound_is_refused(self) -> None:
+        self.use_archive('#!/bin/sh\necho "Python 3.15.0"\n')
+        with self.assertRaises(tools_mod.OfficialToolError):
+            self.call(self.preparer(metrics=SwapGrowthMetrics()),
+                      limits={**LIMITS, "max_system_swap_growth_bytes": 0})
+
+    def test_unreadable_system_swap_fails_closed_before_the_probe(self) -> None:
+        recorded = []
+        with self.assertRaises(tools_mod.OfficialToolError):
+            self.call(self.preparer(metrics=SwapUnreadableMetrics()),
+                      identity_recorder=recorded.append)
+        self.assertEqual(recorded, [])
 
     def test_changed_manifest_is_refused_before_helper(self) -> None:
         preparer = self.preparer()
