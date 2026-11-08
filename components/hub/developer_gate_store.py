@@ -30,7 +30,7 @@ TERMINAL_STATES = frozenset({"passed", "failed", "cancelled", "interrupted", "no
 
 _VALID_TRANSITIONS: dict[str, set[str]] = {
     "waiting_source": {"waiting_source", "waiting_idle", "cancelled", "interrupted", "recovery_hold", "not_run"},
-    "waiting_idle": {"waiting_idle", "preparing_toolchains", "running", "cancelled", "interrupted", "recovery_hold"},
+    "waiting_idle": {"waiting_idle", "preparing_toolchains", "running", "failed", "cancelled", "interrupted", "recovery_hold", "not_run"},
     "preparing_toolchains": {"preparing_toolchains", "waiting_idle", "running", "failed", "cancelled", "interrupted", "recovery_hold"},
     "running": {"running", "collecting", "passed", "failed", "cancelled", "interrupted", "recovery_hold"},
     "collecting": {"collecting", "passed", "failed", "cancelled", "interrupted", "recovery_hold"},
@@ -498,6 +498,26 @@ class DeveloperGateStore:
                 new_rec["resource_release_confirmed"] = bool(resource_release_confirmed)
             new_rec["updated_at"] = utc_now_iso()
 
+            atomic_write_json(self.attempts_dir / f"{attempt_id}.json", new_rec)
+            self._attempts[attempt_id] = new_rec
+            return copy.deepcopy(new_rec)
+
+    def update_metadata(
+        self, attempt_id: str, patch: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Durably merge service-owned attempt metadata before the matching side effect."""
+        if not isinstance(patch, dict):
+            raise GateStoreStateError("metadata patch must be a dict")
+        with self._lock:
+            self._ensure_open()
+            if attempt_id not in self._attempts:
+                raise GateStoreNotFoundError(f"Attempt not found: {attempt_id!r}")
+            rec = self._attempts[attempt_id]
+            new_rec = copy.deepcopy(rec)
+            merged = dict(new_rec.get("metadata") or {})
+            merged.update(copy.deepcopy(patch))
+            new_rec["metadata"] = merged
+            new_rec["updated_at"] = utc_now_iso()
             atomic_write_json(self.attempts_dir / f"{attempt_id}.json", new_rec)
             self._attempts[attempt_id] = new_rec
             return copy.deepcopy(new_rec)

@@ -592,6 +592,22 @@ FLEET_ALLOWED = (
             r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/receipt$"),
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/developer-tests/by-key/"
             r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/log$"),
+    # **App-gate pilot (studio.developer-gate.v1 revision2): exactly seven fixed operations.**
+    # Only the controller's current Fleet header authenticates these; a node credential is
+    # deliberately absent from `NODE_ALLOWED`, and the routes themselves refuse browser,
+    # loopback and node actors. No query, no tool-prepare route, no relay beyond the fixed paths.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/developer-gates/capabilities$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/developer-gates$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/developer-gates/by-key/"
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"),
+    ("PUT", r"^/api/hub/fleet/nodes/[^/]+/developer-gates/by-key/"
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/source$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/developer-gates/by-key/"
+             r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/cancel$"),
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/developer-gates/by-key/"
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/result$"),
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/developer-gates/by-key/"
+             r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/ack$"),
     ("POST", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs$"),
     ("GET", r"^/api/hub/transcription/jobs/[^/]+$"),
