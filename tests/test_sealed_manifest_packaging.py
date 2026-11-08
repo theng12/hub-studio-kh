@@ -2,7 +2,7 @@
 
 Verifies:
   1. Actual Hub manifest producer against the sealed-manifest contract fixture.
-  2. Real Mach-O ad-hoc deep code signing with post-seal sidecar manifest.
+  2. Real Mach-O shared-identity inside-out code signing with post-seal sidecar manifest.
   3. Strict codesign deep verification exits 0 on sealed bundle.
   4. Native Mach-O and CodeResources closure in sidecar manifest.
   5. Tampered Mach-O, CodeResources, or sidecar rejected by validate_stage.
@@ -105,7 +105,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
         return app
 
     def _create_real_signed_app(self, temp_dir: Path) -> Path:
-        """Stage order: deep sign, post-sign payload, manifest, re-sign, sidecar, tree."""
+        """Stage order: sign, post-sign payload, manifest, re-sign, sidecar, tree."""
         app = self._build_real_app(temp_dir)
         contents = app / "Contents"
         exclude = {Path("Resources/release-manifest.json"), Path("_CodeSignature")}
@@ -124,7 +124,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
         return app
 
     def test_payload_sha256_is_postsign_deterministic_and_seal_stays_valid(self):
-        """payload_sha256 is the POST-SIGN digest (Developer 2026-11-07): deep sign, digest
+        """payload_sha256 is the POST-SIGN digest (Developer 2026-11-07): sign, digest
         over signed Contents excluding release-manifest.json and _CodeSignature with
         LC_CODE_SIGNATURE blobs masked, write the manifest, re-sign once; recorded payload
         must equal the final recomputation even though the re-seal rewrites the Mach-O's
@@ -147,7 +147,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
             exclude = {Path("Resources/release-manifest.json"), Path("_CodeSignature")}
             native_before = hashlib.sha256(native.read_bytes()).hexdigest()
 
-            self.stage_voice.sign_app(app)  # initial final deep sign
+            self.stage_voice.sign_app(app)  # initial sign
             native_signed = hashlib.sha256(native.read_bytes()).hexdigest()
             # the seal rewrote the real Mach-O: fake-byte fixtures never exercise this
             self.assertNotEqual(native_before, native_signed)
@@ -205,7 +205,29 @@ class SealedManifestPackagingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.make_dmg.validate_stage(app)
 
-    def test_real_macho_ad_hoc_signing_and_sidecar_closure(self):
+    def test_nested_macho_is_signed_inside_out_with_shared_identity(self):
+        """Nested Mach-O is signed before the outer seal, and signing is never `--deep`."""
+        source = (ROOT / "packaging/stage_voice.py").read_text()
+        self.assertIn("SIGNING_IDENTITY = 'KH Studio Local Signing'", source)
+        self.assertNotIn("'--deep', '--sign'", source)
+
+        with tempfile.TemporaryDirectory(prefix="nested-sign-") as temp_dir:
+            app = self._build_real_app(Path(temp_dir))
+            nested = app / "Contents/Resources/nested.dylib"
+            shutil.copyfile(SYSTEM_MACHO, nested)
+            self.stage_voice.sign_app(app)
+            for path in (nested, app):
+                described = subprocess.run(
+                    ["/usr/bin/codesign", "-d", "--verbose=4", str(path)],
+                    capture_output=True, text=True)
+                self.assertEqual(described.returncode, 0, described.stderr)
+                self.assertIn("Authority=KH Studio Local Signing", described.stderr)
+            verify = subprocess.run(
+                ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
+                capture_output=True, text=True)
+            self.assertEqual(verify.returncode, 0, verify.stderr)
+
+    def test_real_macho_shared_identity_signing_and_sidecar_closure(self):
         """Prove post-seal manifest app strict deep is 0 and every actual signed file indexed."""
         with tempfile.TemporaryDirectory(prefix="macho-seal-test-") as temp_dir:
             app = self._create_real_signed_app(Path(temp_dir))

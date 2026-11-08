@@ -279,13 +279,76 @@ def payload_digest(root: Path, exclude: set[Path] | None = None) -> str:
     return digest.hexdigest()
 
 
+SIGNING_IDENTITY = 'KH Studio Local Signing'
+_MACHO_MAGICS = {
+    b'\xfe\xed\xfa\xce', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xcf\xfa\xed\xfe',
+    b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca', b'\xca\xfe\xba\xbf', b'\xbf\xba\xfe\xca',
+}
+_SIGNABLE_BUNDLES = {'.app', '.appex', '.bundle', '.framework', '.xpc'}
+
+
+def _is_macho(path: Path) -> bool:
+    with path.open('rb') as stream:
+        return stream.read(4) in _MACHO_MAGICS
+
+
+def _existing_real_identity(app: Path) -> str | None:
+    """An app already signed with a real identity keeps it (owner 2026-11-08)."""
+    probe = subprocess.run(
+        ['/usr/bin/codesign', '-d', '--verbose=4', str(app)],
+        capture_output=True, text=True)
+    if probe.returncode:
+        return None
+    for line in probe.stderr.splitlines():
+        if line.startswith('Authority='):
+            authority = line.split('=', 1)[1].strip()
+            if authority and authority != 'adhoc':
+                return authority
+    return None
+
+
+def _signing_identity(app: Path) -> str:
+    identity = _existing_real_identity(app) or SIGNING_IDENTITY
+    if identity != SIGNING_IDENTITY:
+        return identity
+    listed = subprocess.run(
+        ['/usr/bin/security', 'find-identity', '-p', 'codesigning'],
+        capture_output=True, text=True)
+    if SIGNING_IDENTITY not in listed.stdout:
+        raise RuntimeError(
+            f'The shared signing identity {SIGNING_IDENTITY!r} is missing from this Mac\'s login '
+            'keychain. Packaging refuses to fall back to ad-hoc signing; create or import the '
+            'identity in Keychain Access, then stage again.')
+    return identity
+
+
+def _signable_items(app: Path) -> list[Path]:
+    """Nested Mach-O files and code bundles, deepest first, so the outer seal covers signed code."""
+    items = []
+    for path in app.rglob('*'):
+        if path.is_symlink():
+            continue
+        if path.is_dir():
+            if path.suffix in _SIGNABLE_BUNDLES and (
+                    path.suffix == '.framework' or any(
+                        (path / relative).is_file()
+                        for relative in ('Info.plist', 'Contents/Info.plist', 'Resources/Info.plist'))):
+                items.append(path)
+        elif path.is_file() and _is_macho(path):
+            items.append(path)
+    return sorted(items, key=lambda item: (-len(item.parts), item.as_posix()))
+
+
 def sign_app(app: Path) -> None:
-    """Execute deep ad-hoc code sign on the staged .app bundle and verify strictly."""
+    """Sign nested code inside-out, then the app, with the shared stable identity."""
     app = Path(app).resolve()
-    subprocess.run(
-        ['/usr/bin/codesign', '--force', '--deep', '--sign', '-', '--timestamp=none', str(app)],
-        check=True, capture_output=True, text=True,
-    )
+    identity = _signing_identity(app)
+    for item in [*_signable_items(app), app]:
+        result = subprocess.run(
+            ['/usr/bin/codesign', '--force', '--sign', identity, '--timestamp=none', str(item)],
+            capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError(f'codesign failed for {item}: {result.stderr.strip()}')
     subprocess.run(
         ['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)],
         check=True, capture_output=True, text=True,
@@ -1145,7 +1208,7 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         print('NOTE: this Hub build ships no KH Updater agent kit; pass --khu-agent-kit '
               'and --khu-publisher-json to include one.', file=sys.stderr)
     # Developer direction 2026-11-07: payload_sha256 is the POST-SIGN payload digest. The
-    # bundle is deep-signed first; the digest is taken over the signed Contents excluding
+    # bundle is signed inside-out first; the digest is taken over the signed Contents excluding
     # release-manifest.json (it cannot hash itself) and _CodeSignature (the re-sign below
     # regenerates it); the manifest is written and the bundle re-signed once so the seal
     # covers it. Exactly two signs, no loop.
