@@ -241,12 +241,30 @@ class SealedManifestPackagingTests(unittest.TestCase):
             script = app / "Contents/MacOS/StudioHubService"
             script.write_text("#!/bin/sh\nexit 0\n")
             script.chmod(0o755)
-            self.assertIn(script, self.stage_voice._signable_items(app))
+            items = self.stage_voice._signable_items(app)
+            self.assertIn(script, items)
+            self.assertLess(items.index(script), items.index(app / "Contents/MacOS/StudioHub"))
             self.stage_voice.sign_app(app)
             verify = subprocess.run(
                 ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
                 capture_output=True, text=True)
             self.assertEqual(verify.returncode, 0, verify.stderr)
+
+    def test_nested_app_main_is_ordered_after_its_siblings(self):
+        """The same main-last rule applies inside a nested app bundle."""
+        with tempfile.TemporaryDirectory(prefix="nested-order-") as temp_dir:
+            app = self._build_real_app(Path(temp_dir))
+            helper = app / "Contents/Resources/Helper.app"
+            (helper / "Contents/MacOS").mkdir(parents=True)
+            (helper / "Contents/Info.plist").write_text(
+                '<?xml version="1.0"?><plist version="1.0"><dict>'
+                '<key>CFBundleExecutable</key><string>Helper</string></dict></plist>')
+            shutil.copyfile(SYSTEM_MACHO, helper / "Contents/MacOS/Helper")
+            service = helper / "Contents/MacOS/HelperService"
+            service.write_text("#!/bin/sh\nexit 0\n")
+            service.chmod(0o755)
+            items = self.stage_voice._signable_items(app)
+            self.assertLess(items.index(service), items.index(helper / "Contents/MacOS/Helper"))
 
     def test_real_macho_shared_identity_signing_and_sidecar_closure(self):
         """Prove post-seal manifest app strict deep is 0 and every actual signed file indexed."""

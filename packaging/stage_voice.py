@@ -340,8 +340,33 @@ def _signing_identity(app: Path) -> str:
     return identity
 
 
+def _bundle_main_executable(bundle: Path) -> Path | None:
+    for relative in ('Contents/Info.plist', 'Resources/Info.plist', 'Info.plist'):
+        plist = bundle / relative
+        if not plist.is_file():
+            continue
+        try:
+            with plist.open('rb') as stream:
+                name = plistlib.load(stream).get('CFBundleExecutable')
+        except Exception:
+            return None
+        if not name:
+            return None
+        for candidate in (bundle / 'Contents/MacOS' / name,
+                          bundle / 'Versions/Current' / name, bundle / name):
+            if candidate.is_file():
+                return candidate.resolve()
+        return None
+    return None
+
+
 def _signable_items(app: Path) -> list[Path]:
-    """Nested Mach-O files and code bundles, deepest first, so the outer seal covers signed code."""
+    """Nested code deepest first; a bundle's main executable last among its siblings.
+
+    codesign treats a main executable as its enclosing bundle, so signing it before an unsigned
+    sibling fails. The bundle's own sign seals the main last.
+    """
+    bundles = [app]
     items = []
     for path in app.rglob('*'):
         if path.is_symlink():
@@ -351,11 +376,14 @@ def _signable_items(app: Path) -> list[Path]:
                     path.suffix == '.framework' or any(
                         (path / relative).is_file()
                         for relative in ('Info.plist', 'Contents/Info.plist', 'Resources/Info.plist'))):
+                bundles.append(path)
                 items.append(path)
         elif path.is_file():
             if _is_macho(path) or (path.parent.name == 'MacOS' and _is_script(path)):
                 items.append(path)
-    return sorted(items, key=lambda item: (-len(item.parts), item.as_posix()))
+    mains = {main for main in (_bundle_main_executable(bundle) for bundle in bundles) if main}
+    return sorted(items, key=lambda item: (
+        -len(item.parts), item.resolve() in mains, item.as_posix()))
 
 
 def sign_app(app: Path) -> None:
