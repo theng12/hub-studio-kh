@@ -452,12 +452,25 @@ def stage_chat_shared_modules(resources: Path) -> None:
         shutil.copyfile(source, target)
 
 
+def stage_developer_gate_assets(resources: Path) -> None:
+    """Ship the frozen gate contract and commands fixture at the paths their loaders resolve
+    from `Resources/` (`parents[2]` of the staged Hub modules)."""
+    for relative in (
+            'contracts/developer-gate-v1.schema.json',
+            'contracts/developer-gate-v1-wire.txt',
+            'packaging/developer-gates/library-portable.commands.json'):
+        target = resources / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, target)
+
+
 def _stage_hub(context: dict) -> dict | None:
     if not context['include_hub']:
         return None
     resources = context['resources']
     hub = resources / 'components/hub'
     copy_tracked_tree(ROOT / 'components/hub', hub)
+    stage_developer_gate_assets(resources)
     # `Resources/components/*.py` — the shared modules — is already staged by `stage()`, for
     # every bundle, so there is one place that decides what the workers can import.
     copy_model_manifests(resources / 'model-manifests')
