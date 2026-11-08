@@ -141,6 +141,13 @@ def _utcnow() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _exit_and_signal(returncode: int | None) -> tuple[int | None, int | None]:
+    """The command's own exit: a nonnegative code, or null plus the signal that ended it."""
+    if returncode is None:
+        return None, None
+    return (returncode, None) if returncode >= 0 else (None, -returncode)
+
+
 def _measure_dir_bytes(target: Path) -> int:
     total = 0
     try:
@@ -629,7 +636,7 @@ class DeveloperGateRunner:
                 if identity is not None:
                     proof = stop_exact_identity(
                         identity, metrics=self.metrics, clock=self.clock,
-                        grace=self.stop_grace_seconds)
+                        grace=self.stop_grace_seconds, reap=lambda: process.poll())
                     if not proof.confirmed:
                         all_release_confirmed = False
                 else:
@@ -638,15 +645,16 @@ class DeveloperGateRunner:
                 raw_log = sink.body()
                 if auth_code == "production_preempted":
                     overall_outcome = "interrupted"
-                    overall_exit_code = None
                 else:
                     overall_outcome = "failed"
-                    overall_exit_code = 1
+                # The tool never executed, so no command exit exists to report.
+                overall_exit_code = None
+                overall_signal = None
                 overall_reason = {"code": auth_code, "detail": auth_error}
                 checks.append({
                     "id": cid,
                     "outcome": "failed",
-                    "exit_code": 1 if overall_exit_code is not None else None,
+                    "exit_code": None,
                     "duration_seconds": round(max(0.0, self.clock() - cmd_start), 6),
                     "log_sha256": hashlib.sha256(raw_log).hexdigest(),
                     "log_bytes": len(raw_log),
@@ -725,6 +733,7 @@ class DeveloperGateRunner:
                         clock=self.clock,
                         grace=self.stop_grace_seconds,
                         known_pids=list(known.values()),
+                        reap=lambda: process.poll(),
                     )
 
                 process.poll()  # reap a leader that already exited; a zombie has no live group
@@ -746,6 +755,7 @@ class DeveloperGateRunner:
                     clock=self.clock,
                     grace=self.stop_grace_seconds,
                     known_pids=list(known.values()),
+                    reap=lambda: process.poll(),
                 )
 
             drain_thread.join(timeout=5.0)
@@ -773,19 +783,25 @@ class DeveloperGateRunner:
                             f"{disk_floor} after completion")
             raw_log = sink.body()
             duration = max(0.0, self.clock() - cmd_start)
+            exit_code, signal_number = _exit_and_signal(process.poll())
 
             if not proof.confirmed:
                 all_release_confirmed = False
 
-            # Evaluate check outcome
+            # Evaluate check outcome. A check reports the command's own exit: a real
+            # nonnegative code when it finished (including 0 when only the evidence failed),
+            # null plus the terminating signal when it was killed, never a fabricated 1. The
+            # gate-level exit stays null unless a failing command itself returned a positive
+            # code, because the frozen archive rejects every non-passed outcome with exit 0.
             if stop_code == "production_preempted":
                 overall_outcome = "interrupted"
                 overall_exit_code = None
+                overall_signal = signal_number
                 overall_reason = {"code": "production_preempted", "detail": stop_detail or "preempted"}
                 checks.append({
                     "id": cid,
                     "outcome": "failed",
-                    "exit_code": None,
+                    "exit_code": exit_code,
                     "duration_seconds": round(duration, 6),
                     "log_sha256": hashlib.sha256(raw_log).hexdigest(),
                     "log_bytes": len(raw_log),
@@ -793,12 +809,13 @@ class DeveloperGateRunner:
                 })
             elif stop_code is not None:
                 overall_outcome = "failed"
-                overall_exit_code = 1
+                overall_exit_code = None
+                overall_signal = signal_number
                 overall_reason = {"code": stop_code, "detail": stop_detail or "budget violation"}
                 checks.append({
                     "id": cid,
                     "outcome": "failed",
-                    "exit_code": 1,
+                    "exit_code": exit_code,
                     "duration_seconds": round(duration, 6),
                     "log_sha256": hashlib.sha256(raw_log).hexdigest(),
                     "log_bytes": len(raw_log),
@@ -806,13 +823,14 @@ class DeveloperGateRunner:
                 })
             elif not proof.confirmed:
                 overall_outcome = "failed"
-                overall_exit_code = 1
+                overall_exit_code = None
+                overall_signal = signal_number
                 detail = proof.reason.get("detail", "unconfirmed process release") if proof.reason else "unconfirmed"
                 overall_reason = {"code": "release_unknown", "detail": detail}
                 checks.append({
                     "id": cid,
                     "outcome": "failed",
-                    "exit_code": 1,
+                    "exit_code": exit_code,
                     "duration_seconds": round(duration, 6),
                     "log_sha256": hashlib.sha256(raw_log).hexdigest(),
                     "log_bytes": len(raw_log),
@@ -830,16 +848,14 @@ class DeveloperGateRunner:
                 })
             else:
                 rc = process.returncode
-                exit_c = rc if rc >= 0 else None
-                sig = -rc if rc < 0 else None
                 overall_outcome = "failed"
-                overall_exit_code = exit_c if exit_c is not None else 1
-                overall_signal = sig
+                overall_exit_code = exit_code
+                overall_signal = signal_number
                 overall_reason = {"code": "command_failed", "detail": f"command {cid} exited with {rc}"}
                 checks.append({
                     "id": cid,
                     "outcome": "failed",
-                    "exit_code": exit_c,
+                    "exit_code": exit_code,
                     "duration_seconds": round(duration, 6),
                     "log_sha256": hashlib.sha256(raw_log).hexdigest(),
                     "log_bytes": len(raw_log),
@@ -851,7 +867,7 @@ class DeveloperGateRunner:
         # Release confirmation must never false-pass
         if not all_release_confirmed and overall_outcome == "passed":
             overall_outcome = "failed"
-            overall_exit_code = 1
+            overall_exit_code = None
             overall_reason = {"code": "release_unknown", "detail": "process release could not be confirmed"}
 
         process_release = {

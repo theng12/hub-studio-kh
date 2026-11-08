@@ -19,6 +19,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -40,7 +41,33 @@ from components.hub.developer_gate_runner import (
     run_gate,
     validate_trusted_toolchains,
 )
-from components.hub.developer_image_runner import Metrics, ReleaseProof
+from components.hub.developer_image_runner import Metrics, ReleaseProof, stop_exact_identity
+
+_LIBPROC: Any = None
+
+
+def _real_create_time(pid: int) -> float | None:
+    """The process's real start time (what psutil exposes), or None where unsupported.
+
+    0.0 means the pid is gone or is a zombie; the identity check then never matches it. This
+    keeps the fake faithful: a reused pid has a different start time, as in the real Metrics.
+    """
+    global _LIBPROC
+    if _LIBPROC is None:
+        try:
+            import ctypes
+            _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib")
+        except Exception:  # noqa: BLE001 - non-macOS test host keeps the constant fallback
+            _LIBPROC = False
+    if not _LIBPROC:
+        return None
+    import ctypes
+    buffer = ctypes.create_string_buffer(256)
+    if _LIBPROC.proc_pidinfo(pid, 3, 0, buffer, 256) <= 0:  # PROC_PIDTBSDINFO
+        return 0.0
+    sec = ctypes.c_uint64.from_buffer_copy(buffer.raw, 120).value
+    usec = ctypes.c_uint64.from_buffer_copy(buffer.raw, 128).value
+    return float(sec) + usec / 1_000_000.0
 
 
 class FakePsutilProcess:
@@ -49,7 +76,8 @@ class FakePsutilProcess:
         self._ct = ct
 
     def create_time(self) -> float:
-        return self._ct
+        real = _real_create_time(self.pid)
+        return self._ct if real is None else real
 
     def status(self) -> str:
         return "running"
@@ -399,6 +427,188 @@ class TestDeveloperGateRunner(unittest.TestCase):
         self.assertEqual(result.reason["code"], "log_budget")
         self.assertTrue(result.process_release["confirmed"], result.process_release)
         self.assertLessEqual(len(result.check_logs["signing-verifier-unit"]), 1024)
+        # The command's own exit is reported: it finished with 0, or it was killed by the
+        # exact stop. A budget/evidence failure never fabricates a command exit.
+        check = result.checks[0]
+        if check["exit_code"] is None:
+            self.assertEqual(result.termination_signal, 15)
+        else:
+            self.assertEqual(check["exit_code"], 0)
+            self.assertIsNone(result.termination_signal)
+        # The gate failed on evidence, so its own exit is null (the frozen archive rejects a
+        # non-passed outcome with exit 0); the check still reports its observed exit.
+        self.assertIsNone(result.exit_code)
+
+    def test_unreaped_zombie_leader_is_reaped_and_released(self) -> None:
+        # macOS reports an exited, unreaped child as unaddressable (getpgid ESRCH) and its
+        # group as unreadable (killpg EPERM). The exact stop must collect its own child and
+        # still confirm release; the caller's reap callback keeps the real exit status.
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-c", "import time; time.sleep(0.1)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        probed = self.fake_metrics.identity(child.pid)
+        self.assertIsNotNone(probed)
+        identity = {
+            "pid": child.pid,
+            "pgid": os.getpgid(child.pid),
+            "create_time": probed["create_time"],
+        }
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                os.getpgid(child.pid)
+            except ProcessLookupError:
+                break  # exited and unreaped: kill(pid, 0) still succeeds for a zombie
+            if time.monotonic() > deadline:
+                self.fail("toy child did not exit")
+            time.sleep(0.01)
+
+        proof = stop_exact_identity(
+            identity, metrics=self.fake_metrics, clock=time.monotonic, grace=0.5,
+            reap=lambda: child.poll())
+
+        self.assertTrue(proof.confirmed, proof.reason)
+        self.assertEqual(child.returncode, 0)
+
+    def test_unreadable_exit_transition_settles_within_grace(self) -> None:
+        # A leader in its exit transition is briefly unreadable: macOS reports its pid
+        # unaddressable and its group unsignalable before it is reapable. The exact stop
+        # re-verifies over the grace window instead of holding on the first unreadable read.
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-c", "import time; time.sleep(0.1)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        probed = self.fake_metrics.identity(child.pid)
+        self.assertIsNotNone(probed)
+        identity = {
+            "pid": child.pid,
+            "pgid": os.getpgid(child.pid),
+            "create_time": probed["create_time"],
+        }
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                os.getpgid(child.pid)
+            except ProcessLookupError:
+                break
+            if time.monotonic() > deadline:
+                self.fail("toy child did not exit")
+            time.sleep(0.01)
+
+        calls = {"alive": 0, "reap": 0}
+        real_alive = self.fake_metrics.alive
+
+        def unreadable_twice(item):
+            calls["alive"] += 1
+            return None if calls["alive"] <= 2 else real_alive(item)
+
+        def reap_late():
+            calls["reap"] += 1
+            if calls["reap"] > 2:
+                child.poll()
+
+        with mock.patch.object(self.fake_metrics, "alive", side_effect=unreadable_twice):
+            proof = stop_exact_identity(
+                identity, metrics=self.fake_metrics, clock=time.monotonic, grace=1.0,
+                reap=reap_late)
+
+        self.assertTrue(proof.confirmed, proof.reason)
+        self.assertEqual(child.returncode, 0)
+
+    def test_reused_pid_is_never_signalled_or_released(self) -> None:
+        # A recorded identity whose create_time does not match the live pid is a different
+        # process (a reused pid). Its group is not ours: no signal is sent and release holds.
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-c", "import time; time.sleep(10)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        try:
+            probed = self.fake_metrics.identity(child.pid)
+            self.assertIsNotNone(probed)
+            identity = {
+                "pid": child.pid,
+                "pgid": os.getpgid(child.pid),
+                "create_time": probed["create_time"] + 1.0,
+            }
+
+            proof = stop_exact_identity(
+                identity, metrics=self.fake_metrics, clock=time.monotonic, grace=0.2)
+
+            self.assertFalse(proof.confirmed)
+            self.assertEqual(proof.reason["code"], "release_unknown")
+            self.assertIsNone(child.poll())  # the live process was never signalled
+        finally:
+            child.terminate()
+            child.wait(timeout=2)
+
+    def test_budget_stop_reports_killed_command_as_null_exit(self) -> None:
+        self.mock_python.write_text(f"#!{sys.executable}\nimport time; time.sleep(10)\n")
+
+        result = run_gate(
+            workspace_dir=self.ws_dir,
+            source_dir=self.src_dir,
+            trusted_toolchains=self.trusted_tools,
+            stage_allowed=lambda: True,
+            identity_recorder=lambda x: None,
+            limits={"runtime_seconds": 0.2},
+            sample_interval_seconds=0.02,
+            metrics=self.fake_metrics,
+        )
+
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.reason["code"], "runtime_budget")
+        self.assertIsNone(result.exit_code)
+        self.assertEqual(result.termination_signal, 15)
+        self.assertIsNone(result.checks[0]["exit_code"])
+        self.assertTrue(result.process_release["confirmed"], result.process_release)
+
+    def test_signalled_command_reports_null_exit_and_signal(self) -> None:
+        # The observed wait status decides: a signalled command has no exit code and keeps
+        # its real signal; it never becomes 0 or 1.
+        for name, expected in (("SIGTERM", 15), ("SIGKILL", 9)):
+            with self.subTest(signal=name):
+                self.mock_python.write_text(
+                    f"#!{sys.executable}\n"
+                    f"import os, signal\n"
+                    f"os.kill(os.getpid(), signal.{name})\n")
+
+                result = run_gate(
+                    workspace_dir=self.ws_dir,
+                    source_dir=self.src_dir,
+                    trusted_toolchains=self.trusted_tools,
+                    stage_allowed=lambda: True,
+                    identity_recorder=lambda x: None,
+                    sample_interval_seconds=0.02,
+                    metrics=self.fake_metrics,
+                )
+
+                self.assertEqual(result.outcome, "failed")
+                self.assertEqual(result.reason["code"], "command_failed")
+                self.assertIsNone(result.exit_code)
+                self.assertEqual(result.termination_signal, expected)
+                self.assertIsNone(result.checks[0]["exit_code"])
+                self.assertTrue(result.process_release["confirmed"], result.process_release)
+
+    def test_command_failure_keeps_its_actual_exit_code(self) -> None:
+        self.mock_python.write_text(f"#!{sys.executable}\nimport sys; sys.exit(3)\n")
+
+        result = run_gate(
+            workspace_dir=self.ws_dir,
+            source_dir=self.src_dir,
+            trusted_toolchains=self.trusted_tools,
+            stage_allowed=lambda: True,
+            identity_recorder=lambda x: None,
+            sample_interval_seconds=0.02,
+            metrics=self.fake_metrics,
+        )
+
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.reason["code"], "command_failed")
+        self.assertEqual(result.exit_code, 3)
+        self.assertIsNone(result.termination_signal)
+        self.assertEqual(result.checks[0]["exit_code"], 3)
+        self.assertTrue(result.process_release["confirmed"], result.process_release)
 
     def test_split_secret_redacted_across_reads(self) -> None:
         # The shared sink holds a suffix that could start a secret, so a secret split over
@@ -510,6 +720,12 @@ class TestDeveloperGateRunner(unittest.TestCase):
         self.assertEqual(result.outcome, "failed")
         self.assertFalse(result.process_release["confirmed"])
         self.assertEqual(result.reason["code"], "release_unknown")
+        # The command itself finished with 0; only the evidence failed. The check keeps its
+        # observed exit, but the gate-level exit is null (a non-passed 0 is rejected by the
+        # frozen result-archive contract).
+        self.assertEqual(result.checks[0]["exit_code"], 0)
+        self.assertIsNone(result.exit_code)
+        self.assertIsNone(result.termination_signal)
 
     def test_all_six_known_commands_execute_cleanly(self) -> None:
         # Echo unique identifier for each tool invocation
