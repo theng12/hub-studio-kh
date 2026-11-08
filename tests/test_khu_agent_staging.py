@@ -27,7 +27,7 @@ if str(PACKAGING) not in sys.path:
 
 from components.hub.backend import ed25519, khu_agent  # noqa: E402
 from stage_khu_agent import (  # noqa: E402
-    PUBLISHER_FILE, STAGED_FILES, stage_agent_kit, validate_publisher_descriptor,
+    PUBLISHER_FILE, STAGED_FILES, finalize_agent_kit, stage_agent_kit, validate_publisher_descriptor,
     validate_source_kit,
 )
 
@@ -76,6 +76,40 @@ class StagingTests(unittest.TestCase):
         # The round trip: the Hub's installer must accept what the stager produced.
         manifest = khu_agent.verify_kit(result.staged_path, allow_test=False)
         self.assertEqual(set(manifest["files"]), khu_agent.KIT_FILES)
+
+    def test_final_manifest_records_signed_bytes_and_leaves_source_unchanged(self):
+        result = stage_agent_kit(self.resources, self.kit, self.descriptor_path)
+        source = (self.kit / "bin/khu").read_bytes()
+        binary = result.staged_path / "bin/khu"
+        binary.write_bytes(source + b"signed fixture")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            khu_agent.verify_kit(result.staged_path)
+        finalize_agent_kit(result)
+        manifest = khu_agent.verify_kit(result.staged_path)
+        self.assertEqual(manifest["files"]["bin/khu"]["bytes"], binary.stat().st_size)
+        self.assertEqual((self.kit / "bin/khu").read_bytes(), source)
+        binary.write_bytes(binary.read_bytes() + b"tamper")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            khu_agent.verify_kit(result.staged_path)
+
+    def test_finalization_refuses_changed_shape_aliases_and_version(self):
+        result = stage_agent_kit(self.resources, self.kit, self.descriptor_path)
+        extra = result.staged_path / "extra"
+        extra.write_text("unexpected")
+        with self.assertRaisesRegex(ValueError, "unexpected"):
+            finalize_agent_kit(result)
+        extra.unlink()
+        binary = result.staged_path / "bin/khu"
+        data = binary.read_bytes()
+        binary.unlink()
+        binary.symlink_to(self.kit / "bin/khu")
+        with self.assertRaisesRegex(ValueError, "regular file"):
+            finalize_agent_kit(result)
+        binary.unlink()
+        binary.write_bytes(data)
+        (result.staged_path / "VERSION").write_text("9.9.9")
+        with self.assertRaisesRegex(ValueError, "version changed"):
+            finalize_agent_kit(result)
 
     def test_manifest_lists_every_staged_file_with_its_own_bytes(self):
         result = stage_agent_kit(self.resources, self.kit, self.descriptor_path)

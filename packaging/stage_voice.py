@@ -387,11 +387,12 @@ def _signable_items(app: Path) -> list[Path]:
         -len(item.parts), item.resolve() in mains, item.as_posix()))
 
 
-def sign_app(app: Path) -> None:
-    """Sign nested code inside-out, then the app, with the shared stable identity."""
+def sign_app(app: Path, *, nested: bool = True) -> None:
+    """Sign inside-out, or reseal only the outer app after finalizing metadata."""
     app = Path(app).resolve()
     identity = _signing_identity(app)
-    for item in [*_signable_items(app), app]:
+    items = _signable_items(app) if nested else []
+    for item in [*items, app]:
         restore_modes = []
         if item.is_file() and _is_macho(item):
             for path in (item, item.parent):
@@ -1250,8 +1251,9 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     # bundle that carried one without the other could not enrol, and the descriptor is the
     # pinned trust anchor. The staging is recorded on the hub component, so a release that
     # shipped without one says so in its own manifest (and one that shipped one says that too).
+    staged_kit = None
     if include_hub and khu_agent_kit is not None and khu_publisher_json is not None:
-        from stage_khu_agent import stage_agent_kit
+        from stage_khu_agent import finalize_agent_kit, stage_agent_kit
         staged_kit = stage_agent_kit(resources, khu_agent_kit, khu_publisher_json)
         # **Not a top-level component.** A manifest key becomes a runtime the *installed* installer
         # must know (`native/UpdateClient.swift` `verifyDeclaredComponents`), and every Mac in the
@@ -1261,28 +1263,33 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         # which this installer does not know". Adding the name to 0.6.200's own Swift cannot help -
         # the old binary is what validates. The kit therefore rides inside the `hub` component's
         # record, which old installers already accept, and `Resources/khu-agent/` is unchanged.
-        components['hub']['khu_agent'] = {
-            'agent_version': staged_kit.agent_version,
-            'kit_manifest_sha256': hashlib.sha256(
-                staged_kit.manifest_path.read_bytes()).hexdigest(),
-        }
     elif include_hub:
         print('NOTE: this Hub build ships no KH Updater agent kit; pass --khu-agent-kit '
               'and --khu-publisher-json to include one.', file=sys.stderr)
     # Developer direction 2026-11-07: payload_sha256 is the POST-SIGN payload digest. The
     # bundle is signed inside-out first; the digest is taken over the signed Contents excluding
-    # release-manifest.json (it cannot hash itself) and _CodeSignature (the re-sign below
-    # regenerates it); the manifest is written and the bundle re-signed once so the seal
-    # covers it. Exactly two signs, no loop.
+    # release-manifest.json (it cannot hash itself) and _CodeSignature (the reseal below
+    # regenerates it). Nested code is signed once; only the outer app is resealed after
+    # the final kit checksums and release manifest are written.
     # codesign seals release-manifest.json into the principal's CodeDirectory, so the re-seal
     # always rewrites those Mach-O bytes; payload_digest zeroes embedded LC_CODE_SIGNATURE
     # blobs for hashing only (codesign --deep --strict and .tree-sha256 still cover them),
     # which is what makes a recorded payload comparable to the final recomputation at all.
     sign_app(output)
+    if staged_kit is not None:
+        finalize_agent_kit(staged_kit)
+        components['hub']['khu_agent'] = {
+            'agent_version': staged_kit.agent_version,
+            'kit_manifest_sha256': hashlib.sha256(
+                staged_kit.manifest_path.read_bytes()).hexdigest(),
+        }
+        signed_kit_digest = tree_digest(staged_kit.staged_path)
     release['payload_sha256'] = payload_digest(
         contents, exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')})
     (resources / 'release-manifest.json').write_text(json.dumps(release, indent=2) + '\n')
-    sign_app(output)
+    sign_app(output, nested=False)
+    if staged_kit is not None and tree_digest(staged_kit.staged_path) != signed_kit_digest:
+        raise ValueError('outer app reseal changed the finalized agent kit')
     # Stability of the recorded digest across the re-seal is asserted, never assumed: any
     # payload-byte churn outside the signature blobs stops the stage loudly here.
     final_payload = payload_digest(

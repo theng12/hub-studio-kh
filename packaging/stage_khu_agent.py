@@ -134,6 +134,25 @@ def build_manifest(kit_version: str, files: dict[str, tuple[int, str]]) -> dict:
     }
 
 
+def finalize_agent_kit(result: AgentKitStageResult) -> None:
+    """Record final signed bytes in the staged copy, never the supplied source kit."""
+    found = {path.relative_to(result.staged_path).as_posix()
+             for path in result.staged_path.rglob("*")
+             if not path.is_dir() or path.is_symlink()}
+    if found != set(STAGED_FILES) | {"MANIFEST.json"}:
+        raise ValueError("unexpected staged agent kit contents")
+    _regular_file(result.manifest_path, "MANIFEST.json")
+    files = {}
+    for name in STAGED_FILES:
+        _regular_file(result.staged_path / name, name)
+        files[name] = _digest(result.staged_path / name)
+    if (result.staged_path / "VERSION").read_text().strip() != result.agent_version:
+        raise ValueError("staged agent kit version changed")
+    manifest = build_manifest(result.agent_version, files)
+    result.manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                                    encoding="utf-8")
+
+
 def stage_agent_kit(resources: Path, kit: Path, publisher_json: Path, *,
                     allow_test: bool = False) -> AgentKitStageResult:
     """Stage a verified agent kit into ``<resources>/khu-agent``.

@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -31,7 +32,8 @@ SYSTEM_MACHO = Path("/usr/bin/true")
 def load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with mock.patch.dict(sys.modules, {name: mod}):
+        spec.loader.exec_module(mod)
     return mod
 
 
@@ -41,6 +43,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
         cls.stage_voice = load_module("test_stage_voice", ROOT / "packaging/stage_voice.py")
         cls.make_dmg = load_module("test_make_dmg", ROOT / "packaging/make_dmg.py")
         cls.file_manifest = load_module("test_file_manifest", ROOT / "components/hub/backend/file_manifest.py")
+        cls.stage_kit = load_module("test_stage_khu_agent", ROOT / "packaging/stage_khu_agent.py")
 
     def test_actual_producer_against_contract_fixture(self):
         """Hub's actual file_manifest.scan and build match the contract fixture exactly."""
@@ -106,16 +109,43 @@ class SealedManifestPackagingTests(unittest.TestCase):
         return app
 
     def _create_real_signed_app(self, temp_dir: Path) -> Path:
-        """Stage order: sign, post-sign payload, manifest, re-sign, sidecar, tree."""
+        """Exercise real nested kit signing, final checksums and outer-only resealing."""
         app = self._build_real_app(temp_dir)
         contents = app / "Contents"
+        source_kit = temp_dir / "source-kit"
+        (source_kit / "bin").mkdir(parents=True)
+        for name in self.stage_kit._KIT_FILES:
+            target = source_kit / name
+            if name.startswith("bin/"):
+                shutil.copyfile(SYSTEM_MACHO, target)
+            else:
+                target.write_text("0.1.14\n" if name == "VERSION" else "fixture\n")
+        publisher = temp_dir / "publisher.json"
+        publisher.write_text(json.dumps({
+            "feedURL": "http://100.64.0.7:8790/release.json",
+            "enrolURL": "http://100.64.0.7:8790/enrol",
+            "publicKey": base64.b64encode(bytes(range(32))).decode(),
+            "testAuthority": False,
+        }))
+        source_digest = self.stage_voice.tree_digest(source_kit)
+        kit = self.stage_kit.stage_agent_kit(contents / "Resources", source_kit, publisher)
+        initial_manifest = kit.manifest_path.read_bytes()
         exclude = {Path("Resources/release-manifest.json"), Path("_CodeSignature")}
         self.stage_voice.sign_app(app)
+        self.stage_kit.finalize_agent_kit(kit)
+        self.assertNotEqual(initial_manifest, kit.manifest_path.read_bytes())
+        signed_kit = self.stage_voice.tree_digest(kit.staged_path)
         payload = self.stage_voice.payload_digest(contents, exclude=exclude)
         (contents / "Resources/release-manifest.json").write_text(
             json.dumps({"schema": "studiohub.standalone-release",
-                        "payload_sha256": payload}))
-        self.stage_voice.sign_app(app)
+                        "payload_sha256": payload,
+                        "components": {"hub": {"khu_agent": {
+                            "agent_version": kit.agent_version,
+                            "kit_manifest_sha256": hashlib.sha256(
+                                kit.manifest_path.read_bytes()).hexdigest()}}}}))
+        self.stage_voice.sign_app(app, nested=False)
+        self.assertEqual(signed_kit, self.stage_voice.tree_digest(kit.staged_path))
+        self.assertEqual(source_digest, self.stage_voice.tree_digest(source_kit))
         # Recorded-vs-final payload stability asserted on the actual Mach-O, never assumed
         self.assertEqual(payload, self.stage_voice.payload_digest(contents, exclude=exclude))
         self.stage_voice.write_file_manifest(app)
@@ -134,8 +164,13 @@ class SealedManifestPackagingTests(unittest.TestCase):
         first_sign = source.index("sign_app(output)")
         payload_at = source.index("release['payload_sha256']")
         manifest_at = source.index("release-manifest.json').write_text")
-        second_sign = source.index("sign_app(output)", payload_at)
+        second_sign = source.index("sign_app(output, nested=False)", payload_at)
+        finalize_at = source.index("finalize_agent_kit(staged_kit)")
+        binding_at = source.index("components['hub']['khu_agent'] =")
         tree_at = source.index(".tree-sha256').write_text")
+        self.assertLess(first_sign, finalize_at)
+        self.assertLess(finalize_at, binding_at)
+        self.assertLess(binding_at, payload_at)
         self.assertLess(first_sign, payload_at)
         self.assertLess(payload_at, manifest_at)
         self.assertLess(manifest_at, second_sign)
@@ -157,7 +192,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
             (contents / "Resources/release-manifest.json").write_text(
                 json.dumps({"schema": "studiohub.standalone-release",
                             "payload_sha256": payload}))
-            self.stage_voice.sign_app(app)  # re-sign once: seal covers the manifest
+            self.stage_voice.sign_app(app, nested=False)  # outer seal covers the manifest
             native_resent = hashlib.sha256(native.read_bytes()).hexdigest()
             # full re-sign byte determinism is FALSE on a real Mach-O: codesign seals the
             # manifest into the principal's CodeDirectory, so the re-seal churns those bytes
@@ -227,6 +262,20 @@ class SealedManifestPackagingTests(unittest.TestCase):
                 ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
                 capture_output=True, text=True)
             self.assertEqual(verify.returncode, 0, verify.stderr)
+
+    def test_outer_reseal_does_not_sign_nested_code(self):
+        with tempfile.TemporaryDirectory(prefix="outer-reseal-") as temp_dir:
+            app = self._build_real_app(Path(temp_dir))
+            with mock.patch.object(self.stage_voice, "_signing_identity", return_value="fixture"), \
+                    mock.patch.object(self.stage_voice, "_signable_items") as nested, \
+                    mock.patch.object(self.stage_voice.subprocess, "run") as run:
+                run.return_value = subprocess.CompletedProcess([], 0, "", "")
+                self.stage_voice.sign_app(app, nested=False)
+            nested.assert_not_called()
+            self.assertEqual(len(run.call_args_list), 2)
+            self.assertEqual(run.call_args_list[0].args[0][-1], str(app.resolve()))
+            self.assertEqual(run.call_args_list[1].args[0],
+                             ['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app.resolve())])
 
     def test_readonly_macho_and_parent_modes_are_restored_after_signing(self):
         for outcome in ('success', 'failure', 'exception'):
@@ -437,6 +486,25 @@ class SealedManifestPackagingTests(unittest.TestCase):
                     flattened = self.file_manifest.flatten(groups)
                     scanned = self.file_manifest.scan(mounted_app)
                     self.assertEqual(flattened, scanned)
+
+                    # Every kit-listed byte must still match on the final mounted DMG.
+                    from components.hub.backend.khu_agent import verify_kit
+                    kit = mounted_app / "Contents/Resources/khu-agent"
+                    manifest = verify_kit(kit)
+                    self.assertEqual(set(manifest["files"]), set(self.stage_kit.STAGED_FILES))
+                    for name, pin in manifest["files"].items():
+                        data = (kit / name).read_bytes()
+                        self.assertEqual(len(data), pin["bytes"], name)
+                        self.assertEqual(hashlib.sha256(data).hexdigest(), pin["sha256"], name)
+                    release = json.loads((mounted_app / "Contents/Resources/release-manifest.json").read_text())
+                    self.assertEqual(release["components"]["hub"]["khu_agent"]["kit_manifest_sha256"],
+                                     hashlib.sha256((kit / "MANIFEST.json").read_bytes()).hexdigest())
+                    altered = td / "tampered-kit"
+                    shutil.copytree(kit, altered)
+                    binary = altered / "bin/khu"
+                    binary.write_bytes(binary.read_bytes() + b"tamper")
+                    with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                        verify_kit(altered)
                 finally:
                     subprocess.run(["/usr/bin/hdiutil", "detach", str(mount)], capture_output=True)
                     if mount.is_dir():
