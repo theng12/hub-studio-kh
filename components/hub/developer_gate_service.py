@@ -118,7 +118,33 @@ class GateAuthority:
     setting: dict[str, Any] | None = None
     trusted_toolchains: Mapping[str, Any] = field(default_factory=dict)
     actual_toolchains: tuple[dict[str, Any], ...] = ()
+    # Trusted local configuration, never a request field: prepare exact tools, then stop
+    # before any check command because the Library is not ready yet.
+    tools_first_only: bool = False
     reason: dict[str, Any] | None = None
+
+
+class _ToolPreparationHold(Exception):
+    """Preparation may have launched a probe without confirmed release; keep lease and scratch."""
+
+
+class _ToolPreparationMismatch(Exception):
+    """A confirmed preparation returned facts that do not bind the accepted pin."""
+
+    def __init__(self, detail: str, release: dict[str, Any]) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.release = release
+
+
+class _ToolPreparationStop(Exception):
+    """A service-side guard refused the next preparation step; prior probes are released."""
+
+    def __init__(self, code: str, detail: str, release: dict[str, Any] | None = None) -> None:
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+        self.release = release or {}
 
 
 def _now_iso() -> str:
@@ -176,6 +202,8 @@ class DeveloperGateService:
         admission: Any | None = None,
         broker: Any | None = None,
         inventory_provider: Callable[[str, str], dict[str, Any] | None] | None = None,
+        tool_preparer: Callable[..., Any] | None = None,
+        tools_root: str | Path | None = None,
         stop_grace_seconds: float = DEFAULT_STOP_GRACE_SECONDS,
         max_workspace_bytes: int = MAX_WORKSPACE_BYTES,
         max_result_spool_bytes: int = MAX_RESULT_SPOOL_BYTES,
@@ -193,6 +221,8 @@ class DeveloperGateService:
         self._admission = admission
         self._broker = broker
         self._inventory_provider = inventory_provider or self._default_inventory
+        self._tool_preparer = tool_preparer
+        self._tools_root = Path(tools_root) if tools_root is not None else None
         self._stop_grace_seconds = max(0.1, float(stop_grace_seconds))
         self._active_attempt: str | None = None
         self._worker: threading.Thread | None = None
@@ -703,6 +733,95 @@ class DeveloperGateService:
             return total
         return total
 
+    def _prepare_tools(self, attempt_id: str, request: Mapping[str, Any],
+                       admission: Any) -> tuple[dict[str, Any], list[dict[str, Any]],
+                                                dict[str, Any]]:
+        """Prepare every accepted tool pin through the trusted local seam.
+
+        The shared machine lease is already held. Returned facts are checked against the
+        accepted pin and kept for this attempt only; the authority is never mutated.
+        """
+        pins = request["tool_manifest"]["tools"]
+        deadline = time.monotonic() + float(self._authority.bounds["tool_prepare_seconds"])
+        executables: dict[str, Any] = {}
+        facts: list[dict[str, Any]] = []
+        release: dict[str, Any] | None = None
+        for pin in pins:
+            tool_id = str(pin["id"])
+            if time.monotonic() >= deadline:
+                raise _ToolPreparationStop(
+                    "toolchain_timeout", "the tool preparation deadline expired before the next tool",
+                    release)
+            if not admission.stage_allowed(attempt_id):
+                raise _ToolPreparationStop(
+                    "stage_refused", "the machine is no longer allowed to stage this gate", release)
+            if admission.cancel_requested(attempt_id):
+                raise _ToolPreparationStop(
+                    "cancelled", "cancellation was requested before the next tool preparation",
+                    release)
+            if not self._resource_safe(request):
+                raise _ToolPreparationStop(
+                    "resource_unknown",
+                    "fresh disk or memory room could not be established before the next tool",
+                    release)
+            try:
+                self._revalidate(request, self._store.get_attempt_by_id(attempt_id))
+            except GateServiceError as exc:
+                raise _ToolPreparationStop(exc.code, exc.detail, release) from exc
+            try:
+                value = self._tool_preparer(
+                    tool_id,
+                    attempt_root=self._store.get_workspace_path(attempt_id),
+                    tools_root=self._tools_root,
+                    identity_recorder=lambda identity: self._record_identity(
+                        attempt_id, identity),
+                    stage_allowed=lambda: admission.stage_allowed(attempt_id),
+                    preempt_check=lambda: admission.cancel_requested(attempt_id),
+                    resource_safe=lambda: self._resource_safe(request),
+                    deadline_monotonic=deadline,
+                )
+            except Exception as exc:  # noqa: BLE001 - an unproven release keeps the lease
+                raise _ToolPreparationHold(
+                    f"tool preparation for {tool_id} did not confirm process release "
+                    f"({type(exc).__name__}); the lease and scratch are retained") from exc
+            if not isinstance(value, Mapping):
+                raise _ToolPreparationHold(
+                    f"tool preparation for {tool_id} returned no exact facts")
+            prepared_release = value.get("process_release")
+            try:
+                if not isinstance(prepared_release, Mapping):
+                    raise contract.GateContractError("process release is missing")
+                release = dict(prepared_release)
+                contract.validate_schema(release, "processRelease")
+            except contract.GateContractError as exc:
+                raise _ToolPreparationHold(
+                    f"tool preparation for {tool_id} did not confirm process release: {exc}") from exc
+            fact = value.get("actual_toolfacts")
+            executable = value.get("executable")
+            try:
+                if not isinstance(fact, Mapping):
+                    raise contract.GateContractError("actual tool facts are missing")
+                fact = dict(fact)
+                contract.validate_schema(fact, "toolFact")
+            except contract.GateContractError as exc:
+                raise _ToolPreparationMismatch(
+                    f"tool preparation facts for {tool_id} are not schema-valid: {exc}",
+                    release) from exc
+            if (fact.get("id") != tool_id or fact.get("pin") != pin
+                    or fact.get("available") is not True):
+                raise _ToolPreparationMismatch(
+                    f"tool preparation facts for {tool_id} do not bind the accepted pin",
+                    release)
+            if not isinstance(executable, str) or not executable:
+                raise _ToolPreparationMismatch(
+                    f"tool preparation for {tool_id} returned no trusted executable", release)
+            executables[tool_id] = {"available": True, "executable": executable,
+                                    "version": str(pin.get("version"))}
+            facts.append(fact)
+            self._store.update_metadata(attempt_id, {
+                "actual_toolchains": [dict(item) for item in facts]})
+        return executables, facts, release or {}
+
     def _execute(self, attempt_id: str) -> None:
         admission = self._admission_module()
         try:
@@ -732,14 +851,30 @@ class DeveloperGateService:
                 self._settle_without_run(rec, request, "failed",
                                          {"code": exc.code, "detail": exc.detail})
                 return
-            if missing:
-                # No prep route and no guessed installer: refuse before admission or launch.
+            if (self._authority.tools_first_only
+                    and (self._tool_preparer is None or self._tools_root is None)):
+                # Tools-first never trusts a stale ready tool: it needs a fresh probe.
                 self._settle_without_run(
-                    rec, request, "failed",
+                    rec, request, "not_run",
                     {"code": "toolchain_unavailable",
-                     "detail": "trusted packaged tool preparation is unavailable for "
-                               + ", ".join(sorted(set(missing))) + "; no process was launched"})
+                     "detail": "tools-first mode requires fresh trusted preparation, but no "
+                               "preparation provider is configured; no check command was run"})
                 return
+            if self._tool_preparer is None or self._tools_root is None:
+                if missing:
+                    # No trusted preparation seam: settle honestly before any lease or process.
+                    self._settle_without_run(
+                        rec, request, "not_run",
+                        {"code": "toolchain_unavailable",
+                         "detail": "no trusted packaged tool preparation is configured for "
+                                   + ", ".join(sorted(set(missing))) + "; no process was launched"})
+                    return
+                prepared_tools = dict(self._authority.trusted_toolchains)
+                actual_facts: tuple[dict[str, Any], ...] = tuple(
+                    self._authority.actual_toolchains)
+                prep_release: dict[str, Any] = {}
+            # The disk baseline and the one shared machine lease both precede preparation.
+            before = self._disk_sample()
             try:
                 admission.reserve_app_gate(attempt_id, machine="local", resource_safe=True)
             except Exception as exc:  # noqa: BLE001 - admission refusal is a plain reason
@@ -747,14 +882,93 @@ class DeveloperGateService:
                 detail = str(getattr(exc, "detail", "admission was refused before launch"))
                 self._settle_without_run(rec, request, "failed", {"code": code, "detail": detail})
                 return
+            if self._tool_preparer is not None and self._tools_root is not None:
+                try:
+                    prepared_tools, facts, prep_release = self._prepare_tools(
+                        attempt_id, request, admission)
+                except _ToolPreparationMismatch as exc:
+                    rec = self._store.get_attempt_by_id(attempt_id)
+                    self._settle_without_run(
+                        rec, request, "failed",
+                        {"code": "toolchain_mismatch", "detail": exc.detail},
+                        release_admission=True, process_release=exc.release)
+                    return
+                except _ToolPreparationStop as exc:
+                    rec = self._store.get_attempt_by_id(attempt_id)
+                    self._settle_without_run(
+                        rec, request,
+                        "cancelled" if exc.code == "cancelled" else "failed",
+                        {"code": exc.code, "detail": exc.detail},
+                        release_admission=True, process_release=exc.release or None)
+                    return
+                except _ToolPreparationHold as exc:
+                    self._hold(attempt_id, str(exc))
+                    return
+                except Exception:  # noqa: BLE001 - unknown release retains lease and scratch
+                    self._hold(
+                        attempt_id,
+                        "tool preparation did not confirm an exact process release; the "
+                        "physical hold and scratch are retained")
+                    return
+                actual_facts = tuple(facts)
+                if admission.cancel_requested(attempt_id):
+                    self._settle_without_run(
+                        rec, request, "cancelled",
+                        {"code": "cancelled",
+                         "detail": "cancellation was requested before any check command started"},
+                        release_admission=True, process_release=prep_release,
+                        actual_toolchains=actual_facts)
+                    return
+                if self._authority.tools_first_only:
+                    self._settle_without_run(
+                        rec, request, "not_run",
+                        {"code": "library_wait",
+                         "detail": "exact tools are prepared; the gate is waiting for the "
+                                   "Library, so no check command was run"},
+                        release_admission=True, process_release=prep_release,
+                        actual_toolchains=actual_facts, before=before)
+                    return
+            # The service, not the provider, owns the last gate before any check command.
+            if not admission.stage_allowed(attempt_id):
+                self._settle_without_run(
+                    rec, request, "failed",
+                    {"code": "stage_refused",
+                     "detail": "the machine is no longer allowed to stage this gate"},
+                    release_admission=True, process_release=prep_release or None,
+                    actual_toolchains=actual_facts)
+                return
+            if admission.cancel_requested(attempt_id):
+                self._settle_without_run(
+                    rec, request, "cancelled",
+                    {"code": "cancelled",
+                     "detail": "cancellation was requested before any check command started"},
+                    release_admission=True, process_release=prep_release or None,
+                    actual_toolchains=actual_facts)
+                return
+            if not self._resource_safe(request):
+                self._settle_without_run(
+                    rec, request, "failed",
+                    {"code": "resource_unknown",
+                     "detail": "fresh disk or memory room could not be established before the "
+                               "check command"},
+                    release_admission=True, process_release=prep_release or None,
+                    actual_toolchains=actual_facts)
+                return
+            try:
+                self._revalidate(request, rec)
+            except GateServiceError as exc:
+                self._settle_without_run(
+                    rec, request, "failed", {"code": exc.code, "detail": exc.detail},
+                    release_admission=True, process_release=prep_release or None,
+                    actual_toolchains=actual_facts)
+                return
             rec = self._store.update_state(attempt_id, "waiting_idle")
             rec = self._store.update_state(attempt_id, "running")
-            before = self._disk_sample()
             try:
                 result = self._runner(
                     workspace_dir=self._store.get_workspace_path(attempt_id),
                     source_dir=self._store.get_workspace_path(attempt_id) / "source",
-                    trusted_toolchains=self._authority.trusted_toolchains,
+                    trusted_toolchains=prepared_tools,
                     stage_allowed=lambda: admission.stage_allowed(attempt_id),
                     preempt_check=lambda: admission.cancel_requested(attempt_id),
                     identity_recorder=lambda identity: self._record_identity(attempt_id, identity),
@@ -783,7 +997,7 @@ class DeveloperGateService:
                             "detail": "the owned process tree is not confirmed released"})
                 return
             try:
-                self._persist_result(rec, request, result)
+                self._persist_result(rec, request, result, actual_toolchains=actual_facts)
             except Exception:  # noqa: BLE001 - evidence must not be claimed if it cannot be built
                 self._store.update_state(
                     attempt_id, "recovery_hold",
@@ -855,7 +1069,9 @@ class DeveloperGateService:
     def _settle_without_run(self, rec: dict[str, Any], request: dict[str, Any],
                             outcome: str, reason: dict[str, Any], *,
                             release_admission: bool = False,
-                            process_release: dict[str, Any] | None = None) -> None:
+                            process_release: dict[str, Any] | None = None,
+                            actual_toolchains: tuple[dict[str, Any], ...] | None = None,
+                            before: dict[str, Any] | None = None) -> None:
         attempt_id = rec["acceptance"]["attempt_id"]
         release = process_release or {
             "confirmed": True, "observed_at": _now_iso(),
@@ -875,14 +1091,20 @@ class DeveloperGateService:
             process_release=dict(release), started_at=None, finished_at=_now_iso(),
             scope=gate_runner.SCOPE,
             peak_workspace_bytes=self._measure_dir(self._store.workspaces_dir),
-            before=None)
-        self._persist_result(rec, request, result)
+            before=before)
+        self._persist_result(rec, request, result, actual_toolchains=actual_toolchains)
         self._store.update_state(attempt_id, outcome, reason=dict(reason),
                                  resource_release_confirmed=True)
 
     def _persist_result(self, rec: dict[str, Any], request: dict[str, Any],
-                        result: Any) -> dict[str, Any]:
+                        result: Any, *,
+                        actual_toolchains: tuple[dict[str, Any], ...] | None = None,
+                        ) -> dict[str, Any]:
         inventory = self._inventory_value()
+        if actual_toolchains is None:
+            stored = (rec.get("metadata") or {}).get("actual_toolchains")
+            actual_toolchains = tuple(stored) if isinstance(stored, list) else ()
+        facts = actual_toolchains or self._authority.actual_toolchains
         manifest = {
             "format": contract.RESULT_FORMAT,
             "acceptance": copy.deepcopy(rec["acceptance"]),
@@ -890,7 +1112,7 @@ class DeveloperGateService:
             "gate": copy.deepcopy(request["gate"]),
             "source": copy.deepcopy(request["source"]),
             "tool_manifest": copy.deepcopy(request["tool_manifest"]),
-            "actual_toolchains": [copy.deepcopy(item) for item in self._authority.actual_toolchains],
+            "actual_toolchains": [copy.deepcopy(item) for item in facts],
             "outcome": result.outcome,
             "exit_code": result.exit_code,
             "termination_signal": result.termination_signal,
@@ -1105,6 +1327,8 @@ def configure(*, root_dir: str | Path | None = None, authority: GateAuthority | 
               runner: Callable[..., Any] | None = None, metrics: Any | None = None,
               admission: Any | None = None,
               inventory_provider: Callable[[str, str], dict[str, Any] | None] | None = None,
+              tool_preparer: Callable[..., Any] | None = None,
+              tools_root: str | Path | None = None,
               max_workspace_bytes: int = MAX_WORKSPACE_BYTES,
               max_result_spool_bytes: int = MAX_RESULT_SPOOL_BYTES) -> dict[str, Any]:
     """Build the node service. No attempt is read, started or recovered here."""
@@ -1119,6 +1343,7 @@ def configure(*, root_dir: str | Path | None = None, authority: GateAuthority | 
             _SERVICE = DeveloperGateService(
                 root_dir=root_dir, authority=authority, runner=runner, metrics=metrics,
                 admission=admission, inventory_provider=inventory_provider,
+                tool_preparer=tool_preparer, tools_root=tools_root,
                 max_workspace_bytes=max_workspace_bytes,
                 max_result_spool_bytes=max_result_spool_bytes)
             _BLOCK = None

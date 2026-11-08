@@ -209,6 +209,33 @@ def fake_runner(**kwargs):
         peak_workspace_bytes=0, before=None)
 
 
+def _preparer(calls, *, release=None, facts=None, raise_exc=None, on_call=None):
+    def prepare(tool, *, attempt_root, tools_root, identity_recorder, stage_allowed,
+                preempt_check, resource_safe, deadline_monotonic):
+        calls.append({"tool_id": tool, "attempt_root": Path(attempt_root),
+                      "tools_root": Path(tools_root),
+                      "identity_recorder": identity_recorder,
+                      "stage_allowed": stage_allowed, "preempt_check": preempt_check,
+                      "resource_safe": resource_safe})
+        if on_call is not None:
+            on_call(tool)
+        if raise_exc is not None:
+            raise raise_exc
+        identity_recorder({"pid": 4321, "pgid": 4321, "create_time": 9.0})
+        return {
+            "executable": str(Path(tools_root) / "bin" / tool),
+            "actual_toolfacts": dict(facts or {
+                "id": tool, "pin": PIN, "available": True, "observed_at": OBSERVED,
+                "installed_bytes": 1234, "provenance": "owned-toolchain-readback",
+                "reason": None}),
+            "process_release": dict(release or {
+                "confirmed": True, "observed_at": OBSERVED,
+                "owned_processes_remaining": 0,
+                "proof": "owned-process-identities-exited"}),
+        }
+    return prepare
+
+
 class DeveloperGateServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="studiohub-gate-service-")
@@ -224,12 +251,14 @@ class DeveloperGateServiceTests(unittest.TestCase):
         self.disk.start()
         self.addCleanup(self.disk.stop)
 
-    def _service(self, *, authority=None, runner=fake_runner, root_dir=None):
+    def _service(self, *, authority=None, runner=fake_runner, root_dir=None,
+                 tool_preparer=None, tools_root=None):
         authority = authority or _fixture()[0]
         return service_mod.DeveloperGateService(
             root_dir=root_dir or self.temp.name, authority=authority, runner=runner,
             metrics=FakeMetrics(), admission=FakeAdmission(), broker=FakeBroker(),
-            inventory_provider=lambda node, controller: _inventory(node, controller))
+            inventory_provider=lambda node, controller: _inventory(node, controller),
+            tool_preparer=tool_preparer, tools_root=tools_root)
 
     def _wait(self, service, key, states, timeout=5.0):
         deadline = time.monotonic() + timeout
@@ -335,7 +364,7 @@ class DeveloperGateServiceTests(unittest.TestCase):
                        {"credential": "fleet-header"})
         service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
         status = self._wait(service, "key-1", {"failed", "not_run", "recovery_hold"})
-        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["state"], "not_run")
         self.assertEqual(status["reason"]["code"], "toolchain_unavailable")
         self.assertEqual(service._admission.reserved, [])
 
@@ -642,6 +671,221 @@ class DeveloperGateServiceTests(unittest.TestCase):
                 service._persist_result(rec, request, result)
         self.assertEqual(refused.exception.code, "resource_unknown")
         self.assertIn("live free floor", refused.exception.detail)
+
+
+    def test_prep_only_prepares_under_lease_then_settles_not_run_without_checks(self) -> None:
+        authority, request, raw = _fixture()
+        authority = replace(authority, tools_first_only=True)
+        tools_root = tempfile.TemporaryDirectory(prefix="studiohub-tools-")
+        self.addCleanup(tools_root.cleanup)
+        marker = Path(tools_root.name) / "retained.marker"
+        marker.write_text("kept")
+        calls = []
+        lease_seen = []
+        service = None
+
+        def on_call(_tool):
+            lease_seen.append(list(service._admission.reserved))
+
+        service = self._service(
+            authority=authority,
+            runner=lambda **kwargs: self.fail("no check runner in tools-first mode"),
+            tool_preparer=_preparer(calls, on_call=on_call), tools_root=tools_root.name)
+        accepted = service.accept(contract.canonical_json(request).encode(), "key-1",
+                                  CONTROLLER, NODE, {"kind": "fleet"},
+                                  {"credential": "fleet-header"})
+        attempt_id = accepted["acceptance"]["attempt_id"]
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"not_run", "failed", "recovery_hold"})
+        self.assertEqual(status["state"], "not_run")
+        self.assertEqual(status["reason"]["code"], "library_wait")
+        self.assertEqual(lease_seen, [[attempt_id]])
+        self.assertEqual(service._admission.released, [(attempt_id, True)])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["attempt_root"],
+                         service._store.get_workspace_path(attempt_id))
+        self.assertEqual(calls[0]["tools_root"], Path(tools_root.name))
+        self.assertEqual(
+            service._store.get_attempt_by_id(attempt_id)["metadata"]["child_identity"]["pid"],
+            4321)
+        self.assertEqual(service._authority.actual_toolchains, authority.actual_toolchains)
+        path, descriptor = service.result("key-1", CONTROLLER, NODE)
+        with tarfile.open(path, "r") as archive:
+            manifest = json.loads(archive.extractfile("manifest.json").read())
+        self.assertEqual(manifest["checks"], [])
+        self.assertIsNone(manifest["exit_code"])
+        self.assertIsNone(manifest["started_at"])
+        self.assertIsNotNone(manifest["before"])
+        self.assertEqual(manifest["actual_toolchains"][0]["pin"], PIN)
+        rec = service._store.get_attempt_by_id(attempt_id)
+        ack = {"format": contract.ACK_FORMAT, "request_id": "ack-1",
+               "acceptance": rec["acceptance"], "result": descriptor}
+        acked = service.ack("key-1", contract.canonical_json(ack).encode(),
+                            CONTROLLER, NODE)
+        self.assertTrue(acked["workspace_removed"])
+        self.assertTrue(marker.is_file())
+        self.assertTrue(Path(tools_root.name).is_dir())
+
+    def test_admission_refusal_prepares_and_runs_nothing(self) -> None:
+        authority, request, raw = _fixture()
+        calls = []
+
+        class Busy(Exception):
+            code = "busy"
+            detail = "the machine lease is held elsewhere"
+
+        def refuse(attempt_id, *, machine="local", resource_safe=None):
+            raise Busy()
+
+        service = self._service(
+            authority=authority,
+            runner=lambda **kwargs: self.fail("no runner after admission refusal"),
+            tool_preparer=_preparer(calls), tools_root=self.temp.name)
+        service._admission.reserve_app_gate = refuse
+        service.accept(contract.canonical_json(request).encode(), "key-1",
+                       CONTROLLER, NODE, {"kind": "fleet"},
+                       {"credential": "fleet-header"})
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"failed", "not_run", "recovery_hold"})
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["reason"]["code"], "busy")
+        self.assertEqual(calls, [])
+        self.assertEqual(service._admission.released, [])
+
+    def test_preparation_is_not_entered_when_revalidation_fails(self) -> None:
+        authority, request, raw = _fixture()
+        calls = []
+        service = self._service(authority=authority, tool_preparer=_preparer(calls),
+                                tools_root=self.temp.name)
+        service.accept(contract.canonical_json(request).encode(), "key-1",
+                       CONTROLLER, NODE, {"kind": "fleet"},
+                       {"credential": "fleet-header"})
+        policy = dict(authority.policy)
+        policy["revision"] = "pol-rev-2"
+        service._authority = replace(authority, policy=policy)
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"failed", "recovery_hold", "not_run"})
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["reason"]["code"], "conflict")
+        self.assertEqual(calls, [])
+        self.assertEqual(service._admission.reserved, [])
+
+    def test_normal_gate_uses_prepared_executable_and_actual_facts(self) -> None:
+        authority, request, raw = _fixture()
+        calls = []
+        seen = {}
+
+        def runner(**kwargs):
+            seen.update(kwargs)
+            return fake_runner(**kwargs)
+
+        tools_root = tempfile.TemporaryDirectory(prefix="studiohub-tools-")
+        self.addCleanup(tools_root.cleanup)
+        service = self._service(authority=authority, runner=runner,
+                                tool_preparer=_preparer(calls), tools_root=tools_root.name)
+        service.accept(contract.canonical_json(request).encode(), "key-1",
+                       CONTROLLER, NODE, {"kind": "fleet"},
+                       {"credential": "fleet-header"})
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"passed", "failed", "not_run", "recovery_hold"})
+        self.assertEqual(status["state"], "passed")
+        self.assertEqual(seen["trusted_toolchains"]["python"]["executable"],
+                         str(Path(tools_root.name) / "bin" / "python"))
+        path, _descriptor = service.result("key-1", CONTROLLER, NODE)
+        with tarfile.open(path, "r") as archive:
+            manifest = json.loads(archive.extractfile("manifest.json").read())
+        self.assertEqual(manifest["actual_toolchains"][0]["pin"], PIN)
+        self.assertEqual(service._authority.actual_toolchains, authority.actual_toolchains)
+
+    def test_preparation_cancel_or_unknown_release_retains_lease_and_scratch(self) -> None:
+        authority, request, raw = _fixture()
+        cases = (
+            ("cancel", _preparer([], raise_exc=RuntimeError("cancelled during probe"))),
+            ("unknown", _preparer([], release={
+                "confirmed": False, "observed_at": OBSERVED,
+                "owned_processes_remaining": 1,
+                "proof": "owned-process-identities-exited"})),
+        )
+        for label, preparer in cases:
+            with self.subTest(label):
+                root = tempfile.TemporaryDirectory(prefix=f"studiohub-gate-{label}-")
+                self.addCleanup(root.cleanup)
+                service = self._service(
+                    authority=authority,
+                    runner=lambda **kwargs: self.fail("no runner after unproven prep"),
+                    tool_preparer=preparer, root_dir=root.name, tools_root=root.name)
+                key = f"key-{label}"
+                accepted = service.accept(contract.canonical_json(request).encode(), key,
+                                          CONTROLLER, NODE, {"kind": "fleet"},
+                                          {"credential": "fleet-header"})
+                attempt_id = accepted["acceptance"]["attempt_id"]
+                service.source(key, io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+                status = self._wait(service, key, {"recovery_hold", "failed", "not_run"})
+                self.assertEqual(status["state"], "recovery_hold")
+                self.assertEqual(service._admission.reserved, [attempt_id])
+                self.assertEqual(service._admission.released, [])
+                self.assertTrue(service._store.get_workspace_path(attempt_id).is_dir())
+
+    def test_preparation_facts_must_bind_the_accepted_pin(self) -> None:
+        authority, request, raw = _fixture()
+        calls = []
+        service = self._service(
+            authority=authority,
+            runner=lambda **kwargs: self.fail("no runner after pin mismatch"),
+            tool_preparer=_preparer(calls, facts={
+                "id": "python", "pin": dict(PIN, version="3.12.0"), "available": True,
+                "observed_at": OBSERVED, "installed_bytes": 1234,
+                "provenance": "owned-toolchain-readback", "reason": None}),
+            tools_root=self.temp.name)
+        accepted = service.accept(contract.canonical_json(request).encode(), "key-1",
+                                  CONTROLLER, NODE, {"kind": "fleet"},
+                                  {"credential": "fleet-header"})
+        attempt_id = accepted["acceptance"]["attempt_id"]
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"failed", "not_run", "recovery_hold"})
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["reason"]["code"], "toolchain_mismatch")
+        self.assertEqual(service._admission.reserved, [attempt_id])
+        self.assertEqual(service._admission.released, [(attempt_id, True)])
+
+
+    def test_tools_first_requires_a_provider_even_when_tools_are_ready(self) -> None:
+        authority, request, raw = _fixture()
+        authority = replace(authority, tools_first_only=True)
+        service = self._service(
+            authority=authority,
+            runner=lambda **kwargs: self.fail("no check runner without a provider"))
+        service.accept(contract.canonical_json(request).encode(), "key-1",
+                       CONTROLLER, NODE, {"kind": "fleet"},
+                       {"credential": "fleet-header"})
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"not_run", "failed", "recovery_hold"})
+        self.assertEqual(status["state"], "not_run")
+        self.assertEqual(status["reason"]["code"], "toolchain_unavailable")
+        self.assertEqual(service._admission.reserved, [])
+
+    def test_service_rechecks_resources_after_preparation_before_the_runner(self) -> None:
+        authority, request, raw = _fixture()
+        calls = []
+        service = None
+
+        def on_call(_tool):
+            service._metrics = types.SimpleNamespace(available_bytes=lambda: 0)
+
+        service = self._service(
+            authority=authority,
+            runner=lambda **kwargs: self.fail("no runner when resources are gone"),
+            tool_preparer=_preparer(calls, on_call=on_call), tools_root=self.temp.name)
+        accepted = service.accept(contract.canonical_json(request).encode(), "key-1",
+                                  CONTROLLER, NODE, {"kind": "fleet"},
+                                  {"credential": "fleet-header"})
+        attempt_id = accepted["acceptance"]["attempt_id"]
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"failed", "not_run", "recovery_hold"})
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["reason"]["code"], "resource_unknown")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(service._admission.released, [(attempt_id, True)])
 
 
 if __name__ == "__main__":

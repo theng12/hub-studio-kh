@@ -31,7 +31,7 @@ TERMINAL_STATES = frozenset({"passed", "failed", "cancelled", "interrupted", "no
 _VALID_TRANSITIONS: dict[str, set[str]] = {
     "waiting_source": {"waiting_source", "waiting_idle", "cancelled", "interrupted", "recovery_hold", "not_run"},
     "waiting_idle": {"waiting_idle", "preparing_toolchains", "running", "failed", "cancelled", "interrupted", "recovery_hold", "not_run"},
-    "preparing_toolchains": {"preparing_toolchains", "waiting_idle", "running", "failed", "cancelled", "interrupted", "recovery_hold"},
+    "preparing_toolchains": {"preparing_toolchains", "waiting_idle", "running", "failed", "cancelled", "interrupted", "recovery_hold", "not_run"},
     "running": {"running", "collecting", "passed", "failed", "cancelled", "interrupted", "recovery_hold"},
     "collecting": {"collecting", "passed", "failed", "cancelled", "interrupted", "recovery_hold"},
     "passed": {"passed"},
