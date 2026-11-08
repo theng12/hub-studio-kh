@@ -970,6 +970,23 @@ def _signal_group(pgid: int, signum: int) -> None:
         pass
 
 
+def _signal_pid(pid: int, signum: int) -> None:
+    try:
+        os.kill(pid, signum)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _stop_sampled_descendants(checked: list[dict], leader: dict,
+                              state: Callable[[dict], bool | None]) -> None:
+    """SIGKILL only sampled identities verified alive; never signals the group."""
+    for item in checked:
+        if item is leader:
+            continue
+        if state(item) is True:
+            _signal_pid(int(item["pid"]), signal.SIGKILL)
+
+
 def _effective_sample_interval_ms(configured: int, max_runtime: float) -> int:
     """The real interval: never below 250 ms, and small enough for 4000 samples."""
     return max(int(configured), 250, int(math.ceil(max_runtime * 1000 / 4000)))
@@ -1053,8 +1070,10 @@ def stop_exact_identity(identity: dict | None, *, metrics: Metrics,
     """The one stop primitive: exact pid+create_time leader, its process group, its descendants.
 
     A guessed or reused pid is never signalled: an identity without a verified positive
-    create_time sends no signal and never confirms release. Release is confirmed only when the
-    leader, the process group and every sampled descendant are verified gone. An exited but
+    create_time sends no signal and never confirms release. Once the leader is verified gone,
+    its pgid may be reused, so only sampled descendants still verified alive are signalled
+    individually. Release is confirmed only when the leader, the process group and every
+    sampled descendant are verified gone. An exited but
     unreaped child is collected before each check, because macOS reports its zombie pid as
     unaddressable (getpgid ESRCH) and its group as unreadable (killpg EPERM). A caller that owns
     a Popen passes ``reap`` so its exit status survives; the default uses WNOHANG.
@@ -1104,6 +1123,16 @@ def stop_exact_identity(identity: dict | None, *, metrics: Metrics,
         # Only a verified-dead leader plus a verified-empty group is a release. An unreadable
         # leader or a live group we cannot attribute is not proof, so no signal is guessed.
         confirmed = gone()
+        if not confirmed and leader_state is False:
+            # The leader already exited; its pgid may be reused, so stop only sampled
+            # descendants still verified alive, then recheck once over a bounded window.
+            _stop_sampled_descendants(checked, leader, state)
+            deadline = clock() + 2.0
+            while not confirmed and clock() < deadline:
+                collect()
+                confirmed = gone()
+                if not confirmed:
+                    time.sleep(0.05)
         if not confirmed and _group_alive(pgid) is None:
             # A leader in its exit transition can be briefly unreadable (macOS reports its pid
             # unaddressable and its group unsignalable before it is reapable). Re-verify over
@@ -1116,7 +1145,8 @@ def stop_exact_identity(identity: dict | None, *, metrics: Metrics,
             "code": "release_unknown",
             "detail": (f"owned process group {pgid} cannot be verified as this attempt's "
                        f"(leader_alive={leader_state}, group_alive={_group_alive(pgid)})")}
-        return ReleaseProof(confirmed, _utcnow() if confirmed else None, reason, 0.0, checked)
+        return ReleaseProof(confirmed, _utcnow() if confirmed else None, reason,
+                            max(0.0, clock() - started), checked)
     try:
         live_pgid = os.getpgid(pid)
     except ProcessLookupError:
@@ -1140,8 +1170,20 @@ def stop_exact_identity(identity: dict | None, *, metrics: Metrics,
         if gone():
             break
         time.sleep(0.05)
-    if not gone() and state(leader) is not False:
-        _signal_group(pgid, signal.SIGKILL)
+    if not gone():
+        leader_state = state(leader)
+        if leader_state is True:
+            try:
+                live_pgid = os.getpgid(pid)
+            except ProcessLookupError:
+                live_pgid = None
+            except Exception:  # noqa: BLE001 - unreadable is not a verified group
+                live_pgid = -1
+            if live_pgid == pgid:
+                _signal_group(pgid, signal.SIGKILL)
+        elif leader_state is False:
+            _stop_sampled_descendants(checked, leader, state)
+        # An unknown leader never justifies a group signal: the pgid may be reused.
         deadline = clock() + 2.0
         while clock() < deadline:
             collect()

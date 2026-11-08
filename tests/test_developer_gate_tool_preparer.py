@@ -11,7 +11,6 @@ import hashlib
 import io
 import json
 import os
-import signal
 import sys
 import tarfile
 import tempfile
@@ -256,19 +255,41 @@ class OfficialToolPreparerTests(unittest.TestCase):
         with self.assertRaises(tools_mod.OfficialToolError):
             self.call(self.preparer(metrics=TreeFailureMetrics()))
 
-    def test_sampled_descendant_outliving_the_leader_is_never_claimed(self) -> None:
+    def test_sampled_descendant_outliving_the_leader_is_stopped(self) -> None:
+        # The sampled background child outlives the leader. The exact sampled-descendant stop
+        # now verifies it gone, so the probe releases instead of being refused.
         self.use_archive('#!/bin/sh\nsleep 1 &\nsleep 0.5\necho "Python 3.15.0"\n')
         recorded = []
-        try:
-            with self.assertRaises(tools_mod.OfficialToolError):
-                self.call(self.preparer(), identity_recorder=recorded.append)
-            self.assertEqual(len(recorded), 1)
-        finally:
-            if recorded:
-                try:
-                    os.killpg(recorded[0]["pgid"], signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+        sampled = []
+        real_stop = gate_runner.stop_exact_identity
+
+        def stop(*args, **kwargs):
+            sampled.extend(kwargs.get("known_pids") or [])
+            return real_stop(*args, **kwargs)
+
+        with mock.patch.object(preparer_mod.gate_runner, "stop_exact_identity",
+                               side_effect=stop):
+            result = self.call(self.preparer(), identity_recorder=recorded.append)
+
+        self.assertTrue(result["actual_toolfacts"]["available"])
+        self.assertTrue(result["process_release"]["confirmed"])
+        self.assertEqual(result["process_release"]["owned_processes_remaining"], 0)
+        self.assertEqual(len(recorded), 1)
+        descendants = [item for item in sampled if int(item["pid"]) != recorded[0]["pid"]]
+        self.assertTrue(descendants)  # the background child was sampled before the exit
+        for item in descendants:
+            self.assertIs(self.metrics.alive(item), False)
+
+    def test_unconfirmed_probe_release_is_refused(self) -> None:
+        # An unknown release is never claimed: the adapter still refuses.
+        self.use_archive('#!/bin/sh\necho "Python 3.15.0"\n')
+        unknown = gate_runner.ReleaseProof(
+            False, None, {"code": "release_unknown", "detail": "injected hold"}, 0.0, [])
+        with mock.patch.object(preparer_mod.gate_runner, "stop_exact_identity",
+                               return_value=unknown):
+            with self.assertRaises(tools_mod.OfficialToolError) as ctx:
+                self.call(self.preparer())
+        self.assertEqual(ctx.exception.code, "probe_release_unknown")
 
     def test_accepted_runtime_bound_stops_the_probe(self) -> None:
         self.use_archive('#!/bin/sh\nsleep 2\necho "Python 3.15.0"\n')

@@ -31,7 +31,7 @@ ASSETS = {
     "packaging/developer-gates/library-portable.gate.json":
         "a52e426b6863611cec2821a7632ccbcbf11bbd74e1565b8f562cece6dacda2de",
     "packaging/developer-gates/library-portable.registry.json":
-        "7d0c686457d44ad97d69b3a8b4596547f3da18544f1a2976935977a0711d5858",
+        "832c6b986713ba04e43a14c9b161f34918018900867664b2e3469cad1f980197",
     "packaging/developer-gates/library-portable.dependency-manifest.json":
         "834672b41e83673892b7b9d5dc81d4e21066e39795bbf9ee10e9d52c0db74f23",
     "packaging/developer-gates/official-tools.json":

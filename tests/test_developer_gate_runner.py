@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -42,6 +43,7 @@ from components.hub.developer_gate_runner import (
     validate_trusted_toolchains,
 )
 from components.hub.developer_image_runner import Metrics, ReleaseProof, stop_exact_identity
+import components.hub.developer_image_runner as image_runner
 
 _LIBPROC: Any = None
 
@@ -541,6 +543,226 @@ class TestDeveloperGateRunner(unittest.TestCase):
         finally:
             child.terminate()
             child.wait(timeout=2)
+
+    def _spawn_leader_with_ignoring_descendant(self) -> tuple[subprocess.Popen, int]:
+        """A toy leader in its own session whose child ignores SIGTERM in the same group."""
+        pid_file = self.root / "descendant.pid"
+        script = self.root / "toy_leader.py"
+        script.write_text(
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, '-I', '-B', '-c', "
+            "'import os, signal, sys, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "open(sys.argv[1], \"w\").write(str(os.getpid())); time.sleep(60)', sys.argv[1]])\n"
+            "time.sleep(60)\n")
+        leader = subprocess.Popen(
+            [sys.executable, "-I", "-B", str(script), str(pid_file)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        try:
+            deadline = time.monotonic() + 10.0
+            while True:
+                try:
+                    return leader, int(pid_file.read_text())
+                except (OSError, ValueError):
+                    if time.monotonic() > deadline:
+                        self.fail("toy leader did not report its descendant pid")
+                    time.sleep(0.02)
+        except BaseException:
+            leader.kill()
+            leader.wait(timeout=2)
+            raise
+
+    def _stop_identity(self, leader: subprocess.Popen, known_pids, metrics: Metrics,
+                       grace: float) -> ReleaseProof:
+        leader_identity = metrics.identity(leader.pid)
+        self.assertIsNotNone(leader_identity)
+        identity = {"pid": leader.pid, "pgid": os.getpgid(leader.pid),
+                    "create_time": leader_identity["create_time"]}
+        return stop_exact_identity(
+            identity, metrics=metrics, clock=time.monotonic, grace=grace,
+            known_pids=known_pids, reap=lambda: leader.poll())
+
+    def test_leader_gone_ignoring_descendant_is_signalled_and_released(self) -> None:
+        # The leader exits on SIGTERM while its sampled child ignores it. The group pgid may
+        # be reused, so the exact stop must kill the verified child individually and confirm.
+        metrics = Metrics()
+        leader, descendant_pid = self._spawn_leader_with_ignoring_descendant()
+        descendant = None
+        try:
+            descendant = metrics.identity(descendant_pid)
+            self.assertIsNotNone(descendant)
+            proof = self._stop_identity(leader, [descendant], metrics, grace=1.0)
+
+            self.assertTrue(proof.confirmed, proof.reason)
+            self.assertEqual(leader.returncode, -signal.SIGTERM)
+            self.assertIs(metrics.alive(descendant), False)
+        finally:
+            if descendant is not None and metrics.alive(descendant) is True:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if leader.poll() is None:
+                leader.kill()
+            leader.wait(timeout=2)
+
+    def test_unkillable_descendant_holds_and_expires_within_bound(self) -> None:
+        # A descendant that ignores SIGTERM and cannot be killed is never false-released;
+        # the bounded recheck expires and the proof holds.
+        metrics = Metrics()
+        leader, descendant_pid = self._spawn_leader_with_ignoring_descendant()
+        descendant = None
+        try:
+            descendant = metrics.identity(descendant_pid)
+            self.assertIsNotNone(descendant)
+            started = time.monotonic()
+            with mock.patch("components.hub.developer_image_runner._signal_pid"):
+                proof = self._stop_identity(leader, [descendant], metrics, grace=0.2)
+            elapsed = time.monotonic() - started
+
+            self.assertFalse(proof.confirmed)
+            self.assertEqual(proof.reason["code"], "release_unknown")
+            self.assertLess(elapsed, 5.0)
+            self.assertIs(metrics.alive(descendant), True)
+        finally:
+            if descendant is not None and metrics.alive(descendant) is True:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if leader.poll() is None:
+                leader.kill()
+            leader.wait(timeout=2)
+
+    def test_reused_known_descendant_is_never_signalled(self) -> None:
+        # A sampled id whose create_time does not match the live pid is a reused pid: it is
+        # not ours, so it is never signalled and does not block release.
+        metrics = Metrics()
+        other = subprocess.Popen(
+            [sys.executable, "-I", "-B", "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        leader = subprocess.Popen(
+            [sys.executable, "-I", "-B", "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        try:
+            other_identity = metrics.identity(other.pid)
+            self.assertIsNotNone(other_identity)
+            reused = {"pid": other.pid, "create_time": other_identity["create_time"] + 1.0}
+            proof = self._stop_identity(leader, [reused], metrics, grace=0.5)
+
+            self.assertTrue(proof.confirmed, proof.reason)
+            self.assertIsNone(other.poll())  # the unrelated live process was not signalled
+        finally:
+            other.kill()
+            other.wait(timeout=2)
+            leader.kill()
+            leader.wait(timeout=2)
+
+    def test_unreadable_known_descendant_holds_without_signal(self) -> None:
+        # A sampled id with no verified create_time is unknown, never release proof: it is
+        # not signalled and the proof holds.
+        metrics = Metrics()
+        other = subprocess.Popen(
+            [sys.executable, "-I", "-B", "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        leader = subprocess.Popen(
+            [sys.executable, "-I", "-B", "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        try:
+            unreadable = {"pid": other.pid, "create_time": 0.0}
+            proof = self._stop_identity(leader, [unreadable], metrics, grace=0.2)
+
+            self.assertFalse(proof.confirmed)
+            self.assertEqual(proof.reason["code"], "release_unknown")
+            self.assertIsNone(other.poll())  # the unrelated live process was not signalled
+        finally:
+            other.kill()
+            other.wait(timeout=2)
+            leader.kill()
+            leader.wait(timeout=2)
+
+    def test_unknown_leader_at_escalation_never_signals_group(self) -> None:
+        # The leader becomes unreadable after SIGTERM. An unknown leader is never a reason to
+        # SIGKILL the group (its pgid may be reused); the proof holds without a guessed signal.
+        metrics = Metrics()
+        leader, descendant_pid = self._spawn_leader_with_ignoring_descendant()
+        descendant = None
+        try:
+            descendant = metrics.identity(descendant_pid)
+            self.assertIsNotNone(descendant)
+            real_alive = metrics.alive
+            leader_calls = {"count": 0}
+
+            def alive(item):
+                if int(item.get("pid", -1)) == leader.pid:
+                    leader_calls["count"] += 1
+                    if leader_calls["count"] > 1:
+                        return None
+                return real_alive(item)
+
+            signals = []
+            real_group = image_runner._signal_group
+
+            def group(pgid, signum):
+                signals.append(signum)
+                real_group(pgid, signum)
+
+            with mock.patch.object(metrics, "alive", side_effect=alive), \
+                    mock.patch("components.hub.developer_image_runner._signal_group",
+                               side_effect=group):
+                proof = self._stop_identity(leader, [descendant], metrics, grace=0.2)
+
+            self.assertFalse(proof.confirmed)
+            self.assertEqual(proof.reason["code"], "release_unknown")
+            self.assertEqual(signals, [signal.SIGTERM])
+            self.assertIs(metrics.alive(descendant), True)
+        finally:
+            if descendant is not None and metrics.alive(descendant) is True:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if leader.poll() is None:
+                leader.kill()
+            leader.wait(timeout=2)
+
+    def test_already_gone_leader_stops_sampled_descendant(self) -> None:
+        # Recovery sees a leader that already exited while its orphaned sampled child ignores
+        # SIGTERM. The exact stop kills only that verified child and confirms release.
+        metrics = Metrics()
+        leader, descendant_pid = self._spawn_leader_with_ignoring_descendant()
+        descendant = None
+        try:
+            leader_identity = metrics.identity(leader.pid)
+            descendant = metrics.identity(descendant_pid)
+            self.assertIsNotNone(leader_identity)
+            self.assertIsNotNone(descendant)
+            identity = {"pid": leader.pid, "pgid": os.getpgid(leader.pid),
+                        "create_time": leader_identity["create_time"]}
+            leader.kill()
+            leader.wait(timeout=2)
+
+            proof = stop_exact_identity(
+                identity, metrics=metrics, clock=time.monotonic, grace=0.2,
+                known_pids=[descendant], reap=lambda: leader.poll())
+
+            self.assertTrue(proof.confirmed, proof.reason)
+            self.assertGreater(proof.latency_seconds, 0.0)
+            self.assertIs(metrics.alive(descendant), False)
+        finally:
+            if descendant is not None and metrics.alive(descendant) is True:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if leader.poll() is None:
+                leader.kill()
+            leader.wait(timeout=2)
 
     def test_budget_stop_reports_killed_command_as_null_exit(self) -> None:
         self.mock_python.write_text(f"#!{sys.executable}\nimport time; time.sleep(10)\n")
