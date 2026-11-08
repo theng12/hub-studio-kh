@@ -30,7 +30,7 @@ from typing import Any, Callable, Mapping
 
 from . import developer_gate_contract as contract
 from . import developer_gate_authority as authority_mod
-from . import developer_gate_inventory as inventory_mod
+from .. import developer_gate_inventory as inventory_mod
 from . import developer_gate_runner as gate_runner
 from . import developer_gate_store as store_mod
 from . import developer_gate_tools as tools_mod
@@ -289,6 +289,7 @@ class DeveloperGateService:
         self._inventory_cache: tuple[float, dict[str, Any]] | None = None
         self._work_volume: tuple[float, dict[str, Any]] | None = None
         self._inventory_generation = 0
+        self._backing_proof: tuple[float, Mapping[str, Any]] | None = None
 
     # -- identity, setting, inventory -------------------------------------
     def _admission_module(self) -> Any:
@@ -335,6 +336,7 @@ class DeveloperGateService:
             self._inventory_generation += 1
             self._inventory_cache = None
             self._work_volume = None
+            self._backing_proof = None
 
     def _trusted_tools_manifest(self) -> tuple[dict[str, Any] | None, str | None]:
         """The configured official manifest and its raw hash; unknown preparers fail closed.
@@ -536,6 +538,9 @@ class DeveloperGateService:
                 "reason": {"code": "unknown",
                            "detail": "internal physical drive could not be measured"},
             }
+        with self._lock:
+            self._backing_proof = ((time.time(), dict(drive))
+                                   if isinstance(drive, Mapping) else None)
         # The same backing probe already made for the inventory, so a resources poll costs one
         # volume-identifier read, not a second physical-drive sweep. Cached with the inventory.
         try:
@@ -611,6 +616,14 @@ class DeveloperGateService:
                                    "this Mac's developer-gate inventory is invalid") from exc
         return value
 
+    def cached_inventory_for_resources(self) -> dict[str, Any] | None:
+        """Only an inventory an explicit gate attempt already measured; never a probe."""
+        with self._lock:
+            cached = self._inventory_cache
+        if cached is None or time.time() - cached[0] >= 60.0:
+            return None
+        return copy.deepcopy(cached[1])
+
     def inventory_for_resources(self) -> dict[str, Any] | None:
         """The optional frozen inventory a resources snapshot may carry; missing stays absent."""
         now = time.time()
@@ -634,16 +647,26 @@ class DeveloperGateService:
         return value
 
     def work_volume_for_resources(self) -> dict[str, Any] | None:
-        """Exact work-volume facts measured with the inventory's own backing probe.
+        """Exact statvfs bytes and kernel volume id for the work path, never a mount sweep.
 
-        Returns the value cached by the most recent inventory refresh. `None` when no refresh
-        has run yet, so the optional field stays absent rather than being guessed.
+        Backing/physical facts reuse a proof an explicit gate measurement already took; without
+        one they stay null with a reason. `None` only when the path cannot be measured at all.
         """
         with self._lock:
             cached = self._work_volume
-        if cached is None or time.time() - cached[0] >= 60.0:
+            proof = self._backing_proof
+        drive_info = (proof[1] if proof is not None and time.time() - proof[0] < 60.0
+                      else None)
+        if cached is not None and time.time() - cached[0] < 60.0:
+            return copy.deepcopy(cached[1])
+        try:
+            value = inventory_mod.probe_work_volume(
+                self._store.workspaces_dir, drive_info=drive_info, probe_backing=False)
+        except Exception:  # noqa: BLE001 - absent, never a guessed volume
             return None
-        return copy.deepcopy(cached[1])
+        with self._lock:
+            self._work_volume = (time.time(), value)
+        return copy.deepcopy(value)
 
     def _inventory_fresh(self, inventory: Mapping[str, Any], node: str,
                          controller: str) -> bool:
@@ -1726,6 +1749,12 @@ def inventory_for_resources() -> dict[str, Any] | None:
     with _LOCK:
         service = _SERVICE
     return None if service is None else service.inventory_for_resources()
+
+
+def cached_inventory_for_resources() -> dict[str, Any] | None:
+    with _LOCK:
+        service = _SERVICE
+    return None if service is None else service.cached_inventory_for_resources()
 
 
 def work_volume_for_resources() -> dict[str, Any] | None:

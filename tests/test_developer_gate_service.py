@@ -1297,5 +1297,39 @@ class ProductionAuthorityWiringTests(unittest.TestCase):
         self.assertEqual(refused.exception.code, "inventory_stale")
 
 
+class InventoryCacheTests(unittest.TestCase):
+    def _service(self, temp: str):
+        return service_mod.DeveloperGateService(
+            root_dir=temp, authority=_fixture()[0], runner=fake_runner,
+            metrics=FakeMetrics(), admission=FakeAdmission(), broker=FakeBroker())
+
+    def test_expired_backing_proof_is_not_republished(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            service = self._service(temp)
+            Path(service._store.workspaces_dir).mkdir(parents=True, exist_ok=True)
+            service._backing_proof = (time.time() - 61,
+                                      {"device_id": "disk0", "physical": True})
+            with mock.patch("components.developer_gate_inventory._default_diskutil_runner",
+                            side_effect=AssertionError("no mount sweep")):
+                value = service.work_volume_for_resources()
+        self.assertIsNone(value["device_id"])
+        self.assertIsNone(value["physical"])
+        self.assertIn("BACKING_UNKNOWN", value["reason"]["detail"])
+
+    def test_idle_explicit_measurement_fills_the_cached_accessor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            service = self._service(temp)
+            calls = []
+            service._inventory_provider = (
+                lambda node, controller: calls.append(1) or _inventory(node=node,
+                                                                       controller=controller))
+            value = service.inventory_for_resources()
+            self.assertIsNotNone(value)
+            self.assertEqual(service.cached_inventory_for_resources(), value)
+            before = len(calls)
+            self.assertEqual(service.cached_inventory_for_resources(), value)
+        self.assertEqual(len(calls), before)
+
+
 if __name__ == "__main__":
     unittest.main()

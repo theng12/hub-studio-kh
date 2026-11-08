@@ -101,5 +101,39 @@ class DiskPayloadRouteTests(unittest.TestCase):
         self.assertNotIn("work_volume", omitted)
 
 
+    def test_resources_measure_work_volume_on_an_unconfigured_node(self):
+        from fastapi.testclient import TestClient
+        from components.hub import developer_gate_service
+        from components.hub.backend import auth, ledger, monitor as monitor_module, registry
+        from components.hub.standalone import create_app
+        developer_gate_service._reset()
+        with ExitStack() as stack:
+            for module, name, value in (
+                (registry, "DATA_DIR", self.data_dir), (registry, "REGISTRY_FILE", self.data_dir / "studios.json"),
+                (registry, "LABELS_FILE", self.data_dir / "machine_labels.json"),
+                (registry, "FLAGS_FILE", self.data_dir / "machine_flags.json"),
+                (monitor_module, "DATA_DIR", self.data_dir), (auth, "TOKEN_FILE", self.data_dir / ".hub_token"),
+                (auth, "PASSWORD_FILE", self.data_dir / ".hub_password.json"),
+                (auth, "SESSIONS_FILE", self.data_dir / ".hub_sessions.json"),
+                (ledger, "DB_FILE", self.data_dir / "hub.db"), (ledger, "PINOKIO_HOME", self.data_dir),
+            ):
+                stack.enter_context(patch.object(module, name, value))
+            registry._labels_cache = None
+            registry._flags_cache = None
+            owner = {"Authorization": "Bearer same-existing-hub-token"}
+            with TestClient(create_app(start_background=False)) as client:
+                service = developer_gate_service._SERVICE
+                Path(service._store.workspaces_dir).mkdir(parents=True, exist_ok=True)
+                with patch("components.developer_gate_inventory._default_diskutil_runner",
+                           side_effect=AssertionError("no mount-table sweep")):
+                    resources = client.get("/api/hub/resources", headers=owner).json()
+        value = resources["work_volume"]
+        self.assertIsInstance(value["free_bytes"], int)
+        self.assertIsInstance(value["total_bytes"], int)
+        self.assertIsNone(value["device_id"])
+        self.assertIsNone(value["physical"])
+        self.assertIsNotNone(value["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

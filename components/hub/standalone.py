@@ -2235,8 +2235,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "priority_order": registry_view.priority_order("local"),
                 "chat_priority": registry_view.chat_priority("local"),
                 "function_enabled": registry_view.function_switches("local")}
-        # Optional frozen gate inventory: absent when it cannot be measured, never zero.
-        gate_inventory = developer_gate_service.inventory_for_resources()
+        # Optional frozen gate inventory measured by an explicit gate attempt; a status
+        # read never probes the mount table itself.
+        gate_inventory = developer_gate_service.cached_inventory_for_resources()
         if gate_inventory is not None:
             answer["developer_gate_inventory"] = gate_inventory
         # Exact work-volume facts from the same probe, optional and absent when unmeasured.

@@ -19,11 +19,13 @@ from __future__ import annotations
 import plistlib
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from components.hub.developer_gate_inventory import (
+from components.developer_gate_inventory import (
     _default_volume_id_runner,
     collect_developer_gate_inventory,
     is_internal_drive_eligible,
@@ -295,7 +297,7 @@ class DeveloperGateInventoryTests(unittest.TestCase):
             created.append(proc)
             return proc
 
-        with mock.patch("components.hub.developer_gate_inventory.subprocess.Popen", side_effect=spy):
+        with mock.patch("components.developer_gate_inventory.subprocess.Popen", side_effect=spy):
             code, stdout, _ = run_bounded_process([sys.executable, "-c", "print('ok')"], timeout=5.0)
             self.assertEqual(code, 0)
             self.assertIn(b"ok", stdout)
@@ -559,7 +561,7 @@ class WorkVolumeProbeTests(unittest.TestCase):
         })
 
     def test_volume_id_runner_reads_the_filesystem_device(self) -> None:
-        with mock.patch("components.hub.developer_gate_inventory.run_bounded_process",
+        with mock.patch("components.developer_gate_inventory.run_bounded_process",
                         return_value=(0, b"disk3s5\n", b"")) as run:
             self.assertEqual("disk3s5", _default_volume_id_runner("/work"))
         self.assertEqual(
@@ -667,6 +669,46 @@ class WorkVolumeProbeTests(unittest.TestCase):
         self.assertIs(value["physical"], False)
         self.assertEqual(value["device_id"], "disk2")
         self.assertIsNone(value["reason"])
+
+
+class CheapWorkVolumeTests(unittest.TestCase):
+    def test_work_volume_measures_bytes_without_the_mount_table(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch(
+                    "components.developer_gate_inventory._default_diskutil_runner",
+                    side_effect=AssertionError("diskutil must not run")):
+                value = probe_work_volume(temporary, probe_backing=False)
+        self.assertIsInstance(value["free_bytes"], int)
+        self.assertIsInstance(value["total_bytes"], int)
+        self.assertIsNone(value["device_id"])
+        self.assertIsNone(value["physical"])
+        self.assertIsNotNone(value["reason"])
+        self.assertIn("BACKING_UNKNOWN", value["reason"]["detail"])
+
+    def test_known_backing_without_mount_probe_reports_the_mount_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            value = probe_work_volume(
+                temporary,
+                drive_info={"device_id": "disk0", "physical": True},
+                probe_backing=False)
+        self.assertEqual(value["device_id"], "disk0")
+        self.assertIsNone(value["mount_point"])
+        self.assertIn("MOUNT_POINT_UNKNOWN", value["reason"]["detail"])
+
+
+class SharedComponentTests(unittest.TestCase):
+    def test_the_inventory_is_discovered_for_the_packaged_tree(self) -> None:
+        import importlib.util
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location(
+            "stage_voice", root / "packaging" / "stage_voice.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        discovered = {path.resolve() for path in
+                      module.shared_components_modules(root / "components")}
+        self.assertIn((root / "components/developer_gate_inventory.py").resolve(),
+                      discovered)
 
 
 if __name__ == "__main__":

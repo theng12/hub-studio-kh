@@ -422,6 +422,7 @@ def probe_work_volume(
     volume_id_runner: Callable[[str | Path], str] | None = None,
     runner: Callable[[Sequence[str]], bytes] | None = None,
     timeout_seconds: float = 5.0,
+    probe_backing: bool = True,
 ) -> dict[str, Any]:
     """Exact statfs free/total bytes and the volume/backing identity for a work root.
 
@@ -470,7 +471,7 @@ def probe_work_volume(
         failures.append(("VOLUME_ID_UNKNOWN",
                          f"the volume DeviceIdentifier could not be read: {type(exc).__name__}"))
 
-    if volume_id is not None:
+    if volume_id is not None and probe_backing:
         run_diskutil = runner or (
             lambda args: _default_diskutil_runner(args, timeout=timeout_seconds))
         try:
@@ -489,8 +490,11 @@ def probe_work_volume(
             failures.append(("MOUNT_POINT_UNKNOWN",
                              f"the work volume mount could not be read: {type(exc).__name__}"))
 
+    elif volume_id is not None:
+        failures.append(("MOUNT_POINT_UNKNOWN",
+                         "the work volume mount point was not probed"))
     drive = drive_info
-    if drive is None:
+    if drive is None and probe_backing:
         drive = probe_internal_drive(workspace_path, runner=runner,
                                      timeout_seconds=timeout_seconds)
     candidate_device = drive.get("device_id") if isinstance(drive, Mapping) else None
