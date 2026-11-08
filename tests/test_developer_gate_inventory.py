@@ -79,8 +79,16 @@ class DeveloperGateInventoryTests(unittest.TestCase):
         self.assertTrue(drive["observed_at"].endswith("Z"))
         self.assertIsNone(drive["reason"])
 
-        # Capacity accepted against 500GB / 512GB threshold
+        # Measured 500_277_792_768 fits default (nominal 512GB class: 500_000_000_000 floor)
+        self.assertTrue(is_internal_drive_eligible(drive))
         self.assertTrue(is_internal_drive_eligible(drive, min_bytes=500_000_000_000))
+
+        # Explicit lower threshold override works
+        self.assertTrue(is_internal_drive_eligible(drive, min_bytes=250_000_000_000))
+
+        # Explicit larger threshold override (e.g. 1TB floor) refuses
+        self.assertFalse(is_internal_drive_eligible(drive, min_bytes=1_000_000_000_000))
+
         # Container size alone would have failed 500GB floor
         self.assertFalse(494_384_795_648 >= 500_000_000_000)
 

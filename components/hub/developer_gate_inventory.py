@@ -18,7 +18,8 @@ import subprocess
 import time
 from typing import Any, Callable, Mapping, Sequence
 
-MIN_INTERNAL_DRIVE_BYTES: int = 512_000_000_000
+# Nominal 512GB drive class floor (Apple 512GB SSD measures 500,277,792,768 bytes)
+MIN_INTERNAL_DRIVE_BYTES: int = 500_000_000_000
 DISKUTIL_PATH: str = "/usr/sbin/diskutil"
 DEFAULT_MAX_BYTES: int = 1_048_576  # 1 MB bound on subprocess probe output
 KNOWN_TOOL_IDS: tuple[str, ...] = ("python", "node", "go", "rust", "swift", "clt")
