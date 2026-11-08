@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from components.hub.developer_gate_runner import (
+    MINIMUM_FREE_BYTES,
     DeveloperGateRunner,
     GateRunResult,
     GateRunnerError,
@@ -552,6 +553,159 @@ class TestDeveloperGateRunner(unittest.TestCase):
         self.assertIn(b"go ok", result.check_logs["vet-windows"])
         self.assertIn(b"go ok", result.check_logs["vet-linux"])
         self.assertIn(b"go ok", result.check_logs["go-unit"])
+
+    # --- Live free-disk admission ---------------------------------------------
+
+    GIB = 1024**3
+
+    def _sequence_sampler(self, *values):
+        """Deterministic disk sampler: each call returns the next value, last repeats."""
+        calls = []
+
+        def sample(_path):
+            calls.append(1)
+            value = values[min(len(calls) - 1, len(values) - 1)]
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        return sample, calls
+
+    def _run_with_disk(self, sampler, **kwargs):
+        return run_gate(
+            workspace_dir=self.ws_dir,
+            source_dir=self.src_dir,
+            trusted_toolchains=self.trusted_tools,
+            stage_allowed=lambda: True,
+            identity_recorder=kwargs.pop("identity_recorder", lambda x: None),
+            metrics=self.fake_metrics,
+            disk_free_bytes=sampler,
+            sample_interval_seconds=0.02,
+            **kwargs,
+        )
+
+    def test_low_disk_before_spawn_never_starts_tool(self) -> None:
+        marker = self._write_marker_tool()
+        recorded = []
+        result = self._run_with_disk(
+            lambda _path: MINIMUM_FREE_BYTES - 1,
+            identity_recorder=recorded.append,
+        )
+
+        self.assertEqual(result.outcome, "not_run")
+        self.assertEqual(result.reason["code"], "not_enough_disk")
+        self.assertEqual(result.process_release["proof"], "never_started")
+        self.assertTrue(result.process_release["confirmed"])
+        self.assertFalse(marker.exists())
+        self.assertEqual(recorded, [])
+
+    def test_requested_floor_can_only_raise_the_ten_gib_minimum(self) -> None:
+        # A request of 0 cannot disable the owner's 10 GiB live floor.
+        result = self._run_with_disk(
+            lambda _path: MINIMUM_FREE_BYTES - 1,
+            limits={"minimum_free_bytes": 0},
+        )
+        self.assertEqual(result.outcome, "not_run")
+        self.assertEqual(result.reason["code"], "not_enough_disk")
+
+        # A higher requested floor is enforced.
+        result = self._run_with_disk(
+            lambda _path: 11 * self.GIB,
+            limits={"minimum_free_bytes": 12 * self.GIB},
+        )
+        self.assertEqual(result.outcome, "not_run")
+        self.assertEqual(result.reason["code"], "not_enough_disk")
+
+    def test_invalid_configured_floor_refused(self) -> None:
+        for bad in (True, -1, float("nan"), float("inf"), "10737418240", 1.5, 1.0,
+                    2**63, 9007199254740992):
+            with self.subTest(minimum_free_bytes=bad):
+                result = self._run_with_disk(
+                    lambda _path: 99 * self.GIB,
+                    limits={"minimum_free_bytes": bad},
+                )
+                self.assertEqual(result.outcome, "not_run")
+                self.assertEqual(result.reason["code"], "invalid_request")
+
+    def test_disk_drop_between_preflight_and_spawn_leaves_check_not_run(self) -> None:
+        marker = self._write_marker_tool()
+        recorded = []
+        sampler, calls = self._sequence_sampler(99 * self.GIB, MINIMUM_FREE_BYTES - 1)
+        result = self._run_with_disk(sampler, identity_recorder=recorded.append)
+
+        self.assertEqual(result.outcome, "not_run")
+        self.assertIsNone(result.exit_code)
+        self.assertEqual(result.reason["code"], "not_enough_disk")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(result.checks), 6)
+        self.assertEqual(result.checks[0]["outcome"], "not_run")
+        self.assertIsNone(result.checks[0]["exit_code"])
+        self.assertIsNone(result.checks[0]["duration_seconds"])
+        self.assertEqual(recorded, [])
+        self.assertFalse(marker.exists())
+
+    def test_invalid_disk_sample_refused_before_spawn(self) -> None:
+        marker = self._write_marker_tool()
+        result = self._run_with_disk(lambda _path: True)
+
+        self.assertEqual(result.outcome, "not_run")
+        self.assertEqual(result.reason["code"], "metric_unavailable")
+        self.assertEqual(result.process_release["proof"], "never_started")
+        self.assertFalse(marker.exists())
+
+    def test_low_disk_after_identity_before_authorization_stops_owned_process(self) -> None:
+        marker = self._write_marker_tool()
+        recorded = []
+        sampler, calls = self._sequence_sampler(
+            99 * self.GIB, 99 * self.GIB, MINIMUM_FREE_BYTES - 1)
+        result = self._run_with_disk(sampler, identity_recorder=recorded.append)
+
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.reason["code"], "not_enough_disk")
+        self.assertIn("before authorization", result.reason["detail"])
+        self.assertEqual(len(recorded), 1)
+        self.assertFalse(marker.exists())
+        self.assertTrue(result.process_release["confirmed"], result.process_release)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(recorded[0]["pid"], 0)
+        self.assertEqual(len(calls), 3)
+
+    def test_low_disk_while_running_stops_owned_process(self) -> None:
+        self.mock_python.write_text(
+            f"#!{sys.executable}\nimport time; time.sleep(10)\n")
+        sampler, _calls = self._sequence_sampler(
+            99 * self.GIB, 99 * self.GIB, 99 * self.GIB, MINIMUM_FREE_BYTES - 1)
+        result = self._run_with_disk(sampler)
+
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.reason["code"], "not_enough_disk")
+        self.assertTrue(result.process_release["confirmed"], result.process_release)
+        self.assertEqual(result.process_release["owned_processes_remaining"], 0)
+
+    def test_disk_sample_error_while_running_stops_owned_process(self) -> None:
+        self.mock_python.write_text(
+            f"#!{sys.executable}\nimport time; time.sleep(10)\n")
+        sampler, _calls = self._sequence_sampler(
+            99 * self.GIB, 99 * self.GIB, 99 * self.GIB, OSError("statvfs failed"))
+        result = self._run_with_disk(sampler)
+
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.reason["code"], "metric_unavailable")
+        self.assertIn("free-space sample unavailable", result.reason["detail"])
+        self.assertTrue(result.process_release["confirmed"], result.process_release)
+
+    def test_low_disk_after_completion_never_reports_passed(self) -> None:
+        marker = self._write_marker_tool()
+
+        def sampler(_path):
+            return MINIMUM_FREE_BYTES - 1 if marker.exists() else 99 * self.GIB
+
+        result = self._run_with_disk(sampler)
+
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.reason["code"], "not_enough_disk")
+        self.assertTrue(marker.exists())
+        self.assertTrue(result.process_release["confirmed"], result.process_release)
 
 
 if __name__ == "__main__":

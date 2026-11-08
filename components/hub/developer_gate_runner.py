@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -59,6 +59,39 @@ COMMANDS_FIXTURE_PATH = (
 DEFAULT_LOG_CAP_BYTES = 4 * 1024 * 1024
 DEFAULT_STOP_GRACE_SECONDS = 5.0
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 0.1
+# Owner floor on the workspace volume; a request may raise it, never lower or disable it.
+MINIMUM_FREE_BYTES = 10 * 1024**3
+# Frozen contract maximum for integer byte limits.
+MAX_SAFE_INTEGER = 9007199254740991
+
+
+def _default_free_bytes(path: Path) -> int:
+    """Actual filesystem free bytes on the volume holding ``path`` (not workspace bytes)."""
+    return shutil.disk_usage(path).free
+
+
+def _sample_free_bytes(sampler: Callable[[Path], int], path: Path) -> int:
+    """Read one free-space sample, failing closed on any unknown or invalid value."""
+    try:
+        value = sampler(path)
+    except Exception as exc:  # noqa: BLE001 - an unreadable floor is never enforced
+        raise GateRunnerError(
+            f"filesystem free-space sample unavailable: {exc}", code="metric_unavailable") from exc
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise GateRunnerError(
+            f"invalid filesystem free-space sample: {value!r}", code="metric_unavailable")
+    return value
+
+
+def _required_free_bytes(limits: Mapping[str, Any]) -> int:
+    """The live floor: the 10 GiB owner minimum or the request's higher value."""
+    raw = limits.get("minimum_free_bytes", 0)
+    if (isinstance(raw, bool) or not isinstance(raw, int)
+            or raw < 0 or raw > MAX_SAFE_INTEGER):
+        raise GateRunnerError(
+            "minimum_free_bytes must be an integer between 0 and 9007199254740991",
+            code="invalid_request")
+    return max(MINIMUM_FREE_BYTES, raw)
 
 
 class GateRunnerError(Exception):
@@ -254,12 +287,14 @@ class DeveloperGateRunner:
         clock: Callable[[], float] = time.monotonic,
         stop_grace_seconds: float = DEFAULT_STOP_GRACE_SECONDS,
         sample_interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
+        disk_free_bytes: Callable[[Path], int] | None = None,
     ) -> None:
         self.fixture = load_commands_fixture(fixture_path)
         self.metrics = metrics or Metrics()
         self.clock = clock
         self.stop_grace_seconds = max(0.1, float(stop_grace_seconds))
         self.sample_interval = max(0.01, float(sample_interval_seconds))
+        self.disk_free_bytes = disk_free_bytes or _default_free_bytes
 
     def run(
         self,
@@ -328,6 +363,41 @@ class DeveloperGateRunner:
                 exit_code=None,
                 termination_signal=None,
                 reason={"code": "production_preempted", "detail": "cancelled before any command execution"},
+                checks=[],
+                check_logs={},
+                process_release={
+                    "confirmed": True,
+                    "observed_at": _utcnow(),
+                    "owned_processes_remaining": 0,
+                    "proof": "never_started",
+                },
+                started_at=None,
+                finished_at=_utcnow(),
+                scope=SCOPE,
+                peak_workspace_bytes=_measure_dir_bytes(ws_path),
+                before=before,
+            )
+
+        # 3. Live free-disk admission on the workspace volume, before any launcher spawn.
+        disk_reason: dict[str, str] | None = None
+        disk_floor = MINIMUM_FREE_BYTES
+        try:
+            disk_floor = _required_free_bytes(lim)
+            free_bytes = _sample_free_bytes(self.disk_free_bytes, ws_path)
+        except GateRunnerError as exc:
+            disk_reason = {"code": exc.code, "detail": exc.detail}
+        else:
+            if free_bytes < disk_floor:
+                disk_reason = {
+                    "code": "not_enough_disk",
+                    "detail": f"filesystem free bytes {free_bytes} below required floor {disk_floor}",
+                }
+        if disk_reason is not None:
+            return GateRunResult(
+                outcome="not_run",
+                exit_code=None,
+                termination_signal=None,
+                reason=disk_reason,
                 checks=[],
                 check_logs={},
                 process_release={
@@ -412,6 +482,33 @@ class DeveloperGateRunner:
                 check_logs[cid] = b""
                 continue
 
+            # Re-check the workspace volume immediately before this launcher spawn.
+            try:
+                free_bytes = _sample_free_bytes(self.disk_free_bytes, ws_path)
+                disk_error = None if free_bytes >= disk_floor else {
+                    "code": "not_enough_disk",
+                    "detail": f"filesystem free bytes {free_bytes} below required floor {disk_floor}",
+                }
+            except GateRunnerError as exc:
+                disk_error = {"code": exc.code, "detail": exc.detail}
+            if disk_error is not None:
+                # No launcher or tool ran, so this check keeps a null exit and duration.
+                overall_outcome = (
+                    "not_run" if all(c["outcome"] == "not_run" for c in checks) else "failed")
+                overall_exit_code = None
+                overall_reason = disk_error
+                checks.append({
+                    "id": cid,
+                    "outcome": "not_run",
+                    "exit_code": None,
+                    "duration_seconds": None,
+                    "log_sha256": hashlib.sha256(b"").hexdigest(),
+                    "log_bytes": 0,
+                    "reason": dict(overall_reason),
+                })
+                check_logs[cid] = b""
+                continue
+
             argv = _build_command_argv(cmd_spec, tools)
             env = _build_sanitized_env(ws_path, cmd_spec)
 
@@ -480,15 +577,27 @@ class DeveloperGateRunner:
                         auth_code = "identity_unrecorded"
                         auth_error = f"identity recorder failed for {cid}: {exc}"
                     else:
-                        if not stage_allowed() or (preempt_check and preempt_check()):
-                            auth_code = "production_preempted"
-                            auth_error = "preempted before command authorization"
+                        # Identity is durable; measure the volume once more before G.
+                        try:
+                            free_bytes = _sample_free_bytes(self.disk_free_bytes, ws_path)
+                        except GateRunnerError as exc:
+                            auth_code = exc.code
+                            auth_error = exc.detail
                         else:
-                            drain_thread = threading.Thread(
-                                target=_drain_child_log, args=(process.stdout, sink), daemon=True)
-                            drain_thread.start()
-                            process.stdin.write(b"G")
-                            process.stdin.flush()
+                            if free_bytes < disk_floor:
+                                auth_code = "not_enough_disk"
+                                auth_error = (
+                                    f"filesystem free bytes {free_bytes} below required floor "
+                                    f"{disk_floor} before authorization")
+                            elif not stage_allowed() or (preempt_check and preempt_check()):
+                                auth_code = "production_preempted"
+                                auth_error = "preempted before command authorization"
+                            else:
+                                drain_thread = threading.Thread(
+                                    target=_drain_child_log, args=(process.stdout, sink), daemon=True)
+                                drain_thread.start()
+                                process.stdin.write(b"G")
+                                process.stdin.flush()
             except Exception as exc:  # noqa: BLE001 - any failure before G closes the pipe
                 auth_error = f"authorization failed for {cid}: {exc}"
             finally:
@@ -594,6 +703,17 @@ class DeveloperGateRunner:
                     stop_detail = f"workspace usage {cur_ws} exceeded limit {max_workspace}"
                     break
 
+                try:
+                    free_bytes = _sample_free_bytes(self.disk_free_bytes, ws_path)
+                except GateRunnerError as exc:
+                    stop_code = exc.code
+                    stop_detail = exc.detail
+                    break
+                if free_bytes < disk_floor:
+                    stop_code = "not_enough_disk"
+                    stop_detail = f"filesystem free bytes {free_bytes} below required floor {disk_floor}"
+                    break
+
                 time.sleep(self.sample_interval)
 
             # Command finished or stopped: enforce exact identity release
@@ -638,6 +758,19 @@ class DeveloperGateRunner:
                 # sink is the authority, so a fast exit still fails the check.
                 stop_code = "log_budget"
                 stop_detail = f"command log exceeded limit {max_log} bytes"
+            if stop_code is None:
+                # A check is never reported passed without a final free-disk sample.
+                try:
+                    free_bytes = _sample_free_bytes(self.disk_free_bytes, ws_path)
+                except GateRunnerError as exc:
+                    stop_code = exc.code
+                    stop_detail = exc.detail
+                else:
+                    if free_bytes < disk_floor:
+                        stop_code = "not_enough_disk"
+                        stop_detail = (
+                            f"filesystem free bytes {free_bytes} below required floor "
+                            f"{disk_floor} after completion")
             raw_log = sink.body()
             duration = max(0.0, self.clock() - cmd_start)
 
@@ -760,6 +893,7 @@ def run_gate(
     secrets: Iterable[bytes] = (),
     before: dict[str, Any] | None = None,
     fixture_path: Path | None = None,
+    disk_free_bytes: Callable[[Path], int] | None = None,
 ) -> GateRunResult:
     """Convenience functional entrypoint for running the developer gate."""
     runner = DeveloperGateRunner(
@@ -768,6 +902,7 @@ def run_gate(
         clock=clock,
         stop_grace_seconds=stop_grace_seconds,
         sample_interval_seconds=sample_interval_seconds,
+        disk_free_bytes=disk_free_bytes,
     )
     return runner.run(
         workspace_dir=workspace_dir,
