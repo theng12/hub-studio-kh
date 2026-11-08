@@ -12,6 +12,7 @@ release is unconfirmed raises; no ``process_release`` is ever claimed on an exce
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
 import os
@@ -264,6 +265,11 @@ class OfficialToolPreparer:
             "actual_toolfacts": fact,
             "process_release": dict(probe_release),
         }
+
+    def read_manifest(self) -> tuple[dict[str, Any], str]:
+        """Read-only seam: the validated manifest and the raw hash it still matches."""
+        self._require_manifest_unchanged()
+        return copy.deepcopy(dict(self._official)), self._manifest_sha256
 
     def _require_manifest_unchanged(self) -> None:
         try:

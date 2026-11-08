@@ -32,6 +32,7 @@ from . import developer_gate_contract as contract
 from . import developer_gate_inventory as inventory_mod
 from . import developer_gate_runner as gate_runner
 from . import developer_gate_store as store_mod
+from . import developer_gate_tools as tools_mod
 from . import developer_tests
 
 DATA_DIR_NAME = "developer-gates"
@@ -229,6 +230,7 @@ class DeveloperGateService:
         self._stopping = False
         self._last_recovery = 0.0
         self._inventory_cache: tuple[float, dict[str, Any]] | None = None
+        self._inventory_generation = 0
 
     # -- identity, setting, inventory -------------------------------------
     def _admission_module(self) -> Any:
@@ -270,6 +272,197 @@ class DeveloperGateService:
                 "verified": bool(record.get("verified")),
                 "revision": str(record.get("revision") or "unavailable")}
 
+    def _invalidate_inventory(self) -> None:
+        with self._lock:
+            self._inventory_generation += 1
+            self._inventory_cache = None
+
+    def _trusted_tools_manifest(self) -> tuple[dict[str, Any] | None, str | None]:
+        """The configured official manifest and its raw hash; unknown preparers fail closed.
+
+        The seam re-reads the packaged bytes, so a manifest changed after acceptance is
+        unknown rather than trusted.
+        """
+        from . import developer_gate_tool_preparer as preparer_mod
+        if not isinstance(self._tool_preparer, preparer_mod.OfficialToolPreparer):
+            return None, None
+        try:
+            manifest, digest = self._tool_preparer.read_manifest()
+        except Exception:  # noqa: BLE001 - unknown stays absent
+            return None, None
+        if not isinstance(manifest, Mapping) or not isinstance(digest, str):
+            return None, None
+        return dict(manifest), digest
+
+    def _stored_tool_facts(self) -> dict[tuple[str, str], dict[str, Any]]:
+        """Latest schema-valid verified fact per (tool, pin) already persisted by a prep."""
+        best: dict[tuple[str, str], tuple[tuple[str, str], dict[str, Any]]] = {}
+        try:
+            attempts = self._store.list_attempts()
+        except Exception:  # noqa: BLE001 - unreadable store is unknown, never a success
+            return {}
+        for rec in attempts:
+            facts = (rec.get("metadata") or {}).get("actual_toolchains")
+            if not isinstance(facts, list):
+                continue
+            for raw in facts:
+                if not isinstance(raw, Mapping):
+                    continue
+                try:
+                    fact = dict(raw)
+                    contract.validate_schema(fact, "toolFact")
+                except contract.GateContractError:
+                    continue
+                if fact.get("available") is not True:
+                    continue
+                key = (str(fact.get("id")), contract.canonical_json(fact.get("pin")))
+                rank = (str(fact.get("observed_at") or ""),
+                        str(rec.get("updated_at") or ""))
+                if key not in best or rank > best[key][0]:
+                    best[key] = (rank, fact)
+        return {key: value[1] for key, value in best.items()}
+
+    def _retained_tool_ok(self, artifact: Mapping[str, Any],
+                          max_path_length: int) -> bool:
+        """Cheap proof the retained content-addressed tree and its receipt still match.
+
+        shortcut: stat plus the small receipt only; no tree digest or version probe runs on a
+        resources check-in, upgrade if inventory must ever prove file content.
+        """
+        root = self._tools_root
+        if root is None:
+            return False
+        try:
+            tree = root / "tools" / (
+                f"{artifact['id']}-{artifact['version']}-{artifact['sha256']}")
+            if tree.is_symlink() or not tree.is_dir():
+                return False
+            tools_mod._read_receipt(tree, artifact)
+            tools_mod._verify_contained_executable(
+                tree, str(artifact["executable"]), max_path_length)
+        except Exception:  # noqa: BLE001 - any doubt is unavailable, never a stale success
+            return False
+        return True
+
+    def _inventory_toolchains(self, manifest: Mapping[str, Any] | None,
+                              manifest_sha256: str | None,
+                              observed: str) -> list[dict[str, Any]]:
+        pins: dict[str, dict[str, Any]] = {}
+        for tool_manifest in self._authority.tool_manifests:
+            tools = tool_manifest.get("tools") if isinstance(tool_manifest, Mapping) else None
+            for pin in tools or []:
+                if isinstance(pin, Mapping) and isinstance(pin.get("id"), str):
+                    pins[pin["id"]] = dict(pin)
+        if not pins:
+            return []
+        artifacts: dict[str, dict[str, Any]] = {}
+        max_path_length = 1024
+        if manifest is not None:
+            limits = manifest.get("limits") or {}
+            try:
+                max_path_length = int(limits.get("max_path_length", max_path_length))
+            except (TypeError, ValueError):
+                pass
+            for artifact in manifest.get("artifacts") or []:
+                if isinstance(artifact, Mapping) and isinstance(artifact.get("id"), str):
+                    artifacts[artifact["id"]] = dict(artifact)
+        stored = self._stored_tool_facts()
+
+        def unavailable(tool_id: str, pin: Mapping[str, Any], code: str,
+                        detail: str) -> dict[str, Any]:
+            return {"id": tool_id, "pin": dict(pin), "available": False,
+                    "observed_at": observed, "installed_bytes": None,
+                    "provenance": "owned-toolchain-readback",
+                    "reason": {"code": code, "detail": detail}}
+
+        facts: list[dict[str, Any]] = []
+        for tool_id in sorted(pins):
+            pin = pins[tool_id]
+            fact = stored.get((tool_id, contract.canonical_json(pin)))
+            if fact is None:
+                facts.append(unavailable(
+                    tool_id, pin, "not_prepared",
+                    "no verified preparation of this configured pin is recorded on this Mac"))
+                continue
+            artifact = artifacts.get(tool_id)
+            if manifest is None:
+                facts.append(unavailable(
+                    tool_id, pin, "tool_manifest_unavailable",
+                    "the trusted packaged tool manifest is unavailable, so the retained "
+                    "tool cannot be verified"))
+                continue
+            if manifest_sha256 is None or pin.get("manifest_sha256") != manifest_sha256:
+                facts.append(unavailable(
+                    tool_id, pin, "tool_manifest_mismatch",
+                    "the configured tool pin does not bind the loaded official manifest bytes"))
+                continue
+            if artifact is None or artifact.get("version") != pin.get("version"):
+                facts.append(unavailable(
+                    tool_id, pin, "pin_unconfigured",
+                    "the configured tool pin has no matching packaged official artifact"))
+                continue
+            if not self._retained_tool_ok(artifact, max_path_length):
+                facts.append(unavailable(
+                    tool_id, pin, "retained_tool_unavailable",
+                    "the retained tool tree or its receipt is missing or no longer "
+                    "matches the pin"))
+                continue
+            facts.append({
+                "id": tool_id, "pin": dict(pin), "available": True,
+                "observed_at": str(fact["observed_at"]),
+                "installed_bytes": fact.get("installed_bytes"),
+                "provenance": str(fact.get("provenance") or "owned-toolchain-readback"),
+                "reason": None})
+        return facts
+
+    @staticmethod
+    def _measure_cache(cache: Path) -> int:
+        """Strict cache size: any unreadable entry is unknown, never a partial total."""
+        total = 0
+
+        def fail(error: OSError) -> None:
+            raise error
+
+        for current, _dirs, files in os.walk(cache, onerror=fail):
+            for name in files:
+                total += os.lstat(os.path.join(current, name)).st_size
+        return total
+
+    def _inventory_shared_cache(
+            self, manifest: Mapping[str, Any] | None
+    ) -> tuple[int | None, int | None, dict[str, Any] | None]:
+        root = self._tools_root
+        if root is None:
+            return None, None, None
+        try:
+            if root.is_symlink() or not root.is_dir():
+                return None, None, {
+                    "code": "cache_unknown",
+                    "detail": "the configured shared tool store is unavailable"}
+            cache = root / "cache"
+            if os.path.lexists(cache):
+                if cache.is_symlink() or not cache.is_dir():
+                    return None, None, {
+                        "code": "cache_unknown",
+                        "detail": "the shared tool cache is not a real directory"}
+                measured: int | None = int(self._measure_cache(cache))
+            else:
+                measured = 0
+        except OSError:
+            return None, None, {
+                "code": "cache_unknown",
+                "detail": "the shared tool cache could not be measured"}
+        cap: int | None = None
+        if manifest is not None:
+            try:
+                cap = int(manifest["limits"]["download_cache_bytes"])
+            except (KeyError, TypeError, ValueError):
+                cap = None
+        reason = None if cap is not None else {
+            "code": "cache_cap_unknown",
+            "detail": "the trusted packaged tool manifest exposes no shared cache cap"}
+        return measured, cap, reason
+
     def _default_inventory(self, node: str, controller: str) -> dict[str, Any] | None:
         observed = inventory_mod._current_iso_z()
         try:
@@ -288,16 +481,37 @@ class DeveloperGateService:
             free = int(shutil.disk_usage(self._store.workspaces_dir).free)
         except OSError:
             free = None
+        configured = self._tool_preparer is not None and self._tools_root is not None
+        manifest: dict[str, Any] | None = None
+        manifest_sha256: str | None = None
+        if configured:
+            manifest, manifest_sha256 = self._trusted_tools_manifest()
+        toolchains: list[dict[str, Any]] = []
+        cache_bytes: int | None = None
+        cache_limit: int | None = None
+        cache_reason: dict[str, Any] | None = None
+        if configured:
+            try:
+                toolchains = self._inventory_toolchains(
+                    manifest, manifest_sha256, observed)
+            except Exception:  # noqa: BLE001 - unknown stays absent, never a false success
+                toolchains = []
+            try:
+                cache_bytes, cache_limit, cache_reason = self._inventory_shared_cache(manifest)
+            except Exception:  # noqa: BLE001
+                cache_bytes, cache_limit = None, None
+                cache_reason = {"code": "cache_unknown",
+                                "detail": "the shared tool cache could not be measured"}
         space = {
             "observed_at": observed,
             "workspace_bytes": self._store.active_workspace_bytes,
             "result_spool_bytes": self._store.active_spool_bytes,
-            "shared_cache_bytes": None,
+            "shared_cache_bytes": cache_bytes,
             "workspace_limit_bytes": self._store.max_workspace_bytes,
             "result_spool_limit_bytes": self._store.max_result_spool_bytes,
-            "shared_cache_limit_bytes": None,
+            "shared_cache_limit_bytes": cache_limit,
             "cleanup_state": "active" if self._active_attempt else "none",
-            "reason": None,
+            "reason": cache_reason,
         }
         value = {
             "format": contract.INVENTORY_FORMAT,
@@ -306,7 +520,7 @@ class DeveloperGateService:
             "observed_at": observed,
             "internal_physical_drive": drive,
             "free_bytes": free,
-            "toolchains": [],
+            "toolchains": toolchains,
             "developer_gate_space": space,
         }
         try:
@@ -331,7 +545,9 @@ class DeveloperGateService:
     def inventory_for_resources(self) -> dict[str, Any] | None:
         """The optional frozen inventory a resources snapshot may carry; missing stays absent."""
         now = time.time()
-        cached = self._inventory_cache
+        with self._lock:
+            cached = self._inventory_cache
+            generation = self._inventory_generation
         if cached is not None and now - cached[0] < 60.0:
             return copy.deepcopy(cached[1])
         try:
@@ -342,7 +558,10 @@ class DeveloperGateService:
             contract.validate_inventory_schema(value)
         except Exception:  # noqa: BLE001 - absent, never zero
             return None
-        self._inventory_cache = (now, copy.deepcopy(value))
+        with self._lock:
+            # A preparation or ACK during this read must not be re-cached as current.
+            if generation == self._inventory_generation:
+                self._inventory_cache = (now, copy.deepcopy(value))
         return value
 
     # -- capabilities ------------------------------------------------------
@@ -589,6 +808,7 @@ class DeveloperGateService:
         except store_mod.GateStoreError as exc:
             raise GateServiceError(getattr(exc, "status_code", 400), "invalid_request",
                                    str(exc)) from exc
+        self._invalidate_inventory()
         release = (rec.get("metadata") or {}).get("process_release")
         if isinstance(release, dict):
             try:
@@ -597,6 +817,7 @@ class DeveloperGateService:
             except store_mod.GateStoreError as exc:
                 raise GateServiceError(getattr(exc, "status_code", 409), "conflict",
                                        str(exc)) from exc
+        self._invalidate_inventory()
         return self._status(rec)
 
     # -- execution ---------------------------------------------------------
@@ -821,6 +1042,7 @@ class DeveloperGateService:
             facts.append(fact)
             self._store.update_metadata(attempt_id, {
                 "actual_toolchains": [dict(item) for item in facts]})
+            self._invalidate_inventory()
         return executables, facts, release or {}
 
     def _execute(self, attempt_id: str) -> None:

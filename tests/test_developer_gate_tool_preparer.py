@@ -306,6 +306,15 @@ class OfficialToolPreparerTests(unittest.TestCase):
                       identity_recorder=recorded.append)
         self.assertEqual(recorded, [])
 
+    def test_read_manifest_seam_returns_only_raw_hash_verified_bytes(self) -> None:
+        preparer = self.preparer()
+        manifest, digest = preparer.read_manifest()
+        self.assertEqual(digest, self.manifest_sha256)
+        self.assertEqual(manifest["platform"], tools_mod._runtime_platform())
+        self.manifest_path.write_bytes(self.manifest_path.read_bytes() + b"\n")
+        with self.assertRaises(tools_mod.OfficialToolError):
+            preparer.read_manifest()
+
     def test_changed_manifest_is_refused_before_helper(self) -> None:
         preparer = self.preparer()
         self.manifest_path.write_bytes(self.manifest_path.read_bytes() + b"\n")

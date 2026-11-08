@@ -28,6 +28,7 @@ if str(ROOT) not in sys.path:
 from components.hub import developer_gate_contract as contract  # noqa: E402
 from components.hub import developer_gate_runner as gate_runner  # noqa: E402
 from components.hub import developer_gate_service as service_mod  # noqa: E402
+from components.hub import developer_gate_tool_preparer as preparer_mod  # noqa: E402
 from components.hub import developer_tests  # noqa: E402
 
 NODE = "node-1"
@@ -236,6 +237,58 @@ def _preparer(calls, *, release=None, facts=None, raise_exc=None, on_call=None):
     return prepare
 
 
+class _SeamPreparer(preparer_mod.OfficialToolPreparer):
+    """Recognised official preparer whose read-only seam answers from fixtures."""
+
+    def __init__(self, calls, *, manifest, digest, release=None, facts=None):
+        self._fixture_manifest = dict(manifest)
+        self._fixture_digest = digest
+        self._calls = calls
+        self._release = release
+        self._facts = facts
+
+    def read_manifest(self):
+        return dict(self._fixture_manifest), self._fixture_digest
+
+    def __call__(self, tool, **kwargs):
+        return _preparer(self._calls, release=self._release,
+                         facts=self._facts)(tool, **kwargs)
+
+
+def _official_manifest() -> dict:
+    return {
+        "format": "studio.developer-gate.official-tools.v1",
+        "scope": "archive-preparation-only", "production_installer_qualified": False,
+        "platform": "test-platform",
+        "limits": {"download_cache_bytes": 5000, "max_path_length": 1024},
+        "artifacts": [{
+            "id": "python", "version": PIN["version"], "platform": "test-platform",
+            "filename": "python.tar.gz", "url": "https://example.invalid/python.tar.gz",
+            "size_bytes": 100, "sha256": "a" * 64, "expanded_bytes": 200,
+            "executable": "python/bin/python3.11",
+        }],
+    }
+
+
+def _retained_tool(tools_root: Path, artifact: dict) -> Path:
+    tree = tools_root / "tools" / (
+        f"{artifact['id']}-{artifact['version']}-{artifact['sha256']}")
+    executable = tree / artifact["executable"]
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    receipt = {
+        "format": "studio.developer-gate.official-tool-receipt.v1",
+        "scope": "archive-preparation-only", "production_installer_qualified": False,
+        "id": artifact["id"], "version": artifact["version"],
+        "platform": artifact["platform"], "sha256": artifact["sha256"],
+        "size_bytes": artifact["size_bytes"], "executable": artifact["executable"],
+        "version_line": "3.11.0", "tree_digest": "0" * 64,
+    }
+    (tree / ".prepared.json").write_text(json.dumps(receipt, sort_keys=True))
+    return tree
+
+
 class DeveloperGateServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="studiohub-gate-service-")
@@ -258,6 +311,15 @@ class DeveloperGateServiceTests(unittest.TestCase):
             root_dir=root_dir or self.temp.name, authority=authority, runner=runner,
             metrics=FakeMetrics(), admission=FakeAdmission(), broker=FakeBroker(),
             inventory_provider=lambda node, controller: _inventory(node, controller),
+            tool_preparer=tool_preparer, tools_root=tools_root)
+
+    def _default_service(self, *, authority=None, runner=fake_runner, root_dir=None,
+                         tool_preparer=None, tools_root=None):
+        """A service using the real default inventory, not the fixture provider."""
+        authority = authority or _fixture()[0]
+        return service_mod.DeveloperGateService(
+            root_dir=root_dir or self.temp.name, authority=authority, runner=runner,
+            metrics=FakeMetrics(), admission=FakeAdmission(), broker=FakeBroker(),
             tool_preparer=tool_preparer, tools_root=tools_root)
 
     def _wait(self, service, key, states, timeout=5.0):
@@ -886,6 +948,213 @@ class DeveloperGateServiceTests(unittest.TestCase):
         self.assertEqual(status["reason"]["code"], "resource_unknown")
         self.assertEqual(len(calls), 1)
         self.assertEqual(service._admission.released, [(attempt_id, True)])
+
+    def test_inventory_reports_prepared_tools_and_measured_cache_after_prep_and_ack(self) -> None:
+        authority, request, raw = _fixture()
+        authority = replace(authority, tools_first_only=True)
+        tools_root = tempfile.TemporaryDirectory(prefix="studiohub-tools-")
+        self.addCleanup(tools_root.cleanup)
+        gate_root = tempfile.TemporaryDirectory(prefix="studiohub-gate-")
+        self.addCleanup(gate_root.cleanup)
+        root = Path(tools_root.name)
+        manifest = _official_manifest()
+        artifact = manifest["artifacts"][0]
+        _retained_tool(root, artifact)
+        cache_dir = root / "cache" / "python"
+        cache_dir.mkdir(parents=True)
+        calls = []
+        service = self._default_service(
+            authority=authority,
+            runner=lambda **kwargs: self.fail("no check runner in tools-first mode"),
+            root_dir=gate_root.name,
+            tool_preparer=_SeamPreparer(calls, manifest=manifest,
+                                        digest=PIN["manifest_sha256"]),
+            tools_root=root)
+        before = service.inventory_for_resources()
+        self.assertIsNotNone(before)
+        self.assertFalse(before["toolchains"][0]["available"])
+        self.assertIsNone(before["toolchains"][0]["installed_bytes"])
+        self.assertEqual(before["toolchains"][0]["reason"]["code"], "not_prepared")
+        self.assertEqual(before["developer_gate_space"]["shared_cache_bytes"], 0)
+        self.assertEqual(
+            before["developer_gate_space"]["shared_cache_limit_bytes"], 5000)
+
+        accepted = service.accept(contract.canonical_json(request).encode(), "key-1",
+                                  CONTROLLER, NODE, {"kind": "fleet"},
+                                  {"credential": "fleet-header"})
+        attempt_id = accepted["acceptance"]["attempt_id"]
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"not_run", "failed", "recovery_hold"})
+        self.assertEqual(status["state"], "not_run")
+
+        # The inventory cache held the pre-prep value; completion must have cleared it.
+        (cache_dir / "archive.tar.gz").write_bytes(b"x" * 1234)
+        after = service.inventory_for_resources()
+        fact = after["toolchains"][0]
+        self.assertTrue(fact["available"])
+        self.assertEqual(fact["pin"], PIN)
+        self.assertEqual(fact["observed_at"], OBSERVED)
+        self.assertEqual(fact["installed_bytes"], 1234)
+        self.assertIsNone(fact["reason"])
+        space = after["developer_gate_space"]
+        self.assertEqual(space["shared_cache_bytes"], 1234)
+        self.assertEqual(space["shared_cache_limit_bytes"], 5000)
+        self.assertEqual(space["workspace_limit_bytes"],
+                         service._store.max_workspace_bytes)
+        self.assertEqual(space["result_spool_limit_bytes"],
+                         service._store.max_result_spool_bytes)
+
+        _path, descriptor = service.result("key-1", CONTROLLER, NODE)
+        rec = service._store.get_attempt_by_id(attempt_id)
+        ack = {"format": contract.ACK_FORMAT, "request_id": "ack-1",
+               "acceptance": rec["acceptance"], "result": descriptor}
+        # Change the cache after the last cached inventory; ACK must clear the cache.
+        (cache_dir / "archive.tar.gz").write_bytes(b"x" * 1500)
+        service.ack("key-1", contract.canonical_json(ack).encode(),
+                    CONTROLLER, NODE)
+        post = service.inventory_for_resources()
+        self.assertEqual(post["developer_gate_space"]["shared_cache_bytes"], 1500)
+        self.assertTrue(post["toolchains"][0]["available"])
+
+    def test_inventory_refuses_available_when_the_retained_tool_is_removed(self) -> None:
+        authority, request, raw = _fixture()
+        authority = replace(authority, tools_first_only=True)
+        tools_root = tempfile.TemporaryDirectory(prefix="studiohub-tools-")
+        self.addCleanup(tools_root.cleanup)
+        gate_root = tempfile.TemporaryDirectory(prefix="studiohub-gate-")
+        self.addCleanup(gate_root.cleanup)
+        root = Path(tools_root.name)
+        manifest = _official_manifest()
+        artifact = manifest["artifacts"][0]
+        tree = _retained_tool(root, artifact)
+        service = self._default_service(
+            authority=authority,
+            runner=lambda **kwargs: self.fail("no check runner in tools-first mode"),
+            root_dir=gate_root.name,
+            tool_preparer=_SeamPreparer([], manifest=manifest,
+                                        digest=PIN["manifest_sha256"]),
+            tools_root=root)
+        service.accept(contract.canonical_json(request).encode(), "key-1",
+                       CONTROLLER, NODE, {"kind": "fleet"},
+                       {"credential": "fleet-header"})
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"not_run", "failed", "recovery_hold"})
+        self.assertEqual(status["state"], "not_run")
+        self.assertTrue(service.inventory_for_resources()["toolchains"][0]["available"])
+
+        (tree / artifact["executable"]).unlink()
+        service._invalidate_inventory()
+        fact = service.inventory_for_resources()["toolchains"][0]
+        self.assertFalse(fact["available"])
+        self.assertIsNone(fact["installed_bytes"])
+        self.assertEqual(fact["reason"]["code"], "retained_tool_unavailable")
+        self.assertNotIn(root.name, fact["reason"]["detail"])
+
+    def test_inventory_keeps_unconfigured_and_unprepared_tools_unknown(self) -> None:
+        authority, _request, _raw = _fixture()
+        unconfigured = self._default_service(authority=authority)
+        value = unconfigured.inventory_for_resources()
+        self.assertIsNotNone(value)
+        self.assertEqual(value["toolchains"], [])
+        self.assertIsNone(value["developer_gate_space"]["shared_cache_bytes"])
+        self.assertIsNone(value["developer_gate_space"]["shared_cache_limit_bytes"])
+
+        tools_root = tempfile.TemporaryDirectory(prefix="studiohub-tools-")
+        self.addCleanup(tools_root.cleanup)
+        gate_root = tempfile.TemporaryDirectory(prefix="studiohub-gate-")
+        self.addCleanup(gate_root.cleanup)
+        service = self._default_service(
+            authority=authority, root_dir=gate_root.name,
+            tool_preparer=_SeamPreparer([], manifest=_official_manifest(),
+                                        digest=PIN["manifest_sha256"]),
+            tools_root=tools_root.name)
+        value = service.inventory_for_resources()
+        fact = value["toolchains"][0]
+        self.assertFalse(fact["available"])
+        self.assertIsNone(fact["installed_bytes"])
+        self.assertEqual(fact["reason"]["code"], "not_prepared")
+        self.assertEqual(value["developer_gate_space"]["shared_cache_bytes"], 0)
+        self.assertEqual(value["developer_gate_space"]["shared_cache_limit_bytes"], 5000)
+
+    def test_inventory_refuses_available_when_pin_does_not_bind_the_loaded_manifest(self) -> None:
+        authority, request, raw = _fixture()
+        authority = replace(authority, tools_first_only=True)
+        tools_root = tempfile.TemporaryDirectory(prefix="studiohub-tools-")
+        self.addCleanup(tools_root.cleanup)
+        gate_root = tempfile.TemporaryDirectory(prefix="studiohub-gate-")
+        self.addCleanup(gate_root.cleanup)
+        root = Path(tools_root.name)
+        manifest = _official_manifest()
+        _retained_tool(root, manifest["artifacts"][0])
+        service = self._default_service(
+            authority=authority,
+            runner=lambda **kwargs: self.fail("no check runner in tools-first mode"),
+            root_dir=gate_root.name,
+            tool_preparer=_SeamPreparer([], manifest=manifest, digest="e" * 64),
+            tools_root=root)
+        service.accept(contract.canonical_json(request).encode(), "key-1",
+                       CONTROLLER, NODE, {"kind": "fleet"},
+                       {"credential": "fleet-header"})
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"not_run", "failed", "recovery_hold"})
+        self.assertEqual(status["state"], "not_run")
+        fact = service.inventory_for_resources()["toolchains"][0]
+        self.assertFalse(fact["available"])
+        self.assertIsNone(fact["installed_bytes"])
+        self.assertEqual(fact["reason"]["code"], "tool_manifest_mismatch")
+
+    def test_unknown_custom_preparer_manifest_fails_closed(self) -> None:
+        authority, request, raw = _fixture()
+        authority = replace(authority, tools_first_only=True)
+        tools_root = tempfile.TemporaryDirectory(prefix="studiohub-tools-")
+        self.addCleanup(tools_root.cleanup)
+        gate_root = tempfile.TemporaryDirectory(prefix="studiohub-gate-")
+        self.addCleanup(gate_root.cleanup)
+        root = Path(tools_root.name)
+        _retained_tool(root, _official_manifest()["artifacts"][0])
+        service = self._default_service(
+            authority=authority,
+            runner=lambda **kwargs: self.fail("no check runner in tools-first mode"),
+            root_dir=gate_root.name, tool_preparer=_preparer([]), tools_root=root)
+        service.accept(contract.canonical_json(request).encode(), "key-1",
+                       CONTROLLER, NODE, {"kind": "fleet"},
+                       {"credential": "fleet-header"})
+        service.source("key-1", io.BytesIO(raw), len(raw), CONTROLLER, NODE)
+        status = self._wait(service, "key-1", {"not_run", "failed", "recovery_hold"})
+        self.assertEqual(status["state"], "not_run")
+        fact = service.inventory_for_resources()["toolchains"][0]
+        self.assertFalse(fact["available"])
+        self.assertEqual(fact["reason"]["code"], "tool_manifest_unavailable")
+
+    def test_unreadable_cache_traversal_is_unknown_not_a_partial_total(self) -> None:
+        authority, _request, _raw = _fixture()
+        authority = replace(authority, tools_first_only=True)
+        tools_root = tempfile.TemporaryDirectory(prefix="studiohub-tools-")
+        self.addCleanup(tools_root.cleanup)
+        gate_root = tempfile.TemporaryDirectory(prefix="studiohub-gate-")
+        self.addCleanup(gate_root.cleanup)
+        root = Path(tools_root.name)
+        cache = root / "cache" / "python"
+        cache.mkdir(parents=True)
+        (cache / "archive.tar.gz").write_bytes(b"x" * 10)
+        service = self._default_service(
+            authority=authority, root_dir=gate_root.name,
+            tool_preparer=_SeamPreparer([], manifest=_official_manifest(),
+                                        digest=PIN["manifest_sha256"]),
+            tools_root=root)
+
+        def walk(_path, onerror=None):
+            if onerror is not None:
+                onerror(PermissionError(13, "Permission denied", str(_path)))
+            return iter(())
+
+        with mock.patch.object(service_mod.os, "walk", side_effect=walk):
+            with self.assertRaises(OSError):
+                service_mod.DeveloperGateService._measure_cache(cache)
+            value = service.inventory_for_resources()
+        space = value["developer_gate_space"]
+        self.assertIsNone(space["shared_cache_bytes"])
+        self.assertEqual(space["reason"]["code"], "cache_unknown")
 
 
 if __name__ == "__main__":
