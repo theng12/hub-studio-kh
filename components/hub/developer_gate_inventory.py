@@ -1,17 +1,18 @@
 """Read-only physical drive and toolchain inventory for developer gates.
 
 Maps workspace filesystem to physical internal backing drive using macOS diskutil,
-and probes caller-supplied trusted tool executables without shell or installs.
+aligned with frozen wire revision 2 physicalDrive schema, and probes
+caller-supplied trusted tool executables without shell or installs.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import plistlib
 import re
 import subprocess
-import time
 from typing import Any, Callable, Mapping, Sequence
 
 MIN_INTERNAL_DRIVE_BYTES: int = 512_000_000_000
@@ -46,21 +47,39 @@ def _resolve_mount_point(path: str | Path) -> str:
     return str(mount)
 
 
+def _current_iso_z() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def probe_internal_drive(
     workspace_path: str | Path | None = None,
     runner: Callable[[Sequence[str]], bytes] | None = None,
     timeout_seconds: float = 5.0,
 ) -> dict[str, Any]:
-    """Read physical backing drive capacity with provenance for a workspace path."""
+    """Read physical backing drive capacity with provenance aligned to wire r2 physicalDrive."""
     run_diskutil = runner or (lambda args: _default_diskutil_runner(args, timeout=timeout_seconds))
-    observed_at = time.time()
+    observed_at = _current_iso_z()
 
-    def _unknown(source: str | None = None, internal: bool | None = None) -> dict[str, Any]:
+    def _make_drive_result(
+        device_id: str | None = None,
+        internal: bool | None = None,
+        physical: bool | None = None,
+        size_bytes: int | None = None,
+        source: str = "unknown",
+        workspace_backing_device_id: str | None = None,
+        backing_source: str = "unknown",
+        reason: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         return {
+            "device_id": device_id,
             "internal": internal,
-            "physical_capacity_bytes": None,
+            "physical": physical,
+            "size_bytes": size_bytes,
             "source": source,
+            "workspace_backing_device_id": workspace_backing_device_id,
+            "backing_source": backing_source,
             "observed_at": observed_at,
+            "reason": reason,
         }
 
     try:
@@ -78,9 +97,15 @@ def probe_internal_drive(
                 volume_info = plistlib.loads(raw_volume)
 
         if volume_info.get("Error") is True:
-            return _unknown(source=volume_info.get("ErrorMessage") or "diskutil_error")
+            err_msg = volume_info.get("ErrorMessage") or "diskutil volume lookup failed"
+            return _make_drive_result(
+                source="unknown",
+                backing_source="unknown",
+                reason={"code": "VOLUME_LOOKUP_FAILED", "detail": err_msg[:2048]},
+            )
 
         stores = volume_info.get("APFSPhysicalStores")
+        backing_source = "diskutil-info-plist"
         if stores is None and volume_info.get("APFSContainerReference"):
             container_ref = volume_info["APFSContainerReference"]
             raw_container = run_diskutil(["info", "-plist", container_ref])
@@ -89,7 +114,11 @@ def probe_internal_drive(
 
         if stores is not None:
             if len(stores) == 0:
-                return _unknown(source="no_physical_stores")
+                return _make_drive_result(
+                    source="unknown",
+                    backing_source="unknown",
+                    reason={"code": "NO_PHYSICAL_STORES", "detail": "APFS container has no physical stores"},
+                )
             backing_disks: set[str] = set()
             for store in stores:
                 store_dev = store.get("APFSPhysicalStore")
@@ -102,52 +131,116 @@ def probe_internal_drive(
                     backing_disks.add(whole_id)
 
             if len(backing_disks) == 0:
-                return _unknown(source="no_backing_disks")
+                return _make_drive_result(
+                    source="unknown",
+                    backing_source="unknown",
+                    reason={"code": "NO_BACKING_DISKS", "detail": "Could not identify parent whole disk from stores"},
+                )
             if len(backing_disks) > 1:
-                return _unknown(source=f"ambiguous_multiple_drives:{','.join(sorted(backing_disks))}")
+                disk_list = ",".join(sorted(backing_disks))
+                return _make_drive_result(
+                    source="unknown",
+                    backing_source="unknown",
+                    reason={"code": "AMBIGUOUS_BACKING_DRIVES", "detail": f"Workspace backed by multiple drives: {disk_list}"},
+                )
             backing_id = next(iter(backing_disks))
         else:
             whole_id = volume_info.get("ParentWholeDisk") or (volume_info.get("DeviceIdentifier") if volume_info.get("WholeDisk") else None)
             if not whole_id:
-                return _unknown(source="no_whole_disk")
+                return _make_drive_result(
+                    source="unknown",
+                    backing_source="unknown",
+                    reason={"code": "NO_WHOLE_DISK", "detail": "No parent whole disk on non-APFS volume"},
+                )
             backing_id = whole_id
 
         raw_disk = run_diskutil(["info", "-plist", backing_id])
         disk_info = plistlib.loads(raw_disk)
 
-        if disk_info.get("VirtualOrPhysical") == "Virtual" or disk_info.get("SystemImage") is True:
-            return _unknown(source=f"virtual_drive:{backing_id}")
+        is_virtual = disk_info.get("VirtualOrPhysical") == "Virtual" or disk_info.get("SystemImage") is True
+        if is_virtual:
+            return _make_drive_result(
+                device_id=backing_id,
+                internal=False,
+                physical=False,
+                size_bytes=None,
+                source="diskutil-info-plist",
+                workspace_backing_device_id=backing_id,
+                backing_source=backing_source,
+                reason={"code": "VIRTUAL_DRIVE", "detail": f"Backing device {backing_id} is virtual"},
+            )
 
         is_internal = disk_info.get("Internal")
         if is_internal is True:
             capacity = disk_info.get("TotalSize") or disk_info.get("Size") or disk_info.get("IOKitSize")
             if capacity and int(capacity) >= 1:
-                return {
-                    "internal": True,
-                    "physical_capacity_bytes": int(capacity),
-                    "source": f"diskutil:{backing_id}",
-                    "observed_at": observed_at,
-                }
-            return _unknown(source=f"diskutil:{backing_id}:missing_capacity", internal=True)
+                return _make_drive_result(
+                    device_id=backing_id,
+                    internal=True,
+                    physical=True,
+                    size_bytes=int(capacity),
+                    source="diskutil-info-plist",
+                    workspace_backing_device_id=backing_id,
+                    backing_source=backing_source,
+                    reason=None,
+                )
+            return _make_drive_result(
+                device_id=backing_id,
+                internal=True,
+                physical=True,
+                size_bytes=None,
+                source="diskutil-info-plist",
+                workspace_backing_device_id=backing_id,
+                backing_source=backing_source,
+                reason={"code": "MISSING_PHYSICAL_CAPACITY", "detail": f"Backing drive {backing_id} reports no physical capacity"},
+            )
         elif is_internal is False:
-            return _unknown(source=f"diskutil:{backing_id}:external", internal=False)
+            return _make_drive_result(
+                device_id=backing_id,
+                internal=False,
+                physical=True,
+                size_bytes=None,
+                source="diskutil-info-plist",
+                workspace_backing_device_id=backing_id,
+                backing_source=backing_source,
+                reason={"code": "EXTERNAL_DRIVE", "detail": f"Backing drive {backing_id} is external"},
+            )
         else:
-            return _unknown(source=f"diskutil:{backing_id}:unknown_internal_state")
+            return _make_drive_result(
+                device_id=backing_id,
+                internal=None,
+                physical=True,
+                size_bytes=None,
+                source="unknown",
+                workspace_backing_device_id=backing_id,
+                backing_source="unknown",
+                reason={"code": "UNKNOWN_INTERNAL_STATE", "detail": f"Internal state for drive {backing_id} is unknown"},
+            )
 
     except Exception as exc:
-        return _unknown(source=f"probe_failed:{type(exc).__name__}")
+        return _make_drive_result(
+            source="unknown",
+            backing_source="unknown",
+            reason={"code": "PROBE_FAILED", "detail": f"{type(exc).__name__}: {exc}"[:2048]},
+        )
 
 
 def is_internal_drive_eligible(drive_info: Mapping[str, Any], min_bytes: int = MIN_INTERNAL_DRIVE_BYTES) -> bool:
-    """Return True only when drive is verified internal with capacity >= threshold."""
+    """Return True only when drive is verified internal physical with size_bytes >= threshold."""
     if not isinstance(drive_info, Mapping):
         return False
-    if drive_info.get("internal") is not True:
+    if drive_info.get("internal") is not True or drive_info.get("physical") is not True:
         return False
-    capacity = drive_info.get("physical_capacity_bytes")
-    if capacity is None or not isinstance(capacity, int):
+    size = drive_info.get("size_bytes")
+    if size is None or not isinstance(size, int):
         return False
-    return capacity >= min_bytes
+    if drive_info.get("source") != "diskutil-info-plist" or drive_info.get("backing_source") != "diskutil-info-plist":
+        return False
+    dev_id = drive_info.get("device_id")
+    backing_id = drive_info.get("workspace_backing_device_id")
+    if not dev_id or dev_id != backing_id:
+        return False
+    return size >= min_bytes
 
 
 def _default_tool_runner(args: Sequence[str], timeout: float) -> tuple[int, str, str]:
@@ -286,7 +379,7 @@ def collect_developer_gate_inventory(
 ) -> dict[str, Any]:
     """Collect full read-only inventory data: internal physical drive and toolchains."""
     return {
-        "internal_drive": probe_internal_drive(
+        "internal_physical_drive": probe_internal_drive(
             workspace_path=workspace_path,
             runner=disk_runner,
             timeout_seconds=timeout_seconds,

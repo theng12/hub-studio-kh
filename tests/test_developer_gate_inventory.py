@@ -2,10 +2,10 @@
 
 Verifies:
 - Physical internal drive topology vs APFS container capacity.
+- Wire revision 2 physicalDrive exact schema conformance.
 - External / ambiguous / virtual drive eligibility refusal.
 - Bounded tool version probes without shell.
 - Requested tool versions are never adopted as installed facts.
-- Contract schema field conformance.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from __future__ import annotations
 import plistlib
 import subprocess
 import unittest
-from unittest.mock import patch
 
 from components.hub.developer_gate_inventory import (
     collect_developer_gate_inventory,
@@ -61,9 +60,14 @@ class DeveloperGateInventoryTests(unittest.TestCase):
 
         drive = probe_internal_drive(workspace_path="/", runner=mock_runner)
         self.assertTrue(drive["internal"])
-        self.assertEqual(drive["physical_capacity_bytes"], 500_277_792_768)
-        self.assertEqual(drive["source"], "diskutil:disk0")
-        self.assertIsInstance(drive["observed_at"], float)
+        self.assertTrue(drive["physical"])
+        self.assertEqual(drive["device_id"], "disk0")
+        self.assertEqual(drive["workspace_backing_device_id"], "disk0")
+        self.assertEqual(drive["size_bytes"], 500_277_792_768)
+        self.assertEqual(drive["source"], "diskutil-info-plist")
+        self.assertEqual(drive["backing_source"], "diskutil-info-plist")
+        self.assertTrue(drive["observed_at"].endswith("Z"))
+        self.assertIsNone(drive["reason"])
 
         # Capacity accepted against 500GB / 512GB threshold
         self.assertTrue(is_internal_drive_eligible(drive, min_bytes=500_000_000_000))
@@ -71,7 +75,7 @@ class DeveloperGateInventoryTests(unittest.TestCase):
         self.assertFalse(494_384_795_648 >= 500_000_000_000)
 
     def test_external_drive_no_eligibility_claim(self) -> None:
-        """External drive (even 1TB) must return internal=False and physical_capacity_bytes=None."""
+        """External drive (even 1TB) must return internal=False and size_bytes=None."""
         responses = {
             ("info", "-plist", "/Volumes/External"): _make_plist_bytes({
                 "DeviceIdentifier": "disk5s1",
@@ -97,8 +101,12 @@ class DeveloperGateInventoryTests(unittest.TestCase):
 
         drive = probe_internal_drive(workspace_path="/Volumes/External", runner=mock_runner)
         self.assertFalse(drive["internal"])
-        self.assertIsNone(drive["physical_capacity_bytes"])
-        self.assertEqual(drive["source"], "diskutil:disk4:external")
+        self.assertTrue(drive["physical"])
+        self.assertIsNone(drive["size_bytes"])
+        self.assertEqual(drive["device_id"], "disk4")
+        self.assertEqual(drive["workspace_backing_device_id"], "disk4")
+        self.assertIsNotNone(drive["reason"])
+        self.assertEqual(drive["reason"]["code"], "EXTERNAL_DRIVE")
         self.assertFalse(is_internal_drive_eligible(drive))
 
     def test_ambiguous_multiple_backing_drives_returns_unknown(self) -> None:
@@ -126,12 +134,16 @@ class DeveloperGateInventoryTests(unittest.TestCase):
 
         drive = probe_internal_drive(workspace_path="/Volumes/Spanned", runner=mock_runner)
         self.assertIsNone(drive["internal"])
-        self.assertIsNone(drive["physical_capacity_bytes"])
-        self.assertIn("ambiguous_multiple_drives", drive["source"] or "")
+        self.assertIsNone(drive["physical"])
+        self.assertIsNone(drive["size_bytes"])
+        self.assertEqual(drive["source"], "unknown")
+        self.assertEqual(drive["backing_source"], "unknown")
+        self.assertIsNotNone(drive["reason"])
+        self.assertEqual(drive["reason"]["code"], "AMBIGUOUS_BACKING_DRIVES")
         self.assertFalse(is_internal_drive_eligible(drive))
 
     def test_virtual_drive_image_returns_unknown(self) -> None:
-        """Virtual disk images (DMG) return unknown and are ineligible."""
+        """Virtual disk images (DMG) return physical=False, size_bytes=None and are ineligible."""
         responses = {
             ("info", "-plist", "disk15s1"): _make_plist_bytes({
                 "DeviceIdentifier": "disk15s1",
@@ -151,9 +163,10 @@ class DeveloperGateInventoryTests(unittest.TestCase):
             return responses[tuple(args)]
 
         drive = probe_internal_drive(workspace_path="disk15s1", runner=mock_runner)
-        self.assertIsNone(drive["internal"])
-        self.assertIsNone(drive["physical_capacity_bytes"])
-        self.assertIn("virtual_drive", drive["source"] or "")
+        self.assertFalse(drive["physical"])
+        self.assertIsNone(drive["size_bytes"])
+        self.assertIsNotNone(drive["reason"])
+        self.assertEqual(drive["reason"]["code"], "VIRTUAL_DRIVE")
         self.assertFalse(is_internal_drive_eligible(drive))
 
     def test_diskutil_failure_returns_unknown(self) -> None:
@@ -163,8 +176,12 @@ class DeveloperGateInventoryTests(unittest.TestCase):
 
         drive = probe_internal_drive(workspace_path="/", runner=mock_runner)
         self.assertIsNone(drive["internal"])
-        self.assertIsNone(drive["physical_capacity_bytes"])
-        self.assertIn("probe_failed", drive["source"] or "")
+        self.assertIsNone(drive["physical"])
+        self.assertIsNone(drive["size_bytes"])
+        self.assertEqual(drive["source"], "unknown")
+        self.assertEqual(drive["backing_source"], "unknown")
+        self.assertIsNotNone(drive["reason"])
+        self.assertEqual(drive["reason"]["code"], "PROBE_FAILED")
         self.assertFalse(is_internal_drive_eligible(drive))
 
     def test_tool_version_probes_success(self) -> None:
@@ -256,7 +273,6 @@ class DeveloperGateInventoryTests(unittest.TestCase):
             {"id": "go", "version": "1.27.2"},
         ]
 
-        # Caller provides an executable ONLY for python (which outputs 3.12.0), nothing for node or go
         def mock_tool_runner(args: list[str], timeout: float) -> tuple[int, str, str]:
             if "python" in args[0]:
                 return 0, "Python 3.12.0\n", ""
@@ -283,8 +299,8 @@ class DeveloperGateInventoryTests(unittest.TestCase):
         self.assertIsNone(res_map["go"]["version"])
         self.assertNotEqual(res_map["go"]["version"], "1.27.2")
 
-    def test_contract_schema_field_conformance(self) -> None:
-        """Inventory fields conform strictly to canonical contract schema."""
+    def test_wire_r2_physical_drive_schema_conformance(self) -> None:
+        """physicalDrive fields match developer-gate-v1-r2.schema.json exactly."""
         drive = probe_internal_drive(
             workspace_path="disk0",
             runner=lambda args: _make_plist_bytes({
@@ -294,20 +310,23 @@ class DeveloperGateInventoryTests(unittest.TestCase):
                 "TotalSize": 500_277_792_768,
             }),
         )
-        # contract: ["internal", "physical_capacity_bytes", "source", "observed_at"]
-        self.assertEqual(
-            sorted(drive.keys()),
-            sorted(["internal", "physical_capacity_bytes", "source", "observed_at"]),
-        )
 
-        tool = probe_tool_version("python", executable_path=None)
-        # contract: ["id", "version", "available", "reason"]
-        self.assertEqual(
-            sorted(tool.keys()),
-            sorted(["id", "version", "available", "reason"]),
-        )
+        expected_wire_r2_fields = [
+            "device_id",
+            "internal",
+            "physical",
+            "size_bytes",
+            "source",
+            "workspace_backing_device_id",
+            "backing_source",
+            "observed_at",
+            "reason",
+        ]
+        self.assertEqual(sorted(drive.keys()), sorted(expected_wire_r2_fields))
+        self.assertIn(drive["source"], ["diskutil-info-plist", "unknown"])
+        self.assertIn(drive["backing_source"], ["diskutil-info-plist", "diskutil-apfs-list-plist", "unknown"])
+        self.assertTrue(drive["observed_at"].endswith("Z"))
 
-        # Full inventory dictionary shape
         inv = collect_developer_gate_inventory(
             workspace_path="disk0",
             executable_paths={},
@@ -319,7 +338,7 @@ class DeveloperGateInventoryTests(unittest.TestCase):
             }),
             tool_runner=lambda args, to: (0, "Python 3.15.0\n", ""),
         )
-        self.assertIn("internal_drive", inv)
+        self.assertIn("internal_physical_drive", inv)
         self.assertIn("toolchains", inv)
 
 
