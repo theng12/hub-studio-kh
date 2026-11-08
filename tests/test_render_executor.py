@@ -209,7 +209,9 @@ class FakeAssets:
 
 
 class FakeProcess:
-    pid = 731
+    # Above macOS's pid range: a fake must never collide with a live process, or the
+    # resource probe reads a stranger's pid and the render takes the failed path.
+    pid = 2**31 - 1
     returncode = None
 
     def __init__(self, output: Path) -> None:
@@ -2012,7 +2014,7 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(await executor.dispatch_ready())
-        await validation_ran.wait()
+        await asyncio.wait_for(validation_ran.wait(), 10)
         await executor.stop()
 
         self.assertEqual(runtime.job["state"], "cancelled")

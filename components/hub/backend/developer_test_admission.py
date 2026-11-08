@@ -1,15 +1,17 @@
-"""Atomic physical-machine admission for Developer Mode tests.
+"""Atomic physical-machine admission for Developer Mode tests and app gates.
 
-The frozen contract (``studio.developer-test.v1``, candidate 2) requires one test at a time to
-hold the same physical machine lease production uses, and to start only when production is not
-queued, running or reserved there. This module owns that decision; it deliberately reuses
+The frozen contract (``studio.developer-test.v1``, candidate 2) requires one test or app gate at
+a time to hold the same physical machine lease production uses, and to start only when production
+is not queued, running or reserved there. This module owns that decision; it deliberately reuses
 ``broker``'s lease vocabulary (``_external_machine_leases`` / ``acquire_external_machine``)
-instead of inventing a second one.
+instead of inventing a second one. Image tests gate on image-modality switches, while app gates
+require only node enablement, Lite Mode readiness, verified Developer Mode, and exact production
+queues.
 
-The runner calls ``reserve`` immediately before any child spawn or install callback, and
-``release`` only after the exact owned process tree is verified gone. Production paths call
-nothing: ``broker.acquire_external_machine`` sees the test lease and refuses, and the queue
-gates call ``production_arrived`` so the runner's cancel event is set before its next stage.
+The runner calls ``reserve`` or ``reserve_app_gate`` immediately before any child spawn or install
+callback, and ``release`` only after the exact owned process tree is verified gone. Production
+paths call nothing: ``broker.acquire_external_machine`` sees the test lease and refuses, and the
+queue gates call ``production_arrived`` so the runner's cancel event is set before its next stage.
 
 No developer-test state means every check here is a no-op: production behaves exactly as before.
 """
@@ -94,6 +96,23 @@ def _machine_paused(machine: str) -> bool:
     return False
 
 
+def _machine_paused_for_gate(machine: str) -> bool:
+    """Whether the owner's existing controls say this Mac takes no gate work right now.
+
+    App gates require node enablement and Lite Mode readiness, but not image modality switches
+    or image Studio rows. Unknown authority refuses.
+    """
+    from . import peers, registry
+    try:
+        if not registry.machine_enabled(machine):
+            return True
+        if peers.standing_by(machine):
+            return True
+    except Exception:
+        return True   # unknown authority is not permission
+    return False
+
+
 def _queued_production(machine: str) -> bool:
     """Whether any production queue has work that could run on ``machine`` now.
 
@@ -139,31 +158,51 @@ def _production_pending(machine: str) -> bool:
     return _queued_production(machine)
 
 
-def reserve(attempt_id: str, *, machine: str = "local", resource_safe: bool = True) -> str:
+_DEFAULT_RESOURCE_SAFE = object()
+
+
+def reserve(attempt_id: str, *, machine: str = "local",
+            resource_safe: Any = _DEFAULT_RESOURCE_SAFE,
+            purpose: str = "image") -> str:
     """Atomically claim ``machine`` for one test attempt; return the broker owner.
 
     ``resource_safe`` is the runner's own pre-spawn memory check: unknown resource safety must
-    refuse, never start. Raises :class:`AdmissionRefused` with one of ``paused``, ``unverified``,
+    refuse, never start. Defaults to True for frozen image callers; app gates require explicit
+    True proof. ``purpose`` is ``"image"`` (the frozen default) or ``"app_gate"``.
+    Raises :class:`AdmissionRefused` with one of ``paused``, ``unverified``,
     ``resource_unknown``, ``production_busy``, ``busy`` or ``invalid``.
     """
     global _active
     text = str(attempt_id or "")
     if not text or len(text) > 128:
         raise AdmissionRefused("invalid", "attempt_id is not a usable identity")
+    if purpose not in {"image", "app_gate"}:
+        raise AdmissionRefused("invalid", f"unknown purpose {purpose!r}")
+    is_gate = purpose == "app_gate"
+    if resource_safe is _DEFAULT_RESOURCE_SAFE:
+        if is_gate:
+            raise AdmissionRefused("resource_unknown",
+                                   "app gates require explicit resource_safe proof")
+        safe_bool = True
+    else:
+        safe_bool = (resource_safe is True) if is_gate else bool(resource_safe)
     from . import broker
     # Broker lock outside, admission lock inside: busy_machines() takes the broker lock (from
     # acquire) and then reads held_machines(), so the reverse order would deadlock.
     with broker.machine_lease_lock(), _lock:
         if _active is not None:
             if _active["attempt_id"] == text:
+                if _active["machine"] != machine or _active.get("purpose", "image") != purpose:
+                    raise AdmissionRefused("busy", "replaying attempt with conflicting identity")
                 return _active["owner"]          # idempotent replay, never a second claim
             raise AdmissionRefused("busy", "another Developer Mode test holds this Mac")
         allowed, code = _setting()
         if not allowed:
             raise AdmissionRefused(str(code), "Developer Mode is not enabled and verified")
-        if _machine_paused(machine):
+        paused = _machine_paused_for_gate(machine) if is_gate else _machine_paused(machine)
+        if paused:
             raise AdmissionRefused("paused", "this Mac is paused for work")
-        if not resource_safe:
+        if not safe_bool:
             raise AdmissionRefused("resource_unknown",
                                    "resource safety could not be established before starting")
         if _production_pending(machine):
@@ -179,9 +218,20 @@ def reserve(attempt_id: str, *, machine: str = "local", resource_safe: bool = Tr
             "machine": machine,
             "cancel": threading.Event(),
             "release_unknown": False,
+            "purpose": purpose,
         }
         broker._wakeup.set()
         return owner
+
+
+def reserve_app_gate(attempt_id: str, *, machine: str = "local",
+                     resource_safe: Any = _DEFAULT_RESOURCE_SAFE) -> str:
+    """Atomically claim ``machine`` for one app gate; return the broker owner.
+
+    App gates do not require image modality or image Studio switches. Requires explicit
+    ``resource_safe=True`` proof from the trusted caller; failclosed when False or omitted.
+    """
+    return reserve(attempt_id, machine=machine, resource_safe=resource_safe, purpose="app_gate")
 
 
 def release(attempt_id: str, *, confirmed: bool) -> bool:
@@ -222,10 +272,13 @@ def cancel_requested(attempt_id: str) -> bool:
             return False
         event = _active["cancel"]
         machine = _active["machine"]
+        purpose = _active.get("purpose", "image")
     if event.is_set():
         return True
     allowed, _code = _setting()
-    return not allowed or _machine_paused(machine)
+    if not allowed:
+        return True
+    return _machine_paused_for_gate(machine) if purpose == "app_gate" else _machine_paused(machine)
 
 
 def stage_allowed(attempt_id: str) -> bool:
@@ -245,6 +298,12 @@ def production_arrived(machine: str) -> None:
 def active_attempt() -> str | None:
     with _lock:
         return None if _active is None else _active["attempt_id"]
+
+
+def active_purpose() -> str | None:
+    """The purpose of the active hold ('image' or 'app_gate'), or None."""
+    with _lock:
+        return None if _active is None else _active.get("purpose", "image")
 
 
 def release_unknown(attempt_id: str) -> bool:

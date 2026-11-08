@@ -1,0 +1,121 @@
+{
+  "scope": "portable-mocked-checks-only",
+  "fixtureOnly": true,
+  "dispatchPerformed": false,
+  "sourceCommit": "d9c950547cb119c6aa57c54f9e2014a678593692",
+  "archiveFile": "library-0.7.5-d9c9505-source.tar",
+  "archiveSHA256": "103a4d5d882726c035f12e5d0b21587d6d8f2da74c51f4583c25e5c41cf6a8b2",
+  "archiveBytes": 1689600,
+  "cwd": "extracted-source-root",
+  "host": {
+    "os": "darwin",
+    "arch": "arm64"
+  },
+  "testedToolchains": {
+    "go": "1.27.2",
+    "node": "26.8.2",
+    "python": "3.15.0"
+  },
+  "thirdPartyDependencyDownloadsRequired": false,
+  "environment": {
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "1"
+  },
+  "executionRequirements": {
+    "nice": 15,
+    "maxConcurrentCommands": 1,
+    "minimumDiskBytes": 40000000000,
+    "minimumMemoryBytes": 4000000000
+  },
+  "commands": [
+    {
+      "id": "signing-verifier-unit",
+      "argv": [
+        "python3",
+        "-I",
+        "scripts/test_verify_macos_signing.py"
+      ]
+    },
+    {
+      "id": "javascript-unit",
+      "argv": [
+        "node",
+        "--test",
+        "tests/addresses.test.mjs",
+        "tests/cleanup-policy.test.mjs",
+        "tests/companion-settings.test.mjs",
+        "tests/download-view.test.mjs",
+        "tests/feature-wiring.test.mjs",
+        "tests/library-view.test.mjs",
+        "tests/monitoring-ui.test.mjs",
+        "tests/movie-extras.test.mjs",
+        "tests/setup-ui.test.mjs",
+        "tests/source-manager.test.mjs",
+        "tests/subtitle-ui.test.mjs"
+      ]
+    },
+    {
+      "id": "vet-darwin",
+      "argv": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "environment": {
+        "GOOS": "darwin",
+        "GOARCH": "arm64"
+      }
+    },
+    {
+      "id": "vet-windows",
+      "argv": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "environment": {
+        "GOOS": "windows",
+        "GOARCH": "arm64"
+      }
+    },
+    {
+      "id": "vet-linux",
+      "argv": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "environment": {
+        "GOOS": "linux",
+        "GOARCH": "arm64"
+      }
+    },
+    {
+      "id": "go-unit",
+      "argv": [
+        "go",
+        "test",
+        "./..."
+      ],
+      "environment": {
+        "GOOS": "darwin",
+        "GOARCH": "arm64"
+      }
+    }
+  ],
+  "localOnly": [
+    "normal-app-build",
+    "Keychain-signing",
+    "DMG-verification",
+    "packaged-launchd-start",
+    "cross-release-designated-requirements"
+  ],
+  "evidenceRequired": [
+    "exact-source-sha",
+    "archive-sha256",
+    "actual-tool-versions",
+    "per-command-exit-and-duration",
+    "overall-terminal-state"
+  ],
+  "cleanupBoundary": "Only runner-owned disposable workspace after receipts returned and owned processes ended; no local input/source/signing/evidence cleanup."
+}

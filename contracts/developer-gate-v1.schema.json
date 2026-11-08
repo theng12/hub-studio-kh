@@ -1,0 +1,1608 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kh:studio.developer-gate.v1:revision2",
+  "title": "Bounded fleet app-gate pilot canonical revision 2 pending paired ACK",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/capabilities"
+    },
+    {
+      "$ref": "#/$defs/inventory"
+    },
+    {
+      "$ref": "#/$defs/policy"
+    },
+    {
+      "$ref": "#/$defs/gateRequest"
+    },
+    {
+      "$ref": "#/$defs/status"
+    },
+    {
+      "$ref": "#/$defs/cancelRequest"
+    },
+    {
+      "$ref": "#/$defs/ackRequest"
+    },
+    {
+      "$ref": "#/$defs/resultManifest"
+    },
+    {
+      "$ref": "#/$defs/error"
+    }
+  ],
+  "$defs": {
+    "reason": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "code",
+        "detail"
+      ],
+      "additionalProperties": false
+    },
+    "runner": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "const": "studio.app-gate-runner.v1"
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "controller_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "node_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "controller_id",
+        "node_id"
+      ],
+      "additionalProperties": false
+    },
+    "toolPin": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "enum": [
+            "clt",
+            "swift",
+            "node",
+            "python",
+            "rust",
+            "go"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "manifest_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "toolFact": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "enum": [
+            "clt",
+            "swift",
+            "node",
+            "python",
+            "rust",
+            "go"
+          ]
+        },
+        "pin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/toolPin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "installed_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "const": "owned-toolchain-readback"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "pin",
+        "available",
+        "observed_at",
+        "installed_bytes",
+        "provenance",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "toolManifest": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.tool-manifest.v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolPin"
+          },
+          "maxItems": 64
+        },
+        "provenance": {
+          "const": "hub-packaged-official-hash-pinned"
+        }
+      },
+      "required": [
+        "format",
+        "id",
+        "revision",
+        "sha256",
+        "tools",
+        "provenance"
+      ],
+      "additionalProperties": false
+    },
+    "physicalDrive": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "internal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "physical": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "enum": [
+            "diskutil-info-plist",
+            "unknown"
+          ]
+        },
+        "workspace_backing_device_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backing_source": {
+          "enum": [
+            "diskutil-info-plist",
+            "diskutil-apfs-list-plist",
+            "unknown"
+          ]
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "device_id",
+        "internal",
+        "physical",
+        "size_bytes",
+        "source",
+        "workspace_backing_device_id",
+        "backing_source",
+        "observed_at",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "diskSample": {
+      "type": "object",
+      "properties": {
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "workspace_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "result_spool_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "shared_cache_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "observed_at",
+        "free_bytes",
+        "workspace_bytes",
+        "result_spool_bytes",
+        "shared_cache_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "space": {
+      "type": "object",
+      "properties": {
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "workspace_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result_spool_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shared_cache_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_limit_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result_spool_limit_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shared_cache_limit_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cleanup_state": {
+          "enum": [
+            "none",
+            "active",
+            "awaiting_ack",
+            "reconciling",
+            "removing_workspace",
+            "workspace_removed",
+            "blocked"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "observed_at",
+        "workspace_bytes",
+        "result_spool_bytes",
+        "shared_cache_bytes",
+        "workspace_limit_bytes",
+        "result_spool_limit_bytes",
+        "shared_cache_limit_bytes",
+        "cleanup_state",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "inventory": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.developer-gate.inventory.v1"
+        },
+        "node_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "controller_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "internal_physical_drive": {
+          "$ref": "#/$defs/physicalDrive"
+        },
+        "free_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toolchains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolFact"
+          },
+          "maxItems": 64
+        },
+        "developer_gate_space": {
+          "$ref": "#/$defs/space"
+        }
+      },
+      "required": [
+        "format",
+        "node_id",
+        "controller_id",
+        "observed_at",
+        "internal_physical_drive",
+        "free_bytes",
+        "toolchains",
+        "developer_gate_space"
+      ],
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.developer-gate.policy.v1"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "minimum_internal_physical_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "allowed_targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/target"
+          },
+          "maxItems": 4096
+        },
+        "excluded_targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/target"
+          },
+          "maxItems": 4096
+        }
+      },
+      "required": [
+        "format",
+        "revision",
+        "minimum_internal_physical_bytes",
+        "allowed_targets",
+        "excluded_targets"
+      ],
+      "additionalProperties": false
+    },
+    "bounds": {
+      "type": "object",
+      "properties": {
+        "json_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "source_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "source_expanded_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "source_files": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "result_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "log_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "workspace_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "result_spool_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "shared_cache_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "runtime_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "tool_prepare_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "toolchain_install_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "max_process_tree_rss_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "max_system_swap_growth_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "inventory_max_age_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "result_files": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "workspace_enforcement": {
+          "enum": [
+            "filesystem_quota",
+            "monitored_stop"
+          ]
+        },
+        "sample_interval_seconds": {
+          "type": "number",
+          "minimum": 0.001,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "json_bytes",
+        "source_bytes",
+        "source_expanded_bytes",
+        "source_files",
+        "result_bytes",
+        "log_bytes",
+        "workspace_bytes",
+        "result_spool_bytes",
+        "shared_cache_bytes",
+        "runtime_seconds",
+        "tool_prepare_seconds",
+        "toolchain_install_bytes",
+        "max_process_tree_rss_bytes",
+        "max_system_swap_growth_bytes",
+        "inventory_max_age_seconds",
+        "result_files",
+        "workspace_enforcement",
+        "sample_interval_seconds"
+      ],
+      "additionalProperties": false
+    },
+    "setting": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "enabled",
+        "verified",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "stopProof": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "proof_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        },
+        "stop_latency_seconds": {
+          "type": "number",
+          "minimum": 0.001,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "revision",
+        "proof_sha256",
+        "stop_latency_seconds"
+      ],
+      "additionalProperties": false
+    },
+    "gate": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        },
+        "required_toolchains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolPin"
+          },
+          "maxItems": 64
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "command_fixture_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        },
+        "dependency_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        },
+        "tool_manifest": {
+          "$ref": "#/$defs/toolManifest"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "budget_provenance": {
+          "enum": [
+            "requested",
+            "measured"
+          ]
+        },
+        "check_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+            "maxLength": 128
+          },
+          "maxItems": 4096
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "sha256",
+        "required_toolchains",
+        "source",
+        "command_fixture_sha256",
+        "dependency_manifest_sha256",
+        "tool_manifest",
+        "limits",
+        "budget_provenance",
+        "check_ids"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.developer-gate.capabilities.v1"
+        },
+        "contract": {
+          "const": "studio.developer-gate.v1"
+        },
+        "node_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "controller_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "server_time": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "supported": {
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runner": {
+          "$ref": "#/$defs/runner"
+        },
+        "concurrency": {
+          "const": 1
+        },
+        "setting": {
+          "$ref": "#/$defs/setting"
+        },
+        "bounds": {
+          "$ref": "#/$defs/bounds"
+        },
+        "stop_proof": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/stopProof"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_manifests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolManifest"
+          },
+          "maxItems": 64
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gate"
+          },
+          "maxItems": 64
+        },
+        "inventory": {
+          "$ref": "#/$defs/inventory"
+        },
+        "admission_policy": {
+          "$ref": "#/$defs/policy"
+        }
+      },
+      "required": [
+        "format",
+        "contract",
+        "node_id",
+        "controller_id",
+        "server_time",
+        "supported",
+        "reason",
+        "runner",
+        "concurrency",
+        "setting",
+        "bounds",
+        "stop_proof",
+        "tool_manifests",
+        "gates",
+        "inventory",
+        "admission_policy"
+      ],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expanded_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "file_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "maxLength": 40
+        },
+        "media_type": {
+          "const": "application/x-tar"
+        }
+      },
+      "required": [
+        "sha256",
+        "size_bytes",
+        "expanded_bytes",
+        "file_count",
+        "commit",
+        "media_type"
+      ],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "runtime_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "workspace_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "result_spool_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "shared_cache_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "minimum_free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "toolchain_install_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_process_tree_rss_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "max_system_swap_growth_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "start_min_free_memory_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "runtime_seconds",
+        "workspace_bytes",
+        "result_spool_bytes",
+        "shared_cache_bytes",
+        "minimum_free_bytes",
+        "toolchain_install_bytes",
+        "max_process_tree_rss_bytes",
+        "max_system_swap_growth_bytes",
+        "start_min_free_memory_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "gateRequest": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.developer-gate.request.v1"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "test_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "runner": {
+          "$ref": "#/$defs/runner"
+        },
+        "node_setting_revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "admission_policy_revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "minimum_internal_physical_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "requested_limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "gate": {
+          "$ref": "#/$defs/gate"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "tool_manifest": {
+          "$ref": "#/$defs/toolManifest"
+        }
+      },
+      "required": [
+        "format",
+        "run_id",
+        "test_id",
+        "runner",
+        "node_setting_revision",
+        "admission_policy_revision",
+        "minimum_internal_physical_bytes",
+        "requested_limits",
+        "gate",
+        "source",
+        "tool_manifest"
+      ],
+      "additionalProperties": false
+    },
+    "resultDescriptor": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "media_type": {
+          "const": "application/x-tar"
+        }
+      },
+      "required": [
+        "sha256",
+        "size_bytes",
+        "media_type"
+      ],
+      "additionalProperties": false
+    },
+    "acceptance": {
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "idempotency_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "request_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        },
+        "node_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "controller_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "attempt_id",
+        "idempotency_key",
+        "request_sha256",
+        "node_id",
+        "controller_id"
+      ],
+      "additionalProperties": false
+    },
+    "status": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.developer-gate.status.v1"
+        },
+        "acceptance": {
+          "$ref": "#/$defs/acceptance"
+        },
+        "state": {
+          "enum": [
+            "waiting_source",
+            "waiting_idle",
+            "preparing_toolchains",
+            "running",
+            "collecting",
+            "passed",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "not_run",
+            "recovery_hold"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accepted_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "resource_release_confirmed": {
+          "type": "boolean"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/resultDescriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result_acknowledged": {
+          "type": "boolean"
+        },
+        "workspace_removed": {
+          "type": "boolean"
+        },
+        "inventory": {
+          "$ref": "#/$defs/inventory"
+        },
+        "acknowledged_result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/resultDescriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acknowledged_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$",
+              "maxLength": 40
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cleanup_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/diskSample"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "format",
+        "acceptance",
+        "state",
+        "reason",
+        "accepted_at",
+        "updated_at",
+        "resource_release_confirmed",
+        "result",
+        "result_acknowledged",
+        "workspace_removed",
+        "inventory",
+        "acknowledged_result",
+        "acknowledged_at",
+        "cleanup_after"
+      ],
+      "additionalProperties": false
+    },
+    "cancelRequest": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.developer-gate.cancel.v1"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "format",
+        "request_id"
+      ],
+      "additionalProperties": false
+    },
+    "ackRequest": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.developer-gate.ack.v1"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "acceptance": {
+          "$ref": "#/$defs/acceptance"
+        },
+        "result": {
+          "$ref": "#/$defs/resultDescriptor"
+        }
+      },
+      "required": [
+        "format",
+        "request_id",
+        "acceptance",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "processRelease": {
+      "type": "object",
+      "properties": {
+        "confirmed": {
+          "const": true
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "owned_processes_remaining": {
+          "const": 0
+        },
+        "proof": {
+          "enum": [
+            "never_started",
+            "owned-process-identities-exited"
+          ]
+        }
+      },
+      "required": [
+        "confirmed",
+        "observed_at",
+        "owned_processes_remaining",
+        "proof"
+      ],
+      "additionalProperties": false
+    },
+    "check": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "maxLength": 128
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "not_run"
+          ]
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -255,
+              "maximum": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "log_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "maxLength": 64
+        },
+        "log_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "outcome",
+        "exit_code",
+        "duration_seconds",
+        "log_sha256",
+        "log_bytes",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "resultManifest": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.developer-gate.result.v1"
+        },
+        "acceptance": {
+          "$ref": "#/$defs/acceptance"
+        },
+        "runner": {
+          "$ref": "#/$defs/runner"
+        },
+        "gate": {
+          "$ref": "#/$defs/gate"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "tool_manifest": {
+          "$ref": "#/$defs/toolManifest"
+        },
+        "actual_toolchains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolFact"
+          },
+          "maxItems": 64
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "not_run"
+          ]
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -255,
+              "maximum": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "termination_signal": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check"
+          },
+          "maxItems": 4096
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$",
+              "maxLength": 40
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "maxLength": 40
+        },
+        "process_release": {
+          "$ref": "#/$defs/processRelease"
+        },
+        "internal_physical_drive": {
+          "$ref": "#/$defs/physicalDrive"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/diskSample"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "peak_workspace_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "format",
+        "acceptance",
+        "runner",
+        "gate",
+        "source",
+        "tool_manifest",
+        "actual_toolchains",
+        "outcome",
+        "exit_code",
+        "termination_signal",
+        "reason",
+        "checks",
+        "started_at",
+        "finished_at",
+        "process_release",
+        "internal_physical_drive",
+        "before",
+        "peak_workspace_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "studio.developer-gate.error.v1"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "acceptance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/acceptance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "format",
+        "reason",
+        "acceptance"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

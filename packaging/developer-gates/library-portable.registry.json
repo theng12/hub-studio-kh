@@ -1,0 +1,35 @@
+{
+  "format": "studio.developer-gate.registry.v1",
+  "revision": "library-portable-2026-11-08.1",
+  "gate": {
+    "file": "library-portable.gate.json",
+    "sha256": "a52e426b6863611cec2821a7632ccbcbf11bbd74e1565b8f562cece6dacda2de"
+  },
+  "command_fixture": {
+    "file": "library-portable.commands.json",
+    "sha256": "d0b8658d783c7680a96ad0c12526d3ab2ce2ae12c87edb733be20f25cbb3d9df"
+  },
+  "dependency_manifest": {
+    "file": "library-portable.dependency-manifest.json",
+    "sha256": "834672b41e83673892b7b9d5dc81d4e21066e39795bbf9ee10e9d52c0db74f23"
+  },
+  "tool_manifest": {
+    "file": "official-tools.json",
+    "sha256": "83c6250e19a5cd89e1c34b03702ab1582be78cadb3a1984ff6ea30c1ad239f5c"
+  },
+  "runner": {
+    "id": "studio.app-gate-runner.v1",
+    "revision": "studio.app-gate-runner.v1+2026-11-08.1",
+    "entry": "components/hub/developer_gate_runner.py",
+    "files": [
+      {
+        "path": "components/hub/developer_gate_runner.py",
+        "sha256": "5d1eee8ed6f458aab19185e1e817c288cd1c19c32167cea8353818fd692c3c56"
+      },
+      {
+        "path": "components/hub/developer_image_runner.py",
+        "sha256": "5ea89d52dd2533bcfc4f2c7c854f09860a0523947e4849d1e951f613e3fd32c0"
+      }
+    ]
+  }
+}

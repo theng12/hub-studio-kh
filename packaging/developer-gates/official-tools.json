@@ -1,0 +1,52 @@
+{
+  "format": "studio.developer-gate.official-tools.v1",
+  "scope": "archive-preparation-only",
+  "production_installer_qualified": false,
+  "platform": "darwin-arm64",
+  "notes": "Exact archive pins from _orchestra/hub-lead/fleet-gates-20261108/official-tool-artifacts-r1.json. Executable paths and expanded byte facts come from the adjacent local qualification receipts. This manifest prepares retained tool trees only; it makes no supported-production or target-installation claim.",
+  "limits": {
+    "max_archive_bytes": 134217728,
+    "max_expanded_bytes": 536870912,
+    "max_member_bytes": 268435456,
+    "max_members": 150000,
+    "max_path_length": 1024,
+    "max_total_seconds": 900,
+    "min_free_bytes": 10737418240,
+    "download_cache_bytes": 536870912
+  },
+  "artifacts": [
+    {
+      "id": "go",
+      "version": "1.27.2",
+      "platform": "darwin-arm64",
+      "filename": "go1.27.2.darwin-arm64.tar.gz",
+      "url": "https://go.dev/dl/go1.27.2.darwin-arm64.tar.gz",
+      "size_bytes": 68195916,
+      "sha256": "76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5",
+      "expanded_bytes": 240002963,
+      "executable": "go/bin/go"
+    },
+    {
+      "id": "node",
+      "version": "26.8.2",
+      "platform": "darwin-arm64",
+      "filename": "node-v26.8.2-darwin-arm64.tar.gz",
+      "url": "https://nodejs.org/dist/v26.8.2/node-v26.8.2-darwin-arm64.tar.gz",
+      "size_bytes": 57818610,
+      "sha256": "974b6d5fb2fc7c33ff2354db0902b4e91c2de01ec8acc6de48e543c97e18c9e1",
+      "expanded_bytes": 219730984,
+      "executable": "node-v26.8.2-darwin-arm64/bin/node"
+    },
+    {
+      "id": "python",
+      "version": "3.15.0",
+      "platform": "darwin-arm64",
+      "filename": "cpython-3.15.0+20261020-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261020/cpython-3.15.0%2B20261020-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "size_bytes": 27667887,
+      "sha256": "80af02b62e3675f653e79fd9560f90f7ab8ced848cd4a5a81ee7e3d6c8dc2a10",
+      "expanded_bytes": 71928843,
+      "executable": "python/bin/python3.15"
+    }
+  ]
+}

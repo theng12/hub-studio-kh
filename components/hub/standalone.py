@@ -1924,6 +1924,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         from . import developer_test_service
         developer_test_service.configure()
         await _asyncio.to_thread(developer_test_service.recover)
+        # App gates restore their exact physical holds and reconcile owned processes before any
+        # dispatcher or source upload can start. Production stays unsupported until packaged.
+        from . import developer_gate_service
+        developer_gate_service.configure()
+        await _asyncio.to_thread(developer_gate_service.recover)
         transcription_jobs.restore_batches()
         # A pause this build can never clear is not a safety feature, it is a permanent refusal.
         try:
@@ -2052,6 +2057,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 await control_plane.runtime.stop()
                 await monitor.stop()
             await _asyncio.to_thread(developer_test_service.shutdown)
+            await _asyncio.to_thread(developer_gate_service.shutdown)
             if start_background:
                 from . import model_downloads
                 model_downloads.shutdown()
@@ -2214,6 +2220,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         from .backend import fleet_nodes as fleet_view
         from .backend import registry as registry_view
         from .backend import preferred_hold as preferred_view
+        # Bounded orphan reconciliation runs on this node, never at the controller's check-in.
+        from . import developer_gate_service
+        developer_gate_service.recover_if_due()
         _saved_pref = registry_view.preferred_work("local")
         _policy_pref = preferred_view.normalized(_saved_pref)
         answer = {"host": host, "studios": studios, "proxy": proxy, "version": _app_version(),
@@ -2226,6 +2235,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "priority_order": registry_view.priority_order("local"),
                 "chat_priority": registry_view.chat_priority("local"),
                 "function_enabled": registry_view.function_switches("local")}
+        # Optional frozen gate inventory measured by an explicit gate attempt; a status
+        # read never probes the mount table itself.
+        gate_inventory = developer_gate_service.cached_inventory_for_resources()
+        if gate_inventory is not None:
+            answer["developer_gate_inventory"] = gate_inventory
+        # Exact work-volume facts from the same probe, optional and absent when unmeasured.
+        work_volume = developer_gate_service.work_volume_for_resources()
+        if work_volume is not None:
+            answer["work_volume"] = work_volume
         # The Mac's own idle-hold truth, read by its controller for group arbitration: the saved
         # preference and the bounded remaining window. An older reader ignores both fields.
         if _policy_pref:
@@ -5900,7 +5918,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     raise HTTPException(502, "Chat worker returned activity for another job")
         return JSONResponse(snapshot)
 
-    from . import delivery, developer_tests, operator_controls, renders, statistics
+    from . import delivery, developer_gates, developer_tests, operator_controls, renders, statistics
     delivery.register_routes(app, monitor)
     operator_controls.register_routes(app, monitor)
     statistics.register_routes(app, monitor)
@@ -5909,6 +5927,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     # verified OFF is created once here, so a missing file later reads as unverified.
     developer_tests.ensure_initial_setting()
     developer_tests.register_routes(app)
+    # App-gate pilot: exactly seven fixed operations, current Fleet header only.
+    developer_gates.register_routes(app)
     # The Render tab (owner, 2026-10-26). Reads the rows `render_jobs` already writes; on a
     # controller it adds each joined Mac's own list, over the same Fleet-credential read the rest
     # of the fleet uses. No writes, and nothing here reaches the render lane's own routes.

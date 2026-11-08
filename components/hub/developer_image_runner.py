@@ -970,6 +970,23 @@ def _signal_group(pgid: int, signum: int) -> None:
         pass
 
 
+def _signal_pid(pid: int, signum: int) -> None:
+    try:
+        os.kill(pid, signum)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _stop_sampled_descendants(checked: list[dict], leader: dict,
+                              state: Callable[[dict], bool | None]) -> None:
+    """SIGKILL only sampled identities verified alive; never signals the group."""
+    for item in checked:
+        if item is leader:
+            continue
+        if state(item) is True:
+            _signal_pid(int(item["pid"]), signal.SIGKILL)
+
+
 def _effective_sample_interval_ms(configured: int, max_runtime: float) -> int:
     """The real interval: never below 250 ms, and small enough for 4000 samples."""
     return max(int(configured), 250, int(math.ceil(max_runtime * 1000 / 4000)))
@@ -1048,12 +1065,18 @@ def _drain_child_log(pipe: Any, sink: _BoundedLogSink) -> None:
 
 def stop_exact_identity(identity: dict | None, *, metrics: Metrics,
                         clock: Callable[[], float], grace: float,
-                        known_pids: Iterable[dict] = ()) -> ReleaseProof:
+                        known_pids: Iterable[dict] = (),
+                        reap: Callable[[], None] | None = None) -> ReleaseProof:
     """The one stop primitive: exact pid+create_time leader, its process group, its descendants.
 
     A guessed or reused pid is never signalled: an identity without a verified positive
-    create_time sends no signal and never confirms release. Release is confirmed only when the
-    leader, the process group and every sampled descendant are verified gone.
+    create_time sends no signal and never confirms release. Once the leader is verified gone,
+    its pgid may be reused, so only sampled descendants still verified alive are signalled
+    individually. Release is confirmed only when the leader, the process group and every
+    sampled descendant are verified gone. An exited but
+    unreaped child is collected before each check, because macOS reports its zombie pid as
+    unaddressable (getpgid ESRCH) and its group as unreadable (killpg EPERM). A caller that owns
+    a Popen passes ``reap`` so its exit status survives; the default uses WNOHANG.
     """
     started = clock()
     checked = [dict(item) for item in known_pids]
@@ -1081,6 +1104,7 @@ def stop_exact_identity(identity: dict | None, *, metrics: Metrics,
     leader = {"pid": pid, "create_time": create_time}
     checked = [leader] + [dict(item) for item in known_pids
                           if int(item.get("pid", -1)) != pid]
+    collect = reap or (lambda: _reap_owned(pid))
 
     def state(item: dict) -> bool | None:
         try:
@@ -1089,19 +1113,40 @@ def stop_exact_identity(identity: dict | None, *, metrics: Metrics,
             return None
 
     def gone() -> bool:
+        collect()
         return (state(leader) is False and _group_alive(pgid) is False
                 and all(state(item) is False for item in checked[1:]))
 
+    collect()
     leader_state = state(leader)
     if leader_state is not True:
         # Only a verified-dead leader plus a verified-empty group is a release. An unreadable
         # leader or a live group we cannot attribute is not proof, so no signal is guessed.
         confirmed = gone()
+        if not confirmed and leader_state is False:
+            # The leader already exited; its pgid may be reused, so stop only sampled
+            # descendants still verified alive, then recheck once over a bounded window.
+            _stop_sampled_descendants(checked, leader, state)
+            deadline = clock() + 2.0
+            while not confirmed and clock() < deadline:
+                collect()
+                confirmed = gone()
+                if not confirmed:
+                    time.sleep(0.05)
+        if not confirmed and _group_alive(pgid) is None:
+            # A leader in its exit transition can be briefly unreadable (macOS reports its pid
+            # unaddressable and its group unsignalable before it is reapable). Re-verify over
+            # the grace window; a still-unreadable identity holds after it.
+            deadline = clock() + max(0.0, grace)
+            while not confirmed and clock() < deadline:
+                time.sleep(0.05)
+                confirmed = gone()
         reason = None if confirmed else {
             "code": "release_unknown",
             "detail": (f"owned process group {pgid} cannot be verified as this attempt's "
                        f"(leader_alive={leader_state}, group_alive={_group_alive(pgid)})")}
-        return ReleaseProof(confirmed, _utcnow() if confirmed else None, reason, 0.0, checked)
+        return ReleaseProof(confirmed, _utcnow() if confirmed else None, reason,
+                            max(0.0, clock() - started), checked)
     try:
         live_pgid = os.getpgid(pid)
     except ProcessLookupError:
@@ -1109,26 +1154,43 @@ def stop_exact_identity(identity: dict | None, *, metrics: Metrics,
     except Exception:  # noqa: BLE001 - unreadable is not a verified group
         live_pgid = -1
     if live_pgid != pgid:
-        return ReleaseProof(False, None, {
+        # ProcessLookupError means the pid is no longer addressable (typically a child that
+        # exited between the liveness read and this check). Collect it and re-verify the exact
+        # facts; a different or unreadable group is never signalled.
+        confirmed = gone() if live_pgid is None else False
+        reason = None if confirmed else {
             "code": "release_unknown",
             "detail": (f"the live process group for pid {pid} is {live_pgid}, not the "
-                       f"recorded {pgid}; no signal was sent")}, 0.0, checked)
+                       f"recorded {pgid}; no signal was sent")}
+        return ReleaseProof(confirmed, _utcnow() if confirmed else None, reason, 0.0, checked)
     _signal_group(pgid, signal.SIGTERM)
     limit = max(0.0, grace)
     while clock() - started < limit:
-        _reap_owned(pid)
+        collect()
         if gone():
             break
         time.sleep(0.05)
-    if not gone() and state(leader) is not False:
-        _signal_group(pgid, signal.SIGKILL)
+    if not gone():
+        leader_state = state(leader)
+        if leader_state is True:
+            try:
+                live_pgid = os.getpgid(pid)
+            except ProcessLookupError:
+                live_pgid = None
+            except Exception:  # noqa: BLE001 - unreadable is not a verified group
+                live_pgid = -1
+            if live_pgid == pgid:
+                _signal_group(pgid, signal.SIGKILL)
+        elif leader_state is False:
+            _stop_sampled_descendants(checked, leader, state)
+        # An unknown leader never justifies a group signal: the pgid may be reused.
         deadline = clock() + 2.0
         while clock() < deadline:
-            _reap_owned(pid)
+            collect()
             if gone():
                 break
             time.sleep(0.05)
-    _reap_owned(pid)
+    collect()
     group = _group_alive(pgid)
     leader_state = state(leader)
     stragglers = [item for item in checked if state(item) is not False]
@@ -1502,10 +1564,11 @@ class ImageTestRunner:
 
     # -- stop / recovery ----------------------------------------------------
     def _stop_identity(self, identity: dict | None, *, known_pids: Iterable[dict] = (),
-                       grace: float | None = None) -> ReleaseProof:
+                       grace: float | None = None,
+                       reap: Callable[[], None] | None = None) -> ReleaseProof:
         return stop_exact_identity(identity, metrics=self.metrics, clock=self.clock,
                                    grace=self.stop_grace_seconds if grace is None else grace,
-                                   known_pids=known_pids)
+                                   known_pids=known_pids, reap=reap)
 
     def _stage(self, attempt_id: str) -> str | None:
         try:
@@ -1950,7 +2013,8 @@ class ImageTestRunner:
                 gaps = gaps[-4096:]
 
         if float(identity.get("create_time", 0.0)) > 0:
-            proof = self._stop_identity(identity, known_pids=list(known.values()))
+            proof = self._stop_identity(identity, known_pids=list(known.values()),
+                                        reap=lambda: process.poll())
         else:
             # The durable identity was never verified. The unreaped direct child handle is the
             # only safe stop; release stays unconfirmed because no exact identity exists.

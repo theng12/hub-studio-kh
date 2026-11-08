@@ -315,10 +315,41 @@ _CHECKIN_KEYS = ("last_checkin_at", "checkin_version", "checkin_workstation",
 #: dispatch decision actually use travel — the same rule `_current_job_of` and `_workstation_of`
 #: already follow.
 _RESOURCE_KEYS = ("host", "studios", "version", "startup", "current_job", "last_stop",
-                  "workstation", "priority_order", "chat_priority", "function_enabled", "source")
+                  "workstation", "priority_order", "chat_priority", "function_enabled", "source",
+                  "developer_gate_inventory", "work_volume")
 
 
-def _resources_of(value: object, node_id: str) -> dict[str, Any] | None:
+def _gate_inventory_of(value: object, node_id: str,
+                       controller_id: str | None = None) -> dict[str, Any] | None:
+    """The closed developer-gate inventory, or absent when it is not exactly this node's.
+
+    A node's optional field is trusted only after the frozen schema and the identities the
+    controller can know agree. Missing, malformed or another Mac's answer is absent, never null.
+    """
+    if not isinstance(value, dict):
+        return None
+    try:
+        from ..developer_gate_contract import validate_inventory_schema
+        validate_inventory_schema(value)
+    except Exception:  # noqa: BLE001 - a node's optional field never breaks the roster
+        return None
+    wanted = str(node_id or "").strip().lower()
+    if not wanted or str(value.get("node_id") or "").strip().lower() != wanted:
+        return None
+    if controller_id is None:
+        try:
+            from . import control_plane
+            controller_id = str(control_plane.load_settings().get("controller_id") or "")
+        except Exception:  # noqa: BLE001 - an unreadable controller identity is not a match
+            controller_id = ""
+    controller_id = str(controller_id or "").strip().lower()
+    if controller_id and str(value.get("controller_id") or "").strip().lower() != controller_id:
+        return None
+    return value
+
+
+def _resources_of(value: object, node_id: str,
+                  controller_id: str | None = None) -> dict[str, Any] | None:
     """A node's own resources snapshot, cut to the contract, or `None` when it did not send one.
 
     A node that names a *different* Mac in the snapshot it sent is not describing itself, and its
@@ -332,6 +363,14 @@ def _resources_of(value: object, node_id: str) -> dict[str, Any] | None:
         if named and named != node_id:
             return None
     out: dict[str, Any] = {key: value.get(key) for key in _RESOURCE_KEYS if key in value}
+    # An optional frozen developer-gate inventory travels only when it is the closed shape and
+    # names this node and this controller. Missing or malformed is absent, never zero.
+    if "developer_gate_inventory" in out:
+        inventory = _gate_inventory_of(out["developer_gate_inventory"], node_id, controller_id)
+        if inventory is None:
+            out.pop("developer_gate_inventory", None)
+        else:
+            out["developer_gate_inventory"] = inventory
     # The node answered through its own authenticated call, so the two facts `dispatch_ready`
     # reads are true by construction: it is there, and it is this controller's credential it
     # answered with. Marked `pulled` so every reader can see this was not a dial.
@@ -1380,6 +1419,10 @@ def _from_snapshot(row: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, A
                    if isinstance(snapshot.get("preferred_hold_remaining_s"), (int, float))
                    and not isinstance(snapshot.get("preferred_hold_remaining_s"), bool)
                    else 0.0)}
+    inventory = _gate_inventory_of(snapshot.get("developer_gate_inventory"),
+                                   str(row.get("id") or ""))
+    if inventory is not None:
+        carried["developer_gate_inventory"] = inventory
     if snapshot.get("auth") is False:
         return {**row, **carried, "state": "unauthorized",
                 "detail": _CREDENTIAL_DETAIL.format(
@@ -1632,7 +1675,7 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
         if _render_capability_due(node_id):
             _remember_render_capability(
                 node_id, await _probe_render_capability(client, node, older))
-        return {**row, "state": "reachable", "detail": None, "host": host,
+        result = {**row, "state": "reachable", "detail": None, "host": host,
                 # **Why this controller believes the Mac is there.** A node it cannot dial answers
                 # through the pull channel, and that answer travelled on the node's own check-in
                 # connection: the state is the same, the reason is not, and an operator reading a
@@ -1647,6 +1690,10 @@ async def probe(node: dict[str, Any], client: httpx.AsyncClient | None = None) -
                 "priority_order": order,
                 "chat_priority": bool(order and order[0] == "chat"),
                 "function_enabled": _function_enabled_of(body)}
+        inventory = _gate_inventory_of(body.get("developer_gate_inventory"), node_id)
+        if inventory is not None:
+            result["developer_gate_inventory"] = inventory
+        return result
     except (httpx.HTTPError, OSError) as exc:
         # **A Mac this controller cannot dial is not a Mac that is gone.** Sharing a Tailscale node
         # works one way, so three Shops Macs could never be dialled at all — while each of them

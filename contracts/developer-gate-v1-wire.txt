@@ -1,0 +1,194 @@
+CANONICAL PROPOSAL revision2 — studio.developer-gate.v1 — 2026-11-08
+Pair: developer-gate-v1-r2.schema.json + wire-r2.txt. Pending paired Gateway/Hub ACK.
+Supersedes Gateway draft1 and Hub's historical draft1 wrapper. Neither consumer codes
+until both exact pair hashes are ACKed. This pair describes only the bounded pilot.
+JSON Schema defines closed shapes; the following cross-field/lifecycle rules are normative.
+
+1. Exactly seven fixed registered-controller operations
+Base /api/hub/fleet/nodes/{node_id}/developer-gates
+GET /capabilities -> capabilities
+POST base -> gateRequest -> status (200/202); Idempotency-Key required
+GET /by-key/{key} -> status
+PUT /by-key/{key}/source -> streamed raw application/x-tar -> status
+POST /by-key/{key}/cancel -> cancelRequest -> status
+GET /by-key/{key}/result -> streamed immutable raw application/x-tar
+POST /by-key/{key}/ack -> ackRequest -> status
+No separate tool-prepare operation, ackReceipt route/type, live log route or general relay.
+No caller URL, argv, environment command, filesystem destination or additional query.
+Identity comes from existing registered-controller authentication and physical node mapping.
+X-Hub-Token stays local; redirects disabled. No credential, source, env or private path echoed.
+Source/result transfer Content-Length equals the pinned descriptor; exact raw SHA256 verified.
+Errors match closed error definition; 400 malformed,401/403 authentication/authorization,
+404 unknown original key,409 conflict/admission,413 bounds,503 unavailable/unsupported.
+Image developer-test v1 is untouched. Current installed Hub226 cannot run this contract.
+
+2. Acceptance and identity
+Strict UTF-8 JSON rejects duplicates/nonfinite values before validation. request_sha256 is
+SHA256 of canonical JSON: sorted keys, separators comma/colon, ensure_ascii=true,
+allow_nan=false. Persist original request bytes, canonical hash, actor/controller/node/key
+and transport credential/address identity before sending. This differs from image-v1 raw
+hashing deliberately; no old reader is changed. Caller ASCII IDs are safe path segments.
+Hub durably accepts original actor/controller/node/key/hash before any side effect and
+returns immutable acceptance (attempt_id/idempotency_key/request_sha256/node/controller).
+Same key/different request refuses409. Same key/same request reconciles original attempt.
+Unknown submit/source/cancel/ACK delivery is held at original destination/key; no automatic
+job/source replay, substitution, changed request, credential escalation or new worker route.
+A socket timeout is never the gate runtime limit and never proof of rejection/termination.
+Fresh capability/status identities, runner and acceptance must match the pinned original.
+
+3. Packaged authority and source
+Capabilities advertise closed gates, official tool manifests, runner, bounds, current
+owner admission_policy and node inventory. supported=true requires verified stop proof,
+usable packaged registry and fresh measurements; a nonnull failure reason accompanies
+unsupported. A hash string alone is not authority: definitions must be packaged with the
+pinned runner, and capabilities must correspond to its actual installed revision.
+GateRequest.gate matches one advertised gate object exactly, including source, command
+fixture SHA, dependency-manifest SHA, tool manifest, required tools, limits, check IDs and
+requested/measured budget provenance. Request.source equals gate.source and the verified
+archive; request.tool_manifest equals gate.tool_manifest and one advertised tool manifest.
+No duplicate gate/tool/check/fixture identifiers. ToolManifest.tools exactly matches gate
+required_toolchains. Exact installer manifests resolve only official hash-pinned artifacts;
+no network address or arbitrary executable comes from caller input.
+Gate definition sha256 is the packaged gate definition file's raw hash, never a digest
+computed from a wire object containing that digest. Tool-manifest hashes similarly identify
+packaged external definition bytes, not self-referential wire JSON.
+Pilot source MUST be exact approved committed Library source; null/dirty sources are not
+approved. Gate registry must retain portable-subset scope, never claim full Library gate.
+Known input: commit d9c950547cb119c6aa57c54f9e2014a678593692; tar1689600bytes;
+SHA103a4d5d882726c035f12e5d0b21587d6d8f2da74c51f4583c25e5c41cf6a8b2;
+command fixture SHAd0b8658d783c7680a96ad0c12526d3ab2ce2ae12c87edb733be20f25cbb3d9df.
+Expanded bytes/file count/dependency manifest/official installer hashes still require
+actual packaged readback; do not fabricate them from those already known numbers.
+Budgets may be requested or measured and always say which. Requested40GBdisk/4GBRAM are
+not cold peak measurements; no measured hardware recommendation is inferred from them.
+
+4. Owner policy, physical capacity and actual disk
+Gateway and Hub enforce the advertised owner policy; request admission_policy_revision
+and minimum_internal_physical_bytes exactly match the current policy at admission/start.
+Policy is owner state, not caller permission to lower a limit. Initial editable minimum
+is512000000000 decimal bytes. Setting0 disables that comparison only; it never disables
+exclusions, authentication, process ownership, idle/Production priority or resource caps.
+Use policy.allowed_targets explicit stable controller/node IDs; excluded_targets wins.
+Resolve paused Studio,1103,1201,1410,1503 and ALL Shops to stable IDs before enabling pilot;
+unknown exclusion/group mapping means ineligible. No label or hardware-name inference.
+physicalDrive: internal=true, physical=true; size_bytes comes from diskutil-info-plist,
+physical device_id equals workspace_backing_device_id obtained through measured diskutil
+physical/APFS mapping. Unknown fields stay null/source unknown and are not physical proof.
+Filesystem/APFS-container capacity is never a replacement for physical device capacity.
+While the minimum is enabled, unknown physical capacity/mapping/provenance refuses. Even
+with that comparison disabled, external/unknown workspace ownership/free disk never grants
+admission. Current physical and backing measurements must be fresh within advertised age.
+Inventory.free_bytes and per-run diskSample are separate actual filesystem-free measurements.
+Recheck each affected workspace/spool/cache/tool-install volume at acceptance, preparation
+and each launch; actual free need includes pinned source/extraction/manifest gate budget,
+result spool/cache/install reservation plus requested minimum_free_bytes. A large physical
+drive does not prove free bytes. This compact pilot assumes one proven internal physical
+backing device; if required affected-volume proof cannot be represented, refuse explicitly.
+All requested limits stay within gate manifest and advertised bounds. Unknown need is not0.
+Node aggregate result spool cap applies across all attempts, not one archive at a time.
+
+5. Tools first INSIDE one accepted gate attempt
+Lifecycle waiting_source -> waiting_idle -> preparing_toolchains -> waiting_idle ->
+running -> collecting -> terminal. Already verified exact tools may skip preparation.
+Before tool installation, Hub obtains the SAME existing Production-first physical machine
+lease used for gate execution: concurrency1 across all accepted developer-gate work.
+Fresh pause/enabled/Developer Mode verified setting revision, Production queue/idle,
+policy, physical/free disk and memory/swap room are checked atomically by Hub. Gateway
+inventory checks are not a lease. Preserve default Developer Mode OFF; no implicit toggle.
+Production arrival stops/cancels only owned gate/preparation work; never pause Production.
+Trusted manifests prepare CLT/Swift, Node, Python, Rust and Go where required by packaged
+registry. No guessed versions. Official installer unavailable/unknown hash or interactive
+admin/license/keychain/privacy/security step fails with plain reason, never bypasses it.
+Use existing normal Hub install/check-in mechanism, owned tool root where possible, no SSH,
+new daemon, credential, paid provider call, model download or inference.
+ToolFact.available=true only after actual exact executable/version/SDK probes; pin.id equals
+ToolFact.id and actual manifest/version match the request. Requested versions are never
+inventory facts. Unavailable/unknown tools have reason and nullable pin/installed_bytes.
+Persistent installed tools are distinct from workspace and capped shared download caches.
+Requested toolchain_install_bytes bounds required new installation footprint; unknown
+unbounded install cannot be admitted. Readback preserves exact versions before gate starts.
+Preparation is bounded by tool_prepare_seconds, gate by runtime_seconds, each additionally
+within request/runtime manifest allowance; queue-idle time is not execution time.
+
+6. Source, execution and resource bounds
+Known acceptance/waiting_source precedes upload. Stream with source_bytes cap before
+buffer/extract, verify hash, size, actual expanded_bytes and file_count. Plain uncompressed
+tar permits directories/regular files only, safe unique relative paths, no links/sparse/
+special/device/FIFO/absolute/traversal/aliased members. Do not follow existing links.
+Cap source/extraction/files before writes as well as total workspace while running.
+One exclusively owned disposable root contains source/HOME/TMPDIR/test data/model libraries/
+outputs. No live profile, user cache, credential, signing material, repo environment or
+unrelated source is inherited. Fixed packaged gate recipe chooses commands; source cannot
+change the allowlisted entrypoint or inject environment/argv. Dependencies are pinned.
+Enforce workspace/runtime/RSS/system-swap/start-free-memory limits. Advertise exact
+workspace_enforcement; monitored_stop uses positive sample_interval_seconds, reports measured
+peak/overshoot and is never described as an OS hard quota. Installed tooling/shared caches
+have separate bounded leases. Never evict active cache entries or unacknowledged results.
+All JSON response/request bodies are bounded by min(local reader ceiling,bounds.json_bytes)
+before parse. Arrays/strings carry finite schema bounds; narrower advertised caps prevail.
+Do not silently trim evidence to fit. At log/result/workspace cap, stop owned processes and
+report explicit failure with actual/null exit, retaining bounded diagnostic evidence.
+
+7. Normal completion, ACK and workspace cleanup
+Owned process identities (PID+start identity plus owned process tree) must prove exited;
+unknown identity never becomes process release. Never signal by name or unrelated PID.
+Normal ordering: process release -> immutable result in bounded SEPARATE spool -> return
+result -> Gateway durable verification/hash ACK -> owned workspace removal -> status
+cleanup_after/disk readback. No normal workspace deletion merely because result downloaded.
+Immutable manifest records precleanup before sample and peak_workspace_bytes. before may
+be null if preparation/start never reached a measurable execution baseline; reason explains.
+It does NOT require or claim after-removal measurements before ACK. It is never rewritten.
+Terminal result/outcome requires process release+immutable result; workspace may still
+remain awaiting_ack. Gate success and scratch cleanup are separate facts. Cleanup failure
+is loud blocked state, never passed cleanup, even when gate's immutable exit was0.
+Gateway streams result to private bounded local spool, validates exact raw SHA/size, safe
+members and manifest identity/logs, fsyncs file+directory and persists verified descriptor
+before ACK. A buffer/status descriptor/download alone is not durable archive receipt.
+ACK pins acceptance and result descriptor. Hub durably persists result_acknowledged=true,
+acknowledged_result exact descriptor and acknowledged_at before deleting any result bytes.
+PreACK these are false/null/null. Repeat same descriptor returns same durable facts;
+changed acceptance/descriptor refuses409. Same-key status always retains acceptance,
+original result descriptor and ACK tombstone after spool removal; lost ACK response is
+reconciled GET same key only. No age eviction or automatic job/source recreation.
+workspace_removed=true and cleanup_after sample are current status facts bound to immutable
+acceptance/result. cleanup_after remains null until observed actual removal; workspace_bytes0
+requires measured absence, not a guessed0. Explain cache growth/unrelated disk drift;
+never claim exact free-space equality. Aggregate machine inventory shows current caps/use.
+Owner authorizes automatic permanent removal ONLY of disposable owned gate scratch; this
+is no permission to remove source checkouts, other evidence/live state/apps/caches/_trash.
+
+8. Death/disconnect orphan exception
+Disconnect is not permission to erase active work. On next normal check-in first reconcile
+original acceptance/journal and exact process identity. Live/unknown process blocks removal
+and holds its reservation; stop only verified owned processes under lease/preemption rules.
+After confirmed process release, finalize bounded interrupted receipt/log/result OUTSIDE
+workspace, then remove only orphan workspace before ACK if necessary. Preserve unacked
+result spool until durable ACK. Killed jobs have null gate exit and explicit interrupted
+outcome; if result was already immutable terminal, retain it rather than overwrite as
+interrupted. A cancellation request is never proof of release. No blind resubmission.
+Normal workspace awaiting ACK may be reclaimed by this exception only after explicit
+orphan reconciliation, not an age timer or missing HTTP connection alone.
+
+9. Result archive
+Result is plain uncompressed tar containing exactly manifest.json and logs/<check-id>.log
+for each manifest check; no duplicate/unlisted members, directory entries, sparse/link/
+special/absolute/traversal/aliased entries. Check IDs are unique safe packaged registry IDs.
+Bound raw/result_files/log_bytes/member bytes before parse; manifest strict UTF-8 JSON
+closed resultManifest, logs strict UTF-8/redacted and exact per-check SHA/size checked.
+Result manifest binds immutable acceptance/request/source/runner/gate/tool manifest and
+actual tools, each command's actual/null exit/duration, overall exit/signal, process release,
+precleanup baseline/peak and scope. All pins equal accepted request. Killed/unknown exit
+never0; passed requires actual overall0, exact tool probes, all packaged required checks
+present/passed with actual0 and complete bounded evidence. Interrupted/unstarted outcomes
+may have fewer checks and null before/exit/duration with explicit reason, never a pass.
+Result descriptor lives in status, avoiding self-referential archive SHA. No source echo.
+
+10. Existing node view and pilot proof
+Inventory only: actual toolchain versions/pins and developer_gate_space with unknown=null,
+explicit workspace/result-spool/shared-cache caps and current cleanup reason/time. No new
+screen/click. Status after-disk proof is not retroactively added to immutable archive.
+Live pilot still must prove allowed idle target, exact real tool readbacks, real portable
+gate exit/check logs, before/after disk/workspace evidence, killed-owned-job next-check-in
+cleanup with process release, unacked result retention, Gateway durable hash ACK and spool
+removal. Cold peaks/install footprints remain unmeasured until actual receipts. Normal paired
+runner release/bootstrap is required; no remote install/dispatch in contract drafting.

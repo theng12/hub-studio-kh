@@ -1,0 +1,163 @@
+{
+  "at": "2026-11-08T07:21:09.502209+00:00",
+  "sourceCommit": "d9c950547cb119c6aa57c54f9e2014a678593692",
+  "sourceArchiveSHA256": "103a4d5d882726c035f12e5d0b21587d6d8f2da74c51f4583c25e5c41cf6a8b2",
+  "commandsSHA256": "d0b8658d783c7680a96ad0c12526d3ab2ce2ae12c87edb733be20f25cbb3d9df",
+  "scope": "Portable Python/Node/Go test and vet lane only; not packaging dependency closure",
+  "manifestFiles": {
+    "go.mod": {
+      "present": true,
+      "bytes": 32,
+      "sha256": "74e14f440926161e9e7c3826ea79c4873220a9ae4fd43c8643e21bd04f4784fc",
+      "extractedEvidence": "/build/Developer/_orchestra/library-lead/fleet-pilot-075-20261108/dependency-evidence/exact-source/go.mod"
+    },
+    "go.sum": {
+      "present": false,
+      "reason": "Absent from exact committed archive"
+    },
+    "package.json": {
+      "present": true,
+      "bytes": 362,
+      "sha256": "7fa88e3f96682c2558a591f4ca8218720f7cb0c791881faca314c6171a36d200",
+      "extractedEvidence": "/build/Developer/_orchestra/library-lead/fleet-pilot-075-20261108/dependency-evidence/exact-source/package.json"
+    },
+    "package-lock.json": {
+      "present": true,
+      "bytes": 7446,
+      "sha256": "7285255bd24423ae9983c7736a01af808ed460da94de6a278ec34782391c3e2d",
+      "extractedEvidence": "/build/Developer/_orchestra/library-lead/fleet-pilot-075-20261108/dependency-evidence/exact-source/package-lock.json"
+    },
+    "src-tauri/Cargo.toml": {
+      "present": true,
+      "bytes": 254,
+      "sha256": "08749c6269b755c8c56a006718bb916d0c741323ac4f8c6d268a5304fb64a5ce",
+      "extractedEvidence": "/build/Developer/_orchestra/library-lead/fleet-pilot-075-20261108/dependency-evidence/exact-source/src-tauri/Cargo.toml"
+    },
+    "src-tauri/Cargo.lock": {
+      "present": true,
+      "bytes": 103983,
+      "sha256": "b0cf4a9e6c68551987dfbe85222818783abfaeef0ba082323bdbdbea18b6cb89",
+      "extractedEvidence": "/build/Developer/_orchestra/library-lead/fleet-pilot-075-20261108/dependency-evidence/exact-source/src-tauri/Cargo.lock"
+    }
+  },
+  "go": {
+    "module": "librarystudio",
+    "requiredGo": "1.27.2",
+    "goSumPresent": false,
+    "thirdPartyModules": [],
+    "metadataArgv": [
+      "go",
+      "list",
+      "-deps",
+      "-test",
+      "-json",
+      "./..."
+    ],
+    "metadataActualExit": 0,
+    "networkDisabled": true,
+    "readonlyModuleMode": true,
+    "testsExecuted": false,
+    "packageCount": 261,
+    "standardPackageCount": 231,
+    "mainModulePackages": [
+      "librarystudio",
+      "librarystudio/internal/config",
+      "librarystudio/internal/companioninstall",
+      "librarystudio/internal/platform",
+      "librarystudio/internal/stock",
+      "librarystudio/internal/library",
+      "librarystudio/internal/setup",
+      "librarystudio/internal/server",
+      "librarystudio/cmd/library-studio",
+      "librarystudio/tests/mock-stock",
+      "librarystudio [librarystudio.test]",
+      "librarystudio.test",
+      "librarystudio/cmd/library-studio [librarystudio/cmd/library-studio.test]",
+      "librarystudio/cmd/library-studio.test",
+      "librarystudio/internal/companioninstall [librarystudio/internal/companioninstall.test]",
+      "librarystudio/internal/companioninstall.test",
+      "librarystudio/internal/config [librarystudio/internal/config.test]",
+      "librarystudio/internal/config.test",
+      "librarystudio/internal/library [librarystudio/internal/library.test]",
+      "librarystudio/internal/library.test",
+      "librarystudio/internal/platform [librarystudio/internal/platform.test]",
+      "librarystudio/internal/platform.test",
+      "librarystudio/internal/server [librarystudio/internal/server.test]",
+      "librarystudio/internal/server.test",
+      "librarystudio/internal/setup [librarystudio/internal/setup.test]",
+      "librarystudio/internal/setup.test",
+      "librarystudio/internal/stock [librarystudio/internal/stock.test]",
+      "librarystudio/internal/stock.test",
+      "librarystudio/tests/mock-stock [librarystudio/tests/mock-stock.test]",
+      "librarystudio/tests/mock-stock.test"
+    ]
+  },
+  "node": {
+    "testFiles": [
+      "tests/addresses.test.mjs",
+      "tests/cleanup-policy.test.mjs",
+      "tests/companion-settings.test.mjs",
+      "tests/download-view.test.mjs",
+      "tests/feature-wiring.test.mjs",
+      "tests/library-view.test.mjs",
+      "tests/monitoring-ui.test.mjs",
+      "tests/movie-extras.test.mjs",
+      "tests/setup-ui.test.mjs",
+      "tests/source-manager.test.mjs",
+      "tests/subtitle-ui.test.mjs"
+    ],
+    "staticSpecifiers": [
+      "node:assert/strict",
+      "node:fs",
+      "node:test",
+      "node:vm"
+    ],
+    "externalPackageImports": [],
+    "npmInstallRequired": false,
+    "scopeLimit": "Static specifiers from exact fixture test files; archive includes all local fixtures/embedded sources"
+  },
+  "python": {
+    "entryPoint": "scripts/test_verify_macos_signing.py",
+    "localDynamicModule": "scripts/verify-macos-signing.py",
+    "standardLibraryImports": [
+      "argparse",
+      "contextlib",
+      "hashlib",
+      "importlib",
+      "json",
+      "os",
+      "pathlib",
+      "plistlib",
+      "re",
+      "select",
+      "socket",
+      "subprocess",
+      "sys",
+      "tempfile",
+      "time",
+      "types",
+      "unittest",
+      "urllib",
+      "uuid"
+    ],
+    "thirdPartyImports": []
+  },
+  "packagingExcluded": {
+    "npmDevDependencies": {
+      "@tauri-apps/cli": "^2.12.2"
+    },
+    "resolvedTauriCLI": "2.12.4",
+    "rustCargoLockEvidence": {
+      "present": true,
+      "bytes": 103983,
+      "sha256": "b0cf4a9e6c68551987dfbe85222818783abfaeef0ba082323bdbdbea18b6cb89",
+      "extractedEvidence": "/build/Developer/_orchestra/library-lead/fleet-pilot-075-20261108/dependency-evidence/exact-source/src-tauri/Cargo.lock"
+    },
+    "reason": "npm/Rust/Tauri/macOS signing and packaging stay local; excluded from portable pilot"
+  },
+  "toolRuntimeBytes": "Toolchains are installed prerequisites prepared by Hub/Gateway; none embedded in source tar. Go standard library ships with Go1.27.2.",
+  "dispatchPerformed": false,
+  "gatePerformed": false,
+  "signingPerformed": false,
+  "sourceChanged": false
+}

@@ -43,6 +43,11 @@ RESOURCES = {"host": {"chip": "Apple M1", "total_gb": 8.0, "available_gb": 5.0},
              "workstation": {"enabled": True, "state": "idle"},
              "current_job": None,
              "machine": {"id": NODE, "name": "Office iMac"}}
+WORK_VOLUME = {"path": "/Volumes/Work/developer-gates/workspaces",
+               "mount_point": "/Volumes/Work", "volume_id": "disk3s5",
+               "device_id": "disk0", "physical": True, "free_bytes": 0,
+               "total_bytes": 500_277_792_768,
+               "observed_at": "2026-11-08T00:00:00Z", "reason": None}
 
 
 class DeadDial:
@@ -118,6 +123,18 @@ class CheckinIsEvidenceOfLife(PullCase):
         # looking at a Shops Mac has to be able to tell the two apart.
         self.assertEqual("check-in", row["via"])
         self.assertIsNone(row["detail"])
+
+    def test_the_call_home_retains_work_volume_and_older_nodes_omit_it(self) -> None:
+        self.checkin(resources={**RESOURCES, "work_volume": WORK_VOLUME})
+        self.assertEqual(
+            WORK_VOLUME,
+            fleet_nodes._read()[NODE]["checkin_resources"]["work_volume"])
+        self.assertEqual(WORK_VOLUME, self.probe()["work_volume"])
+
+        self.checkin(resources=RESOURCES)
+        self.assertNotIn(
+            "work_volume", fleet_nodes._read()[NODE]["checkin_resources"])
+        self.assertNotIn("work_volume", self.probe())
 
     def test_the_call_home_stamps_last_seen_and_clears_never_connected(self) -> None:
         # Joined long ago, never once dialled successfully: the state that read "never connected"

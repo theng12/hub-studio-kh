@@ -1,0 +1,58 @@
+{
+  "id": "library-portable",
+  "revision": "library-0.7.5-d9c9505+portable-fixture.1",
+  "source": {
+    "sha256": "103a4d5d882726c035f12e5d0b21587d6d8f2da74c51f4583c25e5c41cf6a8b2",
+    "size_bytes": 1689600,
+    "expanded_bytes": 1496064,
+    "file_count": 225,
+    "commit": "d9c950547cb119c6aa57c54f9e2014a678593692",
+    "media_type": "application/x-tar"
+  },
+  "command_fixture_sha256": "d0b8658d783c7680a96ad0c12526d3ab2ce2ae12c87edb733be20f25cbb3d9df",
+  "dependency_manifest_sha256": "834672b41e83673892b7b9d5dc81d4e21066e39795bbf9ee10e9d52c0db74f23",
+  "tool_manifest": {
+    "format": "studio.tool-manifest.v1",
+    "id": "library-portable-official-tools",
+    "revision": "official-tools-2026-11-08.1",
+    "sha256": "83c6250e19a5cd89e1c34b03702ab1582be78cadb3a1984ff6ea30c1ad239f5c",
+    "tools": [
+      {
+        "id": "go",
+        "version": "1.27.2",
+        "manifest_sha256": "83c6250e19a5cd89e1c34b03702ab1582be78cadb3a1984ff6ea30c1ad239f5c"
+      },
+      {
+        "id": "node",
+        "version": "26.8.2",
+        "manifest_sha256": "83c6250e19a5cd89e1c34b03702ab1582be78cadb3a1984ff6ea30c1ad239f5c"
+      },
+      {
+        "id": "python",
+        "version": "3.15.0",
+        "manifest_sha256": "83c6250e19a5cd89e1c34b03702ab1582be78cadb3a1984ff6ea30c1ad239f5c"
+      }
+    ],
+    "provenance": "hub-packaged-official-hash-pinned"
+  },
+  "limits": {
+    "runtime_seconds": 3600,
+    "workspace_bytes": 40000000000,
+    "result_spool_bytes": 2000000000,
+    "shared_cache_bytes": 536870912,
+    "minimum_free_bytes": 10737418240,
+    "toolchain_install_bytes": 2147483648,
+    "max_process_tree_rss_bytes": 8589934592,
+    "max_system_swap_growth_bytes": 0,
+    "start_min_free_memory_bytes": 4000000000
+  },
+  "budget_provenance": "requested",
+  "check_ids": [
+    "signing-verifier-unit",
+    "javascript-unit",
+    "vet-darwin",
+    "vet-windows",
+    "vet-linux",
+    "go-unit"
+  ]
+}
