@@ -70,6 +70,7 @@ class TestDeveloperGateStore(unittest.TestCase):
             idempotency_key="key-abc",
             canonical_request_bytes=self.sample_req,
             requested_workspace_bytes=100,
+            reserved_spool_bytes=50,
         )
         self.assertEqual(rec1["acceptance"]["controller_id"], "ctrl-1")
         self.assertEqual(rec1["acceptance"]["node_id"], "node-1")
@@ -85,6 +86,7 @@ class TestDeveloperGateStore(unittest.TestCase):
             idempotency_key="key-abc",
             canonical_request_bytes=self.sample_req,
             requested_workspace_bytes=100,
+            reserved_spool_bytes=50,
         )
         self.assertEqual(rec1["acceptance"]["attempt_id"], rec2["acceptance"]["attempt_id"])
         self.assertEqual(self.store.active_workspace_bytes, 100)
@@ -96,6 +98,7 @@ class TestDeveloperGateStore(unittest.TestCase):
             idempotency_key="key-abc",
             canonical_request_bytes=self.sample_req,
             requested_workspace_bytes=100,
+            reserved_spool_bytes=50,
         )
         diff_req = canonical_json_bytes({"gate": "test-gate-diff", "run_id": "run-2"})
         with self.assertRaises(GateStoreConflictError):
@@ -104,6 +107,8 @@ class TestDeveloperGateStore(unittest.TestCase):
                 node_id="node-1",
                 idempotency_key="key-abc",
                 canonical_request_bytes=diff_req,
+                requested_workspace_bytes=100,
+                reserved_spool_bytes=50,
             )
 
     def test_accept_conflict_mismatched_hash(self) -> None:
@@ -114,6 +119,8 @@ class TestDeveloperGateStore(unittest.TestCase):
                 idempotency_key="key-bad-hash",
                 canonical_request_bytes=self.sample_req,
                 request_sha256="0" * 64,
+                requested_workspace_bytes=100,
+                reserved_spool_bytes=50,
             )
 
     def test_safe_id_validation_and_path_safety(self) -> None:
@@ -125,6 +132,8 @@ class TestDeveloperGateStore(unittest.TestCase):
                     node_id="node-1",
                     idempotency_key=bad,
                     canonical_request_bytes=self.sample_req,
+                    requested_workspace_bytes=100,
+                    reserved_spool_bytes=50,
                 )
 
     def test_symlink_boundaries_refused(self) -> None:
@@ -133,6 +142,8 @@ class TestDeveloperGateStore(unittest.TestCase):
             node_id="node-1",
             idempotency_key="key-sym",
             canonical_request_bytes=self.sample_req,
+            requested_workspace_bytes=100,
+            reserved_spool_bytes=50,
         )
         att_id = rec["acceptance"]["attempt_id"]
         ws = self.store.get_workspace_path(att_id)
@@ -155,6 +166,7 @@ class TestDeveloperGateStore(unittest.TestCase):
             idempotency_key="key-1",
             canonical_request_bytes=self.sample_req,
             requested_workspace_bytes=800,
+            reserved_spool_bytes=50,
         )
         self.assertEqual(self.store.active_workspace_bytes, 800)
 
@@ -167,6 +179,7 @@ class TestDeveloperGateStore(unittest.TestCase):
                 idempotency_key="key-2",
                 canonical_request_bytes=req2,
                 requested_workspace_bytes=300,
+                reserved_spool_bytes=50,
             )
 
     def test_persist_result_archive_stream_and_verification(self) -> None:
@@ -175,6 +188,7 @@ class TestDeveloperGateStore(unittest.TestCase):
             node_id="node-1",
             idempotency_key="key-res",
             canonical_request_bytes=self.sample_req,
+            requested_workspace_bytes=100,
             reserved_spool_bytes=50,
         )
         att_id = rec["acceptance"]["attempt_id"]
@@ -204,6 +218,8 @@ class TestDeveloperGateStore(unittest.TestCase):
             node_id="node-1",
             idempotency_key="key-res2",
             canonical_request_bytes=canonical_json_bytes({"g": 2}),
+            requested_workspace_bytes=100,
+            reserved_spool_bytes=50,
         )
         with self.assertRaises(GateStoreCapacityError):
             self.store.persist_result_archive(
@@ -218,6 +234,8 @@ class TestDeveloperGateStore(unittest.TestCase):
             node_id="Node-1",
             idempotency_key="Key-Ack",
             canonical_request_bytes=self.sample_req,
+            requested_workspace_bytes=100,
+            reserved_spool_bytes=50,
         )
         att_id = rec["acceptance"]["attempt_id"]
         desc = self.store.persist_result_archive(
@@ -258,6 +276,8 @@ class TestDeveloperGateStore(unittest.TestCase):
             node_id="node-1",
             idempotency_key="key-fault",
             canonical_request_bytes=self.sample_req,
+            requested_workspace_bytes=100,
+            reserved_spool_bytes=50,
         )
         att_id = rec["acceptance"]["attempt_id"]
         desc = self.store.persist_result_archive(att_id, b"fault test data")
@@ -279,6 +299,7 @@ class TestDeveloperGateStore(unittest.TestCase):
             idempotency_key="key-clean",
             canonical_request_bytes=self.sample_req,
             requested_workspace_bytes=250,
+            reserved_spool_bytes=50,
         )
         att_id = rec["acceptance"]["attempt_id"]
         ws = self.store.get_workspace_path(att_id)
@@ -331,6 +352,7 @@ class TestDeveloperGateStore(unittest.TestCase):
             idempotency_key="key-no-spool",
             canonical_request_bytes=self.sample_req,
             requested_workspace_bytes=300,
+            reserved_spool_bytes=50,
         )
         att_id = rec["acceptance"]["attempt_id"]
         ws = self.store.get_workspace_path(att_id)
@@ -354,6 +376,7 @@ class TestDeveloperGateStore(unittest.TestCase):
             idempotency_key="key-orphan-spool",
             canonical_request_bytes=self.sample_req,
             requested_workspace_bytes=300,
+            reserved_spool_bytes=50,
         )
         att_id = rec["acceptance"]["attempt_id"]
         ws = self.store.get_workspace_path(att_id)
@@ -381,6 +404,8 @@ class TestDeveloperGateStore(unittest.TestCase):
             node_id="node-1",
             idempotency_key="key-trans",
             canonical_request_bytes=self.sample_req,
+            requested_workspace_bytes=100,
+            reserved_spool_bytes=50,
         )
         att_id = rec["acceptance"]["attempt_id"]
 
@@ -410,7 +435,12 @@ class TestDeveloperGateStore(unittest.TestCase):
         corrupt_root = self.root / "corrupt_store"
         s = DeveloperGateStore(root_dir=corrupt_root, max_workspace_bytes=1000, max_result_spool_bytes=1000)
         s.accept_attempt(
-            controller_id="c", node_id="n", idempotency_key="k", canonical_request_bytes=self.sample_req
+            controller_id="c",
+            node_id="n",
+            idempotency_key="k",
+            canonical_request_bytes=self.sample_req,
+            requested_workspace_bytes=10,
+            reserved_spool_bytes=10,
         )
         s.close()
 
@@ -427,6 +457,8 @@ class TestDeveloperGateStore(unittest.TestCase):
             node_id="node-1",
             idempotency_key="key-mutation",
             canonical_request_bytes=self.sample_req,
+            requested_workspace_bytes=10,
+            reserved_spool_bytes=10,
         )
         att_id = rec["acceptance"]["attempt_id"]
         # Mutate returned dictionary
@@ -454,6 +486,7 @@ class TestDeveloperGateStore(unittest.TestCase):
             idempotency_key="key-recov2",
             canonical_request_bytes=canonical_json_bytes({"g": "two"}),
             requested_workspace_bytes=250,
+            reserved_spool_bytes=50,
         )
 
         active_ws_before = self.store.active_workspace_bytes
@@ -483,6 +516,8 @@ class TestDeveloperGateStore(unittest.TestCase):
             node_id="node-1",
             idempotency_key="key-status",
             canonical_request_bytes=self.sample_req,
+            requested_workspace_bytes=10,
+            reserved_spool_bytes=10,
         )
         att_id = rec["acceptance"]["attempt_id"]
         status = self.store.get_status(att_id)
@@ -495,6 +530,148 @@ class TestDeveloperGateStore(unittest.TestCase):
         }
         self.assertTrue(required_keys.issubset(status.keys()))
         self.assertEqual(status["format"], "studio.developer-gate.status.v1")
+
+    def test_hidden_unknown_entries_rejected_at_init(self) -> None:
+        self.store.close()
+        (self.root / "workspaces" / ".untracked").mkdir()
+        with self.assertRaises(GateStoreError):
+            DeveloperGateStore(root_dir=self.root, max_workspace_bytes=1000, max_result_spool_bytes=2000)
+        (self.root / "workspaces" / ".untracked").rmdir()
+
+        self.store = DeveloperGateStore(root_dir=self.root, max_workspace_bytes=1000, max_result_spool_bytes=2000)
+        rec = self.store.accept_attempt(
+            controller_id="ctrl-1", node_id="node-1", idempotency_key="key-hidden",
+            canonical_request_bytes=self.sample_req, requested_workspace_bytes=10, reserved_spool_bytes=10,
+        )
+        att_id = rec["acceptance"]["attempt_id"]
+        self.store.close()
+
+        hidden_spool = self.root / "spool" / ".untracked"
+        hidden_spool.mkdir()
+        with self.assertRaises(GateStoreError):
+            DeveloperGateStore(root_dir=self.root, max_workspace_bytes=1000, max_result_spool_bytes=2000)
+        hidden_spool.rmdir()
+
+        hidden_item = self.root / "spool" / att_id / ".scratch"
+        hidden_item.write_bytes(b"x")
+        with self.assertRaises(GateStoreError):
+            DeveloperGateStore(root_dir=self.root, max_workspace_bytes=1000, max_result_spool_bytes=2000)
+        hidden_item.unlink()
+
+        self.store = DeveloperGateStore(root_dir=self.root, max_workspace_bytes=1000, max_result_spool_bytes=2000)
+
+    def test_final_rename_then_journal_failure_restart_retry_accounting(self) -> None:
+        rec1 = self.store.accept_attempt(
+            controller_id="ctrl-1", node_id="node-1", idempotency_key="key-a",
+            canonical_request_bytes=self.sample_req, requested_workspace_bytes=100, reserved_spool_bytes=50,
+        )
+        self.store.accept_attempt(
+            controller_id="ctrl-1", node_id="node-1", idempotency_key="key-b",
+            canonical_request_bytes=canonical_json_bytes({"g": "b"}), requested_workspace_bytes=100, reserved_spool_bytes=50,
+        )
+        att1 = rec1["acceptance"]["attempt_id"]
+        self.assertEqual(self.store.active_spool_bytes, 100)
+
+        with mock.patch("components.hub.developer_gate_store.atomic_write_json", side_effect=OSError("journal failed")):
+            with self.assertRaises(OSError):
+                self.store.persist_result_archive(att1, b"abc")
+        self.assertTrue((self.root / "spool" / att1 / "result.tar").is_file())
+
+        self.store.close()
+        self.store = DeveloperGateStore(root_dir=self.root, max_workspace_bytes=1000, max_result_spool_bytes=2000)
+        self.assertEqual(self.store.active_spool_bytes, 53)
+
+        desc = self.store.persist_result_archive(att1, b"abc")
+        self.assertEqual(desc["size_bytes"], 3)
+        self.assertEqual(self.store.active_spool_bytes, 53)
+
+    def test_repeated_orphan_cleanup_preserves_other_reservation(self) -> None:
+        rec1 = self.store.accept_attempt(
+            controller_id="ctrl-1", node_id="node-1", idempotency_key="key-orphan-a",
+            canonical_request_bytes=self.sample_req, requested_workspace_bytes=300, reserved_spool_bytes=50,
+        )
+        self.store.accept_attempt(
+            controller_id="ctrl-1", node_id="node-1", idempotency_key="key-orphan-b",
+            canonical_request_bytes=canonical_json_bytes({"g": "orphan-b"}), requested_workspace_bytes=100, reserved_spool_bytes=50,
+        )
+        att1 = rec1["acceptance"]["attempt_id"]
+        self.store.persist_result_archive(att1, b"unacked orphan result")
+        expected = self.store.active_spool_bytes
+        self.assertEqual(expected, len(b"unacked orphan result") + 50)
+
+        confirmed = {"confirmed": True, "owned_processes_remaining": 0, "proof": "never_started"}
+        self.store.reconcile_orphan(att1, confirmed)
+        self.assertEqual(self.store.active_spool_bytes, expected)
+        self.store.reconcile_orphan(att1, confirmed)
+        self.assertEqual(self.store.active_spool_bytes, expected)
+
+    def test_corrupt_spool_retains_scratch(self) -> None:
+        rec = self.store.accept_attempt(
+            controller_id="ctrl-1", node_id="node-1", idempotency_key="key-corrupt-spool",
+            canonical_request_bytes=self.sample_req, requested_workspace_bytes=300, reserved_spool_bytes=50,
+        )
+        att_id = rec["acceptance"]["attempt_id"]
+        ws = self.store.get_workspace_path(att_id)
+        self.store.persist_result_archive(att_id, b"good archive")
+        tar = self.store.get_result_path(att_id)
+        tar.write_bytes(b"tampered")
+
+        confirmed = {"confirmed": True, "owned_processes_remaining": 0, "proof": "never_started"}
+        held = self.store.reconcile_orphan(att_id, confirmed)
+        self.assertEqual(held["state"], "recovery_hold")
+        self.assertFalse(held["workspace_removed"])
+        self.assertTrue(ws.exists())
+        self.assertTrue(tar.is_file())
+
+    def test_mutation_after_close_refused(self) -> None:
+        rec = self.store.accept_attempt(
+            controller_id="ctrl-1", node_id="node-1", idempotency_key="key-closed",
+            canonical_request_bytes=self.sample_req, requested_workspace_bytes=10, reserved_spool_bytes=10,
+        )
+        att_id = rec["acceptance"]["attempt_id"]
+        self.store.close()
+        with self.assertRaises(GateStoreError):
+            self.store.get_attempt(att_id)
+        with self.assertRaises(GateStoreError):
+            self.store.update_state(att_id, "waiting_idle")
+        with self.assertRaises(GateStoreError):
+            _ = self.store.active_spool_bytes
+        self.store = DeveloperGateStore(root_dir=self.root, max_workspace_bytes=1000, max_result_spool_bytes=2000)
+
+    def test_spool_accounting_stat_failure_cannot_reduce_reservation(self) -> None:
+        rec = self.store.accept_attempt(
+            controller_id="ctrl-1", node_id="node-1", idempotency_key="key-account-fault",
+            canonical_request_bytes=self.sample_req, requested_workspace_bytes=10, reserved_spool_bytes=50,
+        )
+        self.assertEqual(self.store.active_spool_bytes, 50)
+        with mock.patch.object(Path, "is_file", return_value=True), \
+                mock.patch.object(Path, "stat", side_effect=OSError("injected stat failure")):
+            with self.assertRaises(GateStoreError):
+                self.store._derive_active_spool_bytes()
+        self.assertEqual(self.store.active_spool_bytes, 50)
+
+        spool_sub = self.root / "spool" / rec["acceptance"]["attempt_id"]
+        with mock.patch.object(Path, "iterdir", side_effect=OSError("injected iterdir failure")):
+            with self.assertRaises(GateStoreError):
+                self.store._derive_active_spool_bytes()
+        self.assertTrue(spool_sub.is_dir())
+        self.assertEqual(self.store.active_spool_bytes, 50)
+
+    def test_existing_final_over_reservation_not_reconciled_or_replaced(self) -> None:
+        rec = self.store.accept_attempt(
+            controller_id="ctrl-1", node_id="node-1", idempotency_key="key-oversize-final",
+            canonical_request_bytes=self.sample_req, requested_workspace_bytes=10, reserved_spool_bytes=50,
+        )
+        att_id = rec["acceptance"]["attempt_id"]
+        tar = self.root / "spool" / att_id / "result.tar"
+        oversized = b"x" * 51
+        tar.write_bytes(oversized)
+
+        with self.assertRaises(GateStoreCapacityError):
+            self.store.persist_result_archive(att_id, b"short")
+        self.assertEqual(tar.read_bytes(), oversized)
+        self.assertIsNone(self.store.get_attempt(att_id)["result"])
+        self.assertEqual(self.store.active_spool_bytes, 50)
 
 
 if __name__ == "__main__":
