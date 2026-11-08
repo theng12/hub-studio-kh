@@ -2,6 +2,19 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.227 — 2026-11-09
+
+- Developer checks keep their files, tools and results together, with clear reasons when a Mac cannot accept a check.
+- Fleet disk information reports the space on the Mac's actual work volume. Missing information stays unknown.
+- App updates use a consistent local signing identity to keep the app's identity stable between updates.
+
+### Technical notes
+
+- Candidate source only until the current change-aware verification, packaging, isolated launch/update smoke, feed publication and installation are verified. Portable app-gate support remains unavailable without the exact packaged registry, owner policy and qualified process-stop proof. No live policy, reservation or dispatch is enabled by this release.
+- Source integrates `work/fleet-gates-20261108` at `3378fd5404080ec470ad865139d2b06ffa9c12cb` and the approved rules trim at `e0c72485525c1ff9dbc127f293bfbd0d67792060`, preserving history. Frozen gate revision 2 and existing authenticated Gateway operations remain unchanged.
+- Change-aware evidence is retained under `_orchestra/hub-lead/release-gate-20261109/`: 300 affected tests passed in the first attempt; the render file then passed 47 tests from a verified internal source copy because the ATLAS volume's group-writable ancestor is correctly refused by authority-file validation. Direct callers passed 64 tests; selected caller regressions passed 80. The exact-head 109-test inventory/service proof is reused with its original log hash and exit. Earlier failed attempts remain retained.
+- Shared local app signing uses the normal packager; no trust, privacy or signing-key changes are made. Signature verification and designated-requirement comparisons are required before publication. Hardware qualification, remote inference/install-stop proof and cue-overlay production support are not implied.
+
 ## 0.6.226 — 2026-11-08
 
 - Edit reference-image limits now come from the Mac that owns the model. The same mode- and count-scoped memory policy is enforced when the Hub accepts the job, when a peer Mac receives it, and in the Image worker, so a controller cannot raise or invent another Mac's limits.
