@@ -28,6 +28,12 @@ ASSETS = {
         "67122d464f591daf34dcaa58664c7e82d8e7b7ef425373ff28aacd5375cf43dd",
     "packaging/developer-gates/library-portable.commands.json":
         "d0b8658d783c7680a96ad0c12526d3ab2ce2ae12c87edb733be20f25cbb3d9df",
+    "packaging/developer-gates/library-portable.gate.json":
+        "a52e426b6863611cec2821a7632ccbcbf11bbd74e1565b8f562cece6dacda2de",
+    "packaging/developer-gates/library-portable.registry.json":
+        "7d0c686457d44ad97d69b3a8b4596547f3da18544f1a2976935977a0711d5858",
+    "packaging/developer-gates/library-portable.dependency-manifest.json":
+        "834672b41e83673892b7b9d5dc81d4e21066e39795bbf9ee10e9d52c0db74f23",
     "packaging/developer-gates/official-tools.json":
         "83c6250e19a5cd89e1c34b03702ab1582be78cadb3a1984ff6ea30c1ad239f5c",
 }
@@ -76,6 +82,40 @@ class DeveloperGateStagingTests(unittest.TestCase):
             schema,
             json.loads((self.resources / "contracts/developer-gate-v1.schema.json").read_text()))
         self.assertEqual(len(fixture["commands"]), 6)
+
+    def test_staged_registry_loader_returns_verified_descriptors(self):
+        hub = self.resources / "components/hub"
+        hub.mkdir(parents=True)
+        for name in ("developer_gate_contract", "developer_gate_runner",
+                     "developer_image_runner", "developer_gate_registry"):
+            shutil.copyfile(ROOT / "components/hub" / f"{name}.py", hub / f"{name}.py")
+
+        package = types.ModuleType("staged_gate_hub")
+        package.__path__ = [str(hub)]
+        with mock.patch.dict(sys.modules):
+            sys.modules["staged_gate_hub"] = package
+            module = importlib.import_module("staged_gate_hub.developer_gate_registry")
+            self.assertTrue(Path(module.__file__).is_relative_to(self.resources))
+            registry = module.load_packaged_registry()
+            gate = registry.gates[0]
+            assets = self.resources / "packaging/developer-gates"
+            for field, name in (
+                    ("sha256", "library-portable.gate.json"),
+                    ("command_fixture_sha256", "library-portable.commands.json"),
+                    ("dependency_manifest_sha256",
+                     "library-portable.dependency-manifest.json")):
+                self.assertEqual(
+                    gate[field],
+                    hashlib.sha256((assets / name).read_bytes()).hexdigest(), field)
+            self.assertEqual(
+                gate["tool_manifest"]["sha256"],
+                hashlib.sha256((assets / "official-tools.json").read_bytes()).hexdigest())
+            self.assertEqual(gate["limits"]["shared_cache_bytes"], 536870912)
+            self.assertEqual(
+                registry.runner["sha256"],
+                hashlib.sha256((hub / "developer_gate_runner.py").read_bytes()).hexdigest())
+            self.assertFalse(registry.supported)
+        self.assertNotIn("staged_gate_hub", sys.modules)
 
     def test_staged_official_tools_manifest_loads_from_resource_layout(self):
         hub = self.resources / "components/hub"

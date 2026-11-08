@@ -459,6 +459,9 @@ def stage_developer_gate_assets(resources: Path) -> None:
             'contracts/developer-gate-v1.schema.json',
             'contracts/developer-gate-v1-wire.txt',
             'packaging/developer-gates/library-portable.commands.json',
+            'packaging/developer-gates/library-portable.gate.json',
+            'packaging/developer-gates/library-portable.registry.json',
+            'packaging/developer-gates/library-portable.dependency-manifest.json',
             'packaging/developer-gates/official-tools.json'):
         target = resources / relative
         target.parent.mkdir(parents=True, exist_ok=True)
