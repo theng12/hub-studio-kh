@@ -1157,5 +1157,50 @@ class DeveloperGateServiceTests(unittest.TestCase):
         self.assertEqual(space["reason"]["code"], "cache_unknown")
 
 
+class DefaultAuthorityTests(unittest.TestCase):
+    def _assert_unsupported(self, authority, *, gates: bool) -> None:
+        self.assertIs(authority.supported, False)
+        self.assertIsNone(authority.stop_proof)
+        self.assertEqual(authority.policy["allowed_targets"], [])
+        self.assertFalse(authority.tools_first_only)
+        self.assertEqual(authority.trusted_toolchains, {})
+        self.assertEqual(authority.actual_toolchains, ())
+        self.assertEqual(authority.reason["code"], "unsupported")
+        self.assertIs(bool(authority.gates), gates)
+        self.assertIs(bool(authority.tool_manifests), gates)
+
+    def test_advertises_only_loader_verified_descriptors(self) -> None:
+        from components.hub import developer_gate_registry as registry_mod
+        gate = _fixture()[0].gates[0]
+        packaged = registry_mod.PackagedRegistry(
+            runner={"id": gate_runner.RUNNER_ID, "revision": gate_runner.RUNNER_REVISION,
+                    "sha256": "b" * 64},
+            gates=(gate,), tool_manifests=(TOOL_MANIFEST,))
+        with mock.patch.object(registry_mod, "load_packaged_registry",
+                               return_value=packaged):
+            authority = service_mod.unsupported_authority()
+        self._assert_unsupported(authority, gates=True)
+        self.assertEqual(authority.gates, (gate,))
+        self.assertEqual(authority.tool_manifests, (TOOL_MANIFEST,))
+        self.assertEqual(authority.runner["sha256"], hashlib.sha256(
+            Path(gate_runner.__file__).resolve().read_bytes()).hexdigest())
+
+    def _authority_when_loader_raises(self, detail: str):
+        from components.hub import developer_gate_registry as registry_mod
+        with mock.patch.object(registry_mod, "load_packaged_registry",
+                               side_effect=registry_mod.RegistryError(detail)):
+            return service_mod.unsupported_authority()
+
+    def test_missing_registry_fails_closed(self) -> None:
+        authority = self._authority_when_loader_raises("packaged registry is missing")
+        self._assert_unsupported(authority, gates=False)
+        self.assertEqual(authority.reason, service_mod.UNSUPPORTED_REASON)
+
+    def test_tampered_registry_fails_closed(self) -> None:
+        authority = self._authority_when_loader_raises("gate SHA-256 mismatch")
+        self._assert_unsupported(authority, gates=False)
+        self.assertEqual(authority.reason, service_mod.UNSUPPORTED_REASON)
+
+
 if __name__ == "__main__":
     unittest.main()

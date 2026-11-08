@@ -178,14 +178,33 @@ def _default_policy() -> dict[str, Any]:
 
 
 def unsupported_authority() -> GateAuthority:
+    """Default authority: verified packaged descriptors only, never production support.
+
+    A missing, malformed or changed registry fails closed to the plain unsupported reason
+    and advertises no gates or tool manifests.
+    """
+    gates: tuple[dict[str, Any], ...] = ()
+    tool_manifests: tuple[dict[str, Any], ...] = ()
+    reason = dict(UNSUPPORTED_REASON)
+    try:
+        from . import developer_gate_registry as registry_mod
+        registry = registry_mod.load_packaged_registry()
+    except Exception:  # noqa: BLE001 - unknown packaged input stays unsupported
+        pass
+    else:
+        gates = registry.gates
+        tool_manifests = registry.tool_manifests
+        reason = dict(registry.reason)
     return GateAuthority(
         supported=False,
         runner=_runner_identity() or {"id": gate_runner.RUNNER_ID,
                                       "revision": gate_runner.RUNNER_REVISION,
                                       "sha256": "0" * 64},
+        gates=gates,
+        tool_manifests=tool_manifests,
         policy=_default_policy(),
         bounds=dict(DEFAULT_BOUNDS),
-        reason=dict(UNSUPPORTED_REASON),
+        reason=reason,
     )
 
 
