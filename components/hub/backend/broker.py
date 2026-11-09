@@ -4205,9 +4205,19 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
             return False
         if target.get("error_code") == "DISCARDED_UNCERTAIN":
             return False
-        # A recovery caller owns the row only while its accepted attempt is still undecided.
-        if recovery and target.get("state") != "uncertain":
+        # A recovery caller owns the row only while the operator has not cancelled the batch
+        # and its accepted attempt is still undecided. Normal polling and the abandoned-rerun
+        # adoption keep their existing cancellation handling.
+        if recovery and (b.get("cancelled") or target.get("state") != "uncertain"):
             return False
+        canonical = batches.get(b.get("id"))
+        if canonical is not None and canonical is not b:
+            return False  # the batch object was replaced; a captured batch authorizes nothing
+        if adoption_item is None:
+            row = next((row for row in (canonical or b).get("items") or []
+                        if row.get("index") == target.get("index")), None)
+            if row is not None and row is not target:
+                return False  # the canonical row was replaced; never publish onto a copy
         return True
     _record_worker_resource_usage(item, job)
     _record_worker_section_quality(item, job)
@@ -4657,6 +4667,8 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
               "runtime_revision", "worker_id")}
 
     def still_uncertain() -> bool:
+        if batch.get("cancelled"):
+            return False  # operator cancellation owns the remaining lifecycle
         if batches.get(batch_id) is not batch:
             return False  # canonical batch was replaced; a captured dict authorizes nothing
         if next((row for row in batch.get("items") or []
@@ -4669,8 +4681,11 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
         return all(item.get(key) == value for key, value in owner.items())
 
     def result(reconciled: bool) -> dict:
-        return {"batch_id": batch_id, "clientRequestId": batch.get("client_request_id"),
-                "reconciled": reconciled, "item": public_item(batch, item)}
+        current = batches.get(batch_id) or batch
+        row = next((row for row in current.get("items") or []
+                    if row.get("index") == item_index), None)
+        return {"batch_id": batch_id, "clientRequestId": current.get("client_request_id"),
+                "reconciled": reconciled, "item": public_item(current, row or item)}
 
     def pending(reason: str) -> dict:
         if not still_uncertain():
@@ -4849,6 +4864,8 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
               "runtime_revision", "worker_id")}
 
     def still_uncertain() -> bool:
+        if batch.get("cancelled"):
+            return False  # operator cancellation owns the remaining lifecycle
         if batches.get(batch_id) is not batch:
             return False  # canonical batch was replaced; a captured dict authorizes nothing
         if next((row for row in batch.get("items") or []
@@ -4861,11 +4878,14 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
         return all(item.get(key) == value for key, value in owner.items())
 
     def result(reconciled: bool) -> dict:
+        current = batches.get(batch_id) or batch
+        row = next((row for row in current.get("items") or []
+                    if row.get("index") == item_index), None)
         return {
             "batch_id": batch_id,
-            "clientRequestId": batch.get("client_request_id"),
+            "clientRequestId": current.get("client_request_id"),
             "reconciled": reconciled,
-            "item": public_item(batch, item),
+            "item": public_item(current, row or item),
         }
 
     def pending(reason: str) -> dict:
@@ -4970,13 +4990,15 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
                 float(item.get("run_started") or batch["created_at"]),
             )
             if state == "error":
-                await _attach_review_candidate(client, batch, item, studio,
+                # Fetch into a private copy: the live row may have gained a newer winner's
+                # locator while this read awaited, and this call must write nothing to it.
+                private = dict(item)
+                await _attach_review_candidate(client, batch, private, studio,
                                                str(job.get("error_code") or ""))
                 if not still_uncertain():
-                    # Lost while the review candidate was fetched: leave no locator
-                    # and no terminal write from this losing call.
-                    item.pop("_review_candidate", None)
                     return result(False)
+                if private.get("_review_candidate") is not None:
+                    item["_review_candidate"] = private["_review_candidate"]
             item.update(
                 state=state,
                 error=str(job.get("error") or state)[:500],

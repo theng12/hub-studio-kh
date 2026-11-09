@@ -17,7 +17,7 @@ import time
 import httpx
 import pytest
 
-from components.hub.backend import broker, ledger
+from components.hub.backend import artifact_metadata, broker, ledger
 
 
 def uncertain_attempt(fixture_monitor, modality="image", batch_id="discard-proof"):
@@ -184,6 +184,34 @@ def _voice_done_job(batch):
             "output_url": "/api/generate/jobs/worker-1/audio"}
 
 
+def image_uncertain(fixture_monitor, batch_id="image-ageout"):
+    studio = next(row for row in fixture_monitor.registry if row["id"] == "image")
+    batch = {"id": batch_id, "modality": "image", "model": "fixture/model",
+             "shared_params": {}, "cancelled": False, "routing": "pool",
+             "created_at": time.time(), "items": []}
+    item = {"index": 0, "prompt": "proof", "params": {}, "seed": -1,
+            "state": "uncertain", "tries": 1, "studio": studio["id"],
+            "studio_job_id": "worker-1", "retry_at": None, "error": None,
+            "machine": studio["machine"], "worker_id": studio["id"],
+            "model_revision": "r" * 40, "runtime_revision": "a" * 64,
+            "worker_accepted_params": {"repo": batch["model"]},
+            "recovery": {"phase": "uncertain", "reason": "lost poll"}}
+    batch["items"] = [item]
+    broker.batches[batch["id"]] = batch
+    return batch, item, studio
+
+
+def _image_done_job(batch, item):
+    return {"id": "worker-1", "state": "done",
+            "model_revision": item["model_revision"],
+            "runtime_revision": item["runtime_revision"],
+            "worker_id": item["worker_id"], "machine_id": item["machine"],
+            "params": {"repo": batch["model"], "prompt": item["prompt"], "seed": -1},
+            "output_url": "/api/generate/jobs/worker-1/image",
+            "output_path": "/tmp/worker-1.png", "media_type": "image/png",
+            "generated_at": time.time(), "bytes": 1, "sha256": "a" * 64}
+
+
 def _arm_voice_adoption(monkeypatch, assets, notified, *, yield_in_metadata=True):
     async def metadata(*args):
         if yield_in_metadata:
@@ -343,3 +371,138 @@ class TestAgeOutLateResultTests:
         assert item["state"] == "done" and item["asset_id"] == "asset-1"
         assert len(assets) == 1, "exactly one asset may be recorded"
         assert len(notified) == 1, "exactly one completion notification"
+
+    def test_concurrent_async_reconcile_is_one_asset_one_notification(
+            self, fixture_monitor, monkeypatch):
+        batch, item, studio = image_uncertain(fixture_monitor)
+        batch["item_webhook"] = "http://fixture.invalid/item"
+        assets, notified = [], []
+
+        def asset(**fields):
+            assets.append(fields)
+            return "asset-1"
+
+        async def webhook(client, b, row, *, reserved=False):
+            notified.append(row.get("studio_job_id"))
+
+        monkeypatch.setattr(ledger, "record_asset", asset)
+        monkeypatch.setattr(broker, "_post_item_webhook", webhook)
+        client = _ReconcileClient(_image_done_job(batch, item),
+                                  before_get=lambda: asyncio.sleep(0))
+
+        async def both():
+            return await asyncio.gather(
+                broker.reconcile_image_item(batch["id"], 0, client=client),
+                broker.reconcile_image_item(batch["id"], 0, client=client),
+                return_exceptions=True)
+
+        first, second = asyncio.run(both())
+
+        reconciled = [first, second]
+        assert all(not isinstance(reply, Exception) for reply in reconciled), reconciled
+        assert sum(bool(reply["reconciled"]) for reply in reconciled) == 1, reconciled
+        assert item["state"] == "done" and item["asset_id"] == "asset-1"
+        assert len(assets) == 1, "exactly one asset may be recorded"
+        assert len(notified) == 1, "exactly one completion notification"
+
+
+class TestPostAwaitLosses:
+    """A Voice metadata await that loses ownership must write nothing at all."""
+
+    def _run(self, batch, monkeypatch, loss):
+        assets, notified = [], []
+
+        async def metadata(*args):
+            await asyncio.sleep(0)
+            loss()
+
+        async def webhook(*args, **kwargs):
+            notified.append(1)
+
+        monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", metadata)
+        monkeypatch.setattr(ledger, "record_asset",
+                            lambda **fields: assets.append(fields) or "asset-1")
+        monkeypatch.setattr(broker, "_post_item_webhook", webhook)
+        return asyncio.run(broker.reconcile_voice_item(
+            batch["id"], 0, _ReconcileClient(_voice_done_job(batch)))), assets, notified
+
+    def test_batch_cancel_during_metadata_writes_no_asset(self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+        result, assets, notified = self._run(
+            batch, monkeypatch, lambda: batch.update(cancelled=True))
+
+        assert result["reconciled"] is False
+        assert item["state"] == "uncertain" and item.get("asset_id") is None
+        assert item["recovery"] == {"phase": "uncertain", "reason": "lost poll"}
+        assert result["item"]["state"] == "uncertain"
+        assert assets == [] and notified == []
+
+    def test_replaced_row_during_metadata_writes_no_asset(self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+
+        def replace_row():
+            batch["items"][0] = dict(item)  # same fields, a new canonical row object
+
+        result, assets, notified = self._run(batch, monkeypatch, replace_row)
+
+        replacement = batch["items"][0]
+        assert replacement is not item
+        assert result["reconciled"] is False
+        assert replacement["state"] == "uncertain"
+        assert item.get("asset_id") is None and "asset_id" not in replacement
+        assert result["item"]["state"] == "uncertain"
+        assert assets == [] and notified == []
+
+    def test_replaced_batch_during_metadata_writes_no_asset(self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+
+        def replace_batch():
+            broker.batches[batch["id"]] = {**batch, "items": [dict(item)]}
+
+        result, assets, notified = self._run(batch, monkeypatch, replace_batch)
+
+        canonical = broker.batches[batch["id"]]
+        assert canonical is not batch
+        assert result["reconciled"] is False
+        assert canonical["items"][0]["state"] == "uncertain"
+        assert item.get("asset_id") is None
+        assert result["item"]["state"] == "uncertain"
+        assert assets == [] and notified == []
+
+    def test_unusable_artifact_after_losing_the_row_writes_no_error_code(
+            self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+
+        def lose_and_fail():
+            batch["items"][0] = dict(item)
+            raise artifact_metadata.UnusableArtifact("the file cannot be played")
+
+        result, assets, notified = self._run(batch, monkeypatch, lose_and_fail)
+
+        replacement = batch["items"][0]
+        assert result["reconciled"] is False
+        assert "error_code" not in replacement and "error_code" not in item
+        assert replacement["state"] == "uncertain"
+        assert assets == [] and notified == []
+
+    def test_a_newer_winners_review_locator_survives_the_losing_handler(
+            self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+        job = {**_voice_done_job(batch), "state": "error", "error": "section failed",
+               "error_code": "TTS_SECTION_REJECTED"}
+
+        async def attach(client, b, private, s, code):
+            await asyncio.sleep(0)
+            # A newer winner settles the item and binds its own locator while this call waits.
+            item.update(state="done", asset_id="newer-asset", error=None, error_code=None)
+            item["_review_candidate"] = {"winner": True}
+
+        monkeypatch.setattr(broker, "_attach_review_candidate", attach)
+
+        result = asyncio.run(broker.reconcile_voice_item(
+            batch["id"], 0, _ReconcileClient(job)))
+
+        assert result["reconciled"] is False
+        assert item["state"] == "done" and item["asset_id"] == "newer-asset"
+        assert item.get("error_code") is None
+        assert item["_review_candidate"] == {"winner": True}
