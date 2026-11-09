@@ -20,9 +20,10 @@ runner now prepends itself. Every probe is bounded; a hung interpreter is a loud
 preflight failure, not a silent wait.
 
 Every heavy stage (unittest, regressions, voice, pytest) also refuses to start when the
-volume holding the checkout covers less free space than the measured gate demand in
-retained actual telemetry (`_disk_demand`/`check_free_disk`; provenance recorded with the
-numbers, never a guessed constant). The run's own 10 GiB in-run stop is unchanged.
+volume holding the checkout covers less free space than the retained start rule in actual
+telemetry — budget PLUS the 10 GiB floor kept standing after it (`_disk_demand`/`check_free_disk`;
+provenance recorded with the numbers, never a guessed constant, peak usage unknown).
+The run's own 10 GiB in-run stop is unchanged.
 
 Usage:
   .build/hub-gate/bin/python scripts/hub_offline_gate.py unittest \
@@ -137,62 +138,71 @@ def refuse_different_environment(running_prefix: str, selected_prefix: str, sele
 
 
 # ---------------------------------------------------------------------------
-# Disk preflight: the measured gate demand, read from retained actual telemetry.
+# Disk preflight: the gate's own retained setup rule, read from actual telemetry.
 # ---------------------------------------------------------------------------
-# The gate's measured demand comes from one retained actual gate run's own record:
-# `_orchestra/hub-lead/fleet-gates-20261108/setup-preflight-r1.json` (the 2026-11-08
-# fleet-gates setup, recorded next to `GATE PREFLIGHT: ok` probes for this same gate runner)
-# measured `budget_bytes` = runtime_budget_bytes 5,548,396,544 (hub-gate 2,060,398,592 +
-# image-runtime 1,427,599,360 + voice-runtime 2,060,398,592, all `allocated_bytes`) +
-# scratch_budget_bytes 6,442,450,944, alongside `minimum_remaining_bytes` 10,737,418,240 —
-# the 10 GiB live floor the developer-gate runner's own in-run stop preserves
-# (components/hub/developer_gate_runner.py MINIMUM_FREE_BYTES). The same scratch reserve and
-# floor reappear in `_orchestra/hub-lead/release-gate-20261109/preflight.json`.
-# No retained disk-peak trace exists, so the honest demand this preflight enforces is that
-# measured demand ceiling before a heavy stage starts, with the 10 GiB floor the in-run stop
-# already enforces during it. The 50 GB cleanup trigger and the 25 GB start floor are neither
-# requirement here. Missing or unreadable telemetry is a loud refusal, never a guessed number.
+# Provenance: `_orchestra/hub-lead/fleet-gates-20261108/setup-preflight-r1.json`, the 2026-11-08
+# fleet-gates setup (recorded beside `GATE PREFLIGHT: ok` probes for this same runner), which
+# ran exactly this start rule from `setup-preflight.py`: `ok = (free - budget) >= floor` —
+# i.e. free must cover the budget AND leave the floor standing afterwards. Budget and floor are
+# separate numbers in that record, so the start requirement is their SUM:
+#   * `runtime_budget_bytes` 5,548,396,544 — measured allocated bytes of the three runtimes the
+#     setup staged (hub-gate 2,060,398,592 + image-runtime 1,427,599,360 + voice-runtime
+#     2,060,398,592), from the app's own copies;
+#   * `scratch_budget_bytes` 6,442,450,944 — the configured 6 GiB scratch reserve
+#     (`SCRATCH_BUDGET = 6 * 2 ** 30`), not a measurement of use;
+#   * `budget_bytes` 11,990,847,488 = the two above (floor NOT included);
+#   * `minimum_remaining_bytes` 10,737,418,240 — the 10 GiB floor the in-run stop preserves
+#     (components/hub/developer_gate_runner.py MINIMUM_FREE_BYTES; the same floor+scratch pair
+#     appears in `_orchestra/hub-lead/release-gate-20261109/preflight.json`).
+# What the gate actually consumes during a run (a disk peak) has no retained trace: peak is
+# unknown, so this preflight enforces only the retained start rule above — allocated runtime
+# bytes + configured reserve + floor preserved — never a guessed peak. The 50 GB cleanup
+# trigger and the 25 GB start floor are neither requirement here. Missing or unreadable
+# telemetry is a loud refusal, never a guessed number.
 DISK_TELEMETRY = str(Path.home() / 'Developer' / '_orchestra' / 'hub-lead'
                      / 'fleet-gates-20261108' / 'setup-preflight-r1.json')
 HEAVY_KINDS = ('unittest', 'regressions', 'voice', 'pytest')
 
 
 def _disk_demand(telemetry_path: Path) -> dict:
-    """The measured demand this run must cover, with its provenance; refuse without it."""
+    """The retained start rule (budget + floor), with provenance; refuse without it."""
     if not telemetry_path.is_file():
         _preflight_fail(
             f'measured gate disk telemetry is missing: {telemetry_path}; '
             'refusing a heavy gate run without a measured demand source (never a guessed one)')
     try:
         disk = json.loads(telemetry_path.read_text(encoding='utf-8'))['disk']
-        demand, floor = int(disk['budget_bytes']), int(disk['minimum_remaining_bytes'])
+        budget, floor = int(disk['budget_bytes']), int(disk['minimum_remaining_bytes'])
     except (OSError, KeyError, TypeError, ValueError) as exc:
         _preflight_fail(
             f'measured gate disk telemetry is unreadable at {telemetry_path}: {exc}; '
             'refusing a heavy gate run without a measured demand source')
-    if demand <= 0 or floor <= 0:
+    if budget <= 0 or floor <= 0:
         _preflight_fail(
             f'measured gate disk telemetry at {telemetry_path} is not positive '
-            f'(budget={demand}, floor={floor}); refusing')
-    return {'demand_bytes': demand, 'floor_bytes': floor,
+            f'(budget={budget}, floor={floor}); refusing')
+    # The source rule keeps floor out of budget, so the start must cover both.
+    return {'budget_bytes': budget, 'floor_bytes': floor,
+            'requirement_bytes': budget + floor,
             'provenance': str(telemetry_path),
             'measured_at': '2026-11-08 fleet-gates setup (retained actual gate telemetry)'}
 
 
 def check_free_disk(root: Path, demand: dict, usage=None) -> dict:
-    """Refuse a heavy stage whose volume cannot cover the measured demand; read, never write."""
+    """Refuse a stage whose free space cannot cover budget AND keep the floor; read only."""
     try:
         free = int((usage or shutil.disk_usage)(root).free)
     except OSError as exc:
         _preflight_fail(f'filesystem free-space sample unavailable for {root}: {exc}')
-    need = demand['demand_bytes']
+    need = demand['requirement_bytes']
     if free < need:
         _preflight_fail(
             f'refusing this heavy gate stage: free space {free} bytes on the volume holding '
             f'{root} is below the measured gate need {need} bytes '
-            f'(measured demand ceiling from {demand["provenance"]}; the run\'s own 10 GiB '
-            f'in-run floor {demand["floor_bytes"]} still stops it during the run)')
-    return {'free_bytes': free, 'need_bytes': need, 'floor_bytes': demand['floor_bytes'],
+            f'(budget {demand["budget_bytes"]} + floor {demand["floor_bytes"]}; source rule '
+            f'{demand["provenance"]}; the run\'s own 10 GiB in-run stop still applies during it)')
+    return {'free_bytes': free, 'need_bytes': need,
+            'budget_bytes': demand['budget_bytes'], 'floor_bytes': demand['floor_bytes'],
             'ok': True, 'provenance': demand['provenance'],
             'measured_at': demand['measured_at']}
 

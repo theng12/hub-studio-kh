@@ -213,29 +213,35 @@ class DiskPreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = self.telemetry(Path(temporary))
             demand = self.gate._disk_demand(path)
-            self.assertEqual(demand['demand_bytes'], 11_990_847_488)
+            # The source rule keeps floor out of budget; the start covers both.
+            self.assertEqual(demand['budget_bytes'], 11_990_847_488)
             self.assertEqual(demand['floor_bytes'], 10_737_418_240)
+            self.assertEqual(demand['requirement_bytes'],
+                             demand['budget_bytes'] + demand['floor_bytes'])
             self.assertEqual(demand['provenance'], str(path))
 
-    def test_free_space_below_the_measured_need_refuses_and_names_both_sides(self):
+    def test_free_between_budget_and_the_floor_is_refused_not_tolerated(self):
+        """The regression: budget alone never passed — floor must stand after budget too."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             demand = self.gate._disk_demand(self.telemetry(root))
-            below = SimpleNamespace(free=demand['demand_bytes'] - 1)
+            between = SimpleNamespace(free=demand['budget_bytes'])  # >= budget, < budget+floor
             with self.assertRaises(SystemExit) as caught:
-                self.gate.check_free_disk(root, demand, usage=lambda path: below)
+                self.gate.check_free_disk(root, demand, usage=lambda path: between)
             message = str(caught.exception)
-            self.assertIn(str(demand['demand_bytes']), message)
+            self.assertIn(str(demand['requirement_bytes']), message)
+            self.assertIn(str(demand['budget_bytes']), message)
             self.assertIn(str(demand['floor_bytes']), message)
-            self.assertIn('in-run floor', message)
+            self.assertIn('in-run stop', message)
 
-    def test_free_space_at_the_measured_need_passes(self):
+    def test_free_at_budget_plus_floor_passes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             demand = self.gate._disk_demand(self.telemetry(root))
-            at_need = SimpleNamespace(free=demand['demand_bytes'])
+            at_need = SimpleNamespace(free=demand['requirement_bytes'])
             result = self.gate.check_free_disk(root, demand, usage=lambda path: at_need)
             self.assertTrue(result['ok'])
+            self.assertEqual(result['need_bytes'], demand['requirement_bytes'])
             self.assertEqual(result['provenance'], str(self.telemetry(root)))
 
     def test_a_heavy_preflight_refuses_below_the_need_before_any_other_check(self):
@@ -266,7 +272,7 @@ class DiskPreflightTests(unittest.TestCase):
                                 with mock.patch.object(
                                         self.gate.shutil, 'disk_usage',
                                         lambda path: SimpleNamespace(
-                                            free=11_990_847_488)):
+                                            free=11_990_847_488 + 10_737_418_240)):
                                     self.assertIsNone(self.gate.preflight(root, 'unittest'))
 
     def test_the_native_stage_never_needs_the_disk_demand(self):
