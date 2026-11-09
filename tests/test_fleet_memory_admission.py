@@ -1,10 +1,10 @@
 """Focused regressions for the frozen r5 fleet memory-admission route and relay.
 
 The local Models-screen route is not exercised here: the fleet route's strict body, its one
-RAM pair/reset, its accepted reference-row write (with the fail-closed unreadable-table
-refusal), the named UNKNOWN_MODEL 404, the 64-hex CAS and the relay's pending / unknown /
-passthrough rules are. No live Hub, network, model library or Image worker is touched;
-the store is a temp file and the target is a fake client.
+RAM pair/reset, the explicit reference-write refusal (no running-Hub D4 proof yet, so a
+combined RAM+reference body must write nothing), the named UNKNOWN_MODEL 404, the 64-hex
+CAS and the relay's pending / unknown / passthrough rules are. No live Hub, network, model
+library or Image worker is touched; the store is a temp file and the target is a fake client.
 """
 from __future__ import annotations
 
@@ -192,53 +192,30 @@ class LocalAdmissionTests(unittest.TestCase):
                          "a reset to the identical state legitimately regains the earlier token")
         self.assertFalse(self.settings.exists())
 
-    def test_a_reference_write_lands_only_on_the_selected_row_and_changes_the_token(self) -> None:
-        revision = self.revision("edit")
+    def test_reference_writes_are_explicitly_unavailable_and_write_nothing(self) -> None:
+        revision = self.revision()
         status, body = self.write({"model": MODEL, "mode": "edit",
                                    "expected_revision": revision,
-                                   "reference": {"allowed": True, "max_reference_images": 2},
-                                   "reference_count": 3})
-        self.assertEqual(status, 200, body)
-        rows = {row["reference_count"]: row
-                for row in body["reference_policy"]["rows"]}
-        self.assertTrue(rows[3]["override"]["allowed"])
-        self.assertEqual(rows[3]["override"]["max_reference_images"], 2)
-        self.assertNotEqual(body["revision"], revision)
-        self.assertEqual(self.revision("edit"), body["revision"],
-                         "the token after the write matches the write's own readback")
-        self.assertIsNone(rows[None]["override"], "the generic row stays untouched")
+                                   "reference": {"allowed": True},
+                                   "reference_count": None})
+        self.assertEqual((status, body["code"]), (400, "TIER_UNKNOWN"))
+        self.assertIn("nothing was written", body["detail"])
+        self.assertFalse(self.settings.exists())
 
-        # A null value clears only the selected row; siblings and the generic row survive.
-        token = self.revision("edit")
-        cleared = self.write({"model": MODEL, "mode": "edit", "expected_revision": token,
-                              "reference": None, "reference_count": 3})[1]
-        cleared_rows = {row["reference_count"]: row
-                        for row in cleared["reference_policy"]["rows"]}
-        self.assertIsNone(cleared_rows[3]["override"])
-        self.assertIsNone(cleared_rows[None]["override"])
-
-    def test_a_ram_pair_and_a_reference_row_can_land_in_one_call(self) -> None:
+    def test_a_combined_ram_and_reference_request_writes_nothing_at_all(self) -> None:
+        # The refusal must fire before change(), so a combined body never persists its RAM half.
         token = self.revision("edit")
         status, body = self.write({"model": MODEL, "mode": "edit", "expected_revision": token,
                                    "min_free_memory_gb": 3, "min_total_memory_gb": 12,
                                    "reference": {"allowed": True, "max_reference_images": 1},
                                    "reference_count": 1})
-        self.assertEqual(status, 200, body)
-        self.assertEqual((body["effective_min_total_memory_gb"],
-                          body["effective_min_free_memory_gb"]), (12.0, 3.0))
-        rows = {row["reference_count"]: row
-                for row in body["reference_policy"]["rows"]}
-        self.assertEqual(rows[1]["override"]["max_reference_images"], 1)
-
-    def test_reference_writes_write_nothing_when_the_table_or_tier_is_unknown(self) -> None:
-        # D4 stays fail-closed at the gate: an unreadable published table refuses the write.
-        with mock.patch.object(memory_admission, "_reference_limit_table", lambda: None):
-            status, body = self.write({"model": MODEL, "mode": "edit",
-                                       "expected_revision": self.revision("edit"),
-                                       "reference": {"allowed": True},
-                                       "reference_count": None})
         self.assertEqual((status, body["code"]), (400, "TIER_UNKNOWN"))
-        self.assertFalse(self.settings.exists(), "a refused write must write nothing")
+        self.assertFalse(self.settings.exists(),
+                         "a refused combined write must persist no RAM either")
+        _, after = self.read(mode="edit")
+        self.assertEqual((after["effective_min_total_memory_gb"],
+                          after["effective_min_free_memory_gb"]), (8.0, 2.0),
+                         "the mode scope still reads the published pair after the refusal")
 
     def test_an_unknown_model_on_this_mac_is_a_named_structured_404(self) -> None:
         status, body = self.read(model="nobody/nothing")

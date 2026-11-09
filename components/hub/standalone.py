@@ -476,10 +476,10 @@ def _memory_refusal(manifest: dict[str, Any]) -> None:
 # **One Mac's memory admission, for the fleet route only (proposal.r5).** The local Models-screen
 # route stays model-wide and unchanged. This pair validates the fleet body strictly, resolves one
 # RAM pair/reset or one reference row, and returns the same effective readback the local screen
-# reads. Reference writes are accepted because the shipped consumers that enforce them are wired:
-# broker forwards and gates on the producer's reference_policy snapshot, generation.py admits it
-# on the worker, and the published table resolves locally - an unreadable table or unknown host
-# band still refuses TIER_UNKNOWN, so nothing is ever accepted unread.
+# reads. Reference writes are refused here until D4 runtime proof exists for the running Hub:
+# frozen r5 lines 298/320-323 require a live-Hub read of the packaged table before acceptance,
+# so source/table verification is not enough. Accepting a row nothing has proven readable would
+# make the screen show a policy the installed Hub cannot resolve.
 _FLEET_ADMISSION_KEYS = {"model", "mode", "min_free_memory_gb", "min_total_memory_gb",
                          "reference", "reference_count", "expected_revision"}
 _REFERENCE_FIELDS = {"allowed", "max_reference_images", "swap_allowance_gb"}
@@ -626,31 +626,25 @@ def _fleet_memory_admission_write(*, body: dict, entry: dict | None, node: str,
                          or not math.isfinite(swap) or swap < 0)):
                 return fail("BAD_VALUE", "swap_allowance_gb",
                             "swap_allowance_gb must be a finite number >= 0 or null")
-
-    # D2/D3 consumers and D4 runtime authority were verified against the shipped source: broker
-    # forwards the producer's validated reference_policy into the dispatch payload and gates
-    # submit on it, generation.py admits and enforces it on the worker, and the published
-    # table resolves through REFERENCE_LIMITS_PATH. The gate is the installed table itself:
-    # an unreadable table or unknown host band still refuses TIER_UNKNOWN below, fail-closed.
-    if entry is None:
-        return _fleet_unknown_model(model, node, node_id)
+        # D2/D3 consumers and D4 runtime authority are not proven in a running Hub yet: refuse
+        # loudly. Later activation must run set_reference_override BEFORE the RAM write inside
+        # change(): compare_and_write has no rollback, so a later failure would persist RAM.
+        return fail("TIER_UNKNOWN", "reference",
+                    "reference writes are unavailable until the published reference table and "
+                    "its Hub consumers are wired (D2-D4); nothing was written")
 
     if not (has_free or has_total or reference_present):
         return fail("NOTHING_TO_WRITE", "", "send a RAM pair, a RAM reset, or a reference")
+    if entry is None:
+        return _fleet_unknown_model(model, node, node_id)
 
     def change() -> None:
-        # RAM-only, reference-only or both in one call; each block only moves its own scope.
         if ram_reset:
             memory_admission.reset_override(model, entry, mode=mode)
-        elif ram_write:
+        else:
             memory_admission.set_override(
                 model, min_total_memory_gb=float(total),
                 min_free_memory_gb=float(free), catalog_entry=entry, mode=mode)
-        if reference_present:
-            # One scope, one token: the reference row for this mode moves under the same CAS.
-            memory_admission.set_reference_override(
-                model, mode, body.get("reference_count"), body.get("reference"),
-                total_memory_bytes=total_memory_bytes)
 
     try:
         state = memory_admission.compare_and_write(
@@ -661,9 +655,6 @@ def _fleet_memory_admission_write(*, body: dict, entry: dict | None, node: str,
         return JSONResponse({"ok": False, "code": "REVISION_CONFLICT", "node": node,
                              "node_id": node_id, "current_revision": current.get("revision"),
                              "admission": current}, status_code=409)
-    except memory_admission.TierUnknown as exc:
-        # Refused before the CAS wrote anything: the table or the host band is not known.
-        return fail("TIER_UNKNOWN", "reference", str(exc))
     except ValueError as exc:
         return fail("BAD_VALUE", "", str(exc))
     return JSONResponse({"ok": True, "node": node, "node_id": node_id, **state})
@@ -4599,7 +4590,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     @app.put("/api/hub/fleet/nodes/{node_id}/memory/admission")
     async def fleet_node_memory_admission_write(node_id: str,
                                                 body: dict[str, Any]) -> JSONResponse:
-        """Set or reset one Mac's RAM pair or one reference row on that Mac."""
+        """Set or reset one Mac's RAM pair, or (once wired) one reference row, on that Mac."""
         from .backend import fleet_nodes as fleet
         wanted = node_id.strip().lower()
         machine_id = fleet.this_machine()["id"].lower()
