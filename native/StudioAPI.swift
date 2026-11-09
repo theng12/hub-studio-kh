@@ -11230,6 +11230,18 @@ final class NativeWorkspaceStore: ObservableObject {
         error == "Cancelled by user" ? "Cancelled" : error
     }
 
+    /// The Mac a job's own Hub record actually names. The attempt's `machine` wins when a worker
+    /// has reported; otherwise the dispatch target carries it (`image@mini-01`, written when the
+    /// Hub hands the item over), and a target with no `@` is this Hub's own Mac. Nil when neither
+    /// exists: the Hub has not placed the job, and nothing here invents an owner.
+    static func routingMachine(machine: String?, studio: String?) -> String? {
+        if let machine, !machine.isEmpty { return machine }
+        guard let studio, !studio.isEmpty else { return nil }
+        guard let at = studio.firstIndex(of: "@") else { return "local" }
+        let tail = String(studio[studio.index(after: at)...])
+        return tail.isEmpty ? nil : tail
+    }
+
     private static func mapHubJob(_ wire: HubJobDetail) -> NativeJob {
         let state = hubItemPriority.first { candidate in
             wire.items.contains { $0.state == candidate }
@@ -11262,7 +11274,8 @@ final class NativeWorkspaceStore: ObservableObject {
             stalledSeconds: wire.stalledSeconds,
             answer: item?.text ?? "",
             itemIndex: item?.index ?? 0,
-            governorNote: wire.governorNote, machine: item?.machine,
+            governorNote: wire.governorNote,
+            machine: Self.routingMachine(machine: item?.machine, studio: item?.studio),
             tries: item?.tries, retryAt: item?.retryAt, origin: wire.origin)
     }
 
@@ -12486,6 +12499,10 @@ private struct HubJobItem: Decodable {
     let index: Int?
     /// Which Mac holds the item, how many attempts it has used and when the next is due.
     let machine: String?
+    /// The Hub's dispatch target for the current attempt, `<studio>` or `<studio>@<machine>`.
+    /// `machine` is written only when a worker reports; this is set when the item is handed over,
+    /// so a running row can still name its Mac. Neither present means the Hub has not placed it.
+    let studio: String?
     let tries: Int?
     let retryAt: Double?
     let progress: Double?

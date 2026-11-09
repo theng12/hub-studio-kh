@@ -65,8 +65,10 @@ enum JobMachineFilter: String, CaseIterable, Identifiable {
     func includes(_ job: NativeJob) -> Bool {
         switch self {
         case .all: return true
-        // A row with no machine yet has not been dispatched, so it is this Mac's queue.
-        case .thisMac: return job.machine == nil || job.machine == "local"
+        // Only the Hub's own sentinel is this Mac's. A row with no recorded Mac has not been
+        // placed, or its Mac was never written, so neither Mac filter claims it: unknown is not
+        // a guess for "This Mac".
+        case .thisMac: return job.machine == "local"
         case .nodes: return job.machine != nil && job.machine != "local"
         }
     }
@@ -1807,6 +1809,10 @@ struct StudioContent: View {
                         Text(studio.status).font(HubType.caption).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
+                    // The services' actual failure, beside the status it explains, kept whole on
+                    // click (owner, 2026-10-28: "can we have it like in a notification icon
+                    // somewhere instead?"). It replaces the old full-width top banner.
+                    StartupFailureIcon(detail: studio.failure) { studio.failure = nil }
                     if let updating = workspace.updateStatusLine {
                         Text(updating).font(HubType.caption).foregroundStyle(HubStatus.info.textColor)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1861,9 +1867,12 @@ struct StudioContent: View {
             .frame(minWidth: 180, idealWidth: HubSpace.sidebar, maxWidth: HubSpace.sidebar)
             Divider()
             VStack(spacing: 0) {
-                if let error = studio.failure ?? workspace.error ?? workspace.startupNote ?? fileActionError {
+                // The local-services failure is the notification icon in the sidebar footer, with
+                // its whole message on click (owner, 2026-10-28). What is left here is a note about
+                // a read or a file action, which is a different thing and still belongs on top.
+                if let error = workspace.error ?? workspace.startupNote ?? fileActionError {
                     HubBanner(status: .warn, symbol: "exclamationmark.triangle.fill", message: error) {
-                        Button("Dismiss") { studio.failure = nil; workspace.error = nil; workspace.clearStartupNote(); fileActionError = nil }
+                        Button("Dismiss") { workspace.error = nil; workspace.clearStartupNote(); fileActionError = nil }
                             .hubRowControl()
                     }
                     .padding(.horizontal, HubSpace.page).padding(.top, HubSpace.m)
@@ -8587,6 +8596,51 @@ struct StudioTroubleNote: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(width: 320, alignment: .leading)
                     .padding(HubSpace.m)
+            }
+        }
+    }
+}
+
+/// The local services' failure as one notification icon, with the actual message kept whole.
+///
+/// Owner, 2026-10-28: *"can we have it like in a notification icon somewhere instead?"* The
+/// full-width top banner said the same sentence on every page, so the icon sits beside the
+/// status line it explains. The hover and the click carry the operator's own failure text,
+/// verbatim, and Dismiss - the one control the banner offered - stays in the popover.
+struct StartupFailureIcon: View {
+    let detail: String?
+    let onDismiss: () -> Void
+    @State private var showing = false
+
+    /// The accessible name carries the whole failure: the icon is all VoiceOver has, and opening
+    /// the popover must not be the only way to hear what went wrong.
+    static func label(for detail: String) -> String {
+        "Local services need attention. \(detail)"
+    }
+
+    var body: some View {
+        if let detail {
+            Button { showing.toggle() } label: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(HubStatus.warn.textColor)
+            }
+            .buttonStyle(.plain)
+            .help(detail)
+            .accessibilityLabel(Self.label(for: detail))
+            .popover(isPresented: $showing) {
+                VStack(alignment: .leading, spacing: HubSpace.m) {
+                    Text(detail)
+                        .font(HubType.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 320, alignment: .leading)
+                    Button("Dismiss") {
+                        showing = false
+                        onDismiss()
+                    }
+                    .hubRowControl()
+                }
+                .padding(HubSpace.m)
             }
         }
     }

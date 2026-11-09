@@ -347,6 +347,35 @@ enum ViewChecks {
         check(noteHost([stopping, startingLine]).fittingSize.height > noLine.fittingSize.height,
               "two Studios down grow the footer rather than burying the second line")
 
+        // **The services' own failure is a notification icon, not the top banner** (owner,
+        // 2026-10-28). It must draw nothing with no failure, draw an icon with one, and carry the
+        // actual operator text in words - the detail must survive, not become "something failed".
+        func failureHost(_ detail: String?) -> NSHostingView<StartupFailureIcon> {
+            let host = NSHostingView(rootView: StartupFailureIcon(detail: detail, onDismiss: {}))
+            host.frame = NSRect(x: 0, y: 0, width: 240, height: 40)
+            host.layoutSubtreeIfNeeded()
+            return host
+        }
+        let noFailure = failureHost(nil)
+        let withFailure = failureHost("the services did not start: port 47873 is in use")
+        check(noFailure.fittingSize.height <= 1, "no services failure draws no icon")
+        check(pixels(noFailure) != nil, "the services failure icon draws offscreen")
+        check(pixels(noFailure) != pixels(withFailure),
+              "a services failure adds its notification icon to the footer")
+        check(StartupFailureIcon.label(for: "port 47873 is in use").contains("port 47873 is in use"),
+              "the icon's accessible name carries the actual failure, not just a triangle")
+
+        // The Hub writes `machine` only when a worker reports; a running item still names its Mac
+        // in the dispatch target. Actual routing identity, or nothing.
+        check(NativeWorkspaceStore.routingMachine(machine: nil, studio: "image@mini-01") == "mini-01",
+              "a running fleet item names its Mac from the dispatch target")
+        check(NativeWorkspaceStore.routingMachine(machine: nil, studio: "image") == "local",
+              "a dispatch target with no machine suffix is this Hub's own Mac")
+        check(NativeWorkspaceStore.routingMachine(machine: nil, studio: nil) == nil,
+              "an unplaced item has no routing identity, and none is invented")
+        check(NativeWorkspaceStore.routingMachine(machine: "local", studio: "image@mini-01") == "local",
+              "the attempt's own reported machine wins over the dispatch target")
+
         // ---- Whose work is whose, and running work first (owner on controller 1400) ----
         check(JobFacts.stage("running") == .running && JobFacts.stage("cancel_requested") == .running
               && JobFacts.stage("cancelling") == .running,
@@ -380,9 +409,12 @@ enum ViewChecks {
                                createdAt: 1, outputURL: nil, error: nil, machine: "local")
         let node = NativeJob(id: "n", state: "running", progress: 0.2, text: "t", model: "m",
                              createdAt: 1, outputURL: nil, error: nil, machine: "mini-01")
-        check(JobMachineFilter.thisMac.includes(unplaced) && JobMachineFilter.thisMac.includes(placed)
-              && !JobMachineFilter.nodes.includes(placed) && JobMachineFilter.nodes.includes(node),
-              "the filters split this Mac's queue from the nodes' work")
+        check(JobMachineFilter.thisMac.includes(placed) && !JobMachineFilter.nodes.includes(placed)
+              && JobMachineFilter.nodes.includes(node),
+              "the filters split this Mac's work from the nodes' work")
+        check(!JobMachineFilter.thisMac.includes(unplaced) && !JobMachineFilter.nodes.includes(unplaced)
+              && JobMachineFilter.all.includes(unplaced),
+              "an unplaced row is claimed by neither Mac filter: unknown is not guessed into This Mac")
 
         if failures > 0 { exit(1) }
         print("Native view checks passed")
