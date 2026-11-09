@@ -4676,8 +4676,8 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
              ("studio_job_id", "studio", "machine", "model_revision",
               "runtime_revision", "worker_id")}
 
-    def still_uncertain() -> bool:
-        if batch.get("cancelled"):
+    def still_uncertain(*, allow_cancelled: bool = False) -> bool:
+        if batch.get("cancelled") and not allow_cancelled:
             return False  # operator cancellation owns the remaining lifecycle
         if batches.get(batch_id) is not batch:
             return False  # canonical batch was replaced; a captured dict authorizes nothing
@@ -4693,14 +4693,14 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
     def result(reconciled: bool) -> dict:
         current = batches.get(batch_id)
         if current is None:
-            # The canonical batch was removed during an await; report the
-            # disappearance honestly using the captured item, not None.
+            # A removed batch has no current item to report.
             return {"batch_id": batch_id, "clientRequestId": None,
-                    "reconciled": False, "item": public_item(batch, item)}
+                    "reconciled": False, "item": None}
         row = next((row for row in current.get("items") or []
                     if row.get("index") == item_index), None)
         return {"batch_id": batch_id, "clientRequestId": current.get("client_request_id"),
-                "reconciled": reconciled, "item": public_item(current, row or item)}
+                "reconciled": reconciled and current is batch and row is item,
+                "item": public_item(current, row) if row is not None else None}
 
     def pending(reason: str) -> dict:
         if not still_uncertain():
@@ -4736,7 +4736,7 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
             # write cancel fields onto a replaced or discarded canonical row.
             private = dict(item)
             await _signal_worker_cancel(client, private)
-            if still_uncertain():
+            if still_uncertain(allow_cancelled=True):
                 for key in ("cancel_signal_sent_at", "cancel_error"):
                     if key in private:
                         item[key] = private[key]
@@ -4887,8 +4887,8 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
              ("studio_job_id", "studio", "machine", "model_revision",
               "runtime_revision", "worker_id")}
 
-    def still_uncertain() -> bool:
-        if batch.get("cancelled"):
+    def still_uncertain(*, allow_cancelled: bool = False) -> bool:
+        if batch.get("cancelled") and not allow_cancelled:
             return False  # operator cancellation owns the remaining lifecycle
         if batches.get(batch_id) is not batch:
             return False  # canonical batch was replaced; a captured dict authorizes nothing
@@ -4904,21 +4904,20 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
     def result(reconciled: bool) -> dict:
         current = batches.get(batch_id)
         if current is None:
-            # The canonical batch was removed during an await; report the
-            # disappearance honestly using the captured item, not None.
+            # A removed batch has no current item to report.
             return {
                 "batch_id": batch_id,
                 "clientRequestId": None,
                 "reconciled": False,
-                "item": public_item(batch, item),
+                "item": None,
             }
         row = next((row for row in current.get("items") or []
                     if row.get("index") == item_index), None)
         return {
             "batch_id": batch_id,
             "clientRequestId": current.get("client_request_id"),
-            "reconciled": reconciled,
-            "item": public_item(current, row or item),
+            "reconciled": reconciled and current is batch and row is item,
+            "item": public_item(current, row) if row is not None else None,
         }
 
     def pending(reason: str) -> dict:
@@ -4951,7 +4950,7 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
             # write cancel fields onto a replaced or discarded canonical row.
             private = dict(item)
             await _signal_worker_cancel(client, private)
-            if still_uncertain():
+            if still_uncertain(allow_cancelled=True):
                 for key in ("cancel_signal_sent_at", "cancel_error"):
                     if key in private:
                         item[key] = private[key]

@@ -532,6 +532,7 @@ class TestCorrectionR3OwnershipGuards:
 
         assert result["reconciled"] is False
         assert result["clientRequestId"] is None
+        assert result["item"] is None
         assert assets == [] and notified == []
 
     def test_row_removal_during_voice_metadata_writes_nothing(
@@ -554,7 +555,60 @@ class TestCorrectionR3OwnershipGuards:
             batch["id"], 0, _ReconcileClient(_voice_done_job(batch))))
 
         assert result["reconciled"] is False
+        assert result["item"] is None
         assert assets == [] and notified == []
+
+    @pytest.mark.parametrize("modality", ["image", "voice"])
+    @pytest.mark.parametrize("outcome", ["sent", "error"])
+    def test_cancel_signal_persists_for_unchanged_cancelled_owner(
+            self, fixture_monitor, monkeypatch, modality, outcome):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality=modality)
+        batch["cancelled"] = True
+        saved = []
+
+        async def signal(client, private):
+            await asyncio.sleep(0)
+            if outcome == "sent":
+                private["cancel_signal_sent_at"] = 123.0
+                private.pop("cancel_error", None)
+            else:
+                private["cancel_error"] = "worker unavailable"
+
+        monkeypatch.setattr(broker, "_signal_worker_cancel", signal)
+        monkeypatch.setattr(ledger, "save_batch", lambda b: saved.append(b))
+        reconcile = (broker.reconcile_voice_item if modality == "voice"
+                     else broker.reconcile_image_item)
+        job = (_voice_done_job(batch) if modality == "voice"
+               else _image_done_job(batch, item))
+        result = asyncio.run(reconcile(batch["id"], 0, _ReconcileClient(job)))
+
+        assert not result["reconciled"]
+        assert saved == [batch]
+        assert item["state"] == "uncertain"
+        if outcome == "sent":
+            assert item["cancel_signal_sent_at"] == 123.0
+            assert "cancel_error" not in item
+        else:
+            assert item["cancel_error"] == "worker unavailable"
+
+    @pytest.mark.parametrize("remove", ["batch", "row"])
+    def test_async_reconcile_reports_removed_item_as_absent(
+            self, fixture_monitor, remove):
+        batch, item, studio = uncertain_attempt(fixture_monitor)
+
+        class RemovingClient(_ReconcileClient):
+            async def get(self, *args, **kwargs):
+                if remove == "batch":
+                    broker.batches.pop(batch["id"])
+                else:
+                    batch["items"] = []
+                return await super().get(*args, **kwargs)
+
+        result = asyncio.run(broker.reconcile_image_item(
+            batch["id"], 0, RemovingClient(_image_done_job(batch, item))))
+        assert result["reconciled"] is False
+        assert result["item"] is None
+        assert item["state"] == "uncertain"
 
     def test_cancel_signal_loses_to_row_replacement(self, fixture_monitor, monkeypatch):
         batch, item, studio = uncertain_attempt(fixture_monitor, modality="image")
