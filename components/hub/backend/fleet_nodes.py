@@ -2265,6 +2265,11 @@ async def relay_work_policy(node_id: str, method: str, body: object = None, *,
     return {"ok": True, "node": wanted, "work_policy": answer}
 
 
+# The memory-admission route's own refusal codes are all Upper_Snake; a 404 body whose code
+# matches is this route speaking, not an unknown-Hub default.
+_ADMISSION_404_CODE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
 async def relay_memory_admission(node_id: str, method: str, body: object = None, *,
                                  query: dict[str, Any] | None = None,
                                  client: httpx.AsyncClient | None = None) -> dict[str, Any]:
@@ -2332,7 +2337,18 @@ async def relay_memory_admission(node_id: str, method: str, body: object = None,
     if response.status_code in (400, 409) and isinstance(answer, dict):
         # A CAS conflict must stay a 409 with its fresh readback; a 400 keeps code/field/detail.
         raise StartupRelayError(response.status_code, answer)
-    if response.status_code in (401, 403, 404, 405):
+    if response.status_code in (401, 403, 405):
+        raise StartupRelayError(502, {
+            "ok": False, "code": "NODE_REFUSED",
+            "detail": "that Mac refused: its Studio Hub is older than this route, or it holds "
+                      "a different Fleet token. Update it first."})
+    if response.status_code == 404:
+        # This route names its own misses (UNKNOWN_MODEL). A body this route's vocabulary
+        # produced passes through unchanged so that code survives the relay; an older Mac that
+        # does not know the route still answers a bare string and reads as NODE_REFUSED.
+        if (isinstance(answer, dict) and answer.get("ok") is False
+                and _ADMISSION_404_CODE.fullmatch(str(answer.get("code") or "")) is not None):
+            raise StartupRelayError(404, answer)
         raise StartupRelayError(502, {
             "ok": False, "code": "NODE_REFUSED",
             "detail": "that Mac refused: its Studio Hub is older than this route, or it holds "

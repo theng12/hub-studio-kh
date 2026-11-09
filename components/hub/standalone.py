@@ -476,8 +476,10 @@ def _memory_refusal(manifest: dict[str, Any]) -> None:
 # **One Mac's memory admission, for the fleet route only (proposal.r5).** The local Models-screen
 # route stays model-wide and unchanged. This pair validates the fleet body strictly, resolves one
 # RAM pair/reset or one reference row, and returns the same effective readback the local screen
-# reads. Reference writes are refused here until D2/D3 consumers and D4 runtime authority are
-# wired: accepting a row nothing enforces would make the screen show a policy that is not used.
+# reads. Reference writes are accepted because the shipped consumers that enforce them are wired:
+# broker forwards and gates on the producer's reference_policy snapshot, generation.py admits it
+# on the worker, and the published table resolves locally - an unreadable table or unknown host
+# band still refuses TIER_UNKNOWN, so nothing is ever accepted unread.
 _FLEET_ADMISSION_KEYS = {"model", "mode", "min_free_memory_gb", "min_total_memory_gb",
                          "reference", "reference_count", "expected_revision"}
 _REFERENCE_FIELDS = {"allowed", "max_reference_images", "swap_allowance_gb"}
@@ -502,6 +504,18 @@ def _fleet_admission_refusal(code: str, field: str, detail: str, node: str,
                          "node": node, "node_id": node_id}, status_code=400)
 
 
+def _fleet_unknown_model(model: str, node: str, node_id: str) -> JSONResponse:
+    """A model this Mac does not have is a named 404 on the fleet shape, not a bare string.
+
+    The bare ``HTTPException(404, "unknown model")`` the local screen raises is unwireable: the
+    Gateway asked this route to keep its own envelope (code/detail/status/identity) so a
+    controller relay can pass the answer through unchanged.
+    """
+    return JSONResponse({"ok": False, "code": "UNKNOWN_MODEL", "field": "model",
+                         "detail": "this Mac has no model like that", "model": model,
+                         "node": node, "node_id": node_id}, status_code=404)
+
+
 def _fleet_memory_admission_read(*, model: str, mode: str | None, entry: dict | None,
                                  node: str, node_id: str) -> JSONResponse:
     from .backend import memory_admission
@@ -512,7 +526,7 @@ def _fleet_memory_admission_read(*, model: str, mode: str | None, entry: dict | 
         return _fleet_admission_refusal(
             "BAD_MODE", "mode", "mode must be one of txt2img, edit", node, node_id)
     if entry is None:
-        raise HTTPException(404, "unknown model")
+        return _fleet_unknown_model(model, node, node_id)
     state = memory_admission.effective_state(
         model, entry, node_id=node_id, mode=mode,
         total_memory_bytes=_admission_total_memory_bytes(), model_default=None)
@@ -612,23 +626,31 @@ def _fleet_memory_admission_write(*, body: dict, entry: dict | None, node: str,
                          or not math.isfinite(swap) or swap < 0)):
                 return fail("BAD_VALUE", "swap_allowance_gb",
                             "swap_allowance_gb must be a finite number >= 0 or null")
-        # D2/D3 consumers and D4 runtime authority are not wired yet: refuse loudly.
-        return fail("TIER_UNKNOWN", "reference",
-                    "reference writes are unavailable until the published reference table and "
-                    "its Hub consumers are wired (D2-D4); nothing was written")
+
+    # D2/D3 consumers and D4 runtime authority were verified against the shipped source: broker
+    # forwards the producer's validated reference_policy into the dispatch payload and gates
+    # submit on it, generation.py admits and enforces it on the worker, and the published
+    # table resolves through REFERENCE_LIMITS_PATH. The gate is the installed table itself:
+    # an unreadable table or unknown host band still refuses TIER_UNKNOWN below, fail-closed.
+    if entry is None:
+        return _fleet_unknown_model(model, node, node_id)
 
     if not (has_free or has_total or reference_present):
         return fail("NOTHING_TO_WRITE", "", "send a RAM pair, a RAM reset, or a reference")
-    if entry is None:
-        raise HTTPException(404, "unknown model")
 
     def change() -> None:
+        # RAM-only, reference-only or both in one call; each block only moves its own scope.
         if ram_reset:
             memory_admission.reset_override(model, entry, mode=mode)
-        else:
+        elif ram_write:
             memory_admission.set_override(
                 model, min_total_memory_gb=float(total),
                 min_free_memory_gb=float(free), catalog_entry=entry, mode=mode)
+        if reference_present:
+            # One scope, one token: the reference row for this mode moves under the same CAS.
+            memory_admission.set_reference_override(
+                model, mode, body.get("reference_count"), body.get("reference"),
+                total_memory_bytes=total_memory_bytes)
 
     try:
         state = memory_admission.compare_and_write(
@@ -639,6 +661,9 @@ def _fleet_memory_admission_write(*, body: dict, entry: dict | None, node: str,
         return JSONResponse({"ok": False, "code": "REVISION_CONFLICT", "node": node,
                              "node_id": node_id, "current_revision": current.get("revision"),
                              "admission": current}, status_code=409)
+    except memory_admission.TierUnknown as exc:
+        # Refused before the CAS wrote anything: the table or the host band is not known.
+        return fail("TIER_UNKNOWN", "reference", str(exc))
     except ValueError as exc:
         return fail("BAD_VALUE", "", str(exc))
     return JSONResponse({"ok": True, "node": node, "node_id": node_id, **state})
@@ -4561,14 +4586,20 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         wanted_mode = mode or None
         entry = None
         if wanted_model and (wanted_mode is None or wanted_mode in ("txt2img", "edit")):
-            entry = _admission_entry(wanted_model)
+            try:
+                entry = _admission_entry(wanted_model)
+            except HTTPException as error:
+                # _admission_entry raises the local screen's bare 404; this route answers
+                # its own structured UNKNOWN_MODEL below instead.
+                if error.status_code != 404:
+                    raise
         return _fleet_memory_admission_read(model=wanted_model, mode=wanted_mode, entry=entry,
                                             node=wanted, node_id=machine_id)
 
     @app.put("/api/hub/fleet/nodes/{node_id}/memory/admission")
     async def fleet_node_memory_admission_write(node_id: str,
                                                 body: dict[str, Any]) -> JSONResponse:
-        """Set or reset one Mac's RAM pair, or (once wired) one reference row, on that Mac."""
+        """Set or reset one Mac's RAM pair or one reference row on that Mac."""
         from .backend import fleet_nodes as fleet
         wanted = node_id.strip().lower()
         machine_id = fleet.this_machine()["id"].lower()
@@ -4587,7 +4618,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         mode = body.get("mode")
         entry = None
         if model and (mode is None or mode in ("txt2img", "edit")):
-            entry = _admission_entry(model)
+            try:
+                entry = _admission_entry(model)
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
         return _fleet_memory_admission_write(body=body, entry=entry, node=wanted,
                                              node_id=machine_id,
                                              total_memory_bytes=_admission_total_memory_bytes())
