@@ -2,6 +2,20 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.228 — 2026-11-09
+
+- Local-service warnings now sit beside the status as an icon. Click it to read the full message or dismiss it.
+- Jobs name the Mac they were actually assigned to. Work awaiting assignment stays in All jobs.
+- An uncertain job can release its Mac after the recovery window while keeping the details needed to recover its original result later.
+- Memory settings preserve the Mac's explanation when a model or setting is unavailable.
+- Update checks refuse an installer with the wrong build label, and developer checks reserve enough free space before starting.
+
+### Technical notes
+
+- Candidate only until source review, change-aware checks, packaging, isolated launch/update proof, Developer release review, publication and intended-machine verification finish. Retained receipts are under `_orchestra/hub-lead/source-batch-228-20261109/`.
+- Reference-limit writes still refuse with `TIER_UNKNOWN` until the frozen running-Hub prerequisite is proven. This release does not qualify RAM override/reset enforcement, Developer Mode inference, or paired remote final-MP4 rendering.
+- Automatic release preserves the uncertain attempt and its original identity; operator-cancelled or explicitly discarded attempts remain outside automatic recovery. No generation replay or historical resurrection is introduced.
+
 ## 0.6.227 — 2026-11-09
 
 - Developer checks keep their files, tools and results together, with clear reasons when a Mac cannot accept a check.
