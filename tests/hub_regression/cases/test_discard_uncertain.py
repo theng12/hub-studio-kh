@@ -506,3 +506,127 @@ class TestPostAwaitLosses:
         assert item["state"] == "done" and item["asset_id"] == "newer-asset"
         assert item.get("error_code") is None
         assert item["_review_candidate"] == {"winner": True}
+
+
+class TestCorrectionR3OwnershipGuards:
+    """Narrow guards for the correction-r3 race fixes."""
+
+    def test_batch_removal_during_voice_metadata_writes_nothing(
+            self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+        batch["client_request_id"] = "r3-batch-remove"
+        assets, notified = [], []
+
+        async def metadata(*args):
+            await asyncio.sleep(0)
+            broker.batches.pop(batch["id"], None)
+
+        monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", metadata)
+        monkeypatch.setattr(ledger, "record_asset",
+                            lambda **fields: assets.append(fields) or "asset-1")
+        monkeypatch.setattr(broker, "_post_item_webhook",
+                            lambda *a, **k: notified.append(1))
+
+        result = asyncio.run(broker.reconcile_voice_item(
+            batch["id"], 0, _ReconcileClient(_voice_done_job(batch))))
+
+        assert result["reconciled"] is False
+        assert result["clientRequestId"] is None
+        assert assets == [] and notified == []
+
+    def test_row_removal_during_voice_metadata_writes_nothing(
+            self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+        batch["client_request_id"] = "r3-row-remove"
+        assets, notified = [], []
+
+        async def metadata(*args):
+            await asyncio.sleep(0)
+            batch["items"] = []
+
+        monkeypatch.setattr(broker, "_cache_voice_artifact_metadata", metadata)
+        monkeypatch.setattr(ledger, "record_asset",
+                            lambda **fields: assets.append(fields) or "asset-1")
+        monkeypatch.setattr(broker, "_post_item_webhook",
+                            lambda *a, **k: notified.append(1))
+
+        result = asyncio.run(broker.reconcile_voice_item(
+            batch["id"], 0, _ReconcileClient(_voice_done_job(batch))))
+
+        assert result["reconciled"] is False
+        assert assets == [] and notified == []
+
+    def test_cancel_signal_loses_to_row_replacement(self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="image")
+        batch["cancelled"] = True
+        replacement = dict(item)
+        saved_batches = []
+
+        async def cancel_then_replace(client, private_item):
+            await asyncio.sleep(0)
+            private_item["cancel_signal_sent_at"] = time.time()
+            batch["items"][0] = replacement
+            return True
+
+        monkeypatch.setattr(broker, "_signal_worker_cancel", cancel_then_replace)
+        monkeypatch.setattr(ledger, "save_batch",
+                            lambda b: saved_batches.append(b))
+
+        result = asyncio.run(broker.reconcile_image_item(
+            batch["id"], 0,
+            _ReconcileClient({**_image_done_job(batch, item), "state": "running"})))
+
+        assert result["reconciled"] is False
+        assert "cancel_signal_sent_at" not in replacement
+        assert saved_batches == []
+
+    def test_cancel_signal_loses_to_batch_discard(self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="image")
+        batch["cancelled"] = True
+        saved_batches = []
+
+        async def cancel_then_discard(client, private_item):
+            await asyncio.sleep(0)
+            private_item["cancel_signal_sent_at"] = time.time()
+            broker.discard_uncertain_item(batch["id"], 0)
+            return True
+
+        monkeypatch.setattr(broker, "_signal_worker_cancel", cancel_then_discard)
+        monkeypatch.setattr(ledger, "save_batch",
+                            lambda b: saved_batches.append(b))
+
+        result = asyncio.run(broker.reconcile_image_item(
+            batch["id"], 0,
+            _ReconcileClient({**_image_done_job(batch, item), "state": "running"})))
+
+        assert result["reconciled"] is False
+        assert item["state"] == "cancelled"
+        assert item["error_code"] == "DISCARDED_UNCERTAIN"
+        # The discard's save_batch is the only one; no stale cancel save follows.
+        assert len(saved_batches) == 1
+
+    def test_terminal_webhook_replacement_prevents_detached_finish(
+            self, fixture_monitor, monkeypatch):
+        batch, item, studio = uncertain_attempt(fixture_monitor, modality="voice")
+        batch["client_request_id"] = "r3-webhook-replace"
+        finishes = []
+
+        async def webhook_then_replace(*args, **kwargs):
+            await asyncio.sleep(0)
+            new_batch = {**batch, "items": [dict(item)]}
+            broker.batches[batch["id"]] = new_batch
+
+        async def maybe_finish_capture(client, b):
+            finishes.append(b)
+
+        monkeypatch.setattr(broker, "_cache_voice_artifact_metadata",
+                            lambda *a, **k: asyncio.sleep(0))
+        monkeypatch.setattr(ledger, "record_asset", lambda **f: "asset-1")
+        monkeypatch.setattr(broker, "_post_item_webhook", webhook_then_replace)
+        monkeypatch.setattr(broker, "_maybe_finish", maybe_finish_capture)
+
+        result = asyncio.run(broker.reconcile_voice_item(
+            batch["id"], 0, _ReconcileClient(_voice_done_job(batch))))
+
+        assert result["reconciled"] is False
+        assert finishes == [], "_maybe_finish must not run on a detached batch"

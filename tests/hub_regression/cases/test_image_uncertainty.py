@@ -284,7 +284,8 @@ def test_expired_image_lease_requests_cancel_and_keeps_original_fenced(
         "error": "cancelled", "error_code": "CANCELLED"}})
     second = asyncio.run(broker.reconcile_image_item(batch["id"], 0, client))
     # The operator's cancellation owns the remaining lifecycle: the worker receipt settles
-    # nothing, so the attempt stays uncertain and keeps its hold until discard or age-out.
+    # nothing, so the attempt stays uncertain and keeps its hold until discard.
+    # Age-out intentionally skips cancelled batches (operator cancellation lifecycle).
     assert not second["reconciled"]
     assert second["item"]["state"] == "uncertain"
     assert item["state"] == "uncertain"

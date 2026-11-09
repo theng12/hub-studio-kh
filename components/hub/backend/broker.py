@@ -4211,13 +4211,23 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         if recovery and (b.get("cancelled") or target.get("state") != "uncertain"):
             return False
         canonical = batches.get(b.get("id"))
-        if canonical is not None and canonical is not b:
-            return False  # the batch object was replaced; a captured batch authorizes nothing
-        if adoption_item is None:
-            row = next((row for row in (canonical or b).get("items") or []
+        if recovery:
+            # Recovery callers must hold the exact canonical batch AND row throughout every
+            # await; an absent or replaced one means ownership was lost mid-read.
+            if canonical is None or canonical is not b:
+                return False
+            row = next((row for row in canonical.get("items") or []
                         if row.get("index") == target.get("index")), None)
-            if row is not None and row is not target:
-                return False  # the canonical row was replaced; never publish onto a copy
+            if row is None or row is not target:
+                return False
+        else:
+            if canonical is not None and canonical is not b:
+                return False  # the batch object was replaced; a captured batch authorizes nothing
+            if adoption_item is None:
+                row = next((row for row in (canonical or b).get("items") or []
+                            if row.get("index") == target.get("index")), None)
+                if row is not None and row is not target:
+                    return False  # the canonical row was replaced; never publish onto a copy
         return True
     _record_worker_resource_usage(item, job)
     _record_worker_section_quality(item, job)
@@ -4681,7 +4691,12 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
         return all(item.get(key) == value for key, value in owner.items())
 
     def result(reconciled: bool) -> dict:
-        current = batches.get(batch_id) or batch
+        current = batches.get(batch_id)
+        if current is None:
+            # The canonical batch was removed during an await; report the
+            # disappearance honestly using the captured item, not None.
+            return {"batch_id": batch_id, "clientRequestId": None,
+                    "reconciled": False, "item": public_item(batch, item)}
         row = next((row for row in current.get("items") or []
                     if row.get("index") == item_index), None)
         return {"batch_id": batch_id, "clientRequestId": current.get("client_request_id"),
@@ -4717,8 +4732,17 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
         client = httpx.AsyncClient(follow_redirects=False)
     try:
         if batch.get("cancelled") and not item.get("cancel_signal_sent_at"):
-            await _signal_worker_cancel(client, item)
-            ledger.save_batch(batch)
+            # Signal on a private copy so a lost ownership during the await cannot
+            # write cancel fields onto a replaced or discarded canonical row.
+            private = dict(item)
+            await _signal_worker_cancel(client, private)
+            if still_uncertain():
+                for key in ("cancel_signal_sent_at", "cancel_error"):
+                    if key in private:
+                        item[key] = private[key]
+                    else:
+                        item.pop(key, None)
+                ledger.save_batch(batch)
         try:
             url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
             response = await client.get(url, headers=headers, timeout=15.0)
@@ -4878,7 +4902,16 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
         return all(item.get(key) == value for key, value in owner.items())
 
     def result(reconciled: bool) -> dict:
-        current = batches.get(batch_id) or batch
+        current = batches.get(batch_id)
+        if current is None:
+            # The canonical batch was removed during an await; report the
+            # disappearance honestly using the captured item, not None.
+            return {
+                "batch_id": batch_id,
+                "clientRequestId": None,
+                "reconciled": False,
+                "item": public_item(batch, item),
+            }
         row = next((row for row in current.get("items") or []
                     if row.get("index") == item_index), None)
         return {
@@ -4914,8 +4947,17 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
     try:
         job_id = item["studio_job_id"]
         if batch.get("cancelled") and not item.get("cancel_signal_sent_at"):
-            await _signal_worker_cancel(client, item)
-            ledger.save_batch(batch)
+            # Signal on a private copy so a lost ownership during the await cannot
+            # write cancel fields onto a replaced or discarded canonical row.
+            private = dict(item)
+            await _signal_worker_cancel(client, private)
+            if still_uncertain():
+                for key in ("cancel_signal_sent_at", "cancel_error"):
+                    if key in private:
+                        item[key] = private[key]
+                    else:
+                        item.pop(key, None)
+                ledger.save_batch(batch)
         try:
             url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
             response = await client.get(url, headers=headers, timeout=15.0)
@@ -5012,6 +5054,17 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
         )
         ledger.save_batch(batch)
         await _post_item_webhook(client, batch, item)
+        # Recheck canonical ownership after the webhook await: a replacement or
+        # discard that landed during delivery must not be overwritten by this
+        # captured batch's terminal finish. still_uncertain() is False for
+        # already-done items, so check canonical identity directly.
+        canonical = batches.get(batch_id)
+        if canonical is not batch:
+            return result(False)
+        canonical_row = next((row for row in canonical.get("items") or []
+                              if row.get("index") == item_index), None)
+        if canonical_row is not item:
+            return result(False)
         await _maybe_finish(client, batch)
         _wakeup.set()
         return result(True)
@@ -5241,6 +5294,15 @@ def _retain_async_terminal_persistence_uncertainty(
     publication_state: dict | None = None,
 ) -> bool:
     """Keep a terminal async worker receipt fenced when Hub publication fails."""
+    # Never mutate or persist if the canonical batch or row was replaced or
+    # removed during the failed await — that would resurrect a detached winner.
+    current = batches.get(batch.get("id"))
+    if current is not batch:
+        return False
+    canonical_row = next((row for row in current.get("items") or []
+                          if row.get("index") == item.get("index")), None)
+    if canonical_row is not item:
+        return False
     modality = batch.get("modality")
     if (modality not in DURABLE_ASYNC_MODALITIES
             or item.get("state") not in {"done", "error", "cancelled"}
