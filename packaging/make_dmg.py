@@ -106,8 +106,8 @@ def build(app: Path, output: Path) -> None:
     if not manifest_dir.is_dir():
         manifest_dir = app.parent / 'file-manifest'
     output.parent.mkdir(parents=True, exist_ok=True)
-    for old in sorted(output.parent.glob('*.dmg')):
-        print('Previous installer preserved:', preserve(old, ROOT, 'dist'))
+    if output.exists() or output.is_symlink():
+        print('Previous installer preserved:', preserve(output, ROOT, 'dist'))
     scratch_parent = ROOT / '.build'
     scratch_parent.mkdir(exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix='dmg-stage-', dir=scratch_parent))
