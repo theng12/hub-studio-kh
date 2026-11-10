@@ -315,12 +315,31 @@ class DeveloperGateServiceTests(unittest.TestCase):
 
     def _default_service(self, *, authority=None, runner=fake_runner, root_dir=None,
                          tool_preparer=None, tools_root=None):
-        """A service using the real default inventory, not the fixture provider."""
+        """Real tool/cache inventory with physical admission independent of the test volume."""
+        self.enterContext(mock.patch.object(
+            service_mod.inventory_mod, "probe_internal_drive",
+            side_effect=lambda **_kwargs: _inventory()["internal_physical_drive"]))
         authority = authority or _fixture()[0]
         return service_mod.DeveloperGateService(
             root_dir=root_dir or self.temp.name, authority=authority, runner=runner,
             metrics=FakeMetrics(), admission=FakeAdmission(), broker=FakeBroker(),
             tool_preparer=tool_preparer, tools_root=tools_root)
+
+    def test_default_inventory_still_refuses_an_external_physical_drive(self) -> None:
+        authority, request, _raw = _fixture()
+        service = self._default_service(authority=authority)
+        external = _inventory()["internal_physical_drive"]
+        external["internal"] = False
+        with mock.patch.object(service_mod.inventory_mod, "probe_internal_drive",
+                               return_value=external) as probe:
+            with self.assertRaises(service_mod.GateServiceError) as refused:
+                service.accept(contract.canonical_json(request).encode(), "key-ext",
+                               CONTROLLER, NODE, {"kind": "fleet"},
+                               {"credential": "fleet-header"})
+        self.assertEqual(refused.exception.code, "physical_ineligible")
+        probe.assert_called_with(workspace_path=service._store.workspaces_dir)
+        self.assertEqual(service._store.list_attempts(), [])
+        self.assertEqual(list(service._store.workspaces_dir.iterdir()), [])
 
     def _wait(self, service, key, states, timeout=5.0):
         deadline = time.monotonic() + timeout
