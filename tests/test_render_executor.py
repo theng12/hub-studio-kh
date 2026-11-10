@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import sys
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -40,6 +41,7 @@ from components.hub.backend.render_jobs import (  # noqa: E402
     ValidatedOutputReceipt,
 )
 from components.hub.backend.render_service import RenderService  # noqa: E402
+from _render_authority_root import anchor_root  # noqa: E402
 
 
 class FakeBroker:
@@ -278,6 +280,7 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.root = ROOT / "_trash/render-executor-testroots" / uuid4().hex
         self.root.mkdir(parents=True)
+        anchor_root(self, self.root)
         self.raw = (ROOT / "tests/fixtures/final-render-compiler-v1.json").read_bytes()
 
     def authority(self) -> InstalledRenderAuthority:
@@ -1058,6 +1061,11 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         refused("UNSAFE_FILE")
         (authority / "qualify.json").unlink()
         refused("MISSING")
+        self.root.chmod(0o775)
+        try:
+            refused("UNSAFE_PATH")
+        finally:
+            self.root.chmod(0o700)
         real = self.root / "real-authority"
         authority.rename(real)
         authority.symlink_to(real)
@@ -2454,6 +2462,31 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [key for key in activity.live_batches() if key.startswith("render:")], [],
             "an unconfigured Hub must not advertise a render lane it does not have")
+
+
+class DefaultAnchorTests(unittest.TestCase):
+    """The reader's own root stays the real "/"; foreign and escaping roots are refused."""
+
+    def test_the_default_anchor_is_the_real_root_and_foreign_or_escaping_roots_are_refused(
+            self) -> None:
+        from components.hub.backend import render_authority_files as files
+
+        self.assertEqual(files._ROOT_ANCHOR, Path("/"),
+                         "production must keep walking every real ancestor from /")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(os.path.realpath(directory))
+            anchor = root / "anchor"
+            anchor.mkdir()
+            data_root = root / "data"
+            (data_root / "render-authority").mkdir(parents=True)
+            (data_root / "render-authority").chmod(0o700)
+            for candidate in (
+                    data_root,                              # outside the anchor
+                    anchor / ".." / "data"):                # ".." escaped the anchor
+                with mock.patch.object(files, "_ROOT_ANCHOR", anchor):
+                    with self.assertRaises(files.RenderAuthorityRecordError) as raised:
+                        files.read_record(candidate, "qualify.json", expected_uid=os.getuid())
+                self.assertEqual(raised.exception.code, "UNSAFE_PATH", candidate)
 
 
 if __name__ == "__main__":

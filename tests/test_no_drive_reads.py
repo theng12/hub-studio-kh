@@ -8,8 +8,8 @@ model library the person chose under it.
 **What this test cannot catch.** It reads source and audits this Python process only. It cannot
 see a path assembled at runtime from a chosen library (which is allowed), a read by the native
 shell or a worker process, or whether macOS shows a prompt on a real fleet Mac. A mounted
-`KH-STUDIO-*` drive is not present in the test environment; the runtime half proves no volume is
-opened by the routes, not that a real drive would be invisible to the OS.
+drive may hold the test workspace itself. The audit permits only the explicitly selected source,
+runtime and temporary fixture roots there; it still refuses unrelated volumes and volume roots.
 """
 from __future__ import annotations
 
@@ -30,7 +30,25 @@ def _hub_modules() -> list[Path]:
     return sorted(path for path in HUB.rglob("*.py") if "__pycache__" not in path.parts)
 
 
+def _unexpected_volume_reads(paths, allowed_roots):
+    roots = [Path(root).resolve() for root in allowed_roots]
+    unexpected = []
+    for path in paths:
+        target = Path(os.path.abspath(path))
+        if (target == Path('/Volumes') or Path('/Volumes') in target.parents) and not any(
+                target.is_relative_to(root) for root in roots):
+            unexpected.append(path)
+    return unexpected
+
+
 class SourceTests(unittest.TestCase):
+    def test_audit_allows_only_explicit_volume_subtrees(self):
+        selected = '/Volumes/fixture/source'
+        allowed = selected + '/components/hub.py'
+        other = ['/Volumes', '/Volumes/unselected/model.bin',
+                 selected + '-other/file', selected + '/../private/file']
+        self.assertEqual(_unexpected_volume_reads([allowed, *other], [selected]), other)
+
     def test_no_hub_module_names_a_volume_root(self) -> None:
         offenders = []
         for path in _hub_modules():
@@ -98,14 +116,14 @@ print(json.dumps({"answers": answers, "opened": opened, "probe": probe}))
             models.mkdir()
             environment = dict(os.environ, STUDIOHUB_DATA_DIR=str(data),
                                STUDIOHUB_MODELS_DIR=str(models), STUDIOHUB_PACKAGED="0")
-            run = subprocess.run([sys.executable, "-I", "-c", self.SCRIPT, str(ROOT), str(data)],
+            run = subprocess.run([sys.executable, "-I", "-B", "-c", self.SCRIPT, str(ROOT), str(data)],
                                  capture_output=True, text=True, env=environment, timeout=120)
             self.assertEqual(run.returncode, 0, run.stderr)
             answer = json.loads(run.stdout.strip().splitlines()[-1])
         self.assertEqual(answer["answers"],
                          {"/api/health": 200, "/api/hub/resources": 200,
                           "/api/hub/model-presets": 200})
-        volume_reads = [path for path in answer["opened"] if path.startswith("/Volumes")]
+        volume_reads = _unexpected_volume_reads(answer["opened"], [ROOT, tmp, sys.prefix])
         self.assertEqual(volume_reads, [], "a status route opened a volume root")
         # The hook has to be able to record something, or an empty log proves nothing.
         self.assertIn(answer["probe"], answer["opened"],

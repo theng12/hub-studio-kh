@@ -212,18 +212,16 @@ class CueOverlayCompilerTests(unittest.TestCase):
         self.assertIn("x='if(lt(t,1.000),-200,if(lt(t,2.000),-200*(1-(t-1.000)/1.000),0))'", graph)
 
     def test_descriptor_validation_passes(self):
-        compiler_path = Path("/build/Developer/_worktrees/studio-hub-kh/fleet-batch-20261107/packaging/render-authority-cue-overlay/COMPILER.json")
-        compiler_raw = compiler_path.read_bytes()
+        compiler_raw = (REPO_ROOT / "packaging/render-authority-cue-overlay/COMPILER.json").read_bytes()
         desc = validate_render_compiler_descriptor(compiler_raw)
         self.assertEqual(desc.digest, hashlib.sha256(compiler_raw).hexdigest())
 
-        candidate_path = Path("/build/Developer/_orchestra/gateway-lead/fleet-batch-20261107/cue-overlay-v5-profile/PROFILE.candidate.json")
-        profile_doc = json.loads(candidate_path.read_text())
-        profile_doc["compiler_artifact_sha256"] = desc.digest
-        profile_raw = json.dumps(profile_doc, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        # The tracked profile pins the tracked compiler bytes; nothing is rewritten to match.
+        profile_raw = (REPO_ROOT / "packaging/render-authority-cue-overlay/PROFILE.json").read_bytes()
         pdesc = validate_render_profile_descriptor(profile_raw)
         self.assertEqual(pdesc.format, "studio.render.profile.v5")
         self.assertEqual(pdesc.implementation, "story-classic-cue-overlay-v1")
+        self.assertEqual(pdesc.compiler_artifact_sha256, desc.digest)
 
     def test_frozen_v4_sources_match_subtitle_compiler_pins(self):
         root = Path(__file__).resolve().parents[1]

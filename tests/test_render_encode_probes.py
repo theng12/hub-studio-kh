@@ -23,6 +23,7 @@ from components.hub.backend.render_encode_probe import ProbeRun  # noqa: E402
 from components.hub.backend.render_encode_probes import (  # noqa: E402
     EncodeProbeControl,
 )
+from _render_authority_root import anchor_root  # noqa: E402
 
 ENCODE = {
     "container": "mp4",
@@ -177,6 +178,7 @@ class ProbeControlFixture(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(os.path.realpath(temporary.name))
+        anchor_root(self, self.root)
         self.data_root = self.root / "data"
         self.data_root.mkdir()
         self.loader = FakeLoader()

@@ -22,6 +22,7 @@ from components.hub.backend.render_executor import (  # noqa: E402
     InstalledRenderAuthorityLoader,
     RenderExecutor,
 )
+from _render_authority_root import anchor_root  # noqa: E402
 
 INTENT_ID = "0b6c8d1e-3f4a-4b5c-8d7e-9f0a1b2c3d4e"
 HARDWARE_CLASS = "m4-16gb"
@@ -35,6 +36,7 @@ class QualificationReceiptAuthorityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = ROOT / "_trash/render-executor-testroots" / uuid4().hex
         self.root.mkdir(parents=True)
+        anchor_root(self, self.root)
         self.resources = self.root / "resources"
         self.tools_root = self.resources / "render-tools"
         self.tools_root.mkdir(parents=True)

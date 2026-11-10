@@ -28,8 +28,8 @@ class RecoverableDmgFiles(unittest.TestCase):
             self.assertEqual(second.read_bytes(), b'second')
 
     def test_build_preserves_other_versions_on_success_and_failure(self):
-        for fail in (False, True):
-            with self.subTest(fail=fail), tempfile.TemporaryDirectory(prefix='dmg-retention-') as name:
+        for managed, fail in ((False, False), (False, True), (True, False), (True, True)):
+            with self.subTest(managed=managed, fail=fail), tempfile.TemporaryDirectory(prefix='dmg-retention-') as name:
                 root = Path(name)
                 app = root / 'Studio Hub.app'
                 (app / 'Contents').mkdir(parents=True)
@@ -37,10 +37,19 @@ class RecoverableDmgFiles(unittest.TestCase):
                 spec = importlib.util.spec_from_file_location('safe_dmg_retention', ROOT / 'packaging/make_dmg.py')
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-                output = root / 'dist/Hub Studio KH-0.6.228.dmg'
-                output.parent.mkdir()
-                previous = output.with_name('Hub Studio KH-0.6.227.dmg')
+                folder = root / ('dist/.candidates' if managed else 'dist')
+                output = folder / 'Hub Studio KH-0.6.228.dmg'
+                output.parent.mkdir(parents=True)
+                previous = root / 'dist/Hub Studio KH-0.6.227.dmg'
                 previous.write_bytes(b'verified release')
+                if managed:
+                    (root / 'dist/.release-dist.json').write_text('{"schema": 1, "apps": {}}')
+                    # Rebuilding a released version must remain in the candidate folder.
+                    output = folder / previous.name
+                    with mock.patch.object(module, 'ROOT', root), mock.patch.object(module, 'validate_stage') as validate:
+                        with self.assertRaisesRegex(ValueError, 'accepted release dist is managed'):
+                            module.build(app, previous)
+                        validate.assert_not_called()
                 output.write_bytes(b'replaced candidate')
 
                 def run(command, **kwargs):

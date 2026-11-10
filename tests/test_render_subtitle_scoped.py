@@ -34,6 +34,7 @@ from components.hub.backend.render_service import (  # noqa: E402
     register_relay_routes,
     register_routes,
 )
+from _render_authority_root import anchor_root  # noqa: E402
 
 HUB_TOKEN = "subtitle-scope-hub"
 INTENT_ID = "22222222-2222-2222-2222-222222222222"
@@ -66,6 +67,7 @@ class ScopedCase(unittest.TestCase):
     def setUp(self) -> None:
         self.now = 1_000
         self.root = ROOT / "_trash/render-subtitle-scoped-testroots" / uuid4().hex
+        anchor_root(self, self.root)
         self.resources = self.root / "resources"
         self.tools_root = self.resources / "render-tools"
         self.data_root = self.root / "data"

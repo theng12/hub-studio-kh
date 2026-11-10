@@ -450,9 +450,9 @@ class SealedManifestPackagingTests(unittest.TestCase):
             td = Path(temp_dir)
             app = self._create_real_signed_app(td)
 
-            dist_dir = ROOT / "dist"
+            dist_dir = ROOT / "dist/.candidates"
             dist_dir.mkdir(parents=True, exist_ok=True)
-            dmg_path = dist_dir / "Studio Hub Test 0.6.225.dmg"
+            dmg_path = dist_dir / f"Studio Hub Test {td.name}.dmg"
 
             try:
                 self.make_dmg.build(app, dmg_path)
@@ -461,11 +461,13 @@ class SealedManifestPackagingTests(unittest.TestCase):
                 # Mount read-only and verify volume layout
                 mount = Path(tempfile.mkdtemp(prefix="shub-dmg-mount-"))
                 try:
-                    subprocess.run(
+                    attached = subprocess.run(
                         ["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse",
                          "-noautoopen", "-mountpoint", str(mount), str(dmg_path)],
-                        check=True, capture_output=True, text=True,
+                        capture_output=True, text=True,
                     )
+                    self.assertEqual(attached.returncode, 0,
+                                     f"hdiutil attach failed: {attached.stdout}\n{attached.stderr}")
                     mounted_app = mount / "Studio Hub.app"
                     mounted_sidecar = mount / "file-manifest"
 
@@ -511,7 +513,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
                         mount.rmdir()
             finally:
                 if dmg_path.exists():
-                    dmg_path.unlink()
+                    self.make_dmg.preserve(dmg_path, ROOT, 'test-dmgs')
 
 
 if __name__ == "__main__":

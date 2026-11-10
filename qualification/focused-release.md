@@ -6,6 +6,28 @@ step (see [ST-11](tasks/ST-11.md) checkpoints 11.3–11.6).
 This is the operator-facing description of what is handed to a Mac, how to install it, and
 what has to be true before it can be called qualified.
 
+## Current release acceptance and installer retention
+
+Build unaccepted DMGs in `dist/.candidates/`, using the exact requested versioned filename.
+Once `dist/.release-dist.json` exists, the builder refuses outputs directly in managed `dist/`,
+including same-version rebuilds. A candidate never replaces the released artifact by renaming.
+
+After the normal release has been published, installed and verified on its intended machine,
+invoke the shared portfolio `tools/release-dist.py` with a reviewed, Hub-only schema-1 pin file.
+Use the shared helper directly as the post-acceptance hook; do not copy its retention logic here:
+
+```bash
+python3 -I -B "$RELEASE_DIST_TOOL" "$HUB_ACCEPTED_RELEASE_PINS"
+```
+
+The pin `project` is the canonical **project root**, not its `dist/` folder. Pin the newly accepted
+release and previous verified release by version, source DMG, SHA-256, byte count and acceptance
+evidence. The helper owns `dist/.release-dist.json` and the project-root `.release-dist.lock`;
+keep that lock inode in place and ignore it in Git. Candidate generation must not modify either.
+Before rotation, check dependencies and active jobs. Only the shared helper retires its obsolete
+managed installers recoverably, after acceptance; never wipe the whole dist folder. Publishing
+uses the explicitly requested version and artifact hash even when two released DMGs are present.
+
 ## What ships
 
 | Item | Notes |
