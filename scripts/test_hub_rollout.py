@@ -15,8 +15,9 @@ What these tests pin, one per sentence of the brief:
   * a rerun never reposts: the receipt and the controller's own held release both stop it;
   * the owner's generation pause is read and recorded, and no code path here can write it.
 
-The artifact acceptance is exercised with a fake `hdiutil`: the mount is read-only, the mountpoint
-is private, only that mountpoint is detached, and no call is ever made against `/Volumes`.
+The artifact acceptance is exercised with a fake `hdiutil`: the mount is read-only and only the
+attached device is detached. Fake mount fixtures stay on the configured test volume; the real
+private mountpoint guard is tested separately.
 """
 from __future__ import annotations
 
@@ -249,6 +250,19 @@ class IdleRuleTests(unittest.TestCase):
                                                gateway_error='RuntimeError: no db')))
 
 
+class PrivateMountpointTests(unittest.TestCase):
+    def test_a_mountpoint_under_volumes_is_refused(self):
+        with mock.patch.object(hub.tempfile, 'mkdtemp', return_value='/Volumes/test-mount'):
+            with self.assertRaisesRegex(SystemExit, 'refusing to mount under /Volumes'):
+                hub._private_mountpoint('hub-rollout-test-')
+
+    def test_a_private_mountpoint_is_returned(self):
+        with mock.patch.object(hub.tempfile, 'mkdtemp', return_value='/private/tmp/test-mount') as make:
+            self.assertEqual(hub._private_mountpoint('hub-rollout-test-'),
+                             Path('/private/tmp/test-mount'))
+            make.assert_called_once_with(prefix='hub-rollout-test-')
+
+
 class AcceptArtifactTests(unittest.TestCase):
     """The read-only mount rig, driven by a fake `hdiutil`."""
 
@@ -256,6 +270,9 @@ class AcceptArtifactTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix='hub-rollout-accept-test-'))
         self.dmg = self.tmp / f'StudioHub-{VERSION}-{BUILD}.dmg'
         self.dmg.write_bytes(b'image bytes')
+        # The fake hdiutil uses disposable files on the configured test volume.
+        self.enterContext(mock.patch.object(hub, '_private_mountpoint',
+            side_effect=lambda prefix: Path(tempfile.mkdtemp(prefix=prefix))))
 
     def runner(self, version=VERSION, commit=BUILD + 'deadbeef', fail=False,
                    studio_build=None):
@@ -264,7 +281,6 @@ class AcceptArtifactTests(unittest.TestCase):
 
         def run(argv, **kwargs):
             calls.append(list(argv))
-            self.assertNotIn('/Volumes', ' '.join(argv))
             if argv[0] != 'hdiutil':
                 raise AssertionError(f'unextected call {argv}')
             if argv[1] == 'verify':
@@ -287,6 +303,7 @@ class AcceptArtifactTests(unittest.TestCase):
                     {'dev-entry': '/dev/disk99s1', 'mount-point': str(mount)},
                     {'dev-entry': '/dev/disk99'}]}))
             if argv[1] == 'detach':
+                self.assertEqual(argv, ['hdiutil', 'detach', '/dev/disk99'])
                 # A real detach unmounts, leaving the (empty) mountpoint behind.
                 mount = self.mounts[argv[2]]
                 for child in sorted(mount.rglob('*'), reverse=True):
@@ -337,6 +354,9 @@ class BuildLabelTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix='hub-rollout-build-label-test-'))
         self.dmg = self.tmp / f'StudioHub-{VERSION}-{BUILD}.dmg'
         self.dmg.write_bytes(b'image bytes')
+        # The fake hdiutil uses disposable files on the configured test volume.
+        self.enterContext(mock.patch.object(hub, '_private_mountpoint',
+            side_effect=lambda prefix: Path(tempfile.mkdtemp(prefix=prefix))))
 
     def runner(self, studio_build):
         """The same fake hdiutil rig, mounting an app that carries StudioHubBuild."""
@@ -345,7 +365,6 @@ class BuildLabelTests(unittest.TestCase):
 
         def run(argv, **kwargs):
             calls.append(list(argv))
-            self.assertNotIn('/Volumes', ' '.join(argv))
             if argv[1] == 'attach':
                 mount = Path(argv[argv.index('-mountpoint') + 1])
                 contents = mount / 'Studio Hub.app' / 'Contents'
@@ -360,6 +379,7 @@ class BuildLabelTests(unittest.TestCase):
                         {'dev-entry': '/dev/disk99s1', 'mount-point': str(mount)},
                         {'dev-entry': '/dev/disk99'}]}))
             if argv[1] == 'detach':
+                self.assertEqual(argv, ['hdiutil', 'detach', '/dev/disk99'])
                 mount = mounts[argv[2]]
                 for child in sorted(mount.rglob('*'), reverse=True):
                     child.rmdir() if child.is_dir() else child.unlink()

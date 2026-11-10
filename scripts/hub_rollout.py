@@ -146,6 +146,13 @@ def _as_int(value: object) -> int | None:
 # Artifact acceptance — the accept-artifact rig, generalised to "whatever artifact was named".
 # ---------------------------------------------------------------------------
 
+def _private_mountpoint(prefix: str) -> Path:
+    mount = Path(tempfile.mkdtemp(prefix=prefix))
+    if str(mount).startswith('/Volumes'):
+        raise SystemExit(f'refusing to mount under /Volumes: {mount}')
+    return mount
+
+
 def accept_artifact(artifact: Path, version: str, build: str, run=subprocess.run) -> dict:
     """Prove the artifact before a byte of it is offered to any site.
 
@@ -172,9 +179,7 @@ def accept_artifact(artifact: Path, version: str, build: str, run=subprocess.run
     if verify.returncode != 0 or 'is VALID' not in text:
         raise SystemExit(f'hdiutil verify did not accept the image (exit {verify.returncode})')
 
-    mount = Path(tempfile.mkdtemp(prefix='hub-rollout-accept-'))
-    if str(mount).startswith('/Volumes'):
-        raise SystemExit(f'refusing to mount under /Volumes: {mount}')
+    mount = _private_mountpoint('hub-rollout-accept-')
     try:
         attached = run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-plist', '-mountpoint', str(mount),
                         str(artifact)], check=True, capture_output=True, timeout=600)
@@ -245,9 +250,7 @@ def verify_build_label(artifact: Path, build: str, run=subprocess.run) -> dict:
         raise SystemExit('refusing to publish: no build label was offered (--build is empty); '
                          f'the artifact {artifact.name} carries StudioHubBuild and only that '
                          'label may be published')
-    mount = Path(tempfile.mkdtemp(prefix='hub-rollout-build-'))
-    if str(mount).startswith('/Volumes'):
-        raise SystemExit(f'refusing to mount under /Volumes: {mount}')
+    mount = _private_mountpoint('hub-rollout-build-')
     try:
         attached = run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-plist', '-mountpoint', str(mount),
                         str(artifact)], check=True, capture_output=True, timeout=600)
