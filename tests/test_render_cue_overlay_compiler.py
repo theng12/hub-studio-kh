@@ -240,6 +240,7 @@ class CueOverlayCompilerTests(unittest.TestCase):
         from tests.test_render_subtitle_executor import make_png, FONT, ASS
         from tests.test_render_subtitle_v1 import build_packet, raw as sub_raw, LIMITS as SUB_LIMITS
         case = ScopedCase()
+        self.addCleanup(case.doCleanups)
         case.setUp()
         try:
             case.write_enabled()
