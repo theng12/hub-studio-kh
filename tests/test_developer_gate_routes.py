@@ -25,7 +25,8 @@ from components.hub import developer_gate_service as service_mod  # noqa: E402
 from components.hub import developer_gates  # noqa: E402
 from components.hub import developer_tests  # noqa: E402
 from tests.test_developer_gate_service import (  # noqa: E402
-    CONTROLLER, NODE, FakeAdmission, FakeMetrics, _fixture, _inventory, fake_runner)
+    CONTROLLER, NODE, FakeAdmission, FakeMetrics, _fixture, _inventory, _reset_observed,
+    fake_runner)
 
 BASE = "/api/hub/fleet/nodes/local/developer-gates"
 TOKEN = "fleet-current-token"
@@ -33,6 +34,7 @@ TOKEN = "fleet-current-token"
 
 class DeveloperGateRouteTests(unittest.TestCase):
     def setUp(self) -> None:
+        _reset_observed()
         self.temp = tempfile.TemporaryDirectory(prefix="studiohub-gate-routes-")
         self.addCleanup(self.temp.cleanup)
         self.old_identities = developer_tests._identities

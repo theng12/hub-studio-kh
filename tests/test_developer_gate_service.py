@@ -7,6 +7,7 @@ test fixtures supplied through the normal constructor, never through the wire.
 
 from __future__ import annotations
 
+import calendar
 import hashlib
 import io
 import json
@@ -34,6 +35,19 @@ from components.hub import developer_tests  # noqa: E402
 NODE = "node-1"
 CONTROLLER = "ctrl-1"
 OBSERVED = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _reset_observed() -> None:
+    """Stamp the fixtures when a test starts, not when this module is imported.
+
+    The service refuses an inventory older than `inventory_max_age_seconds` (300 s). This
+    suite takes longer than that on a loaded Mac, so an import-time stamp was stale by the
+    time these modules ran and every accept failed with "inventory_stale".
+    """
+    global OBSERVED
+    OBSERVED = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 PIN = {"id": "python", "version": "3.11.0", "manifest_sha256": "d" * 64}
 TOOL_MANIFEST = {
     "format": "studio.tool-manifest.v1", "id": "tool-manifest-pilot",
@@ -291,6 +305,7 @@ def _retained_tool(tools_root: Path, artifact: dict) -> Path:
 
 class DeveloperGateServiceTests(unittest.TestCase):
     def setUp(self) -> None:
+        _reset_observed()
         self.temp = tempfile.TemporaryDirectory(prefix="studiohub-gate-service-")
         self.addCleanup(self.temp.cleanup)
         self.old_identities = developer_tests._identities
@@ -303,6 +318,12 @@ class DeveloperGateServiceTests(unittest.TestCase):
                                                used=100_277_792_768))
         self.disk.start()
         self.addCleanup(self.disk.stop)
+
+    def test_fixture_clock_is_stamped_when_the_test_starts(self) -> None:
+        """Pins the fix for a long suite: an import-time stamp goes stale past the
+        service's 300 s inventory bound and every accept fails with inventory_stale."""
+        age = time.time() - calendar.timegm(time.strptime(OBSERVED, "%Y-%m-%dT%H:%M:%SZ"))
+        self.assertLess(abs(age), 60)
 
     def _service(self, *, authority=None, runner=fake_runner, root_dir=None,
                  tool_preparer=None, tools_root=None):
@@ -1225,6 +1246,7 @@ class ProductionAuthorityWiringTests(unittest.TestCase):
     """The default constructor must load local evidence, never assume support."""
 
     def setUp(self) -> None:
+        _reset_observed()
         self.old_identities = developer_tests._identities
         developer_tests._identities = lambda: (NODE, CONTROLLER)
         self.addCleanup(setattr, developer_tests, "_identities", self.old_identities)
