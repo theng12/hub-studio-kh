@@ -1410,9 +1410,11 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(runtime.job["state"], "failed")
 
     async def test_validation_failure_and_unknown_ledger_evidence_never_release_physical_hold(self) -> None:
+        packet = json.loads(
+            (ROOT / "tests/fixtures/final-render-compiler-v1.json").read_text()
+        )["f0_base_audio"]["packet"]
         raw = json.dumps({
-            "packet": {"recipe": {"profile_digest": "1" * 64}},
-            "assets": {},
+            "packet": packet, "assets": {"audio": "b" * 32, "base": "a" * 32},
         }, sort_keys=True, separators=(",", ":")).encode()
 
         for evidence in (None, {}, RuntimeError("ledger unavailable")):
@@ -1420,6 +1422,13 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
                 events: list[str] = []
                 runtime = FakeRuntime(self.root / uuid4().hex, raw, self.authority().qualification, events)
                 broker = FakeBroker(events)
+                files = {}
+                for handle, payload in (("a" * 32, self.mp4_bytes()),
+                                        ("b" * 32, self.wav_bytes())):
+                    path = runtime.root / handle
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(payload)
+                    files[handle] = path
 
                 def get(_owner_scope, _job_id):
                     if isinstance(evidence, BaseException):
@@ -1429,18 +1438,22 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
                 runtime.get = get
 
                 async def spawn(*_args, **_kwargs):
-                    return FakeProcess(self.root / "out.mp4")
+                    return FakeProcess(Path(runtime.claim["output_path"]))
+
+                def reject_output(*_args):
+                    events.append("validate")
+                    raise RuntimeError("probe rejected output")
 
                 executor = RenderExecutor(
-                    runtime, FakeAssets({}), authority=lambda: self.authority(),
+                    runtime, FakeAssets(files), authority=lambda: self.authority(),
                     machine="local", broker_api=broker,
-                    compile_plan=lambda *_args: FinalRenderPlan(
+                    compile_plan=lambda _raw, local, output: FinalRenderPlan(
                         tiers=(EncodeTier("hardware-h264", (
-                            "-c:v", "h264_videotoolbox", str(self.root / "out.mp4"))),),
+                            "-i", local["base"], "-i", local["audio"],
+                            "-c:v", "h264_videotoolbox", output)),),
                         requested_burn_ins=(), input_uses=()),
                     spawn=spawn,
-                    output_validator=lambda *_args: (_ for _ in ()).throw(
-                        RuntimeError("probe rejected output")),
+                    output_validator=reject_output,
                     process_identity=lambda process, executable: ProcessIdentity(
                         pid=process.pid, process_group_id=process.pid,
                         start_token=f"boot:1:{executable}"),
@@ -1448,8 +1461,15 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
 
                 self.assertTrue(await executor.dispatch_ready())
+                outcomes = await asyncio.gather(*executor._tasks, return_exceptions=True)
                 await executor.stop()
 
+                self.assertEqual(events.count("validate"), 1)
+                self.assertIn("stopped", events)
+                self.assertEqual(len(outcomes), 1)
+                self.assertIsInstance(outcomes[0], RuntimeError)
+                self.assertEqual(str(outcomes[0]), "probe rejected output")
+                self.assertNotIn("publish", events)
                 self.assertIsNotNone(broker.owner)
                 self.assertNotIn("release", events)
 
