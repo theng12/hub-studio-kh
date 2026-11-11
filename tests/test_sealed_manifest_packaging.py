@@ -288,7 +288,8 @@ class SealedManifestPackagingTests(unittest.TestCase):
                 signed = []
 
                 def codesign(command, **kwargs):
-                    if '--sign' in command and command[-1] == str(nested):
+                    # sign_app resolves the app, and TMPDIR is a /var -> /private/var link.
+                    if '--sign' in command and command[-1] == str(nested.resolve()):
                         signed.append((nested.stat().st_mode & 0o7777,
                                        nested.parent.stat().st_mode & 0o7777))
                         self.assertEqual(signed[-1], (0o755, 0o755))
