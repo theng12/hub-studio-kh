@@ -39,7 +39,7 @@
 #   CHAT_PROMPT="..."           use this prompt instead of the built-in one.
 #   CHAT_MAX_SWAP_GB=6          stop a run whose system swap passes this.
 #   CHAT_TIMEOUT=900            stop a single request after this many seconds.
-#   CHAT_APP=...                use this Studio Hub.app bundle.
+#   CHAT_APP=...                use this Hub Studio KH.app bundle.
 #   CHAT_MODEL=...              use this model folder (must contain config.json + weights).
 #   CHAT_MODELS_DIR=...         use this model library root (…/<package>/<revision>/model).
 #   CHAT_OUT=...                write the record somewhere other than ~/Desktop.
@@ -133,11 +133,11 @@ app_ok() { [ -f "$1/Contents/Resources/chat_worker.py" ] \
   && [ -f "$1/Contents/Resources/release-manifest.json" ]; }
 for candidate in \
   "${CHAT_APP:-}" \
-  /Applications/"Studio Hub.app" \
-  "$HOME"/Applications/"Studio Hub.app" \
-  /Volumes/*/*/"Studio Hub.app" \
-  /Volumes/*/*/*/"Studio Hub.app" \
-  /Volumes/*/*/*/*/"Studio Hub.app"; do
+  /Applications/"Hub Studio KH.app" \
+  "$HOME"/Applications/"Hub Studio KH.app" \
+  /Volumes/*/*/"Hub Studio KH.app" \
+  /Volumes/*/*/*/"Hub Studio KH.app" \
+  /Volumes/*/*/*/*/"Hub Studio KH.app"; do
   [ -n "$candidate" ] && app_ok "$candidate" && { APP="$candidate"; break; }
 done
 if [ -z "$APP" ]; then
@@ -145,9 +145,9 @@ if [ -z "$APP" ]; then
 REFUSING TO RUN: no packaged Studio Hub app was found, and the Chat lane needs the app's own
 worker, runtime and model catalog.
 
-  * Install the kit's app (drag "Studio Hub.app" to Applications), or plug in a kit drive and
-    leave it mounted — this script looks for Studio Hub.app on every mounted volume too.
-  * Or name a bundle explicitly:   CHAT_APP="/path/to/Studio Hub.app" bash "$0"
+  * Install the kit's app (drag "Hub Studio KH.app" to Applications), or plug in a kit drive and
+    leave it mounted — this script looks for Hub Studio KH.app on every mounted volume too.
+  * Or name a bundle explicitly:   CHAT_APP="/path/to/Hub Studio KH.app" bash "$0"
 
 Nothing was run and no record was written.
 EOF

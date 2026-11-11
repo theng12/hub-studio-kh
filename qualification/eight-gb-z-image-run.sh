@@ -150,16 +150,16 @@ if [ -s "$RESULTS" ]; then mv "$RESULTS" "$OUT/results-$(date -u '+%Y%m%dT%H%M%S
 MFLUX=""
 for candidate in \
   "${ZIMAGE_MFLUX_BIN:-}" \
-  /Applications/"Studio Hub.app/Contents/Resources/runtimes/image/bin/mflux-generate-z-image-turbo" \
-  "$HOME"/Applications/"Studio Hub.app/Contents/Resources/runtimes/image/bin/mflux-generate-z-image-turbo" \
+  /Applications/"Hub Studio KH.app/Contents/Resources/runtimes/image/bin/mflux-generate-z-image-turbo" \
+  "$HOME"/Applications/"Hub Studio KH.app/Contents/Resources/runtimes/image/bin/mflux-generate-z-image-turbo" \
   "$HOME"/.local/bin/mflux-generate-z-image-turbo; do
   [ -n "$candidate" ] && [ -x "$candidate" ] && { MFLUX="$candidate"; break; }
 done
 if [ -z "$MFLUX" ]; then
   # A copy of the app on a mounted kit drive, wherever the drive is mounted and whatever the
   # folders above the bundle are called.
-  for candidate in /Volumes/*/*/"Studio Hub.app"/Contents/Resources/runtimes/image/bin/mflux-generate-z-image-turbo \
-                   /Volumes/*/*/*/"Studio Hub.app"/Contents/Resources/runtimes/image/bin/mflux-generate-z-image-turbo; do
+  for candidate in /Volumes/*/*/"Hub Studio KH.app"/Contents/Resources/runtimes/image/bin/mflux-generate-z-image-turbo \
+                   /Volumes/*/*/*/"Hub Studio KH.app"/Contents/Resources/runtimes/image/bin/mflux-generate-z-image-turbo; do
     [ -x "$candidate" ] && { MFLUX="$candidate"; break; }
   done
 fi
@@ -233,7 +233,7 @@ cannot be compared with the 32 GB record, and the tier verdict is about this mod
   0.6.59 to 0.6.62 had shipped 0.20.0, because the release loop staged the superseded runtime. The
   kit on a drive made before 0.6.68 carries 0.17.5 too. Check what THIS app carries before acting:
 
-      ls "/Applications/Studio Hub.app/Contents/Resources/runtimes/image"/lib/python*/site-packages \
+      ls "/Applications/Hub Studio KH.app/Contents/Resources/runtimes/image"/lib/python*/site-packages \
         | grep -o 'mflux-[0-9.]*'
 
   Fix:    a kit at 0.6.68 or later carries mflux 0.20.0 - install that app, or

@@ -18,7 +18,7 @@ enum ReleaseNotes {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "unknown"
     }
 
-    static var title: String { "Studio Hub \(currentVersion)" }
+    static var title: String { "Hub Studio KH \(currentVersion)" }
 
     /// The whole notes file, or a plain explanation if the bundle is missing it.
     static func text() -> String {

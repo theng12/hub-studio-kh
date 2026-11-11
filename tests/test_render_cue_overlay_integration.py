@@ -370,7 +370,7 @@ class CueOverlayIntegrationTests(unittest.TestCase):
 class CueOverlayExecutorPathTests(unittest.IsolatedAsyncioTestCase):
     """Real executor path: v5 admission, media refusal before spawn, and a valid cue render."""
 
-    PINNED_TOOLS = Path("/Applications/Studio Hub.app/Contents/Resources/render-tools")
+    PINNED_TOOLS = Path("/Applications/Hub Studio KH.app/Contents/Resources/render-tools")
 
     def setUp(self):
         self.fixture = fixtures.RenderExecutorTests()

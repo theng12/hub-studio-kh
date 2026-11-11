@@ -8,7 +8,7 @@ set -u
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET="$HERE/eight-gb-image-run.sh"
-APP="${STUDIOHUB_APP:-/Applications/Studio Hub.app}"
+APP="${STUDIOHUB_APP:-/Applications/Hub Studio KH.app}"
 
 if [ ! -f "$TARGET" ] || [ ! -f "$HERE/eight_gb_image_run.py" ] || [ ! -f "$HERE/ssd_wear.py" ]; then
     echo "The image test is not complete beside this file."

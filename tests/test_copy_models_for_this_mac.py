@@ -66,7 +66,7 @@ class Harness:
     can say which Mac it is claiming to be without pretending to be one.
     """
 
-    APP = Path("Studio Hub.app")
+    APP = Path("Hub Studio KH.app")
     REVISION = "c" * 40
 
     def __init__(self, root: Path):
@@ -223,7 +223,7 @@ class Harness:
         else:
             os.environ.pop("STUDIOHUB_KIT_COPY", None)
         # **Point the helper at this fixture's app bundle.** Without this it finds the owner's real
-        # `/Applications/Studio Hub.app`, reads *its* manifests and tests a different computer than
+        # `/Applications/Hub Studio KH.app`, reads *its* manifests and tests a different computer than
         # the one it built — which is what happened the moment the search order changed to prefer an
         # installed app, and why these six tests went red.
         os.environ["STUDIOHUB_APP_ROOT"] = str(self.kit / self.APP)
@@ -740,7 +740,7 @@ class TrashNamingTests(unittest.TestCase):
 class TheCopyUsesTheAppYouInstalledTest(unittest.TestCase):
     """The model copy runs the **installed** app's runtime and manifests, not the kit's copy.
 
-    It used to be the other way round: the launcher looked for `Studio Hub.app` beside itself
+    It used to be the other way round: the launcher looked for `Hub Studio KH.app` beside itself
     first, so a Mac that had just run step 1 still executed an interpreter from the removable
     drive, and read the manifests on the drive rather than the ones the installed app would use.
     Slower, broken if the drive is unplugged mid-copy, and two different answers to "which app is
@@ -753,12 +753,12 @@ class TheCopyUsesTheAppYouInstalledTest(unittest.TestCase):
     def test_the_launcher_prefers_the_installed_app_and_falls_back_to_the_kit(self) -> None:
         text = (ROOT / "copy-models.command").read_text(encoding="utf-8")
         order = text.split("for app in ", 1)[1].split("; do", 1)[0]
-        installed = order.index("/Applications/Studio Hub.app")
-        home = order.index("$HOME/Applications/Studio Hub.app")
-        kit = order.index("$HERE/Studio Hub.app")
+        installed = order.index("/Applications/Hub Studio KH.app")
+        home = order.index("$HOME/Applications/Hub Studio KH.app")
+        kit = order.index("$HERE/Hub Studio KH.app")
         self.assertLess(installed, kit, "the installed app must be tried before the kit's copy")
         self.assertLess(home, kit)
-        self.assertIn("$KIT/Studio Hub.app", order, "the kit's copy stays as the fallback")
+        self.assertIn("$KIT/Hub Studio KH.app", order, "the kit's copy stays as the fallback")
 
     def test_the_launcher_tells_the_helper_which_bundle_it_chose(self) -> None:
         # Two searches for one answer is how the interpreter and the manifests come from different
@@ -773,7 +773,7 @@ class TheCopyUsesTheAppYouInstalledTest(unittest.TestCase):
             root = Path(tmp)
             kit = root / "kit"
             chosen = root / "chosen.app"
-            for bundle in (kit / "Studio Hub.app", chosen):
+            for bundle in (kit / "Hub Studio KH.app", chosen):
                 (bundle / "Contents/Resources/model-manifests").mkdir(parents=True)
             (chosen / "Contents/Resources/model-manifests" / "a.json").write_text("{}")
             spec = importlib.util.spec_from_file_location(

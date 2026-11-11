@@ -25,12 +25,12 @@
 # double-clicked in Finder rather than run from a terminal.
 KIT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 if [ -z "${APP:-}" ]; then
-  for _cand in "/Applications/Studio Hub.app" "/Applications/Studio Hub 0.4.0.app" \
-               "$HOME/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub 0.4.0.app" \
-               "$KIT/Studio Hub.app" "$KIT/Studio Hub 0.4.0.app"; do
+  for _cand in "/Applications/Hub Studio KH.app" "/Applications/Studio Hub 0.4.0.app" \
+               "$HOME/Applications/Hub Studio KH.app" "$HOME/Applications/Studio Hub 0.4.0.app" \
+               "$KIT/Hub Studio KH.app" "$KIT/Studio Hub 0.4.0.app"; do
     [ -d "$_cand" ] && { APP="$_cand"; break; }
   done
-  APP="${APP:-$KIT/Studio Hub.app}"
+  APP="${APP:-$KIT/Hub Studio KH.app}"
 fi
 # LIB (a real library) is deliberately not used: see the header.
 

@@ -1224,7 +1224,7 @@ struct NativeModel: Identifiable, Equatable {
 
     /// The lane's published **switches**: every boolean parameter it honours, in its own order.
     ///
-    /// A switch is a choice, not a capability, and it is the lane's to publish. Studio Hub 0.6.83
+    /// A switch is a choice, not a capability, and it is the lane's to publish. Hub Studio KH 0.6.83
     /// gave the LTX lane an `audio` parameter (default true, with the lane's own note) and no other
     /// video parameter is a boolean, so the Video page renders a toggle for exactly what this
     /// returns and never for a name this app knows on its own. Empty means the lane publishes none.
@@ -3059,7 +3059,7 @@ struct NativeJob: Identifiable, Equatable {
     var revealUnavailableReason: String {
         guard let artifactPath, !artifactPath.isEmpty else {
             return "This result was made on another Mac, so there is no file for it on this one. "
-                + "Open Studio Hub on that Mac to show it, or Save a copy while it is online."
+                + "Open Hub Studio KH on that Mac to show it, or Save a copy while it is online."
         }
         return "The file this job produced is no longer at \(artifactPath) — it has been moved, "
             + "renamed or cleaned up since it was made."
@@ -7908,7 +7908,7 @@ final class NativeWorkspaceStore: ObservableObject {
             guard !secret.isEmpty else { throw NativeAPIError.message("Enter the controller's token.") }
             let nodeID = (controllerIdentity?.settings.controllerId ?? "studiohub-node")
                 .lowercased()
-            let name = controllerIdentity?.settings.machineName ?? "Studio Hub"
+            let name = controllerIdentity?.settings.machineName ?? "Hub Studio KH"
             guard let ownAddress = Self.studioAddress(for: target, port: baseURL?.port,
                                                       boundHosts: boundHosts) else {
                 throw NativeAPIError.message("This Mac is not reachable at any address a controller could use. Choose a network address under Connections → Fleet, restart the services, then join.")
@@ -8576,7 +8576,7 @@ final class NativeWorkspaceStore: ObservableObject {
     private func runFleetCommand(_ command: FleetCommand) async -> [String: Any] {
         guard let baseURL else {
             return ["id": command.id, "status": 503,
-                    "json": ["ok": false, "detail": "Studio Hub is not running on this Mac."]]
+                    "json": ["ok": false, "detail": "Hub Studio KH is not running on this Mac."]]
         }
         let base = baseURL.absoluteString.hasSuffix("/")
             ? String(baseURL.absoluteString.dropLast()) : baseURL.absoluteString
@@ -8611,7 +8611,7 @@ final class NativeWorkspaceStore: ObservableObject {
         guard let (data, response) = try? await session.data(for: request),
               let http = response as? HTTPURLResponse else {
             return ["id": command.id, "status": 503,
-                    "json": ["ok": false, "detail": "this Mac's Studio Hub did not answer."]]
+                    "json": ["ok": false, "detail": "this Mac's Hub Studio KH did not answer."]]
         }
         let payload = (try? JSONSerialization.jsonObject(with: data)) ?? NSNull()
         return ["id": command.id, "status": http.statusCode, "json": payload]
@@ -9710,7 +9710,7 @@ final class NativeWorkspaceStore: ObservableObject {
                 await refreshMemoryPolicy()
                 guard memoryInventory != nil, activeWorkCount == 0 else {
                     releaseRefusal = nil
-                    note(.success, "Studio Hub \(descriptor.version) is downloaded and waiting: this Mac is busy, so it will install when it is idle.")
+                    note(.success, "Hub Studio KH \(descriptor.version) is downloaded and waiting: this Mac is busy, so it will install when it is idle.")
                     return
                 }
             }
@@ -9749,14 +9749,14 @@ final class NativeWorkspaceStore: ObservableObject {
             // Only a completed install makes a stored download disposable. Every failure above leaves
             // them in place, so the next press reuses or resumes one rather than re-downloading.
             retireReleaseArtifacts()
-            note(.success, "Installed Studio Hub \(descriptor.version) (\(landed)). Relaunching Studio Hub now — running work will stop.")
+            note(.success, "Installed Hub Studio KH \(descriptor.version) (\(landed)). Relaunching Hub Studio KH now — running work will stop.")
             onReleaseRestartRequested?()
             await refreshRelease()
         } catch let wait as ReleaseNotReady {
             // The release is still arriving on this Mac's Hub: not a failure, so the next check
             // simply asks again. Nothing was installed, so the Mac takes work meanwhile.
             if automatic { await endUpdateDrain() }
-            note(.success, "Studio Hub \(descriptor.version) is still arriving on this Mac (\(wait.message)); it will be installed once it is all here.")
+            note(.success, "Hub Studio KH \(descriptor.version) is still arriving on this Mac (\(wait.message)); it will be installed once it is all here.")
         } catch {
             // An update that fails on its own is not tried again for the same release for
             // `autoUpdateFailureRetry` (a retry loop would re-copy 5 GB every minute); a re-pushed

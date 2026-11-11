@@ -31,7 +31,7 @@ class RecoverableDmgFiles(unittest.TestCase):
         for managed, fail in ((False, False), (False, True), (True, False), (True, True)):
             with self.subTest(managed=managed, fail=fail), tempfile.TemporaryDirectory(prefix='dmg-retention-') as name:
                 root = Path(name)
-                app = root / 'Studio Hub.app'
+                app = root / 'Hub Studio KH.app'
                 (app / 'Contents').mkdir(parents=True)
                 (app / 'Contents/Info.plist').write_text('fixture')
                 spec = importlib.util.spec_from_file_location('safe_dmg_retention', ROOT / 'packaging/make_dmg.py')
@@ -77,7 +77,7 @@ class RecoverableDmgFiles(unittest.TestCase):
 
     def test_changed_staged_content_is_rejected_before_packaging(self):
         with tempfile.TemporaryDirectory(prefix='dmg-integrity-private-') as name:
-            app = Path(name) / 'Studio Hub.app'
+            app = Path(name) / 'Hub Studio KH.app'
             (app / 'Contents').mkdir(parents=True)
             (app / 'Contents/Info.plist').write_text('staged source')
             spec = importlib.util.spec_from_file_location('safe_dmg_digest', ROOT / 'packaging/make_dmg.py')

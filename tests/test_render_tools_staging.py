@@ -645,7 +645,7 @@ class RenderToolsStagingTests(unittest.TestCase):
         self.assertFalse((ROOT / "packaging" / "MANIFEST.json").exists())
 
     def test_same_copier_can_stage_into_an_existing_app_resources_tree(self) -> None:
-        resources = self.case / "Studio Hub.app/Contents/Resources"
+        resources = self.case / "Hub Studio KH.app/Contents/Resources"
         resources.mkdir(parents=True)
         sentinel = resources / "release-notes.md"
         sentinel.write_text("keep", encoding="utf-8")

@@ -1038,13 +1038,13 @@ enum LoginMigration {
     /// The one-line notice to show when the old entry could not be removed, or nil.
     static func notice(for outcome: Outcome) -> String? {
         guard case .failed(let detail) = outcome else { return nil }
-        return "An older \"Start at login\" entry could not be removed (\(detail)). Studio Hub still "
+        return "An older \"Start at login\" entry could not be removed (\(detail)). Hub Studio KH still "
             + "runs; if it starts twice at login, remove the old entry in System Settings > "
             + "General > Login Items."
     }
 }
 
-/// The single mechanism that keeps Studio Hub running on an unattended Mac: a per-user launchd
+/// The single mechanism that keeps Hub Studio KH running on an unattended Mac: a per-user launchd
 /// agent.
 ///
 /// It replaced `SMAppService.mainApp`, which starts the app at login but does nothing when the app
@@ -1088,12 +1088,12 @@ enum LaunchAgent {
         let root = applicationsRoot.standardizedFileURL.resolvingSymlinksInPath().path
         let bundle = appBundle.standardizedFileURL.resolvingSymlinksInPath().path
         guard bundle == root || bundle.hasPrefix(root + "/") else {
-            return .refuse("Studio Hub has to be in \(root) before it can start at login. "
+            return .refuse("Hub Studio KH has to be in \(root) before it can start at login. "
                 + "Move the app there, then turn Start at login on again.")
         }
         let executable = executablePath(forAppBundle: appBundle)
         guard executableExists(executable) else {
-            return .refuse("Studio Hub's own program is missing from \(bundle). "
+            return .refuse("Hub Studio KH's own program is missing from \(bundle). "
                 + "Reinstall the app before turning Start at login on.")
         }
         return .install(executablePath: executable)
@@ -1293,18 +1293,18 @@ enum LoginAgent {
                 throw ShellFailure(message: "Could not turn off login startup because launchctl could not start. The login agent was kept.")
             case .signaled(let signal):
                 coordinator.quarantine()
-                throw ShellFailure(message: "Could not confirm login startup was unloaded because launchctl ended from signal \(signal); its registration outcome is uncertain. The login agent was kept. Reopen Studio Hub before trying again.")
+                throw ShellFailure(message: "Could not confirm login startup was unloaded because launchctl ended from signal \(signal); its registration outcome is uncertain. The login agent was kept. Reopen Hub Studio KH before trying again.")
             case .timedOut(let confirmed):
                 coordinator.quarantine()
                 let settlement = confirmed ? "launchctl ended" : "launchctl did not settle"
-                throw ShellFailure(message: "Could not confirm login startup was unloaded (\(settlement)); its registration outcome is uncertain. The login agent was kept. Reopen Studio Hub before trying again.")
+                throw ShellFailure(message: "Could not confirm login startup was unloaded (\(settlement)); its registration outcome is uncertain. The login agent was kept. Reopen Hub Studio KH before trying again.")
             }
         }
         // ponytail: quarantine lasts for this app process; a later normal app startup gets a fresh
         // coordinator after launchd/OS settlement. Add persistent reconciliation only if field
         // evidence shows uncertainty survives that boundary.
         guard applied != nil else {
-            throw ShellFailure(message: "Could not safely change login startup because a prior launchctl command has an uncertain outcome. Reopen Studio Hub before trying again.")
+            throw ShellFailure(message: "Could not safely change login startup because a prior launchctl command has an uncertain outcome. Reopen Hub Studio KH before trying again.")
         }
     }
 }
@@ -1323,14 +1323,14 @@ enum LoginAgentSupervision {
 }
 
 /// Why the app could not take its data-folder lock. The distinction matters: "already held" means
-/// another copy of Studio Hub is the real app, while "unavailable" is a real failure to open.
+/// another copy of Hub Studio KH is the real app, while "unavailable" is a real failure to open.
 enum InstanceLockError: LocalizedError, Equatable {
     case alreadyHeld
     case unavailable(String)
     var errorDescription: String? {
         switch self {
         case .alreadyHeld:
-            return "Studio Hub is already using this data folder. Open the running app from its menu-bar icon."
+            return "Hub Studio KH is already using this data folder. Open the running app from its menu-bar icon."
         case .unavailable(let message):
             return message
         }
@@ -1354,7 +1354,7 @@ final class InstanceLock {
 /// What a redundant launch does when another process already owns the data folder.
 ///
 /// This is the second copy launchd can start (for example, a previously loaded agent) while the
-/// real app is running. The new process must never show the "Studio Hub could not open" alert: it
+/// real app is running. The new process must never show the "Hub Studio KH could not open" alert: it
 /// brings the running app forward if it can and leaves with status 0, which `KeepAlive` treats as a
 /// clean exit and never relaunches. The present/exit actions are injected so the contract suite can
 /// prove the behaviour without AppKit or terminating the test process.
@@ -1381,7 +1381,7 @@ enum ExistingInstance {
     }
 }
 
-/// Why the previous run of Studio Hub ended, as this Mac can tell (owner decision 2026-10-03).
+/// Why the previous run of Hub Studio KH ended, as this Mac can tell (owner decision 2026-10-03).
 ///
 /// Only a crash brings the app back. A Force Quit is deliberate - often the answer to macOS's
 /// "out of application memory" dialog - and a memory kill is macOS making room; relaunching either
@@ -1592,7 +1592,7 @@ private func writeStopMarker(_ path: UnsafeMutablePointer<CChar>?, _ number: Int
     close(descriptor)
 }
 
-/// What makes the launch agent supervise a copy of Studio Hub that launchd did not start.
+/// What makes the launch agent supervise a copy of Hub Studio KH that launchd did not start.
 ///
 /// `KeepAlive` only relaunches the process launchd itself spawned. An app opened from Finder, or
 /// reopened by an update, was supervised by nothing, and the agent written after login was not

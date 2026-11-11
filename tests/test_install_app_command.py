@@ -44,7 +44,7 @@ class InstallAppTests(unittest.TestCase):
         shutil.copy(ROOT / "install_app.command", self.kit / "install_app.command")
         self.applications = self.tmp / "Applications"
         self.applications.mkdir()
-        self.live = self.applications / "Studio Hub.app"
+        self.live = self.applications / "Hub Studio KH.app"
 
     def cleanup(self) -> None:
         subprocess.run(["chmod", "-R", "u+w", str(self.tmp)], capture_output=True)
@@ -57,23 +57,23 @@ class InstallAppTests(unittest.TestCase):
                               capture_output=True, text=True, timeout=120)
 
     def leftovers(self) -> list[str]:
-        return sorted(p.name for p in self.applications.iterdir() if p.name != "Studio Hub.app")
+        return sorted(p.name for p in self.applications.iterdir() if p.name != "Hub Studio KH.app")
 
     def archived(self, prefix: str) -> list[Path]:
         trash = self.applications / "_trash"
         return sorted(trash.glob(f"{prefix}-*")) if trash.is_dir() else []
 
     def test_a_first_install_copies_the_kit_app(self) -> None:
-        build_app(self.kit / "Studio Hub.app", {"Contents/Resources/a.py": b"new"})
+        build_app(self.kit / "Hub Studio KH.app", {"Contents/Resources/a.py": b"new"})
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(tree(self.live), tree(self.kit / "Studio Hub.app"))
+        self.assertEqual(tree(self.live), tree(self.kit / "Hub Studio KH.app"))
         self.assertEqual(self.leftovers(), [])
 
     def test_an_update_over_a_read_only_installed_app_brings_across_exactly_what_differs(self) -> None:
         build_app(self.live, {"Contents/Resources/keep.py": b"same", "Contents/Resources/change.py": b"old",
                               "Contents/Resources/gone.py": b"remove me"}, readonly=True)
-        build_app(self.kit / "Studio Hub.app", {"Contents/Resources/keep.py": b"same",
+        build_app(self.kit / "Hub Studio KH.app", {"Contents/Resources/keep.py": b"same",
                                                 "Contents/Resources/change.py": b"new and longer",
                                                 "Contents/Resources/added.py": b"added"})
         old = tree(self.live)
@@ -84,7 +84,7 @@ class InstallAppTests(unittest.TestCase):
 
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(tree(self.live), tree(self.kit / "Studio Hub.app"))
+        self.assertEqual(tree(self.live), tree(self.kit / "Hub Studio KH.app"))
         self.assertFalse((self.live / "Contents/Resources/gone.py").exists())
         archived = self.archived("previous-app")
         self.assertEqual(len(archived), 1, "the previous app must remain recoverable")
@@ -95,7 +95,7 @@ class InstallAppTests(unittest.TestCase):
     def test_a_kit_app_that_is_incomplete_leaves_the_installed_app_exactly_as_it_was(self) -> None:
         build_app(self.live, {"Contents/Resources/keep.py": b"installed"}, readonly=True)
         before = tree(self.live)
-        broken = build_app(self.kit / "Studio Hub.app", {"Contents/Resources/keep.py": b"broken kit"})
+        broken = build_app(self.kit / "Hub Studio KH.app", {"Contents/Resources/keep.py": b"broken kit"})
         (broken / RUNTIME).unlink()                      # a copy that arrived without its runtime
         result = self.run_installer()
         self.assertNotEqual(result.returncode, 0)
@@ -126,7 +126,7 @@ class FleetModeOpenTests(unittest.TestCase):
         self.kit = self.tmp / "kit"
         self.kit.mkdir()
         shutil.copy(ROOT / "install_app.command", self.kit / "install_app.command")
-        build_app(self.kit / "Studio Hub.app", {"Contents/Resources/a.py": b"new"})
+        build_app(self.kit / "Hub Studio KH.app", {"Contents/Resources/a.py": b"new"})
         self.applications = self.tmp / "Applications"
         self.applications.mkdir()
         self.log = self.tmp / "calls.log"
@@ -160,7 +160,7 @@ class FleetModeOpenTests(unittest.TestCase):
     def test_a_fresh_install_opens_the_installed_app_in_fleet_mode(self) -> None:
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.calls(), [f"open -a {self.applications / 'Studio Hub.app'} --args --fleet-mode"])
+        self.assertEqual(self.calls(), [f"open -a {self.applications / 'Hub Studio KH.app'} --args --fleet-mode"])
         self.assertIn("fleet mode", result.stdout)
 
     def test_a_running_app_is_closed_gracefully_first_because_a_running_app_ignores_arguments(self) -> None:

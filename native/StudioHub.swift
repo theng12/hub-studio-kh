@@ -33,7 +33,7 @@ enum LegacyLoginItem {
 /// The app-side actions for a redundant launch, kept out of `ExistingInstance` so the decision and
 /// its present/exit contract stay testable in the contract suite.
 enum ExistingInstanceHandler {
-    /// Bring the already-running Studio Hub forward, if it can be found. Both copies share the
+    /// Bring the already-running Hub Studio KH forward, if it can be found. Both copies share the
     /// bundle identifier, so the other one is the process that is not this one.
     static func presentRunningApp() {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
@@ -47,9 +47,9 @@ enum ExistingInstanceHandler {
 
     /// Leave with status 0 so `KeepAlive` (SuccessfulExit false) never relaunches this copy, and
     /// leave at most one line where a log collects it. No alert, ever: the operator should not see
-    /// "Studio Hub could not open" because they double-clicked an app that is already open.
+    /// "Hub Studio KH could not open" because they double-clicked an app that is already open.
     static func noteAndExit() {
-        FileHandle.standardError.write(Data("Studio Hub is already running; this launch exits.\n".utf8))
+        FileHandle.standardError.write(Data("Hub Studio KH is already running; this launch exits.\n".utf8))
         exit(ExistingInstance.redundantLaunchExitCode)
     }
 }
@@ -115,7 +115,7 @@ final class StudioController: ObservableObject {
     /// not there - the same reasoning as an unattended update's stop. Cleared with the exit.
     private var forceStopSilently = false
     private var instanceLock: InstanceLock?
-    /// True when the data-folder lock is held by another copy of Studio Hub. The app then presents
+    /// True when the data-folder lock is held by another copy of Hub Studio KH. The app then presents
     /// that copy and exits quietly instead of showing a failure.
     private(set) var existingInstanceDetected = false
     private let serviceExecutable: URL
@@ -145,8 +145,11 @@ final class StudioController: ObservableObject {
          now: @escaping () -> Date = Date.init,
          healthRequest: ((URLRequest, URLSession) async throws -> (Data, URLResponse))? = nil) {
         self.configuration = configuration
+        // The helper bundle carries the name the operator sees in Activity Monitor (owner,
+        // 2026-11-12). The old `StudioHubService` shim stays on disk for qualification scripts.
         self.serviceExecutable = serviceExecutable
-            ?? Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioHubService")
+            ?? Bundle.main.bundleURL.appendingPathComponent(
+                "Contents/Resources/helper/Hub Studio KH Helper.app/Contents/MacOS/Hub Studio KH Helper")
         self.appBundle = appBundle
         self.agentPlistURL = agentPlistURL
         let statusReader = loginAgentStatus ?? { LaunchAgent.status(at: $0) }
@@ -162,7 +165,7 @@ final class StudioController: ObservableObject {
         self.loginStatus = statusReader(agentPlistURL)
         do { instanceLock = try InstanceLock(directory: configuration.dataDirectory) }
         catch let error as InstanceLockError {
-            // "Already held" is not a failure: another copy of Studio Hub is the real app. The
+            // "Already held" is not a failure: another copy of Hub Studio KH is the real app. The
             // launch path uses `existingInstanceDetected` to bring it forward and exit 0.
             switch error {
             case .alreadyHeld:
@@ -1287,7 +1290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let agentLaunch = ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1"
         let loginLaunch = agentLaunch || NSAppleEventManager.shared().currentAppleEvent?
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
-        // A Lite Mode Mac opens its window only by hand: an update's reopen must not put Studio Hub in
+        // A Lite Mode Mac opens its window only by hand: an update's reopen must not put Hub Studio KH in
         // front of a cashier. Opening the app from Applications or Spotlight still shows it - with the
         // menu-bar icon hidden, that is the way back to Settings.
         if (!loginLaunch && !(workstation.quiet && updateReopen)) || !controller.hasLibrary { openWindow() }
@@ -1326,7 +1329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 agentLaunch: agentLaunch, hasCustomDataDirectory: hasCustomDataDirectory,
                 ownsInstanceLock: ownsInstanceLock, plistURL: agentPlist)
             FileHandle.standardError.write(
-                Data("Studio Hub login supervision: \(outcome.sanitizedDescription)\n".utf8))
+                Data("Hub Studio KH login supervision: \(outcome.sanitizedDescription)\n".utf8))
         }
     }
     /// The heartbeat that dates a kill nothing can record, and the stamp of critical memory pressure
@@ -1430,7 +1433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 @main
 struct StudioHubApplication {
     @MainActor static func main() {
-        // The agent's copy while another Studio Hub runs: wait for it, before any AppKit setup
+        // The agent's copy while another Hub Studio KH runs: wait for it, before any AppKit setup
         // (no Dock icon, no entry in Force Quit), then let launchd decide. See `AgentStandby`.
         if ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1",
            let configuration = try? ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL),

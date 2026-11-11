@@ -119,11 +119,12 @@ def build(app: Path, output: Path) -> None:
     scratch = Path(tempfile.mkdtemp(prefix='dmg-stage-', dir=scratch_parent))
     complete = False
     try:
-        subprocess.run(['/bin/cp', '-cRp', str(app), str(scratch / 'Studio Hub.app')], check=True)
+        # The bundle keeps the name it was staged with ("Hub Studio KH.app").
+        subprocess.run(['/bin/cp', '-cRp', str(app), str(scratch / app.name)], check=True)
         subprocess.run(['/bin/cp', '-cRp', str(manifest_dir), str(scratch / 'file-manifest')], check=True)
         # hdiutil's image copier and another Mac must read owner-only auxiliary runtime tools.
         # Content/link identity and the manifest's executable flags remain unchanged.
-        subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / 'Studio Hub.app')], check=True)
+        subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / app.name)], check=True)
         subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / 'file-manifest')], check=True)
         (scratch / 'Applications').symlink_to('/Applications', target_is_directory=True)
         subprocess.run(['diskutil', 'image', 'create', 'from', '--volumeName', 'Hub Studio KH',

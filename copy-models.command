@@ -1,7 +1,7 @@
 #!/bin/sh
 # 2 - COPY THE MODELS
 #
-# **This file offers the presets (owner decision 2026-10-30).** Studio Hub never reads a mounted
+# **This file offers the presets (owner decision 2026-10-30).** Hub Studio KH never reads a mounted
 # drive by itself, so this command is the SSD path: it asks which of the four presets to copy
 # (Essentials 8 GB, Creator 16 GB, Creator Plus 24 GB, Studio Pro 32 GB+) and copies only what is
 # missing. A Mac that is already set up keeps every model it has.
@@ -42,15 +42,15 @@ PY=""
 # **The installed app first, the copy in this kit last.** It used to be the other way round, so a
 # Mac that had just run step 1 still executed the interpreter inside the *kit's* bundle — from a
 # removable drive, which is slower, breaks if the drive is unplugged mid-copy, and puts a second
-# copy of "Studio Hub" in front of macOS when the one that matters is the installed one. The kit's
+# copy of "Hub Studio KH" in front of macOS when the one that matters is the installed one. The kit's
 # copy stays as the fallback for the one case it is for: this step on a Mac where the app is not
 # installed yet.
 #
 # The bundle's name deliberately carries no version (`packaging/stage_voice.py` installs it as
-# "Studio Hub.app"), so there is no pinned name to fall back to: a version-pinned candidate could
+# "Hub Studio KH.app"), so there is no pinned name to fall back to: a version-pinned candidate could
 # only ever be dead weight, or worse, an older copy left beside a newer one.
-for app in "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app" \
-           "$HERE/Studio Hub.app" "$KIT/Studio Hub.app"; do
+for app in "/Applications/Hub Studio KH.app" "$HOME/Applications/Hub Studio KH.app" \
+           "$HERE/Hub Studio KH.app" "$KIT/Hub Studio KH.app"; do
   if [ -x "$app/Contents/Resources/runtimes/voice/bin/python3" ]; then
     PY="$app/Contents/Resources/runtimes/voice/bin/python3"; break
   fi
@@ -65,7 +65,7 @@ if [ -z "$HELPER" ]; then
 fi
 
 if [ -z "$PY" ]; then
-  echo "  I cannot find Studio Hub on this Mac."
+  echo "  I cannot find Hub Studio KH on this Mac."
   echo "  Double-click '1 - Install the app' first, then run this file again."
   echo
   echo "  Press Return to close."

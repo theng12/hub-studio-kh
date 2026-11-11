@@ -4,7 +4,7 @@
 the copy, `cp -Rp` stopped after ~1.4 GB of a 2.9 GB bundle, `rm -rf` could not clear the wreckage
 (the image runtime's `tcl9` directories are `dr-xr-xr-x`, and unlinking an entry needs write
 permission on its *parent*), and the rollback's `mv` then put the previous app **inside** the
-wreckage. `/Applications/Studio Hub.app` was left with no `Info.plist` and no `MacOS` — a state no
+wreckage. `/Applications/Hub Studio KH.app` was left with no `Info.plist` and no `MacOS` — a state no
 later step could detect, because the script had already reported its last line.
 
 Both tests drive the real script with `STUDIOHUB_INSTALL_TARGET` pointed at a temp directory, so
@@ -38,7 +38,7 @@ SCRIPT = REPO_ROOT / "packaging" / "install_local.sh"
 
 def _stage(root: Path, *, poison: bool = False, read_only_dir: bool = False) -> Path:
     """A miniature staged app with the shape the script checks for."""
-    app = root / "StudioHub-test" / "Studio Hub.app"
+    app = root / "StudioHub-test" / "Hub Studio KH.app"
     (app / "Contents" / "MacOS").mkdir(parents=True)
     (app / "Contents" / "Info.plist").write_text(
         '<?xml version="1.0"?><plist><dict>'
@@ -70,7 +70,7 @@ def _stage(root: Path, *, poison: bool = False, read_only_dir: bool = False) -> 
 
 def _previous_app(root: Path) -> Path:
     """An installed app that must survive a failed install intact."""
-    target = root / "Applications" / "Studio Hub.app"
+    target = root / "Applications" / "Hub Studio KH.app"
     (target / "Contents").mkdir(parents=True)
     (target / "Contents" / "Info.plist").write_text("<plist>previous</plist>", encoding="utf-8")
     (target / "Contents" / "MacOS").mkdir()
@@ -167,7 +167,7 @@ class TheInstallGuardsTest(unittest.TestCase):
         # ...and nothing was nested inside it, which is the shape that made the bundle unusable.
         self.assertEqual(list(target.glob(".studiohub-old-*")), [],
                          "the previous app was moved inside the target")
-        self.assertEqual(list(target.glob("*/Studio Hub.app")), [],
+        self.assertEqual(list(target.glob("*/Hub Studio KH.app")), [],
                          "a whole app was nested inside another")
         failed = list(trash.glob("failed-install-*"))
         self.assertEqual(len(failed), 1, "the partial copy must be archived before rollback")
@@ -228,8 +228,8 @@ class TheInstallGuardsTest(unittest.TestCase):
         reason; the start half has to match, or every guard test above launches Studio Hub.
         """
         source = SCRIPT.read_text(encoding="utf-8")
-        start = source.index("== starting Studio Hub")
-        guard = source.rindex('if [ "$TARGET" = "/Applications/Studio Hub.app" ] && [ "$START" = 1 ]; then',
+        start = source.index("== starting Hub Studio KH")
+        guard = source.rindex('if [ "$TARGET" = "/Applications/Hub Studio KH.app" ] && [ "$START" = 1 ]; then',
                               0, start)
         self.assertGreater(guard, 0)
         # The guard must open before the launch and be the nearest one above it.

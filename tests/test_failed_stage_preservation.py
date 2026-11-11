@@ -17,7 +17,7 @@ class FailedStagePreservation(unittest.TestCase):
                         'failed staged bundles need a recoverable archive operation')
         with tempfile.TemporaryDirectory(prefix='stage-preservation-private-') as name:
             project = Path(name)
-            failed = project / '.build/Studio Hub.app'
+            failed = project / '.build/Hub Studio KH.app'
             failed.mkdir(parents=True)
             (failed / 'diagnostic').write_text('missing-module failure')
             with patch.object(module, 'ROOT', project):

@@ -537,7 +537,7 @@ struct ReleaseInstaller {
     /// never deleted. `live` names the Hub's Trash Folder.
     var trashFolder: URL?
 
-    init(targetApp: URL = URL(fileURLWithPath: "/Applications/Studio Hub.app"),
+    init(targetApp: URL = URL(fileURLWithPath: "/Applications/Hub Studio KH.app"),
          trashFolder: URL? = nil,
          fileManager: FileManager = .default,
          attach: @escaping (URL, URL) throws -> Void = ReleaseInstaller.attachImage,

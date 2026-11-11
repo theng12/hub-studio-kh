@@ -5,13 +5,13 @@
 #
 # Reads only. Writes nothing except this output.
 
-APP="${APP:-/Applications/Studio Hub.app}"
+APP="${APP:-/Applications/Hub Studio KH.app}"
 
 # Accept either the version-free bundle name or the older versioned one, and either Applications
 # folder, so a Mac carrying a previous kit still works.
 if [ ! -d "$APP" ]; then
-  for _cand in "/Applications/Studio Hub.app" "/Applications/Studio Hub 0.4.0.app" \
-               "$HOME/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub 0.4.0.app"; do
+  for _cand in "/Applications/Hub Studio KH.app" "/Applications/Studio Hub 0.4.0.app" \
+               "$HOME/Applications/Hub Studio KH.app" "$HOME/Applications/Studio Hub 0.4.0.app"; do
     [ -d "$_cand" ] && { APP="$_cand"; break; }
   done
 fi

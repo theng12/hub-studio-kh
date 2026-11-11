@@ -230,7 +230,7 @@ def hub_data_dir(home: Path) -> Path | None:
     if override:
         return Path(override).expanduser()
     for folder in app_folders(home):
-        app = folder / "Studio Hub.app"
+        app = folder / "Hub Studio KH.app"
         if app.is_dir():
             # The Hub's launcher root is the `voice/` folder inside its own bundle.
             return app / "Contents" / "Resources" / "voice"

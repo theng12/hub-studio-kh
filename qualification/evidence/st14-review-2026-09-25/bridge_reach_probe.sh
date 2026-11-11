@@ -3,7 +3,7 @@
 # GETs only: no model is loaded.
 set -u
 ROOT=/build/Developer/studio-hub-kh
-RES="$ROOT/.build/StudioHub-0662/Studio Hub.app/Contents/Resources"
+RES="$ROOT/.build/StudioHub-0662/Hub Studio KH.app/Contents/Resources"
 PY="$RES/runtimes/voice/bin/python3"
 OUT="$ROOT/.build/chat-review-2026-09-25"
 DATA="$(mktemp -d /tmp/chat-bridge.XXXXXX)"; chmod 700 "$DATA"

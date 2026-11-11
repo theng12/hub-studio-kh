@@ -17,7 +17,7 @@ SELF="${BASH_SOURCE[0]}"
 HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
 
 APP=""; PY=""
-for candidate in "${STUDIOHUB_APP:-}" "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app"; do
+for candidate in "${STUDIOHUB_APP:-}" "/Applications/Hub Studio KH.app" "$HOME/Applications/Hub Studio KH.app"; do
   [ -n "$candidate" ] || continue
   for rt in image voice; do
     [ -x "$candidate/Contents/Resources/runtimes/$rt/bin/python3" ] && { APP="$candidate"; PY="$candidate/Contents/Resources/runtimes/$rt/bin/python3"; break 2; }

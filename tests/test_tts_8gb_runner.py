@@ -660,7 +660,7 @@ class ImportKitPackagesTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name).resolve()
-        self.app, self.kit, self.library = root / "Studio Hub.app", root / "kit", root / "library"
+        self.app, self.kit, self.library = root / "Hub Studio KH.app", root / "kit", root / "library"
         res = self.app / "Contents/Resources"
         (res / "components").mkdir(parents=True)
         (res / "components" / "model_packages.py").symlink_to(ROOT / "components" / "model_packages.py")

@@ -21,3 +21,7 @@ xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -D LIFECYCLE_TESTING
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -O -parse-as-library \
   "$ROOT_DIR"/native/*.swift \
   -o "$ROOT_DIR/.build/StudioHub"
+# The background helper, compiled on its own (top-level code, no UI) and staged into the app.
+xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -O \
+  "$ROOT_DIR/native/helper/HelperMain.swift" \
+  -o "$ROOT_DIR/.build/HubStudioHelper"

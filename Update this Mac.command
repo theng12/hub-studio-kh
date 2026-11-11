@@ -13,7 +13,7 @@
 # the Mac already had that exact build. On a fleet that is most of the work for none of the result.
 # This compares the two builds first and skips the copy when they match.
 #
-# **Why the two steps cannot run at the same time.** '1' replaces /Applications/Studio Hub.app, and
+# **Why the two steps cannot run at the same time.** '1' replaces /Applications/Hub Studio KH.app, and
 # '2' runs its helper with the Python from inside that same app. Started together, '2' would either
 # find no app at all — and fall back to the copy on this drive, which fails if the drive is
 # unplugged — or keep running from files '1' has just deleted. So this file runs them in order and
@@ -25,7 +25,7 @@
 set -u
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 KIT="$(dirname -- "$HERE")"
-NAME="Studio Hub.app"
+NAME="Hub Studio KH.app"
 
 # **Make this Mac serve after a restart (owner, 2026-10-02).** The app starts at login by default but
 # its services do not: "Start services on startup" is off unless the app was opened once with
@@ -45,17 +45,17 @@ fleet_mode_open() {
   already=$(/usr/bin/plutil -extract startServicesAtLogin raw "$prefs" 2>/dev/null || echo "")
   if is_running; then
     if [ "$already" = "true" ]; then
-      echo "  Studio Hub is running and already starts its services after a restart."
+      echo "  Hub Studio KH is running and already starts its services after a restart."
       return 0
     fi
-    echo "  Closing Studio Hub so it can be reopened in fleet mode..."
+    echo "  Closing Hub Studio KH so it can be reopened in fleet mode..."
     set -- ${STUDIOHUB_OSASCRIPT:-/usr/bin/osascript}
-    "$@" -e 'with timeout of 20 seconds' -e 'quit app "Studio Hub"' -e 'end timeout' >/dev/null 2>&1 || true
+    "$@" -e 'with timeout of 20 seconds' -e 'quit app "Hub Studio KH"' -e 'end timeout' >/dev/null 2>&1 || true
     waited=0
     while is_running && [ "$waited" -lt "${STUDIOHUB_QUIT_WAIT:-40}" ]; do sleep 1; waited=$((waited + 1)); done
     if is_running; then
       echo
-      echo "  Studio Hub did not close - it may be busy with a job or waiting for an answer, so it was"
+      echo "  Hub Studio KH did not close - it may be busy with a job or waiting for an answer, so it was"
       echo "  left alone. Close it yourself, then run this file again so this Mac is set to start its"
       echo "  services after a restart."
       return 1
@@ -63,15 +63,15 @@ fleet_mode_open() {
   fi
   if /usr/bin/xattr -p com.apple.quarantine "$app" >/dev/null 2>&1; then
     echo
-    echo "  macOS has not opened this app before: if it asks, right-click Studio Hub in Applications and"
+    echo "  macOS has not opened this app before: if it asks, right-click Hub Studio KH in Applications and"
     echo "  choose Open (once), then run this file again."
   fi
-  echo "  Opening Studio Hub in fleet mode: it starts its services now, at every login and after a restart."
+  echo "  Opening Hub Studio KH in fleet mode: it starts its services now, at every login and after a restart."
   if "$opener" -a "$app" --args --fleet-mode; then
     return 0
   fi
   echo
-  echo "  macOS would not open Studio Hub. Right-click it in Applications and choose Open (once), then run"
+  echo "  macOS would not open Hub Studio KH. Right-click it in Applications and choose Open (once), then run"
   echo "  this file again so this Mac is set to start its services after a restart."
   return 1
 }
@@ -80,7 +80,7 @@ fleet_mode_open() {
 # headless Mac mini render and be screen-shared. Its installer rides in the kit's Extras folder and
 # `Extras/Install Yam Display.command` does the work: install when missing or older, never downgrade,
 # one line and move on when the installer is not in the kit. A Yam Display problem never stops or
-# fails the Studio Hub install: this returns 1 so the caller can say so plainly, and nothing more.
+# fails the Hub Studio KH install: this returns 1 so the caller can say so plainly, and nothing more.
 # The `STUDIOHUB_*` names are for tests; nobody sets them in real use.
 install_yam_display() {
   yd_cmd=""
@@ -96,7 +96,7 @@ install_yam_display() {
 
 clear
 echo "============================================================"
-echo "  Studio Hub - updating this Mac"
+echo "  Hub Studio KH - updating this Mac"
 echo "============================================================"
 echo
 
@@ -203,7 +203,7 @@ STATUS=$?
 # current: a Mac whose app is current may still have "Start services on startup" off.
 echo
 echo "============================================================"
-echo "  Starting Studio Hub in fleet mode"
+echo "  Starting Hub Studio KH in fleet mode"
 echo "============================================================"
 echo
 FLEET_TARGET="${INSTALLED:-/Applications/$NAME}"
@@ -222,7 +222,7 @@ fi
 if [ "$STATUS" = "0" ] && [ "$FLEET_STATUS" = "0" ]; then
   echo "  This Mac is up to date."
 elif [ "$STATUS" = "0" ]; then
-  echo "  The app and models are up to date, but Studio Hub was not opened in fleet mode (see above)."
+  echo "  The app and models are up to date, but Hub Studio KH was not opened in fleet mode (see above)."
 else
   echo "  The models step reported a problem above. Running this file again is safe and"
   echo "  picks up where it left off."

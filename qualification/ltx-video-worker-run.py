@@ -44,7 +44,7 @@ def hub_root() -> Path:
     candidates = [
         os.environ.get('STUDIOHUB_HUB_ROOT', ''),
         str(Path(__file__).resolve().parents[1]),
-        '/Applications/Studio Hub.app/Contents/Resources',
+        '/Applications/Hub Studio KH.app/Contents/Resources',
     ]
     marker = Path('components') / 'video' / 'app' / 'backend' / 'main.py'
     for candidate in candidates:

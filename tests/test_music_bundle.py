@@ -95,7 +95,7 @@ class MusicBundleTests(unittest.TestCase):
             self.skipTest("a built Voice Python is unavailable")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            resources = root / "Studio Hub.app/Contents/Resources"
+            resources = root / "Hub Studio KH.app/Contents/Resources"
             resources.mkdir(parents=True)
             for worker in ("music_worker.py", "voice_worker.py"):
                 shutil.copyfile(ROOT / "packaging" / worker, resources / worker)

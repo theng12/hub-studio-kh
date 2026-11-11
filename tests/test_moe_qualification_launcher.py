@@ -63,7 +63,7 @@ class MoeQualificationLauncherTests(unittest.TestCase):
         return model
 
     def _runtime(self, parent: Path, implementation: str) -> Path:
-        runtime = parent / "Studio Hub.app" / "Contents" / "Resources" / "runtimes" / "voice"
+        runtime = parent / "Hub Studio KH.app" / "Contents" / "Resources" / "runtimes" / "voice"
         python = runtime / "bin" / "python3"
         python.parent.mkdir(parents=True)
         python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -138,7 +138,7 @@ class MoeQualificationLauncherTests(unittest.TestCase):
         kit = self.root / "kit"
         with self.assertRaisesRegex(self.module.QualificationError, "model-library.*55ac8c"):
             self.module.resolve_model_dir(kit, spec)
-        missing_python = self.root / "Missing Studio Hub.app" / "Contents" / "Resources" / "runtimes" / "voice" / "bin" / "python3"
+        missing_python = self.root / "Missing Hub Studio KH.app" / "Contents" / "Resources" / "runtimes" / "voice" / "bin" / "python3"
         with self.assertRaisesRegex(self.module.QualificationError, "voice runtime Python"):
             self.module.check_runtime(missing_python, spec)
 

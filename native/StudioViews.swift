@@ -1093,7 +1093,7 @@ private struct LiteModeSettings: View {
     static let startFreeHint = "A job starts only when this much memory is free. A running job always finishes; it is "
         + "stopped only if macOS reports critical memory pressure for 20 seconds (very rare), and then moves to another Mac."
     static let quietHint = "No work during these hours. Separate several with commas, like 22:00-07:00, 12:00-13:00."
-    static let hideIconHint = "With the icon hidden, open Studio Hub from Applications or Spotlight to come back to these settings."
+    static let hideIconHint = "With the icon hidden, open Hub Studio KH from Applications or Spotlight to come back to these settings."
 
     /// The draft as it would be saved: quiet hours from the text field.
     private var edited: NativeWorkstationSettings {
@@ -1163,7 +1163,7 @@ private struct LiteModeSettings: View {
                 hint(Self.quietHint)
             }
             group {
-                Toggle("Hide the Studio Hub menu-bar icon", isOn: $draft.hideMenuBarIcon).toggleStyle(.checkbox)
+                Toggle("Hide the Hub Studio KH menu-bar icon", isOn: $draft.hideMenuBarIcon).toggleStyle(.checkbox)
                 hint(Self.hideIconHint)
             }
             HStack {
@@ -4908,8 +4908,8 @@ struct StudioContent: View {
             } else if !workspace.installPlanSupported && workspace.installPlan == nil {
                 HubCard {
                     VStack(alignment: .leading, spacing: HubSpace.s) {
-                        Text("This Studio Hub does not offer the install screen yet").font(HubType.rowTitle)
-                        Text("Update Studio Hub on this Mac, then reopen this page. The Models page still works for everything else.")
+                        Text("This Hub Studio KH does not offer the install screen yet").font(HubType.rowTitle)
+                        Text("Update Hub Studio KH on this Mac, then reopen this page. The Models page still works for everything else.")
                             .font(HubType.secondary).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -6232,8 +6232,8 @@ struct StudioContent: View {
         Toggle("Start at login", isOn: Binding(get: { studio.loginStatus == .enabled }, set: { studio.setLogin($0) }))
             .toggleStyle(.checkbox)
         Text(studio.loginStatus == .enabled
-             ? "On: Studio Hub opens by itself when you sign in and relaunches if it crashes. A normal Quit leaves it stopped until you open it or sign in again."
-             : "Off: Studio Hub does not open by itself after a restart.")
+             ? "On: Hub Studio KH opens by itself when you sign in and relaunches if it crashes. A normal Quit leaves it stopped until you open it or sign in again."
+             : "Off: Hub Studio KH does not open by itself after a restart.")
             .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         Toggle("Start services on startup", isOn: Binding(
             get: { studio.configuration.startServicesAtLogin },
@@ -6466,7 +6466,7 @@ struct StudioContent: View {
                             Button("Cancel", role: .cancel) {}
                         } message: {
                             let count = workspace.activeWorkCount
-                            Text("\(count) job\(count == 1 ? " is" : "s are") still running or waiting on this Mac. Installing relaunches Studio Hub and stops \(count == 1 ? "it" : "them").")
+                            Text("\(count) job\(count == 1 ? " is" : "s are") still running or waiting on this Mac. Installing relaunches Hub Studio KH and stops \(count == 1 ? "it" : "them").")
                         }
                     Button("Dismiss") { workspace.dismissOfferedRelease() }
                         .disabled(workspace.installingRelease)
@@ -6958,7 +6958,7 @@ struct StudioContent: View {
     }
 
     private var controllerSection: some View {
-        HubSection("Studio Hub & GatewayKH") {
+        HubSection("Hub Studio KH & GatewayKH") {
             if let identity = workspace.controllerIdentity, let version = workspace.hubVersion {
                 ValueRow("Hub version", value: version.display)
                 ValueRow("Data store", value: identity.readiness.sqliteAuthoritative == true ? "Local, authoritative" : identity.settings.databaseMode)
@@ -6967,7 +6967,7 @@ struct StudioContent: View {
                 if let warning = identity.readiness.telemetryWarning {
                     Text(warning).font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
                 }
-                Text("Jobs are recorded and claimed on this Mac. GatewayKH sends work to location controllers; Studio Hub manages local execution and reports the capabilities it actually has. This app offers no update channel it cannot honour.")
+                Text("Jobs are recorded and claimed on this Mac. GatewayKH sends work to location controllers; Hub Studio KH manages local execution and reports the capabilities it actually has. This app offers no update channel it cannot honour.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
             } else {
                 Text("Remote control is optional and not required to create assets locally.")
@@ -7040,7 +7040,7 @@ struct StudioContent: View {
             }
 
             // **The identifiers, in plain view** (owner, 2026-10-25: *"what are the identifiers on
-            // Studio Hub for each machine? Make sure they're prominent and easily edited, so I
+            // Hub Studio KH for each machine? Make sure they're prominent and easily edited, so I
             // don't repeat my current mistake, because they're hard to change. With this move I
             // want a clean slate."*).
             //
@@ -8303,7 +8303,7 @@ struct StudioContent: View {
                     }
                 }
             }
-            Text("A macOS setting, not Studio Hub's. Files moved to macOS Trash are removed by Finder "
+            Text("A macOS setting, not Hub Studio KH's. Files moved to macOS Trash are removed by Finder "
                  + "after 30 days, which is what stops that Trash from filling the disk.")
                 .font(HubType.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

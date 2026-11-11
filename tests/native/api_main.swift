@@ -7355,7 +7355,7 @@ struct NativeAPITests {
             return ReleaseDescriptor(json: json)!
         }
         let deltaStagedHolder = temporary.appendingPathComponent(".studiohub-staged-fixture")
-        let deltaStagedApp = deltaStagedHolder.appendingPathComponent("Studio Hub.app")
+        let deltaStagedApp = deltaStagedHolder.appendingPathComponent("Hub Studio KH.app")
         try FileManager.default.createDirectory(at: deltaStagedApp, withIntermediateDirectories: true)
         var stagedSwaps = 0
         var imageInstalls = 0
@@ -7592,8 +7592,8 @@ struct NativeAPITests {
         // removed only after the landed Info.plist reads back. A scratch target, never /Applications.
         let installParent = temporary.appendingPathComponent("Install Target")
         try FileManager.default.createDirectory(at: installParent, withIntermediateDirectories: true)
-        let targetApp = installParent.appendingPathComponent("Studio Hub.app")
-        let stagedApp = installParent.appendingPathComponent("staged/Studio Hub.app")
+        let targetApp = installParent.appendingPathComponent("Hub Studio KH.app")
+        let stagedApp = installParent.appendingPathComponent("staged/Hub Studio KH.app")
         /// One staged app, with the release manifest the real build writes and, for each component
         /// named, the runtime paths that component requires. `components` is the caller's list, so a
         /// test can omit exactly one runtime and prove that component is what is checked.
@@ -7696,19 +7696,19 @@ struct NativeAPITests {
         // The full-image install refuses up front when the volume cannot hold the new app beside the
         // old one, names the numbers, and leaves nothing staged and the installed app untouched.
         let roomyParent = installParent.appendingPathComponent("space-check")
-        let roomyTarget = roomyParent.appendingPathComponent("Studio Hub.app")
+        let roomyTarget = roomyParent.appendingPathComponent("Hub Studio KH.app")
         try makeFakeApp(at: roomyTarget, build: "currentbuild")
         var spaceCheckInstalled = false
         let tightInstaller = ReleaseInstaller(
             targetApp: roomyTarget,
             fileManager: macTrash,
-            attach: { _, mount in try makeFakeApp(at: mount.appendingPathComponent("Studio Hub.app"), build: "newbuild") },
+            attach: { _, mount in try makeFakeApp(at: mount.appendingPathComponent("Hub Studio KH.app"), build: "newbuild") },
             detach: { _ in },
             availableCapacity: { _ in 1024 })
         let roomyInstaller = ReleaseInstaller(
             targetApp: roomyTarget,
             fileManager: macTrash,
-            attach: { _, mount in try makeFakeApp(at: mount.appendingPathComponent("Studio Hub.app"), build: "newbuild") },
+            attach: { _, mount in try makeFakeApp(at: mount.appendingPathComponent("Hub Studio KH.app"), build: "newbuild") },
             detach: { _ in },
             availableCapacity: { _ in Int64.max / 2 })
         let placeholderImage = temporary.appendingPathComponent("space-check.dmg")
@@ -7722,7 +7722,7 @@ struct NativeAPITests {
         }
         require(!spaceCheckInstalled, "an install with no room must be refused, not attempted")
         let parentAfter = (try? FileManager.default.contentsOfDirectory(atPath: roomyParent.path)) ?? []
-        require(parentAfter == ["Studio Hub.app"], "a refused install must stage nothing: \(parentAfter)")
+        require(parentAfter == ["Hub Studio KH.app"], "a refused install must stage nothing: \(parentAfter)")
         let stillCurrent = try PropertyListSerialization.propertyList(
             from: Data(contentsOf: roomyTarget.appendingPathComponent("Contents/Info.plist")),
             options: [], format: nil) as? [String: Any]
@@ -7744,7 +7744,7 @@ struct NativeAPITests {
             "video": ["runtime": "video"],
         ]
         for missing in ["voice", "image", "music", "chat", "subtitle", "video"] {
-            let incomplete = installParent.appendingPathComponent("missing-\(missing)/Studio Hub.app")
+            let incomplete = installParent.appendingPathComponent("missing-\(missing)/Hub Studio KH.app")
             try makeFakeApp(at: incomplete, build: "newbuild", components: allComponents)
             // Remove the component's own worker entry point, which its release manifest declares.
             try FileManager.default.removeItem(
@@ -7763,7 +7763,7 @@ struct NativeAPITests {
         // `_music_spec` requires before it will start that worker.
         for (label, relative) in [("voice runtime", "Contents/Resources/runtimes/voice"),
                                   ("music overlay", "Contents/Resources/runtimes/music")] {
-            let incomplete = installParent.appendingPathComponent("missing-\(label)/Studio Hub.app")
+            let incomplete = installParent.appendingPathComponent("missing-\(label)/Hub Studio KH.app")
             try makeFakeApp(at: incomplete, build: "newbuild", components: allComponents)
             try FileManager.default.removeItem(at: incomplete.appendingPathComponent(relative))
             do {
@@ -7776,7 +7776,7 @@ struct NativeAPITests {
         }
         // An app with no release manifest at all cannot be checked, so it is refused with a reason
         // rather than installed on the strength of one hardcoded path.
-        let noManifest = installParent.appendingPathComponent("no-manifest/Studio Hub.app")
+        let noManifest = installParent.appendingPathComponent("no-manifest/Hub Studio KH.app")
         try makeFakeApp(at: noManifest, build: "newbuild")
         try? FileManager.default.removeItem(at: noManifest.appendingPathComponent(ReleaseInstaller.releaseManifest))
         do {
@@ -7795,7 +7795,7 @@ struct NativeAPITests {
         let shippedComponents = (try JSONSerialization.jsonObject(with: Data(contentsOf: shippedManifest))
             as! [String: Any])["components"] as! [String: [String: Any]]
         require(shippedComponents["video"] != nil, "the fixture must be a manifest that ships Video")
-        let shippedApp = installParent.appendingPathComponent("shipped-manifest/Studio Hub.app")
+        let shippedApp = installParent.appendingPathComponent("shipped-manifest/Hub Studio KH.app")
         try makeFakeApp(at: shippedApp, build: "newbuild", components: shippedComponents)
         let shippedLanded = try installer.swapStagedApp(staged: shippedApp, descriptor: swapDescriptor)
         require(shippedLanded == "newbuild",
@@ -7803,7 +7803,7 @@ struct NativeAPITests {
 
         // A component whose runtime name this installer does not know is refused by name, naming
         // both files to update.
-        let unknownRuntime = installParent.appendingPathComponent("unknown-runtime/Studio Hub.app")
+        let unknownRuntime = installParent.appendingPathComponent("unknown-runtime/Hub Studio KH.app")
         try makeFakeApp(at: unknownRuntime, build: "newbuild",
                         components: ["voice": [:], "hologram": ["runtime": "holo-render"]])
         do {
@@ -7823,7 +7823,7 @@ struct NativeAPITests {
         // throwaway directory and never touches this machine's real LaunchAgents.
         let agentRoot = temporary.appendingPathComponent("Agent Fixture")
         let appRoot = agentRoot.appendingPathComponent("Applications")
-        let appBundle = appRoot.appendingPathComponent("Studio Hub.app")
+        let appBundle = appRoot.appendingPathComponent("Hub Studio KH.app")
         let agentExecutable = appBundle.appendingPathComponent(LaunchAgent.executableRelativePath)
         try FileManager.default.createDirectory(at: agentExecutable.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
@@ -7876,7 +7876,7 @@ struct NativeAPITests {
 
         // A dev build outside /Applications is refused rather than writing an agent whose program
         // will not exist at login, and nothing is left behind.
-        let devBundle = agentRoot.appendingPathComponent("Builds/Studio Hub.app")
+        let devBundle = agentRoot.appendingPathComponent("Builds/Hub Studio KH.app")
         let outsideRefusal = LaunchAgent.installDecision(appBundle: devBundle, applicationsRoot: appRoot,
                                                          executableExists: { _ in true })
         if case .install = outsideRefusal { fatalError("an app outside the applications root must be refused") }

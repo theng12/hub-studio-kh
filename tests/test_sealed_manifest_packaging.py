@@ -53,7 +53,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
         expected_hashes = valid["hashes"]
 
         with tempfile.TemporaryDirectory(prefix="hub-producer-fixture-") as temp_dir:
-            app_dir = Path(temp_dir) / "Studio Hub.app"
+            app_dir = Path(temp_dir) / "Hub Studio KH.app"
             for rel, info in app_files.items():
                 dest = app_dir / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
 
     def _build_real_app(self, temp_dir: Path) -> Path:
         """Create an unsigned minimal staged bundle using a real system Mach-O binary."""
-        app = temp_dir / "Studio Hub.app"
+        app = temp_dir / "Hub Studio KH.app"
         macos_dir = app / "Contents/MacOS"
         macos_dir.mkdir(parents=True)
         # Copy a real tiny system Mach-O binary
@@ -469,7 +469,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
                     )
                     self.assertEqual(attached.returncode, 0,
                                      f"hdiutil attach failed: {attached.stdout}\n{attached.stderr}")
-                    mounted_app = mount / "Studio Hub.app"
+                    mounted_app = mount / "Hub Studio KH.app"
                     mounted_sidecar = mount / "file-manifest"
 
                     self.assertTrue(mounted_app.is_dir())

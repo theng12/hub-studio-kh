@@ -290,7 +290,7 @@ class AcceptArtifactTests(unittest.TestCase):
                 self.assertIn('-readonly', argv)
                 self.assertIn('-nobrowse', argv)
                 mount = Path(argv[argv.index('-mountpoint') + 1])
-                app = mount / 'Studio Hub.app' / 'Contents'
+                app = mount / 'Hub Studio KH.app' / 'Contents'
                 (app / 'Resources').mkdir(parents=True)
                 info = {'CFBundleShortVersionString': '0.0.1' if fail else version}
                 if studio_build is not None:
@@ -367,7 +367,7 @@ class BuildLabelTests(unittest.TestCase):
             calls.append(list(argv))
             if argv[1] == 'attach':
                 mount = Path(argv[argv.index('-mountpoint') + 1])
-                contents = mount / 'Studio Hub.app' / 'Contents'
+                contents = mount / 'Hub Studio KH.app' / 'Contents'
                 contents.mkdir(parents=True)
                 plist = {'CFBundleShortVersionString': VERSION}
                 if studio_build is not None:

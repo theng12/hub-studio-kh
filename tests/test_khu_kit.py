@@ -552,13 +552,13 @@ class InstallerTests(unittest.TestCase):
         clients' configs can be compared directly - and a field added on one side and not the other
         is a difference rather than a detail nobody reads.
         """
-        (self.home / "Applications/Studio Hub.app/Contents").mkdir(parents=True)
-        (self.home / "Applications/Studio Hub.app/Contents/Info.plist").write_bytes(
+        (self.home / "Applications/Hub Studio KH.app/Contents").mkdir(parents=True)
+        (self.home / "Applications/Hub Studio KH.app/Contents/Info.plist").write_bytes(
             plistlib.dumps({"CFBundleIdentifier": "local.studiohub.standalone"}))
         self.run_installer()
         root = self.home / "Library/KHUpdater"
         apps = {"updater": {"bundlePath": "", "recipe": "updater", "automatic": False},
-                "hub": {"bundlePath": str((self.home / "Applications/Studio Hub.app").resolve()),
+                "hub": {"bundlePath": str((self.home / "Applications/Hub Studio KH.app").resolve()),
                         "recipe": "hub", "automatic": False,
                         "bundleID": "local.studiohub.standalone"}}
         expected = json.dumps({"feedURL": self.descriptor_value("feedURL"),
@@ -584,9 +584,9 @@ class InstallerTests(unittest.TestCase):
     def test_on_a_hub_mac_the_proposed_name_is_the_hubs_own(self) -> None:
         """A Hub Mac already has an identity, and the Hub's own auto-install enrols under it. The
         kit must propose the same one, or the two paths would give this Mac two names."""
-        voice = self.home / "Applications/Studio Hub.app/Contents/Resources/voice"
-        (self.home / "Applications/Studio Hub.app/Contents").mkdir(parents=True)
-        (self.home / "Applications/Studio Hub.app/Contents/Info.plist").write_bytes(
+        voice = self.home / "Applications/Hub Studio KH.app/Contents/Resources/voice"
+        (self.home / "Applications/Hub Studio KH.app/Contents").mkdir(parents=True)
+        (self.home / "Applications/Hub Studio KH.app/Contents/Info.plist").write_bytes(
             plistlib.dumps({"CFBundleIdentifier": "local.studiohub.standalone"}))
         voice.mkdir(parents=True)
         (voice / "controller_settings.json").write_text(json.dumps({"controller_id": "mac-mini-7"}))
@@ -656,10 +656,10 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("no Python could be found on this Mac", text)
         self.assertIn('"$candidate" -c \'pass\'', text)
         self.assertIn("/usr/bin/python3", text)
-        self.assertIn("Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3", text)
-        order = [text.index("/Applications/Studio Hub.app"),
+        self.assertIn("Hub Studio KH.app/Contents/Resources/runtimes/voice/bin/python3", text)
+        order = [text.index("/Applications/Hub Studio KH.app"),
                  text.index("/usr/bin/python3"),
-                 text.index("../Hub Studio KH/Studio Hub.app")]
+                 text.index("../Hub Studio KH/Hub Studio KH.app")]
         self.assertEqual(order, sorted(order), "the drive's copy must be the last resort")
 
     def test_no_publisher_record_refuses_before_anything_is_written(self) -> None:

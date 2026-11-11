@@ -65,7 +65,7 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
 # The Python that goes with the installed app: the machine may have no other, and the system
 # /usr/bin/python3 can pop up a developer-tools installer.
 APP=""
-for candidate in "${STUDIOHUB_APP:-}" "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app"; do
+for candidate in "${STUDIOHUB_APP:-}" "/Applications/Hub Studio KH.app" "$HOME/Applications/Hub Studio KH.app"; do
   [ -n "$candidate" ] && [ -x "$candidate/Contents/Resources/runtimes/voice/bin/python3" ] && { APP="$candidate"; break; }
 done
 if [ -z "$APP" ]; then

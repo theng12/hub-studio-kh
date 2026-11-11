@@ -12,7 +12,7 @@ fi
 shift
 
 PYTHON=""
-for app in "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app" "$KIT/Studio Hub.app"; do
+for app in "/Applications/Hub Studio KH.app" "$HOME/Applications/Hub Studio KH.app" "$KIT/Hub Studio KH.app"; do
     candidate="$app/Contents/Resources/runtimes/voice/bin/python3"
     if [ -x "$candidate" ]; then
         PYTHON="$candidate"

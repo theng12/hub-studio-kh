@@ -22,7 +22,7 @@ import library_guard  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_APP = Path("/Applications/Studio Hub.app")
+DEFAULT_APP = Path("/Applications/Hub Studio KH.app")
 MODEL = "ACE-Step/Ace-Step1.5"
 PROMPT = "Warm lo-fi hip hop beat, mellow piano, vinyl crackle, late night study mood"
 

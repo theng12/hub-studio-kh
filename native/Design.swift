@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// The Studio Hub design tokens: one place for the type scale, the spacing grid, the corner radii, the
+// The Hub Studio KH design tokens: one place for the type scale, the spacing grid, the corner radii, the
 // status colours, the status badge, the shared page scaffold and the row/section/empty-state pieces.
 //
 // Why this file exists: before it, 13 pages each wrote their own `.padding(28)`, fonts came from 22

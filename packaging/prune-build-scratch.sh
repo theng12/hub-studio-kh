@@ -64,29 +64,29 @@ done
 # 0.6.71 bundle and proposed moving the 0.6.74 stage this release was built from. A stage's version
 # is the fact that matters, so it is read from the stage itself.
 stage_version() {
-  # A stage is a directory holding `Studio Hub.app`, so the manifest is one level deeper. Getting
+  # A stage is a directory holding `Hub Studio KH.app`, so the manifest is one level deeper. Getting
   # this wrong read every stage as "unknown", which meant no stage was recognised as the current
   # release and the 0.6.74 stage was queued for pruning - the one thing this must never do.
-  local manifest="$1/Studio Hub.app/Contents/Resources/release-manifest.json"
+  local manifest="$1/Hub Studio KH.app/Contents/Resources/release-manifest.json"
   [ -f "$manifest" ] || manifest="$1/Contents/Resources/release-manifest.json"
   [ -f "$manifest" ] || return 0
   sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -1
 }
 version_key() { local digits; digits="$(printf '%s' "$1" | tr -cd '0-9')"; echo "$(( 10#${digits:-0} ))"; }
 stage_build() {
-  local plist="$1/Studio Hub.app/Contents/Info.plist"
+  local plist="$1/Hub Studio KH.app/Contents/Info.plist"
   [ -f "$plist" ] || plist="$1/Contents/Info.plist"
   /usr/libexec/PlistBuddy -c 'Print :StudioHubBuild' "$plist" 2>/dev/null || true
 }
 stage_is_dev() {
-  local manifest="$1/Studio Hub.app/Contents/Resources/release-manifest.json"
+  local manifest="$1/Hub Studio KH.app/Contents/Resources/release-manifest.json"
   [ -f "$manifest" ] || manifest="$1/Contents/Resources/release-manifest.json"
   grep -q '"development_build"[[:space:]]*:[[:space:]]*true' "$manifest" 2>/dev/null
 }
 # What the running app was installed from. Beats every version comparison: two stages can carry the
 # same version - a development re-stage does exactly that - and only the stamp says which one is
 # deployed.
-INSTALLED_STAMP="$(/usr/libexec/PlistBuddy -c 'Print :StudioHubBuild' "/Applications/Studio Hub.app/Contents/Info.plist" 2>/dev/null || true)"
+INSTALLED_STAMP="$(/usr/libexec/PlistBuddy -c 'Print :StudioHubBuild' "/Applications/Hub Studio KH.app/Contents/Info.plist" 2>/dev/null || true)"
 
 CURRENT_VERSION="$(cat "$REPO_ROOT/VERSION" 2>/dev/null | tr -d '[:space:]')"
 ranked="$(mktemp)"
