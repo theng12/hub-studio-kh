@@ -77,6 +77,15 @@ class StagingTests(unittest.TestCase):
         manifest = khu_agent.verify_kit(result.staged_path, allow_test=False)
         self.assertEqual(set(manifest["files"]), khu_agent.KIT_FILES)
 
+    def test_a_shared_icon_in_the_source_kit_is_staged_and_pinned(self):
+        (self.kit / "AppIcon.icns").write_bytes(b"icns-icon")
+        result = stage_agent_kit(self.resources, self.kit, self.descriptor_path)
+        self.assertEqual((result.staged_path / "AppIcon.icns").read_bytes(), b"icns-icon")
+        manifest = khu_agent.verify_kit(result.staged_path, allow_test=False)
+        self.assertIn("AppIcon.icns", manifest["files"])
+        # The icon travels with the kit but is never executable.
+        self.assertEqual((result.staged_path / "AppIcon.icns").stat().st_mode & 0o777, 0o644)
+
     def test_final_manifest_records_signed_bytes_and_leaves_source_unchanged(self):
         result = stage_agent_kit(self.resources, self.kit, self.descriptor_path)
         source = (self.kit / "bin/khu").read_bytes()

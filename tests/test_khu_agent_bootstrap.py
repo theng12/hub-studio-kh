@@ -191,6 +191,22 @@ class KhAgentKitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             khu_agent.verify_kit(kit, allow_test=True)
 
+    def test_verify_kit_accepts_the_shared_icon_when_the_manifest_pins_it(self):
+        kit = _build_kit(self.work, self.publisher)
+        (kit / "AppIcon.icns").write_bytes(b"icns-icon")
+        manifest_path = kit / "MANIFEST.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["files"]["AppIcon.icns"] = _kit_files(kit / "AppIcon.icns")
+        manifest_path.write_text(json.dumps(manifest))
+        verified = khu_agent.verify_kit(kit, allow_test=True)
+        self.assertIn("AppIcon.icns", verified["files"])
+
+    def test_verify_kit_refuses_a_shared_icon_the_manifest_does_not_pin(self):
+        kit = _build_kit(self.work, self.publisher)
+        (kit / "AppIcon.icns").write_bytes(b"icns-icon")
+        with self.assertRaises(ValueError):
+            khu_agent.verify_kit(kit, allow_test=True)
+
     def test_verify_kit_refuses_a_symlink(self):
         kit = _build_kit(self.work, self.publisher)
         target = self.work / "elsewhere"
