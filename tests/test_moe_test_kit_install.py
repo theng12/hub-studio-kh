@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 import uuid
@@ -44,5 +45,6 @@ class TestKitInstall(unittest.TestCase):
         finally:
             archive = ROOT / "_trash/tests" / ("moe-kit-install-" + uuid.uuid4().hex)
             archive.parent.mkdir(parents=True, exist_ok=True)
-            fixture.rename(archive)
+            # TMPDIR and the checkout can be different volumes; rename() cannot cross them.
+            shutil.move(str(fixture), str(archive))
             print("Fixture preserved:", archive)
