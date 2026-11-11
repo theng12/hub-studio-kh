@@ -1435,13 +1435,12 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
                         raise evidence
                     return evidence
 
-                runtime.get = get
-
                 async def spawn(*_args, **_kwargs):
                     return FakeProcess(Path(runtime.claim["output_path"]))
 
                 def reject_output(*_args):
                     events.append("validate")
+                    runtime.get = get
                     raise RuntimeError("probe rejected output")
 
                 executor = RenderExecutor(
