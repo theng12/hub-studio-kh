@@ -671,4 +671,42 @@ let expectedResources = probeResources.resolvingSymlinksInPath().path
 require(probe.terminationStatus == 0 && probePrinted == expectedResources,
         "the helper must resolve the host app's Contents/Resources, got '\(probePrinted)' exit \(probe.terminationStatus)")
 
+// A stale login agent must be repaired, not trusted because a plist exists. 0.6.228 renamed the app
+// to "Hub Studio KH.app" while every Mac kept an agent naming "Studio Hub.app", so login start ran a
+// program that no longer existed; `status` reads the plist's existence, so only a path check catches it.
+let agentPlist = temporary.appendingPathComponent("local.studiohub.standalone.plist")
+require(!LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+        "no agent is not a repair")
+let staleAgent = ["Label": LaunchAgent.label,
+                  "ProgramArguments": ["/Applications/Studio Hub.app/Contents/MacOS/StudioHub"],
+                  "RunAtLoad": true] as [String: Any]
+try PropertyListSerialization.data(fromPropertyList: staleAgent, format: .xml, options: 0).write(to: agentPlist)
+require(LaunchAgent.installedExecutablePath(at: agentPlist) == "/Applications/Studio Hub.app/Contents/MacOS/StudioHub",
+        "the agent's program is readable")
+require(LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+        "an agent naming the pre-rename app must be repaired")
+let currentAgent = ["Label": LaunchAgent.label,
+                    "ProgramArguments": ["/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"]] as [String: Any]
+try PropertyListSerialization.data(fromPropertyList: currentAgent, format: .xml, options: 0).write(to: agentPlist)
+require(!LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+        "an agent naming this app needs no repair")
+try Data("not a plist".utf8).write(to: agentPlist)
+require(LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+        "an unreadable agent must be repaired")
+
+// Uninstall must remove the app and the login mechanisms and never touch the operator's data: the
+// step list has no data step at all, and a running copy or a copy outside /Applications is refused.
+let installedBundle = URL(fileURLWithPath: "/Applications/Hub Studio KH.app")
+require(Uninstall.decide(appBundle: installedBundle, agentInstalled: true, runningCopyDetected: false)
+        == .proceed([.bootoutAgent, .removeAgentPlist, .unregisterLegacyItem, .trashAppBundle]),
+        "an installed app with a login agent unloads it before the app goes to the Trash")
+require(Uninstall.decide(appBundle: installedBundle, agentInstalled: false, runningCopyDetected: false)
+        == .proceed([.unregisterLegacyItem, .trashAppBundle]),
+        "no agent means no agent steps")
+guard case .refuse = Uninstall.decide(appBundle: installedBundle, agentInstalled: true, runningCopyDetected: true)
+else { fatalError("a running copy must refuse to uninstall itself") }
+guard case .refuse = Uninstall.decide(appBundle: temporary.appendingPathComponent("Dev.app"),
+                                      agentInstalled: false, runningCopyDetected: false)
+else { fatalError("only an app in /Applications may uninstall itself") }
+
 print("Native boundary checks passed")

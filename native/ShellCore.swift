@@ -1145,6 +1145,27 @@ enum LaunchAgent {
         FileManager.default.fileExists(atPath: plistURL.path)
     }
 
+    /// The program an installed agent names, or nil when the plist is absent or unreadable.
+    static func installedExecutablePath(at plistURL: URL) -> String? {
+        guard let data = try? Data(contentsOf: plistURL),
+              let plist = try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil) as? [String: Any],
+              let arguments = plist["ProgramArguments"] as? [String] else { return nil }
+        return arguments.first
+    }
+
+    /// Whether an agent that exists names a program other than this app's.
+    ///
+    /// The plist's existence is the operator's "on", but the path inside it goes stale when the app
+    /// is renamed or moved: 0.6.228 renamed the bundle to `Hub Studio KH.app`, while every Mac kept
+    /// an agent pointing at the old `Studio Hub.app` path, so login startup ran a program that no
+    /// longer existed. An unreadable plist counts as needing repair.
+    static func needsRepair(at plistURL: URL, currentExecutable: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: plistURL.path) else { return false }
+        guard let installed = installedExecutablePath(at: plistURL) else { return true }
+        return installed != currentExecutable
+    }
+
     /// Whether the operator sees "Start at login" as on.
     ///
     /// The plist existing is the signal. launchd loads `~/Library/LaunchAgents` at login, so a
@@ -1358,6 +1379,41 @@ final class InstanceLock {
 /// brings the running app forward if it can and leaves with status 0, which `KeepAlive` treats as a
 /// clean exit and never relaunches. The present/exit actions are injected so the contract suite can
 /// prove the behaviour without AppKit or terminating the test process.
+/// What an uninstall does, as data, so its order and refusals are testable without touching a Mac.
+///
+/// Owner rule 2026-11-12: deleting the app must leave no worker, no launchd job and no login item,
+/// and must keep the operator's data. The data directory is deliberately absent from every step.
+enum Uninstall {
+    enum Step: Equatable {
+        case bootoutAgent
+        case removeAgentPlist
+        case unregisterLegacyItem
+        case trashAppBundle
+    }
+
+    enum Decision: Equatable {
+        case proceed([Step])
+        case refuse(String)
+    }
+
+    static func decide(appBundle: URL, agentInstalled: Bool, runningCopyDetected: Bool,
+                       applicationsRoot: URL = LaunchAgent.defaultApplicationsRoot) -> Decision {
+        guard !runningCopyDetected else {
+            return .refuse("Quit Hub Studio KH first: the app cannot remove itself while another copy is running.")
+        }
+        let root = applicationsRoot.standardizedFileURL.resolvingSymlinksInPath().path
+        let bundle = appBundle.standardizedFileURL.resolvingSymlinksInPath().path
+        guard bundle.hasPrefix(root + "/") else {
+            return .refuse("Only a copy installed in \(root) can uninstall itself; this one is at \(bundle).")
+        }
+        var steps: [Step] = []
+        if agentInstalled { steps.append(.bootoutAgent); steps.append(.removeAgentPlist) }
+        steps.append(.unregisterLegacyItem)
+        steps.append(.trashAppBundle)
+        return .proceed(steps)
+    }
+}
+
 enum ExistingInstance {
     enum Decision: Equatable {
         case continueStarting

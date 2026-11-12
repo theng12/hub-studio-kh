@@ -2,6 +2,19 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.230 — 2026-11-12
+
+- Start at login works again after the rename: an existing login entry that still named the old app is corrected on launch instead of being trusted.
+- A second launch no longer pulls the open Hub to the front; it leaves one line and exits.
+- New: `--uninstall` removes the app, its helper, its login entry and any old login item, moves the app to the Trash, and leaves your data alone.
+
+### Technical notes
+
+- `LaunchAgent.needsRepair`/`installedExecutablePath` compare the agent's `ProgramArguments[0]` with the running bundle; `enableLoginByDefault` now repairs instead of returning early when a plist exists. This is the 0.6.228 rename's leftover: the agent kept `/Applications/Studio Hub.app/Contents/MacOS/StudioHub` from 2026-09-30.
+- `ExistingInstanceHandler.stayBehind` replaces the `activate(options:)` call, so a redundant launch never takes focus.
+- `Uninstall` in ShellCore returns the ordered steps as data; the `--uninstall` path in `StudioHub.swift` executes them and refuses when another copy runs or the app is outside `/Applications`. The operator's data directory is not a step.
+- Boundary tests cover the stale, current, missing and unreadable agent, and the uninstall refusals/steps.
+
 ## 0.6.229 — 2026-11-12
 
 - Hub Studio KH starts its local services again. 0.6.228's background helper looked for its runtime one folder too high, so a fresh install had no Hub until this fixes it.

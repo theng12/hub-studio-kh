@@ -33,17 +33,10 @@ enum LegacyLoginItem {
 /// The app-side actions for a redundant launch, kept out of `ExistingInstance` so the decision and
 /// its present/exit contract stay testable in the contract suite.
 enum ExistingInstanceHandler {
-    /// Bring the already-running Hub Studio KH forward, if it can be found. Both copies share the
-    /// bundle identifier, so the other one is the process that is not this one.
-    static func presentRunningApp() {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return }
-        let current = ProcessInfo.processInfo.processIdentifier
-        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        where app.processIdentifier != current {
-            app.activate(options: [.activateAllWindows])
-            return
-        }
-    }
+    /// A redundant launch must not take the desktop (owner rule, 2026-11-12): no activation, no
+    /// window, no alert. `noteAndExit` leaves one line and exits 0; this stays a no-op so the
+    /// app-side action is explicit rather than an omission.
+    static func stayBehind() {}
 
     /// Leave with status 0 so `KeepAlive` (SuccessfulExit false) never relaunches this copy, and
     /// leave at most one line where a log collects it. No alert, ever: the operator should not see
@@ -1029,7 +1022,13 @@ final class StudioController: ObservableObject {
         do { try configuration.save() } catch { failure = error.localizedDescription }
     }
     private func enableLoginByDefault() {
-        guard configuration.startAtLogin, loginStatus != .enabled else { return }
+        guard configuration.startAtLogin else { return }
+        // The plist's existence is the operator's "on", but it can name a program this app no longer
+        // is: 0.6.228 renamed the bundle and left every Mac's agent pointing at the old path. Repair
+        // a stale agent here instead of treating "a plist exists" as correct.
+        let executable = LaunchAgent.executablePath(forAppBundle: appBundle)
+        if loginStatus == .enabled,
+           !LaunchAgent.needsRepair(at: agentPlistURL, currentExecutable: executable) { return }
         switch LaunchAgent.installDecision(appBundle: appBundle) {
         case .refuse:
             // A dev build or an app moved out of /Applications cannot be started at login, and
@@ -1188,7 +1187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // running app and exits 0, before any window or alert. The agent's own copy never gets
             // here while the app runs: it stands by in `main` (see `AgentStandby`).
             ExistingInstance.handle(ExistingInstance.decide(lockHeldByAnother: controller.existingInstanceDetected),
-                                    present: ExistingInstanceHandler.presentRunningApp,
+                                    present: ExistingInstanceHandler.stayBehind,
                                     exitQuietly: ExistingInstanceHandler.noteAndExit)
             // This copy owns the data folder now: settle why the previous one ended (unless the
             // agent's copy already did), then leave the evidence the next settle reads.
@@ -1429,10 +1428,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 }
 
+/// The headless `--uninstall` path: stop being an app, remove everything the installer put on this
+/// Mac, keep the operator's data. Launched from a terminal so it stays testable and never needs a
+/// window (owner rules 2026-11-12: release everything on delete; don't take the desktop).
+enum Uninstaller {
+    static func run() -> Int32 {
+        let bundle = Bundle.main.bundleURL
+        let plist = LaunchAgent.defaultPlistURL()
+        let runningCopies = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        switch Uninstall.decide(appBundle: bundle, agentInstalled: LaunchAgent.isInstalled(at: plist),
+                                runningCopyDetected: !runningCopies.isEmpty) {
+        case .refuse(let message):
+            FileHandle.standardError.write(Data((message + "\n").utf8))
+            return 2
+        case .proceed(let steps):
+            for step in steps {
+                switch step {
+                case .bootoutAgent:
+                    _ = LaunchAgent.bootout()
+                    print("unloaded the login agent")
+                case .removeAgentPlist:
+                    do {
+                        try LaunchAgent.remove(at: plist)
+                        print("removed \(plist.path)")
+                    } catch {
+                        FileHandle.standardError.write(Data("could not remove \(plist.path): \(error)\n".utf8))
+                        return 1
+                    }
+                case .unregisterLegacyItem:
+                    try? LegacyLoginItem.unregister()
+                    print("cleared any old login item")
+                case .trashAppBundle:
+                    // Trashed, not deleted: the bundle stays recoverable from the Trash.
+                    do {
+                        try FileManager.default.trashItem(at: bundle, resultingItemURL: nil)
+                        print("moved \(bundle.path) to the Trash")
+                    } catch {
+                        FileHandle.standardError.write(Data("could not move the app to the Trash: \(error)\n".utf8))
+                        return 1
+                    }
+                }
+            }
+            print("Hub Studio KH uninstalled. Your data is untouched at ~/Library/Application Support/StudioHub Standalone.")
+            return 0
+        }
+    }
+}
+
 #if !LIFECYCLE_TESTING
 @main
 struct StudioHubApplication {
     @MainActor static func main() {
+        if CommandLine.arguments.contains("--uninstall") { exit(Uninstaller.run()) }
         // The agent's copy while another Hub Studio KH runs: wait for it, before any AppKit setup
         // (no Dock icon, no entry in Force Quit), then let launchd decide. See `AgentStandby`.
         if ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1",
