@@ -1745,8 +1745,14 @@ struct StudioContent: View {
     /// guess. A raw development executable has no bundle version; "Development" is
     /// more honest there than inventing a number.
     private var appVersion: String {
+        // The offscreen render harness is a plain binary, not a bundle, so it passes the version
+        // it is rendering; without this every footer screenshot showed "Development" and no number
+        // (footer critic, 2026-11-13). Shipped builds always read their own Info.plist.
         let product = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            ?? ProcessInfo.processInfo.environment["STUDIOHUB_VERSION"].flatMap {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+            }
             ?? "Development"
         // The exact build, stamped at packaging time. Two copies of the same product version are
         // otherwise indistinguishable, which is exactly the question an update raises.
@@ -1865,15 +1871,11 @@ struct StudioContent: View {
                                 .lineLimit(1).fixedSize()
                                 .textSelection(.enabled)
                                 .accessibilityLabel("Hub Studio KH version \(appVersion)")
-                            Button("What's New") { studio.select(.whatsNew) }
-                                .buttonStyle(.plain)
-                                .font(HubType.caption)
-                                .foregroundStyle(HubStatus.info.textColor)
-                                .help("Show the release notes for this build.")
                         }
                         .lineLimit(1)
                         .padding(.horizontal, HubSpace.s).padding(.vertical, 3)
                         .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                        .fixedSize()
                         // Icon-only by the owner's standard; the words live in the hover text.
                         Button {
                             Task { await workspace.checkForUpdateNow() }
@@ -1898,6 +1900,13 @@ struct StudioContent: View {
                         }
                         Spacer(minLength: 0)
                     }
+                    // What's New keeps its own line: at the sidebar's width a single pill cannot
+                    // hold the name, the version and a link without truncating one of them
+                    // (footer critic, 2026-11-13).
+                    Button("What's New") { studio.select(.whatsNew) }
+                        .buttonStyle(.link)
+                        .font(HubType.caption)
+                        .help("Show the release notes for this build.")
                     if let note = workspace.manualUpdateNote {
                         Text(note).font(HubType.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
