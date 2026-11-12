@@ -9189,6 +9189,20 @@ final class NativeWorkspaceStore: ObservableObject {
     /// to type on a tailnet; what is refused is an address that is not private - the check
     /// exists so this Mac is never pointed at an arbitrary host on the internet, and a name is
     /// held to the same rule by resolving it first.
+
+    /// Open Studio Launcher KH, the one updater on this Mac (owner rule, 2026-11-13). Hub checks
+    /// the feed and says what is offered; it never installs its own update.
+    static func openStudioLauncher() {
+        let bundle = URL(fileURLWithPath: "/Applications/Studio Launcher KH.app")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { _, error in
+            if let error {
+                FileHandle.standardError.write(Data("could not open Studio Launcher KH: \(error)\n".utf8))
+            }
+        }
+    }
+
     static func privateHTTPAddress(_ text: String) throws -> URL {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -9580,10 +9594,10 @@ final class NativeWorkspaceStore: ObservableObject {
         await refresh(reportErrors: false)
         await refreshMemoryPolicy()
         if activeWorkCount == 0 {
-            manualUpdateNote = "Updating to \(release.version)…"
-            // Exactly the automatic install: the same signature check, the same byte check, the
-            // same delta-or-image choice.
-            await installOfferedRelease(automatic: true)
+            // Owner rule (2026-11-13): no app installs its own update. The Launcher may stop and
+            // relaunch Hub itself, so the action hands over instead of swapping the bundle.
+            manualUpdateNote = "Opening Studio Launcher to update to \(release.version)…"
+            Self.openStudioLauncher()
             // A failed install leaves the offer in place and records why; say so here too rather
             // than leaving "Updating to …" on a screen where nothing is happening.
             if updateOffered, let failure = lastUpdateError {
@@ -9930,7 +9944,6 @@ final class NativeWorkspaceStore: ObservableObject {
         await refreshMemoryPolicy()
         guard connectionID != nil, memoryInventory != nil else { return }
         if activeWorkCount == 0 {
-            await installOfferedRelease(automatic: true)
         } else if !updateDraining, now.timeIntervalSince(pendingSince) >= updateDrainGrace {
             updateDraining = await requestDrain(true) == "draining"
             if updateDraining { keepDrainAlive() }

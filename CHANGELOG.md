@@ -2,6 +2,16 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.232 — 2026-11-13
+
+- Hub no longer installs its own updates. When one is offered, the update action opens Studio Launcher KH, which updates every app on this Mac.
+- Connecting to a controller now names the address it actually tried when it fails, including the assumed http:// and port 47873.
+
+### Technical notes
+
+- `installOfferedRelease` has no callers: the manual and automatic paths both hand over to Studio Launcher KH (`openStudioLauncher`). The install machinery is left in place for now and should be deleted in a following build.
+- Test failures in Connections name the normalised URL; the join success note already did.
+
 ## 0.6.231 — 2026-11-13
 
 - The sidebar footer is tidier: Support this app, then one version line with What's New, an icon that checks for updates, and one status line.
