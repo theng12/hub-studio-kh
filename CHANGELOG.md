@@ -2,6 +2,18 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.231 — 2026-11-13
+
+- The sidebar footer is tidier: Support this app, then one version line with What's New, an icon that checks for updates, and one status line.
+- Models says where installation happens and offers the way there; Chat's message box has a hint and an honest disabled Send; Voices keeps its row actions behind one menu.
+- Escape now closes what it should: it clears both model searches, and in the stop/quit prompts it always picks "keep running" rather than stopping work.
+
+### Technical notes
+
+- Footer: no repeated role ("Controller" pill plus a "4 Macs" line), version fixed and visible while the product name truncates, per-generator counts on one line, status line last, symbol follows its sentence.
+- `appVersion` reads `STUDIOHUB_VERSION` only in the offscreen render harness (a plain binary); shipped builds read their Info.plist.
+- No Keychain use anywhere; the packaging refusal no longer names Keychain Access.
+
 ## 0.6.230 — 2026-11-12
 
 - Start at login works again after the rename: an existing login entry that still named the old app is corrected on launch instead of being trusted.
