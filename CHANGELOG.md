@@ -2,6 +2,10 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.230 — 2026-11-12
+- Quitting Hub leaves nothing running behind it, and a second copy says so instead of taking the screen.
+- Uninstalling removes the app, its helper and its login item; your data stays exactly as it was.
+
 ## 0.6.229 — 2026-11-12
 - Small fixes to startup and the helper's resource guard.
 - Nothing in your existing settings or profiles changes.
