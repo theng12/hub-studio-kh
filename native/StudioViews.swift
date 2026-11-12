@@ -1417,7 +1417,11 @@ struct StudioContent: View {
     /// The sidebar's status symbol, read from the same facts as `studio.status`: a Mac with no
     /// model library is not "connected and fine", and the line beside this symbol says so.
     private var footerStatusSymbol: String {
-        if studio.configuration.modelsDirectory == nil { return "exclamationmark.circle" }
+        // The sentence decides. "Choose a model library" is an instruction, so it cannot wear a
+        // success tick even when services are connected (page critics, 2026-11-12).
+        if studio.configuration.modelsDirectory == nil || studio.status.hasPrefix("Choose") {
+            return "exclamationmark.circle"
+        }
         return connected ? "checkmark.circle.fill" : "circle"
     }
     /// Enough to attempt an authenticated Nodes read. Model-catalog reachability remains the gate
@@ -2267,6 +2271,14 @@ struct StudioContent: View {
 
     private var selectedChatModel: NativeModel? { workspace.models.first { $0.repo == workspace.chatModel && $0.function == .chat } }
 
+    private var canSendChat: Bool {
+        connected && !workspace.submittingChat
+            && !workspace.chatPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && selectedChatModel?.supported == true
+            && selectedChatModel?.cached == true
+            && selectedChatModel?.runtimeReady == true
+    }
+
     private var chatWorkspace: some View {
         PageScaffold(title: pageTitle(.chat), subtitle: "Work with a language model running on this Mac.") {
             if !connected { setup }
@@ -2286,18 +2298,21 @@ struct StudioContent: View {
                         }
                         // An empty composer says what it is for (page critic, 2026-11-12): a blank
                         // box under an empty conversation left the one control unlabelled.
-                        ZStack(alignment: .topLeading) {
-                            if workspace.chatPrompt.isEmpty {
-                                Text("Write a message…").font(HubType.body)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.top, 8).padding(.leading, 5)
-                                    .allowsHitTesting(false)
+                        TextEditor(text: $workspace.chatPrompt)
+                            .font(HubType.body).padding(HubSpace.s).frame(height: 155)
+                            .overlay(RoundedRectangle(cornerRadius: HubRadius.control).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                            // Overlaid, not stacked behind: a TextEditor draws its own opaque
+                            // background, so the placeholder behind it was never visible (page
+                            // critic, 2026-11-12).
+                            .overlay(alignment: .topLeading) {
+                                if workspace.chatPrompt.isEmpty {
+                                    Text("Write a message…").font(HubType.body)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.top, HubSpace.s + 8).padding(.leading, HubSpace.s + 5)
+                                        .allowsHitTesting(false)
+                                }
                             }
-                            TextEditor(text: $workspace.chatPrompt)
-                                .font(HubType.body).padding(HubSpace.s).frame(height: 155)
-                                .overlay(RoundedRectangle(cornerRadius: HubRadius.control).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
-                                .accessibilityLabel("Chat message")
-                        }
+                            .accessibilityLabel("Chat message")
                         if workspace.submittingChat {
                             VStack(alignment: .leading, spacing: HubSpace.xs) {
                                 if let activity = workspace.chatActivity {
@@ -2320,13 +2335,16 @@ struct StudioContent: View {
                         }
                         HStack {
                             Spacer()
-                            Button("Send") { Task { await workspace.sendChat() } }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(!connected || workspace.submittingChat
-                                          || workspace.chatPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                          || selectedChatModel?.supported != true
-                                          || selectedChatModel?.cached != true
-                                          || selectedChatModel?.runtimeReady != true)
+                            // A disabled prominent button keeps its saturated fill in dark
+                            // appearance, so an unsendable Send looked like the primary action in
+                            // dark and a dead one in light. When it cannot send it is a plain
+                            // button in both themes (page critic, 2026-11-12).
+                            if canSendChat {
+                                Button("Send") { Task { await workspace.sendChat() } }
+                                    .buttonStyle(.borderedProminent)
+                            } else {
+                                Button("Send") {}.buttonStyle(.bordered).disabled(true)
+                            }
                         }
                         Divider().padding(.top, 8)
                         // The same picker the other four pages use. The page used to name one model
@@ -6123,7 +6141,13 @@ struct StudioContent: View {
                     Button("Remove…", role: .destructive) { pendingVoiceDeletion = voice }
                         .disabled(workspace.savingVoice)
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    // A standard, full-size kebab: the 13 pt circled ellipsis read as decoration at
+                    // both widths, and this is now the only route to Edit and Remove (page critic,
+                    // 2026-11-12).
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 26, height: 22)
+                        .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
