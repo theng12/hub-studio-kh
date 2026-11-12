@@ -341,8 +341,8 @@ def _signing_identity(app: Path) -> str:
     if SIGNING_IDENTITY not in listed.stdout:
         raise RuntimeError(
             f'The shared signing identity {SIGNING_IDENTITY!r} is missing from this Mac\'s login '
-            'keychain. Packaging refuses to fall back to ad-hoc signing; create or import the '
-            'identity in Keychain Access, then stage again.')
+            'signing identity. Packaging refuses to fall back to ad-hoc signing; create or import '
+            'the signing identity, then stage again.')
     return identity
 
 
