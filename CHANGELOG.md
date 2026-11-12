@@ -2,6 +2,10 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.229 — 2026-11-12
+- Small fixes to startup and the helper's resource guard.
+- Nothing in your existing settings or profiles changes.
+
 ## 0.6.227 — 2026-11-09
 
 - Developer checks keep their files, tools and results together, with clear reasons when a Mac cannot accept a check.
