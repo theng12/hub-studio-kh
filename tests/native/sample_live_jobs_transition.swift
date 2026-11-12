@@ -3,7 +3,7 @@
 import AppKit
 import ApplicationServices
 precondition(CommandLine.arguments.count == 2, "Pass the output JSON path")
-let app = NSWorkspace.shared.runningApplications.first { $0.localizedName == "StudioHub" || $0.localizedName == "Studio Hub" }!
+let app = NSWorkspace.shared.runningApplications.first { $0.localizedName == "Hub Studio KH" || $0.localizedName == "StudioHub" || $0.localizedName == "Studio Hub" }!
 let root = AXUIElementCreateApplication(app.processIdentifier)
 func attr(_ node: AXUIElement, _ key: CFString) -> CFTypeRef? { var v: CFTypeRef?; AXUIElementCopyAttributeValue(node,key,&v); return v }
 func label(_ node: AXUIElement) -> String { attr(node,kAXTitleAttribute as CFString) as? String ?? attr(node,kAXDescriptionAttribute as CFString) as? String ?? attr(node,kAXValueAttribute as CFString) as? String ?? "" }

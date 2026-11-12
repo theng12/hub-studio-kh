@@ -384,7 +384,7 @@ require(LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: true,
                            hasLibrary: false, canConfigure: true) == .nothingToStart,
         "the same without a login launch")
 require(LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: true,
-                           hasLibrary: true, canConfigure: false) == .stayStopped("another copy of Studio Hub is already running"),
+                           hasLibrary: true, canConfigure: false) == .stayStopped("another copy of Hub Studio KH is already running"),
         "a second copy of the app must never start a second set of services")
 require(LaunchStart.stoppedByChoice == "Start services on startup is off",
         "the reason a deliberate choice gives is a sentence a person can read")
