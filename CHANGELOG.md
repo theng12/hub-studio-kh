@@ -2,6 +2,14 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.231 — 2026-11-13
+- The sidebar footer now lines up: Support this app, a one-line version and What's New, a Check for Updates button, and one short status line.
+- Chat shows a placeholder in the message box and a Send button that looks the same in light and dark.
+- The Models page says where a model is installed and gives you the button that does it.
+- Voices keeps one settings menu per voice instead of four buttons, and shows language names rather than codes.
+- Overview tells you the next step when something is missing.
+- Escape clears the search boxes and answers the stop and quit prompts with the safe choice.
+
 ## 0.6.230 — 2026-11-12
 - Quitting Hub leaves nothing running behind it, and a second copy says so instead of taking the screen.
 - Uninstalling removes the app, its helper and its login item; your data stays exactly as it was.
