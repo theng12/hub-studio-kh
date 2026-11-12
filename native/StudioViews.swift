@@ -1772,19 +1772,11 @@ struct StudioContent: View {
                             // label against the selection fill, and forcing `Color.primary` there made the
                             // selected row black-on-black in light appearance (found by the page critics,
                             // 2026-11-12). Only the quieter "Coming later" rows carry a style.
-                            Group {
-                                if section.title == "Coming later" {
-                                    Label(page.title, systemImage: page.symbol).foregroundStyle(.secondary)
-                                } else {
-                                    // No explicit foreground: a sidebar List inverts the label against
-                                    // the selection fill, and forcing `Color.primary` made the selected
-                                    // row black-on-black in light appearance (page critics, 2026-11-12).
-                                    Label(page.title, systemImage: page.symbol)
-                                }
-                            }
-                            // An offered update is otherwise only visible on this page.
-                            .badge(page == .connections && workspace.showingUpdateBanner ? Text("Update") : nil)
-                            .tag(page)
+                            Label(page.title, systemImage: page.symbol)
+                                .foregroundStyle(section.title == "Coming later" ? Color.secondary : Color.primary)
+                                // An offered update is otherwise only visible on this page.
+                                .badge(page == .connections && workspace.showingUpdateBanner ? Text("Update") : nil)
+                                .tag(page)
                         }
                     }
                 }
@@ -2041,6 +2033,24 @@ struct StudioContent: View {
                      subtitle: "Create locally. Keep track of your jobs, models and workspaces in one place.",
                      scrolls: true) {
             if !connected { setup }
+            // One honest next step in the column, not only in the sidebar footer: the landing page
+            // should say what to do first when something is missing (page critic, 2026-11-12).
+            if studio.configuration.modelsDirectory == nil {
+                HStack(spacing: HubSpace.s) {
+                    Label("Choose a model library before you create anything.", systemImage: "exclamationmark.circle")
+                        .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
+                    Button("Set up this Mac") { studio.select(.setup) }
+                    Spacer()
+                }
+            } else if !workspace.models.contains(where: { $0.cached }) {
+                HStack(spacing: HubSpace.s) {
+                    Label("No models are installed yet. Install one to start creating.",
+                          systemImage: "exclamationmark.circle")
+                        .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
+                    Button("Set up this Mac") { studio.select(.setup) }
+                    Spacer()
+                }
+            }
             VStack(alignment: .leading, spacing: HubSpace.m) {
                 HStack(alignment: .firstTextBaseline) {
                     sectionTitle("In progress")
@@ -2354,7 +2364,11 @@ struct StudioContent: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Manage Chat Models") { modelFilter = "Chat"; studio.select(.models) }
                     }.padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
-                }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                // At a wide window the composer column takes a share of the width instead of staying
+                // 390 pt beside 1200 pt of empty conversation (page critic, 2026-11-12).
+                }.frame(minWidth: 350,
+                        idealWidth: windowWidth >= 1500 ? 620 : 390,
+                        maxWidth: windowWidth >= 1500 ? 760 : 440)
                 // What you said and what the model answered, on the right, in the house shape the
                 // Image preview and the Audio and Subtitle histories use: a fixed heading row, then
                 // the content under it. The heading used to be the first line *inside* the
@@ -5183,12 +5197,20 @@ struct StudioContent: View {
     }
 
     private var modelsWorkspace: some View {
-        PageScaffold(title: pageTitle(.models), subtitle: "One library for every workspace. Install models here, then choose them where you create.") {
+        // The subtitle used to promise installation on a page that only lists and selects; models
+        // are installed from the preset picker, so say where it happens (page critic, 2026-11-12).
+        PageScaffold(title: pageTitle(.models), subtitle: "One library for every workspace. Install models in Set up this Mac, then choose them where you create.") {
             if !connected { setup }
             HStack(spacing: HubSpace.m) {
                 TextField("Search models", text: $modelSearch).textFieldStyle(.roundedBorder).frame(maxWidth: 320)
                 Toggle("Installed only", isOn: $installedOnly).toggleStyle(.checkbox)
                 Spacer(minLength: HubSpace.xl)
+                // The page lists what is installed; the install itself happens in the preset picker.
+                // A not-installed row says so, and this is the way there (page critic, 2026-11-12).
+                if workspace.models.contains(where: { !$0.cached }) {
+                    Button("Set up this Mac") { studio.select(.setup) }
+                        .help("Choose a preset or tick models to install")
+                }
                 Button("Verify All") { Task { await workspace.verifyInstalledModels() } }
                     .help("Re-check every installed model against its pinned file digests")
                     .disabled(!connected || workspace.updatingModels)
