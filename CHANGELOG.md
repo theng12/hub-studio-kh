@@ -2,6 +2,17 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.229 — 2026-11-12
+
+- Hub Studio KH starts its local services again. 0.6.228's background helper looked for its runtime one folder too high, so a fresh install had no Hub until this fixes it.
+- Installing an update no longer brings the app to the front; it starts hidden.
+
+### Technical notes
+
+- `native/helper/HelperMain.swift` finds the host app's `Contents/Resources` by its payload (`hub_worker.py` beside `runtimes/voice/bin/python3`) instead of counting parent directories. 0.6.228's count of four landed on `Contents/Resources/helper` and every install exited 127 before starting the worker.
+- `tests/native/main.swift` now stages the built helper in a synthetic bundle and requires `--print-resources` to resolve the host app's `Contents/Resources`; `native/build.sh` builds the helper before the test binaries. The test fails against the 0.6.228 source.
+- `packaging/install_local.sh` starts the installed app with `open -g -j` (hidden), per the owner's desktop rule.
+
 ## 0.6.228 — 2026-11-09
 
 - Local-service warnings now sit beside the status as an icon. Click it to read the full message or dismiss it.

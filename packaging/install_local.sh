@@ -188,7 +188,9 @@ echo "== installed $STAGED_VERSION / $INSTALLED_BUILD"
 # path must not start an app, which is also what keeps the guard tests from launching anything.
 if [ "$TARGET" = "/Applications/Hub Studio KH.app" ] && [ "$START" = 1 ]; then
   echo "== starting Hub Studio KH"
-  open -a "$TARGET" >/dev/null 2>&1 || true
+  # Hidden and unfocused (-g -j): the owner's desktop is not part of an install (owner,
+  # 2026-11-12 "Don't take the owner's desktop").
+  open -g -j -a "$TARGET" >/dev/null 2>&1 || true
   # Wait for the **Hub**, not for the app bundle: `hub-ready.json` is written by the Hub service once
   # it is actually serving, so this cannot report success for a process that is merely running.
   READY="$DATA/hub-ready.json"

@@ -637,4 +637,38 @@ require(silentJSON?["label"] as? String == "Local services stopped answering", "
 require((silentJSON?["at"] as? Double) == 1_800_000_000, "the recorded time")
 require(silentJSON?["relaunched"] as? Bool == false, "the app itself did not stop")
 
+// The background helper must find the host app's Contents/Resources by its payload. 0.6.228 counted
+// four parent directories, looked under Contents/Resources/helper, and shipped a helper that could
+// not start its worker on any Mac (exit 127). Run the built guard against the real launch layout.
+let repoRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+let builtHelper = repoRoot.appendingPathComponent(".build/HubStudioHelper")
+require(FileManager.default.isExecutableFile(atPath: builtHelper.path),
+        "native/build.sh must build .build/HubStudioHelper before the boundary tests")
+let probeResources = temporary.appendingPathComponent("Probe Host.app/Contents/Resources")
+let probePython = probeResources.appendingPathComponent("runtimes/voice/bin/python3")
+try FileManager.default.createDirectory(at: probePython.deletingLastPathComponent(),
+                                        withIntermediateDirectories: true)
+try Data("#!/bin/sh\nexit 0\n".utf8).write(to: probePython)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: probePython.path)
+try Data().write(to: probeResources.appendingPathComponent("hub_worker.py"))
+let probeMacOS = probeResources.appendingPathComponent(
+    "helper/Hub Studio KH Helper.app/Contents/MacOS")
+try FileManager.default.createDirectory(at: probeMacOS, withIntermediateDirectories: true)
+let probeHelper = probeMacOS.appendingPathComponent("Hub Studio KH Helper")
+try FileManager.default.copyItem(at: builtHelper, to: probeHelper)
+let probe = Process()
+probe.executableURL = probeHelper
+probe.arguments = ["--print-resources"]
+let probeOutput = Pipe()
+probe.standardOutput = probeOutput
+probe.standardError = Pipe()
+try probe.run()
+let probePrinted = String(decoding: probeOutput.fileHandleForReading.readDataToEndOfFile(),
+                          as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+probe.waitUntilExit()
+let expectedResources = probeResources.resolvingSymlinksInPath().path
+require(probe.terminationStatus == 0 && probePrinted == expectedResources,
+        "the helper must resolve the host app's Contents/Resources, got '\(probePrinted)' exit \(probe.terminationStatus)")
+
 print("Native boundary checks passed")

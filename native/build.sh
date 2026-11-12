@@ -5,6 +5,11 @@ mkdir -p "$ROOT_DIR/.build"
 # Pin the build SDK: the installed 27.0 CLI SDK exposes State macros without its plugin.
 # This is a build dependency only; the executable still targets macOS 14.
 source "$ROOT_DIR/native/sdk.sh"
+# The background helper, compiled on its own (top-level code, no UI) and staged into the app.
+# Built before the test binaries: the boundary tests run it against a synthetic bundle layout.
+xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -O \
+  "$ROOT_DIR/native/helper/HelperMain.swift" \
+  -o "$ROOT_DIR/.build/HubStudioHelper"
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 \
   "$ROOT_DIR/native/ShellCore.swift" "$ROOT_DIR/native/StartupRecovery.swift" "$ROOT_DIR/native/ReleaseNotes.swift" "$ROOT_DIR/tests/native/main.swift" \
   -o "$ROOT_DIR/.build/native-boundary-tests"
@@ -21,7 +26,3 @@ xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -D LIFECYCLE_TESTING
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -O -parse-as-library \
   "$ROOT_DIR"/native/*.swift \
   -o "$ROOT_DIR/.build/StudioHub"
-# The background helper, compiled on its own (top-level code, no UI) and staged into the app.
-xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -O \
-  "$ROOT_DIR/native/helper/HelperMain.swift" \
-  -o "$ROOT_DIR/.build/HubStudioHelper"

@@ -14,17 +14,41 @@ import Darwin
 import Foundation
 
 let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-// .../Contents/Resources/helper/Hub Studio KH Helper.app/Contents/MacOS/Hub Studio KH Helper
-var resources = executable
-for _ in 0..<4 { resources.deleteLastPathComponent() }
 
-let python = resources.appendingPathComponent("runtimes/voice/bin/python3")
-let worker = resources.appendingPathComponent("hub_worker.py")
-guard FileManager.default.isExecutableFile(atPath: python.path),
-      FileManager.default.fileExists(atPath: worker.path) else {
+// The host app keeps `hub_worker.py` beside `runtimes/` in Contents/Resources. Find it by that
+// payload, never by counting parent directories: 0.6.228 counted four, landed on
+// Resources/helper, and shipped a helper that could not start on any Mac.
+func locateResources(from executable: URL) -> URL? {
+    var candidate = executable.deletingLastPathComponent()
+    while candidate.path != "/" && !candidate.path.isEmpty {
+        if FileManager.default.isExecutableFile(
+                atPath: candidate.appendingPathComponent("runtimes/voice/bin/python3").path),
+           FileManager.default.fileExists(atPath: candidate.appendingPathComponent("hub_worker.py").path) {
+            return candidate
+        }
+        candidate.deleteLastPathComponent()
+    }
+    return nil
+}
+
+// Test seam: the native boundary tests stage this binary in a synthetic bundle and ask where it
+// resolved, so the guard is proved against the real launch layout without starting a worker.
+if CommandLine.arguments.contains("--print-resources") {
+    guard let resources = locateResources(from: executable) else {
+        FileHandle.standardError.write(Data("Hub Studio KH Helper: the bundled runtime or hub_worker.py is missing\n".utf8))
+        exit(127)
+    }
+    print(resources.path)
+    exit(0)
+}
+
+guard let resources = locateResources(from: executable) else {
     FileHandle.standardError.write(Data("Hub Studio KH Helper: the bundled runtime or hub_worker.py is missing\n".utf8))
     exit(127)
 }
+
+let python = resources.appendingPathComponent("runtimes/voice/bin/python3")
+let worker = resources.appendingPathComponent("hub_worker.py")
 
 var arguments = Array(CommandLine.arguments.dropFirst())
 if let index = arguments.firstIndex(of: "--parent-pid"), index + 1 < arguments.count {
