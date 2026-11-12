@@ -7,6 +7,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 - The sidebar footer is tidier: Support this app, then one version line with What's New, an icon that checks for updates, and one status line.
 - Models says where installation happens and offers the way there; Chat's message box has a hint and an honest disabled Send; Voices keeps its row actions behind one menu.
 - Escape now closes what it should: it clears both model searches, and in the stop/quit prompts it always picks "keep running" rather than stopping work.
+- The Voice Studio's token prompt and its download-failure message are in-app dialogs now; the browser's own dialogs are silently blocked inside a packaged webview.
 
 ### Technical notes
 
