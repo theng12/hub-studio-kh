@@ -1413,6 +1413,13 @@ struct StudioContent: View {
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
+
+    /// The sidebar's status symbol, read from the same facts as `studio.status`: a Mac with no
+    /// model library is not "connected and fine", and the line beside this symbol says so.
+    private var footerStatusSymbol: String {
+        if studio.configuration.modelsDirectory == nil { return "exclamationmark.circle" }
+        return connected ? "checkmark.circle.fill" : "circle"
+    }
     /// Enough to attempt an authenticated Nodes read. Model-catalog reachability remains the gate
     /// for generation controls; it is not evidence that the fleet roster itself is unavailable.
     private var localServicesReady: Bool { studio.readyURL != nil && !studio.stopping }
@@ -1761,11 +1768,23 @@ struct StudioContent: View {
                         ForEach(section.pages) { page in
                             // "Coming later" pages are reachable but deliberately quieter: they
                             // work, there is just no engine behind them yet.
-                            Label(page.title, systemImage: page.symbol)
-                                .foregroundStyle(section.title == "Coming later" ? Color.secondary : Color.primary)
-                                // An offered update is otherwise only visible on this page.
-                                .badge(page == .connections && workspace.showingUpdateBanner ? Text("Update") : nil)
-                                .tag(page)
+                            // No explicit foreground for the selectable rows: a sidebar List inverts the
+                            // label against the selection fill, and forcing `Color.primary` there made the
+                            // selected row black-on-black in light appearance (found by the page critics,
+                            // 2026-11-12). Only the quieter "Coming later" rows carry a style.
+                            Group {
+                                if section.title == "Coming later" {
+                                    Label(page.title, systemImage: page.symbol).foregroundStyle(.secondary)
+                                } else {
+                                    // No explicit foreground: a sidebar List inverts the label against
+                                    // the selection fill, and forcing `Color.primary` made the selected
+                                    // row black-on-black in light appearance (page critics, 2026-11-12).
+                                    Label(page.title, systemImage: page.symbol)
+                                }
+                            }
+                            // An offered update is otherwise only visible on this page.
+                            .badge(page == .connections && workspace.showingUpdateBanner ? Text("Update") : nil)
+                            .tag(page)
                         }
                     }
                 }
@@ -1804,8 +1823,11 @@ struct StudioContent: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     HStack(alignment: .top, spacing: HubSpace.tight) {
-                        Image(systemName: connected ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(connected ? HubStatus.ok.textColor : Color.secondary)
+                        // The symbol follows the sentence beside it. A green check in front of
+                        // "Choose a model library" read as "this is done" while the line was an
+                        // instruction (page critics, 2026-11-12).
+                        Image(systemName: footerStatusSymbol)
+                            .foregroundStyle(footerStatusSymbol == "checkmark.circle.fill" ? HubStatus.ok.textColor : Color.secondary)
                         Text(studio.status).font(HubType.caption).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
@@ -2252,10 +2274,20 @@ struct StudioContent: View {
                             Button("Clear") { workspace.clearChat() }
                                 .disabled(workspace.chatTurns.isEmpty || workspace.submittingChat)
                         }
-                        TextEditor(text: $workspace.chatPrompt)
-                            .font(HubType.body).padding(HubSpace.s).frame(height: 155)
-                            .overlay(RoundedRectangle(cornerRadius: HubRadius.control).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
-                            .accessibilityLabel("Chat message")
+                        // An empty composer says what it is for (page critic, 2026-11-12): a blank
+                        // box under an empty conversation left the one control unlabelled.
+                        ZStack(alignment: .topLeading) {
+                            if workspace.chatPrompt.isEmpty {
+                                Text("Write a message…").font(HubType.body)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.top, 8).padding(.leading, 5)
+                                    .allowsHitTesting(false)
+                            }
+                            TextEditor(text: $workspace.chatPrompt)
+                                .font(HubType.body).padding(HubSpace.s).frame(height: 155)
+                                .overlay(RoundedRectangle(cornerRadius: HubRadius.control).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                                .accessibilityLabel("Chat message")
+                        }
                         if workspace.submittingChat {
                             VStack(alignment: .leading, spacing: HubSpace.xs) {
                                 if let activity = workspace.chatActivity {
@@ -6031,10 +6063,14 @@ struct StudioContent: View {
             VStack(alignment: .leading, spacing: HubSpace.xs) {
                 HStack(spacing: HubSpace.tight) {
                     Text(voice.name).font(HubType.rowTitle)
-                    Text(voice.language).font(HubType.caption).foregroundStyle(.secondary)
+                    // A language reads as a word, not an ISO code ("en" -> "English"), and "Fleet"
+                    // explains itself on hover (page critic, 2026-11-12).
+                    Text((Locale.current.localizedString(forLanguageCode: voice.language) ?? voice.language).capitalized)
+                        .font(HubType.caption).foregroundStyle(.secondary)
                     Text(voice.genderLabel).font(HubType.caption).foregroundStyle(.secondary)
                     if voice.fleetManaged {
                         StatusBadge(text: "Fleet", status: .info)
+                            .help("This voice came with the fleet and can be used on this Mac.")
                     }
                     ForEach(voice.tagList, id: \.self) { tag in jobTag(tag) }
                 }
@@ -6057,10 +6093,20 @@ struct StudioContent: View {
                 .disabled(!voice.readyForCloning)
                 .help("Use this voice for the next clone")
                 .rowAction()
-                Button("Edit…") { voiceDraft = VoiceDraft(voice: voice); showingVoiceEditor = true }.rowAction()
-                Button("Remove…", role: .destructive) { pendingVoiceDeletion = voice }
-                    .disabled(workspace.savingVoice)
-                    .rowAction()
+                // Editing and removing are secondary to Play/Use: four equal buttons on every row
+                // read as button soup against "one list, fewer buttons" (page critic, 2026-11-12),
+                // so the pair lives behind one overflow control and keeps its destructive role.
+                Menu {
+                    Button("Edit…") { voiceDraft = VoiceDraft(voice: voice); showingVoiceEditor = true }
+                    Button("Remove…", role: .destructive) { pendingVoiceDeletion = voice }
+                        .disabled(workspace.savingVoice)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Edit or remove this voice")
+                .accessibilityLabel("More actions for \(voice.name)")
             }
         }
         .padding(.vertical, HubSpace.s)
@@ -8109,7 +8155,10 @@ struct StudioContent: View {
                 return "Controller"
             }
             let count = nodes.count
-            return "Controller · \(count) \(count == 1 ? "node" : "nodes")"
+            // "Macs", not "nodes": the Overview's job filter also counts "Nodes", meaning Macs that
+            // are running work, and two different node counts on one screen read as a contradiction
+            // (page critic, 2026-11-12). This line counts the Macs on the controller's roster.
+            return "Controller · \(count) Mac\(count == 1 ? "" : "s")"
         case "agent":
             let address = workspace.controllerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = workspace.fleetOverview?.controller?.label
