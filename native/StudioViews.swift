@@ -1818,15 +1818,8 @@ struct StudioContent: View {
                             .font(HubType.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    HStack(alignment: .top, spacing: HubSpace.tight) {
-                        // The symbol follows the sentence beside it. A green check in front of
-                        // "Choose a model library" read as "this is done" while the line was an
-                        // instruction (page critics, 2026-11-12).
-                        Image(systemName: footerStatusSymbol)
-                            .foregroundStyle(footerStatusSymbol == "checkmark.circle.fill" ? HubStatus.ok.textColor : Color.secondary)
-                        Text(studio.status).font(HubType.caption).fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
-                    }
+                    // The single status line is drawn last in the column (owner footer standard,
+                    // 2026-11-12): the version pill and update action sit above it as one row.
                     // The services' actual failure, beside the status it explains, kept whole on
                     // click (owner, 2026-10-28: "can we have it like in a notification icon
                     // somewhere instead?"). It replaces the old full-width top banner.
@@ -1842,37 +1835,71 @@ struct StudioContent: View {
                     // MERGE POINT (feat/remote-startup): one self-contained line. Keep it, and the
                     // `StartupSidebarNote` struct at the end of this file, when merging the footer.
                     StartupSidebarNote(studio: studio)
-                    // The version line carries the display name the operator approved for this
-                    // release; What's New sits beside it and opens the same notes page the
-                    // menu-bar item already reaches — no second notes source.
-                    HStack(alignment: .firstTextBaseline, spacing: HubSpace.tight) {
-                        Text("Hub Studio KH \(appVersion)")
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .accessibilityLabel("Hub Studio KH version \(appVersion)")
-                        Button("What's New") { studio.select(.whatsNew) }
-                            .buttonStyle(.link)
-                            .font(HubType.caption)
-                            .help("Show the release notes for this build.")
-                    }
-                    // The owner asked for this where the version is read: a Mac away from the
-                    // controller should not have to wait ten minutes for the next silent check.
+                    // Owner footer standard (2026-11-12), in order: Support row, one-line version +
+                    // What's New pill, icon-only Check for Updates, then the single status line,
+                    // with equal insets and even rhythm. Optional and non-blocking throughout.
                     Button {
-                        Task { await workspace.checkForUpdateNow() }
-                    } label: {
-                        if workspace.manualUpdateChecking {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            Text("Check for update now")
+                        if let url = URL(string: "https://nowpayments.io/donation/studiokh") {
+                            NSWorkspace.shared.open(url)
                         }
+                    } label: {
+                        Label("Support this app", systemImage: "heart")
+                            .font(HubType.caption)
                     }
                     .buttonStyle(.link)
-                    .font(HubType.caption)
-                    .disabled(!connected || workspace.manualUpdateChecking || workspace.installingRelease)
-                    .help("Ask the controller now whether a newer release is held. With work running, it updates when that work finishes.")
+                    .help("Open the donation page in your browser.")
+                    .accessibilityLabel("Support this app")
+                    HStack(alignment: .center, spacing: HubSpace.s) {
+                        // One line, never wrapped: a long name truncates inside the pill.
+                        HStack(spacing: HubSpace.tight) {
+                            Text("Hub Studio KH \(appVersion)")
+                                .font(HubType.caption).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                                .textSelection(.enabled)
+                                .accessibilityLabel("Hub Studio KH version \(appVersion)")
+                            Button("What's New") { studio.select(.whatsNew) }
+                                .buttonStyle(.plain)
+                                .font(HubType.caption)
+                                .foregroundStyle(HubStatus.info.textColor)
+                                .help("Show the release notes for this build.")
+                        }
+                        .lineLimit(1)
+                        .padding(.horizontal, HubSpace.s).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                        // Icon-only by the owner's standard; the words live in the hover text.
+                        Button {
+                            Task { await workspace.checkForUpdateNow() }
+                        } label: {
+                            if workspace.manualUpdateChecking {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(!connected || workspace.manualUpdateChecking || workspace.installingRelease)
+                        .help("Check for Updates — ask the controller now whether a newer release is held. With work running, it updates when that work finishes.")
+                        .accessibilityLabel("Check for Updates")
+                        if workspace.showingUpdateBanner {
+                            Image(systemName: "arrow.down.circle")
+                                .font(.system(size: 12))
+                                .foregroundStyle(HubStatus.info.textColor)
+                                .help("A newer release is available on the controller.")
+                                .accessibilityLabel("A newer release is available")
+                        }
+                        Spacer(minLength: 0)
+                    }
                     if let note = workspace.manualUpdateNote {
                         Text(note).font(HubType.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    // The single status line, last in the column (owner footer standard, 2026-11-12).
+                    HStack(alignment: .top, spacing: HubSpace.tight) {
+                        Image(systemName: footerStatusSymbol)
+                            .foregroundStyle(footerStatusSymbol == "checkmark.circle.fill" ? HubStatus.ok.textColor : Color.secondary)
+                        Text(studio.status).font(HubType.caption).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
                     }
             }
             .padding(HubSpace.l)
