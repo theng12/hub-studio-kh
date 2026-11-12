@@ -5179,6 +5179,7 @@ struct StudioContent: View {
                 sectionTitle("Every other model")
                 Spacer(minLength: HubSpace.m)
                 TextField("Search models", text: $setupSearch).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                    .onExitCommand { setupSearch = "" }
             }
             ForEach(plan.groups) { group in
                 let rows = group.models.filter { setupSearch.isEmpty || $0.label.localizedCaseInsensitiveContains(setupSearch) || $0.id.localizedCaseInsensitiveContains(setupSearch) }
@@ -5248,6 +5249,7 @@ struct StudioContent: View {
             if !connected { setup }
             HStack(spacing: HubSpace.m) {
                 TextField("Search models", text: $modelSearch).textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                    .onExitCommand { modelSearch = "" }
                 Toggle("Installed only", isOn: $installedOnly).toggleStyle(.checkbox)
                 Spacer(minLength: HubSpace.xl)
                 // The page lists what is installed; the install itself happens in the preset picker.

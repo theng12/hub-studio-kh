@@ -729,7 +729,7 @@ final class StudioController: ObservableObject {
         let alert = NSAlert()
         alert.messageText = "The local services are still stopping"
         alert.informativeText = "You can keep waiting or force it to stop. Force Stop may leave an incomplete output or download; it will not restart the job."
-        alert.addButton(withTitle: "Keep Waiting")
+        alert.addButton(withTitle: "Keep Waiting").keyEquivalent = "\u{1b}"  // Esc keeps running
         alert.addButton(withTitle: "Force Stop")
         if alert.runModal() == .alertSecondButtonReturn { forceStop() }
     }
@@ -746,7 +746,7 @@ final class StudioController: ObservableObject {
         let alert = NSAlert()
         alert.messageText = "Stop the local services?"
         alert.informativeText = "Active generation, transcription, or model downloads may be interrupted. Leave the engine running to finish them."
-        alert.addButton(withTitle: "Keep Running")
+        alert.addButton(withTitle: "Keep Running").keyEquivalent = "\u{1b}"  // Esc keeps running
         alert.addButton(withTitle: "Stop Engine")
         if alert.runModal() == .alertSecondButtonReturn { stop() }
     }
@@ -1138,7 +1138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let alert = NSAlert()
         alert.messageText = "Quit Hub Studio KH and stop its engine?"
         alert.informativeText = "Active generation, transcription, or downloads may be interrupted. Close the window to keep working in the background."
-        alert.addButton(withTitle: "Keep Running")
+        alert.addButton(withTitle: "Keep Running").keyEquivalent = "\u{1b}"  // Esc keeps running
         alert.addButton(withTitle: "Quit and Stop")
         return alert.runModal() == .alertSecondButtonReturn
     }
