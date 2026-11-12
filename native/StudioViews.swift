@@ -1816,7 +1816,9 @@ struct StudioContent: View {
                     if !generatorSummary.isEmpty, windowHeight >= 760 {
                         Text(generatorSummary)
                             .font(HubType.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                            // One line: wrapping left a dangling "·" at the line end (footer
+                            // critic, 2026-11-13).
+                            .lineLimit(1).truncationMode(.tail)
                     }
                     // The single status line is drawn last in the column (owner footer standard,
                     // 2026-11-12): the version pill and update action sit above it as one row.
@@ -1852,9 +1854,15 @@ struct StudioContent: View {
                     HStack(alignment: .center, spacing: HubSpace.s) {
                         // One line, never wrapped: a long name truncates inside the pill.
                         HStack(spacing: HubSpace.tight) {
-                            Text("Hub Studio KH \(appVersion)")
+                            // The version must survive a narrow sidebar; the product name is what
+                            // truncates, so a long dev channel string cannot eat the number (page
+                            // critic, 2026-11-13: the pill read "Hub....opment").
+                            Text("Hub Studio KH")
                                 .font(HubType.caption).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle)
+                                .lineLimit(1).truncationMode(.tail)
+                            Text(appVersion)
+                                .font(HubType.caption).foregroundStyle(.secondary)
+                                .lineLimit(1).fixedSize()
                                 .textSelection(.enabled)
                                 .accessibilityLabel("Hub Studio KH version \(appVersion)")
                             Button("What's New") { studio.select(.whatsNew) }
@@ -8233,7 +8241,9 @@ struct StudioContent: View {
             // "Macs", not "nodes": the Overview's job filter also counts "Nodes", meaning Macs that
             // are running work, and two different node counts on one screen read as a contradiction
             // (page critic, 2026-11-12). This line counts the Macs on the controller's roster.
-            return "Controller · \(count) Mac\(count == 1 ? "" : "s")"
+            // The role pill already says Controller; repeating it here was the owner's
+            // "nothing repeats itself" failure (footer critic, 2026-11-13).
+            return "\(count) Mac\(count == 1 ? "" : "s")"
         case "agent":
             let address = workspace.controllerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = workspace.fleetOverview?.controller?.label
