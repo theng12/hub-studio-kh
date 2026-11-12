@@ -11517,14 +11517,19 @@ final class NativeWorkspaceStore: ObservableObject {
             note(.failure, "Type the controller's address first, then test it.")
             return
         }
+        // Name the address actually tried, not the raw text: a bare "100.64.0.5" becomes
+        // http://100.64.0.5:47873, and an error that echoes only the typing hides that (owner
+        // rule, 2026-11-13: connection fields take what the owner types).
+        let target: URL
+        do { target = try Self.privateHTTPAddress(trimmed) }
+        catch { note(.failure, Self.describe(error)); return }
         do {
-            let target = try Self.privateHTTPAddress(trimmed)
             var request = URLRequest(url: target.appendingPathComponent("api/health"))
             request.timeoutInterval = 10
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
-                note(.failure, "\(trimmed) answered, but not like a Hub.")
+                note(.failure, "\(target.absoluteString) answered, but not like a Hub.")
                 return
             }
             let body = (String(data: data, encoding: .utf8) ?? "")
@@ -11533,11 +11538,11 @@ final class NativeWorkspaceStore: ObservableObject {
                 note(.success, "Reached the controller at \(target.host ?? trimmed):"
                      + "\(target.port ?? 0) — HTTP \(http.statusCode). \(body.prefix(160))")
             } else {
-                note(.failure, "\(trimmed) answered HTTP \(http.statusCode), which is not a "
+                note(.failure, "\(target.absoluteString) answered HTTP \(http.statusCode), which is not a "
                      + "Hub answering its health check. \(body.prefix(160))")
             }
         } catch {
-            note(.failure, "Could not reach \(trimmed). \(Self.describe(error))")
+            note(.failure, "Could not reach \(target.absoluteString). \(Self.describe(error))")
         }
     }
 
