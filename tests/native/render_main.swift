@@ -834,7 +834,7 @@ struct PageRenderHarness {
             ("Hana", "ja", "f", false, 19.0), ("Brightwater (narrator)", "en", "m", true, 120.4),
         ].enumerated().map { index, row in
             decode(NativeVoice.self, """
-                {"id":"voice-\(index)","name":"\(row.0)","language":"\(row.1)","gender":"\(row.2)","notes":"\(voiceNotes[index])","tags":\(voiceTags[index].map { "\"\($0)\"" }.joined(separator: ",", prefix: "[", suffix: "]")),
+                {"id":"voice-\(index)","name":"\(row.0)","language":"\(row.1)","gender":"\(row.2)","notes":"\(voiceNotes[index])","tags":[\(voiceTags[index].map { "\"\($0)\"" }.joined(separator: ","))],
                  "license":"self-owned","permission_acknowledged":true,"has_transcript":\(row.3),"transcript":\(row.3 ? "\"The quick brown fox jumps over the lazy dog.\"" : "null"),
                  "audio_extension":"wav","duration_seconds":\(row.4),"sample_rate":24000,"channels":1,"fleet_managed":\(index % 2 == 0)}
                 """)
