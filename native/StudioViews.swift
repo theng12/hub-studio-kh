@@ -2133,6 +2133,7 @@ struct StudioContent: View {
         // The same count the All filter shows, so the line and the tab cannot disagree.
         let running = overviewActiveCounts[.all] ?? 0
         var parts = ["Hub running", "\(installed) models installed"]
+        if workspace.workPolicy?.machineEnabled == false { parts.append("local work paused") }
         parts.append(running == 0 ? "no jobs active" : "\(running) jobs active")
         if !activeDownloads.isEmpty {
             parts.append("\(activeDownloads.count) downloading")

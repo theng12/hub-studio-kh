@@ -8889,9 +8889,12 @@ final class NativeWorkspaceStore: ObservableObject {
 
     /// Open Studio Launcher KH, the one updater on this Mac (owner rule, 2026-11-13).
     static func openStudioLauncher() {
-        let bundle = URL(fileURLWithPath: "/Applications/Studio Launcher KH.app")
+        // Identity is the bundle ID, not a path; the launcher may live anywhere Launch Services
+        // knows it. Only if it is unregistered do we try the conventional /Applications location.
+        let bundle = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.khupdater.launcher")
+            ?? URL(fileURLWithPath: "/Applications/Studio Launcher KH.app")
         let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
+        configuration.activates = true
         NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { _, error in
             if let error {
                 FileHandle.standardError.write(Data("could not open Studio Launcher KH: \(error)\n".utf8))
