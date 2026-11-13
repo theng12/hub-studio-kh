@@ -1872,12 +1872,13 @@ struct StudioContent: View {
                                              : (footerStatusSymbol == "pause.circle.fill" ? HubStatus.warn.textColor : Color.secondary))
                         let role = roleTitle(workspace.controllerIdentity?.settings.role)
                         let paused = localServicesReady && workspace.workPolicy?.machineEnabled == false
+                        // One short line at 220 pt; role, machine and group are in the tooltip.
                         let line = localServicesReady
-                            ? "\(role) · Hub running\(paused ? " · paused" : "")"
-                            : (testMachine ? "\(role) · Test machine · off" : "\(role) · \(studio.status)")
+                            ? (paused ? "Hub running · paused" : "Hub running")
+                            : (testMachine ? "Test machine · off" : studio.status)
                         Text(line)
                             .font(HubType.caption).fixedSize(horizontal: false, vertical: true)
-                            .help("\(thisMachineName) · \(groupLine)")
+                            .help("\(role) · \(thisMachineName) · \(groupLine)")
                         Spacer(minLength: 0)
                     }
             }
@@ -8145,15 +8146,16 @@ struct StudioContent: View {
 
     /// Counts the rows the table draws, this Mac included, so the sentence and the table agree.
     private func countsLine(_ rows: [NativeFleetRow]) -> String {
-        // The status line already says how many are reachable; this sentence carries the exceptions.
-        var line = "Every Mac in the group is listed below"
+        // The status line says how many are reachable and poolSummary says the list is below; this
+        // sentence carries only the exceptions.
+        var parts: [String] = []
         if let fleet = workspace.fleetNodes {
             if let refused = fleet.summary.unauthorized, refused > 0 {
-                line += " · \(refused) refused this controller's credential"
+                parts.append("\(refused) refused this controller's credential")
             }
-            if fleet.summary.error > 0 { line += " · \(fleet.summary.error) answered with an error" }
+            if fleet.summary.error > 0 { parts.append("\(fleet.summary.error) answered with an error") }
         }
-        return line + "."
+        return parts.isEmpty ? "Every Mac answered." : parts.joined(separator: " · ") + "."
     }
 
     private func nodeTable(_ rows: [NativeFleetRow]) -> some View {

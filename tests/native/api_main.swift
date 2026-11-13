@@ -4816,9 +4816,10 @@ struct NativeAPITests {
 
         // B29: the display and aggregation lists are derived, so a Studio cannot be missing from
         // the sidebar, the status line or the history tabs.
-        let engineFunctions = StudioFunction.allCases.filter { $0.hasEngine }
+        // Video's lane is retired: its page and Jobs history stay, but it is not navigation.
+        let engineFunctions = StudioFunction.allCases.filter { $0.hasEngine && $0 != .video }
         require(Set(StudioPage.create.compactMap { $0.function }) == Set(engineFunctions),
-                "every Studio with an engine must have a Create page, got: \(StudioPage.create)")
+                "every live Studio with an engine must have a Create page, got: \(StudioPage.create)")
         require(StudioPage.comingLater.allSatisfy { $0.function?.hasEngine == false },
                 "the Coming later section must hold exactly the Studios with no engine")
         require(Set(StudioFunction.allCases.map { StudioPage.page(for: $0) }) == Set(StudioFunction.allCases.map { Optional(StudioPage(rawValue: $0.rawValue)) }),
