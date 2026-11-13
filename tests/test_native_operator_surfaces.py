@@ -122,41 +122,20 @@ class ConfirmationTests(unittest.TestCase):
         # the dry run, and the editor's own copy has grown twice (both stages now name days and GB).
         self.assertIn("storageWouldDelete(", body(VIEWS, "private var storageEditor", 4200))
 
-    def test_installing_asks_when_work_is_active(self):
-        install = body(VIEWS, 'Button(workspace.installingRelease ? "Installing…" : "Install")', 700)
-        self.assertIn("workspace.activeWorkCount > 0", install)
-        self.assertIn("confirmingInstall = true", install)
+class RetiredSelfUpdateTests(unittest.TestCase):
+    def test_the_app_carries_no_self_update_machinery(self):
+        for gone in ("releaseTick", "refreshRelease", "checkForUpdateNow", "installOfferedRelease",
+                     "installVerifiedArtifact", "releasePublisherKey", "offeredRelease",
+                     "showingUpdateBanner", "manualUpdateNote", "updateStatusLine", "relaunchAfterUpdate",
+                     "RelaunchHelper", "changePublisherKey", "ReleaseInstaller"):
+            self.assertNotIn(gone, VIEWS + API + HUB, gone)
+        self.assertFalse((ROOT / "native" / "UpdateClient.swift").exists(),
+                         "the in-app update client is retired")
 
-
-class UpdateTests(unittest.TestCase):
-    def test_install_work_runs_off_the_main_actor(self):
-        install = body(API, "func installOfferedRelease(", 5200)
-        self.assertIn("Task.detached", install)
-        self.assertNotIn("try installVerifiedArtifact(", install)
-        self.assertNotIn("try Self.verifyArtifactFile(", install, "hashing a 2 GB image on the main actor froze the window")
-        self.assertNotIn("try Self.verifyArtifactFile(", body(API, "private func downloadReleaseArtifact", 4200))
-
-    def test_an_idle_mac_of_either_role_updates_itself_and_only_when_idle(self):
-        # 0.6.114 let only a joined node do this and left controllers to a button; the unified
-        # update extends it to controllers once they are drained. Role is no longer a condition.
-        tick = body(API, "func releaseTick(", 2600)
-        self.assertNotIn("settings.role", tick, "a controller updates itself when drained too")
-        self.assertIn("activeWorkCount == 0", tick)
-        self.assertIn("releasePublisherKey != nil", tick, "this must never be the read that pins a key")
-
-    def test_an_old_uncertain_job_does_not_block_updating_for_ever(self):
-        count = body(API, "func countActiveWork(", 1400)
-        self.assertIn('job.state == "uncertain"', count)
-        self.assertIn("deadlineSeconds", count)
-
-    def test_an_update_relaunches_the_app_without_the_quit_prompt(self):
-        self.assertIn("onRelaunchRequested", HUB)
-        relaunch = body(HUB, "func relaunchAfterUpdate()", 1200)
-        self.assertIn("relaunching = true", relaunch)
-        self.assertIn("if relaunching { stopThenQuit()", HUB)
-
-    def test_the_sidebar_badges_an_offered_update(self):
-        self.assertIn('.badge(page == .connections && workspace.showingUpdateBanner ? Text("Update") : nil)', VIEWS)
+    def test_the_footer_control_opens_the_launcher_with_the_one_sentence(self):
+        self.assertIn("NativeWorkspaceStore.openStudioLauncher()", VIEWS)
+        self.assertIn('"Updates are installed by Studio Launcher KH."', VIEWS)
+        self.assertNotIn("Check for Updates", VIEWS)
 
 
 class PollCostTests(unittest.TestCase):

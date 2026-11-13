@@ -1355,7 +1355,6 @@ struct StudioContent: View {
     @State private var confirmingFleetReset = false
     @State private var confirmingRotation = false
     @State private var confirmingHandover = false
-    @State private var confirmingInstall = false
     @State private var confirmingRestoreStorage = false
     /// The Trash Folder's contents are moved to macOS Trash only after this confirmation names the
     /// item count and bytes; macOS Trash still holds them, so it is recoverable, not a delete.
@@ -1391,12 +1390,6 @@ struct StudioContent: View {
     @StateObject private var videoThumbnails = VideoThumbnailStore()
     /// The uncertain job the operator asked to discard, held until they confirm.
     @State private var pendingDiscard: PendingDiscard?
-    /// The gateway public key being pasted, and its optional label. Kept as plain text so the
-    /// operator can read back exactly what they pasted before confirming.
-    @State private var publisherKeyDraft = ""
-    @State private var publisherIdDraft = ""
-    /// Set while the confirmation dialog is up. The key is not sent until the operator confirms.
-    @State private var confirmingPublisherKeyChange = false
     /// A sample is seeded into an empty prompt the first time a studio is opened, so a brand-new
     /// user has something to press Generate on. The flag keeps it from refilling a field the
     /// operator deliberately cleared.
@@ -1784,8 +1777,6 @@ struct StudioContent: View {
                             // 2026-11-12). Only the quieter "Coming later" rows carry a style.
                             Label(page.title, systemImage: page.symbol)
                                 .foregroundStyle(section.title == "Coming later" ? Color.secondary : Color.primary)
-                                // An offered update is otherwise only visible on this page.
-                                .badge(page == .connections && workspace.showingUpdateBanner ? Text("Update") : nil)
                                 .tag(page)
                         }
                     }
@@ -1832,10 +1823,6 @@ struct StudioContent: View {
                     // click (owner, 2026-10-28: "can we have it like in a notification icon
                     // somewhere instead?"). It replaces the old full-width top banner.
                     StartupFailureIcon(detail: studio.failure) { studio.failure = nil }
-                    if let updating = workspace.updateStatusLine {
-                        Text(updating).font(HubType.caption).foregroundStyle(HubStatus.info.textColor)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                     // A Studio that has stopped answering, beside the status it belongs to - not
                     // across the top of every page (owner, 2026-10-28). It names the Studio and
                     // clears itself the moment the Studio answers.
@@ -1843,8 +1830,8 @@ struct StudioContent: View {
                     // MERGE POINT (feat/remote-startup): one self-contained line. Keep it, and the
                     // `StartupSidebarNote` struct at the end of this file, when merging the footer.
                     StartupSidebarNote(studio: studio)
-                    // Owner footer standard (2026-11-12), in order: Support row, one-line version +
-                    // What's New pill, icon-only Check for Updates, then the single status line,
+                    // Owner footer standard (2026-11-12), in order: Support row, one-line version,
+                    // the What's New pill, the icon-only Launcher control, then the single status line,
                     // with equal insets and even rhythm. Optional and non-blocking throughout.
                     Button {
                         if let url = URL(string: "https://nowpayments.io/donation/studiokh") {
@@ -1878,26 +1865,14 @@ struct StudioContent: View {
                         .fixedSize()
                         // Icon-only by the owner's standard; the words live in the hover text.
                         Button {
-                            Task { await workspace.checkForUpdateNow() }
+                            NativeWorkspaceStore.openStudioLauncher()
                         } label: {
-                            if workspace.manualUpdateChecking {
-                                ProgressView().controlSize(.mini)
-                            } else {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.system(size: 12, weight: .medium))
-                            }
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 12, weight: .medium))
                         }
                         .buttonStyle(.borderless)
-                        .disabled(!connected || workspace.manualUpdateChecking || workspace.installingRelease)
-                        .help("Check for Updates — ask the controller now whether a newer release is held. With work running, it updates when that work finishes.")
-                        .accessibilityLabel("Check for Updates")
-                        if workspace.showingUpdateBanner {
-                            Image(systemName: "arrow.down.circle")
-                                .font(.system(size: 12))
-                                .foregroundStyle(HubStatus.info.textColor)
-                                .help("A newer release is available on the controller.")
-                                .accessibilityLabel("A newer release is available")
-                        }
+                        .help("Updates are installed by Studio Launcher KH.")
+                        .accessibilityLabel("Updates are installed by Studio Launcher KH.")
                         Spacer(minLength: 0)
                     }
                     // What's New keeps its own line: at the sidebar's width a single pill cannot
@@ -1907,10 +1882,6 @@ struct StudioContent: View {
                         .buttonStyle(.link)
                         .font(HubType.caption)
                         .help("Show the release notes for this build.")
-                    if let note = workspace.manualUpdateNote {
-                        Text(note).font(HubType.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                     // The single status line, last in the column (owner footer standard, 2026-11-12).
                     HStack(alignment: .top, spacing: HubSpace.tight) {
                         Image(systemName: footerStatusSymbol)
@@ -1994,26 +1965,6 @@ struct StudioContent: View {
                 Button("Keep", role: .cancel) { pendingDiscard = nil }
             } message: { _ in
                 Text("This is you declaring the attempt abandoned. The Hub will stop waiting for it, will not try to reconcile it again, and this Mac is released for new work. Any result the original worker may still produce is ignored.")
-            }
-        // Changing the trusted publisher key decides which Macs may update this Mac, so it is a
-        // confirmation like discarding an attempt: the action is spelled out and the cost is named.
-        .confirmationDialog(
-            "Change the trusted App Update Key?",
-            isPresented: $confirmingPublisherKeyChange,
-            titleVisibility: .visible) {
-                Button("Change App Update Key", role: .destructive) {
-                    let key = publisherKeyDraft
-                    let publisher = publisherIdDraft
-                    Task {
-                        if await workspace.changePublisherKey(publicKey: key, publisherId: publisher) {
-                            publisherKeyDraft = ""
-                            publisherIdDraft = ""
-                        }
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This changes which Macs are allowed to update this Mac. A wrong key means releases will be refused, and putting the right key back requires the owner to paste it on this Mac again.")
             }
     }
 
@@ -6555,7 +6506,6 @@ struct StudioContent: View {
         PageScaffold(title: pageTitle(.connections),
                      subtitle: "Local creation works independently. Connecting a controller is optional.",
                      scrolls: true) {
-            releaseUpdateSection
             fleetSection
             appUpdatesSection
             localAPI
@@ -6569,204 +6519,15 @@ struct StudioContent: View {
     /// It never installs silently or on a timer: the operator presses Install, and the text says
     /// plainly that the local services restart and running work stops. A release that cannot be
     /// verified against the key already pinned on this Mac is shown without an Install button.
-    @ViewBuilder private var releaseUpdateSection: some View {
-        if workspace.showingUpdateBanner, let release = workspace.offeredRelease {
-            VStack(alignment: .leading, spacing: HubSpace.s) {
-                HStack(alignment: .top, spacing: HubSpace.m) {
-                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(HubStatus.info.color)
-                    VStack(alignment: .leading, spacing: HubSpace.xs) {
-                        Text("Update available — \(release.version) (\(release.build))")
-                            .font(HubType.rowTitle)
-                        Text("\(release.sizeDisplay) · controller App Update Key (fingerprint) \(release.shortSigner)… · from \(release.publisherId)")
-                            .font(HubType.secondary).foregroundStyle(.secondary)
-                        Text("Installing replaces this app and relaunches it. Any work running right now will stop.")
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if let progress = workspace.releaseProgress {
-                            Text(progress).font(HubType.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer(minLength: 8)
-                    // Installing relaunches the app. With nothing running that is just the press; with
-                    // work active it says how much will stop first.
-                    Button(workspace.installingRelease ? "Installing…" : "Install") {
-                        if workspace.activeWorkCount > 0 { confirmingInstall = true }
-                        else { Task { await workspace.installOfferedRelease() } }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(workspace.installingRelease)
-                    .confirmationDialog(
-                        "Install \(release.version) and relaunch?",
-                        isPresented: $confirmingInstall, titleVisibility: .visible) {
-                            Button("Install and Relaunch", role: .destructive) {
-                                Task { await workspace.installOfferedRelease() }
-                            }
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            let count = workspace.activeWorkCount
-                            Text("\(count) job\(count == 1 ? " is" : "s are") still running or waiting on this Mac. Installing relaunches Hub Studio KH and stops \(count == 1 ? "it" : "them").")
-                        }
-                    Button("Dismiss") { workspace.dismissOfferedRelease() }
-                        .disabled(workspace.installingRelease)
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(HubStatus.info.color.opacity(0.10), in: RoundedRectangle(cornerRadius: HubRadius.card))
-            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubStatus.info.color.opacity(0.35)))
-        } else if workspace.offeredReleaseIsOlder, let release = workspace.offeredRelease {
-            // A stale controller must not be able to roll this Mac backwards, so this is shown as
-            // its own state — not a verification failure — and carries no Install button.
-            HStack(alignment: .top, spacing: HubSpace.m) {
-                Image(systemName: "arrow.down.circle").foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: HubSpace.tight) {
-                    Text("Older release available — this Mac is on a newer version")
-                        .font(HubType.rowTitle)
-                    Text("The controller holds \(release.version) (\(release.build)), older than the \(workspace.currentAppVersion ?? "newer") version installed here. It is not offered, so a stale controller cannot roll this Mac backwards.")
-                        .font(HubType.secondary).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(HubStatus.off.color.opacity(0.10), in: RoundedRectangle(cornerRadius: HubRadius.card))
-            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubStatus.off.color.opacity(0.35)))
-        } else if let refusal = workspace.releaseRefusal {
-            HStack(alignment: .top, spacing: HubSpace.m) {
-                Image(systemName: "lock.trianglebadge.exclamationmark.fill").foregroundStyle(HubStatus.warn.color)
-                VStack(alignment: .leading, spacing: HubSpace.tight) {
-                    Text("Update cannot be verified").font(HubType.rowTitle)
-                    Text(refusal).font(HubType.secondary).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Check Again") { Task { await workspace.refreshRelease() } }
-                        .disabled(workspace.installingRelease)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(HubStatus.warn.color.opacity(0.12), in: RoundedRectangle(cornerRadius: HubRadius.card))
-            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubStatus.warn.color.opacity(0.35)))
-        }
-    }
-
-    /// The owner's front door to the gateway key this Mac trusts for app releases.
-    ///
-    /// Two fingerprints are shown, and the difference matters: this Mac's own publisher key is what
-    /// a joining node pins, while the trusted gateway key is what allows GatewayKH to push a
-    /// release here. Only the second is changeable here, and changing it decides which Macs may
-    /// update this Mac, so the button confirms first and says what a wrong key costs.
+    /// Where updates come from now: one sentence, and nothing in this app installs one.
     @ViewBuilder private var appUpdatesSection: some View {
         HubSection("App updates") {
-            HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
-                Button(workspace.manualUpdateChecking ? "Checking…" : "Check for update now") {
-                    Task { await workspace.checkForUpdateNow() }
-                }
-                .disabled(!connected || workspace.manualUpdateChecking || workspace.installingRelease)
-                if let note = workspace.manualUpdateNote {
-                    Text(note).font(HubType.secondary).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Divider()
-            publisherIdentityRow
-            Divider()
-            trustedPublisherRow
-            Divider()
-            publisherKeyControl
+            Text("Updates are installed by Studio Launcher KH.")
+                .font(HubType.secondary).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    /// This controller's own release-signing key: the fingerprint a joining node pins.
-    @ViewBuilder private var publisherIdentityRow: some View {
-        VStack(alignment: .leading, spacing: HubSpace.xs) {
-            Text("This Mac's App Update Key").font(HubType.rowTitle)
-            if let identity = workspace.controllerReleaseIdentity {
-                ValueRow("App Update Key (fingerprint)") {
-                    Text(identity.fingerprint)
-                        .font(HubType.mono)
-                        .textSelection(.enabled)
-                        .multilineTextAlignment(.trailing)
-                }
-                ValueRow("Algorithm", value: identity.algorithm)
-                // Say what the key actually does (Gateway lead, 2026-11-13): it signs Hub and Story
-                // release artifacts published through Gateway, and it is not how this app updates.
-                Text("This Ed25519 key signs the Hub and Story release artifacts that Gateway publishes. A Mac that joins this one pins the fingerprint, so it accepts releases signed by this key — it does not install updates here: Studio Launcher KH does that.")
-                    .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text(connected
-                     ? "This Mac's App Update Key is unavailable until the services refresh."
-                     : "Start the local services to read this Mac's App Update Key.")
-                    .font(HubType.secondary).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    /// The gateway key the owner has installed, or plainly that none is installed.
-    @ViewBuilder private var trustedPublisherRow: some View {
-        VStack(alignment: .leading, spacing: HubSpace.xs) {
-            Text("Trusted Gateway App Update Key").font(HubType.rowTitle)
-            if workspace.trustedPublisher?.installedFingerprint != nil {
-                // The key's own first characters, not the fingerprint. A fingerprint is 64 hex
-                // characters too, so pasting one into the key field is accepted and then refuses
-                // every release silently (the Mac 1607 wedged on 0.6.181 for days). Showing the
-                // stored *key* is what lets the operator see that mistake on this screen.
-                ValueRow("App Update Key") {
-                    Text(workspace.trustedPublisher?.keyPrefix.map { "\($0)…" } ?? "installed")
-                        .font(HubType.mono)
-                        .textSelection(.enabled)
-                        .multilineTextAlignment(.trailing)
-                }
-                if let publisher = workspace.trustedPublisher?.publisherId {
-                    ValueRow("Publisher", value: publisher)
-                }
-                Text("A release pushed by GatewayKH is accepted only when it is signed by this App Update Key.")
-                    .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text("No App Update Key installed yet — this Mac cannot accept an app release.")
-                    .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            // A Mac whose updates are being refused names its own fault here, on the screen that
-            // configures updates, instead of looking merely out of date.
-            if let refusal = workspace.releaseLastSync?.refusal {
-                Text("Updates refused: \(refusal)")
-                    .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
-                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-            }
-        }
-    }
-
-    /// Paste a replacement key. The button confirms before anything is sent, and an empty field is
-    /// refused with a message rather than a request.
-    @ViewBuilder private var publisherKeyControl: some View {
-        VStack(alignment: .leading, spacing: HubSpace.s) {
-            Text("Change App Update Key").font(HubType.rowTitle)
-            HStack {
-                TextField("Paste the key from Gateway → Settings → App Update Key", text: $publisherKeyDraft)
-                    .textFieldStyle(.roundedBorder).frame(maxWidth: 360)
-                    .font(HubType.mono)
-                TextField("Publisher id (optional)", text: $publisherIdDraft)
-                    .textFieldStyle(.roundedBorder).frame(maxWidth: 220)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
-                Button("Change App Update Key") {
-                    // An empty paste has nothing to confirm: refuse it with the same clear message
-                    // the store gives, and never send the route.
-                    if publisherKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Task { _ = await workspace.changePublisherKey(publicKey: publisherKeyDraft,
-                                                                     publisherId: publisherIdDraft) }
-                    } else {
-                        confirmingPublisherKeyChange = true
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!connected)
-                Text("Paste the key from Gateway → Settings → App Update Key (starts with e6b9eece on this fleet). 64 hex characters (either case) or standard base64 — the Public key itself, never the fingerprint printed beside it.")
-                    .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
 
     /// ST-10.2 — the private address, the identity behind it, and the credential, with the
     /// secret masked until the operator reveals or copies it.

@@ -3263,174 +3263,6 @@ private final class RejectRedirects: NSObject, URLSessionTaskDelegate {
     }
 }
 
-/// Streams one ranged artifact download to a file, appending to an existing fragment when the
-/// controller honours Range.
-///
-/// URLSession's async byte sequence yields one byte at a time, which is useless for a gigabyte
-/// image, so this holds its own session and data-task delegate and writes each received chunk
-/// straight to disk. It leaves the file in place on every failure: the caller resumes from its
-/// length, or discards it when it proves not to be the signed artifact.
-private final class ResumableArtifactDownloader: NSObject, URLSessionDataDelegate {
-    private let configuration: URLSessionConfiguration
-    private let destination: URL
-    private let startingOffset: Int64
-    private let expectedSha256: String
-    private let onProgress: (Int64) -> Void
-
-    private var handle: FileHandle?
-    private var continuation: CheckedContinuation<Int64, Error>?
-    private var failure: Error?
-    private var received: Int64
-    private var lastReported: Int64
-    private var expectedHost: String?
-    private var expectedPort: Int?
-
-    init(configuration: URLSessionConfiguration,
-         destination: URL,
-         startingOffset: Int64,
-         expectedSha256: String,
-         onProgress: @escaping (Int64) -> Void) {
-        self.configuration = configuration
-        self.destination = destination
-        self.startingOffset = startingOffset
-        self.expectedSha256 = expectedSha256
-        self.onProgress = onProgress
-        self.received = startingOffset
-        self.lastReported = startingOffset
-        super.init()
-    }
-
-    /// Download `request` (already carrying a Range header when resuming) and return the number of
-    /// bytes now on disk. Throws with the partial file left in place.
-    func run(_ request: URLRequest) async throws -> Int64 {
-        let configuration = configuration.copy() as! URLSessionConfiguration
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.urlCache = nil
-        expectedHost = request.url?.host
-        expectedPort = request.url?.port
-        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-        return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-            session.dataTask(with: request).resume()
-        }
-    }
-
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
-                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        guard let http = response as? HTTPURLResponse else {
-            failure = ReleaseError("The controller's artifact route returned no HTTP response.")
-            completionHandler(.cancel)
-            return
-        }
-        guard http.url?.host == expectedHost, http.url?.port == expectedPort else {
-            failure = ReleaseError("The controller's artifact route answered from an address this Mac did not ask.")
-            completionHandler(.cancel)
-            return
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            failure = ReleaseError("The controller's artifact route answered HTTP \(http.statusCode). Nothing was installed.")
-            completionHandler(.cancel)
-            return
-        }
-        // The route advertises the digest; the signed descriptor's sha256 stays authoritative and
-        // is checked over the bytes too. A disagreement here is refused all the same.
-        if let announced = http.value(forHTTPHeaderField: "X-Content-SHA256"),
-           announced.lowercased() != expectedSha256 {
-            failure = ReleaseError("The controller's artifact route advertises SHA-256 \(announced), not the signed \(expectedSha256). Nothing was installed.")
-            completionHandler(.cancel)
-            return
-        }
-        do {
-            var resumeAt = received
-            if startingOffset > 0, http.statusCode == 200 {
-                // The server ignored the Range header and is sending the whole artifact, so the
-                // stale fragment is replaced rather than appended to.
-                resumeAt = 0
-                try? FileManager.default.removeItem(at: destination)
-            } else if startingOffset > 0, http.statusCode == 206 {
-                // A 206 must actually start where the fragment ends, or the bytes would land at
-                // the wrong offset in the file.
-                if let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
-                   let start = Self.rangeStart(contentRange), start != received {
-                    try? FileManager.default.removeItem(at: destination)
-                    failure = ReleaseError("The controller answered a range starting at byte \(start), not the \(received) this Mac has. The part-downloaded file was discarded; press Install again.")
-                    completionHandler(.cancel)
-                    return
-                }
-            } else {
-                // Nothing to resume from: start a clean file.
-                try? FileManager.default.removeItem(at: destination)
-            }
-            if !FileManager.default.fileExists(atPath: destination.path) {
-                guard FileManager.default.createFile(atPath: destination.path, contents: nil,
-                                                     attributes: [.posixPermissions: 0o600]) else {
-                    throw ReleaseError("Could not create the private update file.")
-                }
-            }
-            let handle = try FileHandle(forWritingTo: destination)
-            try handle.seekToEnd()
-            // A fragment seeded or left by an earlier attempt must be private too.
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600],
-                                                   ofItemAtPath: destination.path)
-            self.handle = handle
-            received = resumeAt
-            completionHandler(.allow)
-        } catch {
-            failure = error
-            completionHandler(.cancel)
-        }
-    }
-
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        guard let handle else { return }
-        do {
-            try handle.write(contentsOf: data)
-            received += Int64(data.count)
-            // Report at most every 8 MB; a callback per chunk is thousands of main-actor hops.
-            if received - lastReported >= 8 << 20 {
-                lastReported = received
-                onProgress(received)
-            }
-        } catch {
-            failure = ReleaseError("Could not write the update to disk: \(error.localizedDescription)")
-            dataTask.cancel()
-        }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        try? handle?.close()
-        handle = nil
-        let continuation = continuation
-        self.continuation = nil
-        if let failure {
-            continuation?.resume(throwing: failure)
-        } else if let error {
-            let receivedText = ByteCountFormatter.string(fromByteCount: received, countStyle: .file)
-            continuation?.resume(throwing: ReleaseError("The download stopped after \(receivedText): \(error.localizedDescription). The part-downloaded file is kept; press Install again to resume."))
-        } else {
-            continuation?.resume(returning: received)
-        }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask,
-                    willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest,
-                    completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(nil)
-    }
-
-    /// `bytes 1000-4095/4096` -> `1000`.
-    private static func rangeStart(_ contentRange: String) -> Int64? {
-        let trimmed = contentRange.trimmingCharacters(in: .whitespaces)
-        guard trimmed.lowercased().hasPrefix("bytes ") else { return nil }
-        let afterUnit = trimmed.dropFirst("bytes ".count)
-        guard let range = afterUnit.split(separator: "/").first,
-              let start = range.split(separator: "-").first else { return nil }
-        return Int64(start)
-    }
-}
-
 @MainActor
 final class PreviewPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var playing = false
@@ -4062,8 +3894,8 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The last Fleet-token rotation or handover, with each Mac's outcome. Nil until one is run.
     @Published private(set) var fleetOperation: FleetOperationReport?
     @Published private(set) var fleetOperationRunning = false
-    /// Persist or clear the node credential with the membership, the way the pinned release key is
-    /// kept. The app owns the preferences file; the workspace owns the value.
+    /// Persist or clear the node credential with the membership. The app owns the preferences file;
+    /// the workspace owns the value.
     var onNodeCredentialChanged: ((String?) -> Void)?
     /// Called when the Hub's **Fleet token** has been replaced on this Mac — a rotation this Mac
     /// performed, or a leave that minted its own. The page shows that value next to a Copy button,
@@ -4101,9 +3933,6 @@ final class NativeWorkspaceStore: ObservableObject {
         /// This Mac's own node credential, issued by that controller. Part of the membership: the
         /// app persists it beside the address, and a Mac that rejoins after a restart presents it.
         var nodeCredential: String? = nil
-        /// The controller's release key pinned on first read. Part of the membership: it is
-        /// restored with it at startup and cleared when this Mac leaves the group.
-        var releasePublisherKey: ReleasePublisherKey? = nil
     }
     var storedMembership: FleetMembership?
     private var startupMembershipAttemptID: UUID?
@@ -4153,98 +3982,6 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var connectionNotice: ConnectionNotice?
 
     func dismissConnectionNotice() { connectionNotice = nil }
-
-    // MARK: Remote app update
-
-    /// The controller's release-signing key, pinned on this Mac the first time its identity is
-    /// read. Once pinned it is never replaced by a later read: a new key is an explicit act on
-    /// this Mac, not something the network can do. Held with the fleet membership and restored
-    /// from it at startup.
-    @Published private(set) var releasePublisherKey: ReleasePublisherKey?
-    /// The release the controller holds, if any. Shown even when it cannot be installed, so the
-    /// reason is visible rather than the offer silently vanishing.
-    @Published private(set) var offeredRelease: OfferedRelease?
-    /// True only when the release is signed by the pinned controller key, is newer than (or a
-    /// rebuild of) the version installed here, and has an artifact form this Mac can install.
-    @Published private(set) var updateOffered = false
-    /// True when the controller holds a release older than the version installed here. Shown
-    /// distinctly and with no Install button, so a stale controller cannot roll this Mac backwards.
-    @Published private(set) var offeredReleaseIsOlder = false
-    /// Why an offered release cannot be installed, in a sentence the banner shows verbatim.
-    @Published private(set) var releaseRefusal: String?
-    /// True while the artifact is downloading, verifying or being swapped in.
-    @Published private(set) var installingRelease = false
-    /// A one-line progress sentence while `installingRelease` is true.
-    @Published private(set) var releaseProgress: String?
-    /// A verified update is waiting for this Mac to finish its work (unattended install).
-    @Published private(set) var updateWaiting = false
-    /// True while "Check for update now" is asking the controller and reading the answer.
-    @Published private(set) var manualUpdateChecking = false
-    /// The plain-words result of the last manual check: "Up to date (0.6.210)", "Updating to …",
-    /// "Will update when the current work finishes", or why it could not check.
-    @Published private(set) var manualUpdateNote: String?
-    /// This Mac's Hub is refusing NEW work so the running work can finish and the update install:
-    /// the grace period for a natural idle ran out. Running work is never stopped.
-    @Published private(set) var updateDraining = false
-    /// What the sidebar says while an update waits for work to finish.
-    var updateStatusLine: String? { updateWaiting || updateDraining ? "Updating after current work finishes…" : nil }
-    /// How long a Mac with a verified update waits for a natural idle before it stops taking new
-    /// work. Default ten minutes; `defaults write <bundle id> UpdateDrainGraceSeconds -int N` changes it.
-    var updateDrainGrace: TimeInterval = {
-        let value = UserDefaults.standard.double(forKey: "UpdateDrainGraceSeconds")
-        return value > 0 ? value : 600
-    }()
-    private var updatePendingSince: Date?
-    private var drainLease: Task<Void, Never>?
-    /// The build whose banner the operator dismissed. An offer stays dismissed until a different
-    /// build is advertised; nothing installs on a timer.
-    @Published private(set) var dismissedReleaseBuild: String?
-
-    var showingUpdateBanner: Bool {
-        updateOffered && offeredRelease?.build != dismissedReleaseBuild
-    }
-
-    func dismissOfferedRelease() { dismissedReleaseBuild = offeredRelease?.build }
-
-    /// The build this running app was packaged as. Read from the bundle, and writable so the
-    /// contract tests can stand in for a packaged app; a plain CLI has no StudioHubBuild.
-    var currentAppBuild: String? = Bundle.main.object(forInfoDictionaryKey: "StudioHubBuild") as? String
-    /// The product version this running app was packaged as (`CFBundleShortVersionString`), used
-    /// with `currentAppBuild` to order an advertised release against this one. Writable for tests.
-    var currentAppVersion: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-    /// The app bundle an update replaces.
-    var installedAppURL: URL = Bundle.main.bundleURL
-    /// The descriptor behind `offeredRelease`, kept for install so verification runs against the
-    /// same bytes that were offered rather than a second, possibly different, read.
-    private var offeredReleaseDescriptor: ReleaseDescriptor?
-    /// Whether a disk image can be installed for the offered release (`delta.artifact`, read with the
-    /// descriptor). Nil means the Hub did not say, and the install judges it from the signed
-    /// descriptor instead: a manifest push carries `files_sha256` and leaves no image in the chain.
-    private var offeredReleaseHasImage: Bool?
-    /// Persist or clear the pinned key with this Mac's controller membership.
-    var onReleasePublisherKeyChanged: ((ReleasePublisherKey?) -> Void)?
-    /// The controller's own release-signing identity as its route reports it — what a joining node
-    /// pins. Kept apart from `releasePublisherKey`, which is the key already pinned on this Mac.
-    @Published private(set) var controllerReleaseIdentity: ReleaseIdentity?
-    /// The gateway key the owner has installed on this controller, or nil when none is installed.
-    /// Read from `trusted_publisher` on `GET /api/hub/release`; never inferred from a release.
-    @Published private(set) var trustedPublisher: TrustedPublisher?
-    /// What this Mac's last poll of its controller concluded (`last_sync` on the same route), or
-    /// nil when no poll has concluded yet. A refusal names the fault on the App updates screen.
-    @Published private(set) var releaseLastSync: ReleaseSyncStatus?
-    /// The existing restart path, called once, after a verified swap.
-    var onReleaseRestartRequested: (() -> Void)?
-    /// Performs the swap of a verified artifact. Injectable so the download-and-verify path can be
-    /// driven in tests without writing to /Applications.
-    var installVerifiedArtifact: (URL, ReleaseDescriptor) throws -> String = ReleaseInstaller.live.install
-    /// Builds the offered release on this Mac's own Hub as a copy of the installed app plus only
-    /// the files that changed, and returns the staged bundle. It never answers "use the disk image":
-    /// a manifest-only release has none, so waiting throws `ReleaseNotReady` and a refusal throws
-    /// with its reason. Injectable so the path can be driven without a Hub.
-    var stageDeltaRelease: ((ReleaseDescriptor) async throws -> URL)?
-    /// Verifies a staged bundle and swaps it in, restoring the old app on failure. Returns the build
-    /// that landed. Injectable for the same reason as `installVerifiedArtifact`.
-    var installStagedApp: (URL, ReleaseDescriptor) throws -> String = ReleaseInstaller.live.swapStagedApp
 
     /// Record the outcome of a connection action.
     ///
@@ -4519,40 +4256,24 @@ final class NativeWorkspaceStore: ObservableObject {
         savingModelDefaults = false
         modelDefaultsNote = nil
         modelDefaultsSettingsFile = nil
-        offeredRelease = nil
-        offeredReleaseDescriptor = nil
-        updateOffered = false
-        offeredReleaseIsOlder = false
-        releaseRefusal = nil
-        installingRelease = false
-        releaseProgress = nil
-        updateWaiting = false
-        updateDraining = false
-        updatePendingSince = nil
-        drainLease?.cancel()
-        drainLease = nil
-        controllerReleaseIdentity = nil
-        trustedPublisher = nil
-        releaseLastSync = nil
     }
 
     func refresh() async { await refresh(reportErrors: true) }
 
     /// Set by the app to say whether its window can be seen. Polling for the screen's sake stops
-    /// while it cannot; the release check below does not, because a node's window is normally
-    /// closed and that is exactly when it should be updating itself.
+    /// while it cannot.
     var isWindowVisible: () -> Bool = { true }
 
     /// Two seconds while something is running and someone is looking; ten otherwise. Every tick
     /// costs a fan of reads that scale with job history, so an idle Mac must not pay the busy rate.
     var nextPollDelay: Double { isWindowVisible() && activeWorkCount > 0 ? 2 : 10 }
 
-    /// One poll tick: refresh what the screen shows (only if it can be seen), then the update check.
+    /// One poll tick: refresh what the screen shows (only if it can be seen), then the
+    /// membership and startup exchanges.
     func pollOnce(now: Date = Date()) async {
         if isWindowVisible() { await refresh(reportErrors: false) }
         await membershipTick(now: now)
         await startupSyncTick()
-        await releaseTick(now: now)
     }
 
     // MARK: - Startup settings: reported to the Hub, changed from the fleet
@@ -4569,14 +4290,6 @@ final class NativeWorkspaceStore: ObservableObject {
         let startServicesOnLaunch: Bool
         let appVersion: String
         var applied: [StartupOutcome] = []
-        var lastUpdateError: UpdateFailure?
-    }
-    /// Where an update stopped (`verifying`, `staging`, `downloading`, `installing`) and why, in one line.
-    struct UpdateFailure: Codable, Equatable {
-        let phase: String
-        let reason: String
-        let build: String
-        let at: Double
     }
     /// What the app did with one request the fleet sent, reported on the next call.
     struct StartupOutcome: Codable, Equatable {
@@ -4614,7 +4327,6 @@ final class NativeWorkspaceStore: ObservableObject {
         var report = provider()
         let sent = startupOutcomesToReport
         report.applied = sent
-        report.lastUpdateError = lastUpdateError
         guard let answer: StartupAnswer = try? await sendJSON(["api", "hub", "startup", "sync"],
                                                                 method: "POST", body: report) else { return }
         startupOutcomesToReport.removeAll { sent.contains($0) }
@@ -4624,13 +4336,13 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
-    /// Work an update, or a relaunch, would interrupt: jobs of every kind that are waiting or
+    /// Work a relaunch would interrupt: jobs of every kind that are waiting or
     /// running, downloads, a transcription, and any Studio that reports itself busy (which is how a
     /// job a controller sent to this Mac shows, since it is not one of this Hub's own batches).
     ///
     /// An **uncertain** job (the Hub lost sight of it) counts only while it is younger than the longest
     /// deadline any lane publishes: after that the Hub has given up on it, and counting it for ever
-    /// would keep a Mac from ever installing an update. With no deadline published it still counts.
+    /// would keep a Mac from ever restarting. With no deadline published it still counts.
     var activeWorkCount: Int { countActiveWork(now: Date()) }
 
     /// The same count from fresh reads: a hidden window does not poll, so the stored lists can be
@@ -4641,15 +4353,11 @@ final class NativeWorkspaceStore: ObservableObject {
         return activeWorkCount
     }
 
-    func countActiveWork(now: Date, deadline published: Double? = nil, excludingQueued: Bool? = nil) -> Int {
+    func countActiveWork(now: Date, deadline published: Double? = nil) -> Int {
         let states: Set<String> = ["queued", "running", "cancel_requested", "cancelling", "paused", "uncertain", "recovery_pending"]
         let deadline = published ?? models.compactMap { $0.laneContract?.deadlineSeconds }.max()
-        // A drained Mac starts nothing, so a job that is only queued will not run until it is back:
-        // it waits in the Hub's saved queue through the relaunch, and counting it would never let the
-        // drain finish. Running work still counts.
-        let skipQueued = excludingQueued ?? updateDraining
         func counts(_ job: NativeJob) -> Bool {
-            guard states.contains(job.state), !(skipQueued && job.state == "queued") else { return false }
+            guard states.contains(job.state) else { return false }
             guard job.state == "uncertain", let deadline, let created = job.createdAt else { return true }
             return now.timeIntervalSince1970 - created < deadline
         }
@@ -8171,13 +7879,6 @@ final class NativeWorkspaceStore: ObservableObject {
         // The Hub has minted its own Fleet token, so the value on the page is re-read rather than
         // left showing the credential of a group this Mac is no longer in.
         onFleetCredentialChanged?()
-        releasePublisherKey = nil
-        onReleasePublisherKeyChanged?(nil)
-        offeredRelease = nil
-        offeredReleaseDescriptor = nil
-        updateOffered = false
-        offeredReleaseIsOlder = false
-        releaseRefusal = nil
         onControllerJoined?(nil)
         return cleared
     }
@@ -8664,12 +8365,12 @@ final class NativeWorkspaceStore: ObservableObject {
     /// app is not in that transaction, so without this the saved membership stays on the *old*
     /// controler and every path that trusts it keeps pointing the wrong way: the startup re-join,
     /// the status ask that decides whether this Mac is still listed, the check-in that takes work
-    /// back, and the release mirror. A Mac that had deliberately moved would drag itself back at the
+    /// back. A Mac that had deliberately moved would drag itself back at the
     /// next launch, because `hasRejoinableMembership` reads the saved address.
     ///
     /// **Only the address changes**, which is the whole difference between a repoint and a re-join:
-    /// the group Fleet token, this Mac's own node credential, the networks it answers on and the
-    /// pinned release key all belong to the membership and are carried across untouched. That is why
+    /// the group Fleet token, this Mac's own node credential and the networks it answers on all
+    /// belong to the membership and are carried across untouched. That is why
     /// this rebuilds one field instead of calling `joinController` — a join would mint a new
     /// credential and re-register the Mac, which is exactly what the operation exists to avoid.
     ///
@@ -8693,8 +8394,7 @@ final class NativeWorkspaceStore: ObservableObject {
         storedMembership = FleetMembership(controllerAddress: hubAddress,
                                            token: membership.token,
                                            boundHosts: membership.boundHosts,
-                                           nodeCredential: membership.nodeCredential,
-                                           releasePublisherKey: membership.releasePublisherKey)
+                                           nodeCredential: membership.nodeCredential)
         controllerAddress = hubAddress
         // The app owns the preferences file, so the new address is written through the callback a
         // join already uses. Without this the move would last exactly until the next launch.
@@ -8746,9 +8446,6 @@ final class NativeWorkspaceStore: ObservableObject {
         // the identity — so the address is published here as well as stored, and a test asserts the
         // two agree rather than that one of them is right.
         controllerAddress = membership.controllerAddress
-        // The pinned release key travels with the membership: restore it before any release is
-        // read, so the first read verifies against the key pinned at the last join.
-        releasePublisherKey = membership.releasePublisherKey
         // **This Mac's node credential travels with the membership too.** It is the value that
         // names this Mac alone, so it is what the re-join presents; without it a controller whose
         // roster already holds a credential for this id refuses the join (H12), and a Mac would
@@ -9190,8 +8887,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// exists so this Mac is never pointed at an arbitrary host on the internet, and a name is
     /// held to the same rule by resolving it first.
 
-    /// Open Studio Launcher KH, the one updater on this Mac (owner rule, 2026-11-13). Hub checks
-    /// the feed and says what is offered; it never installs its own update.
+    /// Open Studio Launcher KH, the one updater on this Mac (owner rule, 2026-11-13).
     static func openStudioLauncher() {
         let bundle = URL(fileURLWithPath: "/Applications/Studio Launcher KH.app")
         let configuration = NSWorkspace.OpenConfiguration()
@@ -9425,757 +9121,6 @@ final class NativeWorkspaceStore: ObservableObject {
             controllerIdentity = nil
             hubVersion = nil
         }
-        // Read the release offer on the same visit that reads the connection state, so the banner
-        // sits next to what it belongs to. It never installs anything: the operator presses a button.
-        guard connectionID == requestConnection else { return }
-        await refreshRelease()
-    }
-
-    /// Read what the controller currently offers and decide whether this Mac may install it.
-    ///
-    /// The first successful read of the controller's identity **pins** its key and does not verify
-    /// the release in the same pass: a key fetched at the same moment as the artifact proves
-    /// nothing, so the caller is told to check again. Later reads verify the countersignature with
-    /// the stored pin, and a different key presented later is refused rather than adopted.
-    func refreshRelease() async {
-        guard let requestConnection = connectionID else { return }
-        do {
-            offeredReleaseIsOlder = false
-            let presented = try await readReleaseIdentity()
-            guard connectionID == requestConnection else { return }
-            controllerReleaseIdentity = presented
-            if let existing = releasePublisherKey {
-                guard existing.fingerprint == presented.fingerprint else {
-                    let answer = try? await readRelease()
-                    guard connectionID == requestConnection else { return }
-                    trustedPublisher = answer?.trustedPublisher
-                    releaseLastSync = answer?.lastSync
-                    offeredRelease = answer?.descriptor?.offered
-                    offeredReleaseDescriptor = answer?.descriptor
-                    offeredReleaseHasImage = answer?.hasDiskImage
-                    updateOffered = false
-                    releaseRefusal = "The controller now presents a different App Update Key (fingerprint \(presented.shortFingerprint)…) than the one pinned on this Mac (\(existing.shortFingerprint)…). A pinned key is only replaced by an explicit action on this Mac, so no update can be installed."
-                    return
-                }
-            } else {
-                // Pin it, then wait for the next check to verify anything against it.
-                let pinned = presented.publisherKey
-                releasePublisherKey = pinned
-                onReleasePublisherKeyChanged?(pinned)
-                let answer = try? await readRelease()
-                guard connectionID == requestConnection else { return }
-                trustedPublisher = answer?.trustedPublisher
-                offeredRelease = answer?.descriptor?.offered
-                offeredReleaseDescriptor = answer?.descriptor
-                offeredReleaseHasImage = answer?.hasDiskImage
-                updateOffered = false
-                releaseRefusal = "This Mac just pinned the controller's App Update Key (fingerprint \(presented.shortFingerprint)…). Check again to verify the release against it — a key read at the same time as an artifact proves nothing."
-                return
-            }
-            guard let pinnedKey = releasePublisherKey else { return }
-            let answer = try await readRelease()
-            guard connectionID == requestConnection else { return }
-            trustedPublisher = answer.trustedPublisher
-            releaseLastSync = answer.lastSync
-            guard let descriptor = answer.descriptor else {
-                offeredRelease = nil
-                offeredReleaseDescriptor = nil
-                offeredReleaseHasImage = nil
-                updateOffered = false
-                releaseRefusal = nil
-                return
-            }
-            offeredRelease = descriptor.offered
-            offeredReleaseDescriptor = descriptor
-            offeredReleaseHasImage = answer.hasDiskImage
-            guard descriptor.controllerKeyId == pinnedKey.fingerprint else {
-                updateOffered = false
-                releaseRefusal = "The release names controller App Update Key (fingerprint) \(descriptor.controllerKeyId.prefix(12))…, which is not the key pinned on this Mac (\(pinnedKey.shortFingerprint)…). Refusing it."
-                return
-            }
-            guard ReleaseSignature.verifyControllerSignature(
-                descriptor: descriptor.raw,
-                signatureBase64: descriptor.controllerSignature,
-                publicKeyHex: pinnedKey.publicKey) else {
-                updateOffered = false
-                releaseRefusal = "The controller's signature on this release does not verify against the App Update Key pinned on this Mac. Refusing it."
-                return
-            }
-            if case .unsupported(let reason) = ReleaseArtifactForm.classify(filename: descriptor.filename) {
-                updateOffered = false
-                releaseRefusal = reason
-                return
-            }
-            guard let ownBuild = currentAppBuild, !ownBuild.isEmpty else {
-                updateOffered = false
-                offeredReleaseIsOlder = false
-                releaseRefusal = "This app cannot read its own StudioHubBuild, so it cannot tell whether the offered release is different."
-                return
-            }
-            switch ReleaseOffer.decide(advertisedVersion: descriptor.version,
-                                       advertisedBuild: descriptor.build,
-                                       installedVersion: currentAppVersion,
-                                       installedBuild: ownBuild) {
-            case .offered:
-                updateOffered = true
-                offeredReleaseIsOlder = false
-                releaseRefusal = nil
-            case .sameVersionSameBuild:
-                updateOffered = false
-                offeredReleaseIsOlder = false
-                releaseRefusal = nil
-            case .olderRelease:
-                // A stale controller cannot roll this Mac backwards: the release stays visible,
-                // with the reason, but there is no install action.
-                updateOffered = false
-                offeredReleaseIsOlder = true
-                releaseRefusal = nil
-            }
-        } catch {
-            guard connectionID == requestConnection else { return }
-            updateOffered = false
-            offeredReleaseIsOlder = false
-            releaseRefusal = Self.actionable(error, action: "Read the update offer")
-        }
-    }
-
-    /// Ask the controller **now** whether a newer release is held, and start the same update path
-    /// the automatic check uses.
-    ///
-    /// The owner asked for this on the node itself: *"add a way to probe for update when I'm on the
-    /// node machine."* It is the existing release read plus `installOfferedRelease` - no second
-    /// update mechanism, no shortened verification, and nothing is restarted under running work:
-    /// with work active it says so and lets the normal drain finish it.
-    ///
-    /// The result is one plain sentence in `manualUpdateNote`.
-    func checkForUpdateNow() async {
-        guard !manualUpdateChecking, !installingRelease else { return }
-        guard connectionID != nil else {
-            manualUpdateNote = "Can't reach the local Hub. Start the services, then check again."
-            return
-        }
-        manualUpdateChecking = true
-        manualUpdateNote = nil
-        defer { manualUpdateChecking = false }
-        // The next tick would otherwise wait up to ten minutes to look again.
-        lastReleaseCheck = nil
-        await refreshRelease()
-        // The very first read on a Mac pins the controller's key and deliberately does not verify
-        // the release in the same pass. A person who just pressed a button gets the second read,
-        // rather than being told to press it again.
-        if let refusal = releaseRefusal,
-           (refusal.localizedCaseInsensitiveContains("pinned")
-            || refusal.localizedCaseInsensitiveContains("check again")) {
-            await refreshRelease()
-        }
-        guard connectionID != nil else {
-            manualUpdateNote = "Can't reach the local Hub. Start the services, then check again."
-            return
-        }
-        if let refusal = releaseRefusal {
-            // A **node** asks its controller through its own Hub, so the controller is the thing
-            // that could not be reached. A controller or a standalone Mac reads its own Hub.
-            let role = controllerIdentity?.settings.role
-            let isNode = role != nil && role != "controller"
-            manualUpdateNote = isNode
-                ? "Can't reach the controller: \(refusal)"
-                : "Could not check for an update: \(refusal)"
-            return
-        }
-        guard updateOffered, let release = offeredRelease else {
-            if offeredReleaseIsOlder, let held = offeredRelease {
-                manualUpdateNote = "Up to date (\(currentAppVersion ?? "this build")). The controller holds an older release (\(held.version))."
-            } else {
-                manualUpdateNote = "Up to date (\(currentAppVersion ?? "this build"))."
-            }
-            return
-        }
-        // The same fresh evidence the automatic path reads before it decides anything.
-        await refresh(reportErrors: false)
-        await refreshMemoryPolicy()
-        if activeWorkCount == 0 {
-            // Owner rule (2026-11-13): no app installs its own update. The Launcher may stop and
-            // relaunch Hub itself, so the action hands over instead of swapping the bundle.
-            manualUpdateNote = "Opening Studio Launcher to update to \(release.version)…"
-            Self.openStudioLauncher()
-            // A failed install leaves the offer in place and records why; say so here too rather
-            // than leaving "Updating to …" on a screen where nothing is happening.
-            if updateOffered, let failure = lastUpdateError {
-                manualUpdateNote = "Could not update to \(release.version): \(failure.reason)"
-            }
-        } else {
-            updateWaiting = true
-            updatePendingSince = updatePendingSince ?? Date()
-            manualUpdateNote = "Update \(release.version) is ready. Will update when the current work finishes."
-        }
-    }
-
-    /// Install or replace the trusted gateway publisher key on this controller.
-    ///
-    /// This is the owner's decision and is never implied by a release or run on a timer: the
-    /// operator presses the button and confirms the dialog, and only then is the route sent. An
-    /// empty key is refused here with a plain sentence, before any request. The publisher id is a
-    /// display label and may be blank. A success refreshes what the route reports and lands in the
-    /// existing Connections notice.
-    func changePublisherKey(publicKey: String, publisherId: String = "") async -> Bool {
-        guard let requestConnection = connectionID else {
-            note(.failure, "Start the local services before changing the App Update Key. Nothing was sent.")
-            return false
-        }
-        let key = publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else {
-            note(.failure, "Paste the Gateway's App Update Key (Ed25519 public key) before changing it — nothing was sent.")
-            return false
-        }
-        let named = publisherId.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            let requested = ReleaseTrustRequest(publicKey: key,
-                                                publisherId: named.isEmpty ? nil : named)
-            let result: ReleaseTrustResult = try await sendJSON(
-                ["api", "hub", "release", "trust"], method: "POST", body: requested)
-            guard connectionID == requestConnection else { return false }
-            await refreshRelease()
-            guard connectionID == requestConnection else { return false }
-            let fingerprint = result.fingerprint ?? result.publisherKeyId ?? "unknown"
-            let listed = result.publisherId ?? (named.isEmpty ? "no publisher name" : named)
-            note(.success, "Installed the trusted Gateway App Update Key (fingerprint) \(fingerprint) (\(listed)). "
-                 + "This Mac now accepts app releases signed by that key.")
-            return true
-        } catch {
-            guard connectionID == requestConnection else { return false }
-            note(.failure, Self.actionable(error, action: "Change the App Update Key"))
-            return false
-        }
-    }
-
-    /// Install the offered release, once the operator has pressed the button.
-    ///
-    /// Order is the contract's: verify the controller countersignature with the pinned key before
-    /// trusting anything else, download the artifact to a temporary file (streamed to disk, never
-    /// held in memory), verify the SHA-256 of those bytes, then swap. Nothing is installed
-    /// silently, and the whole thing is abandoned on the first failure.
-    func installOfferedRelease(automatic: Bool = false) async {
-        guard !installingRelease else { return }
-        guard updateOffered, let descriptor = offeredReleaseDescriptor, let pinned = releasePublisherKey else {
-            note(.failure, releaseRefusal ?? "No verified update is being offered.")
-            return
-        }
-        installingRelease = true
-        releaseProgress = "Verifying the controller's signature…"
-        var phase = "verifying"
-        defer {
-            installingRelease = false
-            releaseProgress = nil
-        }
-        do {
-            guard descriptor.controllerKeyId == pinned.fingerprint,
-                  ReleaseSignature.verifyControllerSignature(
-                    descriptor: descriptor.raw,
-                    signatureBase64: descriptor.controllerSignature,
-                    publicKeyHex: pinned.publicKey) else {
-                throw ReleaseError("The controller's signature on this release does not verify against the App Update Key pinned on this Mac. Nothing was downloaded or installed.")
-            }
-            if case .unsupported(let reason) = ReleaseArtifactForm.classify(filename: descriptor.filename) {
-                throw ReleaseError(reason)
-            }
-            // A release that carries a file manifest was pushed as files, not as a disk image, so it
-            // is first built from the installed app and the few files that changed (seconds, not a
-            // 1.8 GB download). No disk image of such a release exists anywhere in the chain, so a
-            // stage that cannot finish is retried or reported — never replaced by a download that
-            // could only answer 404 (2026-10-25: a member Mac spent an update cycle on exactly that).
-            var staged: URL?
-            if descriptor.raw["files_sha256"] != nil {
-                phase = "staging"
-                releaseProgress = "Preparing the update from the files that changed…"
-                do {
-                    staged = try await (stageDeltaRelease ?? { try await self.requestDeltaStage($0) })(descriptor)
-                } catch let refused as DeltaStageRefused {
-                    // The Hub will not build this release from the files it was pushed as. Where a
-                    // disk image exists that is the answer; a manifest push leaves none anywhere in
-                    // the chain, so there the only honest ending is "nothing was installed".
-                    guard offeredReleaseHasImage ?? false else {
-                        throw ReleaseError("This release arrived as files only, and it could not be built on this Mac (\(refused.reason)). There is no disk image of it to install instead, so nothing was installed.")
-                    }
-                    staged = nil
-                    releaseProgress = "The update could not be built from the changed files (\(refused.reason)); downloading the full image instead…"
-                }
-            } else {
-                staged = nil
-            }
-            var artifact: URL?
-            if staged == nil {
-                // The disk image — and only when this release really has one: `delta.artifact` from
-                // the Hub, or (a Hub that does not publish it) the signed descriptor having no file
-                // manifest. Anything else would be the guaranteed 404 above.
-                guard offeredReleaseHasImage ?? (descriptor.raw["files_sha256"] == nil) else {
-                    throw ReleaseNotReady(message: "it arrived as files only, and this Mac has no disk image of it to install instead")
-                }
-                phase = "downloading"
-                releaseProgress = "Downloading \(descriptor.filename) — \(descriptor.offered.sizeDisplay)…"
-                // `downloadReleaseArtifact` returns only a file it has already verified against the
-                // signed size and SHA-256, so the bytes are not hashed a second time here.
-                artifact = try await downloadReleaseArtifact(descriptor: descriptor)
-            }
-            if automatic {
-                // The check that started this was minutes ago. Work that arrived while the update was
-                // being prepared is not interrupted; what was built is kept and the next idle check
-                // installs it.
-                await refresh(reportErrors: false)
-                await refreshMemoryPolicy()
-                guard memoryInventory != nil, activeWorkCount == 0 else {
-                    releaseRefusal = nil
-                    note(.success, "Hub Studio KH \(descriptor.version) is downloaded and waiting: this Mac is busy, so it will install when it is idle.")
-                    return
-                }
-            }
-            let landed: String
-            phase = "installing"
-            if let staged {
-                releaseProgress = "Installing \(descriptor.version) (\(descriptor.build))…"
-                let swap = installStagedApp
-                do {
-                    landed = try await Task.detached(priority: .userInitiated) { try swap(staged, descriptor) }.value
-                } catch {
-                    // A staged app that would not verify or swap is not offered again as it is.
-                    retireStagingFolder(of: staged)
-                    throw error
-                }
-                retireStagingFolder(of: staged)
-            } else if let artifact {
-                releaseProgress = "Installing \(descriptor.version) (\(descriptor.build)) — copying the app, which takes a minute or two…"
-                // Mounting the image and copying a multi-gigabyte bundle is blocking work; on the main
-                // actor it froze the whole window, including the progress line above.
-                let install = installVerifiedArtifact
-                landed = try await Task.detached(priority: .userInitiated) { try install(artifact, descriptor) }.value
-            } else {
-                throw ReleaseError("There was nothing to install.")
-            }
-            guard landed == descriptor.build else {
-                throw ReleaseError("The app that landed reports build \(landed), not \(descriptor.build).")
-            }
-            // The running process is still the old build; treat the installed one as current so the
-            // banner does not offer the update we just took. A relaunch reads the new Info.plist.
-            currentAppBuild = landed
-            currentAppVersion = descriptor.version
-            updateOffered = false
-            releaseRefusal = nil
-            lastUpdateError = nil
-            // Only a completed install makes a stored download disposable. Every failure above leaves
-            // them in place, so the next press reuses or resumes one rather than re-downloading.
-            retireReleaseArtifacts()
-            note(.success, "Installed Hub Studio KH \(descriptor.version) (\(landed)). Relaunching Hub Studio KH now — running work will stop.")
-            onReleaseRestartRequested?()
-            await refreshRelease()
-        } catch let wait as ReleaseNotReady {
-            // The release is still arriving on this Mac's Hub: not a failure, so the next check
-            // simply asks again. Nothing was installed, so the Mac takes work meanwhile.
-            if automatic { await endUpdateDrain() }
-            note(.success, "Hub Studio KH \(descriptor.version) is still arriving on this Mac (\(wait.message)); it will be installed once it is all here.")
-        } catch {
-            // An update that fails on its own is not tried again for the same release for
-            // `autoUpdateFailureRetry` (a retry loop would re-copy 5 GB every minute); a re-pushed
-            // release carries a new signature and is tried at once.
-            let message = Self.actionable(error, action: "Install the update")
-            if automatic {
-                autoUpdateFailure = (descriptor.signature, lastAutoUpdateAttempt ?? Date())
-                await endUpdateDrain()   // a failed install must not leave this Mac refusing work
-            }
-            lastUpdateError = UpdateFailure(phase: phase, reason: String(message.split(whereSeparator: \.isNewline).first?.prefix(300) ?? ""),
-                                            build: descriptor.build, at: Date().timeIntervalSince1970)
-            note(.failure, message)
-            await refreshRelease()
-        }
-    }
-
-    /// After a completed install, everything under `Updates/` - the download just installed and any
-    /// older one an earlier attempt left - goes to the Hub's Trash Folder at once (`HubTrash.retire`:
-    /// macOS Trash if that move fails, never a delete). The owner empties it (owner request 2026-10-15).
-    /// One that cannot move stays where it is; the Hub's disk governor moves any left over.
-    func retireReleaseArtifacts() {
-        guard let base = dataDirectory else { return }
-        let updates = base.appendingPathComponent("Updates", isDirectory: true)
-        let entries = (try? FileManager.default.contentsOfDirectory(at: updates, includingPropertiesForKeys: nil)) ?? []
-        for entry in entries { HubTrash.retire(entry, into: hubTrash, label: "release-download") }
-    }
-
-    private var hubTrash: URL? { dataDirectory?.appendingPathComponent("hub/trash", isDirectory: true) }
-
-    /// The folder the Hub staged an update in (`.studiohub-staged-<id>`, beside the installed app),
-    /// retired once the app inside has been swapped in or has failed to be: removed only when it is
-    /// empty, otherwise moved like any retired file (`HubTrash.retire`). Only a folder with that
-    /// name is touched, whatever path a Hub answers with.
-    private func retireStagingFolder(of staged: URL) {
-        let folder = staged.deletingLastPathComponent()
-        guard folder.lastPathComponent.hasPrefix(".studiohub-staged-") else { return }
-        if rmdir(folder.path) != 0 { HubTrash.retire(folder, into: hubTrash, label: "update-staging") }
-    }
-
-    /// How long a stage may take before the app asks again on its next check. A stage that outlives
-    /// it is **not ready**, never a disk-image download: a release delivered as files has no image.
-    /// Writable so the lifecycle check can prove that ending without waiting 45 minutes.
-    static var deltaStageWait: TimeInterval = 45 * 60
-
-    /// Ask this Mac's own Hub to build the offered release from the installed app plus the files
-    /// that changed, and wait for it. Returns the staged bundle.
-    ///
-    /// It never means "use the disk image" as a nil used to: a release is only staged when it carries
-    /// a file manifest, which says it was pushed as files, and no disk image of it exists to install
-    /// instead. So a Hub still working throws `ReleaseNotReady` (asked again on the next check, which
-    /// is not a failure), and a Hub that will not build one throws with its own reason. What the app
-    /// must never do again is abandon a slow stage and download an image that 404s (2026-10-25).
-    private func requestDeltaStage(_ descriptor: ReleaseDescriptor) async throws -> URL {
-        func status(_ data: Data) -> [String: Any] {
-            ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
-        }
-        var start = try makeRequest(["api", "hub", "release", "stage"], method: "POST")
-        start.timeoutInterval = 30
-        var answer: [String: Any]
-        do {
-            answer = status(try await performData(start))
-        } catch {
-            // A Hub that could not be asked (a route it does not have yet, a read that failed on
-            // the way) is asked again later: the release itself is fine, and there is nothing else
-            // to install from.
-            throw ReleaseNotReady(message: "the Hub could not prepare it: \(Self.describe(error))")
-        }
-        let deadline = Date().addingTimeInterval(Self.deltaStageWait)
-        while answer["state"] as? String == "running" {
-            guard installingRelease, Date() < deadline else {
-                throw ReleaseNotReady(message: "its files are still being prepared on this Mac")
-            }
-            releaseProgress = Self.deltaProgress(answer)
-            do {
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-                answer = status(try await performData(makeRequest(["api", "hub", "release", "stage"])))
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // One unreadable poll is not evidence that the Hub gave up; the next check asks
-                // again and finds either the staged app or the same job still running.
-                throw ReleaseNotReady(message: "the Hub could not be read while it prepared the update")
-            }
-        }
-        if answer["state"] as? String == "not_ready" {
-            throw ReleaseNotReady(message: (answer["message"] as? String) ?? "its files are still arriving")
-        }
-        guard answer["state"] as? String == "staged", let path = answer["staged_app"] as? String,
-              path.hasPrefix("/") else {
-            throw DeltaStageRefused(reason: (answer["message"] as? String) ?? "the Hub did not say why")
-        }
-        return URL(fileURLWithPath: path)
-    }
-
-    private static func deltaProgress(_ status: [String: Any]) -> String {
-        let done = (status["done_bytes"] as? NSNumber)?.int64Value ?? 0
-        let total = (status["total_bytes"] as? NSNumber)?.int64Value ?? 0
-        switch status["phase"] as? String {
-        case "copying": return "Copying the installed app…"
-        case "downloading" where total > 0:
-            return "Fetching the changed files… \(sizeDisplay(done)) of \(sizeDisplay(total))"
-        case "applying": return "Applying the changed files…"
-        case "verifying": return "Checking the new app…"
-        default: return "Preparing the update from the files that changed…"
-        }
-    }
-
-    // MARK: - Checking for, and taking, updates without the Connections page open
-
-    static let releaseCheckInterval: TimeInterval = 600
-    static let autoUpdateRetryInterval: TimeInterval = 60
-    /// How long a release whose unattended install failed waits before it is tried again.
-    static let autoUpdateFailureRetry: TimeInterval = 30 * 60
-    private var lastReleaseCheck: Date?
-    private var lastAutoUpdateAttempt: Date?
-    /// The release (by descriptor signature) whose unattended install last failed, and when.
-    private var autoUpdateFailure: (signature: String, at: Date)?
-    /// The last update that failed here, reported up the fleet with the startup settings.
-    private(set) var lastUpdateError: UpdateFailure?
-
-    /// Updates belong to Studio Launcher KH (owner rule, 2026-11-13): this Mac never installs its
-    /// own update. What remains here checks the feed, shows what is offered, and keeps the drain
-    /// bookkeeping honest; the tick below returns before anything could install.
-    ///
-    /// A verified offer is installed once the Mac is **drained**: no job running or queued, no
-    /// download, no Studio busy (`activeWorkCount == 0`, read fresh). A Mac under continuous work never
-    /// gets there by itself, so the rule is **drain for update** (owner decision 2026-09-30): wait
-    /// `updateDrainGrace` (ten minutes) for a natural idle; after that ask this Mac's Hub to stop taking
-    /// NEW work (`MACHINE_BUSY`, which the gateway re-routes), let what runs finish - nothing is ever
-    /// stopped - then install and relaunch. Every Mac does this on its own: two Macs never wait on
-    /// each other's install, and the drain is a lease the Hub lets lapse, so a failed install or a
-    /// dead app never leaves a Mac refusing work.
-    ///
-    /// **Nothing here asks a person.** The confirmation before a manual Install lives in the view
-    /// (`StudioViews`), not in this path; the relaunch skips the quit prompt and force-stops a hung
-    /// shutdown by itself (`StudioHub.relaunchAfterUpdate`).
-    ///
-    /// **Verification is unchanged, and the key is pinned here too.** A Mac that never had a controller
-    /// key pinned (installed from a drive, Connections never opened) pins its own Hub's release-signing
-    /// key on the first read (trust on first use, the rule `refreshRelease` and a node's join use) and
-    /// verifies the offer against it on the very next tick: a key read at the same moment as the
-    /// artifact proves nothing. A different key presented later is refused, never replaced.
-    func releaseTick(now: Date = Date()) async {
-        guard connectionID != nil, !installingRelease else { return }
-        if controllerIdentity == nil,
-           let identity: NativeControllerIdentity = try? await get(["api", "hub", "controller"]) {
-            controllerIdentity = identity
-        }
-        let hadKey = releasePublisherKey != nil
-        if lastReleaseCheck.map({ now.timeIntervalSince($0) >= Self.releaseCheckInterval }) ?? true {
-            lastReleaseCheck = now
-            await refreshRelease()
-            // Just pinned: verify on the next tick, not ten minutes from now.
-            if !hadKey && releasePublisherKey != nil { lastReleaseCheck = nil }
-        }
-        guard updateOffered, let signature = offeredReleaseDescriptor?.signature,
-              autoUpdateFailure.map({ $0.signature != signature || now.timeIntervalSince($0.at) >= Self.autoUpdateFailureRetry }) ?? true
-        else {
-            updatePendingSince = nil
-            await endUpdateDrain()
-            return
-        }
-        updateWaiting = true
-        let pendingSince = updatePendingSince ?? now
-        updatePendingSince = pendingSince
-        guard updateDraining
-                || lastAutoUpdateAttempt.map({ now.timeIntervalSince($0) >= Self.autoUpdateRetryInterval }) ?? true
-        else { return }
-        lastAutoUpdateAttempt = now
-        // Fresh evidence rather than the last poll's: a hidden window does not refresh, and the
-        // Studios' own busy flags are the only place a job sent by the controller shows.
-        await refresh(reportErrors: false)
-        await refreshMemoryPolicy()
-        guard connectionID != nil, memoryInventory != nil else { return }
-        // Fresh evidence is kept (the page must still show the offered release and what work is
-        // running), but nothing installs from here: Studio Launcher KH installs updates and may
-        // stop and relaunch Hub itself (owner rule, 2026-11-13).
-        updateWaiting = false
-        updatePendingSince = nil
-        await endUpdateDrain()
-        return
-    }
-
-    private struct DrainWant: Encodable { let want: Bool }
-    private struct DrainAnswer: Decodable { let state: String }
-
-    /// Ask this Mac's Hub to stop (`true`) or resume (`false`) taking new work. The answer is
-    /// `draining` or `resumed`; nil when the Hub could not be asked (an older Hub has no such route -
-    /// the Mac then just waits for idle, and an older Hub may answer `waiting`).
-    private func requestDrain(_ want: Bool) async -> String? {
-        let answer: DrainAnswer? = try? await sendJSON(["api", "hub", "update", "drain"], method: "POST", body: DrainWant(want: want))
-        return answer?.state
-    }
-
-    /// The Hub's drain is a two-minute lease: renewed here every half minute, through the install
-    /// too (the tick does not run while installing). It lapses if the app dies.
-    private func keepDrainAlive() {
-        drainLease?.cancel()
-        drainLease = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
-                guard let self, !Task.isCancelled else { return }
-                if await self.requestDrain(true) == "waiting" {
-                    self.updateDraining = false
-                    self.drainLease = nil
-                    return
-                }
-            }
-        }
-    }
-
-    /// Stop draining and take work again: no update is pending any more, or the install failed.
-    private func endUpdateDrain() async {
-        updateWaiting = false
-        guard updateDraining else { return }
-        updateDraining = false
-        drainLease?.cancel()
-        drainLease = nil
-        _ = await requestDrain(false)
-    }
-
-    /// Download the signed artifact to a stable, private file, resuming a kept partial file when
-    /// the controller's route honours Range.
-    ///
-    /// The file is not removed here: it stays until the install succeeds, so a failed swap does
-    /// not throw away a gigabyte of transfer. It lives under this Mac's data directory, keyed by
-    /// the release identity, created 0700 with the artifact itself 0600.
-    private func downloadReleaseArtifact(descriptor: ReleaseDescriptor) async throws -> URL {
-        guard let base = dataDirectory else {
-            throw ReleaseError("This Mac has no private updates folder, so the release could not be downloaded.")
-        }
-        let directory = ReleaseArtifactStore.directory(base: base, descriptor: descriptor)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                attributes: [.posixPermissions: 0o700])
-        let destination = directory.appendingPathComponent(descriptor.filename)
-
-        var offset = Self.artifactSize(destination)
-        if offset > descriptor.bytes {
-            // A file larger than the signed size cannot be a prefix of the artifact, so it is not
-            // resumable and is discarded rather than trusted and appended to.
-            try? FileManager.default.removeItem(at: destination)
-            offset = 0
-            releaseProgress = "Discarded a partial update larger than the signed \(descriptor.bytes) bytes; starting again…"
-        } else if offset == descriptor.bytes {
-            // A complete artifact was kept from an earlier failed install. It is reused without a
-            // second transfer once it still matches the signed size and digest.
-            do {
-                releaseProgress = "Checking the update already downloaded…"
-                try await Self.verifyOffMain(destination, descriptor)
-                releaseProgress = "Using the update already downloaded — \(descriptor.offered.sizeDisplay)."
-                return destination
-            } catch {
-                try? FileManager.default.removeItem(at: destination)
-                offset = 0
-                releaseProgress = "Discarded a downloaded file that did not match the signed artifact; downloading again…"
-            }
-        }
-
-        if offset > 0 {
-            releaseProgress = "Resuming from \(Self.sizeDisplay(offset)) of \(descriptor.offered.sizeDisplay)…"
-        } else {
-            releaseProgress = "Starting download of \(descriptor.offered.sizeDisplay)…"
-        }
-
-        let requestConnection = connectionID
-        var request = try makeRequest(["api", "hub", "release", "artifact"])
-        request.timeoutInterval = 600
-        if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
-
-        let downloader = ResumableArtifactDownloader(
-            configuration: sessionConfiguration,
-            destination: destination,
-            startingOffset: offset,
-            expectedSha256: descriptor.sha256
-        ) { [weak self] received in
-            Task { @MainActor in
-                guard let self, self.installingRelease else { return }
-                self.releaseProgress = "Downloading… \(Self.sizeDisplay(received)) of \(descriptor.offered.sizeDisplay)"
-            }
-        }
-        // On any failure the fragment stays on disk; the next press of Install resumes it.
-        _ = try await downloader.run(request)
-        guard connectionID == requestConnection else {
-            throw ReleaseError("The local engine connection changed while the update was downloading.")
-        }
-        // Completeness is proved against the signed descriptor before the bytes go any further. A
-        // file that is short or hashes wrong is not a resumable prefix, so it is discarded.
-        do {
-            releaseProgress = "Verifying the downloaded bytes…"
-            try await Self.verifyOffMain(destination, descriptor)
-        } catch {
-            try? FileManager.default.removeItem(at: destination)
-            throw ReleaseError("\(error.localizedDescription) The downloaded file was discarded.")
-        }
-        return destination
-    }
-
-    private static func artifactSize(_ url: URL) -> Int64 {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let size = attributes[.size] as? NSNumber else { return 0 }
-        return size.int64Value
-    }
-
-    private static func sizeDisplay(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
-
-    /// The same check on a background thread: a 2 GB image takes seconds to hash, and on the main
-    /// actor that is a frozen window.
-    private static func verifyOffMain(_ file: URL, _ descriptor: ReleaseDescriptor) async throws {
-        try await Task.detached(priority: .userInitiated) {
-            try verifyArtifactFile(file, descriptor: descriptor)
-        }.value
-    }
-
-    /// The signed descriptor's SHA-256 over the bytes on disk. Throws with a plain sentence on any
-    /// mismatch; a corruption check, not the trust decision.
-    nonisolated static func verifyArtifactFile(_ file: URL, descriptor: ReleaseDescriptor) throws {
-        let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value
-        guard size == descriptor.bytes else {
-            throw ReleaseError("The downloaded update is \(size.map(String.init) ?? "an unknown number of") bytes but the signed descriptor says \(descriptor.bytes). Nothing was installed.")
-        }
-        let handle = try FileHandle(forReadingFrom: file)
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty {
-            hasher.update(data: chunk)
-        }
-        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        guard digest == descriptor.sha256 else {
-            throw ReleaseError("The downloaded update is not the artifact the controller signed: its SHA-256 is \(digest.prefix(16))…, not \(descriptor.sha256.prefix(16))…. Nothing was installed.")
-        }
-    }
-
-    private func readReleaseIdentity() async throws -> ReleaseIdentity {
-        let data = try await performData(makeRequest(["api", "hub", "release", "identity"]))
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ReleaseError("The controller's release identity was not a JSON object.")
-        }
-        guard let algorithm = object["algorithm"] as? String, algorithm == "ed25519" else {
-            throw ReleaseError("The controller signs releases with \(object["algorithm"] as? String ?? "an unknown algorithm"), not ed25519.")
-        }
-        guard let publicKey = (object["public_key"] as? String).flatMap(ReleaseSignature.normalizedHex),
-              let fingerprint = (object["fingerprint"] as? String).flatMap(ReleaseSignature.normalizedHex),
-              ReleaseSignature.fingerprint(publicKeyHex: publicKey) == fingerprint else {
-            throw ReleaseError("The controller's App Update Key is not a 64-hex Ed25519 public key whose fingerprint matches.")
-        }
-        return ReleaseIdentity(algorithm: algorithm, publicKey: publicKey, fingerprint: fingerprint)
-    }
-
-    /// The answer to `GET /api/hub/release`: the held descriptor (if any) plus the gateway key the
-    /// owner installed. Keeping them together means one read reports both what is offered and
-    /// whether this Mac could accept it at all.
-    private struct ReleaseAnswer {
-        let descriptor: ReleaseDescriptor?
-        let trustedPublisher: TrustedPublisher?
-        let lastSync: ReleaseSyncStatus?
-        /// `delta.artifact`: whether a disk image can be installed for this release. Nil on a Hub
-        /// that predates the field — never guessed.
-        let hasDiskImage: Bool?
-    }
-
-    /// Parse the additive `trusted_publisher` value. A null, or an object carrying no 64-hex
-    /// fingerprint, is reported as no installed key rather than a fabricated one.
-    static func parseTrustedPublisher(_ value: Any?) -> TrustedPublisher? {
-        guard let object = value as? [String: Any] else { return nil }
-        let publisherId = (object["publisher_id"] as? String)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .flatMap { $0.isEmpty ? nil : $0 }
-        let fingerprint = (object["fingerprint"] as? String).flatMap(ReleaseSignature.normalizedHex)
-        let publicKey = (object["public_key"] as? String).flatMap(ReleaseSignature.normalizedHex)
-        guard fingerprint != nil || publisherId != nil else { return nil }
-        return TrustedPublisher(publisherId: publisherId, fingerprint: fingerprint,
-                                publicKey: publicKey)
-    }
-
-    /// Parse the additive `last_sync` value. An absent or malformed value reads as "no poll has
-    /// concluded yet" rather than as a refusal: a Mac must never be told it was refused on the
-    /// strength of a field the route did not send.
-    static func parseLastSync(_ value: Any?) -> ReleaseSyncStatus? {
-        guard let object = value as? [String: Any], let ok = object["ok"] as? Bool else { return nil }
-        return ReleaseSyncStatus(ok: ok,
-                                 error: (object["error"] as? String).flatMap { $0.isEmpty ? nil : $0 },
-                                 result: (object["result"] as? String).flatMap { $0.isEmpty ? nil : $0 },
-                                 at: (object["at"] as? NSNumber)?.doubleValue)
-    }
-
-    private func readRelease() async throws -> ReleaseAnswer {
-        let data = try await performData(makeRequest(["api", "hub", "release"]))
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let release = object["release"] else {
-            throw ReleaseError("The controller's release answer was not JSON with a release field.")
-        }
-        let trusted = Self.parseTrustedPublisher(object["trusted_publisher"])
-        let lastSync = Self.parseLastSync(object["last_sync"])
-        // Additive: an answer without it (an older Hub) reads as unknown, and the install falls back
-        // to what the signed descriptor says rather than inventing an image.
-        let hasDiskImage = (object["delta"] as? [String: Any])?["artifact"] as? Bool
-        if release is NSNull { return ReleaseAnswer(descriptor: nil, trustedPublisher: trusted,
-                                                    lastSync: lastSync, hasDiskImage: hasDiskImage) }
-        guard let dictionary = release as? [String: Any], let descriptor = ReleaseDescriptor(json: dictionary) else {
-            throw ReleaseError("The controller holds a release whose descriptor does not match the agreed schema. Refusing it.")
-        }
-        return ReleaseAnswer(descriptor: descriptor, trustedPublisher: trusted, lastSync: lastSync,
-                             hasDiskImage: hasDiskImage)
     }
 
     /// A moment the Hub stamped, as a person reads it. The Hub's unit is seconds since 1970 and
@@ -11970,19 +10915,6 @@ private struct FleetTokenRequest: Encodable { let token: String? }
 private struct FleetHandoverRequest: Encodable {
     let controllerUrl: String
     let token: String
-}
-/// What the owner's app sends to `POST /api/hub/release/trust`. `publisherId` is a display label
-/// and is omitted when blank; the Hub stores null rather than inventing a name.
-private struct ReleaseTrustRequest: Encodable {
-    let publicKey: String
-    let publisherId: String?
-}
-/// The Hub's answer to a trust install. `publisherKeyId` and `fingerprint` are the same value; both
-/// are read so a slightly older Hub that returns only one still reports correctly.
-private struct ReleaseTrustResult: Decodable {
-    let publisherId: String?
-    let publisherKeyId: String?
-    let fingerprint: String?
 }
 private struct JoinRequest: Encodable {
     let nodeId: String

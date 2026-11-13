@@ -159,7 +159,7 @@ def main() -> int:
     TARGET.write_text(source.replace(marker, EVIDENCE + marker, 1))
     command = ('source native/sdk.sh && xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 '
                'native/ShellCore.swift native/StartupRecovery.swift native/ReleaseNotes.swift '
-               'native/UpdateClient.swift native/StudioAPI.swift .build/surface_evidence_main.swift '
+               'native/StudioAPI.swift .build/surface_evidence_main.swift '
                '-o .build/surface-evidence && .build/surface-evidence')
     result = subprocess.run(["/bin/bash", "-c", command], cwd=ROOT, text=True)
     return result.returncode

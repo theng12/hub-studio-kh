@@ -2,6 +2,16 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.233 — 2026-11-13
+
+- Hub no longer checks for or installs its own updates. Its footer button and the App updates section point to Studio Launcher KH, which installs updates for every app on this Mac.
+- The App Update Key settings are gone from Hub; they are no longer how an app here is updated.
+
+### Technical notes
+
+- Retired `native/UpdateClient.swift` and the StudioAPI release feed, download, verify, install, drain and trust paths. `HubTrash` moved to `ShellCore.swift`.
+- Retired the update-error field from the startup report; the Hub's route still accepts it from older builds.
+
 ## 0.6.232 — 2026-11-13
 
 - Hub no longer installs its own updates. When one is offered, the update action opens Studio Launcher KH, which updates every app on this Mac.

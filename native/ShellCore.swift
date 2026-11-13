@@ -230,11 +230,6 @@ struct ShellConfiguration {
     /// on every call this Mac makes home. Stored with the membership and written 0600 — it is a
     /// secret, and it is the only credential whose revocation is about this Mac alone (A8).
     var nodeCredential: String?
-    /// The controller's release-signing key, pinned the first time this Mac reads its identity.
-    /// Kept with the membership: it is restored when the services start, and leaving the group
-    /// clears it. A different key presented later is refused, never adopted silently.
-    var releasePublisherPublicKey: String?
-    var releasePublisherFingerprint: String?
     /// The address this app's own Hub answers on. Always loopback.
     ///
     /// Loopback is bound in every configuration - `bind_hosts` adds it unconditionally - and the
@@ -380,8 +375,6 @@ struct ShellConfiguration {
             listenHostAutomatic = saved.listenHostAutomatic ?? true
             port = saved.port ?? Self.defaultPort
             controllerAddress = saved.controllerAddress
-            releasePublisherPublicKey = saved.releasePublisherPublicKey
-            releasePublisherFingerprint = saved.releasePublisherFingerprint
             loginMigrationComplete = saved.loginMigrationComplete
             if StartupRecovery.validPolicy(maxAttempts: saved.recoveryMaxAttempts,
                                            delays: saved.recoveryBackoffSeconds) {
@@ -714,8 +707,6 @@ struct ShellConfiguration {
                                                         port: port,
                                                         controllerAddress: controllerAddress,
                                                         nodeCredential: nodeCredential,
-                                                        releasePublisherPublicKey: releasePublisherPublicKey,
-                                                        releasePublisherFingerprint: releasePublisherFingerprint,
                                                         recoveryMaxAttempts: recoveryMaxAttempts,
                                                         recoveryBackoffSeconds: recoveryBackoffSeconds,
                                                         loginMigrationComplete: loginMigrationComplete))
@@ -758,10 +749,6 @@ struct ShellConfiguration {
         /// own credential. Kept in this file, which is written 0600 in a 0700 directory, and beside
         /// the membership it belongs to — leaving the group clears both.
         let nodeCredential: String?
-        /// The controller's pinned release-signing key. Absent until the first release read, and
-        /// absent again after leaving the group.
-        let releasePublisherPublicKey: String?
-        let releasePublisherFingerprint: String?
         let recoveryMaxAttempts: Int
         let recoveryBackoffSeconds: [TimeInterval]
         /// Absent in every preferences file written before the launch agent replaced the login
@@ -771,7 +758,6 @@ struct ShellConfiguration {
         init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
              startServicesChoiceRecorded: Bool?, listenHost: String, listenHostAutomatic: Bool?, port: Int?, controllerAddress: String?,
              nodeCredential: String?,
-             releasePublisherPublicKey: String?, releasePublisherFingerprint: String?,
              recoveryMaxAttempts: Int,
              recoveryBackoffSeconds: [TimeInterval],
              loginMigrationComplete: Bool) {
@@ -785,8 +771,6 @@ struct ShellConfiguration {
             self.port = port
             self.controllerAddress = controllerAddress
             self.nodeCredential = nodeCredential
-            self.releasePublisherPublicKey = releasePublisherPublicKey
-            self.releasePublisherFingerprint = releasePublisherFingerprint
             self.recoveryMaxAttempts = recoveryMaxAttempts
             self.recoveryBackoffSeconds = recoveryBackoffSeconds
             self.loginMigrationComplete = loginMigrationComplete
@@ -810,8 +794,6 @@ struct ShellConfiguration {
             port = try values.decodeIfPresent(Int.self, forKey: .port)
             controllerAddress = try values.decodeIfPresent(String.self, forKey: .controllerAddress)
             nodeCredential = try values.decodeIfPresent(String.self, forKey: .nodeCredential)
-            releasePublisherPublicKey = try values.decodeIfPresent(String.self, forKey: .releasePublisherPublicKey)
-            releasePublisherFingerprint = try values.decodeIfPresent(String.self, forKey: .releasePublisherFingerprint)
             recoveryMaxAttempts = try values.decodeIfPresent(Int.self, forKey: .recoveryMaxAttempts)
                 ?? StartupRecovery.defaultMaxAutomaticAttempts
             recoveryBackoffSeconds = try values.decodeIfPresent([TimeInterval].self, forKey: .recoveryBackoffSeconds)
@@ -865,10 +847,55 @@ func rotatePrivateLogIfNeeded(_ url: URL) {
     try? FileManager.default.moveItem(at: url, to: previous)
 }
 
+/// The Hub's Trash Folder (`<data>/hub/trash/<UTC date>/...`). Nothing in it is deleted by the Hub:
+/// the owner empties it through macOS Trash (owner request 2026-10-15), so anything moved here can be
+/// taken back until then.
+enum HubTrash {
+    static var live: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/StudioHub Standalone/hub/trash", isDirectory: true)
+    }
+
+    /// Move `item` into `<trash>/<UTC date>/<label>-<id>/`, keeping its name unless `named` says
+    /// otherwise. Only ever a same-volume rename: returns false, leaving `item` untouched, if the
+    /// Trash Folder is on another volume or the move fails. It never copies and never deletes;
+    /// what to do about a false is the caller's decision.
+    @discardableResult
+    static func move(_ item: URL, into trash: URL, label: String, named: String? = nil,
+                     fileManager: FileManager = .default, now: Date = Date()) -> Bool {
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.timeZone = TimeZone(identifier: "UTC")
+        format.dateFormat = "yyyy-MM-dd"
+        let folder = trash.appendingPathComponent(format.string(from: now), isDirectory: true)
+            .appendingPathComponent("\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: folder, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+            let here = try item.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
+            let there = try folder.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
+            if let here, let there, here.isEqual(there) {
+                try fileManager.moveItem(at: item, to: folder.appendingPathComponent(named ?? item.lastPathComponent))
+                return true
+            }
+        } catch {}
+        rmdir(folder.path)   // the folder made above, only if it is still empty
+        return false
+    }
+
+    /// Retire `item`: into the Hub's Trash Folder, else (no Trash Folder, another volume, a failed move)
+    /// into macOS Trash, else it stays where it is. Never a delete. Returns whether it moved.
+    @discardableResult
+    static func retire(_ item: URL, into trash: URL?, label: String, named: String? = nil,
+                       fileManager: FileManager = .default) -> Bool {
+        if let trash, move(item, into: trash, label: label, named: named, fileManager: fileManager) { return true }
+        return (try? fileManager.trashItem(at: item, resultingItemURL: nil)) != nil
+    }
+}
+
 /// A rotated log is retired, never deleted: into the Hub's Trash Folder (`<data>/hub/trash`, the one
-/// the app's storage screen shows), else macOS Trash, else it stays where it is. This mirrors
-/// `HubTrash.move` locally because ShellCore is compiled into the boundary tests without
-/// `UpdateClient.swift`. The live log is truncated only by the Hub's disk governor, under red.
+/// the app's storage screen shows), else macOS Trash, else it stays where it is. The live log is
+/// truncated only by the Hub's disk governor, under red.
 func retireRotatedLog(_ url: URL) {
     let format = DateFormatter()
     format.locale = Locale(identifier: "en_US_POSIX")
@@ -1491,7 +1518,7 @@ enum ExistingInstance {
 /// `~/Library/Logs/DiagnosticReports` backs up the signal handler (a stack overflow cannot run it).
 /// The verdict is written to `last-stop.json`, which the Hub publishes as `last_stop`.
 enum StopReason: String, Equatable {
-    case quit, crashed, updated
+    case quit, crashed
     case forceQuit = "force_quit"
     case lowMemory = "low_memory"
     case macRestarted = "mac_restarted"
@@ -1506,7 +1533,6 @@ enum StopReason: String, Equatable {
         switch self {
         case .quit: return "Quit"
         case .crashed: return relaunched ? "Crashed (restarted)" : "Crashed"
-        case .updated: return "Restarted for an update"
         case .forceQuit: return "Force-quit"
         case .lowMemory: return "Stopped for low memory"
         case .macRestarted: return "Mac restarted, shut down or lost power"
@@ -1521,9 +1547,8 @@ enum StopRecord {
     static let crashedMarkerName = "crashed"
     static let terminatedMarkerName = "terminated"
     static let memoryMarkerName = "memory-critical"
-    /// Written by a Quit for an update's relaunch, and when macOS announces a restart, shutdown or
-    /// logout (`NSWorkspace.willPowerOffNotification`), so neither reads as the owner quitting.
-    static let updatingMarkerName = "updating"
+    /// Written when macOS announces a restart, shutdown or logout
+    /// (`NSWorkspace.willPowerOffNotification`), so it does not read as the owner quitting.
     static let powerOffMarkerName = "power-off"
     static let crashSignals: [Int32] = [SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGTRAP, SIGSYS]
     /// How often the running app touches its `running` file, which dates a kill nothing records.
@@ -1536,9 +1561,8 @@ enum StopRecord {
     /// The decision, pure. `stoppedAt` is when the run ended as far as the evidence dates it.
     static func classify(cleanQuit: Bool, crashed: Bool, terminated: Bool,
                          stoppedAt: Date, bootTime: Date, memoryCriticalAt: Date?,
-                         updating: Bool = false, poweringOff: Bool = false) -> StopReason {
+                         poweringOff: Bool = false) -> StopReason {
         if crashed { return .crashed }
-        if updating { return .updated }
         if cleanQuit { return poweringOff ? .macRestarted : .quit }
         if poweringOff { return .macRestarted }
         if terminated { return .forceQuit }
@@ -1608,7 +1632,6 @@ enum StopRecord {
         let reason = classify(cleanQuit: cleanQuitAt != nil, crashed: crashedAt != nil || reportAt != nil,
                               terminated: terminatedAt != nil, stoppedAt: stoppedAt, bootTime: boot,
                               memoryCriticalAt: modified(marker(memoryMarkerName)),
-                              updating: modified(marker(updatingMarkerName)) != nil,
                               poweringOff: modified(marker(powerOffMarkerName)) != nil)
         let relaunched = relaunching && relaunches(reason)
         let record: [String: Any] = ["reason": reason.rawValue, "at": stoppedAt.timeIntervalSince1970,
@@ -1617,7 +1640,7 @@ enum StopRecord {
             try? data.write(to: marker(fileName), options: .atomic)
         }
         for name in [runningMarkerName, crashedMarkerName, terminatedMarkerName, memoryMarkerName,
-                     updatingMarkerName, powerOffMarkerName, AgentStandby.cleanQuitMarkerName] {
+                     powerOffMarkerName, AgentStandby.cleanQuitMarkerName] {
             unlink(marker(name).path)
         }
         return record
@@ -1651,7 +1674,6 @@ enum StopRecord {
     }
 
     static func noteCriticalMemory(directory: URL) { touch(directory.appendingPathComponent(memoryMarkerName)) }
-    static func noteUpdating(directory: URL) { touch(directory.appendingPathComponent(updatingMarkerName)) }
     static func notePowerOff(directory: URL) { touch(directory.appendingPathComponent(powerOffMarkerName)) }
     private static func touch(_ url: URL) {
         let path = url.path
