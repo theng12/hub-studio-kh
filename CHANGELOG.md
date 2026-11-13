@@ -11,7 +11,10 @@ Plain-language changes appear first in each release and feed the app’s What’
 - Jobs, Models, Voices and Renders say what to do next when they are empty. Jobs counts done, failed and needs-attention separately, and its Mac filter carries a count.
 - Models, Jobs, Voices and Connections each have one search. Selecting a model at a narrow window fills the page, with a back button, instead of squeezing the list and the details side by side.
 - The Jobs and Models tabs fit a narrow window without scrolling sideways, and each tab has an icon at normal widths. The Studio pages switch between Set up and their result pane instead of cutting the result pane off at 768 points.
-- Settings has Appearance with exactly System, Light and Dark.
+- Settings has Appearance with exactly System, Light and Dark, and lays its sections out in two columns at normal widths so the page is shorter.
+- The current page in the sidebar is a filled blue row with a visible icon and label in every window state.
+- Set up this Mac keeps the selected preset's Install button above the cards, so it is on the first screen at a narrow window.
+- What's New says when a build carries no notes and offers Open Studio Launcher; it no longer dresses the fallback up as release notes.
 - Render rows are titled by what and when they were made, never by a job id.
 
 ### Technical notes
