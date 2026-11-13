@@ -9926,12 +9926,6 @@ final class NativeWorkspaceStore: ObservableObject {
             // Just pinned: verify on the next tick, not ten minutes from now.
             if !hadKey && releasePublisherKey != nil { lastReleaseCheck = nil }
         }
-        // No self-install path may run from here. Studio Launcher KH installs updates and may stop
-        // and relaunch Hub itself, so the tick stops after refreshing the offer.
-        updateWaiting = false
-        updatePendingSince = nil
-        await endUpdateDrain()
-        return
         guard updateOffered, let signature = offeredReleaseDescriptor?.signature,
               autoUpdateFailure.map({ $0.signature != signature || now.timeIntervalSince($0.at) >= Self.autoUpdateFailureRetry }) ?? true
         else {
@@ -9951,8 +9945,16 @@ final class NativeWorkspaceStore: ObservableObject {
         await refresh(reportErrors: false)
         await refreshMemoryPolicy()
         guard connectionID != nil, memoryInventory != nil else { return }
-        if activeWorkCount == 0 {
-        } else if !updateDraining, now.timeIntervalSince(pendingSince) >= updateDrainGrace {
+        // Fresh evidence is kept (the page must still show the offered release and what work is
+        // running), but nothing installs from here: Studio Launcher KH installs updates and may
+        // stop and relaunch Hub itself (owner rule, 2026-11-13).
+        updateWaiting = false
+        updatePendingSince = nil
+        await endUpdateDrain()
+        return
+        // The idle branch that installed is gone with the self-install path; only the drain
+        // bookkeeping below remains, and it is unreachable in this build.
+        if activeWorkCount != 0, !updateDraining, now.timeIntervalSince(pendingSince) >= updateDrainGrace {
             updateDraining = await requestDrain(true) == "draining"
             if updateDraining { keepDrainAlive() }
         }
