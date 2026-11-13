@@ -8,7 +8,8 @@ Plain-language changes appear first in each release and feed the app’s What’
 - Models say what you can do with each one — Ready, Needs setup, Downloading 42%, Not downloaded — instead of Installed or Not installed. A model's repository id and the library folder moved into Details.
 - Macs on Connections read by health first: name and state, what the Mac is doing, disk and memory, and one Send Here action. Its routing id, address, version and last-seen are in Details, and Remove is in the row's own menu.
 - The long explanations on Connections are one-line summaries now, with the whole text behind Details; the Local API's ids moved there too.
-- Jobs, Models, Voices and Renders say what to do next when they are empty, and the Jobs Mac filter carries a count.
+- Jobs, Models, Voices and Renders say what to do next when they are empty. Jobs counts done, failed and needs-attention separately, and its Mac filter carries a count.
+- Models, Jobs, Voices and Connections each have one search. Selecting a model at a narrow window fills the page, with a back button, instead of squeezing the list and the details side by side.
 - The Jobs and Models tabs fit a narrow window without scrolling sideways, and each tab has an icon at normal widths. The Studio pages switch between Set up and their result pane instead of cutting the result pane off at 768 points.
 - Settings has Appearance with exactly System, Light and Dark.
 - Render rows are titled by what and when they were made, never by a job id.

@@ -1776,14 +1776,10 @@ struct StudioContent: View {
                             // No explicit foreground on a selectable row: a sidebar List inverts
                             // the label against the selection fill, and forcing a colour left the
                             // selected row's icon black-on-black (critic, 2026-11-13).
-                            Group {
-                                if section.title == "Coming later" {
-                                    Label(page.title, systemImage: page.symbol).foregroundStyle(.secondary)
-                                } else {
-                                    Label(page.title, systemImage: page.symbol)
-                                }
-                            }
-                            .tag(page)
+                            Label(page.title, systemImage: page.symbol)
+                                .foregroundStyle(studio.selection == page ? Color.white
+                                                 : (section.title == "Coming later" ? Color.secondary : Color.primary))
+                                .tag(page)
                         }
                     }
                 }
@@ -6939,10 +6935,13 @@ struct StudioContent: View {
             return PageStatusLine("Local services are stopped — start them to see this Mac's group.", tone: .warn)
         }
         let role = roleTitle(workspace.controllerIdentity?.settings.role)
-        if let overview = workspace.fleetOverview {
-            let reachable = overview.summary.reachable
-            let total = overview.summary.total
-            let tone: HubStatus = overview.summary.total > 0 && reachable == 0 ? .bad
+        if workspace.fleetOverview != nil || workspace.fleetNodes != nil {
+            // The same rows the table draws, this Mac included: the summary's total does not
+            // count it, so the line and the table disagreed by one (critic, 2026-11-13).
+            let rows = NativeFleetRow.rows(overview: workspace.fleetOverview, nodes: workspace.fleetNodes)
+            let total = rows.count
+            let reachable = rows.filter(\.isReachable).count
+            let tone: HubStatus = total > 0 && reachable == 0 ? .bad
                 : (reachable < total ? .warn : .ok)
             return PageStatusLine("\(role) · \(total) \(total == 1 ? "Mac" : "Macs") in this group · \(reachable) reachable now",
                                   tone: tone)
