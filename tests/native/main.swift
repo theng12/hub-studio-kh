@@ -714,7 +714,12 @@ else { fatalError("only an app in /Applications may uninstall itself") }
 // pinned here: the first copy takes it, a second cannot, and release frees it again.
 let menuLock = temporary.appendingPathComponent("menubar.lock")
 require(MenuBarLock.acquire(at: menuLock, wait: 0), "the first copy takes the menu lock")
-require(!MenuBarLock.acquire(at: menuLock, wait: 0.2), "a second copy cannot take the menu while the first holds it")
+// A second holder is another process; in this one, prove it the way flock sees it — a fresh
+// descriptor on the same file cannot take the lock while it is held.
+let competitor = open(menuLock.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+require(competitor >= 0, "the lock file opens for a contender")
+require(flock(competitor, LOCK_EX | LOCK_NB) != 0, "a second copy cannot take the menu while the first holds it")
+close(competitor)
 MenuBarLock.release()
 require(MenuBarLock.acquire(at: menuLock, wait: 0.2), "once the previous owner exits, the menu is available")
 MenuBarLock.release()
