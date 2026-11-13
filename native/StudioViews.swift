@@ -1314,6 +1314,7 @@ struct StudioContent: View {
     @State private var historyTab = HistoryTab.all
     @State private var jobSearch = ""
     @State private var voiceSearch = ""
+    @State private var fleetSearch = ""
     /// System, Light or Dark — the only three the app offers, saved on this Mac.
     @AppStorage("studiohub.appearance") private var appearancePreference = "system"
     /// Which Macs the Jobs page lists. Offered only where more than one Mac's work can land.
@@ -1772,9 +1773,17 @@ struct StudioContent: View {
                             // label against the selection fill, and forcing `Color.primary` there made the
                             // selected row black-on-black in light appearance (found by the page critics,
                             // 2026-11-12). Only the quieter "Coming later" rows carry a style.
-                            Label(page.title, systemImage: page.symbol)
-                                .foregroundStyle(section.title == "Coming later" ? Color.secondary : Color.primary)
-                                .tag(page)
+                            // No explicit foreground on a selectable row: a sidebar List inverts
+                            // the label against the selection fill, and forcing a colour left the
+                            // selected row's icon black-on-black (critic, 2026-11-13).
+                            Group {
+                                if section.title == "Coming later" {
+                                    Label(page.title, systemImage: page.symbol).foregroundStyle(.secondary)
+                                } else {
+                                    Label(page.title, systemImage: page.symbol)
+                                }
+                            }
+                            .tag(page)
                         }
                     }
                 }
@@ -5915,15 +5924,22 @@ struct StudioContent: View {
         let all = workspace.jobHistories.flatMap(\.jobs)
         let running = all.filter { JobFacts.stage($0.state) == .running }.count
         let waiting = all.filter { JobFacts.stage($0.state) == .waiting }.count
-        let finished = all.count - running - waiting
+        // "Completed" is done, not "everything that is not running": a failed or cancelled job
+        // was counted as completed before (critic, 2026-11-13).
+        let completed = all.filter { $0.state == "done" }.count
+        let failed = all.filter { $0.state == "error" }.count
+        let attention = all.filter { $0.state == "uncertain" }.count
         let downloads = workspace.downloads.filter { active($0.state) }.count
         // The total is the same number the All Mac filter carries; downloads are listed apart
         // because they are a tab of their own, not a job.
         var parts = ["\(all.count) jobs", "\(running) running", "\(waiting) queued"]
-        if finished > 0 { parts.append("\(finished) completed") }
+        if completed > 0 { parts.append("\(completed) completed") }
+        if failed > 0 { parts.append("\(failed) failed") }
+        if attention > 0 { parts.append("\(attention) need attention") }
         if downloads > 0 { parts.append("\(downloads) downloading") }
         return PageStatusLine(parts.joined(separator: " · "),
-                              tone: running > 0 ? .ok : (waiting > 0 ? .warn : .off))
+                              tone: running > 0 ? .ok
+                                : (failed > 0 || attention > 0 || waiting > 0 ? .warn : .off))
     }
 
     private var jobsWorkspace: some View {
@@ -7809,9 +7825,21 @@ struct StudioContent: View {
             HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
                 Text("Nodes").font(HubType.section)
                 Spacer(minLength: 0)
+                TextField("Search Macs", text: $fleetSearch)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 240)
+                    .onExitCommand { fleetSearch = "" }
+                if !fleetSearch.isEmpty {
+                    Button("Clear") { fleetSearch = "" }.hubRowControl()
+                }
                 fleetRefreshStatus
             }
-            let rows = NativeFleetRow.rows(overview: workspace.fleetOverview, nodes: workspace.fleetNodes)
+            let allRows = NativeFleetRow.rows(overview: workspace.fleetOverview, nodes: workspace.fleetNodes)
+            let query = fleetSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rows = query.isEmpty ? allRows : allRows.filter {
+                $0.name.localizedCaseInsensitiveContains(query)
+                    || ($0.address ?? "").localizedCaseInsensitiveContains(query)
+                    || ($0.node?.id ?? "").localizedCaseInsensitiveContains(query)
+            }
             let hasFleetSnapshot = workspace.fleetOverview != nil || workspace.fleetNodes != nil
             if let catalogError = workspace.catalogReadError {
                 HubBanner(status: .warn, symbol: "exclamationmark.triangle.fill", message: catalogError) {
@@ -7839,6 +7867,9 @@ struct StudioContent: View {
                 nodesSummary
                 if !rows.isEmpty {
                     nodeTable(rows)
+                } else if !query.isEmpty {
+                    Text("No Mac matches “\(query)”.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
                 }
                 if let removed = workspace.fleetNodes?.removed, !removed.isEmpty {
                     removedNodes(removed)
