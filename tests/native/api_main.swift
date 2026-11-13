@@ -7018,8 +7018,9 @@ struct NativeAPITests {
         require(startedNow >= 1, "Quit must read fresh, not the last poll: \(startedNow)")
         FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
         _ = await updateStore.activeWorkNow()
-        require(autoSwaps == 1 && autoRelaunches == 1,
-                "an idle node must install the offered update and relaunch once: \(autoSwaps) swaps, \(autoRelaunches) relaunches")
+        // Launcher-only updates (owner, 2026-11-13): an idle node installs nothing either.
+        require(autoSwaps == 0 && autoRelaunches == 0,
+                "an idle node must not install its own update: \(autoSwaps) swaps, \(autoRelaunches) relaunches")
         // A failed unattended install is not retried for the same build (it would re-copy 5 GB a minute).
         let failing = makeReleaseDescriptor(version: "0.6.61", build: "failbuild", artifact: artifact,
                                             gateway: gatewayKey, controllerSigning: controllerKey)
@@ -7230,9 +7231,10 @@ struct NativeAPITests {
         FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = true }
         FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)
         await updateStore.checkForUpdateNow()
-        require(manualSwaps == 1 && manualRelaunches == 1,
-                "an idle Mac must install from the manual check: \(manualSwaps) swaps, \(manualRelaunches) relaunches")
-        require(updateStore.manualUpdateNote?.contains("Updating to 0.6.63") == true,
+        // The manual check hands over to Studio Launcher KH and installs nothing itself.
+        require(manualSwaps == 0 && manualRelaunches == 0,
+                "an idle Mac must not install from the manual check: \(manualSwaps) swaps, \(manualRelaunches) relaunches")
+        require(updateStore.manualUpdateNote?.contains("Opening Studio Launcher") == true,
                 "the result must say what it is doing: \(updateStore.manualUpdateNote ?? "nil")")
         FixtureProtocol.setMemoryPolicyOverride(nil)
         FixtureProtocol.mutate { FixtureProtocol.voiceDownloadsIdle = true }   // as the section found it
