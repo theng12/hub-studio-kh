@@ -2,6 +2,12 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.232 — 2026-11-13
+- Hub shows one menu-bar icon even if another copy starts: the second copy waits a few seconds and exits quietly.
+- Update opens Studio Launcher KH. Hub never installs its own update.
+- A connection failure names the address it actually tried, including the port it filled in.
+- Settings says plainly what the App Update Key signs.
+
 ## 0.6.231 — 2026-11-13
 - The sidebar footer now lines up: Support this app, a one-line version and What's New, a Check for Updates button, and one short status line.
 - Chat shows a placeholder in the message box and a Send button that looks the same in light and dark.
