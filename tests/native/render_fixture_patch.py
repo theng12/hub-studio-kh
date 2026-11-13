@@ -67,7 +67,8 @@ needle = "private var connected: Bool { studio.readyURL != nil && !studio.stoppi
 assert needle in text, "connected moved; update render_fixture_patch.py"
 text = text.replace(
     needle,
-    'private var connected: Bool { ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" '
+    'private var connected: Bool { (ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" '
+    '&& ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_SERVICES"] != "off") '
     '|| (studio.readyURL != nil && !studio.stopping && workspace.isReachable) }', 1)
 needle = "@State private var selectedModel: String?"
 assert needle in text, "selectedModel moved; update render_fixture_patch.py"

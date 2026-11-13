@@ -148,6 +148,12 @@ struct PageRenderHarness {
             if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_SERVICES"] == "off" {
                 studio.readyURL = nil
                 studio.status = "Local services are stopped"
+                // A stopped Hub has no live work: do not draw running jobs or a download over the
+                // setup card, or the off state is not honest (critic, 2026-11-13).
+                studio.workspace.audioJobs = []
+                studio.workspace.imageJobs = []
+                studio.workspace.musicJobs = []
+                studio.workspace.downloads = []
             }
             studio.connectionToken = "render-fixture-hub-token-0123456789"
             let hubState = scratch.appendingPathComponent("hub")
@@ -463,6 +469,45 @@ struct PageRenderHarness {
                     "fittingWidth": control.fittingSize.width, "segments": segmentFrames(control)]
                 let data = try! JSONSerialization.data(withJSONObject: metrics, options: [.sortedKeys])
                 print("JOBS_GEOMETRY " + String(data: data, encoding: .utf8)!)
+            }
+            // One native click, named per page, so a page's named task has a real interaction log.
+            func clickKey(_ page: StudioPage) -> String? {
+                switch page {
+                case .music: return "MUSIC"
+                case .audio: return "AUDIO"
+                case .voices: return "VOICES"
+                case .whatsNew: return "WHATSNEW"
+                case .setup: return "SETUP"
+                case .image: return "IMAGE"
+                default: return nil
+                }
+            }
+            if let key = clickKey(page),
+               let title = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_CLICK_\(key)"],
+               !title.isEmpty {
+                func targetButton(_ view: NSView) -> NSButton? {
+                    if let button = view as? NSButton, button.title.localizedCaseInsensitiveContains(title) {
+                        return button
+                    }
+                    for child in view.subviews { if let found = targetButton(child) { return found } }
+                    return nil
+                }
+                if let button = targetButton(hosting) {
+                    let before = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)
+                    hosting.cacheDisplay(in: hosting.bounds, to: before!)
+                    button.performClick(nil)
+                    for _ in 0..<6 {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                        hosting.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                    }
+                    let after = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)
+                    hosting.cacheDisplay(in: hosting.bounds, to: after!)
+                    let changed = before!.tiffRepresentation != after!.tiffRepresentation
+                    print("CLICK_INTERACTION page=\(fileName(for: page)) target=\(title) changed=\(changed)")
+                } else {
+                    print("CLICK_MISS page=\(fileName(for: page)) target=\(title)")
+                }
             }
             if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_MEASURE"] == "1" {
                 let measure = PageLayoutMeasure.run(hosting)
@@ -782,12 +827,14 @@ struct PageRenderHarness {
         let voiceNotes = ["Studio reference, room tone removed.", "Two takes, the second kept.",
                           "Narration sample, quiet room.", "Needs a transcript before cloning.",
                           "Long-form narrator reference."]
+        let voiceTags = [["narration", "english"], ["narration", "spanish"], ["dialogue"],
+                         ["japanese"], ["narration", "long-form"]]
         workspace.voices = [
             ("Marlowe", "en", "f", true, 42.0), ("Ines", "es", "f", true, 31.5), ("Okafor", "en", "m", true, 58.2),
             ("Hana", "ja", "f", false, 19.0), ("Brightwater (narrator)", "en", "m", true, 120.4),
         ].enumerated().map { index, row in
             decode(NativeVoice.self, """
-                {"id":"voice-\(index)","name":"\(row.0)","language":"\(row.1)","gender":"\(row.2)","notes":"\(voiceNotes[index])",
+                {"id":"voice-\(index)","name":"\(row.0)","language":"\(row.1)","gender":"\(row.2)","notes":"\(voiceNotes[index])","tags":\(voiceTags[index].map { "\"\($0)\"" }.joined(separator: ",", prefix: "[", suffix: "]")),
                  "license":"self-owned","permission_acknowledged":true,"has_transcript":\(row.3),"transcript":\(row.3 ? "\"The quick brown fox jumps over the lazy dog.\"" : "null"),
                  "audio_extension":"wav","duration_seconds":\(row.4),"sample_rate":24000,"channels":1,"fleet_managed":\(index % 2 == 0)}
                 """)

@@ -1777,21 +1777,7 @@ struct StudioContent: View {
             // the window, and in an inactive window it came out black with a black label and icon.
             // Drawing the fill and the label together makes the current page readable in every
             // window state, in both appearances (critic, 2026-11-13).
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    sidebarRow(.overview)
-                    ForEach(StudioPage.sidebarSections.filter { !$0.pages.isEmpty }, id: \.title) { section in
-                        Text(section.title)
-                            .font(HubType.captionStrong).foregroundStyle(.secondary)
-                            .padding(.horizontal, HubSpace.s)
-                            .padding(.top, HubSpace.m).padding(.bottom, HubSpace.xs)
-                        ForEach(section.pages) { page in
-                            sidebarRow(page, quiet: section.title == "Coming later")
-                        }
-                    }
-                }
-                .padding(.horizontal, HubSpace.s).padding(.vertical, HubSpace.s)
-            }
+            ScrollView { sidebarList }
             // A drawn list still moves with the arrow keys.
             .focusable()
             .onMoveCommand { direction in
@@ -1834,25 +1820,7 @@ struct StudioContent: View {
                     .help("Open the donation page in your browser.")
                     .accessibilityLabel("Support this app")
                     HStack(alignment: .center, spacing: HubSpace.s) {
-                        // One pill, and it is the What's New button: the version and the notes
-                        // are one control, not a capsule with a separate link under it.
-                        Button { studio.select(.whatsNew) } label: {
-                            HStack(spacing: HubSpace.tight) {
-                                Text("What's New")
-                                    .font(HubType.caption).foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                Text(appVersion)
-                                    .font(HubType.caption).foregroundStyle(.secondary)
-                                    .lineLimit(1).fixedSize()
-                            }
-                            .lineLimit(1)
-                            .padding(.horizontal, HubSpace.s).padding(.vertical, 3)
-                            .background(Capsule().fill(Color.secondary.opacity(0.12)))
-                            .fixedSize()
-                        }
-                        .buttonStyle(.plain)
-                        .help("Hub Studio KH \(appVersion). Open What's New.")
-                        .accessibilityLabel("Hub Studio KH version \(appVersion). Open What's New.")
+                        footerVersionPill
                         // Icon-only by the owner's standard; the words live in the hover text.
                         Button {
                             NativeWorkspaceStore.openStudioLauncher()
@@ -1866,21 +1834,7 @@ struct StudioContent: View {
                         Spacer(minLength: 0)
                     }
                     // The single status line, last in the column (owner footer standard, 2026-11-12).
-                    HStack(alignment: .top, spacing: HubSpace.tight) {
-                        Image(systemName: footerStatusSymbol)
-                            .foregroundStyle(footerStatusSymbol == "checkmark.circle.fill" ? HubStatus.ok.textColor
-                                             : (footerStatusSymbol == "pause.circle.fill" ? HubStatus.warn.textColor : Color.secondary))
-                        let role = roleTitle(workspace.controllerIdentity?.settings.role)
-                        let paused = localServicesReady && workspace.workPolicy?.machineEnabled == false
-                        // One short line at 220 pt; role, machine and group are in the tooltip.
-                        let line = localServicesReady
-                            ? (paused ? "Hub running · paused" : "Hub running")
-                            : (testMachine ? "Test machine · off" : studio.status)
-                        Text(line)
-                            .font(HubType.caption).fixedSize(horizontal: false, vertical: true)
-                            .help("\(role) · \(thisMachineName) · \(groupLine)")
-                        Spacer(minLength: 0)
-                    }
+                    footerStatusLine
             }
             .padding(HubSpace.l)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1991,6 +1945,64 @@ struct StudioContent: View {
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         default: NSApp.appearance = nil
         }
+    }
+
+    /// The one status line: symbol, words, and the role/machine/group tooltip.
+    @ViewBuilder private var footerStatusLine: some View {
+        let role = roleTitle(workspace.controllerIdentity?.settings.role)
+        let paused = localServicesReady && workspace.workPolicy?.machineEnabled == false
+        let line: String = {
+            if testMachine { return localServicesReady ? "Test machine · running" : "Test machine · off" }
+            if localServicesReady { return paused ? "Hub running · work paused" : "Hub running" }
+            return studio.status
+        }()
+        HStack(alignment: .top, spacing: HubSpace.tight) {
+            Image(systemName: footerStatusSymbol)
+                .foregroundStyle(footerStatusSymbol == "checkmark.circle.fill" ? HubStatus.ok.textColor
+                                 : (footerStatusSymbol == "pause.circle.fill" ? HubStatus.warn.textColor : Color.secondary))
+            Text(line).font(HubType.caption).fixedSize(horizontal: false, vertical: true)
+                .help("\(role) · \(thisMachineName) · \(groupLine)")
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The version + What's New pill, extracted so the footer body stays inside the type checker.
+    @ViewBuilder private var footerVersionPill: some View {
+        Button { studio.select(.whatsNew) } label: {
+            HStack(spacing: HubSpace.tight) {
+                Text("What's New")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(appVersion)
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).fixedSize()
+            }
+            .lineLimit(1)
+            .padding(.horizontal, HubSpace.s).padding(.vertical, 3)
+            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .help("Hub Studio KH \(appVersion). Open What's New.")
+        .accessibilityLabel("Hub Studio KH version \(appVersion). Open What's New.")
+    }
+
+    /// The sidebar's rows and section headings, separate from the window body so the type checker
+    /// does not have to solve the whole page in one expression.
+    @ViewBuilder private var sidebarList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            sidebarRow(.overview)
+            ForEach(StudioPage.sidebarSections.filter { !$0.pages.isEmpty }, id: \.title) { section in
+                Text(section.title)
+                    .font(HubType.captionStrong).foregroundStyle(.secondary)
+                    .padding(.horizontal, HubSpace.s)
+                    .padding(.top, HubSpace.m).padding(.bottom, HubSpace.xs)
+                ForEach(section.pages) { page in
+                    sidebarRow(page, quiet: section.title == "Coming later")
+                }
+            }
+        }
+        .padding(.horizontal, HubSpace.s).padding(.vertical, HubSpace.s)
     }
 
     /// One sidebar row: the glyph and the name, with the selected one filled in the accent colour
