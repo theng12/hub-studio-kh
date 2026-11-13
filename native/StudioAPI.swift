@@ -9891,7 +9891,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The last update that failed here, reported up the fleet with the startup settings.
     private(set) var lastUpdateError: UpdateFailure?
 
-    /// Every Mac - node or controller - updates itself, with nobody at the keyboard.
+    /// Updates belong to Studio Launcher KH (owner rule, 2026-11-13): this Mac never installs its
+    /// own update. What remains here checks the feed, shows what is offered, and keeps the drain
+    /// bookkeeping honest; the tick below returns before anything could install.
     ///
     /// A verified offer is installed once the Mac is **drained**: no job running or queued, no
     /// download, no Studio busy (`activeWorkCount == 0`, read fresh). A Mac under continuous work never
@@ -9924,6 +9926,12 @@ final class NativeWorkspaceStore: ObservableObject {
             // Just pinned: verify on the next tick, not ten minutes from now.
             if !hadKey && releasePublisherKey != nil { lastReleaseCheck = nil }
         }
+        // No self-install path may run from here. Studio Launcher KH installs updates and may stop
+        // and relaunch Hub itself, so the tick stops after refreshing the offer.
+        updateWaiting = false
+        updatePendingSince = nil
+        await endUpdateDrain()
+        return
         guard updateOffered, let signature = offeredReleaseDescriptor?.signature,
               autoUpdateFailure.map({ $0.signature != signature || now.timeIntervalSince($0.at) >= Self.autoUpdateFailureRetry }) ?? true
         else {
