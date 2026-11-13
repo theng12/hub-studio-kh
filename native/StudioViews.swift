@@ -1320,6 +1320,10 @@ struct StudioContent: View {
     @State private var jobSearch = ""
     @State private var voiceSearch = ""
     @State private var fleetSearch = ""
+    /// The Mac whose Details sheet is open; the row's overflow owns the action.
+    @State private var fleetDetailRow: NativeFleetRow?
+    /// Remembered per list: Table or Cards. Cards are forced below the table's minimum width.
+    @AppStorage("hub.fleetView") private var fleetView = "table"
     @State private var pendingModelRemoval: NativeModel?
     /// System, Light or Dark — the only three the app offers, saved on this Mac.
     @AppStorage("studiohub.appearance") private var appearancePreference = "system"
@@ -7185,6 +7189,9 @@ struct StudioContent: View {
             controllerSection
         }
         .task { if connected { await workspace.refreshConnection() } }
+        .sheet(item: $fleetDetailRow) { row in
+            FleetRowDetailSheet(row: row) { fleetDetailRow = nil }
+        }
     }
 
     /// The controller's app update, next to the connection state it comes from.
@@ -8042,6 +8049,18 @@ struct StudioContent: View {
             HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
                 Text("Nodes").font(HubType.section)
                 Spacer(minLength: 0)
+                if windowWidth - HubSpace.sidebar - 1 - 2 * HubSpace.page >= NodeColumn.wideMinimum {
+                    HubSegmentedControl(
+                        selection: $fleetView,
+                        items: [
+                            HubSegmentItem(tag: "table", label: "Table", symbol: "tablecells"),
+                            HubSegmentItem(tag: "cards", label: "Cards", symbol: "square.grid.2x2"),
+                        ],
+                        controlSize: .small,
+                        accessibilityLabel: "Macs view"
+                    )
+                    .help("Table or cards; remembered for this Mac")
+                }
                 TextField("Search Macs", text: $fleetSearch)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 240)
                     .onExitCommand { fleetSearch = "" }
@@ -8058,14 +8077,14 @@ struct StudioContent: View {
                     || ($0.node?.id ?? "").localizedCaseInsensitiveContains(query)
             }
             let hasFleetSnapshot = workspace.fleetOverview != nil || workspace.fleetNodes != nil
-            if let catalogError = workspace.catalogReadError {
-                HubBanner(status: .warn, symbol: "exclamationmark.triangle.fill", message: catalogError) {
-                    Button("Retry") { Task { await workspace.refreshFleetNodes() } }.hubRowControl()
-                }
-            }
-            if let error = workspace.fleetReadError {
+            // One grouped warning with its count, not a stack of repeated lines.
+            let warnings = [workspace.catalogReadError,
+                            workspace.fleetReadError.map { $0 + (hasFleetSnapshot ? " Showing what was read last." : "") },
+                            nodeRemovalRefusal].compactMap { $0 }
+            if !warnings.isEmpty {
                 HubBanner(status: .warn, symbol: "exclamationmark.triangle.fill",
-                          message: error + (hasFleetSnapshot ? " Showing what was read last." : "")) {
+                          title: "\(warnings.count) fleet warning\(warnings.count == 1 ? "" : "s")",
+                          message: warnings.joined(separator: "\n\n")) {
                     Button(localServicesReady ? "Retry" : "Start Services") {
                         if localServicesReady {
                             Task { await workspace.refreshFleetNodes() }
@@ -8074,11 +8093,6 @@ struct StudioContent: View {
                         }
                     }.hubRowControl()
                 }
-            }
-            if let nodeRemovalRefusal {
-                Text(nodeRemovalRefusal)
-                    .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             if workspace.fleetOverview != nil || workspace.fleetNodes != nil {
                 nodesSummary
@@ -8143,24 +8157,56 @@ struct StudioContent: View {
     }
 
     private func nodeTable(_ rows: [NativeFleetRow]) -> some View {
-        // The width the card gets decides the layout: one line per Mac when every column fits, a small
-        // card per Mac when it does not. (`ViewThatFits` cannot say: it asks each layout for its ideal
-        // width, which for a row of text is the whole sentence.)
-        HubCard(padding: 0) {
-            VStack(spacing: 0) {
-                if windowWidth - HubSpace.sidebar - 1 - 2 * HubSpace.page >= NodeColumn.wideMinimum {
-                    nodeTableHeader
-                    ForEach(rows) { row in
-                        Divider()
-                        wideNodeRow(row)
-                    }
-                } else {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        if index > 0 { Divider() }
-                        compactNodeRow(row)
+        // The remembered Table/Cards choice, with cards forced below the table's minimum width.
+        let canTable = windowWidth - HubSpace.sidebar - 1 - 2 * HubSpace.page >= NodeColumn.wideMinimum
+        let cards = fleetView == "cards" || !canTable
+        return Group {
+            if cards {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: HubSpace.m, alignment: .top)],
+                          alignment: .leading, spacing: HubSpace.m) {
+                    ForEach(rows) { row in fleetCard(row) }
+                }
+            } else {
+                HubCard(padding: 0) {
+                    VStack(spacing: 0) {
+                        nodeTableHeader
+                        ForEach(rows) { row in
+                            Divider()
+                            wideNodeRow(row)
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /// One Mac as a card: the same facts as a table row, equal height, actions at the foot.
+    private func fleetCard(_ row: NativeFleetRow) -> some View {
+        HubCard {
+            VStack(alignment: .leading, spacing: HubSpace.s) {
+                HStack(alignment: .top, spacing: HubSpace.m) {
+                    nodeIdentity(row)
+                    Spacer(minLength: 0)
+                    nodeStateCell(row)
+                }
+                nodeDoingNow(row)
+                HStack(alignment: .bottom, spacing: HubSpace.l) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Disk free").font(HubType.caption).foregroundStyle(.secondary)
+                        resourceCell(text: row.machine?.diskText, tier: row.machine?.diskTier ?? .unknown,
+                                     fraction: row.machine?.diskFreeFraction, reachable: row.isReachable,
+                                     total: row.machine?.totalDiskText)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Memory free").font(HubType.caption).foregroundStyle(.secondary)
+                        resourceCell(text: row.machine?.memoryText, tier: row.machine?.memoryTier ?? .unknown,
+                                     fraction: row.machine?.memoryFreeFraction, reachable: row.isReachable)
+                    }
+                    Spacer(minLength: 0)
+                    nodeActions(row)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 168, alignment: .topLeading)
         }
     }
 
@@ -8234,26 +8280,6 @@ struct StudioContent: View {
             if let facts = nodeFactsLine(row) {
                 Text(facts).font(HubType.caption).foregroundStyle(.secondary)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-            }
-            // A Mac's routing id and its address are diagnostics: the name is what a person acts
-            // on, and the two raw values are one disclosure away. They were printed under every
-            // name, which made a roster of five Macs read as five blocks of ids.
-            if row.node != nil || row.address != nil {
-                DiagnosticDetails(title: "Details", summary: "ID and address") {
-                    if let nodeId = row.node?.id, nodeId != "local" {
-                        DiagnosticValue(label: "ID", value: nodeId)
-                    }
-                    DiagnosticValue(label: "Address", value: row.address)
-                    DiagnosticValue(label: "Version", value: row.version)
-                    if let node = row.node {
-                        DiagnosticValue(label: "Joined", value: node.joinedAt.map { NativeWorkspaceStore.moment($0) })
-                        DiagnosticValue(label: "Last seen", value: node.lastSeenAt.map { NativeWorkspaceStore.moment($0) })
-                    }
-                    if let detail = row.node?.detail ?? row.machine?.detail {
-                        DiagnosticValue(label: "Reported", value: detail)
-                    }
-                }
-                .frame(maxWidth: 360, alignment: .leading)
             }
             HStack(spacing: HubSpace.xs) {
                 if let startup = row.startupText {
@@ -8409,26 +8435,24 @@ struct StudioContent: View {
                 // has no live machine row for.
                 Color.clear.frame(width: 78, height: 1).accessibilityHidden(true)
             }
-            if let node = row.node {
-                Menu {
+            Menu {
+                Button("Details") { fleetDetailRow = row }
+                if let node = row.node {
                     Button("Remove \(node.name)…", role: .destructive) {
                         nodeRemovalRefusal = nil
                         pendingNodeRemoval = PendingNodeRemoval(
                             node: node, connectionGeneration: workspace.connectionGeneration)
                     }
                     .disabled(!localServicesReady || !workspace.fleetRosterReachable || workspace.fleetRefreshing)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("More actions for \(node.name)")
-                .accessibilityLabel("More actions for \(node.name)")
-            } else if canPinWork {
-                // Keep the actions column's edge on a Mac this controller does not own.
-                Color.clear.frame(width: 26, height: 1).accessibilityHidden(true)
+            } label: {
+                Image(systemName: "ellipsis.circle")
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Details and more actions for \(row.name)")
+            .accessibilityLabel("Details and more actions for \(row.name)")
         }
     }
 
@@ -9201,6 +9225,47 @@ struct StudioContent: View {
     /// An in-app dialog, never a native alert (owner gate, 2026-11-13): the question and both
     /// answers are part of the page, so the window cannot lose them.
     private func confirmRemove(_ model: NativeModel) { pendingModelRemoval = model }
+}
+
+/// One Mac's diagnostic details, opened from its row's overflow. Plain values, selectable, no raw
+/// JSON and no id as a title.
+private struct FleetRowDetailSheet: View {
+    let row: NativeFleetRow
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HubSpace.l) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: HubSpace.xs) {
+                    Text(row.name).font(HubType.section)
+                    Text(row.node?.role == "agent" ? "Node" : (row.node?.role?.capitalized ?? "This Mac"))
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            VStack(alignment: .leading, spacing: HubSpace.xs) {
+                if let nodeId = row.node?.id, nodeId != "local" {
+                    DiagnosticValue(label: "ID", value: nodeId)
+                }
+                DiagnosticValue(label: "Address", value: row.address)
+                DiagnosticValue(label: "Version", value: row.version)
+                if let node = row.node {
+                    DiagnosticValue(label: "Joined", value: node.joinedAt.map { NativeWorkspaceStore.moment($0) })
+                    DiagnosticValue(label: "Last seen", value: node.lastSeenAt.map { NativeWorkspaceStore.moment($0) })
+                }
+                if let detail = row.node?.detail ?? row.machine?.detail {
+                    DiagnosticValue(label: "Reported", value: detail)
+                }
+            }
+            .padding(HubSpace.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(HubSurface.card, in: RoundedRectangle(cornerRadius: HubRadius.card))
+            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubSurface.border, lineWidth: 1))
+        }
+        .padding(HubSpace.xl)
+        .frame(width: 460)
+    }
 }
 
 /// The sidebar's one line about startup: shown only when this Mac is in a fleet and will not bring its
