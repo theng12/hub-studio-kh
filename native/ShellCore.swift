@@ -1372,6 +1372,47 @@ final class InstanceLock {
     deinit { close(descriptor) }
 }
 
+/// The one menu-bar owner on this Mac, independent of bundle id, path and data folder.
+///
+/// `InstanceLock` only stops copies that share a data folder, so an SSD copy, an older build or a
+/// copy started with another `--data-dir` each took its own lock and drew its own status item — the
+/// owner saw a second, third and fourth Hub menu (report, 2026-11-13). This lock lives at one fixed
+/// path, so every copy on the Mac contends for it. A waiter is given `wait` seconds for the previous
+/// owner to exit — the Launcher restarts Hub without asking, and the new copy must not start drawing
+/// before the old one is gone — then gives up and exits silently.
+enum MenuBarLock {
+    private static var heldDescriptor: Int32?
+
+    static func defaultURL(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL {
+        home.appendingPathComponent("Library/Application Support/StudioHub Standalone/menubar.lock")
+    }
+
+    /// Take the menu for this process. False means another copy is genuinely running.
+    static func acquire(at url: URL = defaultURL(), wait: TimeInterval = 10) -> Bool {
+        guard heldDescriptor == nil else { return true }
+        let directory = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        let descriptor = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { return false }
+        let deadline = Date().addingTimeInterval(wait)
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            if Date() >= deadline { close(descriptor); return false }
+            usleep(100_000)
+        }
+        heldDescriptor = descriptor
+        return true
+    }
+
+    /// Release the menu (process exit would release it too; the tests use this).
+    static func release() {
+        guard let descriptor = heldDescriptor else { return }
+        flock(descriptor, LOCK_UN)
+        close(descriptor)
+        heldDescriptor = nil
+    }
+}
+
 /// What a redundant launch does when another process already owns the data folder.
 ///
 /// This is the second copy launchd can start (for example, a previously loaded agent) while the

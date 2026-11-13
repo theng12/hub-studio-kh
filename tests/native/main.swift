@@ -709,4 +709,14 @@ guard case .refuse = Uninstall.decide(appBundle: temporary.appendingPathComponen
                                       agentInstalled: false, runningCopyDetected: false)
 else { fatalError("only an app in /Applications may uninstall itself") }
 
+// One menu-bar item per Mac, whatever bundle id, path or data folder a copy has (owner report,
+// 2026-11-13: a second, third and fourth Hub menu). The fixed lock is the whole guarantee, so it is
+// pinned here: the first copy takes it, a second cannot, and release frees it again.
+let menuLock = temporary.appendingPathComponent("menubar.lock")
+require(MenuBarLock.acquire(at: menuLock, wait: 0), "the first copy takes the menu lock")
+require(!MenuBarLock.acquire(at: menuLock, wait: 0.2), "a second copy cannot take the menu while the first holds it")
+MenuBarLock.release()
+require(MenuBarLock.acquire(at: menuLock, wait: 0.2), "once the previous owner exits, the menu is available")
+MenuBarLock.release()
+
 print("Native boundary checks passed")

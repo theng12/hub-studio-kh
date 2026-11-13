@@ -9952,12 +9952,6 @@ final class NativeWorkspaceStore: ObservableObject {
         updatePendingSince = nil
         await endUpdateDrain()
         return
-        // The idle branch that installed is gone with the self-install path; only the drain
-        // bookkeeping below remains, and it is unreachable in this build.
-        if activeWorkCount != 0, !updateDraining, now.timeIntervalSince(pendingSince) >= updateDrainGrace {
-            updateDraining = await requestDrain(true) == "draining"
-            if updateDraining { keepDrainAlive() }
-        }
     }
 
     private struct DrainWant: Encodable { let want: Bool }

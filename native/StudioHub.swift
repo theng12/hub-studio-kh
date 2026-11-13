@@ -1189,6 +1189,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ExistingInstance.handle(ExistingInstance.decide(lockHeldByAnother: controller.existingInstanceDetected),
                                     present: ExistingInstanceHandler.stayBehind,
                                     exitQuietly: ExistingInstanceHandler.noteAndExit)
+            // The data-folder lock only covers copies that share a folder. This one is fixed, so a
+            // copy with another --data-dir, another bundle id or another path cannot add a second
+            // menu-bar item; an update's restart waits here for the old owner to exit.
+            guard MenuBarLock.acquire() else {
+                ExistingInstanceHandler.noteAndExit()
+                return
+            }
             // This copy owns the data folder now: settle why the previous one ended (unless the
             // agent's copy already did), then leave the evidence the next settle reads.
             let settled = StopRecord.settle(directory: config.dataDirectory, relaunching: false)
