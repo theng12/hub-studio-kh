@@ -6980,8 +6980,13 @@ struct NativeAPITests {
         FixtureProtocol.setMemoryPolicyOverride(FixtureProtocol.memoryAutoFixture)   // drained
         tick += 120
         await updateStore.releaseTick(now: tick)
-        require(autoSwaps == 1 && autoRelaunches == 1,
-                "a drained controller must install the offered update and relaunch once: \(autoSwaps) swaps, \(autoRelaunches) relaunches")
+        // Owner rule (2026-11-13): no app installs its own update — Studio Launcher KH does. Even a
+        // fully drained controller must swap nothing and relaunch nothing; the offer stays visible
+        // so the hand-over has something to show.
+        require(autoSwaps == 0 && autoRelaunches == 0,
+                "a drained controller must not install its own update: \(autoSwaps) swaps, \(autoRelaunches) relaunches")
+        require(updateStore.updateOffered,
+                "the offered update stays visible for the Launcher hand-over")
         // Back to an un-updated app, so the node cases below start from the same offer.
         autoSwaps = 0
         autoRelaunches = 0
