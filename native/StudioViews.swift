@@ -1413,6 +1413,9 @@ struct StudioContent: View {
         if studio.configuration.modelsDirectory == nil || studio.status.hasPrefix("Choose") {
             return "exclamationmark.circle"
         }
+        if localServicesReady, workspace.workPolicy?.machineEnabled == false {
+            return "pause.circle.fill"
+        }
         return connected ? "checkmark.circle.fill" : "circle"
     }
     /// Enough to attempt an authenticated Nodes read. Model-catalog reachability remains the gate
@@ -1845,9 +1848,9 @@ struct StudioContent: View {
                         // are one control, not a capsule with a separate link under it.
                         Button { studio.select(.whatsNew) } label: {
                             HStack(spacing: HubSpace.tight) {
-                                Text("Hub Studio KH")
+                                Text("What's New")
                                     .font(HubType.caption).foregroundStyle(.secondary)
-                                    .lineLimit(1).truncationMode(.tail)
+                                    .lineLimit(1)
                                 Text(appVersion)
                                     .font(HubType.caption).foregroundStyle(.secondary)
                                     .lineLimit(1).fixedSize()
@@ -1875,8 +1878,11 @@ struct StudioContent: View {
                     // The single status line, last in the column (owner footer standard, 2026-11-12).
                     HStack(alignment: .top, spacing: HubSpace.tight) {
                         Image(systemName: footerStatusSymbol)
-                            .foregroundStyle(footerStatusSymbol == "checkmark.circle.fill" ? HubStatus.ok.textColor : Color.secondary)
-                        Text(studio.status).font(HubType.caption).fixedSize(horizontal: false, vertical: true)
+                            .foregroundStyle(footerStatusSymbol == "checkmark.circle.fill" ? HubStatus.ok.textColor
+                                             : (footerStatusSymbol == "pause.circle.fill" ? HubStatus.warn.textColor : Color.secondary))
+                        Text(localServicesReady && workspace.workPolicy?.machineEnabled == false
+                             ? "Hub running · local work paused" : studio.status)
+                            .font(HubType.caption).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
             }
@@ -1960,6 +1966,15 @@ struct StudioContent: View {
                 Button("Keep", role: .cancel) { pendingDiscard = nil }
             } message: { _ in
                 Text("This is you declaring the attempt abandoned. The Hub will stop waiting for it, will not try to reconcile it again, and this Mac is released for new work. Any result the original worker may still produce is ignored.")
+            }
+        .confirmationDialog(
+            "Stop the local services?",
+            isPresented: $studio.stopPrompt,
+            titleVisibility: .visible) {
+                Button("Stop Engine", role: .destructive) { studio.stopNow() }
+                Button("Keep Running", role: .cancel) { studio.stopPrompt = false }
+            } message: {
+                Text("Active generation, transcription, or model downloads may be interrupted. Leave the engine running to finish them.")
             }
         .confirmationDialog(
             "The local services are still stopping",
@@ -2120,10 +2135,13 @@ struct StudioContent: View {
             parts.append("\(activeDownloads.count) downloading")
         }
         // A job that has gone quiet is not a green page, even while others run.
-        let stalled = (activeAudio + activeImages + activeMusic + activeVideo)
-            .contains { ($0.stalledSeconds ?? 0) > 0 }
+        let stalledJobs = (activeAudio + activeImages + activeMusic + activeVideo)
+            .filter { ($0.stalledSeconds ?? 0) > 0 }
+        if !stalledJobs.isEmpty {
+            parts.append("\(stalledJobs.count) stalled")
+        }
         return PageStatusLine(parts.joined(separator: " · "),
-                              tone: stalled ? .warn
+                              tone: !stalledJobs.isEmpty ? .warn
                                 : (running > 0 || !activeDownloads.isEmpty ? .ok : .off))
     }
 
@@ -2172,10 +2190,10 @@ struct StudioContent: View {
                 if workspace.controllerIdentity?.settings.role == "controller" {
                     machineFilterPicker($overviewMachineFilter, counts: overviewActiveCounts)
                 }
+                // A download is this Mac's own work, not a job: it has its own strip below the
+                // card, so the All filter counts exactly the job rows the card draws.
+                let downloadsHere = overviewMachineFilter == .nodes ? [] : activeDownloads
                 HubCard {
-                    // A download or a live transcription is this Mac's own work, so neither is
-                    // shown under Nodes: the tabs separate whose jobs ran, not whose disks they use.
-                    let downloadsHere = overviewMachineFilter == .nodes ? [] : activeDownloads
                     let transcribingHere = overviewMachineFilter == .nodes ? false : workspace.transcribing
                     let audio = activeAudio.filter(overviewMachineFilter.includes)
                     let images = activeImages.filter(overviewMachineFilter.includes)
@@ -2183,7 +2201,7 @@ struct StudioContent: View {
                     let video = activeVideo.filter(overviewMachineFilter.includes)
                     let subtitles = activeSubtitles.filter(overviewMachineFilter.includes)
                     if audio.isEmpty && images.isEmpty && music.isEmpty && video.isEmpty
-                        && subtitles.isEmpty && downloadsHere.isEmpty && !transcribingHere {
+                        && subtitles.isEmpty && !transcribingHere {
                         HStack(spacing: HubSpace.m) {
                             Image(systemName: "checkmark.circle").font(HubType.icon).foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: HubSpace.xs) {
@@ -2204,11 +2222,20 @@ struct StudioContent: View {
                             + video.map { AnyView(videoJobRow($0)) }
                             + subtitles.map { AnyView(subtitleJobRow($0)) }
                             + (transcribingHere ? [AnyView(transcriptionActivity)] : [])
-                            + downloadsHere.map { download in AnyView(downloadRow(download)) }
                         VStack(alignment: .leading, spacing: HubSpace.m) {
                             ForEach(rows.indices, id: \.self) { index in
                                 if index > 0 { Divider() }
                                 rows[index]
+                            }
+                        }
+                    }
+                }
+                if !downloadsHere.isEmpty {
+                    VStack(alignment: .leading, spacing: HubSpace.m) {
+                        sectionTitle("Downloads")
+                        HubCard {
+                            VStack(alignment: .leading, spacing: HubSpace.m) {
+                                ForEach(downloadsHere) { downloadRow($0) }
                             }
                         }
                     }
@@ -5243,7 +5270,10 @@ struct StudioContent: View {
     }
 
     private static func gigabytes(_ bytes: Int64) -> String {
-        NativeCapacityDisplay.gigabytes(bytes: Double(bytes))
+        // Storage is decimal GB, the unit Finder and the Hub's own plan use. The binary formatter
+        // is for RAM, where "32 GB" means 34.36e9 bytes; using it for disk made one card show
+        // 93.4 GB and its own refusal say 100.3 GB for the same copy (critic, 2026-11-13).
+        String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
     }
 
     /// The four presets, each with its own count, cost and refusal. Selecting one marks it; nothing
@@ -5307,8 +5337,12 @@ struct StudioContent: View {
                     Text(refused).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if !preset.fitsThisMac {
+                if preset.fitsThisMac == false {
                     Text("Sized for a bigger Mac than this one; its models are checked against this Mac's memory individually.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if preset.fitsThisMac == nil {
+                    Text("The Hub did not say whether this preset fits this Mac; its models are checked individually.")
                         .font(HubType.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -5481,6 +5515,8 @@ struct StudioContent: View {
                         HStack(spacing: HubSpace.m) {
                             Image(systemName: "arrow.down.circle").foregroundStyle(HubStatus.info.color)
                             Text(modelName(download.repo)).font(HubType.rowTitle).lineLimit(1)
+                            StatusBadge(text: "Downloading \(Int(min(100, max(0, download.percent))))%",
+                                        status: .info, symbol: "arrow.down.circle")
                             ProgressView(value: min(100, max(0, download.percent)), total: 100)
                                 .frame(maxWidth: 220)
                             Text(download.totalBytes > 0
@@ -5805,10 +5841,12 @@ struct StudioContent: View {
         }
         if let history = workspace.renderHistory {
             let count = history.renders.count
+            let failed = history.totals.failed
             return PageStatusLine(count == 0
                                   ? "No final renders yet — videos Story Studio renders here appear automatically."
-                                  : "\(count) final \(count == 1 ? "render" : "renders") · newest first · last \(history.retentionDays ?? 90) days",
-                                  tone: count == 0 ? .off : .ok)
+                                  : "\(count) final \(count == 1 ? "render" : "renders") · newest first · last \(history.retentionDays ?? 90) days"
+                                    + (failed > 0 ? " · \(failed) failed" : ""),
+                                  tone: failed > 0 ? .warn : (count == 0 ? .off : .ok))
         }
         if let problem = workspace.renderHistoryError {
             return PageStatusLine(problem, tone: .warn)
@@ -5997,8 +6035,8 @@ struct StudioContent: View {
         if attention > 0 { parts.append("\(attention) need attention") }
         if downloads > 0 { parts.append("\(downloads) downloading") }
         return PageStatusLine(parts.joined(separator: " · "),
-                              tone: running > 0 ? .ok
-                                : (failed > 0 || attention > 0 || waiting > 0 ? .warn : .off))
+                              tone: (failed > 0 || attention > 0 || waiting > 0) ? .warn
+                                : (running > 0 ? .ok : .off))
     }
 
     private var jobsWorkspace: some View {
@@ -8148,17 +8186,26 @@ struct StudioContent: View {
             // Each unhealthy state names what a person can do about it, on the row itself.
             switch row.state(readiness: workspace.fleetReadiness[row.id]) {
             case .refused:
-                Text("It has to rejoin this controller with the current Fleet token.")
-                    .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: HubSpace.s) {
+                    Text("It has to rejoin this controller with the current Fleet token.")
+                        .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Refresh") { Task { await workspace.refreshFleetNodes() } }.hubRowControl()
+                }
             case .offline:
-                Text("Start that Mac or check its connection, then Refresh Fleet.")
-                    .font(HubType.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: HubSpace.s) {
+                    Text("Start that Mac or check its connection, then refresh.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Refresh") { Task { await workspace.refreshFleetNodes() } }.hubRowControl()
+                }
             case .error:
-                Text("It answered with an error; its detail above is the reason.")
-                    .font(HubType.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: HubSpace.s) {
+                    Text("It answered with an error; its detail above is the reason.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Refresh") { Task { await workspace.refreshFleetNodes() } }.hubRowControl()
+                }
             default:
                 EmptyView()
             }
@@ -8206,7 +8253,8 @@ struct StudioContent: View {
         } else if row.isReachable, row.machine != nil {
             Text(done(row)).font(HubType.secondary).foregroundStyle(.secondary)
         } else {
-            Text("—").font(HubType.secondary).foregroundStyle(.secondary)
+            Text(row.isReachable ? "—" : "Not answering")
+                .font(HubType.secondary).foregroundStyle(.secondary)
         }
     }
 
@@ -8284,6 +8332,9 @@ struct StudioContent: View {
                 .fixedSize()
                 .help("More actions for \(node.name)")
                 .accessibilityLabel("More actions for \(node.name)")
+            } else if canPinWork {
+                // Keep the actions column's edge on a Mac this controller does not own.
+                Color.clear.frame(width: 26, height: 1).accessibilityHidden(true)
             }
         }
     }

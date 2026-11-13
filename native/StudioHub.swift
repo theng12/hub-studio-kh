@@ -53,6 +53,8 @@ final class StudioController: ObservableObject {
     @Published var status = "Choose a model library"
     /// Set when a stop has hung: the window draws an in-app dialog instead of a native alert.
     @Published var forceStopPrompt = false
+    /// Set when Stop Services… is pressed: the window draws the question in-app.
+    @Published var stopPrompt = false
     @Published var failure: String?
     @Published var readyURL: URL?
     /// The credential this app already holds for its own Hub, so Connections can reveal it
@@ -732,13 +734,11 @@ final class StudioController: ObservableObject {
         if getpgid(pid) == pid { killpg(pid, SIGKILL) }
         else { kill(pid, SIGKILL) }
     }
-    func confirmStop() {
-        let alert = NSAlert()
-        alert.messageText = "Stop the local services?"
-        alert.informativeText = "Active generation, transcription, or model downloads may be interrupted. Leave the engine running to finish them."
-        alert.addButton(withTitle: "Keep Running").keyEquivalent = "\u{1b}"  // Esc keeps running
-        alert.addButton(withTitle: "Stop Engine")
-        if alert.runModal() == .alertSecondButtonReturn { stop() }
+    func confirmStop() { stopPrompt = true }
+    /// The dialog's destructive answer; Escape and Keep Running leave the engine up.
+    func stopNow() {
+        stopPrompt = false
+        stop()
     }
     func select(_ value: StudioPage) { selection = value }
 

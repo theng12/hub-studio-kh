@@ -6550,7 +6550,7 @@ final class NativeWorkspaceStore: ObservableObject {
                              installedCount: preset.installedCount ?? 0,
                              packageCount: preset.packageCount ?? (preset.packages?.count ?? 0),
                              complete: preset.complete ?? false,
-                             fitsThisMac: preset.fitsThisMac ?? false,
+                             fitsThisMac: preset.fitsThisMac,
                              toCopyBytes: preset.projection?.toCopyBytes ?? 0,
                              freeAfterBytes: preset.projection?.freeAfterBytes,
                              refused: preset.projection?.refused,
@@ -10857,7 +10857,7 @@ struct NativePreset: Identifiable, Equatable {
     let installedCount: Int
     let packageCount: Int
     let complete: Bool
-    let fitsThisMac: Bool
+    let fitsThisMac: Bool?
     let toCopyBytes: Int64
     let freeAfterBytes: Int64?
     let refused: String?

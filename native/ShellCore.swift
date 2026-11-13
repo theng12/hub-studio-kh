@@ -86,7 +86,10 @@ enum StudioPage: String, CaseIterable, Identifiable {
         let available = StudioFunction.allCases.filter { $0.hasEngine }
         let placed = createOrder.filter { available.contains($0) }
         let unplaced = available.filter { !createOrder.contains($0) }
+        // The Video lane was retired (LTX-2.3); its page stays for old links and its finished
+        // clips stay in Jobs, but a retired feature is not navigation (critic, 2026-11-13).
         return (placed + unplaced).compactMap { Self(rawValue: $0.rawValue) }
+            .filter { $0 != .video }
     }()
     static let library: [Self] = [.setup, .models, .voices, .jobs, .renders]
     static let fleet: [Self] = [.connections]

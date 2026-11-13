@@ -285,18 +285,19 @@ require(StudioPage.sidebarSections.map(\.title) == ["Create", "Library", "Fleet"
 // Membership is derived from the Studio list, so a Studio added to the enum cannot be absent from
 // the sidebar. This is the check that a hand-written list used to hide: nothing failed when a
 // modality was missing from all four of them.
-require(Set(StudioPage.create.compactMap { $0.function }) == Set(StudioFunction.allCases.filter { $0.hasEngine }),
-        "Create must hold every Studio with an engine: \(StudioPage.create)")
+// Video's lane is retired: its page and Jobs history stay, but it is not navigation.
+require(Set(StudioPage.create.compactMap { $0.function }) == Set(StudioFunction.allCases.filter { $0.hasEngine && $0 != .video }),
+        "Create must hold every live Studio with an engine: \(StudioPage.create)")
 require(Set(StudioPage.comingLater.compactMap { $0.function }) == Set(StudioFunction.allCases.filter { !$0.hasEngine }),
         "Coming later must hold exactly the Studios with no engine: \(StudioPage.comingLater)")
 require(StudioFunction.allCases.allSatisfy { StudioPage.page(for: $0) != nil },
         "every Studio must have its own page: adding a case without one is a wiring hole")
-require(StudioFunction.allCases.filter { $0.hasEngine }.count == StudioPage.create.count,
-        "every Studio with an engine must appear in Create exactly once")
+require(StudioFunction.allCases.filter { $0.hasEngine && $0 != .video }.count == StudioPage.create.count,
+        "every live Studio with an engine must appear in Create exactly once")
 // The order inside Create is the owner's own (2026-09-15). A Studio this order does not name still
 // lands in a section — this asserts the display order, not membership.
-require(StudioPage.create == [.image, .audio, .transcription, .music, .chat, .video],
-        "Create's order is the owner's; Video joined it when the lane shipped")
+require(StudioPage.create == [.image, .audio, .transcription, .music, .chat],
+        "Create's order is the owner's, without the retired Video lane")
 // Renders joined Library on 2026-10-26 with the owner's own request ("there's no render tab"): it is a
 // list of finished work beside Jobs, not a fleet setting, and it is the same page on a node and on
 // a controller. The order is a display decision, which is why it is written here and pinned.

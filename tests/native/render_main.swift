@@ -541,7 +541,7 @@ struct PageRenderHarness {
                          packageIDs: []),
             NativePreset(id: "studio-pro-32", name: "Studio Pro · 32 GB+", tierGB: 32,
                          summary: "Adds the largest writing models: Qwen3.6 35B and Gemma 4 26B.",
-                         installedCount: 0, packageCount: 18, complete: false, fitsThisMac: true,
+                         installedCount: 0, packageCount: 18, complete: false, fitsThisMac: false,
                          toCopyBytes: 100_300_000_000, freeAfterBytes: 284_000_000_000,
                          refused: "Not enough free space on /Volumes/KH-STUDIO-ATLAS/model-target: copying 100.3 GB would leave 284.0 GB, and this Mac keeps 5.0 GB free for working room.",
                          packageIDs: [])
@@ -712,8 +712,8 @@ struct PageRenderHarness {
                        "measured_renders":2,"measured_output_seconds":406,
                        "measured_wall_seconds":201,"average_wall_seconds":100.5,
                        "speed":2.019900497512438},
-             "machines":[{"machine":"local","machine_name":"This Mac","renders":4,"ok":true,"error":null},
-                         {"machine":"blue-1","machine_name":"Blue Room 1","renders":3,"ok":true,"error":null},
+             "machines":[{"machine":"local","machine_name":"This Mac","renders":3,"ok":true,"error":null},
+                         {"machine":"blue-1","machine_name":"Blue Room 1","renders":2,"ok":true,"error":null},
                          {"machine":"blue-2","machine_name":"Blue Room 2","renders":1,"ok":false,
                           "error":"that Mac did not answer"}]}
             """)
@@ -736,12 +736,12 @@ struct PageRenderHarness {
             model("mlx-community/Kokoro-82M-bf16", "Kokoro 82M bf16", "Kokoro", .audio, cached: true, size: 0.4),
             model("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "Qwen3 TTS 0.6B Base 4-bit", "Qwen3-TTS", .audio, cached: true, size: 1.7),
             model("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16", "Qwen3 TTS 1.7B Base bf16", "Qwen3-TTS", .audio, cached: false, size: 4.6,
-                  memory: "This Mac has 16 GB; this model is qualified at 24 GB."),
+                  memory: "This Mac has 32 GB; this model is qualified at 24 GB."),
             model("mlx-community/whisper-large-v3-turbo", "Whisper large v3 turbo", "Whisper", .transcription, cached: true, size: 1.6),
             model("mlx-community/whisper-small-mlx", "Whisper small", "Whisper", .transcription, cached: true, size: 0.5),
             model("black-forest-labs/FLUX.2-klein-4B", "FLUX.2 Klein 4B MLX 4-bit", "FLUX", .image, cached: true, size: 8.0),
             model("Tongyi-MAI/Z-Image-Turbo", "Z-Image-Turbo 6B MLX 4-bit", "Z-Image", .image, cached: false, size: 12.4,
-                  block: "Needs 24 GB of memory; this Mac has 16 GB."),
+                  block: "Needs 24 GB of memory; this Mac has 32 GB."),
             model("stabilityai/stable-audio-3-optimized", "Stable Audio 3", "Stable Audio", .music, cached: true, size: 6.1),
             model("vanch007/mlx-Yue2-3B", "YuE 2 3B", "YuE", .music, cached: false, size: 7.2),
             model("mlx-community/Qwen3-4B-Instruct-4bit", "Qwen3 4B Instruct 4-bit", "Qwen3", .chat, cached: true, size: 2.4),
@@ -812,8 +812,8 @@ struct PageRenderHarness {
     }
 
     private static let longPrompts = [
-        "A sweeping cinematic landscape of a lighthouse on a basalt cliff at dusk, storm clouds breaking over a copper sea, volumetric god rays, a lone fishing boat returning along the Play of light across the swell, ultra detailed, 35mm film grain",
-        "Lo-fi hip hop beat with warm vinyl crackle, mellow Rhodes chords, a slow brushed snare and a walking upright bass, rain on a window in the background, nostalgic and sleepy, perfect for studying late at night along the Play button of a long playlist",
+        "A sweeping cinematic landscape of a lighthouse on a basalt cliff at dusk, storm clouds breaking over a copper sea, volumetric god rays, a lone fishing boat returning across the swell, ultra detailed, 35mm film grain",
+        "Lo-fi hip hop beat with warm vinyl crackle, mellow Rhodes chords, a slow brushed snare and a walking upright bass, rain on a window in the background, nostalgic and sleepy, perfect for studying late at night on a long playlist",
         "Portrait of an elderly clockmaker in a cluttered workshop, brass gears and loose springs on every surface, soft window light, shallow depth of field",
         "Short",
         "An orchestral cue that begins with solo cello, builds through woodwinds and muted brass into a full-string climax, then resolves quietly on a single harp note; slow, hopeful, cinematic, suitable for a documentary ending",
@@ -865,7 +865,12 @@ struct PageRenderHarness {
                                                      instrumental: nil, lyrics: nil, vocalLanguage: nil)
             return item
         }
-        workspace.audioJobs = longPrompts.prefix(3).enumerated().map { index, prompt in
+        let audioPrompts = [
+            "Welcome back. Your previous session is exactly where you left it.",
+            "Please leave a message after the tone, and we will get back to you soon.",
+            "The tide turns at four; bring the small boat in before then.",
+        ]
+        workspace.audioJobs = audioPrompts.enumerated().map { index, prompt in
             var item = job("audio-\(index)", prompt, "kokoro/Kokoro-82M", seconds: 18)
             item.voiceSettings = nil
             return item
