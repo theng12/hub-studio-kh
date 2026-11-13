@@ -95,9 +95,10 @@ class PageTests(unittest.TestCase):
 
     def test_the_sidebar_is_220_and_keeps_its_footer(self) -> None:
         self.assertIn("idealWidth: HubSpace.sidebar, maxWidth: HubSpace.sidebar", VIEWS)
-        # The owner accepted the footer: this Mac's name and its group line stay.
-        self.assertIn("Text(thisMachineName)", VIEWS)
-        self.assertIn("Text(groupLine)", VIEWS)
+        # The fleet footer is one status line now; the Mac's name and group live in its tooltip.
+        self.assertIn("thisMachineName", VIEWS)
+        self.assertIn("groupLine", VIEWS)
+        self.assertIn('.help("\(thisMachineName) · \(groupLine)")', VIEWS)
 
     def test_scrolling_pages_say_so_and_split_pages_do_not(self) -> None:
         for name in ("overview", "jobsWorkspace", "connections", "whatsNew", "settings"):
