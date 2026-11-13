@@ -1315,6 +1315,7 @@ struct StudioContent: View {
     @State private var jobSearch = ""
     @State private var voiceSearch = ""
     @State private var fleetSearch = ""
+    @State private var pendingModelRemoval: NativeModel?
     /// System, Light or Dark — the only three the app offers, saved on this Mac.
     @AppStorage("studiohub.appearance") private var appearancePreference = "system"
     /// Which Macs the Jobs page lists. Offered only where more than one Mac's work can land.
@@ -1777,6 +1778,17 @@ struct StudioContent: View {
                 }
                 .padding(.horizontal, HubSpace.s).padding(.vertical, HubSpace.s)
             }
+            // A drawn list still moves with the arrow keys.
+            .focusable()
+            .onMoveCommand { direction in
+                let pages: [StudioPage] = [.overview] + StudioPage.sidebarSections.flatMap(\.pages)
+                guard let index = pages.firstIndex(of: studio.selection) else { return }
+                switch direction {
+                case .up: if index > 0 { studio.select(pages[index - 1]) }
+                case .down: if index < pages.count - 1 { studio.select(pages[index + 1]) }
+                default: break
+                }
+            }
             Divider()
             VStack(alignment: .leading, spacing: HubSpace.tight) {
                     // The working mode, as a pill. One glance answers "what is this Mac doing?" -
@@ -1801,16 +1813,6 @@ struct StudioContent: View {
                     }
                     .help("\(thisMachineName)\n\(groupLine)")
                     .accessibilityElement(children: .combine)
-                    // What this Mac can actually take: one count per kind of generator it is
-                    // running, so a worker that failed to start is visible here.
-                    // Hidden in a short window, where the footer must give height back to the list.
-                    if !generatorSummary.isEmpty, windowHeight >= 760 {
-                        Text(generatorSummary)
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                            // One line: wrapping left a dangling "·" at the line end (footer
-                            // critic, 2026-11-13).
-                            .lineLimit(1).truncationMode(.tail)
-                    }
                     // The single status line is drawn last in the column (owner footer standard,
                     // 2026-11-12): the version pill and update action sit above it as one row.
                     // The services' actual failure, beside the status it explains, kept whole on
@@ -1839,24 +1841,25 @@ struct StudioContent: View {
                     .help("Open the donation page in your browser.")
                     .accessibilityLabel("Support this app")
                     HStack(alignment: .center, spacing: HubSpace.s) {
-                        // One line, never wrapped: a long name truncates inside the pill.
-                        HStack(spacing: HubSpace.tight) {
-                            // The version must survive a narrow sidebar; the product name is what
-                            // truncates, so a long dev channel string cannot eat the number (page
-                            // critic, 2026-11-13: the pill read "Hub....opment").
-                            Text("Hub Studio KH")
-                                .font(HubType.caption).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.tail)
-                            Text(appVersion)
-                                .font(HubType.caption).foregroundStyle(.secondary)
-                                .lineLimit(1).fixedSize()
-                                .textSelection(.enabled)
-                                .accessibilityLabel("Hub Studio KH version \(appVersion)")
+                        // One pill, and it is the What's New button: the version and the notes
+                        // are one control, not a capsule with a separate link under it.
+                        Button { studio.select(.whatsNew) } label: {
+                            HStack(spacing: HubSpace.tight) {
+                                Text("Hub Studio KH")
+                                    .font(HubType.caption).foregroundStyle(.secondary)
+                                    .lineLimit(1).truncationMode(.tail)
+                                Text(appVersion)
+                                    .font(HubType.caption).foregroundStyle(.secondary)
+                                    .lineLimit(1).fixedSize()
+                            }
+                            .lineLimit(1)
+                            .padding(.horizontal, HubSpace.s).padding(.vertical, 3)
+                            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                            .fixedSize()
                         }
-                        .lineLimit(1)
-                        .padding(.horizontal, HubSpace.s).padding(.vertical, 3)
-                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
-                        .fixedSize()
+                        .buttonStyle(.plain)
+                        .help("Hub Studio KH \(appVersion). Open What's New.")
+                        .accessibilityLabel("Hub Studio KH version \(appVersion). Open What's New.")
                         // Icon-only by the owner's standard; the words live in the hover text.
                         Button {
                             NativeWorkspaceStore.openStudioLauncher()
@@ -1869,13 +1872,6 @@ struct StudioContent: View {
                         .accessibilityLabel("Updates are installed by Studio Launcher KH.")
                         Spacer(minLength: 0)
                     }
-                    // What's New keeps its own line: at the sidebar's width a single pill cannot
-                    // hold the name, the version and a link without truncating one of them
-                    // (footer critic, 2026-11-13).
-                    Button("What's New") { studio.select(.whatsNew) }
-                        .buttonStyle(.link)
-                        .font(HubType.caption)
-                        .help("Show the release notes for this build.")
                     // The single status line, last in the column (owner footer standard, 2026-11-12).
                     HStack(alignment: .top, spacing: HubSpace.tight) {
                         Image(systemName: footerStatusSymbol)
@@ -1892,6 +1888,9 @@ struct StudioContent: View {
             // squeezed (Split View, most obviously) the layout overflowed and macOS clipped it -
             // the sidebar and the page's first column appeared to be cropped away.
             .frame(minWidth: 180, idealWidth: HubSpace.sidebar, maxWidth: HubSpace.sidebar)
+            // An opaque sidebar surface: the drawn rows are not a List, so the column must paint
+            // its own background or it blends into the page (critic, 2026-11-13).
+            .background(Color(nsColor: .controlBackgroundColor))
             Divider()
             VStack(spacing: 0) {
                 // The local-services failure is the notification icon in the sidebar footer, with
@@ -1961,6 +1960,15 @@ struct StudioContent: View {
                 Button("Keep", role: .cancel) { pendingDiscard = nil }
             } message: { _ in
                 Text("This is you declaring the attempt abandoned. The Hub will stop waiting for it, will not try to reconcile it again, and this Mac is released for new work. Any result the original worker may still produce is ignored.")
+            }
+        .confirmationDialog(
+            "The local services are still stopping",
+            isPresented: $studio.forceStopPrompt,
+            titleVisibility: .visible) {
+                Button("Force Stop", role: .destructive) { studio.forceStopNow() }
+                Button("Keep Waiting", role: .cancel) { studio.forceStopPrompt = false }
+            } message: {
+                Text("You can keep waiting or force it to stop. Force Stop may leave an incomplete output or download; it will not restart the job.")
             }
     }
 
@@ -2068,6 +2076,10 @@ struct StudioContent: View {
             $0.function == function && $0.cached && $0.supported && $0.runtimeReady && !$0.paused
         }
         if let ready, ready.cached, ready.supported, ready.runtimeReady, !ready.paused {
+            if function == .audio, !ready.reportsVoiceModes {
+                return PageStatusLine("\(ready.label) is installed, but its engine has not reported its voice modes — update it or choose another model.",
+                                      tone: .warn)
+            }
             let work = active == 0 ? "no jobs running"
                 : "\(active) \(active == 1 ? "job" : "jobs") running"
             return PageStatusLine("Ready · \(ready.label) · \(work)", tone: active > 0 ? .ok : .off)
@@ -2107,8 +2119,12 @@ struct StudioContent: View {
         if !activeDownloads.isEmpty {
             parts.append("\(activeDownloads.count) downloading")
         }
+        // A job that has gone quiet is not a green page, even while others run.
+        let stalled = (activeAudio + activeImages + activeMusic + activeVideo)
+            .contains { ($0.stalledSeconds ?? 0) > 0 }
         return PageStatusLine(parts.joined(separator: " · "),
-                              tone: running > 0 || !activeDownloads.isEmpty ? .ok : .off)
+                              tone: stalled ? .warn
+                                : (running > 0 || !activeDownloads.isEmpty ? .ok : .off))
     }
 
     private var overview: some View {
@@ -2116,7 +2132,9 @@ struct StudioContent: View {
                      status: overviewStatus,
                      scrolls: true,
                      primary: localServicesReady
-                        ? PagePrimaryAction("Open Audio") { studio.select(.audio) }
+                        ? PagePrimaryAction((overviewActiveCounts[.all] ?? 0) > 0 ? "Open Jobs" : "Open Audio") {
+                            studio.select((overviewActiveCounts[.all] ?? 0) > 0 ? .jobs : .audio)
+                        }
                         : PagePrimaryAction("Start Services", isEnabled: studio.canConfigure) { studio.start() },
                      menu: [
                         PageMenuAction("All Jobs", symbol: "list.bullet.rectangle") { studio.select(.jobs) },
@@ -4728,6 +4746,11 @@ struct StudioContent: View {
                     Text("Sections of \(longForm.chosenSectionMaxCharacters) chars · speed: \(longForm.speedDelivery == "native" ? "engine" : "post-pass")")
                         .font(HubType.caption).foregroundStyle(.tertiary)
                 }
+                // A model with no Download button says why on its own row, not only in Details.
+                if let reason = model.blockReason {
+                    Text(reason).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: HubSpace.m)
             if !model.cached, model.supported,
@@ -5243,7 +5266,6 @@ struct StudioContent: View {
                     }
                     .hubPrimary()
                     .disabled(!connected || preset.refused != nil || !workspace.installBusy.isEmpty)
-                    Text(preset.name).font(HubType.secondary).foregroundStyle(.secondary)
                     if preset.refused != nil {
                         Text("Not enough space on the models' drive for this set.")
                             .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
@@ -5292,8 +5314,7 @@ struct StudioContent: View {
                 }
             }
             .padding(HubSpace.l)
-            // One height for every card in the row, so their edges line up whatever their copy.
-            .frame(maxWidth: .infinity, minHeight: 168, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: HubRadius.card))
             .overlay(RoundedRectangle(cornerRadius: HubRadius.card)
                 .stroke(chosen ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: chosen ? 2 : 1))
@@ -5686,6 +5707,20 @@ struct StudioContent: View {
                 }
             }
         }
+        .confirmationDialog(
+            "Remove downloaded model?",
+            isPresented: Binding(get: { pendingModelRemoval != nil },
+                                 set: { if !$0 { pendingModelRemoval = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingModelRemoval) { model in
+                Button("Remove Download", role: .destructive) {
+                    pendingModelRemoval = nil
+                    Task { await workspace.removeModel(model) }
+                }
+                Button("Keep Model", role: .cancel) { pendingModelRemoval = nil }
+            } message: { model in
+                Text("Move \(model.label) into this library's trash. Nothing is deleted: it can be restored for 30 days, then it goes to the Mac's Trash. Generated files are kept. A model a job is using, or one another installed model needs, is refused and says which.")
+            }
         // The defaults are read when this tab appears, once per Studio and once per connection: it
         // is one request each, and nothing on the two-second poll depends on it. Keyed on the
         // connection, so a reconnect reads the new Hub's answers rather than showing the last one's.
@@ -5789,7 +5824,9 @@ struct StudioContent: View {
     private var renderGrantLine: some View {
         VStack(alignment: .leading, spacing: HubSpace.xs) {
             if let authority = workspace.renderAuthority {
-                Text(authority.grantLine)
+                // The grant's internal version ("v2") is not something a person acts on.
+                Text(authority.grantLine.replacingOccurrences(of: " \\(v[0-9]+\\)", with: "",
+                                                             options: .regularExpression))
                     .font(HubType.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 let tuples = authority.effectiveTuples
@@ -5972,9 +6009,20 @@ struct StudioContent: View {
                     selection: $historyTab,
                     items: HistoryTab.allCases.map { tab in
                         let running = workspace.downloads.filter { active($0.state) }.count
+                        // Every filter carries its count at a width that fits; a narrow window
+                        // keeps the short labels so the row does not have to scroll.
+                        let jobs = workspace.jobHistories.flatMap(\.jobs)
+                        let count: Int? = {
+                            if tab == .all { return jobs.count }
+                            if tab == .downloads { return running > 0 ? running : nil }
+                            guard let studio = tab.studio else { return nil }
+                            return workspace.jobHistories.first { $0.function == studio }?.jobs.count
+                        }()
+                        let label = (windowWidth >= 980 ? count.map { "\(tab.title) \($0)" } : nil)
+                            ?? (tab == .downloads && running > 0 ? "\(tab.title) (\(running))" : tab.title)
                         return HubSegmentItem(
                             tag: tab,
-                            label: tab == .downloads && running > 0 ? "\(tab.title) (\(running))" : tab.title,
+                            label: label,
                             symbol: windowWidth < 980 ? nil
                                 : (tab == .all ? "square.grid.2x2"
                                    : (tab == .downloads ? "arrow.down.circle" : tab.studio?.symbol))
@@ -6316,37 +6364,47 @@ struct StudioContent: View {
     }
 
     private func downloadRow(_ download: NativeDownload) -> some View {
-        VStack(alignment: .leading, spacing: HubSpace.tight) {
-            HStack {
-                Text(modelName(download.repo)).lineLimit(1)
-                Spacer()
-                StatusBadge(text: stateLabel(download.state),
-                            status: download.error != nil ? .bad : (active(download.state) ? .info : .ok),
-                            symbol: active(download.state) ? "arrow.down.circle" : nil)
-                if active(download.state) { Button("Cancel") { Task { await workspace.cancelDownload(download) } }.disabled(!connected) }
-                else if download.error != nil { Button("Dismiss") { workspace.dismissDownload(download) } }
-            }
-            if active(download.state) {
-                if download.percent > 0 || download.totalBytes > 0 {
-                    ProgressView(value: min(100, max(0, download.percent)), total: 100)
-                    if download.totalBytes > 0 {
-                        Text("\(ByteCountFormatter.string(fromByteCount: download.downloadedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: download.totalBytes, countStyle: .file))")
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                    }
-                } else {
-                    // No byte counts yet (the Hub measures them from the folder the download writes
-                    // into, which does not exist until the first file starts), so there is no honest
-                    // percentage to draw, and a bar pinned at zero reads as "stuck". The size comes
-                    // from the model itself, which is the same figure the Models page shows.
-                    HStack(spacing: HubSpace.s) {
-                        ProgressView().controlSize(.small)
-                        Text(sizeCaption(for: download))
-                            .font(HubType.caption).foregroundStyle(.secondary)
+        // The same row shape as a job: text and progress in the content slot, one action in the
+        // fixed actions column, so a Cancel lines up with the job Cancels above it.
+        ActionRow {
+            VStack(alignment: .leading, spacing: HubSpace.tight) {
+                HStack(spacing: HubSpace.s) {
+                    Text(modelName(download.repo)).lineLimit(1)
+                    if active(download.state) {
+                        StatusBadge(text: "Downloading \(Int(min(100, max(0, download.percent))))%",
+                                    status: .info, symbol: "arrow.down.circle")
+                    } else {
+                        StatusBadge(text: stateLabel(download.state),
+                                    status: download.error != nil ? .bad : .ok)
                     }
                 }
+                if active(download.state) {
+                    if download.percent > 0 || download.totalBytes > 0 {
+                        ProgressView(value: min(100, max(0, download.percent)), total: 100)
+                        if download.totalBytes > 0 {
+                            Text("\(ByteCountFormatter.string(fromByteCount: download.downloadedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: download.totalBytes, countStyle: .file))")
+                                .font(HubType.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        // No byte counts yet: the model's own size, never a bar pinned at zero.
+                        HStack(spacing: HubSpace.s) {
+                            ProgressView().controlSize(.small)
+                            Text(sizeCaption(for: download))
+                                .font(HubType.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let error = download.error, !error.isEmpty {
+                    Text(error).font(HubType.caption).foregroundStyle(HubStatus.bad.textColor).textSelection(.enabled)
+                }
             }
-            if let error = download.error, !error.isEmpty {
-                Text(error).font(HubType.caption).foregroundStyle(HubStatus.bad.textColor).textSelection(.enabled)
+            RowActions {
+                if active(download.state) {
+                    Button("Cancel") { Task { await workspace.cancelDownload(download) } }
+                        .disabled(!connected).rowAction()
+                } else if download.error != nil {
+                    Button("Dismiss") { workspace.dismissDownload(download) }.rowAction()
+                }
             }
         }
     }
@@ -6754,7 +6812,9 @@ struct StudioContent: View {
     private var settings: some View {
         PageScaffold(title: pageTitle(.settings),
                      status: localServicesReady
-                        ? PageStatusLine("Hub running · changes save as you make them", tone: .ok)
+                        ? (workspace.workPolicy?.machineEnabled == false
+                           ? PageStatusLine("Hub running · local work is paused (resume on Gateway's Fleet page)", tone: .warn)
+                           : PageStatusLine("Hub running · changes save as you make them", tone: .ok))
                         : PageStatusLine("Hub stopped — start it in Startup below.", tone: .warn),
                      scrolls: true,
                      primary: localServicesReady ? nil
@@ -6791,6 +6851,9 @@ struct StudioContent: View {
                 if let note = workspace.developerModeNote ?? workspace.developerModeSetting?.reason?.detail {
                     Text(note).font(HubType.secondary).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if !connected {
+                    Text("The Hub has not answered, so it cannot say why.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
                 }
                 Text("Closing the window keeps local jobs running. Quit stops the app and its services.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
@@ -6930,14 +6993,14 @@ struct StudioContent: View {
         return PageScaffold(title: pageTitle(.whatsNew),
                             status: ReleaseNotes.hasNotes
                                 ? PageStatusLine("Hub Studio KH \(ReleaseNotes.currentVersion) · newest first")
-                                : PageStatusLine("These notes were not found inside this build — Studio Launcher installs the current one.", tone: .warn),
+                                : PageStatusLine("These notes were not found inside this build — Studio Launcher can reinstall it.", tone: .warn),
                             scrolls: true) {
             if !ReleaseNotes.hasNotes {
                 // The next step is the build that ships the notes: Studio Launcher installs it.
                 HStack(spacing: HubSpace.m) {
                     Button("Open Studio Launcher") { NativeWorkspaceStore.openStudioLauncher() }
                         .hubPrimary()
-                    Text("Install the current build there; its notes ship inside the app.")
+                    Text("Reinstall this build there, or install a newer one; its notes ship inside the app.")
                         .font(HubType.secondary).foregroundStyle(.secondary)
                     Spacer()
                 }
@@ -8188,13 +8251,18 @@ struct StudioContent: View {
         HStack(spacing: HubSpace.xs) {
             if canPinWork, let machine = row.machine {
                 let pinned = workspace.routingPin == "machine:\(machine.machine)"
-                Button(pinned ? "Automatic" : "Send Here") {
-                    workspace.routingPin = pinned ? nil : "machine:\(machine.machine)"
+                // No dead button: an offline Mac has no Send Here at all, and the row's advice
+                // says to start it. Clearing an existing pin to it is still offered.
+                if machine.reachable || pinned {
+                    Button(pinned ? "Automatic" : "Send Here") {
+                        workspace.routingPin = pinned ? nil : "machine:\(machine.machine)"
+                    }
+                    .disabled(!connected)
+                    .help("Send new Image, Voice, Subtitle and Music work to this Mac until you clear the pin.")
+                    .rowAction()
+                } else {
+                    Color.clear.frame(width: 78, height: 1).accessibilityHidden(true)
                 }
-                // An offline Mac cannot be pinned; clearing an existing pin to it always works.
-                .disabled(!connected || (!machine.reachable && !pinned))
-                .help("Send new Image, Voice, Subtitle and Music work to this Mac until you clear the pin.")
-                .rowAction()
             } else if canPinWork {
                 // Keep the Send Here column's left edge on every row, including a Mac the roster
                 // has no live machine row for.
@@ -8570,7 +8638,9 @@ struct StudioContent: View {
                 if workspace.fleetReadError != nil { return "Controller · nodes not read" }
                 return "Controller"
             }
-            let count = nodes.count
+            // This Mac is in the group too, and Connections counts it; the footer cannot say one
+            // fewer than the table (critic, 2026-11-13).
+            let count = nodes.count + 1
             // "Macs", not "nodes": the Overview's job filter also counts "Nodes", meaning Macs that
             // are running work, and two different node counts on one screen read as a contradiction
             // (page critic, 2026-11-12). This line counts the Macs on the controller's roster.
@@ -8587,21 +8657,6 @@ struct StudioContent: View {
         case "standalone": return "Standalone"
         default: return "Not reporting"
         }
-    }
-
-    /// "Image 1 · Audio 8 · Subtitle 3 · Music 2" - how many models this Mac can run for each
-    /// studio, counted with the same filter the model pickers use, so the sidebar and the picker
-    /// always agree. It counts models, not workers: every Mac runs one worker per studio, so a
-    /// worker count said "1" beside a picker offering eight. The Studios come from
-    /// `StudioFunction.allCases`, so a new one is counted here without a second edit.
-    private var generatorSummary: String {
-        let parts = StudioFunction.allCases.filter { $0.hasEngine }.compactMap { function -> String? in
-            let count = workspace.supportedModels(for: function).filter(NativeWorkspaceStore.runsHere).count
-            guard count > 0 else { return nil }
-            let label = StudioPage.page(for: function)?.title ?? function.rawValue
-            return "\(label) \(count)"
-        }
-        return parts.joined(separator: " · ")
     }
 
     private func roleExplanation(_ role: String?) -> String {
@@ -8999,11 +9054,9 @@ struct StudioContent: View {
             catch { fileActionError = error.localizedDescription }
         }
     }
-    private func confirmRemove(_ model: NativeModel) {
-        let alert = NSAlert(); alert.messageText = "Remove downloaded model?"; alert.informativeText = "Move \(model.label) into this library's trash. Nothing is deleted: it can be restored for 30 days, then it goes to the Mac's Trash. Generated files are kept. A model a job is using, or one another installed model needs, is refused and says which."
-        alert.addButton(withTitle: "Keep Model"); alert.addButton(withTitle: "Remove Download")
-        if alert.runModal() == .alertSecondButtonReturn { Task { await workspace.removeModel(model) } }
-    }
+    /// An in-app dialog, never a native alert (owner gate, 2026-11-13): the question and both
+    /// answers are part of the page, so the window cannot lose them.
+    private func confirmRemove(_ model: NativeModel) { pendingModelRemoval = model }
 }
 
 /// The sidebar's one line about startup: shown only when this Mac is in a fleet and will not bring its

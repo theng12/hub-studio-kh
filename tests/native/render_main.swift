@@ -142,6 +142,9 @@ struct PageRenderHarness {
             seedRenders(studio.workspace)
             // Running services and both tokens, so Connections draws its (masked) credential rows.
             studio.readyURL = URL(string: "http://127.0.0.1:47873")
+            // The footer's status line is the app's own field; a fixture Hub is running, so the
+            // line must not keep its first-launch "Choose a model library" (critic, 2026-11-13).
+            studio.status = "Hub running · local services ready"
             studio.connectionToken = "render-fixture-hub-token-0123456789"
             let hubState = scratch.appendingPathComponent("hub")
             try? FileManager.default.createDirectory(at: hubState, withIntermediateDirectories: true)

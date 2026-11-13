@@ -51,6 +51,8 @@ enum ExistingInstanceHandler {
 final class StudioController: ObservableObject {
     @Published var selection: StudioPage = .overview
     @Published var status = "Choose a model library"
+    /// Set when a stop has hung: the window draws an in-app dialog instead of a native alert.
+    @Published var forceStopPrompt = false
     @Published var failure: String?
     @Published var readyURL: URL?
     /// The credential this app already holds for its own Hub, so Connections can reveal it
@@ -714,12 +716,12 @@ final class StudioController: ObservableObject {
     var recoveryPending: Bool { restartTask != nil }
     func confirmForceStop() {
         guard let worker, worker.isRunning, canForceStop else { return }
-        let alert = NSAlert()
-        alert.messageText = "The local services are still stopping"
-        alert.informativeText = "You can keep waiting or force it to stop. Force Stop may leave an incomplete output or download; it will not restart the job."
-        alert.addButton(withTitle: "Keep Waiting").keyEquivalent = "\u{1b}"  // Esc keeps running
-        alert.addButton(withTitle: "Force Stop")
-        if alert.runModal() == .alertSecondButtonReturn { forceStop() }
+        forceStopPrompt = true
+    }
+    /// The dialog's destructive answer; Escape and Keep Waiting leave the services stopping.
+    func forceStopNow() {
+        forceStopPrompt = false
+        forceStop()
     }
     /// Set by Quit: the force-stop escalation then acts by itself.
     var forceStopWithoutAsking = false

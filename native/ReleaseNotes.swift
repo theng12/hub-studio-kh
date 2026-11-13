@@ -29,6 +29,8 @@ enum ReleaseNotes {
     /// so "the body is non-empty" cannot answer this; the page uses this flag to offer the update
     /// path instead of dressing the fallback up as notes.
     static var hasNotes: Bool {
+        // The offscreen render harness points the notes at a file instead of a bundle.
+        if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_NOTES"] != nil { return true }
         guard let url = Bundle.main.url(forResource: "release-notes", withExtension: "md"),
               let body = try? String(contentsOf: url, encoding: .utf8) else { return false }
         return !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
