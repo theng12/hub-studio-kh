@@ -7081,8 +7081,17 @@ struct StudioContent: View {
                     Spacer()
                 }
             } else {
-                MarkdownText(markdown: body.joined(separator: "\n"))
+                // Plain-language changes first; engineering detail is a disclosure, not the page.
+                let notes = body.joined(separator: "\n")
+                let parts = notes.components(separatedBy: "### Technical notes")
+                MarkdownText(markdown: parts[0])
                     .frame(maxWidth: 760, alignment: .leading)
+                if parts.count > 1 {
+                    DiagnosticDetails(title: "Technical notes", summary: "engineering detail") {
+                        MarkdownText(markdown: parts.dropFirst().joined(separator: "### Technical notes"))
+                    }
+                    .frame(maxWidth: 760, alignment: .leading)
+                }
             }
         }
     }
