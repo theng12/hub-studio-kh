@@ -7918,7 +7918,8 @@ struct StudioContent: View {
     @ViewBuilder private var nodesSummary: some View {
         VStack(alignment: .leading, spacing: HubSpace.xs) {
             if let overview = workspace.fleetOverview {
-                Text(poolSummary(overview) + " " + countsLine(overview))
+                let rows = NativeFleetRow.rows(overview: workspace.fleetOverview, nodes: workspace.fleetNodes)
+                Text(poolSummary(overview) + " " + countsLine(rows))
                     .font(HubType.secondary).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(pinSummary)
@@ -7940,8 +7941,9 @@ struct StudioContent: View {
         }
     }
 
-    private func countsLine(_ overview: NativeFleetOverview) -> String {
-        var line = "\(overview.summary.reachable) of \(overview.summary.total) reachable now"
+    /// Counts the rows the table draws, this Mac included, so the sentence and the table agree.
+    private func countsLine(_ rows: [NativeFleetRow]) -> String {
+        var line = "\(rows.filter(\.isReachable).count) of \(rows.count) reachable now"
         if let fleet = workspace.fleetNodes {
             if let refused = fleet.summary.unauthorized, refused > 0 {
                 line += " · \(refused) refused this controller's credential"
