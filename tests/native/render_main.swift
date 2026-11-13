@@ -45,10 +45,16 @@ import SwiftUI
                 for child in view.subviews { visit(child, insideScroll: true) }
                 return
             }
-            if !insideScroll {
+            // Containers may legitimately extend past a clip; a control may not. Only controls
+            // outside a scroll view are checked, so a list's own taller document is not a finding.
+            let isControl = view is NSControl || view is NSTextView
+            if isControl, !insideScroll {
                 let frameInRoot = view.convert(view.bounds, to: root)
-                if frameInRoot.maxX > root.bounds.width + 1 || frameInRoot.minX < -1 {
-                    result.clipped.append("\(name) x=\(Int(frameInRoot.minX))..\(Int(frameInRoot.maxX))")
+                // Outside a scroll view, reaching past any window edge is a clipped control. Inside
+                // one, a taller document is the scroll itself and is not a defect.
+                if frameInRoot.maxX > root.bounds.width + 1 || frameInRoot.minX < -1
+                    || frameInRoot.maxY > root.bounds.height + 1 || frameInRoot.minY < -1 {
+                    result.clipped.append("\(name) x=\(Int(frameInRoot.minX))..\(Int(frameInRoot.maxX)) y=\(Int(frameInRoot.minY))..\(Int(frameInRoot.maxY))")
                 }
             }
             for child in view.subviews { visit(child, insideScroll: insideScroll) }
@@ -195,6 +201,10 @@ struct PageRenderHarness {
         let borderless = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_BORDERLESS"] == "1"
         for appearance in appearances {
         if let appearance { app.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua) }
+        // The app owns its appearance now (Settings > Appearance). Set the preference the app
+        // reads, not just NSApp.appearance: the view's onAppear otherwise resets it to System and
+        // every "light" render came out dark (critic, 2026-11-13).
+        UserDefaults.standard.set(appearance ?? "system", forKey: "studiohub.appearance")
         for role in (roles.isEmpty ? [nil] : roles) {
         if let role { applyRole(role, to: studio.workspace) }
         Self.applyInstallPlan(studio.workspace)
@@ -220,6 +230,18 @@ struct PageRenderHarness {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.15))
                 hosting.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
+            }
+            // The fixture has no Hub to poll, so the page's first refresh records a read error
+            // above live fixture rows. Clear it after the view has settled: the fixture is the
+            // "last good read", and a banner contradicting the rows is not a state to review.
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" {
+                studio.workspace.catalogReadError = nil
+                studio.workspace.fleetReadError = nil
+                for _ in 0..<3 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                    hosting.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                }
             }
             if page == .connections && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_CONNECTION_COPY"] == "1" {
                 func scrollView(_ view: NSView) -> NSScrollView? {
@@ -479,7 +501,7 @@ struct PageRenderHarness {
             NativeInstallGroup(job: "image", models: [
                 model("z-image-turbo-mflux-4bit", "Z-Image-Turbo 6B", "image",
                       "Fast pictures from words; the everyday image model on a small Mac.",
-                      "MLX 4-bit", 5.9, 8, installed: true),
+                      "MLX 4-bit", 5.9, 8),
                 model("qwen-image-2-1-turbo-mflux-q4", "Qwen Image 2.1 Turbo Low-RAM", "image",
                       "Higher-fidelity pictures in eight steps.", "MLX 4-bit", 10.0, 16),
                 model("qwen-image-2-1-mlx-serve-4bit", "Qwen Image 2.1 (native MLX server)", "image",
@@ -505,7 +527,7 @@ struct PageRenderHarness {
                       installed: true)])
         ]
         workspace.seedInstallPlanForRendering(NativeInstallPlan(
-            memoryGB: 16, library: "/Volumes/KH-STUDIO-ATLAS/model-target",
+            memoryGB: 32, library: "/Volumes/KH-STUDIO-ATLAS/model-target",
             diskPath: "/Volumes/KH-STUDIO-ATLAS/model-target", freeBytes: 380_200_000_000,
             diskMeasured: true, stopBytes: 5_000_000_000,
             presets: presets,
@@ -690,8 +712,8 @@ struct PageRenderHarness {
         workspace.hubVersion = decode(NativeVersion.self, #"{"version":"0.6.126","build":"a1b2c3d","source":"app"}"#)
         // One download in flight, so the catalogue's "Downloading 42%" chip is looked at too.
         workspace.downloads = [
-            NativeDownload(id: "fixture-download", repo: "Tongyi-MAI/Z-Image-Turbo", state: "running",
-                           percent: 42, downloadedBytes: 5_200_000_000, totalBytes: 12_400_000_000, error: nil),
+            NativeDownload(id: "fixture-download", repo: "vanch007/mlx-Yue2-3B", state: "running",
+                           percent: 42, downloadedBytes: 3_000_000_000, totalBytes: 7_200_000_000, error: nil),
         ]
         // One job in every live or failed state, so the badges and progress lines are looked at too.
         func live(_ id: String, _ state: String, _ model: String, _ prompt: String, progress: Double = 0,

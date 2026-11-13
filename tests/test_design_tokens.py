@@ -106,6 +106,20 @@ class PageTests(unittest.TestCase):
             self.assertNotIn("scrolls: true", page_body(name), f"{name} scrolls inside its panes, not as a page")
 
 
+class KeyboardTests(unittest.TestCase):
+    def test_escape_closes_dialogs_and_clears_searches(self) -> None:
+        """Escape is the app's cancel: sheets, the image lightbox and every search field."""
+        for needle in (
+            'Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)',
+            'Button("Close") { imageModalID = nil }',
+            '.onExitCommand { modelSearch = "" }',
+            '.onExitCommand { jobSearch = "" }',
+            '.onExitCommand { voiceSearch = "" }',
+            'Button("Cancel", role: .cancel)',
+        ):
+            self.assertIn(needle, VIEWS, f"Escape lost its route: {needle}")
+
+
 class FormTests(unittest.TestCase):
     def test_form_labels_sit_above_their_controls_through_one_row(self) -> None:
         picker = VIEWS[VIEWS.index("private func modelPicker"):]
@@ -121,7 +135,9 @@ class RowTests(unittest.TestCase):
         row = VIEWS[VIEWS.index("private func voiceRow"):]
         row = row[:row.index("\n    /// One editor for both adding and editing")]
         self.assertIn("ActionRow {", row)
-        self.assertIn("RowActions {", row)
+        # The three controls sit on one line (the kebab used to wrap under Play); they still
+        # declare themselves as the row's action slot.
+        self.assertIn(".layoutValue(key: RowSlotKey.self, value: .actions)", row)
         self.assertNotIn("Spacer()", row, "the actions column is ActionRow's, not a Spacer's guess")
 
     def test_removed_nodes_rows_are_action_rows(self) -> None:

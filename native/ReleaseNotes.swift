@@ -14,8 +14,13 @@ import SwiftUI
 enum ReleaseNotes {
     /// The version this build is, from the bundle rather than a constant that can drift.
     static var currentVersion: String {
+        // The offscreen render harness is a plain binary with no Info.plist; it passes the version
+        // it is rendering, so What's New names the same build as the footer.
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "unknown"
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            ?? ProcessInfo.processInfo.environment["STUDIOHUB_VERSION"]
+                .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            ?? "unknown"
     }
 
     static var title: String { "Hub Studio KH \(currentVersion)" }
@@ -28,8 +33,8 @@ enum ReleaseNotes {
             return """
             # What's new
 
-            These notes were not found inside the app. The full history is in the `CHANGELOG.md`
-            that ships beside it.
+            These notes were not found inside this build. The full history is in the changelog
+            that ships beside the app.
             """
         }
         return body
