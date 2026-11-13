@@ -38,6 +38,11 @@ class PageAcceptanceTests(unittest.TestCase):
                 for word in ("Present:", "Deliberately absent:", "Missing:"):
                     self.assertIn(word, flat, f"{page} does not state {word[:-1].lower()}")
 
+    def test_the_retired_page_is_recorded_and_not_navigation(self) -> None:
+        body = section("Retired — Video")
+        self.assertIn("Not a navigation page", body)
+        self.assertIn("retired", body.lower())
+
     def test_the_record_names_the_live_producers_not_a_second_list(self) -> None:
         # The cross-check must read what the producers publish, never a page-local enumeration.
         self.assertIn("NativeModel", DOC)

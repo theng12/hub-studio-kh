@@ -2133,7 +2133,7 @@ struct StudioContent: View {
     /// order an operator asks about them.
     private var overviewStatus: PageStatusLine {
         if testMachine {
-            return PageStatusLine("Test machine · \(localServicesReady ? "services running" : "services off") · no model library needed",
+            return PageStatusLine("Test machine · \(localServicesReady ? "services running" : "services off")",
                                   tone: localServicesReady ? .ok : .off)
         }
         if !localServicesReady {
@@ -3085,25 +3085,6 @@ struct StudioContent: View {
         .rowAction()
     }
 
-    /// The second and third actions of a finished row, behind one menu: a row keeps Play (or
-    /// Preview) primary and Save beside it, and Reveal is here rather than a third button.
-    private func revealMenu(_ job: NativeJob) -> some View {
-        Menu {
-            Button("Show in Folder") {
-                if !workspace.revealArtifact(job) { fileActionError = job.revealUnavailableReason }
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 13, weight: .semibold))
-                .frame(width: 22, height: 18)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help(job.canRevealArtifact ? "Show this file in Finder" : job.revealUnavailableReason)
-        .accessibilityLabel("More actions for this clip")
-    }
-
     /// Puts a failed job back in the queue (`POST .../items/{i}/retry`); prompt and settings are kept.
     @ViewBuilder private func retryButton(_ job: NativeJob) -> some View {
         Button("Retry") { Task { await workspace.retryJob(job) } }.disabled(!connected).rowAction()
@@ -3652,7 +3633,7 @@ struct StudioContent: View {
     private var videoWorkspace: some View {
         PageScaffold(title: pageTitle(.video),
                      status: noVideoModel
-                        ? PageStatusLine("No video model ships in this version — ask for one to be added, or use Image and Music.", tone: .off)
+                        ? PageStatusLine("The local video model was retired; finished clips stay in Jobs and Renders.", tone: .off)
                         : studioStatus(.video, active: activeVideo.count, selected: workspace.videoModel),
                      menu: studioPageMenu) {
             if !connected { setup }
@@ -5961,20 +5942,16 @@ struct StudioContent: View {
             ?? (totals.succeeded == 0 ? "none yet" : "unknown")
         return HubCard {
             VStack(alignment: .leading, spacing: HubSpace.m) {
-                HStack(alignment: .top, spacing: HubSpace.xl) {
-                    renderStat("Renders", "\(totals.processed)", counts.joined(separator: " · "))
-                    renderStat("Output video", output,
-                               totals.unknownDuration > 0
-                                 ? "\(totals.unknownDuration) with no recorded length"
-                                 : "of finished video")
-                    renderStat("Average render",
-                               totals.averageWallSeconds.map { NativeJob.clock($0) } ?? "not measured",
-                               totals.measuredRenders > 0
-                                 ? "over \(totals.measuredRenders) timed render\(totals.measuredRenders == 1 ? "" : "s")"
-                                 : "no render timed yet")
-                    renderStat("Speed",
-                               totals.speed.map { String(format: "%.1f× real time", $0) } ?? "not measured",
-                               "video seconds per second of rendering")
+                // Four columns wide, 2x2 in a narrow window: a value split mid-phrase
+                // ("6 min / 46 s") is not a metric.
+                if windowWidth >= 1000 {
+                    HStack(alignment: .top, spacing: HubSpace.xl) { renderStats(totals, counts: counts, output: output) }
+                } else {
+                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .topLeading),
+                                                 GridItem(.flexible(), alignment: .topLeading)],
+                              alignment: .leading, spacing: HubSpace.m) {
+                        renderStats(totals, counts: counts, output: output)
+                    }
                 }
                 // Only where the list came from more than one Mac: a node's page is its own.
                 if let machines = history.machines, machines.count > 1 {
@@ -5997,10 +5974,27 @@ struct StudioContent: View {
         }
     }
 
+    @ViewBuilder
+    private func renderStats(_ totals: NativeRenderTotals, counts: [String], output: String) -> some View {
+        renderStat("Renders", "\(totals.processed)", counts.joined(separator: " · "))
+        renderStat("Output video", output,
+                   totals.unknownDuration > 0
+                     ? "\(totals.unknownDuration) with no recorded length"
+                     : "of finished video")
+        renderStat("Average render",
+                   totals.averageWallSeconds.map { NativeJob.clock($0) } ?? "not measured",
+                   totals.measuredRenders > 0
+                     ? "over \(totals.measuredRenders) timed render\(totals.measuredRenders == 1 ? "" : "s")"
+                     : "no render timed yet")
+        renderStat("Speed",
+                   totals.speed.map { String(format: "%.1f× real time", $0) } ?? "not measured",
+                   "video seconds per second of rendering")
+    }
+
     private func renderStat(_ title: String, _ value: String, _ detail: String) -> some View {
         VStack(alignment: .leading, spacing: HubSpace.xs) {
             Text(title).font(HubType.caption).foregroundStyle(.secondary)
-            Text(value).font(HubType.figure)
+            Text(value).font(HubType.figure).lineLimit(1).minimumScaleFactor(0.75)
             Text(detail).font(HubType.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -6397,8 +6391,21 @@ struct StudioContent: View {
                                 } catch { fileActionError = error.localizedDescription }
                             }
                         }.disabled(!connected).rowAction()
-                        Button("Save…") { saveAudio(job) }.disabled(!connected).rowAction()
-                        revealMenu(job)
+                        Menu {
+                            Button("Save…") { saveAudio(job) }.disabled(!connected)
+                            Button("Show in Folder") {
+                                if !workspace.revealArtifact(job) { fileActionError = job.revealUnavailableReason }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(width: 22, height: 18)
+                                .contentShape(Rectangle())
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Save or show this clip")
+                        .accessibilityLabel("More actions for this clip")
                     } else if job.state == "uncertain" {
                         Button("Discard…", role: .destructive) { requestDiscard(job, kind: .audio) }.disabled(!connected).rowAction()
                     } else if job.state == "error" { retryButton(job)
@@ -7045,7 +7052,7 @@ struct StudioContent: View {
                     DiagnosticValue(label: "Folder", value: studio.configuration.dataDirectory.path)
                 }
                 Button("Show App Data") { NSWorkspace.shared.open(studio.configuration.dataDirectory) }
-                ValueRow("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
+                ValueRow("Version", value: appVersion)
             }
             }
         }

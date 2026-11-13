@@ -167,3 +167,9 @@ gate adds the measured 1440/768 layout, contrast and independent 4/4 review.
   the page never dresses the fallback up as notes.
 - Standard: **App Store What's New / Sparkle release notes**. Present: versioned notes, disclosure.
   Deliberately absent: update installation (Studio Launcher owns it). Missing: none named.
+
+## Retired — Video
+
+Not a navigation page. The Video lane was retired; its page and clips remain reachable only through
+Jobs and Renders, and it deliberately has no Create entry, no model picker promise and no install
+invitation. It is excluded from the all-pages render set; the Jobs Video tab is its history.

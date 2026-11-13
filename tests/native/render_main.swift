@@ -145,6 +145,10 @@ struct PageRenderHarness {
             // The footer's status line is the app's own field; a fixture Hub is running, so the
             // line must not keep its first-launch "Choose a model library" (critic, 2026-11-13).
             studio.status = "Hub running · local services ready"
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_SERVICES"] == "off" {
+                studio.readyURL = nil
+                studio.status = "Local services are stopped"
+            }
             studio.connectionToken = "render-fixture-hub-token-0123456789"
             let hubState = scratch.appendingPathComponent("hub")
             try? FileManager.default.createDirectory(at: hubState, withIntermediateDirectories: true)

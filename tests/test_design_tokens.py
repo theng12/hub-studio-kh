@@ -98,7 +98,7 @@ class PageTests(unittest.TestCase):
         # The fleet footer is one status line now; the Mac's name and group live in its tooltip.
         self.assertIn("thisMachineName", VIEWS)
         self.assertIn("groupLine", VIEWS)
-        self.assertIn('.help("\(thisMachineName) · \(groupLine)")', VIEWS)
+        self.assertIn('.help("\(role) · \(thisMachineName) · \(groupLine)")', VIEWS)
 
     def test_scrolling_pages_say_so_and_split_pages_do_not(self) -> None:
         for name in ("overview", "jobsWorkspace", "connections", "whatsNew", "settings"):
