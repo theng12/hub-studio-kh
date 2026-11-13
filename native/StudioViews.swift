@@ -6971,7 +6971,9 @@ struct StudioContent: View {
                     .font(HubType.secondary).foregroundStyle(.secondary)
             }
             HubSection("Model library") {
-                ValueRow("Location") { Text(studio.configuration.modelsDirectory?.path ?? "Not selected").font(HubType.mono).textSelection(.enabled).multilineTextAlignment(.trailing) }
+                DiagnosticDetails(title: "Location", summary: "where models are stored") {
+                    DiagnosticValue(label: "Folder", value: studio.configuration.modelsDirectory?.path)
+                }
                 if studio.hasLibrary && !studio.libraryFolderExists {
                     // A library on a drive that is not connected stays selected and is recoverable, so
                     // this names which way it failed instead of leaving a grey button with no reason.
@@ -7034,7 +7036,9 @@ struct StudioContent: View {
                 storageControls
             }
             HubSection("App data") {
-                ValueRow("Location") { Text(studio.configuration.dataDirectory.path).font(HubType.mono).textSelection(.enabled).multilineTextAlignment(.trailing) }
+                DiagnosticDetails(title: "Location", summary: "where settings and jobs live") {
+                    DiagnosticValue(label: "Folder", value: studio.configuration.dataDirectory.path)
+                }
                 Button("Show App Data") { NSWorkspace.shared.open(studio.configuration.dataDirectory) }
                 ValueRow("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
             }
