@@ -2181,7 +2181,7 @@ struct StudioContent: View {
                         ? PagePrimaryAction((overviewActiveCounts[.all] ?? 0) > 0 ? "Open Jobs" : "Open Audio") {
                             studio.select((overviewActiveCounts[.all] ?? 0) > 0 ? .jobs : .audio)
                         }
-                        : PagePrimaryAction("Start Services", isEnabled: studio.canConfigure) { studio.start() },
+                        : nil,
                      menu: [
                         PageMenuAction("All Jobs", symbol: "list.bullet.rectangle") { studio.select(.jobs) },
                         PageMenuAction("Set Up This Mac", symbol: "wand.and.stars") { studio.select(.setup) },
@@ -2236,11 +2236,18 @@ struct StudioContent: View {
                                 Text(overviewMachineFilter == .all ? "No active jobs"
                                      : "No active jobs on \(overviewMachineFilter == .thisMac ? "this Mac" : "the nodes")")
                                     .font(HubType.rowTitle)
-                                Text("Open a workspace to start creating. Completed work stays in Jobs.")
+                                Text(localServicesReady
+                                     ? "Open a workspace to start creating. Completed work stays in Jobs."
+                                     : "Start the local services to create on this Mac. Completed work stays in Jobs.")
                                     .font(HubType.secondary).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button("Open Audio") { studio.select(.audio) }.hubRowControl()
+                            if localServicesReady {
+                                Button("Open Audio") { studio.select(.audio) }.hubRowControl()
+                            } else {
+                                Button("Start Services") { studio.start() }
+                                    .hubRowControl().disabled(!studio.canConfigure)
+                            }
                         }
                     } else {
                         // One divider between rows, none after the last: the card draws its own edge.
@@ -6178,17 +6185,6 @@ struct StudioContent: View {
                     JobFacts.stage(row.job.state) == .finished
                         && (row.job.state == "error" || row.job.state == "uncertain")
                 }
-                if !running.isEmpty {
-                    VStack(alignment: .leading, spacing: HubSpace.m) {
-                        sectionTitle("Running now")
-                        LazyVStack(alignment: .leading, spacing: HubSpace.m) {
-                            ForEach(Array(running.enumerated()), id: \.offset) { index, row in
-                                jobRow(row.job, for: row.function)
-                                if index < running.count - 1 { Divider() }
-                            }
-                        }
-                    }
-                }
                 if !needsYou.isEmpty {
                     VStack(alignment: .leading, spacing: HubSpace.m) {
                         sectionTitle("Needs you")
@@ -6196,6 +6192,17 @@ struct StudioContent: View {
                             ForEach(Array(needsYou.enumerated()), id: \.offset) { index, row in
                                 jobRow(row.job, for: row.function)
                                 if index < needsYou.count - 1 { Divider() }
+                            }
+                        }
+                    }
+                }
+                if !running.isEmpty {
+                    VStack(alignment: .leading, spacing: HubSpace.m) {
+                        sectionTitle("Running now")
+                        LazyVStack(alignment: .leading, spacing: HubSpace.m) {
+                            ForEach(Array(running.enumerated()), id: \.offset) { index, row in
+                                jobRow(row.job, for: row.function)
+                                if index < running.count - 1 { Divider() }
                             }
                         }
                     }
@@ -6627,12 +6634,12 @@ struct StudioContent: View {
                 // Tags arrive from the Gateway, which owns them; this row narrows the list and is
                 // the only thing this app does with them.
                 if !voiceTagCounts.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: HubSpace.xs) {
-                            voiceTagButton("All tags", count: workspace.voices.count, tag: nil)
-                            ForEach(voiceTagCounts, id: \.tag) { entry in
-                                voiceTagButton(entry.tag, count: entry.count, tag: entry.tag)
-                            }
+                    // Tags wrap instead of scrolling sideways: a clipped last chip is not a filter.
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: HubSpace.xs, alignment: .leading)],
+                              alignment: .leading, spacing: HubSpace.xs) {
+                        voiceTagButton("All tags", count: workspace.voices.count, tag: nil)
+                        ForEach(voiceTagCounts, id: \.tag) { entry in
+                            voiceTagButton(entry.tag, count: entry.count, tag: entry.tag)
                         }
                     }
                 }
