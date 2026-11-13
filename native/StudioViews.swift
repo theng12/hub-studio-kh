@@ -5520,6 +5520,9 @@ struct StudioContent: View {
                 }
             }
             HStack(spacing: 0) {
+                // A selected model takes the whole page on a narrow window; the 380 pt list plus
+                // the 320 pt detail pane cannot both fit beside the sidebar (critic, 2026-11-13).
+                if windowWidth >= 1000 || selectedModel == nil {
                 List(selection: $selectedModel) {
                     // Under "All" the headings are the Studio list itself, so a Studio the Hub
                     // offers a model for is named without an edit here. Inside a function's own
@@ -5539,13 +5542,21 @@ struct StudioContent: View {
                 // remembered column beside an empty panel. Once a model is picked it goes back to
                 // that column, which is what the divider drags and what is remembered.
                 .frame(width: selectedModel == nil ? nil : CGFloat(modelsListWidth))
+                }
                 // Nothing selected, nothing to inspect: the list keeps the whole width rather than
                 // leaving a panel that says only "select a model" across a third of the page.
                 if let model = workspace.models.first(where: { $0.repo == selectedModel }) {
-                    modelSplitDivider
+                    if windowWidth >= 1000 || selectedModel == nil { modelSplitDivider }
                     ScrollView {
                         let chip = modelStateChip(model)
                         VStack(alignment: .leading, spacing: HubSpace.l) {
+                            if windowWidth < 1000 {
+                                Button { selectedModel = nil } label: {
+                                    Label("All Models", systemImage: "chevron.left")
+                                }
+                                .hubRowControl()
+                                .accessibilityLabel("Back to all models")
+                            }
                             HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
                                 Text(model.label).font(HubType.section).textSelection(.enabled)
                                 StatusBadge(text: chip.text, status: chip.status, symbol: chip.symbol)
