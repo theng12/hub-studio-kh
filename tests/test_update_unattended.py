@@ -1,7 +1,9 @@
-"""The unattended update path (releaseTick -> installOfferedRelease -> relaunch) never needs a person.
+"""The old unattended path never asked a person — and no longer installs at all.
 
-A Mac installed from a drive, with nobody at it, has to update itself. Anything in that path that
-asks a question - a confirmation, a quit prompt, a "still stopping" dialog - waits for ever.
+Owner rule 2026-11-13: only Studio Launcher KH installs updates. `releaseTick` refreshes the
+offer and returns before any install; these source-level guarantees still matter because the
+install and relaunch helpers remain in the tree until they are deleted, and nothing in the API
+layer may ever grow a dialog.
 """
 import re
 import unittest
