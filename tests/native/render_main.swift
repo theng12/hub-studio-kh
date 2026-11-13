@@ -210,6 +210,8 @@ struct PageRenderHarness {
         UserDefaults.standard.set(appearance ?? "system", forKey: "studiohub.appearance")
         UserDefaults.standard.set(ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_TEST_MACHINE"] == "1",
                                   forKey: "studiohub.testMachine")
+        UserDefaults.standard.set(ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FLEET_VIEW"] ?? "table",
+                                  forKey: "hub.fleetView")
         for role in (roles.isEmpty ? [nil] : roles) {
         if let role { applyRole(role, to: studio.workspace) }
         Self.applyInstallPlan(studio.workspace)

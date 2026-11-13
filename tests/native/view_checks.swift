@@ -35,11 +35,19 @@ enum ViewChecks {
         }
         for (appearanceName, appearance) in [("light", NSAppearance(named: .aqua)!),
                                              ("dark", NSAppearance(named: .darkAqua)!)] {
+            // Dynamic colours resolve against the current appearance; resolve the card and the
+            // badge tint inside the appearance being measured, or a light check reads a dark card.
             var card = NSColor.controlBackgroundColor
-            appearance.performAsCurrentDrawingAppearance { card = NSColor.controlBackgroundColor }
+            appearance.performAsCurrentDrawingAppearance {
+                card = NSColor.controlBackgroundColor.usingColorSpace(.sRGB) ?? .white
+            }
             for status in [HubStatus.ok, HubStatus.warn, HubStatus.bad, HubStatus.off, HubStatus.info] {
+                var base = status.baseNSColor
+                appearance.performAsCurrentDrawingAppearance {
+                    base = status.baseNSColor.usingColorSpace(.sRGB) ?? base
+                }
                 let text = status.textNSColor(for: appearance)
-                let fill = composited(status.baseNSColor.withAlphaComponent(0.14), over: card)
+                let fill = composited(base.withAlphaComponent(0.14), over: card)
                 check(contrast(text, fill) >= 4.5,
                       "\(appearanceName) status text \(status) is \(String(format: "%.2f", contrast(text, fill))):1, below 4.5:1")
             }
