@@ -153,7 +153,7 @@ class ConnectionsTableTests(unittest.TestCase):
 
     def test_disk_and_memory_are_badges_in_the_shared_status_colours(self) -> None:
         cell = VIEWS[VIEWS.index("private func resourceCell"):]
-        cell = cell[:cell.index("/// Send here / Automatic")]
+        cell = cell[:cell.index("/// One action per Mac")]
         self.assertIn("StatusBadge(", cell)
         self.assertIn("HubStatus(tier)", cell)
         self.assertIn("MeterBar(", cell)

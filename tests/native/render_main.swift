@@ -22,6 +22,42 @@ import SwiftUI
     static var didCopy = false
 }
 
+/// The native equivalent of `documentScrollWidth == innerWidth`: does any scroll view on the page
+/// have a document wider than the space it shows, and does any control reach past the window?
+/// A page that fails either is a page a person has to scroll sideways or cannot reach at all.
+@MainActor enum PageLayoutMeasure {
+    struct Result {
+        var horizontalScrolls: [String] = []
+        var clipped: [String] = []
+        var pass: Bool { horizontalScrolls.isEmpty && clipped.isEmpty }
+    }
+
+    static func run(_ root: NSView) -> Result {
+        var result = Result()
+        func visit(_ view: NSView, insideScroll: Bool) {
+            let name = view.identifier?.rawValue ?? String(describing: type(of: view))
+            if let scroll = view as? NSScrollView {
+                let shown = scroll.contentView.bounds.width
+                let document = scroll.documentView?.frame.width ?? 0
+                if document > shown + 1 {
+                    result.horizontalScrolls.append("\(name) \(Int(document))>\(Int(shown))")
+                }
+                for child in view.subviews { visit(child, insideScroll: true) }
+                return
+            }
+            if !insideScroll {
+                let frameInRoot = view.convert(view.bounds, to: root)
+                if frameInRoot.maxX > root.bounds.width + 1 || frameInRoot.minX < -1 {
+                    result.clipped.append("\(name) x=\(Int(frameInRoot.minX))..\(Int(frameInRoot.maxX))")
+                }
+            }
+            for child in view.subviews { visit(child, insideScroll: insideScroll) }
+        }
+        visit(root, insideScroll: false)
+        return result
+    }
+}
+
 @main
 struct PageRenderHarness {
     @MainActor static func main() {
@@ -325,6 +361,13 @@ struct PageRenderHarness {
                     "fittingWidth": control.fittingSize.width, "segments": segmentFrames(control)]
                 let data = try! JSONSerialization.data(withJSONObject: metrics, options: [.sortedKeys])
                 print("JOBS_GEOMETRY " + String(data: data, encoding: .utf8)!)
+            }
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_MEASURE"] == "1" {
+                let measure = PageLayoutMeasure.run(hosting)
+                print("MEASURE page=\(fileName(for: page)) size=\(Int(size.0))x\(Int(size.1)) hscroll=\(measure.horizontalScrolls.count) clipped=\(measure.clipped.count) \(measure.pass ? "PASS" : "FAIL")")
+                for item in measure.horizontalScrolls.prefix(4) { print("  HSCROLL \(item)") }
+                for item in measure.clipped.prefix(4) { print("  CLIPPED \(item)") }
+                fflush(stdout)
             }
             guard let representation = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
                 print("could not allocate a bitmap for \(Int(size.0))x\(Int(size.1))")
@@ -645,6 +688,11 @@ struct PageRenderHarness {
                 """)
         }
         workspace.hubVersion = decode(NativeVersion.self, #"{"version":"0.6.126","build":"a1b2c3d","source":"app"}"#)
+        // One download in flight, so the catalogue's "Downloading 42%" chip is looked at too.
+        workspace.downloads = [
+            NativeDownload(id: "fixture-download", repo: "Tongyi-MAI/Z-Image-Turbo", state: "running",
+                           percent: 42, downloadedBytes: 5_200_000_000, totalBytes: 12_400_000_000, error: nil),
+        ]
         // One job in every live or failed state, so the badges and progress lines are looked at too.
         func live(_ id: String, _ state: String, _ model: String, _ prompt: String, progress: Double = 0,
                   stage: String? = nil, error: String? = nil, stalled: Double? = nil) -> NativeJob {

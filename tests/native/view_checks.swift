@@ -218,8 +218,9 @@ enum ViewChecks {
               "a failed attempt's detail says nothing was produced")
         check(legacyFacts.contains("6d0b8f2e") == false,
               "the Story instance belongs in the detail, not in the one-line facts")
-        check(RenderCopy.title(legacy).hasSuffix("c41d0e88"),
-              "a render with no channel or episode name is titled by its own job id")
+        check(RenderCopy.title(legacy).hasPrefix("Final render · ")
+                && !RenderCopy.title(legacy).contains("c41d0e88"),
+              "a render with no channel or episode name is titled by when it was made, never by a job id")
         check(RenderCopy.facts(legacy).contains("This Mac"),
               "the row names the Mac that rendered it")
         // A render Story Studio named shows which channel and episode it belongs to, and the job
@@ -239,8 +240,8 @@ enum ViewChecks {
         check(RenderCopy.title(named).contains("Khmer History")
                 && RenderCopy.title(named).contains("EP012 The Fall"),
               "a named render is titled by its channel and episode: \(RenderCopy.title(named))")
-        check(RenderCopy.title(legacy).contains("c41d0e88"),
-              "a render with no name keeps its job id in the title")
+        check(!RenderCopy.title(legacy).contains("c41d0e88"),
+              "a render with no name keeps its job id out of the title (it is in Details)")
         check(NativeRenderDisplay(channel: nil, episode: "EP013").label == "EP013",
               "one label alone is still shown")
         check(RenderCopy.status(legacy) == .ok && RenderCopy.outcomeLabel(legacy) == "Done",

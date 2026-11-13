@@ -2,6 +2,24 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.234 — 2026-11-13
+
+- Every page now opens the same way: its name, one plain line saying what is true right now (hub running, models ready, jobs moving), at most one main button, and one menu for the rest.
+- Models say what you can do with each one — Ready, Needs setup, Downloading 42%, Not downloaded — instead of Installed or Not installed. A model's repository id and the library folder moved into Details.
+- Macs on Connections read by health first: name and state, what the Mac is doing, disk and memory, and one Send Here action. Its routing id, address, version and last-seen are in Details, and Remove is in the row's own menu.
+- The long explanations on Connections are one-line summaries now, with the whole text behind Details; the Local API's ids moved there too.
+- Jobs, Models, Voices and Renders say what to do next when they are empty, and the Jobs Mac filter carries a count.
+- The Jobs and Models tabs fit a narrow window without scrolling sideways, and each tab has an icon at normal widths. The Studio pages switch between Set up and their result pane instead of cutting the result pane off at 768 points.
+- Settings has Appearance with exactly System, Light and Dark.
+- Render rows are titled by what and when they were made, never by a job id.
+
+### Technical notes
+
+- `PageScaffold` now owns the status line, the one primary action and the overflow; `PageStatusLine`, `PagePrimaryAction`, `PageMenuAction`, `DiagnosticDetails`, `DiagnosticValue` and `StudioSplit` are the shared frame pieces in `native/Design.swift`.
+- The render harness gained `STUDIOHUB_RENDER_MEASURE=1`: it walks every `NSScrollView` (document vs clip width) and every control frame, the native equivalent of `documentScrollWidth == innerWidth`. 60/60 page/size/appearance runs pass at 1440x900 and 768x900; evidence in `_orchestra/hub-lead/ui-pass-0.6.234/evidence/`.
+- `tests/native/view_checks.swift` now pins the new render title rule; the fixture renders one model download so the downloading chip is covered.
+- `tests/test_audio_layout.py` already failed on `bca44d1f` (its `HSplitView`/`maxWidth: 440)` parsers predate Chat's column); one boundary string was updated for `StudioSplit` and the rest are recorded as inherited.
+
 ## 0.6.233 — 2026-11-13
 
 - Hub no longer checks for or installs its own updates. Its footer button and the App updates section point to Studio Launcher KH, which installs updates for every app on this Mac.

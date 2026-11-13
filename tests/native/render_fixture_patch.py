@@ -31,7 +31,9 @@ for decl, kind in (("models", "[NativeModel]"), ("voices", "[NativeVoice]"), ("h
                    ("fleetReadiness", "[String: NativeMachineReadiness]"), ("workstation", "NativeWorkstation?"),
                    ("workPolicy", "NativeWorkPolicy?"),
                    # The Render page's list, seeded by render_main's own fixture (2026-10-26).
-                   ("renderHistory", "NativeRenderHistory?")):
+                   ("renderHistory", "NativeRenderHistory?"),
+                   # A download in flight, so the Models page's downloading chip is rendered.
+                   ("downloads", "[NativeDownload]")):
     needle = f"@Published private(set) var {decl}: {kind}"
     assert needle in text, f"{decl} moved; update render_fixture_patch.py"
     text = text.replace(needle, f"@Published var {decl}: {kind}", 1)
