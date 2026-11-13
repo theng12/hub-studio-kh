@@ -7021,6 +7021,13 @@ struct NativeAPITests {
         // Launcher-only updates (owner, 2026-11-13): an idle node installs nothing either.
         require(autoSwaps == 0 && autoRelaunches == 0,
                 "an idle node must not install its own update: \(autoSwaps) swaps, \(autoRelaunches) relaunches")
+        // Owner rule (2026-11-13): the app installs nothing, so everything below describes a path
+        // that no longer runs — failed installs, retries, re-pushes and the drain-for-update dance.
+        // Those assertions and the machinery they pin are deleted with the self-update removal in
+        // 0.6.233; the test stops at the offer, which is all Hub still does.
+        require(updateStore.updateOffered, "the offer stays visible after the ticks")
+        return
+
         // A failed unattended install is not retried for the same build (it would re-copy 5 GB a minute).
         let failing = makeReleaseDescriptor(version: "0.6.61", build: "failbuild", artifact: artifact,
                                             gateway: gatewayKey, controllerSigning: controllerKey)
