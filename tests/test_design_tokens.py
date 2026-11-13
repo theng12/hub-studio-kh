@@ -133,6 +133,9 @@ class OwnerFixTests(unittest.TestCase):
         self.assertIn("private func attentionPhrase(_ count: Int) -> String", VIEWS)
         self.assertEqual(VIEWS.count("attentionPhrase("), 3,
                          "the helper and both status lines must use the one phrase")
+        # One remembered view choice per fleet list, and Details is a row-menu action.
+        self.assertIn('@AppStorage("hub.fleetView") private var fleetView = "table"', VIEWS)
+        self.assertIn('Button("Details") { fleetDetailRow = row }', VIEWS)
 
 
 class FormTests(unittest.TestCase):
