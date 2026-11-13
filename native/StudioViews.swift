@@ -6690,7 +6690,9 @@ struct StudioContent: View {
                         .multilineTextAlignment(.trailing)
                 }
                 ValueRow("Algorithm", value: identity.algorithm)
-                Text("A Mac that joins this one pins this App Update Key fingerprint, so this is who it will accept an app release from.")
+                // Say what the key actually does (Gateway lead, 2026-11-13): it signs Hub and Story
+                // release artifacts published through Gateway, and it is not how this app updates.
+                Text("This Ed25519 key signs the Hub and Story release artifacts that Gateway publishes. A Mac that joins this one pins the fingerprint, so it accepts releases signed by this key — it does not install updates here: Studio Launcher KH does that.")
                     .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(connected
