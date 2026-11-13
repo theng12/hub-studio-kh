@@ -19,6 +19,9 @@ Plain-language changes appear first in each release and feed the app’s What’
 - Storage sizes are decimal GB, the same unit the Hub's install plan and Finder use, so one card cannot show two different sizes for the same copy.
 - Stop Services asks in the app, like Force Stop; the status dot takes the worst state on the page, and the footer says when local work is paused.
 - Video leaves Create and Overview now that its lane is retired; finished clips stay in Jobs and Renders.
+- A long page's content is clipped to its own region and the sidebar paints above it, so scrolling to the bottom can never paint over the sidebar or its footer.
+- Settings > General has a switchable "Test machine (no models needed)" profile, off by default: it does not ask for a model library or treat one as a blocker, and services may stay off without an error posture.
+- The footer is one column: Support this app, the version/What's New pill with the Launcher control, and one status line; the Mac's name, role and group are in that line and its tooltip.
 
 ### Technical notes
 
