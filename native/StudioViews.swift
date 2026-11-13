@@ -6128,6 +6128,12 @@ struct StudioContent: View {
                 // drawn by its own Studio, honouring the tab and the Mac filter.
                 let running = jobsInScope.filter { JobFacts.stage($0.job.state) == .running }
                 let waiting = jobsInScope.filter { JobFacts.stage($0.job.state) == .waiting }
+                // Failures and uncertain attempts first: they are the work that needs a person,
+                // and they used to sit inside their kind's finished list.
+                let needsYou = jobsInScope.filter { row in
+                    JobFacts.stage(row.job.state) == .finished
+                        && (row.job.state == "error" || row.job.state == "uncertain")
+                }
                 if !running.isEmpty {
                     VStack(alignment: .leading, spacing: HubSpace.m) {
                         sectionTitle("Running now")
@@ -6135,6 +6141,17 @@ struct StudioContent: View {
                             ForEach(Array(running.enumerated()), id: \.offset) { index, row in
                                 jobRow(row.job, for: row.function)
                                 if index < running.count - 1 { Divider() }
+                            }
+                        }
+                    }
+                }
+                if !needsYou.isEmpty {
+                    VStack(alignment: .leading, spacing: HubSpace.m) {
+                        sectionTitle("Needs you")
+                        LazyVStack(alignment: .leading, spacing: HubSpace.m) {
+                            ForEach(Array(needsYou.enumerated()), id: \.offset) { index, row in
+                                jobRow(row.job, for: row.function)
+                                if index < needsYou.count - 1 { Divider() }
                             }
                         }
                     }
@@ -6159,6 +6176,7 @@ struct StudioContent: View {
                       let jobs = history.jobs.filter(jobMachineFilter.includes)
                           .filter(jobMatchesSearch)
                           .filter { !active($0.state) }
+                          .filter { $0.state != "error" && $0.state != "uncertain" }
                       VStack(alignment: .leading, spacing: HubSpace.m) {
                         sectionTitle(StudioPage.page(for: history.function)?.title ?? history.function.rawValue)
                         // Only when this Studio has nothing at all: a Studio whose work is all
