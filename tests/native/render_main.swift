@@ -561,14 +561,14 @@ struct PageRenderHarness {
                          packageIDs: ["whisper-turbo"]),
             NativePreset(id: "creator-plus-24", name: "Creator Plus · 24 GB", tierGB: 24,
                          summary: "Adds music generation and Gemma 3 12B for longer writing.",
-                         installedCount: 0, packageCount: 16, complete: false, fitsThisMac: false,
+                         installedCount: 0, packageCount: 16, complete: false, fitsThisMac: true,
                          toCopyBytes: 64_200_000_000, freeAfterBytes: 316_000_000_000, refused: nil,
                          packageIDs: []),
             NativePreset(id: "studio-pro-32", name: "Studio Pro · 32 GB+", tierGB: 32,
                          summary: "Adds the largest writing models: Qwen3.6 35B and Gemma 4 26B.",
                          installedCount: 0, packageCount: 18, complete: false, fitsThisMac: false,
-                         toCopyBytes: 100_300_000_000, freeAfterBytes: 284_000_000_000,
-                         refused: "Not enough free space on /Volumes/KH-STUDIO-ATLAS/model-target: copying 100.3 GB would leave 284.0 GB, and this Mac keeps 5.0 GB free for working room.",
+                         toCopyBytes: 378_000_000_000, freeAfterBytes: 2_200_000_000,
+                         refused: "Not enough free space on /Volumes/KH-STUDIO-ATLAS/model-target: copying 378.0 GB would leave 2.2 GB, and this Mac keeps 5.0 GB free for working room.",
                          packageIDs: [])
         ]
         let groups = [
@@ -766,7 +766,7 @@ struct PageRenderHarness {
             model("mlx-community/whisper-small-mlx", "Whisper small", "Whisper", .transcription, cached: true, size: 0.5),
             model("black-forest-labs/FLUX.2-klein-4B", "FLUX.2 Klein 4B MLX 4-bit", "FLUX", .image, cached: true, size: 8.0),
             model("Tongyi-MAI/Z-Image-Turbo", "Z-Image-Turbo 6B MLX 4-bit", "Z-Image", .image, cached: false, size: 12.4,
-                  block: "Needs 24 GB of memory; this Mac has 32 GB."),
+                  block: "Needs 48 GB of memory; this Mac has 32 GB."),
             model("stabilityai/stable-audio-3-optimized", "Stable Audio 3", "Stable Audio", .music, cached: true, size: 6.1),
             model("vanch007/mlx-Yue2-3B", "YuE 2 3B", "YuE", .music, cached: false, size: 7.2),
             model("mlx-community/Qwen3-4B-Instruct-4bit", "Qwen3 4B Instruct 4-bit", "Qwen3", .chat, cached: true, size: 2.4),
