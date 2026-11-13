@@ -492,6 +492,27 @@ struct PageRenderHarness {
                     for child in view.subviews { if let found = targetButton(child) { return found } }
                     return nil
                 }
+                func targetElement(_ view: NSView, _ title: String) -> NSAccessibilityElement? {
+                    func matches(_ objects: [Any]?) -> NSAccessibilityElement? {
+                        for object in objects ?? [] {
+                            if let element = object as? NSAccessibilityElement {
+                                let labels = [element.accessibilityLabel(), element.accessibilityTitle(),
+                                              element.accessibilityValue() as? String].compactMap { $0 }
+                                if labels.contains(where: { $0.localizedCaseInsensitiveContains(title) }) {
+                                    return element
+                                }
+                                if let found = matches(element.accessibilityChildren()) { return found }
+                            }
+                        }
+                        return nil
+                    }
+                    if let found = matches(view.accessibilityChildren()) { return found }
+                    for child in view.subviews {
+                        if let found = targetElement(child, title) { return found }
+                    }
+                    return nil
+                }
+                let axTarget = targetElement(hosting, title)
                 if let button = targetButton(hosting) {
                     let before = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)
                     hosting.cacheDisplay(in: hosting.bounds, to: before!)
@@ -505,6 +526,19 @@ struct PageRenderHarness {
                     hosting.cacheDisplay(in: hosting.bounds, to: after!)
                     let changed = before!.tiffRepresentation != after!.tiffRepresentation
                     print("CLICK_INTERACTION page=\(fileName(for: page)) target=\(title) changed=\(changed)")
+                } else if let axTarget {
+                    let before = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)
+                    hosting.cacheDisplay(in: hosting.bounds, to: before!)
+                    let pressed = axTarget.accessibilityPerformPress()
+                    for _ in 0..<6 {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                        hosting.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                    }
+                    let after = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)
+                    hosting.cacheDisplay(in: hosting.bounds, to: after!)
+                    let changed = before!.tiffRepresentation != after!.tiffRepresentation
+                    print("AX_CLICK page=\(fileName(for: page)) target=\(title) pressed=\(pressed) changed=\(changed)")
                 } else {
                     print("CLICK_MISS page=\(fileName(for: page)) target=\(title)")
                 }

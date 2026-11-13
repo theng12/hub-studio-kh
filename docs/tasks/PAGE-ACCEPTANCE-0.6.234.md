@@ -13,12 +13,13 @@ carries three things beside its visual review:
 A page is not accepted until the three are filled in below and the referenced tests pass. The UI
 gate adds the measured 1440/768 layout, contrast and independent 4/4 review.
 
-The ship-window interaction log (`evidence/end-to-end.log`) records one native control action per
-page where a control exists: Image reference mode, all Jobs tabs, the Music and Audio surprise
-prompt, the Voices tag filter, Setup preset selection, and the What's New Technical-notes
-disclosure. A page whose task needs a real worker (generation, install, download) states that its
-end-to-end lane test is the Hub's own batch contract; the UI run proves the form and the control,
-not the model.
+The ship-window interaction log (`evidence/end-to-end.log`) records the UI interactions the
+offscreen harness can drive through the shipped controls: Image reference mode, every Jobs tab
+through the native segment control, the model detail at 768, the Studio pane switch and the
+Appearance choice. Tasks that need a real worker (generation, install, download, transcription,
+playback) are covered by the Hub's own batch/API contract tests in the native gate and by the
+fixture render of every state; they are not claimed as click-through here. The per-page lists below
+follow that distinction.
 
 ## Overview
 
