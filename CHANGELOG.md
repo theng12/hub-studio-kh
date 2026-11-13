@@ -6,6 +6,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 
 - Hub no longer installs its own updates. When one is offered, the update action opens Studio Launcher KH, which updates every app on this Mac.
 - Connecting to a controller now names the address it actually tried when it fails, including the assumed http:// and port 47873.
+- Hub shows one menu-bar icon even if another copy starts — a second copy waits briefly and then exits, and never steals focus.
 
 ### Technical notes
 
