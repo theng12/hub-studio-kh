@@ -16,6 +16,9 @@ Plain-language changes appear first in each release and feed the app’s What’
 - Set up this Mac keeps the selected preset's Install button above the cards, so it is on the first screen at a narrow window.
 - What's New says when a build carries no notes and offers Open Studio Launcher; it no longer dresses the fallback up as release notes.
 - Render rows are titled by what and when they were made, never by a job id.
+- Storage sizes are decimal GB, the same unit the Hub's install plan and Finder use, so one card cannot show two different sizes for the same copy.
+- Stop Services asks in the app, like Force Stop; the status dot takes the worst state on the page, and the footer says when local work is paused.
+- Video leaves Create and Overview now that its lane is retired; finished clips stay in Jobs and Renders.
 
 ### Technical notes
 

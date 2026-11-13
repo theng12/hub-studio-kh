@@ -61,6 +61,8 @@ enum JobMachineFilter: String, CaseIterable, Identifiable {
     case nodes = "Nodes"
 
     var id: String { rawValue }
+    /// The picker's word for the filter: "Other Macs" reads as people, "Nodes" as the roster.
+    var label: String { self == .nodes ? "Other Macs" : rawValue }
 
     func includes(_ job: NativeJob) -> Bool {
         switch self {
@@ -1449,7 +1451,7 @@ struct StudioContent: View {
                 let count = counts?[filter]
                 return HubSegmentItem(
                     tag: filter,
-                    label: count.map { "\(filter.rawValue) \($0)" } ?? filter.rawValue
+                    label: count.map { "\(filter.label) \($0)" } ?? filter.label
                 )
             },
             accessibilityLabel: "Show jobs made on",
