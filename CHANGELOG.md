@@ -2,6 +2,10 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.233 — 2026-11-13
+- Hub no longer updates itself. Updates are installed by Studio Launcher KH, and Settings says so in one line.
+- The App Update Key panel, its trust flow and every release check inside Hub are gone with the self-updater.
+
 ## 0.6.232 — 2026-11-13
 - Hub shows one menu-bar icon even if another copy starts: the second copy waits a few seconds and exits quietly.
 - Update opens Studio Launcher KH. Hub never installs its own update.
