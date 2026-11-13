@@ -538,6 +538,45 @@ struct StudioSplit<Form: View, Side: View>: View {
     }
 }
 
+// MARK: - Masonry columns
+
+/// Sections of different heights in the shortest column: two columns of cards without the empty
+/// band a row-aligned grid leaves under the shorter card. One column below the width that fits two.
+struct MasonryLayout: Layout {
+    var columns: Int = 2
+    var spacing: CGFloat = HubSpace.xl
+
+    private func columnWidth(_ width: CGFloat) -> CGFloat {
+        (width - spacing * CGFloat(max(1, columns) - 1)) / CGFloat(max(1, columns))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 0
+        let columnWidth = columnWidth(width)
+        var heights = [CGFloat](repeating: 0, count: max(1, columns))
+        for subview in subviews {
+            let height = subview.sizeThatFits(.init(width: columnWidth, height: nil)).height
+            let column = heights.enumerated().min { $0.element < $1.element }?.offset ?? 0
+            heights[column] += height + spacing
+        }
+        return CGSize(width: width, height: max(0, (heights.max() ?? 0) - spacing))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let columnWidth = columnWidth(bounds.width)
+        var heights = [CGFloat](repeating: 0, count: max(1, columns))
+        for subview in subviews {
+            let height = subview.sizeThatFits(.init(width: columnWidth, height: nil)).height
+            let column = heights.enumerated().min { $0.element < $1.element }?.offset ?? 0
+            let x = bounds.minX + CGFloat(column) * (columnWidth + spacing)
+            let y = bounds.minY + heights[column]
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading,
+                          proposal: .init(width: columnWidth, height: height))
+            heights[column] += height + spacing
+        }
+    }
+}
+
 // MARK: - Diagnostics
 
 /// Raw facts on demand: one plain summary line, the identifiers, paths, addresses or hashes behind

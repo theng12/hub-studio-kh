@@ -25,6 +25,15 @@ enum ReleaseNotes {
 
     static var title: String { "Hub Studio KH \(currentVersion)" }
 
+    /// Whether this build actually carries its notes. The fallback text is deliberately readable,
+    /// so "the body is non-empty" cannot answer this; the page uses this flag to offer the update
+    /// path instead of dressing the fallback up as notes.
+    static var hasNotes: Bool {
+        guard let url = Bundle.main.url(forResource: "release-notes", withExtension: "md"),
+              let body = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        return !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// The whole notes file, or a plain explanation if the bundle is missing it.
     static func text() -> String {
         guard let url = Bundle.main.url(forResource: "release-notes", withExtension: "md"),

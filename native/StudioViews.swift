@@ -1758,33 +1758,25 @@ struct StudioContent: View {
             // The list takes the height that is left and scrolls; the footer is its own row beneath it,
             // never a layer over it, so a short window cannot draw the footer on top of the last items.
             VStack(spacing: 0) {
-            List(selection: Binding<StudioPage?>(get: { studio.selection }, set: { if let value = $0 { studio.select(value) } })) {
-                Label("Overview", systemImage: StudioPage.overview.symbol).tag(StudioPage.overview)
-                // An empty section is not drawn: "Coming later" is a real section with no pages
-                // the moment every Studio has an engine, and a heading over nothing reads as a
-                // missing list rather than as "none". The declared sections keep their names and
-                // order for the tests; this is only what reaches the screen.
-                ForEach(StudioPage.sidebarSections.filter { !$0.pages.isEmpty }, id: \.title) { section in
-                    Section(section.title) {
+            // A drawn sidebar rather than an AppKit List: the List's selection fill is drawn by
+            // the window, and in an inactive window it came out black with a black label and icon.
+            // Drawing the fill and the label together makes the current page readable in every
+            // window state, in both appearances (critic, 2026-11-13).
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    sidebarRow(.overview)
+                    ForEach(StudioPage.sidebarSections.filter { !$0.pages.isEmpty }, id: \.title) { section in
+                        Text(section.title)
+                            .font(HubType.captionStrong).foregroundStyle(.secondary)
+                            .padding(.horizontal, HubSpace.s)
+                            .padding(.top, HubSpace.m).padding(.bottom, HubSpace.xs)
                         ForEach(section.pages) { page in
-                            // "Coming later" pages are reachable but deliberately quieter: they
-                            // work, there is just no engine behind them yet.
-                            // No explicit foreground for the selectable rows: a sidebar List inverts the
-                            // label against the selection fill, and forcing `Color.primary` there made the
-                            // selected row black-on-black in light appearance (found by the page critics,
-                            // 2026-11-12). Only the quieter "Coming later" rows carry a style.
-                            // No explicit foreground on a selectable row: a sidebar List inverts
-                            // the label against the selection fill, and forcing a colour left the
-                            // selected row's icon black-on-black (critic, 2026-11-13).
-                            Label(page.title, systemImage: page.symbol)
-                                .foregroundStyle(studio.selection == page ? Color.white
-                                                 : (section.title == "Coming later" ? Color.secondary : Color.primary))
-                                .tag(page)
+                            sidebarRow(page, quiet: section.title == "Coming later")
                         }
                     }
                 }
+                .padding(.horizontal, HubSpace.s).padding(.vertical, HubSpace.s)
             }
-            .listStyle(.sidebar)
             Divider()
             VStack(alignment: .leading, spacing: HubSpace.tight) {
                     // The working mode, as a pill. One glance answers "what is this Mac doing?" -
@@ -1979,6 +1971,28 @@ struct StudioContent: View {
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         default: NSApp.appearance = nil
         }
+    }
+
+    /// One sidebar row: the glyph and the name, with the selected one filled in the accent colour
+    /// and written in white so the current page is always readable.
+    private func sidebarRow(_ page: StudioPage, quiet: Bool = false) -> some View {
+        let selected = studio.selection == page
+        return Button { studio.select(page) } label: {
+            HStack(spacing: HubSpace.s) {
+                Image(systemName: page.symbol).frame(width: 18)
+                Text(page.title).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(HubType.body)
+            .foregroundStyle(selected ? Color.white : (quiet ? Color.secondary : Color.primary))
+            .padding(.horizontal, HubSpace.s).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: HubRadius.control)
+                .fill(selected ? Color.accentColor : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityLabel(page.title)
     }
 
     /// Every page's title is the sidebar row's own name (`StudioPage.title`), so the two cannot drift.
@@ -5220,11 +5234,8 @@ struct StudioContent: View {
                     Text("This Mac suits \(starting.name)").font(HubType.caption).foregroundStyle(.secondary)
                 }
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: HubSpace.m)], spacing: HubSpace.m) {
-                ForEach(plan.presets) { preset in setupPresetCard(preset) }
-            }
-            // The Mac's own preset is the starting choice, so the install action is on screen
-            // before anything is clicked (critic, 2026-11-13: the cards had no Install button).
+            // The action sits above the cards: at 768 the four tall cards stacked and pushed the
+            // only Install button below the fold (critic, 2026-11-13).
             if let preset = plan.presets.first(where: { $0.id == setupSelectedPreset }) ?? plan.starting {
                 HStack(spacing: HubSpace.m) {
                     Button(preset.complete ? "Install anything missing" : "Install \(preset.name)") {
@@ -5232,12 +5243,16 @@ struct StudioContent: View {
                     }
                     .hubPrimary()
                     .disabled(!connected || preset.refused != nil || !workspace.installBusy.isEmpty)
+                    Text(preset.name).font(HubType.secondary).foregroundStyle(.secondary)
                     if preset.refused != nil {
                         Text("Not enough space on the models' drive for this set.")
                             .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
                     }
                     Spacer(minLength: 0)
                 }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: HubSpace.m)], spacing: HubSpace.m) {
+                ForEach(plan.presets) { preset in setupPresetCard(preset) }
             }
         }
     }
@@ -6744,6 +6759,18 @@ struct StudioContent: View {
                      scrolls: true,
                      primary: localServicesReady ? nil
                         : PagePrimaryAction("Start Services", isEnabled: studio.canConfigure) { studio.start() }) {
+            // Two columns where they fit: eleven sections in one column needed a full-page scroll
+            // at 900 points (critic, 2026-11-13). At 768 it is one column again.
+            MasonryLayout(columns: windowWidth >= 1000 ? 2 : 1, spacing: HubSpace.xl) {
+            HubSection("Startup") {
+                startupSettings
+            }
+            HubSection("Work on this Mac") {
+                WorkPolicySettings(workspace: workspace, connected: connected)
+            }
+            HubSection("Lite Mode") {
+                LiteModeSettings(workspace: workspace, connected: connected)
+            }
             HubSection("Appearance") {
                 HubSegmentedControl(
                     selection: $appearancePreference,
@@ -6756,15 +6783,6 @@ struct StudioContent: View {
                 )
                 Text("System follows macOS. Light and Dark apply to this app only, on this Mac.")
                     .font(HubType.caption).foregroundStyle(.secondary)
-            }
-            HubSection("Startup") {
-                startupSettings
-            }
-            HubSection("Work on this Mac") {
-                WorkPolicySettings(workspace: workspace, connected: connected)
-            }
-            HubSection("Lite Mode") {
-                LiteModeSettings(workspace: workspace, connected: connected)
             }
             HubSection("General") {
                 ValueRow("Developer Mode", value: connected ? workspace.developerModeSetting.map {
@@ -6845,6 +6863,7 @@ struct StudioContent: View {
                 Button("Show App Data") { NSWorkspace.shared.open(studio.configuration.dataDirectory) }
                 ValueRow("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
             }
+            }
         }
         .task { if connected { await workspace.refreshDeveloperMode(); await workspace.refreshMemoryPolicy(); await workspace.refreshStorage(); await workspace.refreshTrash() } }
         .sheet(isPresented: $showingStorageEditor) { storageEditor }
@@ -6909,11 +6928,11 @@ struct StudioContent: View {
         let body = notes.drop(while: { $0.trimmingCharacters(in: .whitespaces).isEmpty
             || $0.trimmingCharacters(in: .whitespaces).hasPrefix("# ") })
         return PageScaffold(title: pageTitle(.whatsNew),
-                            status: body.isEmpty
-                                ? PageStatusLine("These notes were not found inside this build — the CHANGELOG beside the app has the full history.", tone: .warn)
-                                : PageStatusLine("Hub Studio KH \(ReleaseNotes.currentVersion) · newest first"),
+                            status: ReleaseNotes.hasNotes
+                                ? PageStatusLine("Hub Studio KH \(ReleaseNotes.currentVersion) · newest first")
+                                : PageStatusLine("These notes were not found inside this build — Studio Launcher installs the current one.", tone: .warn),
                             scrolls: true) {
-            if body.isEmpty {
+            if !ReleaseNotes.hasNotes {
                 // The next step is the build that ships the notes: Studio Launcher installs it.
                 HStack(spacing: HubSpace.m) {
                     Button("Open Studio Launcher") { NativeWorkspaceStore.openStudioLauncher() }

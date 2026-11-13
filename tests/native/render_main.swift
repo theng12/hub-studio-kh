@@ -325,8 +325,12 @@ struct PageRenderHarness {
                 control.selectedSegment = 1
                 _ = control.sendAction(control.action, to: control.target)
                 precondition(studio.workspace.imageMode == "edit", "Native reference mode action did not reach the form")
-                studio.workspace.addImageReference(scratch.appendingPathComponent("fixture.png"))
-                precondition(studio.workspace.imageReferences.count == 1, "Reference image was not prepared")
+                // The seam runs once per process; a second page/size/appearance pass must not add a
+                // second reference and trip the old exactly-one precondition (critic, 2026-11-13).
+                if studio.workspace.imageReferences.isEmpty {
+                    studio.workspace.addImageReference(scratch.appendingPathComponent("fixture.png"))
+                }
+                precondition(!studio.workspace.imageReferences.isEmpty, "Reference image was not prepared")
                 let decoded = Data(base64Encoded: studio.workspace.imageReferences[0].b64!)!
                 let bitmap = NSBitmapImageRep(data: decoded)!
                 precondition(max(bitmap.pixelsWide, bitmap.pixelsHigh) <= 1024)
@@ -336,6 +340,48 @@ struct PageRenderHarness {
                     window.displayIfNeeded()
                 }
                 print("IMAGE_REFERENCE_INTERACTION passed: native segment action, reference preparation, published pixel bound")
+            }
+            // A Studio page at a narrow width switches between its form and its result pane through
+            // the real segmented control, offscreen.
+            if page == .audio, size.0 < 1000,
+               ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_PANE_SWITCH"] == "1" {
+                func paneControl(_ view: NSView) -> NSSegmentedControl? {
+                    if let control = view as? NSSegmentedControl, control.segmentCount == 2,
+                       control.label(forSegment: 0) == "Set up" { return control }
+                    for child in view.subviews { if let found = paneControl(child) { return found } }
+                    return nil
+                }
+                guard let control = paneControl(hosting) else { fatalError("Studio pane control missing") }
+                control.selectedSegment = 1
+                _ = control.sendAction(control.action, to: control.target)
+                for _ in 0..<6 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                    hosting.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                }
+                print("PANE_SWITCH_INTERACTION passed: native segment action reached the result pane")
+            }
+            // Settings > Appearance is a real control: choosing Dark persists the preference the
+            // app reads at launch and applies it to NSApp.
+            if page == .settings, ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_APPEARANCE_SWITCH"] == "1" {
+                func appearanceControl(_ view: NSView) -> NSSegmentedControl? {
+                    if let control = view as? NSSegmentedControl, control.segmentCount == 3,
+                       control.label(forSegment: 0) == "System" { return control }
+                    for child in view.subviews { if let found = appearanceControl(child) { return found } }
+                    return nil
+                }
+                guard let control = appearanceControl(hosting) else { fatalError("Appearance control missing") }
+                control.selectedSegment = 2
+                _ = control.sendAction(control.action, to: control.target)
+                for _ in 0..<6 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                    hosting.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                }
+                precondition(UserDefaults.standard.string(forKey: "studiohub.appearance") == "dark",
+                             "Appearance choice was not persisted")
+                precondition(NSApp.appearance?.name == .darkAqua, "Appearance choice was not applied")
+                print("APPEARANCE_INTERACTION passed: native segment action persisted Dark and applied it")
             }
             // Exercise the shipped Jobs view through its native control; no recreated header.
             let captureTabs = page == .jobs && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_JOBS_TABS"] == "1"
