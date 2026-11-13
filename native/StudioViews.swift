@@ -317,9 +317,9 @@ enum RenderCopy {
         // job id the row used to be titled by is still in Details, so nothing is lost by naming
         // the render the way the customer knows it.
         if let named = render.display?.label { return "\(kind) · \(named)" }
-        // A render with no name from Story Studio is titled by when it was made, never by a job id:
-        // an id is a diagnostic, and it is one click away in Details.
-        return "\(kind) · \(when(render.createdAt))"
+        // No name from Story Studio: the kind is the title, and the when/where are in the facts
+        // line. A job id or a repeated timestamp is not a title.
+        return kind
     }
 
     /// The one line under the title: only the parts the render actually states.
@@ -2086,6 +2086,16 @@ struct StudioContent: View {
             }
             let work = active == 0 ? "no jobs running"
                 : "\(active) \(active == 1 ? "job" : "jobs") running"
+            // A failed, uncertain or stalled job is the worst state on the page, even when the
+            // model is ready and other work is moving.
+            let recent = workspace.jobHistories.first { $0.function == function }?.jobs ?? []
+            let attention = recent.filter {
+                $0.state == "error" || $0.state == "uncertain" || ($0.stalledSeconds ?? 0) > 0
+            }.count
+            if attention > 0 {
+                return PageStatusLine("Ready · \(ready.label) · \(work) · \(attention) needs attention",
+                                      tone: .warn)
+            }
             return PageStatusLine("Ready · \(ready.label) · \(work)", tone: active > 0 ? .ok : .off)
         }
         if workspace.models.contains(where: { $0.function == function && $0.cached }) {
@@ -4728,7 +4738,8 @@ struct StudioContent: View {
                     .font(HubType.captionStrong)
                     .rotationEffect(.degrees(isModelSectionExpanded(section.function) ? 90 : 0))
                 Image(systemName: section.symbol)
-                Text(section.header).font(HubType.rowTitle)
+                Text(StudioPage.page(for: section.function)?.title ?? section.header)
+                    .font(HubType.rowTitle)
                 Spacer()
             }
             .contentShape(Rectangle())
@@ -5303,14 +5314,18 @@ struct StudioContent: View {
                     Spacer(minLength: 0)
                 }
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: HubSpace.m)], spacing: HubSpace.m) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: HubSpace.m, alignment: .top)],
+                      alignment: .leading, spacing: HubSpace.m) {
                 ForEach(plan.presets) { preset in setupPresetCard(preset) }
             }
         }
     }
 
     private func setupPresetCard(_ preset: NativePreset) -> some View {
+        // Before a click, the Mac's own preset is the one the Install button acts on, so it wears
+        // the selected edge too.
         let chosen = setupSelectedPreset == preset.id
+            || (setupSelectedPreset == nil && workspace.installPlan?.starting?.id == preset.id)
         return Button {
             setupSelectedPreset = preset.id
         } label: {
@@ -5929,7 +5944,7 @@ struct StudioContent: View {
                     HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
                         Text(machines.map { machine in
                             let name = machine.machineName ?? (machine.machine == "local" ? "This Mac" : machine.machine)
-                            return machine.ok ? "\(name) \(machine.renders)" : "\(name) did not answer"
+                            return machine.ok ? "\(name) · \(machine.renders)" : "\(name) did not answer"
                         }.joined(separator: "   ·   "))
                             .font(HubType.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -8224,7 +8239,12 @@ struct StudioContent: View {
 
     private func nodeStateCell(_ row: NativeFleetRow) -> some View {
         let state = row.state(readiness: workspace.fleetReadiness[row.id])
-        return StatusBadge(text: state.title, status: nodeStatus(state), symbol: nodeSymbol(state))
+        // A Mac that is answering but has no room, no credential or a startup that will not come
+        // back is not "Ready": the chip takes the worst fact on the row.
+        let resourceTrouble = row.machine?.memoryTier == .bad || row.machine?.diskTier == .bad
+            || row.startupNeedsAttention || row.node?.hasCredential == false
+        let shown: NativeFleetRowState = (state == .ready && resourceTrouble) ? .attention : state
+        return StatusBadge(text: shown.title, status: nodeStatus(shown), symbol: nodeSymbol(shown))
     }
 
     private func nodeStatus(_ state: NativeFleetRowState) -> HubStatus {
