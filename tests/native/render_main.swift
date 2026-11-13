@@ -208,6 +208,8 @@ struct PageRenderHarness {
         // reads, not just NSApp.appearance: the view's onAppear otherwise resets it to System and
         // every "light" render came out dark (critic, 2026-11-13).
         UserDefaults.standard.set(appearance ?? "system", forKey: "studiohub.appearance")
+        UserDefaults.standard.set(ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_TEST_MACHINE"] == "1",
+                                  forKey: "studiohub.testMachine")
         for role in (roles.isEmpty ? [nil] : roles) {
         if let role { applyRole(role, to: studio.workspace) }
         Self.applyInstallPlan(studio.workspace)
@@ -244,6 +246,29 @@ struct PageRenderHarness {
                     RunLoop.current.run(until: Date().addingTimeInterval(0.1))
                     hosting.layoutSubtreeIfNeeded()
                     window.displayIfNeeded()
+                }
+            }
+            // The page's own scroll view, taken to its bottom: proves a long page's content never
+            // paints across the sidebar or its footer.
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_SCROLL_BOTTOM"] == "1" {
+                func widestScroll(_ view: NSView) -> NSScrollView? {
+                    var best: NSScrollView?
+                    func walk(_ v: NSView) {
+                        if let scroll = v as? NSScrollView,
+                           scroll.bounds.width > (best?.bounds.width ?? 0) { best = scroll }
+                        for child in v.subviews { walk(child) }
+                    }
+                    walk(view)
+                    return best
+                }
+                if let scroll = widestScroll(hosting), let document = scroll.documentView {
+                    document.scroll(NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
+                    for _ in 0..<6 {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                        hosting.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                    }
+                    print("SCROLL_BOTTOM reached: \(Int(document.bounds.height)) in \(Int(scroll.contentView.bounds.height))")
                 }
             }
             if page == .connections && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_CONNECTION_COPY"] == "1" {

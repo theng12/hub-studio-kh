@@ -1320,6 +1320,8 @@ struct StudioContent: View {
     @State private var pendingModelRemoval: NativeModel?
     /// System, Light or Dark — the only three the app offers, saved on this Mac.
     @AppStorage("studiohub.appearance") private var appearancePreference = "system"
+    /// A test machine runs without a model library: no install blocker, no error posture.
+    @AppStorage("studiohub.testMachine") private var testMachine = false
     /// Which Macs the Jobs page lists. Offered only where more than one Mac's work can land.
     @State private var jobMachineFilter = JobMachineFilter.all
     /// The same choice on Overview's In progress list, kept separate so narrowing one page does
@@ -1796,30 +1798,9 @@ struct StudioContent: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: HubSpace.tight) {
-                    // The working mode, as a pill. One glance answers "what is this Mac doing?" -
-                    // Controller, Node or Standalone - with the dot beside it saying whether the
-                    // group it belongs to is actually answering.
-                    HStack(spacing: HubSpace.tight) {
-                        StatusBadge(text: roleTitle(workspace.controllerIdentity?.settings.role), status: modeStatus)
-                        if workspace.controllerReachable != nil {
-                            Circle().fill(connectionStateTint).frame(width: 7, height: 7)
-                                .help(workspace.controllerHealthNote ?? "")
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    // Which Mac this is, and where it stands in its group. Both come from what the
-                    // app already reads (the Hub's identity and the fleet overview), so this adds no
-                    // request. The long names are cut to the sidebar and whole in the tooltip.
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(thisMachineName).font(HubType.captionStrong)
-                            .lineLimit(1).truncationMode(.middle)
-                        Text(groupLine).font(HubType.caption).foregroundStyle(.secondary)
-                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                    }
-                    .help("\(thisMachineName)\n\(groupLine)")
-                    .accessibilityElement(children: .combine)
-                    // The single status line is drawn last in the column (owner footer standard,
-                    // 2026-11-12): the version pill and update action sit above it as one row.
+                    // The fleet footer is three things: support, the version/What's New pill with
+                    // its update control, and one status line. The role, machine name and group
+                    // live in that line's text and tooltip instead of three stacked blocks.
                     // The services' actual failure, beside the status it explains, kept whole on
                     // click (owner, 2026-10-28: "can we have it like in a notification icon
                     // somewhere instead?"). It replaces the old full-width top banner.
@@ -1882,9 +1863,14 @@ struct StudioContent: View {
                         Image(systemName: footerStatusSymbol)
                             .foregroundStyle(footerStatusSymbol == "checkmark.circle.fill" ? HubStatus.ok.textColor
                                              : (footerStatusSymbol == "pause.circle.fill" ? HubStatus.warn.textColor : Color.secondary))
-                        Text(localServicesReady && workspace.workPolicy?.machineEnabled == false
-                             ? "Hub running · local work paused" : studio.status)
+                        let role = roleTitle(workspace.controllerIdentity?.settings.role)
+                        let paused = localServicesReady && workspace.workPolicy?.machineEnabled == false
+                        let line = localServicesReady
+                            ? "\(role) · Hub running\(paused ? " · local work paused" : "")"
+                            : (testMachine ? "\(role) · Test machine · services off" : "\(role) · \(studio.status)")
+                        Text(line)
                             .font(HubType.caption).fixedSize(horizontal: false, vertical: true)
+                            .help("\(thisMachineName) · \(groupLine)")
                         Spacer(minLength: 0)
                     }
             }
@@ -1896,9 +1882,10 @@ struct StudioContent: View {
             // squeezed (Split View, most obviously) the layout overflowed and macOS clipped it -
             // the sidebar and the page's first column appeared to be cropped away.
             .frame(minWidth: 180, idealWidth: HubSpace.sidebar, maxWidth: HubSpace.sidebar)
-            // An opaque sidebar surface: the drawn rows are not a List, so the column must paint
-            // its own background or it blends into the page (critic, 2026-11-13).
+            // An opaque sidebar surface, above the content in stacking order: a page's scroll
+            // content can never paint across it or its footer.
             .background(Color(nsColor: .controlBackgroundColor))
+            .zIndex(1)
             Divider()
             VStack(spacing: 0) {
                 // The local-services failure is the notification icon in the sidebar footer, with
@@ -2122,6 +2109,10 @@ struct StudioContent: View {
     /// What this page says under its title: the Hub's state, the library, and live work, in the
     /// order an operator asks about them.
     private var overviewStatus: PageStatusLine {
+        if testMachine {
+            return PageStatusLine("Test machine · \(localServicesReady ? "services running" : "services off") · no model library needed",
+                                  tone: localServicesReady ? .ok : .off)
+        }
         if !localServicesReady {
             return PageStatusLine("Local services are stopped — start them to create anything on this Mac.", tone: .warn)
         }
@@ -2165,7 +2156,13 @@ struct StudioContent: View {
             if !connected { setup }
             // One honest next step in the column, not only in the sidebar footer: the landing page
             // should say what to do first when something is missing (page critic, 2026-11-12).
-            if studio.configuration.modelsDirectory == nil {
+            if testMachine {
+                HStack(spacing: HubSpace.s) {
+                    Label("Test machine — studios are exercised without a model library.", systemImage: "wrench.and.screwdriver")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } else if studio.configuration.modelsDirectory == nil {
                 HStack(spacing: HubSpace.s) {
                     Label("Choose a model library before you create anything.", systemImage: "exclamationmark.circle")
                         .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
@@ -2284,7 +2281,8 @@ struct StudioContent: View {
                 sectionTitle("Model library")
                 HubCard {
                     HStack {
-                        Text(connected ? "\(workspace.models.filter(\.cached).count) installed models in the connected library" : "Connect your library to inspect installed models")
+                        Text(testMachine ? "Test machine — no model library is required."
+                             : (connected ? "\(workspace.models.filter(\.cached).count) installed models in the connected library" : "Connect your library to inspect installed models"))
                             .font(HubType.body).foregroundStyle(.secondary)
                         Spacer()
                         Button("Manage Models") { studio.select(.models) }.hubRowControl()
@@ -6885,6 +6883,11 @@ struct StudioContent: View {
                     .font(HubType.caption).foregroundStyle(.secondary)
             }
             HubSection("General") {
+                Toggle("Test machine (no models needed)", isOn: $testMachine)
+                    .toggleStyle(.checkbox)
+                Text("Off by default. On, Hub does not ask for a model library or present one as a blocker; services may stay stopped without an error posture.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 ValueRow("Developer Mode", value: connected ? workspace.developerModeSetting.map {
                     $0.verified ? ($0.enabled ? "On" : "Off") : "Unverified"
                 } ?? "Unavailable" : "Unavailable")
