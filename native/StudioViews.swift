@@ -317,9 +317,12 @@ enum RenderCopy {
         // job id the row used to be titled by is still in Details, so nothing is lost by naming
         // the render the way the customer knows it.
         if let named = render.display?.label { return "\(kind) · \(named)" }
-        // No name from Story Studio: the kind is the title, and the when/where are in the facts
-        // line. A job id or a repeated timestamp is not a title.
-        return kind
+        // No name from Story Studio: the kind and the day identify the row; the full time and
+        // machine are in its facts. A job id is never a title.
+        let day = render.createdAt.map {
+            Date(timeIntervalSince1970: $0).formatted(.dateTime.day().month(.abbreviated))
+        }
+        return day.map { "\(kind) · \($0)" } ?? kind
     }
 
     /// The one line under the title: only the parts the render actually states.
@@ -2068,6 +2071,11 @@ struct StudioContent: View {
 
     /// The one line a Studio page shows under its title: its engine, the model it will use, and
     /// whether work is moving. The same words as the sidebar's own state, so the two never differ.
+    /// "1 needs attention" / "3 need attention": one phrase, both call sites.
+    private func attentionPhrase(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "needs" : "need") attention"
+    }
+
     private func studioStatus(_ function: StudioFunction, active: Int,
                               selected: String? = nil) -> PageStatusLine {
         guard localServicesReady else {
@@ -2133,7 +2141,6 @@ struct StudioContent: View {
         // The same count the All filter shows, so the line and the tab cannot disagree.
         let running = overviewActiveCounts[.all] ?? 0
         var parts = ["Hub running", "\(installed) models installed"]
-        if workspace.workPolicy?.machineEnabled == false { parts.append("local work paused") }
         parts.append(running == 0 ? "no jobs active" : "\(running) jobs active")
         if !activeDownloads.isEmpty {
             parts.append("\(activeDownloads.count) downloading")
@@ -3249,9 +3256,18 @@ struct StudioContent: View {
                         // A disabled prominent button with no explanation is the worst state a form
                         // can be in: whatever holds it up is named right below it, first thing first.
                         if let reason = musicBlockedReason {
-                            Label(reason, systemImage: "exclamationmark.circle")
-                                .font(HubType.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                            HStack(alignment: .firstTextBaseline, spacing: HubSpace.s) {
+                                Label(reason, systemImage: "exclamationmark.circle")
+                                    .font(HubType.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if reason.localizedCaseInsensitiveContains("settings")
+                                    || reason.localizedCaseInsensitiveContains("controls") {
+                                    Button("Open Model Defaults") {
+                                        modelFilter = "Music"
+                                        studio.select(.models)
+                                    }.hubRowControl()
+                                }
+                            }
                         }
                         Divider().padding(.top, 8)
                         Text("Generation").font(HubType.section)
@@ -5384,6 +5400,9 @@ struct StudioContent: View {
     /// measured, so "62 GB to copy" and "380 GB free after" are one claim, not two guesses.
     private func setupPresetCost(_ preset: NativePreset) -> String {
         if preset.complete { return "Every model in this preset is installed and verified." }
+        // A refused preset's own sentence is the authoritative number; a second computed
+        // "copies X GB" beside it showed two different sizes for the same copy.
+        if preset.refused != nil { return "This preset does not fit on the models' drive right now." }
         var parts: [String] = []
         parts.append(preset.installedCount == 0
                      ? "Copies \(Self.gigabytes(preset.toCopyBytes))"
@@ -6048,7 +6067,7 @@ struct StudioContent: View {
         var parts = ["\(all.count) jobs", "\(running) running", "\(waiting) queued"]
         if completed > 0 { parts.append("\(completed) completed") }
         if failed > 0 { parts.append("\(failed) failed") }
-        if attention > 0 { parts.append("\(attention) need attention") }
+        if attention > 0 { parts.append(attentionPhrase(attention)) }
         if downloads > 0 { parts.append("\(downloads) downloading") }
         return PageStatusLine(parts.joined(separator: " · "),
                               tone: (failed > 0 || attention > 0 || waiting > 0) ? .warn
@@ -6928,7 +6947,10 @@ struct StudioContent: View {
                 if let note = workspace.developerModeNote ?? workspace.developerModeSetting?.reason?.detail {
                     Text(note).font(HubType.secondary).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                } else if !connected {
+                } else if connected {
+                    Text("The Hub reported Developer Mode as unavailable without a reason.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                } else {
                     Text("The Hub has not answered, so it cannot say why.")
                         .font(HubType.secondary).foregroundStyle(.secondary)
                 }
@@ -8092,7 +8114,8 @@ struct StudioContent: View {
 
     /// Counts the rows the table draws, this Mac included, so the sentence and the table agree.
     private func countsLine(_ rows: [NativeFleetRow]) -> String {
-        var line = "\(rows.filter(\.isReachable).count) of \(rows.count) reachable now"
+        // The status line already says how many are reachable; this sentence carries the exceptions.
+        var line = "Every Mac in the group is listed below"
         if let fleet = workspace.fleetNodes {
             if let refused = fleet.summary.unauthorized, refused > 0 {
                 line += " · \(refused) refused this controller's credential"
