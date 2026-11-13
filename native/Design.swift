@@ -88,6 +88,26 @@ enum HubType {
     static let icon = Font.system(size: 15)
 }
 
+// MARK: - Neutral surfaces
+
+/// One neutral ramp for the whole app: page, sidebar, card, border, muted text, body text. Every
+/// surface resolves through here so light and dark keep the same layering (page < card < sidebar
+/// separation) and no view invents its own grey.
+enum HubSurface {
+    /// The window behind the content.
+    static var page: Color { Color(nsColor: .windowBackgroundColor) }
+    /// The sidebar column: one step away from the page, never the same fill.
+    static var sidebar: Color { Color(nsColor: .underPageBackgroundColor) }
+    /// A card, panel or field surface.
+    static var card: Color { Color(nsColor: .controlBackgroundColor) }
+    /// The one hairline colour for cards, rows and dividers.
+    static var border: Color { Color(nsColor: .separatorColor) }
+    /// Secondary and help text.
+    static var muted: Color { Color(nsColor: .secondaryLabelColor) }
+    /// Body and titles.
+    static var body: Color { Color(nsColor: .labelColor) }
+}
+
 // MARK: - Status colours
 
 /// One vocabulary for every state in the app, shared with the Gateway.
@@ -116,28 +136,32 @@ enum HubStatus: Equatable {
         }
     }
 
-    /// The colour for *text* in this state: the status colour blended 40 % toward the label colour
-    /// (black in light, white in dark). Plain system orange on white is about 2.3:1, and the same
-    /// blend in the Gateway keeps both apps readable. Resolved per appearance, so it follows a
-    /// switch between light and dark without a redraw of the data.
-    var textColor: Color {
-        let base: NSColor
+    /// The status colour as an AppKit colour, before the text blend.
+    var baseNSColor: NSColor {
         switch self {
-        case .ok: base = .systemGreen
-        case .warn: base = .systemOrange
-        case .bad: base = .systemRed
-        case .off: base = .systemGray
-        case .info: base = .systemBlue
+        case .ok: return .systemGreen
+        case .warn: return .systemOrange
+        case .bad: return .systemRed
+        case .off: return .systemGray
+        case .info: return .systemBlue
         }
-        return Color(nsColor: NSColor(name: nil) { appearance in
-            var resolved = base
-            appearance.performAsCurrentDrawingAppearance {
-                let from = base.usingColorSpace(.sRGB) ?? base
-                let label = NSColor.labelColor.usingColorSpace(.sRGB) ?? NSColor.labelColor
-                resolved = from.blended(withFraction: 0.4, of: label) ?? from
-            }
-            return resolved
-        })
+    }
+
+    /// The colour for *text* in this state, resolved for one appearance: the status colour blended
+    /// 40 % toward the label colour. The native view checks measure every pair against its badge
+    /// fill at 4.5:1; change this blend only with that check.
+    func textNSColor(for appearance: NSAppearance) -> NSColor {
+        var resolved = baseNSColor
+        appearance.performAsCurrentDrawingAppearance {
+            let from = baseNSColor.usingColorSpace(.sRGB) ?? baseNSColor
+            let label = NSColor.labelColor.usingColorSpace(.sRGB) ?? NSColor.labelColor
+            resolved = from.blended(withFraction: 0.4, of: label) ?? from
+        }
+        return resolved
+    }
+
+    var textColor: Color {
+        Color(nsColor: NSColor(name: nil) { appearance in textNSColor(for: appearance) })
     }
 
     /// The status a disk or memory tier is drawn in. An unknown tier is grey, never green.
@@ -636,9 +660,9 @@ struct HubCard<Content: View>: View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: HubRadius.card))
+            .background(HubSurface.card, in: RoundedRectangle(cornerRadius: HubRadius.card))
             .overlay(RoundedRectangle(cornerRadius: HubRadius.card)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                .stroke(HubSurface.border, lineWidth: 1))
     }
 }
 
@@ -647,9 +671,9 @@ extension View {
     /// background, a one point separator border and an 8-point radius, clipped to it.
     func hubCardSurface() -> some View {
         self
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: HubRadius.card))
+            .background(HubSurface.card, in: RoundedRectangle(cornerRadius: HubRadius.card))
             .clipShape(RoundedRectangle(cornerRadius: HubRadius.card))
-            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubSurface.border, lineWidth: 1))
     }
 }
 

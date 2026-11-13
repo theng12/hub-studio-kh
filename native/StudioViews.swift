@@ -1887,7 +1887,7 @@ struct StudioContent: View {
             .frame(minWidth: 180, idealWidth: HubSpace.sidebar, maxWidth: HubSpace.sidebar)
             // An opaque sidebar surface, above the content in stacking order: a page's scroll
             // content can never paint across it or its footer.
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(HubSurface.sidebar)
             .zIndex(1)
             Divider()
             VStack(spacing: 0) {
@@ -1924,7 +1924,7 @@ struct StudioContent: View {
                 // a Studio to the enum stops this build until its page is wired.
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(HubSurface.page)
             // The version used to sit in the page's lower-right corner. It now lives with the rest
             // of the status, under the sidebar, so everything an operator needs to identify this
             // Mac - mode, what it offers, whether it is up, which build - is in one place.
@@ -6678,7 +6678,7 @@ struct StudioContent: View {
                         .font(HubType.caption).foregroundStyle(.secondary)
                     Text(voice.genderLabel).font(HubType.caption).foregroundStyle(.secondary)
                     if voice.fleetManaged {
-                        StatusBadge(text: "Fleet", status: .info)
+                        StatusBadge(text: "Fleet", status: .off)
                             .help("This voice came with the fleet and can be used on this Mac.")
                     }
                     ForEach(voice.tagList, id: \.self) { tag in jobTag(tag) }
@@ -8228,7 +8228,7 @@ struct StudioContent: View {
             HStack(spacing: HubSpace.tight) {
                 Text(row.name).font(HubType.rowTitle).lineLimit(1).truncationMode(.middle)
                 if let role = nodeRoleTitle(row) {
-                    StatusBadge(text: role, status: role == "Controller" ? .info : .off)
+                    StatusBadge(text: role, status: .off)
                 }
             }
             if let facts = nodeFactsLine(row) {
@@ -8752,7 +8752,7 @@ struct StudioContent: View {
     /// and a Mac on its own stays quiet.
     private var modeStatus: HubStatus {
         switch workspace.controllerIdentity?.settings.role {
-        case "controller": return .info
+        case "controller": return .off
         case "agent": return workspace.controllerReachable == true ? .ok : .warn
         default: return .off
         }

@@ -11,6 +11,39 @@ enum ViewChecks {
         check(HistoryTab.allCases.last == .downloads && HistoryTab.downloads.title == "Downloads",
               "Downloads is the last Jobs tab")
         check(Set(HistoryTab.allCases.map(\.id)).count == HistoryTab.allCases.count, "Jobs tab ids are unique")
+        // Every status chip's text against its own 14 % tint fill over a card: 4.5:1 in both themes.
+        func composited(_ foreground: NSColor, over background: NSColor) -> NSColor {
+            let f = foreground.usingColorSpace(.sRGB) ?? foreground
+            let b = background.usingColorSpace(.sRGB) ?? background
+            let alpha = f.alphaComponent
+            return NSColor(srgbRed: f.redComponent * alpha + b.redComponent * (1 - alpha),
+                           green: f.greenComponent * alpha + b.greenComponent * (1 - alpha),
+                           blue: f.blueComponent * alpha + b.blueComponent * (1 - alpha),
+                           alpha: 1)
+        }
+        func luminance(_ color: NSColor) -> Double {
+            let c = color.usingColorSpace(.sRGB) ?? color
+            func channel(_ value: Double) -> Double {
+                value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(c.redComponent) + 0.7152 * channel(c.greenComponent)
+                + 0.0722 * channel(c.blueComponent)
+        }
+        func contrast(_ a: NSColor, _ b: NSColor) -> Double {
+            let x = luminance(a), y = luminance(b)
+            return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+        }
+        for (appearanceName, appearance) in [("light", NSAppearance(named: .aqua)!),
+                                             ("dark", NSAppearance(named: .darkAqua)!)] {
+            var card = NSColor.controlBackgroundColor
+            appearance.performAsCurrentDrawingAppearance { card = NSColor.controlBackgroundColor }
+            for status in [HubStatus.ok, HubStatus.warn, HubStatus.bad, HubStatus.off, HubStatus.info] {
+                let text = status.textNSColor(for: appearance)
+                let fill = composited(status.baseNSColor.withAlphaComponent(0.14), over: card)
+                check(contrast(text, fill) >= 4.5,
+                      "\(appearanceName) status text \(status) is \(String(format: "%.2f", contrast(text, fill))):1, below 4.5:1")
+            }
+        }
         check(HistoryTab.downloads.studio == nil, "the Downloads tab shows no Studio's history")
 
         let configuration = try ShellConfiguration(
