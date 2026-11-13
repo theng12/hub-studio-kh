@@ -148,14 +148,14 @@ enum HubStatus: Equatable {
     }
 
     /// The colour for *text* in this state, resolved for one appearance: the status colour blended
-    /// 40 % toward the label colour. The native view checks measure every pair against its badge
+    /// 50 % toward the label colour. The native view checks measure every pair against its badge
     /// fill at 4.5:1; change this blend only with that check.
     func textNSColor(for appearance: NSAppearance) -> NSColor {
         var resolved = baseNSColor
         appearance.performAsCurrentDrawingAppearance {
             let from = baseNSColor.usingColorSpace(.sRGB) ?? baseNSColor
             let label = NSColor.labelColor.usingColorSpace(.sRGB) ?? NSColor.labelColor
-            resolved = from.blended(withFraction: 0.4, of: label) ?? from
+            resolved = from.blended(withFraction: 0.5, of: label) ?? from
         }
         return resolved
     }
