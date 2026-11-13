@@ -1869,8 +1869,8 @@ struct StudioContent: View {
                         let role = roleTitle(workspace.controllerIdentity?.settings.role)
                         let paused = localServicesReady && workspace.workPolicy?.machineEnabled == false
                         let line = localServicesReady
-                            ? "\(role) · Hub running\(paused ? " · local work paused" : "")"
-                            : (testMachine ? "\(role) · Test machine · services off" : "\(role) · \(studio.status)")
+                            ? "\(role) · Hub running\(paused ? " · paused" : "")"
+                            : (testMachine ? "\(role) · Test machine · off" : "\(role) · \(studio.status)")
                         Text(line)
                             .font(HubType.caption).fixedSize(horizontal: false, vertical: true)
                             .help("\(thisMachineName) · \(groupLine)")
@@ -2101,7 +2101,7 @@ struct StudioContent: View {
                 $0.state == "error" || $0.state == "uncertain" || ($0.stalledSeconds ?? 0) > 0
             }.count
             if attention > 0 {
-                return PageStatusLine("Ready · \(ready.label) · \(work) · \(attention) needs attention",
+                return PageStatusLine("Ready · \(ready.label) · \(work) · \(attentionPhrase(attention))",
                                       tone: .warn)
             }
             return PageStatusLine("Ready · \(ready.label) · \(work)", tone: active > 0 ? .ok : .off)
@@ -2174,20 +2174,14 @@ struct StudioContent: View {
             if !connected { setup }
             // One honest next step in the column, not only in the sidebar footer: the landing page
             // should say what to do first when something is missing (page critic, 2026-11-12).
-            if testMachine {
-                HStack(spacing: HubSpace.s) {
-                    Label("Test machine — studios are exercised without a model library.", systemImage: "wrench.and.screwdriver")
-                        .font(HubType.secondary).foregroundStyle(.secondary)
-                    Spacer()
-                }
-            } else if studio.configuration.modelsDirectory == nil {
+            if studio.configuration.modelsDirectory == nil, !testMachine {
                 HStack(spacing: HubSpace.s) {
                     Label("Choose a model library before you create anything.", systemImage: "exclamationmark.circle")
                         .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
                     Button("Set up this Mac") { studio.select(.setup) }
                     Spacer()
                 }
-            } else if !workspace.models.contains(where: { $0.cached }) {
+            } else if !testMachine, !workspace.models.contains(where: { $0.cached }) {
                 HStack(spacing: HubSpace.s) {
                     Label("No models are installed yet. Install one to start creating.",
                           systemImage: "exclamationmark.circle")
@@ -3086,6 +3080,25 @@ struct StudioContent: View {
         .rowAction()
     }
 
+    /// The second and third actions of a finished row, behind one menu: a row keeps Play (or
+    /// Preview) primary and Save beside it, and Reveal is here rather than a third button.
+    private func revealMenu(_ job: NativeJob) -> some View {
+        Menu {
+            Button("Show in Folder") {
+                if !workspace.revealArtifact(job) { fileActionError = job.revealUnavailableReason }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 22, height: 18)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(job.canRevealArtifact ? "Show this file in Finder" : job.revealUnavailableReason)
+        .accessibilityLabel("More actions for this clip")
+    }
+
     /// Puts a failed job back in the queue (`POST .../items/{i}/retry`); prompt and settings are kept.
     @ViewBuilder private func retryButton(_ job: NativeJob) -> some View {
         Button("Retry") { Task { await workspace.retryJob(job) } }.disabled(!connected).rowAction()
@@ -3191,7 +3204,7 @@ struct StudioContent: View {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
                     jobMetaLine(job)
                     jobProgress(job)
-                    jobRequestFacts(job, .image)
+                    DiagnosticDetails(title: "Request", summary: "settings used") { jobRequestFacts(job, .image) }
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(HubType.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
@@ -3584,7 +3597,7 @@ struct StudioContent: View {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
                     jobMetaLine(job)
                     jobProgress(job)
-                    jobRequestFacts(job, .music)
+                    DiagnosticDetails(title: "Request", summary: "settings used") { jobRequestFacts(job, .music) }
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(HubType.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
@@ -3920,7 +3933,7 @@ struct StudioContent: View {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
                     jobMetaLine(job)
                     jobProgress(job)
-                    jobRequestFacts(job, .video)
+                    DiagnosticDetails(title: "Request", summary: "settings used") { jobRequestFacts(job, .video) }
                     // The clip's own facts already carry its length, so the separate "Clip length"
                     // line is gone: it printed the same number twice in one row.
                     if job.state == "done", !job.assetFacts.isEmpty {
@@ -6361,7 +6374,7 @@ struct StudioContent: View {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(compact ? 1 : 3)
                     jobMetaLine(job)
                     jobProgress(job)
-                    jobRequestFacts(job, .audio)
+                    DiagnosticDetails(title: "Request", summary: "settings used") { jobRequestFacts(job, .audio) }
                     // What was actually produced: length, size and the size requested. An asset
                     // with no stated facts is hard to tell apart from one that came back wrong.
                     if job.state == "done", !job.assetFacts.isEmpty {
@@ -6380,7 +6393,7 @@ struct StudioContent: View {
                             }
                         }.disabled(!connected).rowAction()
                         Button("Save…") { saveAudio(job) }.disabled(!connected).rowAction()
-                        revealButton(job)
+                        revealMenu(job)
                     } else if job.state == "uncertain" {
                         Button("Discard…", role: .destructive) { requestDiscard(job, kind: .audio) }.disabled(!connected).rowAction()
                     } else if job.state == "error" { retryButton(job)

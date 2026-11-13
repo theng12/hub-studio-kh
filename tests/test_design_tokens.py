@@ -121,6 +121,20 @@ class KeyboardTests(unittest.TestCase):
             self.assertIn(needle, VIEWS, f"Escape lost its route: {needle}")
 
 
+class OwnerFixTests(unittest.TestCase):
+    def test_sidebar_content_and_footer_keep_their_edges(self) -> None:
+        # Content is clipped and the sidebar paints above it, so a long page cannot cross it.
+        self.assertIn(".clipped()", VIEWS)
+        self.assertIn(".zIndex(1)", VIEWS)
+        self.assertIn(".background(Color(nsColor: .controlBackgroundColor))", VIEWS)
+        # The test-machine profile is off unless switched on.
+        self.assertIn('@AppStorage("studiohub.testMachine") private var testMachine = false', VIEWS)
+        # One attention phrase, so "1 need" and "3 needs" cannot both appear.
+        self.assertIn("private func attentionPhrase(_ count: Int) -> String", VIEWS)
+        self.assertEqual(VIEWS.count("attentionPhrase("), 3,
+                         "the helper and both status lines must use the one phrase")
+
+
 class FormTests(unittest.TestCase):
     def test_form_labels_sit_above_their_controls_through_one_row(self) -> None:
         picker = VIEWS[VIEWS.index("private func modelPicker"):]

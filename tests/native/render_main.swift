@@ -773,12 +773,15 @@ struct PageRenderHarness {
             model("mlx-community/Qwen3.5-9B-4bit", "Qwen3.5 9B 4-bit", "Qwen3.5", .chat, cached: false, size: 6.0,
                   memory: "Close other apps before loading."),
         ]
+        let voiceNotes = ["Studio reference, room tone removed.", "Two takes, the second kept.",
+                          "Narration sample, quiet room.", "Needs a transcript before cloning.",
+                          "Long-form narrator reference."]
         workspace.voices = [
             ("Marlowe", "en", "f", true, 42.0), ("Ines", "es", "f", true, 31.5), ("Okafor", "en", "m", true, 58.2),
             ("Hana", "ja", "f", false, 19.0), ("Brightwater (narrator)", "en", "m", true, 120.4),
         ].enumerated().map { index, row in
             decode(NativeVoice.self, """
-                {"id":"voice-\(index)","name":"\(row.0)","language":"\(row.1)","gender":"\(row.2)","notes":"Studio reference, room tone removed.",
+                {"id":"voice-\(index)","name":"\(row.0)","language":"\(row.1)","gender":"\(row.2)","notes":"\(voiceNotes[index])",
                  "license":"self-owned","permission_acknowledged":true,"has_transcript":\(row.3),"transcript":\(row.3 ? "\"The quick brown fox jumps over the lazy dog.\"" : "null"),
                  "audio_extension":"wav","duration_seconds":\(row.4),"sample_rate":24000,"channels":1,"fleet_managed":\(index % 2 == 0)}
                 """)
