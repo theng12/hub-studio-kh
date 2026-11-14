@@ -21,5 +21,14 @@ class SidebarTests(unittest.TestCase):
         self.assertNotIn("Color.white", row, "the selected row is no longer a white-on-accent block")
 
 
+class FooterTests(unittest.TestCase):
+    def test_pill_names_the_product_version_and_whats_new(self) -> None:
+        pill = VIEWS[VIEWS.index("private var footerVersionPill"):]
+        pill = pill[:pill.index("private var footerStatusLine")]
+        self.assertIn('Text("Hub Studio KH")', pill)
+        self.assertIn("Text(appVersion)", pill)
+        self.assertIn('Text("· What\'s New")', pill)
+
+
 if __name__ == "__main__":
     unittest.main()

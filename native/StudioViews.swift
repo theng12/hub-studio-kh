@@ -1969,18 +1969,25 @@ struct StudioContent: View {
     /// The version + What's New pill, extracted so the footer body stays inside the type checker.
     @ViewBuilder private var footerVersionPill: some View {
         Button { studio.select(.whatsNew) } label: {
-            HStack(spacing: HubSpace.tight) {
-                Text("What's New")
+            // Every app shows its product, its version and What's New; the pill is the one place
+            // this app does it.
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Hub Studio KH")
                     .font(HubType.caption).foregroundStyle(.secondary)
                     .lineLimit(1)
-                Text(appVersion)
-                    .font(HubType.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).fixedSize()
+                HStack(spacing: HubSpace.xs) {
+                    Text(appVersion)
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text("· What's New")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
-            .lineLimit(1)
+            .minimumScaleFactor(0.75)
             .padding(.horizontal, HubSpace.s).padding(.vertical, 3)
             .background(Capsule().fill(Color.secondary.opacity(0.12)))
-            .fixedSize()
+            .fixedSize(horizontal: false, vertical: true)
         }
         .buttonStyle(.plain)
         .help("Hub Studio KH \(appVersion). Open What's New.")
