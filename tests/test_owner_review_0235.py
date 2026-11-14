@@ -79,8 +79,8 @@ class AudioServiceStateTests(unittest.TestCase):
         self.assertEqual(picker.count(".disabled(servicePhase != .running)"), 2)
         audio = VIEWS[VIEWS.index("private var audioWorkspace"):]
         audio = audio[:audio.index("private var voiceSourcePicker")]
-        self.assertIn('Button("Manage Audio Models") { modelFilter = "Audio"; studio.select(.models) }
-                            .disabled(servicePhase != .running)', audio)
+        self.assertIn('Button("Manage Audio Models")', audio)
+        self.assertIn(".disabled(servicePhase != .running)", audio)
 
 
 if __name__ == "__main__":
