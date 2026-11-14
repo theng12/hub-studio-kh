@@ -1432,6 +1432,26 @@ struct StudioContent: View {
     /// Enough to attempt an authenticated Nodes read. Model-catalog reachability remains the gate
     /// for generation controls; it is not evidence that the fleet roster itself is unavailable.
     private var localServicesReady: Bool { studio.readyURL != nil && !studio.stopping }
+
+    /// The one service state every page and the footer read. `studio.status` is a sentence, not a
+    /// state: during recovery it says "Recovering local services…" while `readyURL` can still be
+    /// absent, and the page used to call that "stopped" in one place and "recovering" in another.
+    private enum ServicePhase: Equatable { case running, recovering, stopped }
+
+    private var servicePhase: ServicePhase {
+        if localServicesReady { return .running }
+        if studio.starting || studio.recoveryPending
+            || studio.status.localizedCaseInsensitiveContains("recover") { return .recovering }
+        return .stopped
+    }
+
+    private var servicePhaseLine: String {
+        switch servicePhase {
+        case .running: return "Hub running"
+        case .recovering: return "Recovering local services…"
+        case .stopped: return studio.hasLibrary ? "Local services are stopped" : "No model library selected"
+        }
+    }
     private var selectedAudioModel: NativeModel? { workspace.models.first { $0.repo == workspace.audioModel && $0.function == .audio } }
     private var selectedTranscriptionModel: NativeModel? { workspace.models.first { $0.repo == workspace.transcriptionModel && $0.function == .transcription } }
     private var selectedImageModel: NativeModel? { workspace.models.first { $0.repo == workspace.imageModel && $0.function == .image } }
@@ -1954,7 +1974,7 @@ struct StudioContent: View {
         let line: String = {
             if testMachine { return localServicesReady ? "Test machine · running" : "Test machine · off" }
             if localServicesReady { return paused ? "Hub running · work paused" : "Hub running" }
-            return studio.status
+            return servicePhaseLine
         }()
         HStack(alignment: .top, spacing: HubSpace.tight) {
             Image(systemName: footerStatusSymbol)
@@ -2073,8 +2093,10 @@ struct StudioContent: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
-                if studio.starting || studio.stopping { ProgressView().controlSize(.small); Text(studio.status) }
-                else {
+                if servicePhase == .recovering || studio.stopping {
+                    ProgressView().controlSize(.small)
+                    Text(servicePhase == .recovering ? "Starting local services…" : studio.status)
+                } else {
                     if studio.hasLibrary { Button("Start Services") { studio.start() }.buttonStyle(.borderedProminent).disabled(!studio.canConfigure) }
                     // The models the setup step just copied are one click away, and are offered
                     // first: the alternative on a fresh Mac is an empty folder that would download
@@ -2107,8 +2129,8 @@ struct StudioContent: View {
 
     private func studioStatus(_ function: StudioFunction, active: Int,
                               selected: String? = nil) -> PageStatusLine {
-        guard localServicesReady else {
-            return PageStatusLine("Local services are stopped — start them to create here.", tone: .warn)
+        guard servicePhase == .running else {
+            return PageStatusLine(servicePhaseLine, tone: servicePhase == .recovering ? .info : .warn)
         }
         // The model the page will actually run, not whichever ready model happens to be first:
         // "Ready · Kokoro" beside a Qwen3 picker was the critic's clearest contradiction.
@@ -2160,8 +2182,14 @@ struct StudioContent: View {
             return PageStatusLine("Test machine · \(localServicesReady ? "services running" : "services off")",
                                   tone: localServicesReady ? .ok : .off)
         }
-        if !localServicesReady {
-            return PageStatusLine("Local services are stopped — start them to create anything on this Mac.", tone: .warn)
+        if servicePhase == .recovering {
+            return PageStatusLine("Recovering local services… this page updates when they are ready.", tone: .info)
+        }
+        if servicePhase == .stopped {
+            return PageStatusLine(studio.hasLibrary
+                                  ? "Local services are stopped — start them to create on this Mac."
+                                  : "No model library selected — choose one in Settings, then start services.",
+                                  tone: .warn)
         }
         if studio.configuration.modelsDirectory == nil {
             return PageStatusLine("No model library is selected yet — set up this Mac to install models.", tone: .warn)
@@ -2203,14 +2231,14 @@ struct StudioContent: View {
             if !connected { setup }
             // One honest next step in the column, not only in the sidebar footer: the landing page
             // should say what to do first when something is missing (page critic, 2026-11-12).
-            if studio.configuration.modelsDirectory == nil, !testMachine {
+            if studio.configuration.modelsDirectory == nil, !testMachine, servicePhase == .running {
                 HStack(spacing: HubSpace.s) {
                     Label("Choose a model library before you create anything.", systemImage: "exclamationmark.circle")
                         .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
                     Button("Set up this Mac") { studio.select(.setup) }
                     Spacer()
                 }
-            } else if !testMachine, !workspace.models.contains(where: { $0.cached }) {
+            } else if !testMachine, servicePhase == .running, !workspace.models.contains(where: { $0.cached }) {
                 HStack(spacing: HubSpace.s) {
                     Label("No models are installed yet. Install one to start creating.",
                           systemImage: "exclamationmark.circle")
@@ -2254,12 +2282,12 @@ struct StudioContent: View {
                                     .font(HubType.secondary).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if localServicesReady {
+                            if servicePhase == .running {
                                 Button("Open Audio") { studio.select(.audio) }.hubRowControl()
-                            } else {
-                                Button("Start Services") { studio.start() }
-                                    .hubRowControl().disabled(!studio.canConfigure)
                             }
+                            // While services are stopped or recovering, Start Services lives in
+                            // the setup card above; a second primary here was the owner's duplicate.
+
                         }
                     } else {
                         // One divider between rows, none after the last: the card draws its own edge.
@@ -2330,7 +2358,10 @@ struct StudioContent: View {
                 HubCard {
                     HStack {
                         Text(testMachine ? "Test machine — no model library is required."
-                             : (connected ? "\(workspace.models.filter(\.cached).count) installed models in the connected library" : "Connect your library to inspect installed models"))
+                             : (connected ? "\(workspace.models.filter(\.cached).count) installed models in the connected library"
+                                : (studio.hasLibrary
+                                   ? "Your model folder is on this Mac. Start local services to list what is installed."
+                                   : "No model folder is selected. Choose one in Settings, or install models in Set up this Mac.")))
                             .font(HubType.body).foregroundStyle(.secondary)
                         Spacer()
                         Button("Manage Models") { studio.select(.models) }.hubRowControl()

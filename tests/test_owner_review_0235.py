@@ -30,5 +30,32 @@ class FooterTests(unittest.TestCase):
         self.assertIn('Text("· What\'s New")', pill)
 
 
+class ServiceStateTests(unittest.TestCase):
+    def test_one_service_phase_drives_footer_and_overview(self) -> None:
+        self.assertIn("private enum ServicePhase", VIEWS)
+        self.assertIn("private var servicePhase: ServicePhase", VIEWS)
+        self.assertIn("private var servicePhaseLine: String", VIEWS)
+        status = VIEWS[VIEWS.index("private var overviewStatus"):]
+        status = status[:status.index("private var overview:")]
+        self.assertIn("servicePhase == .recovering", status)
+        self.assertIn("servicePhase == .stopped", status)
+        footer = VIEWS[VIEWS.index("private var footerStatusLine"):]
+        footer = footer[:footer.index("private var footerVersionPill")]
+        self.assertIn("return servicePhaseLine", footer)
+
+    def test_overview_has_one_start_primary_and_no_model_blocker_while_stopped(self) -> None:
+        overview = VIEWS[VIEWS.index("private var overview:") :]
+        overview = overview[:overview.index("private var measuredSection")]
+        self.assertNotIn('Button("Start Services")', overview,
+                         "Start Services lives in the setup card, not the empty in-progress card")
+        self.assertIn("servicePhase == .running, !workspace.models.contains", overview)
+        self.assertIn("servicePhase == .running {", overview)
+
+    def test_model_library_copy_names_the_local_folder(self) -> None:
+        self.assertIn("Your model folder is on this Mac.", VIEWS)
+        self.assertIn("No model folder is selected.", VIEWS)
+        self.assertNotIn("Connect your library to inspect installed models", VIEWS)
+
+
 if __name__ == "__main__":
     unittest.main()
