@@ -24,7 +24,7 @@ class SidebarTests(unittest.TestCase):
 class FooterTests(unittest.TestCase):
     def test_pill_names_the_product_version_and_whats_new(self) -> None:
         pill = VIEWS[VIEWS.index("private var footerVersionPill"):]
-        pill = pill[:pill.index("private var footerStatusLine")]
+        pill = pill[:pill.index("private var sidebarList")]
         self.assertIn('Text("Hub Studio KH")', pill)
         self.assertIn("Text(appVersion)", pill)
         self.assertIn('Text("· What\'s New")', pill)
