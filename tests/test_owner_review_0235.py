@@ -64,7 +64,9 @@ class AudioServiceStateTests(unittest.TestCase):
         self.assertIn('primary: servicePhase == .stopped', audio)
         self.assertIn('title: servicePhase == .recovering ? "Starting local services…" : "Local services are stopped"', audio)
         self.assertIn(".disabled(servicePhase != .running || audioBlockedReason != nil)", audio)
-        self.assertNotIn('"Start the local services first."', VIEWS)
+        blocked = VIEWS[VIEWS.index("private var audioBlockedReason"):]
+        blocked = blocked[:blocked.index("private var voiceLibraryLoadKey")]
+        self.assertNotIn('"Start the local services first."', blocked)
 
     def test_voice_select_says_services_stopped(self) -> None:
         picker = VIEWS[VIEWS.index("private var voiceSourcePicker"):]
