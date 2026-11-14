@@ -370,11 +370,17 @@ class CueOverlayIntegrationTests(unittest.TestCase):
 class CueOverlayExecutorPathTests(unittest.IsolatedAsyncioTestCase):
     """Real executor path: v5 admission, media refusal before spawn, and a valid cue render."""
 
-    PINNED_TOOLS = Path("/Applications/Studio Hub.app/Contents/Resources/render-tools")
+    PINNED_TOOLS = Path("/Applications/Hub Studio KH.app/Contents/Resources/render-tools")
 
     def setUp(self):
         self.fixture = fixtures.RenderExecutorTests()
         self.fixture.setUp()
+        # A borrowed case is not run by unittest, so move its cleanups (the render-authority root
+        # anchor and its temp roots) onto this one; otherwise they never run and every later test
+        # sees a fake root.
+        for function, args, kwargs in self.fixture._cleanups:
+            self.addCleanup(function, *args, **kwargs)
+        self.fixture._cleanups.clear()
         self.root = self.fixture.root
         for name in ("ffmpeg", "ffprobe"):
             if not (self.PINNED_TOOLS / name).is_file():

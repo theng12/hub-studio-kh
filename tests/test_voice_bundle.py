@@ -692,6 +692,9 @@ class StagingTests(unittest.TestCase):
             native = base / 'StudioHub'
             native.write_bytes(b'native-shell')
             native.chmod(0o755)
+            helper = base / 'HubStudioHelper'
+            helper.write_bytes(b'native-helper')
+            helper.chmod(0o755)
             # A Hub build requires the two pinned render tools. The real pins name ~132 MB
             # universal binaries, so the fixture supplies its own tiny pins through the seam
             # `stage_voice` imports at stage time; the staging code still copies and verifies
@@ -717,7 +720,7 @@ class StagingTests(unittest.TestCase):
                 pins.append(stage_render_tools._ToolPin(
                     tool_name, tools / tool_name, len(payload),
                     hashlib.sha256(payload).hexdigest()))
-            artifact = base / 'Studio Hub.app'
+            artifact = base / 'Hub Studio KH.app'
             with mock.patch.object(module, 'ROOT', repo), \
                     mock.patch.dict(sys.modules, {'stage_render_tools': stage_render_tools}), \
                     mock.patch.object(stage_render_tools, 'production_pins',
@@ -765,11 +768,13 @@ class StagingTests(unittest.TestCase):
                         # A stage this build must refuse: report why, and prove it left no app.
                         with self.assertRaises(ValueError) as caught:
                             module.stage(runtime, artifact, native_shell=native,
+                                         native_helper=helper,
                                          render_tools_dir=tools, **stage_kwargs)
                         self.assertFalse(artifact.exists(),
                                          'a refused stage must leave no artifact')
                         return str(caught.exception)
                     module.stage(runtime, artifact, native_shell=native,
+                                 native_helper=helper,
                                  render_tools_dir=tools, **stage_kwargs)
                 except TypeError as exc:
                     self.fail(f'stage must accept native_shell: {exc}')
@@ -783,11 +788,21 @@ class StagingTests(unittest.TestCase):
             with (contents / 'Info.plist').open('rb') as stream:
                 plist = plistlib.load(stream)
             self.assertEqual(plist['CFBundleExecutable'], 'StudioHub')
-            self.assertEqual(plist['CFBundleName'], 'Studio Hub')
+            self.assertEqual(plist['CFBundleName'], 'Hub Studio KH')
             self.assertEqual(plist['CFBundleDisplayName'], 'Hub Studio KH')
             self.assertEqual(plist['CFBundleIdentifier'], 'local.studiohub.standalone')
             self.assertNotIn('LSUIElement', plist)
             self.assertIn('microphone', plist['NSMicrophoneUsageDescription'].lower())
+            # The background process is a named helper bundle, not a bare python3 (owner rule).
+            helper_bundle = contents / 'Resources/helper/Hub Studio KH Helper.app'
+            helper_exe = helper_bundle / 'Contents/MacOS/Hub Studio KH Helper'
+            self.assertEqual(helper_exe.read_bytes(), b'native-helper')
+            self.assertTrue(os.access(helper_exe, os.X_OK))
+            helper_plist = plistlib.loads((helper_bundle / 'Contents/Info.plist').read_bytes())
+            self.assertEqual(helper_plist['CFBundleName'], 'Hub Studio KH Helper')
+            self.assertEqual(helper_plist['CFBundleDisplayName'], 'Hub Studio KH Helper')
+            self.assertEqual(helper_plist['CFBundleIdentifier'], 'local.studiohub.helper')
+            self.assertTrue(helper_plist['LSUIElement'])
             manifest = json.loads((contents / 'Resources/release-manifest.json').read_text())
             self.assertFalse(manifest['development_build'])
             # The installer on every fleet Mac is 0.6.198's: it reads the manifest's component keys

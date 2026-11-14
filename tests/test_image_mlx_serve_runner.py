@@ -4,7 +4,9 @@ import base64
 import json
 import os
 from pathlib import Path
+import shlex
 import stat
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import threading
@@ -26,8 +28,7 @@ def _png(width: int, height: int) -> str:
 
 def _fake_server(path: Path, payload: dict, *, delay: float = 0.0,
                  version: str = "26.10.1", ignore_term: bool = False) -> None:
-    source = f'''#!{sys.executable}
-import json, os, sys, time
+    source = f'''import json, os, sys, time
 args = sys.argv[1:]
 if args == ["--version"]:
     print("mlx-serve {version}")
@@ -64,11 +65,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(body)
 HTTPServer(("127.0.0.1", port), Handler).serve_forever()
 '''
-    path.write_text(source)
+    Path(str(path) + ".py").write_text(source)
+    path.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$0.py" "$@"\n')
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
 class MlxServeRunnerTests(unittest.TestCase):
+    def test_version_fixture_uses_the_exact_spaced_interpreter(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            interpreter = root / "Owner's Python Runtime" / "python3"
+            interpreter.parent.mkdir()
+            interpreter.symlink_to(sys.executable)
+            binary = root / "Owner's mlx-serve"
+            with patch.object(sys, "executable", str(interpreter)):
+                _fake_server(binary, {"data": []})
+            result = subprocess.run([str(binary), "--version"], capture_output=True,
+                                    text=True, env={"PATH": "/nonexistent"}, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "mlx-serve 26.10.1")
+
     def test_worker_shutdown_kills_a_sigterm_ignoring_active_leaf(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

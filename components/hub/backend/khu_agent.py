@@ -24,6 +24,9 @@ from . import ed25519
 log = logging.getLogger("studiohub.khu_agent")
 KIT_FILES = {"VERSION", "bin/khu", "bin/khu-stub", "install-agent.sh",
              "com.khupdater.agent.plist", "agent-config.example.json", "publisher.json"}
+# The shared icon names the background bundles the agent installs. A kit built before the
+# icon existed still installs; when present it is pinned by the manifest like every other byte.
+KIT_OPTIONAL = {"AppIcon.icns"}
 STATUS = {"state": "pending", "tokenRejected": False,
           "detail": "KH Updater has not been checked yet."}
 
@@ -87,10 +90,9 @@ def verify_kit(kit: Path, *, allow_test: bool = False) -> dict:
         raise ValueError("agent kit missing")
     manifest = json.loads((kit / "MANIFEST.json").read_text())
     files = manifest["files"]
-    if set(files) != KIT_FILES:
-        raise ValueError("unexpected agent kit contents")
     actual = {p.relative_to(kit).as_posix() for p in kit.rglob("*") if not p.is_dir()}
-    if actual != KIT_FILES | {"MANIFEST.json"}:
+    if (not KIT_FILES <= set(files) or not set(files) <= KIT_FILES | KIT_OPTIONAL
+            or actual != set(files) | {"MANIFEST.json"}):
         raise ValueError("unexpected agent kit contents")
     for name, pin in files.items():
         path = kit / name

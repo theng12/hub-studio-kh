@@ -16,8 +16,8 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 KIT=$(CDPATH= cd -- "$HERE/.." && pwd)
 TARGET="$HERE/eight-gb-tts-run.sh"
 IMPORTER="$HERE/import_kit_packages.py"
-APP="${STUDIOHUB_APP:-/Applications/Studio Hub.app}"
-[ -f "$APP/Contents/Info.plist" ] || APP="$HOME/Applications/Studio Hub.app"
+APP="${STUDIOHUB_APP:-/Applications/Hub Studio KH.app}"
+[ -f "$APP/Contents/Info.plist" ] || APP="$HOME/Applications/Hub Studio KH.app"
 PYTHON="$APP/Contents/Resources/runtimes/voice/bin/python3"
 PACKAGES="fish-audio-s2-pro-4bit,fish-audio-s2-pro-8bit,fish-audio-s2-pro-bf16"
 

@@ -255,16 +255,6 @@ class ReleaseWithoutVideoTests(unittest.TestCase):
         self.assertEqual({spec["id"] for spec in specs},
                          {"voice", "image", "subtitle", "music", "chat", "embeddings", "vision"})
 
-    def test_the_installer_accepts_releases_with_or_without_video(self) -> None:
-        """`verifyDeclaredComponents` checks only the components a manifest declares, and its table
-        still knows `video` (an older or a future release that ships it must keep installing)."""
-        source = (WORKTREE / "native/UpdateClient.swift").read_text()
-        table = re.search(r"static let runtimePaths: \[String: \[String\]\] = \[(.*?)\n    \]", source, re.S).group(1)
-        self.assertIn('"video":', table)
-        verify = source[source.index("func verifyDeclaredComponents"):]
-        self.assertIn("for (name, value) in components.sorted", verify.split("\n    }\n")[0],
-                      "the installer must iterate what the manifest declares, not a fixed list")
-
     def test_the_swift_video_page_has_a_plain_no_model_state(self) -> None:
         views = (WORKTREE / "native/StudioViews.swift").read_text()
         self.assertIn("noVideoModel", views)

@@ -14,6 +14,7 @@ import platform
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,6 +178,107 @@ class PreflightTests(unittest.TestCase):
     def test_native_stage_needs_no_interpreter(self):
         with tempfile.TemporaryDirectory() as temporary:
             self.assertIsNone(self.gate.preflight(Path(temporary), 'native'))
+
+
+class DiskPreflightTests(unittest.TestCase):
+    """The measured gate demand: provenance is read, never invented."""
+
+    def setUp(self):
+        self.gate = load_gate()
+
+    @staticmethod
+    def telemetry(root: Path, budget=11_990_847_488, floor=10_737_418_240) -> Path:
+        path = root / 'telemetry.json'
+        path.write_text(json.dumps({'disk': {'budget_bytes': budget,
+                                             'minimum_remaining_bytes': floor}}), encoding='utf-8')
+        return path
+
+    def test_missing_telemetry_is_a_loud_refusal_not_a_guess(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(SystemExit) as caught:
+                self.gate._disk_demand(Path(temporary) / 'absent.json')
+            message = str(caught.exception)
+            self.assertIn('measured gate disk telemetry is missing', message)
+            self.assertIn('absent.json', message)
+
+    def test_unreadable_telemetry_is_a_loud_refusal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            broken = Path(temporary) / 'telemetry.json'
+            broken.write_text('{"disk": {"budget_bytes": "plenty"}}', encoding='utf-8')
+            with self.assertRaises(SystemExit) as caught:
+                self.gate._disk_demand(broken)
+            self.assertIn('unreadable', str(caught.exception))
+
+    def test_the_measured_demand_is_carried_with_its_provenance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.telemetry(Path(temporary))
+            demand = self.gate._disk_demand(path)
+            # The source rule keeps floor out of budget; the start covers both.
+            self.assertEqual(demand['budget_bytes'], 11_990_847_488)
+            self.assertEqual(demand['floor_bytes'], 10_737_418_240)
+            self.assertEqual(demand['requirement_bytes'],
+                             demand['budget_bytes'] + demand['floor_bytes'])
+            self.assertEqual(demand['provenance'], str(path))
+
+    def test_free_between_budget_and_the_floor_is_refused_not_tolerated(self):
+        """The regression: budget alone never passed — floor must stand after budget too."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            demand = self.gate._disk_demand(self.telemetry(root))
+            between = SimpleNamespace(free=demand['budget_bytes'])  # >= budget, < budget+floor
+            with self.assertRaises(SystemExit) as caught:
+                self.gate.check_free_disk(root, demand, usage=lambda path: between)
+            message = str(caught.exception)
+            self.assertIn(str(demand['requirement_bytes']), message)
+            self.assertIn(str(demand['budget_bytes']), message)
+            self.assertIn(str(demand['floor_bytes']), message)
+            self.assertIn('in-run stop', message)
+
+    def test_free_at_budget_plus_floor_passes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            demand = self.gate._disk_demand(self.telemetry(root))
+            at_need = SimpleNamespace(free=demand['requirement_bytes'])
+            result = self.gate.check_free_disk(root, demand, usage=lambda path: at_need)
+            self.assertTrue(result['ok'])
+            self.assertEqual(result['need_bytes'], demand['requirement_bytes'])
+            self.assertEqual(result['provenance'], str(self.telemetry(root)))
+
+    def test_a_heavy_preflight_refuses_below_the_need_before_any_other_check(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            telemetry = self.telemetry(root)
+            with mock.patch.dict(os.environ, {'HUB_GATE_DISK_TELEMETRY': str(telemetry)}):
+                with mock.patch.object(self.gate, 'check_gate_selection'):
+                    with mock.patch.object(self.gate, 'check_gate_seeds'):
+                        with mock.patch.object(self.gate, 'check_gate_closure'):
+                            with mock.patch.object(self.gate, 'check_interpreter'):
+                                with mock.patch.object(
+                                        self.gate.shutil, 'disk_usage',
+                                        lambda path: SimpleNamespace(free=0)):
+                                    with self.assertRaises(SystemExit) as caught:
+                                        self.gate.preflight(root, 'unittest')
+            self.assertIn('below the measured gate need', str(caught.exception))
+
+    def test_a_heavy_preflight_reads_the_measured_need_before_running(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            telemetry = self.telemetry(root)
+            with mock.patch.dict(os.environ, {'HUB_GATE_DISK_TELEMETRY': str(telemetry)}):
+                with mock.patch.object(self.gate, 'check_gate_selection'):
+                    with mock.patch.object(self.gate, 'check_gate_seeds'):
+                        with mock.patch.object(self.gate, 'check_gate_closure'):
+                            with mock.patch.object(self.gate, 'check_interpreter'):
+                                with mock.patch.object(
+                                        self.gate.shutil, 'disk_usage',
+                                        lambda path: SimpleNamespace(
+                                            free=11_990_847_488 + 10_737_418_240)):
+                                    self.assertIsNone(self.gate.preflight(root, 'unittest'))
+
+    def test_the_native_stage_never_needs_the_disk_demand(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.dict(os.environ, {'HUB_GATE_DISK_TELEMETRY': '/absent'}):
+                self.assertIsNone(self.gate.preflight(Path(temporary), 'native'))
 
 
 if __name__ == '__main__':

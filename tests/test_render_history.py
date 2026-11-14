@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from components.hub.backend import render_history  # noqa: E402
 from components.hub.backend.render_jobs import RenderJobRuntime  # noqa: E402
+from _render_authority_root import anchor_root  # noqa: E402
 
 NOW = 1_800_000_000.0
 
@@ -83,7 +84,8 @@ def insert(path: Path, job_id: str, **fields) -> None:
 class ReadTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="render-history-")
-        self.path = database(Path(self.temporary.name) / "hub.db")
+        self.root = anchor_root(self, Path(self.temporary.name))
+        self.path = database(self.root / "hub.db")
 
     def tearDown(self) -> None:
         self.temporary.cleanup()

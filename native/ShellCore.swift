@@ -86,7 +86,10 @@ enum StudioPage: String, CaseIterable, Identifiable {
         let available = StudioFunction.allCases.filter { $0.hasEngine }
         let placed = createOrder.filter { available.contains($0) }
         let unplaced = available.filter { !createOrder.contains($0) }
+        // The Video lane was retired (LTX-2.3); its page stays for old links and its finished
+        // clips stay in Jobs, but a retired feature is not navigation (critic, 2026-11-13).
         return (placed + unplaced).compactMap { Self(rawValue: $0.rawValue) }
+            .filter { $0 != .video }
     }()
     static let library: [Self] = [.setup, .models, .voices, .jobs, .renders]
     static let fleet: [Self] = [.connections]
@@ -230,11 +233,6 @@ struct ShellConfiguration {
     /// on every call this Mac makes home. Stored with the membership and written 0600 — it is a
     /// secret, and it is the only credential whose revocation is about this Mac alone (A8).
     var nodeCredential: String?
-    /// The controller's release-signing key, pinned the first time this Mac reads its identity.
-    /// Kept with the membership: it is restored when the services start, and leaving the group
-    /// clears it. A different key presented later is refused, never adopted silently.
-    var releasePublisherPublicKey: String?
-    var releasePublisherFingerprint: String?
     /// The address this app's own Hub answers on. Always loopback.
     ///
     /// Loopback is bound in every configuration - `bind_hosts` adds it unconditionally - and the
@@ -380,8 +378,6 @@ struct ShellConfiguration {
             listenHostAutomatic = saved.listenHostAutomatic ?? true
             port = saved.port ?? Self.defaultPort
             controllerAddress = saved.controllerAddress
-            releasePublisherPublicKey = saved.releasePublisherPublicKey
-            releasePublisherFingerprint = saved.releasePublisherFingerprint
             loginMigrationComplete = saved.loginMigrationComplete
             if StartupRecovery.validPolicy(maxAttempts: saved.recoveryMaxAttempts,
                                            delays: saved.recoveryBackoffSeconds) {
@@ -714,8 +710,6 @@ struct ShellConfiguration {
                                                         port: port,
                                                         controllerAddress: controllerAddress,
                                                         nodeCredential: nodeCredential,
-                                                        releasePublisherPublicKey: releasePublisherPublicKey,
-                                                        releasePublisherFingerprint: releasePublisherFingerprint,
                                                         recoveryMaxAttempts: recoveryMaxAttempts,
                                                         recoveryBackoffSeconds: recoveryBackoffSeconds,
                                                         loginMigrationComplete: loginMigrationComplete))
@@ -758,10 +752,6 @@ struct ShellConfiguration {
         /// own credential. Kept in this file, which is written 0600 in a 0700 directory, and beside
         /// the membership it belongs to — leaving the group clears both.
         let nodeCredential: String?
-        /// The controller's pinned release-signing key. Absent until the first release read, and
-        /// absent again after leaving the group.
-        let releasePublisherPublicKey: String?
-        let releasePublisherFingerprint: String?
         let recoveryMaxAttempts: Int
         let recoveryBackoffSeconds: [TimeInterval]
         /// Absent in every preferences file written before the launch agent replaced the login
@@ -771,7 +761,6 @@ struct ShellConfiguration {
         init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
              startServicesChoiceRecorded: Bool?, listenHost: String, listenHostAutomatic: Bool?, port: Int?, controllerAddress: String?,
              nodeCredential: String?,
-             releasePublisherPublicKey: String?, releasePublisherFingerprint: String?,
              recoveryMaxAttempts: Int,
              recoveryBackoffSeconds: [TimeInterval],
              loginMigrationComplete: Bool) {
@@ -785,8 +774,6 @@ struct ShellConfiguration {
             self.port = port
             self.controllerAddress = controllerAddress
             self.nodeCredential = nodeCredential
-            self.releasePublisherPublicKey = releasePublisherPublicKey
-            self.releasePublisherFingerprint = releasePublisherFingerprint
             self.recoveryMaxAttempts = recoveryMaxAttempts
             self.recoveryBackoffSeconds = recoveryBackoffSeconds
             self.loginMigrationComplete = loginMigrationComplete
@@ -810,8 +797,6 @@ struct ShellConfiguration {
             port = try values.decodeIfPresent(Int.self, forKey: .port)
             controllerAddress = try values.decodeIfPresent(String.self, forKey: .controllerAddress)
             nodeCredential = try values.decodeIfPresent(String.self, forKey: .nodeCredential)
-            releasePublisherPublicKey = try values.decodeIfPresent(String.self, forKey: .releasePublisherPublicKey)
-            releasePublisherFingerprint = try values.decodeIfPresent(String.self, forKey: .releasePublisherFingerprint)
             recoveryMaxAttempts = try values.decodeIfPresent(Int.self, forKey: .recoveryMaxAttempts)
                 ?? StartupRecovery.defaultMaxAutomaticAttempts
             recoveryBackoffSeconds = try values.decodeIfPresent([TimeInterval].self, forKey: .recoveryBackoffSeconds)
@@ -865,10 +850,55 @@ func rotatePrivateLogIfNeeded(_ url: URL) {
     try? FileManager.default.moveItem(at: url, to: previous)
 }
 
+/// The Hub's Trash Folder (`<data>/hub/trash/<UTC date>/...`). Nothing in it is deleted by the Hub:
+/// the owner empties it through macOS Trash (owner request 2026-10-15), so anything moved here can be
+/// taken back until then.
+enum HubTrash {
+    static var live: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/StudioHub Standalone/hub/trash", isDirectory: true)
+    }
+
+    /// Move `item` into `<trash>/<UTC date>/<label>-<id>/`, keeping its name unless `named` says
+    /// otherwise. Only ever a same-volume rename: returns false, leaving `item` untouched, if the
+    /// Trash Folder is on another volume or the move fails. It never copies and never deletes;
+    /// what to do about a false is the caller's decision.
+    @discardableResult
+    static func move(_ item: URL, into trash: URL, label: String, named: String? = nil,
+                     fileManager: FileManager = .default, now: Date = Date()) -> Bool {
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.timeZone = TimeZone(identifier: "UTC")
+        format.dateFormat = "yyyy-MM-dd"
+        let folder = trash.appendingPathComponent(format.string(from: now), isDirectory: true)
+            .appendingPathComponent("\(label)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: folder, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+            let here = try item.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
+            let there = try folder.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
+            if let here, let there, here.isEqual(there) {
+                try fileManager.moveItem(at: item, to: folder.appendingPathComponent(named ?? item.lastPathComponent))
+                return true
+            }
+        } catch {}
+        rmdir(folder.path)   // the folder made above, only if it is still empty
+        return false
+    }
+
+    /// Retire `item`: into the Hub's Trash Folder, else (no Trash Folder, another volume, a failed move)
+    /// into macOS Trash, else it stays where it is. Never a delete. Returns whether it moved.
+    @discardableResult
+    static func retire(_ item: URL, into trash: URL?, label: String, named: String? = nil,
+                       fileManager: FileManager = .default) -> Bool {
+        if let trash, move(item, into: trash, label: label, named: named, fileManager: fileManager) { return true }
+        return (try? fileManager.trashItem(at: item, resultingItemURL: nil)) != nil
+    }
+}
+
 /// A rotated log is retired, never deleted: into the Hub's Trash Folder (`<data>/hub/trash`, the one
-/// the app's storage screen shows), else macOS Trash, else it stays where it is. This mirrors
-/// `HubTrash.move` locally because ShellCore is compiled into the boundary tests without
-/// `UpdateClient.swift`. The live log is truncated only by the Hub's disk governor, under red.
+/// the app's storage screen shows), else macOS Trash, else it stays where it is. The live log is
+/// truncated only by the Hub's disk governor, under red.
 func retireRotatedLog(_ url: URL) {
     let format = DateFormatter()
     format.locale = Locale(identifier: "en_US_POSIX")
@@ -1038,13 +1068,13 @@ enum LoginMigration {
     /// The one-line notice to show when the old entry could not be removed, or nil.
     static func notice(for outcome: Outcome) -> String? {
         guard case .failed(let detail) = outcome else { return nil }
-        return "An older \"Start at login\" entry could not be removed (\(detail)). Studio Hub still "
+        return "An older \"Start at login\" entry could not be removed (\(detail)). Hub Studio KH still "
             + "runs; if it starts twice at login, remove the old entry in System Settings > "
             + "General > Login Items."
     }
 }
 
-/// The single mechanism that keeps Studio Hub running on an unattended Mac: a per-user launchd
+/// The single mechanism that keeps Hub Studio KH running on an unattended Mac: a per-user launchd
 /// agent.
 ///
 /// It replaced `SMAppService.mainApp`, which starts the app at login but does nothing when the app
@@ -1088,12 +1118,12 @@ enum LaunchAgent {
         let root = applicationsRoot.standardizedFileURL.resolvingSymlinksInPath().path
         let bundle = appBundle.standardizedFileURL.resolvingSymlinksInPath().path
         guard bundle == root || bundle.hasPrefix(root + "/") else {
-            return .refuse("Studio Hub has to be in \(root) before it can start at login. "
+            return .refuse("Hub Studio KH has to be in \(root) before it can start at login. "
                 + "Move the app there, then turn Start at login on again.")
         }
         let executable = executablePath(forAppBundle: appBundle)
         guard executableExists(executable) else {
-            return .refuse("Studio Hub's own program is missing from \(bundle). "
+            return .refuse("Hub Studio KH's own program is missing from \(bundle). "
                 + "Reinstall the app before turning Start at login on.")
         }
         return .install(executablePath: executable)
@@ -1143,6 +1173,27 @@ enum LaunchAgent {
 
     static func isInstalled(at plistURL: URL) -> Bool {
         FileManager.default.fileExists(atPath: plistURL.path)
+    }
+
+    /// The program an installed agent names, or nil when the plist is absent or unreadable.
+    static func installedExecutablePath(at plistURL: URL) -> String? {
+        guard let data = try? Data(contentsOf: plistURL),
+              let plist = try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil) as? [String: Any],
+              let arguments = plist["ProgramArguments"] as? [String] else { return nil }
+        return arguments.first
+    }
+
+    /// Whether an agent that exists names a program other than this app's.
+    ///
+    /// The plist's existence is the operator's "on", but the path inside it goes stale when the app
+    /// is renamed or moved: 0.6.228 renamed the bundle to `Hub Studio KH.app`, while every Mac kept
+    /// an agent pointing at the old `Studio Hub.app` path, so login startup ran a program that no
+    /// longer existed. An unreadable plist counts as needing repair.
+    static func needsRepair(at plistURL: URL, currentExecutable: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: plistURL.path) else { return false }
+        guard let installed = installedExecutablePath(at: plistURL) else { return true }
+        return installed != currentExecutable
     }
 
     /// Whether the operator sees "Start at login" as on.
@@ -1293,18 +1344,18 @@ enum LoginAgent {
                 throw ShellFailure(message: "Could not turn off login startup because launchctl could not start. The login agent was kept.")
             case .signaled(let signal):
                 coordinator.quarantine()
-                throw ShellFailure(message: "Could not confirm login startup was unloaded because launchctl ended from signal \(signal); its registration outcome is uncertain. The login agent was kept. Reopen Studio Hub before trying again.")
+                throw ShellFailure(message: "Could not confirm login startup was unloaded because launchctl ended from signal \(signal); its registration outcome is uncertain. The login agent was kept. Reopen Hub Studio KH before trying again.")
             case .timedOut(let confirmed):
                 coordinator.quarantine()
                 let settlement = confirmed ? "launchctl ended" : "launchctl did not settle"
-                throw ShellFailure(message: "Could not confirm login startup was unloaded (\(settlement)); its registration outcome is uncertain. The login agent was kept. Reopen Studio Hub before trying again.")
+                throw ShellFailure(message: "Could not confirm login startup was unloaded (\(settlement)); its registration outcome is uncertain. The login agent was kept. Reopen Hub Studio KH before trying again.")
             }
         }
         // ponytail: quarantine lasts for this app process; a later normal app startup gets a fresh
         // coordinator after launchd/OS settlement. Add persistent reconciliation only if field
         // evidence shows uncertainty survives that boundary.
         guard applied != nil else {
-            throw ShellFailure(message: "Could not safely change login startup because a prior launchctl command has an uncertain outcome. Reopen Studio Hub before trying again.")
+            throw ShellFailure(message: "Could not safely change login startup because a prior launchctl command has an uncertain outcome. Reopen Hub Studio KH before trying again.")
         }
     }
 }
@@ -1323,14 +1374,14 @@ enum LoginAgentSupervision {
 }
 
 /// Why the app could not take its data-folder lock. The distinction matters: "already held" means
-/// another copy of Studio Hub is the real app, while "unavailable" is a real failure to open.
+/// another copy of Hub Studio KH is the real app, while "unavailable" is a real failure to open.
 enum InstanceLockError: LocalizedError, Equatable {
     case alreadyHeld
     case unavailable(String)
     var errorDescription: String? {
         switch self {
         case .alreadyHeld:
-            return "Studio Hub is already using this data folder. Open the running app from its menu-bar icon."
+            return "Hub Studio KH is already using this data folder. Open the running app from its menu-bar icon."
         case .unavailable(let message):
             return message
         }
@@ -1351,13 +1402,89 @@ final class InstanceLock {
     deinit { close(descriptor) }
 }
 
+/// The one menu-bar owner on this Mac, independent of bundle id, path and data folder.
+///
+/// `InstanceLock` only stops copies that share a data folder, so an SSD copy, an older build or a
+/// copy started with another `--data-dir` each took its own lock and drew its own status item — the
+/// owner saw a second, third and fourth Hub menu (report, 2026-11-13). This lock lives at one fixed
+/// path, so every copy on the Mac contends for it. A waiter is given `wait` seconds for the previous
+/// owner to exit — the Launcher restarts Hub without asking, and the new copy must not start drawing
+/// before the old one is gone — then gives up and exits silently.
+enum MenuBarLock {
+    private static var heldDescriptor: Int32?
+
+    static func defaultURL(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL {
+        home.appendingPathComponent("Library/Application Support/StudioHub Standalone/menubar.lock")
+    }
+
+    /// Take the menu for this process. False means another copy is genuinely running.
+    static func acquire(at url: URL = defaultURL(), wait: TimeInterval = 10) -> Bool {
+        guard heldDescriptor == nil else { return true }
+        let directory = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        let descriptor = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { return false }
+        let deadline = Date().addingTimeInterval(wait)
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            if Date() >= deadline { close(descriptor); return false }
+            usleep(100_000)
+        }
+        heldDescriptor = descriptor
+        return true
+    }
+
+    /// Release the menu (process exit would release it too; the tests use this).
+    static func release() {
+        guard let descriptor = heldDescriptor else { return }
+        flock(descriptor, LOCK_UN)
+        close(descriptor)
+        heldDescriptor = nil
+    }
+}
+
 /// What a redundant launch does when another process already owns the data folder.
 ///
 /// This is the second copy launchd can start (for example, a previously loaded agent) while the
-/// real app is running. The new process must never show the "Studio Hub could not open" alert: it
+/// real app is running. The new process must never show the "Hub Studio KH could not open" alert: it
 /// brings the running app forward if it can and leaves with status 0, which `KeepAlive` treats as a
 /// clean exit and never relaunches. The present/exit actions are injected so the contract suite can
 /// prove the behaviour without AppKit or terminating the test process.
+/// What an uninstall does, as data, so its order and refusals are testable without touching a Mac.
+///
+/// Owner rule 2026-11-12: deleting the app must leave no worker, no launchd job and no login item,
+/// and must keep the operator's data. The data directory is deliberately absent from every step.
+enum Uninstall {
+    enum Step: Equatable {
+        case bootoutAgent
+        case removeAgentPlist
+        case unregisterLegacyItem
+        case trashAppBundle
+    }
+
+    enum Decision: Equatable {
+        case proceed([Step])
+        case refuse(String)
+    }
+
+    static func decide(appBundle: URL, agentInstalled: Bool, runningCopyDetected: Bool,
+                       applicationsRoot: URL = LaunchAgent.defaultApplicationsRoot) -> Decision {
+        guard !runningCopyDetected else {
+            return .refuse("Quit Hub Studio KH first: the app cannot remove itself while another copy is running.")
+        }
+        let root = applicationsRoot.standardizedFileURL.resolvingSymlinksInPath().path
+        let bundle = appBundle.standardizedFileURL.resolvingSymlinksInPath().path
+        guard bundle.hasPrefix(root + "/") else {
+            return .refuse("Only a copy installed in \(root) can uninstall itself; this one is at \(bundle).")
+        }
+        var steps: [Step] = []
+        if agentInstalled { steps.append(.bootoutAgent); steps.append(.removeAgentPlist) }
+        steps.append(.unregisterLegacyItem)
+        steps.append(.trashAppBundle)
+        return .proceed(steps)
+    }
+}
+
 enum ExistingInstance {
     enum Decision: Equatable {
         case continueStarting
@@ -1381,7 +1508,7 @@ enum ExistingInstance {
     }
 }
 
-/// Why the previous run of Studio Hub ended, as this Mac can tell (owner decision 2026-10-03).
+/// Why the previous run of Hub Studio KH ended, as this Mac can tell (owner decision 2026-10-03).
 ///
 /// Only a crash brings the app back. A Force Quit is deliberate - often the answer to macOS's
 /// "out of application memory" dialog - and a memory kill is macOS making room; relaunching either
@@ -1394,7 +1521,7 @@ enum ExistingInstance {
 /// `~/Library/Logs/DiagnosticReports` backs up the signal handler (a stack overflow cannot run it).
 /// The verdict is written to `last-stop.json`, which the Hub publishes as `last_stop`.
 enum StopReason: String, Equatable {
-    case quit, crashed, updated
+    case quit, crashed
     case forceQuit = "force_quit"
     case lowMemory = "low_memory"
     case macRestarted = "mac_restarted"
@@ -1409,7 +1536,6 @@ enum StopReason: String, Equatable {
         switch self {
         case .quit: return "Quit"
         case .crashed: return relaunched ? "Crashed (restarted)" : "Crashed"
-        case .updated: return "Restarted for an update"
         case .forceQuit: return "Force-quit"
         case .lowMemory: return "Stopped for low memory"
         case .macRestarted: return "Mac restarted, shut down or lost power"
@@ -1424,9 +1550,8 @@ enum StopRecord {
     static let crashedMarkerName = "crashed"
     static let terminatedMarkerName = "terminated"
     static let memoryMarkerName = "memory-critical"
-    /// Written by a Quit for an update's relaunch, and when macOS announces a restart, shutdown or
-    /// logout (`NSWorkspace.willPowerOffNotification`), so neither reads as the owner quitting.
-    static let updatingMarkerName = "updating"
+    /// Written when macOS announces a restart, shutdown or logout
+    /// (`NSWorkspace.willPowerOffNotification`), so it does not read as the owner quitting.
     static let powerOffMarkerName = "power-off"
     static let crashSignals: [Int32] = [SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGTRAP, SIGSYS]
     /// How often the running app touches its `running` file, which dates a kill nothing records.
@@ -1439,9 +1564,8 @@ enum StopRecord {
     /// The decision, pure. `stoppedAt` is when the run ended as far as the evidence dates it.
     static func classify(cleanQuit: Bool, crashed: Bool, terminated: Bool,
                          stoppedAt: Date, bootTime: Date, memoryCriticalAt: Date?,
-                         updating: Bool = false, poweringOff: Bool = false) -> StopReason {
+                         poweringOff: Bool = false) -> StopReason {
         if crashed { return .crashed }
-        if updating { return .updated }
         if cleanQuit { return poweringOff ? .macRestarted : .quit }
         if poweringOff { return .macRestarted }
         if terminated { return .forceQuit }
@@ -1511,7 +1635,6 @@ enum StopRecord {
         let reason = classify(cleanQuit: cleanQuitAt != nil, crashed: crashedAt != nil || reportAt != nil,
                               terminated: terminatedAt != nil, stoppedAt: stoppedAt, bootTime: boot,
                               memoryCriticalAt: modified(marker(memoryMarkerName)),
-                              updating: modified(marker(updatingMarkerName)) != nil,
                               poweringOff: modified(marker(powerOffMarkerName)) != nil)
         let relaunched = relaunching && relaunches(reason)
         let record: [String: Any] = ["reason": reason.rawValue, "at": stoppedAt.timeIntervalSince1970,
@@ -1520,7 +1643,7 @@ enum StopRecord {
             try? data.write(to: marker(fileName), options: .atomic)
         }
         for name in [runningMarkerName, crashedMarkerName, terminatedMarkerName, memoryMarkerName,
-                     updatingMarkerName, powerOffMarkerName, AgentStandby.cleanQuitMarkerName] {
+                     powerOffMarkerName, AgentStandby.cleanQuitMarkerName] {
             unlink(marker(name).path)
         }
         return record
@@ -1554,7 +1677,6 @@ enum StopRecord {
     }
 
     static func noteCriticalMemory(directory: URL) { touch(directory.appendingPathComponent(memoryMarkerName)) }
-    static func noteUpdating(directory: URL) { touch(directory.appendingPathComponent(updatingMarkerName)) }
     static func notePowerOff(directory: URL) { touch(directory.appendingPathComponent(powerOffMarkerName)) }
     private static func touch(_ url: URL) {
         let path = url.path
@@ -1592,7 +1714,7 @@ private func writeStopMarker(_ path: UnsafeMutablePointer<CChar>?, _ number: Int
     close(descriptor)
 }
 
-/// What makes the launch agent supervise a copy of Studio Hub that launchd did not start.
+/// What makes the launch agent supervise a copy of Hub Studio KH that launchd did not start.
 ///
 /// `KeepAlive` only relaunches the process launchd itself spawned. An app opened from Finder, or
 /// reopened by an update, was supervised by nothing, and the agent written after login was not

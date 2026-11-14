@@ -1575,7 +1575,7 @@ function studio() {
           await this.refreshCatalog();
         }
       } catch (e) {
-        alert("Failed to start download: " + e);
+        window.khAlert("Failed to start download: " + e);
       }
     },
 

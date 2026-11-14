@@ -53,7 +53,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
         expected_hashes = valid["hashes"]
 
         with tempfile.TemporaryDirectory(prefix="hub-producer-fixture-") as temp_dir:
-            app_dir = Path(temp_dir) / "Studio Hub.app"
+            app_dir = Path(temp_dir) / "Hub Studio KH.app"
             for rel, info in app_files.items():
                 dest = app_dir / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
 
     def _build_real_app(self, temp_dir: Path) -> Path:
         """Create an unsigned minimal staged bundle using a real system Mach-O binary."""
-        app = temp_dir / "Studio Hub.app"
+        app = temp_dir / "Hub Studio KH.app"
         macos_dir = app / "Contents/MacOS"
         macos_dir.mkdir(parents=True)
         # Copy a real tiny system Mach-O binary
@@ -288,7 +288,8 @@ class SealedManifestPackagingTests(unittest.TestCase):
                 signed = []
 
                 def codesign(command, **kwargs):
-                    if '--sign' in command and command[-1] == str(nested):
+                    # sign_app resolves the app, and TMPDIR is a /var -> /private/var link.
+                    if '--sign' in command and command[-1] == str(nested.resolve()):
                         signed.append((nested.stat().st_mode & 0o7777,
                                        nested.parent.stat().st_mode & 0o7777))
                         self.assertEqual(signed[-1], (0o755, 0o755))
@@ -450,9 +451,9 @@ class SealedManifestPackagingTests(unittest.TestCase):
             td = Path(temp_dir)
             app = self._create_real_signed_app(td)
 
-            dist_dir = ROOT / "dist"
+            dist_dir = ROOT / "dist/.candidates"
             dist_dir.mkdir(parents=True, exist_ok=True)
-            dmg_path = dist_dir / "Studio Hub Test 0.6.225.dmg"
+            dmg_path = dist_dir / f"Studio Hub Test {td.name}.dmg"
 
             try:
                 self.make_dmg.build(app, dmg_path)
@@ -461,12 +462,14 @@ class SealedManifestPackagingTests(unittest.TestCase):
                 # Mount read-only and verify volume layout
                 mount = Path(tempfile.mkdtemp(prefix="shub-dmg-mount-"))
                 try:
-                    subprocess.run(
+                    attached = subprocess.run(
                         ["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse",
                          "-noautoopen", "-mountpoint", str(mount), str(dmg_path)],
-                        check=True, capture_output=True, text=True,
+                        capture_output=True, text=True,
                     )
-                    mounted_app = mount / "Studio Hub.app"
+                    self.assertEqual(attached.returncode, 0,
+                                     f"hdiutil attach failed: {attached.stdout}\n{attached.stderr}")
+                    mounted_app = mount / "Hub Studio KH.app"
                     mounted_sidecar = mount / "file-manifest"
 
                     self.assertTrue(mounted_app.is_dir())
@@ -511,7 +514,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
                         mount.rmdir()
             finally:
                 if dmg_path.exists():
-                    dmg_path.unlink()
+                    self.make_dmg.preserve(dmg_path, ROOT, 'test-dmgs')
 
 
 if __name__ == "__main__":

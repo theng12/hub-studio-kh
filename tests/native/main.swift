@@ -285,18 +285,19 @@ require(StudioPage.sidebarSections.map(\.title) == ["Create", "Library", "Fleet"
 // Membership is derived from the Studio list, so a Studio added to the enum cannot be absent from
 // the sidebar. This is the check that a hand-written list used to hide: nothing failed when a
 // modality was missing from all four of them.
-require(Set(StudioPage.create.compactMap { $0.function }) == Set(StudioFunction.allCases.filter { $0.hasEngine }),
-        "Create must hold every Studio with an engine: \(StudioPage.create)")
+// Video's lane is retired: its page and Jobs history stay, but it is not navigation.
+require(Set(StudioPage.create.compactMap { $0.function }) == Set(StudioFunction.allCases.filter { $0.hasEngine && $0 != .video }),
+        "Create must hold every live Studio with an engine: \(StudioPage.create)")
 require(Set(StudioPage.comingLater.compactMap { $0.function }) == Set(StudioFunction.allCases.filter { !$0.hasEngine }),
         "Coming later must hold exactly the Studios with no engine: \(StudioPage.comingLater)")
 require(StudioFunction.allCases.allSatisfy { StudioPage.page(for: $0) != nil },
         "every Studio must have its own page: adding a case without one is a wiring hole")
-require(StudioFunction.allCases.filter { $0.hasEngine }.count == StudioPage.create.count,
-        "every Studio with an engine must appear in Create exactly once")
+require(StudioFunction.allCases.filter { $0.hasEngine && $0 != .video }.count == StudioPage.create.count,
+        "every live Studio with an engine must appear in Create exactly once")
 // The order inside Create is the owner's own (2026-09-15). A Studio this order does not name still
 // lands in a section — this asserts the display order, not membership.
-require(StudioPage.create == [.image, .audio, .transcription, .music, .chat, .video],
-        "Create's order is the owner's; Video joined it when the lane shipped")
+require(StudioPage.create == [.image, .audio, .transcription, .music, .chat],
+        "Create's order is the owner's, without the retired Video lane")
 // Renders joined Library on 2026-10-26 with the owner's own request ("there's no render tab"): it is a
 // list of finished work beside Jobs, not a fleet setting, and it is the same page on a node and on
 // a controller. The order is a display decision, which is why it is written here and pinned.
@@ -384,7 +385,7 @@ require(LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: true,
                            hasLibrary: false, canConfigure: true) == .nothingToStart,
         "the same without a login launch")
 require(LaunchStart.decide(loginLaunch: false, startServicesOnLaunch: true,
-                           hasLibrary: true, canConfigure: false) == .stayStopped("another copy of Studio Hub is already running"),
+                           hasLibrary: true, canConfigure: false) == .stayStopped("another copy of Hub Studio KH is already running"),
         "a second copy of the app must never start a second set of services")
 require(LaunchStart.stoppedByChoice == "Start services on startup is off",
         "the reason a deliberate choice gives is a sentence a person can read")
@@ -636,5 +637,92 @@ require(silentJSON?["reason"] as? String == "stopped_answering", "the recorded r
 require(silentJSON?["label"] as? String == "Local services stopped answering", "the recorded label")
 require((silentJSON?["at"] as? Double) == 1_800_000_000, "the recorded time")
 require(silentJSON?["relaunched"] as? Bool == false, "the app itself did not stop")
+
+// The background helper must find the host app's Contents/Resources by its payload. 0.6.228 counted
+// four parent directories, looked under Contents/Resources/helper, and shipped a helper that could
+// not start its worker on any Mac (exit 127). Run the built guard against the real launch layout.
+let repoRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+let builtHelper = repoRoot.appendingPathComponent(".build/HubStudioHelper")
+require(FileManager.default.isExecutableFile(atPath: builtHelper.path),
+        "native/build.sh must build .build/HubStudioHelper before the boundary tests")
+let probeResources = temporary.appendingPathComponent("Probe Host.app/Contents/Resources")
+let probePython = probeResources.appendingPathComponent("runtimes/voice/bin/python3")
+try FileManager.default.createDirectory(at: probePython.deletingLastPathComponent(),
+                                        withIntermediateDirectories: true)
+try Data("#!/bin/sh\nexit 0\n".utf8).write(to: probePython)
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: probePython.path)
+try Data().write(to: probeResources.appendingPathComponent("hub_worker.py"))
+let probeMacOS = probeResources.appendingPathComponent(
+    "helper/Hub Studio KH Helper.app/Contents/MacOS")
+try FileManager.default.createDirectory(at: probeMacOS, withIntermediateDirectories: true)
+let probeHelper = probeMacOS.appendingPathComponent("Hub Studio KH Helper")
+try FileManager.default.copyItem(at: builtHelper, to: probeHelper)
+let probe = Process()
+probe.executableURL = probeHelper
+probe.arguments = ["--print-resources"]
+let probeOutput = Pipe()
+probe.standardOutput = probeOutput
+probe.standardError = Pipe()
+try probe.run()
+let probePrinted = String(decoding: probeOutput.fileHandleForReading.readDataToEndOfFile(),
+                          as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+probe.waitUntilExit()
+let expectedResources = probeResources.resolvingSymlinksInPath().path
+require(probe.terminationStatus == 0 && probePrinted == expectedResources,
+        "the helper must resolve the host app's Contents/Resources, got '\(probePrinted)' exit \(probe.terminationStatus)")
+
+// A stale login agent must be repaired, not trusted because a plist exists. 0.6.228 renamed the app
+// to "Hub Studio KH.app" while every Mac kept an agent naming "Studio Hub.app", so login start ran a
+// program that no longer existed; `status` reads the plist's existence, so only a path check catches it.
+let agentPlist = temporary.appendingPathComponent("local.studiohub.standalone.plist")
+require(!LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+        "no agent is not a repair")
+let staleAgent = ["Label": LaunchAgent.label,
+                  "ProgramArguments": ["/Applications/Studio Hub.app/Contents/MacOS/StudioHub"],
+                  "RunAtLoad": true] as [String: Any]
+try PropertyListSerialization.data(fromPropertyList: staleAgent, format: .xml, options: 0).write(to: agentPlist)
+require(LaunchAgent.installedExecutablePath(at: agentPlist) == "/Applications/Studio Hub.app/Contents/MacOS/StudioHub",
+        "the agent's program is readable")
+require(LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+        "an agent naming the pre-rename app must be repaired")
+let currentAgent = ["Label": LaunchAgent.label,
+                    "ProgramArguments": ["/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"]] as [String: Any]
+try PropertyListSerialization.data(fromPropertyList: currentAgent, format: .xml, options: 0).write(to: agentPlist)
+require(!LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+        "an agent naming this app needs no repair")
+try Data("not a plist".utf8).write(to: agentPlist)
+require(LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+        "an unreadable agent must be repaired")
+
+// Uninstall must remove the app and the login mechanisms and never touch the operator's data: the
+// step list has no data step at all, and a running copy or a copy outside /Applications is refused.
+let installedBundle = URL(fileURLWithPath: "/Applications/Hub Studio KH.app")
+require(Uninstall.decide(appBundle: installedBundle, agentInstalled: true, runningCopyDetected: false)
+        == .proceed([.bootoutAgent, .removeAgentPlist, .unregisterLegacyItem, .trashAppBundle]),
+        "an installed app with a login agent unloads it before the app goes to the Trash")
+require(Uninstall.decide(appBundle: installedBundle, agentInstalled: false, runningCopyDetected: false)
+        == .proceed([.unregisterLegacyItem, .trashAppBundle]),
+        "no agent means no agent steps")
+guard case .refuse = Uninstall.decide(appBundle: installedBundle, agentInstalled: true, runningCopyDetected: true)
+else { fatalError("a running copy must refuse to uninstall itself") }
+guard case .refuse = Uninstall.decide(appBundle: temporary.appendingPathComponent("Dev.app"),
+                                      agentInstalled: false, runningCopyDetected: false)
+else { fatalError("only an app in /Applications may uninstall itself") }
+
+// One menu-bar item per Mac, whatever bundle id, path or data folder a copy has (owner report,
+// 2026-11-13: a second, third and fourth Hub menu). The fixed lock is the whole guarantee, so it is
+// pinned here: the first copy takes it, a second cannot, and release frees it again.
+let menuLock = temporary.appendingPathComponent("menubar.lock")
+require(MenuBarLock.acquire(at: menuLock, wait: 0), "the first copy takes the menu lock")
+// A second holder is another process; in this one, prove it the way flock sees it — a fresh
+// descriptor on the same file cannot take the lock while it is held.
+let competitor = open(menuLock.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+require(competitor >= 0, "the lock file opens for a contender")
+require(flock(competitor, LOCK_EX | LOCK_NB) != 0, "a second copy cannot take the menu while the first holds it")
+close(competitor)
+MenuBarLock.release()
+require(MenuBarLock.acquire(at: menuLock, wait: 0.2), "once the previous owner exits, the menu is available")
+MenuBarLock.release()
 
 print("Native boundary checks passed")

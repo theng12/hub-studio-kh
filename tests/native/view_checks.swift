@@ -11,6 +11,59 @@ enum ViewChecks {
         check(HistoryTab.allCases.last == .downloads && HistoryTab.downloads.title == "Downloads",
               "Downloads is the last Jobs tab")
         check(Set(HistoryTab.allCases.map(\.id)).count == HistoryTab.allCases.count, "Jobs tab ids are unique")
+        // Every status chip's text against its own 14 % tint fill over a card: 4.5:1 in both themes.
+        func composited(_ foreground: NSColor, over background: NSColor) -> NSColor {
+            let f = foreground.usingColorSpace(.sRGB) ?? foreground
+            let b = background.usingColorSpace(.sRGB) ?? background
+            let alpha = f.alphaComponent
+            return NSColor(srgbRed: f.redComponent * alpha + b.redComponent * (1 - alpha),
+                           green: f.greenComponent * alpha + b.greenComponent * (1 - alpha),
+                           blue: f.blueComponent * alpha + b.blueComponent * (1 - alpha),
+                           alpha: 1)
+        }
+        func luminance(_ color: NSColor) -> Double {
+            let c = color.usingColorSpace(.sRGB) ?? color
+            func channel(_ value: Double) -> Double {
+                value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(c.redComponent) + 0.7152 * channel(c.greenComponent)
+                + 0.0722 * channel(c.blueComponent)
+        }
+        func contrast(_ a: NSColor, _ b: NSColor) -> Double {
+            let x = luminance(a), y = luminance(b)
+            return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+        }
+        for (appearanceName, appearance) in [("light", NSAppearance(named: .aqua)!),
+                                             ("dark", NSAppearance(named: .darkAqua)!)] {
+            // Dynamic colours resolve against the current appearance; resolve the card and the
+            // badge tint inside the appearance being measured, or a light check reads a dark card.
+            var card = NSColor.controlBackgroundColor
+            appearance.performAsCurrentDrawingAppearance {
+                card = NSColor.controlBackgroundColor.usingColorSpace(.sRGB) ?? .white
+            }
+            var page = NSColor.windowBackgroundColor
+            var muted = NSColor.secondaryLabelColor
+            appearance.performAsCurrentDrawingAppearance {
+                page = NSColor.windowBackgroundColor.usingColorSpace(.sRGB) ?? .white
+                muted = NSColor.secondaryLabelColor.usingColorSpace(.sRGB) ?? .gray
+            }
+            for (surfaceName, surface) in [("card", card), ("page", page)] {
+                check(contrast(muted, surface) >= 4.5,
+                      "\(appearanceName) muted text on \(surfaceName) is \(String(format: "%.2f", contrast(muted, surface))):1, below 4.5:1")
+            }
+            for status in [HubStatus.ok, HubStatus.warn, HubStatus.bad, HubStatus.off, HubStatus.info] {
+                var base = status.baseNSColor
+                appearance.performAsCurrentDrawingAppearance {
+                    base = status.baseNSColor.usingColorSpace(.sRGB) ?? base
+                }
+                let text = status.textNSColor(for: appearance)
+                let fill = composited(base.withAlphaComponent(0.14), over: card)
+                check(contrast(text, fill) >= 4.5,
+                      "\(appearanceName) status text \(status) is \(String(format: "%.2f", contrast(text, fill))):1, below 4.5:1")
+                check(contrast(text, page) >= 4.5,
+                      "\(appearanceName) status text \(status) on the page is \(String(format: "%.2f", contrast(text, page))):1, below 4.5:1")
+            }
+        }
         check(HistoryTab.downloads.studio == nil, "the Downloads tab shows no Studio's history")
 
         let configuration = try ShellConfiguration(
@@ -218,8 +271,9 @@ enum ViewChecks {
               "a failed attempt's detail says nothing was produced")
         check(legacyFacts.contains("6d0b8f2e") == false,
               "the Story instance belongs in the detail, not in the one-line facts")
-        check(RenderCopy.title(legacy).hasSuffix("c41d0e88"),
-              "a render with no channel or episode name is titled by its own job id")
+        check(RenderCopy.title(legacy).hasPrefix("Final render · ")
+                && !RenderCopy.title(legacy).contains("c41d0e88"),
+              "a render with no channel or episode name is titled by when it was made, never by a job id")
         check(RenderCopy.facts(legacy).contains("This Mac"),
               "the row names the Mac that rendered it")
         // A render Story Studio named shows which channel and episode it belongs to, and the job
@@ -239,8 +293,8 @@ enum ViewChecks {
         check(RenderCopy.title(named).contains("Khmer History")
                 && RenderCopy.title(named).contains("EP012 The Fall"),
               "a named render is titled by its channel and episode: \(RenderCopy.title(named))")
-        check(RenderCopy.title(legacy).contains("c41d0e88"),
-              "a render with no name keeps its job id in the title")
+        check(!RenderCopy.title(legacy).contains("c41d0e88"),
+              "a render with no name keeps its job id out of the title (it is in Details)")
         check(NativeRenderDisplay(channel: nil, episode: "EP013").label == "EP013",
               "one label alone is still shown")
         check(RenderCopy.status(legacy) == .ok && RenderCopy.outcomeLabel(legacy) == "Done",
@@ -347,6 +401,35 @@ enum ViewChecks {
         check(noteHost([stopping, startingLine]).fittingSize.height > noLine.fittingSize.height,
               "two Studios down grow the footer rather than burying the second line")
 
+        // **The services' own failure is a notification icon, not the top banner** (owner,
+        // 2026-10-28). It must draw nothing with no failure, draw an icon with one, and carry the
+        // actual operator text in words - the detail must survive, not become "something failed".
+        func failureHost(_ detail: String?) -> NSHostingView<StartupFailureIcon> {
+            let host = NSHostingView(rootView: StartupFailureIcon(detail: detail, onDismiss: {}))
+            host.frame = NSRect(x: 0, y: 0, width: 240, height: 40)
+            host.layoutSubtreeIfNeeded()
+            return host
+        }
+        let noFailure = failureHost(nil)
+        let withFailure = failureHost("the services did not start: port 47873 is in use")
+        check(noFailure.fittingSize.height <= 1, "no services failure draws no icon")
+        check(pixels(noFailure) != nil, "the services failure icon draws offscreen")
+        check(pixels(noFailure) != pixels(withFailure),
+              "a services failure adds its notification icon to the footer")
+        check(StartupFailureIcon.label(for: "port 47873 is in use").contains("port 47873 is in use"),
+              "the icon's accessible name carries the actual failure, not just a triangle")
+
+        // The Hub writes `machine` only when a worker reports; a running item still names its Mac
+        // in the dispatch target. Actual routing identity, or nothing.
+        check(NativeWorkspaceStore.routingMachine(machine: nil, studio: "image@mini-01") == "mini-01",
+              "a running fleet item names its Mac from the dispatch target")
+        check(NativeWorkspaceStore.routingMachine(machine: nil, studio: "image") == "local",
+              "a dispatch target with no machine suffix is this Hub's own Mac")
+        check(NativeWorkspaceStore.routingMachine(machine: nil, studio: nil) == nil,
+              "an unplaced item has no routing identity, and none is invented")
+        check(NativeWorkspaceStore.routingMachine(machine: "local", studio: "image@mini-01") == "local",
+              "the attempt's own reported machine wins over the dispatch target")
+
         // ---- Whose work is whose, and running work first (owner on controller 1400) ----
         check(JobFacts.stage("running") == .running && JobFacts.stage("cancel_requested") == .running
               && JobFacts.stage("cancelling") == .running,
@@ -380,9 +463,12 @@ enum ViewChecks {
                                createdAt: 1, outputURL: nil, error: nil, machine: "local")
         let node = NativeJob(id: "n", state: "running", progress: 0.2, text: "t", model: "m",
                              createdAt: 1, outputURL: nil, error: nil, machine: "mini-01")
-        check(JobMachineFilter.thisMac.includes(unplaced) && JobMachineFilter.thisMac.includes(placed)
-              && !JobMachineFilter.nodes.includes(placed) && JobMachineFilter.nodes.includes(node),
-              "the filters split this Mac's queue from the nodes' work")
+        check(JobMachineFilter.thisMac.includes(placed) && !JobMachineFilter.nodes.includes(placed)
+              && JobMachineFilter.nodes.includes(node),
+              "the filters split this Mac's work from the nodes' work")
+        check(!JobMachineFilter.thisMac.includes(unplaced) && !JobMachineFilter.nodes.includes(unplaced)
+              && JobMachineFilter.all.includes(unplaced),
+              "an unplaced row is claimed by neither Mac filter: unknown is not guessed into This Mac")
 
         if failures > 0 { exit(1) }
         print("Native view checks passed")

@@ -22,6 +22,48 @@ import SwiftUI
     static var didCopy = false
 }
 
+/// The native equivalent of `documentScrollWidth == innerWidth`: does any scroll view on the page
+/// have a document wider than the space it shows, and does any control reach past the window?
+/// A page that fails either is a page a person has to scroll sideways or cannot reach at all.
+@MainActor enum PageLayoutMeasure {
+    struct Result {
+        var horizontalScrolls: [String] = []
+        var clipped: [String] = []
+        var pass: Bool { horizontalScrolls.isEmpty && clipped.isEmpty }
+    }
+
+    static func run(_ root: NSView) -> Result {
+        var result = Result()
+        func visit(_ view: NSView, insideScroll: Bool) {
+            let name = view.identifier?.rawValue ?? String(describing: type(of: view))
+            if let scroll = view as? NSScrollView {
+                let shown = scroll.contentView.bounds.width
+                let document = scroll.documentView?.frame.width ?? 0
+                if document > shown + 1 {
+                    result.horizontalScrolls.append("\(name) \(Int(document))>\(Int(shown))")
+                }
+                for child in view.subviews { visit(child, insideScroll: true) }
+                return
+            }
+            // Containers may legitimately extend past a clip; a control may not. Only controls
+            // outside a scroll view are checked, so a list's own taller document is not a finding.
+            let isControl = view is NSControl || view is NSTextView
+            if isControl, !insideScroll {
+                let frameInRoot = view.convert(view.bounds, to: root)
+                // Outside a scroll view, reaching past any window edge is a clipped control. Inside
+                // one, a taller document is the scroll itself and is not a defect.
+                if frameInRoot.maxX > root.bounds.width + 1 || frameInRoot.minX < -1
+                    || frameInRoot.maxY > root.bounds.height + 1 || frameInRoot.minY < -1 {
+                    result.clipped.append("\(name) x=\(Int(frameInRoot.minX))..\(Int(frameInRoot.maxX)) y=\(Int(frameInRoot.minY))..\(Int(frameInRoot.maxY))")
+                }
+            }
+            for child in view.subviews { visit(child, insideScroll: insideScroll) }
+        }
+        visit(root, insideScroll: false)
+        return result
+    }
+}
+
 @main
 struct PageRenderHarness {
     @MainActor static func main() {
@@ -100,6 +142,19 @@ struct PageRenderHarness {
             seedRenders(studio.workspace)
             // Running services and both tokens, so Connections draws its (masked) credential rows.
             studio.readyURL = URL(string: "http://127.0.0.1:47873")
+            // The footer's status line is the app's own field; a fixture Hub is running, so the
+            // line must not keep its first-launch "Choose a model library" (critic, 2026-11-13).
+            studio.status = "Hub running · local services ready"
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_SERVICES"] == "off" {
+                studio.readyURL = nil
+                studio.status = "Local services are stopped"
+                // A stopped Hub has no live work: do not draw running jobs or a download over the
+                // setup card, or the off state is not honest (critic, 2026-11-13).
+                studio.workspace.audioJobs = []
+                studio.workspace.imageJobs = []
+                studio.workspace.musicJobs = []
+                studio.workspace.downloads = []
+            }
             studio.connectionToken = "render-fixture-hub-token-0123456789"
             let hubState = scratch.appendingPathComponent("hub")
             try? FileManager.default.createDirectory(at: hubState, withIntermediateDirectories: true)
@@ -159,6 +214,14 @@ struct PageRenderHarness {
         let borderless = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_BORDERLESS"] == "1"
         for appearance in appearances {
         if let appearance { app.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua) }
+        // The app owns its appearance now (Settings > Appearance). Set the preference the app
+        // reads, not just NSApp.appearance: the view's onAppear otherwise resets it to System and
+        // every "light" render came out dark (critic, 2026-11-13).
+        UserDefaults.standard.set(appearance ?? "system", forKey: "studiohub.appearance")
+        UserDefaults.standard.set(ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_TEST_MACHINE"] == "1",
+                                  forKey: "studiohub.testMachine")
+        UserDefaults.standard.set(ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FLEET_VIEW"] ?? "table",
+                                  forKey: "hub.fleetView")
         for role in (roles.isEmpty ? [nil] : roles) {
         if let role { applyRole(role, to: studio.workspace) }
         Self.applyInstallPlan(studio.workspace)
@@ -184,6 +247,41 @@ struct PageRenderHarness {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.15))
                 hosting.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
+            }
+            // The fixture has no Hub to poll, so the page's first refresh records a read error
+            // above live fixture rows. Clear it after the view has settled: the fixture is the
+            // "last good read", and a banner contradicting the rows is not a state to review.
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" {
+                studio.workspace.catalogReadError = nil
+                studio.workspace.fleetReadError = nil
+                for _ in 0..<3 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                    hosting.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                }
+            }
+            // The page's own scroll view, taken to its bottom: proves a long page's content never
+            // paints across the sidebar or its footer.
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_SCROLL_BOTTOM"] == "1" {
+                func widestScroll(_ view: NSView) -> NSScrollView? {
+                    var best: NSScrollView?
+                    func walk(_ v: NSView) {
+                        if let scroll = v as? NSScrollView,
+                           scroll.bounds.width > (best?.bounds.width ?? 0) { best = scroll }
+                        for child in v.subviews { walk(child) }
+                    }
+                    walk(view)
+                    return best
+                }
+                if let scroll = widestScroll(hosting), let document = scroll.documentView {
+                    document.scroll(NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)))
+                    for _ in 0..<6 {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                        hosting.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                    }
+                    print("SCROLL_BOTTOM reached: \(Int(document.bounds.height)) in \(Int(scroll.contentView.bounds.height))")
+                }
             }
             if page == .connections && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_CONNECTION_COPY"] == "1" {
                 func scrollView(_ view: NSView) -> NSScrollView? {
@@ -267,8 +365,12 @@ struct PageRenderHarness {
                 control.selectedSegment = 1
                 _ = control.sendAction(control.action, to: control.target)
                 precondition(studio.workspace.imageMode == "edit", "Native reference mode action did not reach the form")
-                studio.workspace.addImageReference(scratch.appendingPathComponent("fixture.png"))
-                precondition(studio.workspace.imageReferences.count == 1, "Reference image was not prepared")
+                // The seam runs once per process; a second page/size/appearance pass must not add a
+                // second reference and trip the old exactly-one precondition (critic, 2026-11-13).
+                if studio.workspace.imageReferences.isEmpty {
+                    studio.workspace.addImageReference(scratch.appendingPathComponent("fixture.png"))
+                }
+                precondition(!studio.workspace.imageReferences.isEmpty, "Reference image was not prepared")
                 let decoded = Data(base64Encoded: studio.workspace.imageReferences[0].b64!)!
                 let bitmap = NSBitmapImageRep(data: decoded)!
                 precondition(max(bitmap.pixelsWide, bitmap.pixelsHigh) <= 1024)
@@ -278,6 +380,48 @@ struct PageRenderHarness {
                     window.displayIfNeeded()
                 }
                 print("IMAGE_REFERENCE_INTERACTION passed: native segment action, reference preparation, published pixel bound")
+            }
+            // A Studio page at a narrow width switches between its form and its result pane through
+            // the real segmented control, offscreen.
+            if page == .audio, size.0 < 1000,
+               ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_PANE_SWITCH"] == "1" {
+                func paneControl(_ view: NSView) -> NSSegmentedControl? {
+                    if let control = view as? NSSegmentedControl, control.segmentCount == 2,
+                       control.label(forSegment: 0) == "Set up" { return control }
+                    for child in view.subviews { if let found = paneControl(child) { return found } }
+                    return nil
+                }
+                guard let control = paneControl(hosting) else { fatalError("Studio pane control missing") }
+                control.selectedSegment = 1
+                _ = control.sendAction(control.action, to: control.target)
+                for _ in 0..<6 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                    hosting.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                }
+                print("PANE_SWITCH_INTERACTION passed: native segment action reached the result pane")
+            }
+            // Settings > Appearance is a real control: choosing Dark persists the preference the
+            // app reads at launch and applies it to NSApp.
+            if page == .settings, ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_APPEARANCE_SWITCH"] == "1" {
+                func appearanceControl(_ view: NSView) -> NSSegmentedControl? {
+                    if let control = view as? NSSegmentedControl, control.segmentCount == 3,
+                       control.label(forSegment: 0) == "System" { return control }
+                    for child in view.subviews { if let found = appearanceControl(child) { return found } }
+                    return nil
+                }
+                guard let control = appearanceControl(hosting) else { fatalError("Appearance control missing") }
+                control.selectedSegment = 2
+                _ = control.sendAction(control.action, to: control.target)
+                for _ in 0..<6 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                    hosting.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                }
+                precondition(UserDefaults.standard.string(forKey: "studiohub.appearance") == "dark",
+                             "Appearance choice was not persisted")
+                precondition(NSApp.appearance?.name == .darkAqua, "Appearance choice was not applied")
+                print("APPEARANCE_INTERACTION passed: native segment action persisted Dark and applied it")
             }
             // Exercise the shipped Jobs view through its native control; no recreated header.
             let captureTabs = page == .jobs && ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_JOBS_TABS"] == "1"
@@ -325,6 +469,86 @@ struct PageRenderHarness {
                     "fittingWidth": control.fittingSize.width, "segments": segmentFrames(control)]
                 let data = try! JSONSerialization.data(withJSONObject: metrics, options: [.sortedKeys])
                 print("JOBS_GEOMETRY " + String(data: data, encoding: .utf8)!)
+            }
+            // One native click, named per page, so a page's named task has a real interaction log.
+            func clickKey(_ page: StudioPage) -> String? {
+                switch page {
+                case .music: return "MUSIC"
+                case .audio: return "AUDIO"
+                case .voices: return "VOICES"
+                case .whatsNew: return "WHATSNEW"
+                case .setup: return "SETUP"
+                case .image: return "IMAGE"
+                default: return nil
+                }
+            }
+            if let key = clickKey(page),
+               let title = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_CLICK_\(key)"],
+               !title.isEmpty {
+                func targetButton(_ view: NSView) -> NSButton? {
+                    if let button = view as? NSButton, button.title.localizedCaseInsensitiveContains(title) {
+                        return button
+                    }
+                    for child in view.subviews { if let found = targetButton(child) { return found } }
+                    return nil
+                }
+                func targetElement(_ view: NSView, _ title: String) -> NSAccessibilityElement? {
+                    func matches(_ objects: [Any]?) -> NSAccessibilityElement? {
+                        for object in objects ?? [] {
+                            if let element = object as? NSAccessibilityElement {
+                                let labels = [element.accessibilityLabel(), element.accessibilityTitle(),
+                                              element.accessibilityValue() as? String].compactMap { $0 }
+                                if labels.contains(where: { $0.localizedCaseInsensitiveContains(title) }) {
+                                    return element
+                                }
+                                if let found = matches(element.accessibilityChildren()) { return found }
+                            }
+                        }
+                        return nil
+                    }
+                    if let found = matches(view.accessibilityChildren()) { return found }
+                    for child in view.subviews {
+                        if let found = targetElement(child, title) { return found }
+                    }
+                    return nil
+                }
+                let axTarget = targetElement(hosting, title)
+                if let button = targetButton(hosting) {
+                    let before = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)
+                    hosting.cacheDisplay(in: hosting.bounds, to: before!)
+                    button.performClick(nil)
+                    for _ in 0..<6 {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                        hosting.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                    }
+                    let after = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)
+                    hosting.cacheDisplay(in: hosting.bounds, to: after!)
+                    let changed = before!.tiffRepresentation != after!.tiffRepresentation
+                    print("CLICK_INTERACTION page=\(fileName(for: page)) target=\(title) changed=\(changed)")
+                } else if let axTarget {
+                    let before = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)
+                    hosting.cacheDisplay(in: hosting.bounds, to: before!)
+                    let pressed = axTarget.accessibilityPerformPress()
+                    for _ in 0..<6 {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                        hosting.layoutSubtreeIfNeeded()
+                        window.displayIfNeeded()
+                    }
+                    let after = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds)
+                    hosting.cacheDisplay(in: hosting.bounds, to: after!)
+                    let changed = before!.tiffRepresentation != after!.tiffRepresentation
+                    print("AX_CLICK page=\(fileName(for: page)) target=\(title) pressed=\(pressed) changed=\(changed)")
+                } else {
+                    print("CLICK_MISS page=\(fileName(for: page)) target=\(title)")
+                }
+            }
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_MEASURE"] == "1" {
+                let measure = PageLayoutMeasure.run(hosting)
+                print("MEASURE page=\(fileName(for: page)) size=\(Int(size.0))x\(Int(size.1)) hscroll=\(measure.horizontalScrolls.count) clipped=\(measure.clipped.count) \(measure.pass ? "PASS" : "FAIL")")
+                for item in measure.horizontalScrolls.prefix(4) { print("  HSCROLL \(item)") }
+                for item in measure.clipped.prefix(4) { print("  CLIPPED \(item)") }
+                fflush(stdout)
             }
             guard let representation = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
                 print("could not allocate a bitmap for \(Int(size.0))x\(Int(size.1))")
@@ -422,21 +646,21 @@ struct PageRenderHarness {
                          packageIDs: ["whisper-turbo"]),
             NativePreset(id: "creator-plus-24", name: "Creator Plus · 24 GB", tierGB: 24,
                          summary: "Adds music generation and Gemma 3 12B for longer writing.",
-                         installedCount: 0, packageCount: 16, complete: false, fitsThisMac: false,
+                         installedCount: 0, packageCount: 16, complete: false, fitsThisMac: true,
                          toCopyBytes: 64_200_000_000, freeAfterBytes: 316_000_000_000, refused: nil,
                          packageIDs: []),
             NativePreset(id: "studio-pro-32", name: "Studio Pro · 32 GB+", tierGB: 32,
                          summary: "Adds the largest writing models: Qwen3.6 35B and Gemma 4 26B.",
-                         installedCount: 0, packageCount: 18, complete: false, fitsThisMac: true,
-                         toCopyBytes: 100_300_000_000, freeAfterBytes: 284_000_000_000,
-                         refused: "Not enough free space on /Volumes/KH-STUDIO-ATLAS/model-target: copying 100.3 GB would leave 284.0 GB, and this Mac keeps 5.0 GB free for working room.",
+                         installedCount: 0, packageCount: 18, complete: false, fitsThisMac: false,
+                         toCopyBytes: 378_000_000_000, freeAfterBytes: 2_200_000_000,
+                         refused: "Not enough free space on /Volumes/KH-STUDIO-ATLAS/model-target: copying 378.0 GB would leave 2.2 GB, and this Mac keeps 5.0 GB free for working room.",
                          packageIDs: [])
         ]
         let groups = [
             NativeInstallGroup(job: "image", models: [
                 model("z-image-turbo-mflux-4bit", "Z-Image-Turbo 6B", "image",
                       "Fast pictures from words; the everyday image model on a small Mac.",
-                      "MLX 4-bit", 5.9, 8, installed: true),
+                      "MLX 4-bit", 5.9, 8),
                 model("qwen-image-2-1-turbo-mflux-q4", "Qwen Image 2.1 Turbo Low-RAM", "image",
                       "Higher-fidelity pictures in eight steps.", "MLX 4-bit", 10.0, 16),
                 model("qwen-image-2-1-mlx-serve-4bit", "Qwen Image 2.1 (native MLX server)", "image",
@@ -462,7 +686,7 @@ struct PageRenderHarness {
                       installed: true)])
         ]
         workspace.seedInstallPlanForRendering(NativeInstallPlan(
-            memoryGB: 16, library: "/Volumes/KH-STUDIO-ATLAS/model-target",
+            memoryGB: 32, library: "/Volumes/KH-STUDIO-ATLAS/model-target",
             diskPath: "/Volumes/KH-STUDIO-ATLAS/model-target", freeBytes: 380_200_000_000,
             diskMeasured: true, stopBytes: 5_000_000_000,
             presets: presets,
@@ -598,8 +822,8 @@ struct PageRenderHarness {
                        "measured_renders":2,"measured_output_seconds":406,
                        "measured_wall_seconds":201,"average_wall_seconds":100.5,
                        "speed":2.019900497512438},
-             "machines":[{"machine":"local","machine_name":"This Mac","renders":4,"ok":true,"error":null},
-                         {"machine":"blue-1","machine_name":"Blue Room 1","renders":3,"ok":true,"error":null},
+             "machines":[{"machine":"local","machine_name":"This Mac","renders":3,"ok":true,"error":null},
+                         {"machine":"blue-1","machine_name":"Blue Room 1","renders":2,"ok":true,"error":null},
                          {"machine":"blue-2","machine_name":"Blue Room 2","renders":1,"ok":false,
                           "error":"that Mac did not answer"}]}
             """)
@@ -622,29 +846,39 @@ struct PageRenderHarness {
             model("mlx-community/Kokoro-82M-bf16", "Kokoro 82M bf16", "Kokoro", .audio, cached: true, size: 0.4),
             model("mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit", "Qwen3 TTS 0.6B Base 4-bit", "Qwen3-TTS", .audio, cached: true, size: 1.7),
             model("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16", "Qwen3 TTS 1.7B Base bf16", "Qwen3-TTS", .audio, cached: false, size: 4.6,
-                  memory: "This Mac has 16 GB; this model is qualified at 24 GB."),
+                  memory: "This Mac has 32 GB; this model is qualified at 24 GB."),
             model("mlx-community/whisper-large-v3-turbo", "Whisper large v3 turbo", "Whisper", .transcription, cached: true, size: 1.6),
             model("mlx-community/whisper-small-mlx", "Whisper small", "Whisper", .transcription, cached: true, size: 0.5),
             model("black-forest-labs/FLUX.2-klein-4B", "FLUX.2 Klein 4B MLX 4-bit", "FLUX", .image, cached: true, size: 8.0),
             model("Tongyi-MAI/Z-Image-Turbo", "Z-Image-Turbo 6B MLX 4-bit", "Z-Image", .image, cached: false, size: 12.4,
-                  block: "Needs 24 GB of memory; this Mac has 16 GB."),
+                  block: "Needs 48 GB of memory; this Mac has 32 GB."),
             model("stabilityai/stable-audio-3-optimized", "Stable Audio 3", "Stable Audio", .music, cached: true, size: 6.1),
             model("vanch007/mlx-Yue2-3B", "YuE 2 3B", "YuE", .music, cached: false, size: 7.2),
             model("mlx-community/Qwen3-4B-Instruct-4bit", "Qwen3 4B Instruct 4-bit", "Qwen3", .chat, cached: true, size: 2.4),
             model("mlx-community/Qwen3.5-9B-4bit", "Qwen3.5 9B 4-bit", "Qwen3.5", .chat, cached: false, size: 6.0,
                   memory: "Close other apps before loading."),
         ]
+        let voiceNotes = ["Studio reference, room tone removed.", "Two takes, the second kept.",
+                          "Narration sample, quiet room.", "Needs a transcript before cloning.",
+                          "Long-form narrator reference."]
+        let voiceTags = [["narration", "english"], ["narration", "spanish"], ["dialogue"],
+                         ["japanese"], ["narration", "long-form"]]
         workspace.voices = [
             ("Marlowe", "en", "f", true, 42.0), ("Ines", "es", "f", true, 31.5), ("Okafor", "en", "m", true, 58.2),
             ("Hana", "ja", "f", false, 19.0), ("Brightwater (narrator)", "en", "m", true, 120.4),
         ].enumerated().map { index, row in
             decode(NativeVoice.self, """
-                {"id":"voice-\(index)","name":"\(row.0)","language":"\(row.1)","gender":"\(row.2)","notes":"Studio reference, room tone removed.",
+                {"id":"voice-\(index)","name":"\(row.0)","language":"\(row.1)","gender":"\(row.2)","notes":"\(voiceNotes[index])","tags":[\(voiceTags[index].map { "\"\($0)\"" }.joined(separator: ","))],
                  "license":"self-owned","permission_acknowledged":true,"has_transcript":\(row.3),"transcript":\(row.3 ? "\"The quick brown fox jumps over the lazy dog.\"" : "null"),
                  "audio_extension":"wav","duration_seconds":\(row.4),"sample_rate":24000,"channels":1,"fleet_managed":\(index % 2 == 0)}
                 """)
         }
         workspace.hubVersion = decode(NativeVersion.self, #"{"version":"0.6.126","build":"a1b2c3d","source":"app"}"#)
+        // One download in flight, so the catalogue's "Downloading 42%" chip is looked at too.
+        workspace.downloads = [
+            NativeDownload(id: "fixture-download", repo: "vanch007/mlx-Yue2-3B", state: "running",
+                           percent: 42, downloadedBytes: 3_000_000_000, totalBytes: 7_200_000_000, error: nil),
+        ]
         // One job in every live or failed state, so the badges and progress lines are looked at too.
         func live(_ id: String, _ state: String, _ model: String, _ prompt: String, progress: Double = 0,
                   stage: String? = nil, error: String? = nil, stalled: Double? = nil) -> NativeJob {
@@ -693,8 +927,8 @@ struct PageRenderHarness {
     }
 
     private static let longPrompts = [
-        "A sweeping cinematic landscape of a lighthouse on a basalt cliff at dusk, storm clouds breaking over a copper sea, volumetric god rays, a lone fishing boat returning along the Play of light across the swell, ultra detailed, 35mm film grain",
-        "Lo-fi hip hop beat with warm vinyl crackle, mellow Rhodes chords, a slow brushed snare and a walking upright bass, rain on a window in the background, nostalgic and sleepy, perfect for studying late at night along the Play button of a long playlist",
+        "A sweeping cinematic landscape of a lighthouse on a basalt cliff at dusk, storm clouds breaking over a copper sea, volumetric god rays, a lone fishing boat returning across the swell, ultra detailed, 35mm film grain",
+        "Lo-fi hip hop beat with warm vinyl crackle, mellow Rhodes chords, a slow brushed snare and a walking upright bass, rain on a window in the background, nostalgic and sleepy, perfect for studying late at night on a long playlist",
         "Portrait of an elderly clockmaker in a cluttered workshop, brass gears and loose springs on every surface, soft window light, shallow depth of field",
         "Short",
         "An orchestral cue that begins with solo cello, builds through woodwinds and muted brass into a full-string climax, then resolves quietly on a single harp note; slow, hopeful, cinematic, suitable for a documentary ending",
@@ -746,7 +980,12 @@ struct PageRenderHarness {
                                                      instrumental: nil, lyrics: nil, vocalLanguage: nil)
             return item
         }
-        workspace.audioJobs = longPrompts.prefix(3).enumerated().map { index, prompt in
+        let audioPrompts = [
+            "Welcome back. Your previous session is exactly where you left it.",
+            "Please leave a message after the tone, and we will get back to you soon.",
+            "The tide turns at four; bring the small boat in before then.",
+        ]
+        workspace.audioJobs = audioPrompts.enumerated().map { index, prompt in
             var item = job("audio-\(index)", prompt, "kokoro/Kokoro-82M", seconds: 18)
             item.voiceSettings = nil
             return item

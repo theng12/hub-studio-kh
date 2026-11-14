@@ -17,7 +17,7 @@ set -u
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TARGET="$HERE/eight-gb-z-image-run.sh"
-APP="${STUDIOHUB_APP:-/Applications/Studio Hub.app}"
+APP="${STUDIOHUB_APP:-/Applications/Hub Studio KH.app}"
 
 if [ ! -f "$TARGET" ]; then
     echo "eight-gb-z-image-run.sh is not beside this file."

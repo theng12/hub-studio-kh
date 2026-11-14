@@ -55,6 +55,8 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 #: drive's `khu-agent/` is also a valid kit for Studio Hub should one ever be copied into a bundle.
 KIT_FILES = {"VERSION", "bin/khu", "bin/khu-stub", "install-agent.sh",
              "com.khupdater.agent.plist", "agent-config.example.json", "publisher.json"}
+#: The shared icon names the background bundles; a kit built before it still installs.
+KIT_OPTIONAL = {"AppIcon.icns"}
 LAUNCHD_LABEL = "com.khupdater.agent"
 PLIST_NAME = LAUNCHD_LABEL + ".plist"
 #: The Hub's own rule for its `controller_id` (`control_plane.ID_PATTERN`).
@@ -142,10 +144,9 @@ def verify_kit(kit: Path, *, allow_test: bool = False) -> dict:
         raise ValueError("agent kit missing")
     manifest = json.loads((kit / "MANIFEST.json").read_text())
     files = manifest["files"]
-    if set(files) != KIT_FILES:
-        raise ValueError("unexpected agent kit contents")
     actual = {p.relative_to(kit).as_posix() for p in kit.rglob("*") if not p.is_dir()}
-    if actual != KIT_FILES | {"MANIFEST.json"}:
+    if (not KIT_FILES <= set(files) or not set(files) <= KIT_FILES | KIT_OPTIONAL
+            or actual != set(files) | {"MANIFEST.json"}):
         raise ValueError("unexpected agent kit contents")
     for name, pin in files.items():
         path = kit / name
@@ -230,7 +231,7 @@ def hub_data_dir(home: Path) -> Path | None:
     if override:
         return Path(override).expanduser()
     for folder in app_folders(home):
-        app = folder / "Studio Hub.app"
+        app = folder / "Hub Studio KH.app"
         if app.is_dir():
             # The Hub's launcher root is the `voice/` folder inside its own bundle.
             return app / "Contents" / "Resources" / "voice"

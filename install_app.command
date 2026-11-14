@@ -1,7 +1,7 @@
 #!/bin/sh
 # 1 - INSTALL THE APP
 #
-# Double-click this file. It copies Studio Hub onto this Mac.
+# Double-click this file. It copies Hub Studio KH onto this Mac.
 # Nothing to type, nothing to configure.
 
 set -u
@@ -10,13 +10,13 @@ KIT="$(dirname -- "$HERE")"
 # This launcher sits either in the kit root or in its Technical folder; the app is beside one of
 # them. The bundle's name carries no version, so there is no version-pinned name to look for.
 APP=""
-for spot in "$HERE/Studio Hub.app" "$KIT/Studio Hub.app"; do
+for spot in "$HERE/Hub Studio KH.app" "$KIT/Hub Studio KH.app"; do
   [ -d "$spot" ] && { APP="$spot"; break; }
 done
-APP="${APP:-$HERE/Studio Hub.app}"
+APP="${APP:-$HERE/Hub Studio KH.app}"
 # The installed name carries no version, so a new release replaces the old app instead of
 # leaving a second copy beside it.
-NAME="Studio Hub.app"
+NAME="Hub Studio KH.app"
 
 # **Make this Mac serve after a restart (owner, 2026-10-02).** The app starts at login by default but
 # its services do not: "Start services on startup" is off unless the app was opened once with
@@ -36,17 +36,17 @@ fleet_mode_open() {
   already=$(/usr/bin/plutil -extract startServicesAtLogin raw "$prefs" 2>/dev/null || echo "")
   if is_running; then
     if [ "$already" = "true" ]; then
-      echo "  Studio Hub is running and already starts its services after a restart."
+      echo "  Hub Studio KH is running and already starts its services after a restart."
       return 0
     fi
-    echo "  Closing Studio Hub so it can be reopened in fleet mode..."
+    echo "  Closing Hub Studio KH so it can be reopened in fleet mode..."
     set -- ${STUDIOHUB_OSASCRIPT:-/usr/bin/osascript}
-    "$@" -e 'with timeout of 20 seconds' -e 'quit app "Studio Hub"' -e 'end timeout' >/dev/null 2>&1 || true
+    "$@" -e 'with timeout of 20 seconds' -e 'quit app "Hub Studio KH"' -e 'end timeout' >/dev/null 2>&1 || true
     waited=0
     while is_running && [ "$waited" -lt "${STUDIOHUB_QUIT_WAIT:-40}" ]; do sleep 1; waited=$((waited + 1)); done
     if is_running; then
       echo
-      echo "  Studio Hub did not close - it may be busy with a job or waiting for an answer, so it was"
+      echo "  Hub Studio KH did not close - it may be busy with a job or waiting for an answer, so it was"
       echo "  left alone. Close it yourself, then run this file again so this Mac is set to start its"
       echo "  services after a restart."
       return 1
@@ -54,15 +54,15 @@ fleet_mode_open() {
   fi
   if /usr/bin/xattr -p com.apple.quarantine "$app" >/dev/null 2>&1; then
     echo
-    echo "  macOS has not opened this app before: if it asks, right-click Studio Hub in Applications and"
+    echo "  macOS has not opened this app before: if it asks, right-click Hub Studio KH in Applications and"
     echo "  choose Open (once), then run this file again."
   fi
-  echo "  Opening Studio Hub in fleet mode: it starts its services now, at every login and after a restart."
+  echo "  Opening Hub Studio KH in fleet mode: it starts its services now, at every login and after a restart."
   if "$opener" -a "$app" --args --fleet-mode; then
     return 0
   fi
   echo
-  echo "  macOS would not open Studio Hub. Right-click it in Applications and choose Open (once), then run"
+  echo "  macOS would not open Hub Studio KH. Right-click it in Applications and choose Open (once), then run"
   echo "  this file again so this Mac is set to start its services after a restart."
   return 1
 }
@@ -71,7 +71,7 @@ fleet_mode_open() {
 # headless Mac mini render and be screen-shared. Its installer rides in the kit's Extras folder and
 # `Extras/Install Yam Display.command` does the work: install when missing or older, never downgrade,
 # one line and move on when the installer is not in the kit. A Yam Display problem never stops or
-# fails the Studio Hub install: this returns 1 so the caller can say so plainly, and nothing more.
+# fails the Hub Studio KH install: this returns 1 so the caller can say so plainly, and nothing more.
 # The `STUDIOHUB_*` names are for tests; nobody sets them in real use.
 install_yam_display() {
   yd_cmd=""
@@ -87,7 +87,7 @@ install_yam_display() {
 
 clear
 echo "============================================================"
-echo "  Studio Hub - installing the app"
+echo "  Hub Studio KH - installing the app"
 echo "============================================================"
 echo
 
@@ -113,7 +113,7 @@ TARGET="${STUDIOHUB_INSTALL_TARGET:-/Applications}"
 NEEDS_ADMIN=1
 if [ -w "$TARGET" ]; then NEEDS_ADMIN=0; fi
 
-echo "  This will replace any Studio Hub already installed."
+echo "  This will replace any Hub Studio KH already installed."
 echo
 # **Unattended when another script is driving.** Two of this file's three stops are for a person
 # who double-clicked it: which Applications folder to use, and reading the result before the window
@@ -136,11 +136,11 @@ else
 fi
 
 echo
-echo "  Updating... (a few seconds when this Mac already has an older Studio Hub)"
+echo "  Updating... (a few seconds when this Mac already has an older Hub Studio KH)"
 # A running copy holds its own files open, and replacing one underneath itself is how an install
 # half-lands - the old process keeps serving from deleted files while the folder on disk changes.
 if [ -z "${STUDIOHUB_INSTALL_TARGET:-}" ]; then
-  osascript -e 'quit app "Studio Hub"' >/dev/null 2>&1 || true
+  osascript -e 'quit app "Hub Studio KH"' >/dev/null 2>&1 || true
   osascript -e 'quit app "StudioHub"' >/dev/null 2>&1 || true
   sleep 2
 fi
@@ -253,7 +253,7 @@ VERSION=$(/usr/bin/plutil -extract CFBundleShortVersionString raw \
           "$TARGET/$NAME/Contents/Info.plist" 2>/dev/null || echo "unknown")
 
 echo
-echo "  Installed Studio Hub $VERSION"
+echo "  Installed Hub Studio KH $VERSION"
 echo "  Installed to:  $TARGET/$NAME"
 echo
 # Yam Display next, into the same Applications folder. `Update this Mac.command` does this step itself
@@ -261,7 +261,7 @@ echo
 if [ "${STUDIOHUB_YAMDISPLAY_BY_CALLER:-}" != "1" ]; then
   install_yam_display "${STUDIOHUB_YAMDISPLAY_TARGET:-$TARGET}" || {
     echo
-    echo "  Studio Hub is installed. Yam Display was not - see above."
+    echo "  Hub Studio KH is installed. Yam Display was not - see above."
   }
   echo
 fi

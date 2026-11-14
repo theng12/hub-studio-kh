@@ -16,6 +16,8 @@ import stat
 
 AUTHORITY_DIRECTORY = "render-authority"
 MAX_RECORD_BYTES = 16 * 1024
+# Tests substitute a private fixture root when their volume ancestry is unsafe.
+_ROOT_ANCHOR = Path("/")
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
@@ -76,14 +78,17 @@ def read_record(data_root: Path, *names: str, expected_uid: int,
     data_root = Path(data_root)
     if not data_root.is_absolute() or not names:
         _fail("UNSAFE_PATH")
-    components = data_root.parts[1:]
+    try:
+        components = tuple(map(_plain_name, data_root.relative_to(_ROOT_ANCHOR).parts))
+    except ValueError:
+        _fail("UNSAFE_PATH")
     private = (AUTHORITY_DIRECTORY, *map(_plain_name, names[:-1]))
     filename = _plain_name(names[-1])
     descriptors: list[int] = []
     directories: list[tuple[int, str, int, str]] = []
     file_stage = False
     try:
-        root_fd = os.open("/", _DIR_FLAGS)
+        root_fd = os.open(_ROOT_ANCHOR, _DIR_FLAGS)
         descriptors.append(root_fd)
         root_policy = "data" if not components else "ancestor"
         _validate_directory(os.fstat(root_fd), expected_uid=expected_uid, policy=root_policy)

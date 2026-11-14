@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Put named model packages from the kit's model-library onto THIS Mac, through the Hub's own import code.
 
-    <the app's python3> import_kit_packages.py --app "/Applications/Studio Hub.app" --kit "<Studio Hub KH folder>" \
+    <the app's python3> import_kit_packages.py --app "/Applications/Hub Studio KH.app" --kit "<Studio Hub KH folder>" \
         --packages fish-audio-s2-pro-4bit,fish-audio-s2-pro-8bit,fish-audio-s2-pro-bf16
 
 Used by RUN-16GB-FISH.command: Fish S2 Pro bf16 (and 8-bit) are shelved / 24 GB-tier, so the kit's normal copy step

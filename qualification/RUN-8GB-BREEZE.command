@@ -16,8 +16,8 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 KIT=$(CDPATH= cd -- "$HERE/.." && pwd)
 TARGET="$HERE/eight-gb-tts-run.sh"
 IMPORTER="$HERE/import_kit_packages.py"
-APP="${STUDIOHUB_APP:-/Applications/Studio Hub.app}"
-[ -f "$APP/Contents/Info.plist" ] || APP="$HOME/Applications/Studio Hub.app"
+APP="${STUDIOHUB_APP:-/Applications/Hub Studio KH.app}"
+[ -f "$APP/Contents/Info.plist" ] || APP="$HOME/Applications/Hub Studio KH.app"
 PYTHON="$APP/Contents/Resources/runtimes/voice/bin/python3"
 PACKAGES="breeze-tts-2-mlx-4bit"
 

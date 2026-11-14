@@ -107,7 +107,9 @@ YUE2_RUNTIME_SHA256 = '75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac
 # (the Image and YuE2 content pins in their stagers do that), a missing model package (models live
 # outside the app), a staged file altered after this check (the release manifest and a mount
 # comparison do that), or a DMG step that drops something staging had (prove the mounted image).
+HELPER_BUNDLE = Path('helper') / 'Hub Studio KH Helper.app'
 HUB_RELEASE_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    'helper': ('Contents/MacOS/Hub Studio KH Helper', 'Contents/Info.plist'),
     'runtimes': ('voice', 'image', 'music-yue2'),
     'workers': (
         'hub_worker.py', 'voice_worker.py', 'subtitle_worker.py', 'chat_worker.py',
@@ -139,6 +141,9 @@ def missing_release_artifacts(resources: Path) -> list[str]:
     missing += [
         name for name in HUB_RELEASE_ARTIFACTS['workers']
         if not (resources / name).is_file()]
+    missing += [
+        f'helper/{name}' for name in HUB_RELEASE_ARTIFACTS['helper']
+        if not (resources / HELPER_BUNDLE / name).is_file()]
     return missing
 
 
@@ -336,8 +341,8 @@ def _signing_identity(app: Path) -> str:
     if SIGNING_IDENTITY not in listed.stdout:
         raise RuntimeError(
             f'The shared signing identity {SIGNING_IDENTITY!r} is missing from this Mac\'s login '
-            'keychain. Packaging refuses to fall back to ad-hoc signing; create or import the '
-            'identity in Keychain Access, then stage again.')
+            'signing identity. Packaging refuses to fall back to ad-hoc signing; create or import '
+            'the signing identity, then stage again.')
     return identity
 
 
@@ -1004,7 +1009,41 @@ def stage_hub_render_authority(
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+def stage_hub_helper(resources: Path, native_helper: Path) -> None:
+    """Stage the background helper as `Hub Studio KH Helper.app` beside the runtimes.
+
+    Every user-visible background name is `<App Name> Helper` (owner, 2026-11-11), so Activity
+    Monitor, App Background Activity and notifications show "Hub Studio KH Helper" instead of
+    `python3`. The launchd labels and bundle identifiers stay as they are: they are internal.
+    """
+    bundle = resources / HELPER_BUNDLE
+    macos = bundle / 'Contents' / 'MacOS'
+    helper_resources = bundle / 'Contents' / 'Resources'
+    macos.mkdir(parents=True)
+    helper_resources.mkdir(parents=True)
+    executable = macos / 'Hub Studio KH Helper'
+    shutil.copyfile(native_helper, executable)
+    executable.chmod(0o755)
+    shutil.copyfile(ROOT / 'assets' / 'app-icon.icns', helper_resources / 'app-icon.icns')
+    plist = {
+        'CFBundleExecutable': 'Hub Studio KH Helper',
+        'CFBundleName': 'Hub Studio KH Helper',
+        'CFBundleDisplayName': 'Hub Studio KH Helper',
+        'CFBundleIdentifier': 'local.studiohub.helper',
+        'CFBundlePackageType': 'APPL',
+        'CFBundleShortVersionString': '1.0',
+        'CFBundleVersion': '1',
+        'CFBundleIconFile': 'app-icon',
+        'LSMinimumSystemVersion': '14.0',
+        # No Dock icon and no menu bar: the helper exists only to own the worker process.
+        'LSUIElement': True,
+    }
+    with (bundle / 'Contents' / 'Info.plist').open('wb') as stream:
+        plistlib.dump(plist, stream)
+
+
 def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
+          native_helper: Path | None = None,
           include_hub: bool = False, image_runtime: Path | None = None,
           unqualified_image_runtime: str | None = None,
           video_runtime: Path | None = None, unqualified_video_runtime: str | None = None,
@@ -1047,6 +1086,13 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         native_shell = native_shell.expanduser().resolve()
         validate_native_shell(native_shell)
         include_hub = True
+        if native_helper is None:
+            raise ValueError(
+                'A Hub build needs --native-helper: .build/HubStudioHelper, the launcher staged '
+                'as Hub Studio KH Helper.app. Without it the app falls back to a python3 process '
+                'name and the release is missing an artifact HUB_RELEASE_ARTIFACTS declares.')
+        native_helper = native_helper.expanduser().resolve()
+        validate_native_shell(native_helper)
     provenance = json.loads((ROOT / 'research/voice-adoption.json').read_text())
     hub_provenance = None
     if include_hub:
@@ -1156,6 +1202,8 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     # Image and sung-song Music could not start. Refuse here, before hashing, so no installer can
     # be built from it.
     if include_hub:
+        if native_helper is not None:
+            stage_hub_helper(resources, native_helper)
         missing = missing_release_artifacts(resources)
         if missing:
             saved = archive_failed_stage(output)
@@ -1217,21 +1265,21 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         plist.update({
             'CFBundleExecutable': 'StudioHub',
             'CFBundleIdentifier': 'local.studiohub.standalone',
-            # The short internal name stays "Studio Hub": launchers, verify scripts and
-            # instruction files still look the bundle up by that name, and the folder on
-            # disk remains `Studio Hub.app`. The name the operator sees in Finder, the
-            # Dock and the About panel is the approved display name (owner, next tested
-            # release), which is what `CFBundleDisplayName` is for.
-            'CFBundleName': 'Studio Hub',
+            # The app is "Hub Studio KH" everywhere an operator can see it: bundle filename,
+            # Finder, Dock, About, window title and this short name (owner, 2026-11-12; it
+            # used to ship as `Studio Hub.app` with only the display name changed). The bundle
+            # identifier and the Application Support folder stay as they are, because they are
+            # invisible and moving them would break update continuity and orphan the data.
+            'CFBundleName': 'Hub Studio KH',
             'CFBundleDisplayName': 'Hub Studio KH',
             'NSMicrophoneUsageDescription':
-                'Studio Hub uses the microphone to record audio for transcription.',
+                'Hub Studio KH uses the microphone to record audio for transcription.',
             # macOS gates local-network access per app, separately from App Transport Security,
             # and an app that declares nothing here is refused rather than prompted - which is
             # what a node hit when it tried to reach its controller. Granting the prompt puts
             # this app in System Settings > Privacy & Security > Local Network.
             'NSLocalNetworkUsageDescription':
-                'Studio Hub talks to your other Macs on this network to send and receive work.',
+                'Hub Studio KH talks to your other Macs on this network to send and receive work.',
         })
         plist.pop('LSUIElement')
     with (contents / 'Info.plist').open('wb') as stream:
@@ -1311,6 +1359,9 @@ if __name__ == '__main__':
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--native-shell', type=Path)
+    parser.add_argument('--native-helper', type=Path,
+                        help='.build/HubStudioHelper, staged as Hub Studio KH Helper.app; '
+                             'required for a Hub build with a native shell')
     parser.add_argument('--image-runtime', type=Path, help='Include the independently qualified Image runtime and worker')
     # Staging a runtime that is NOT the qualified one is allowed only by saying why. The reason is
     # recorded in the release manifest, so an unqualified bundle announces itself.
@@ -1338,6 +1389,7 @@ if __name__ == '__main__':
                              'enrolment URLs and the pinned public key. Required with --khu-agent-kit')
     args = parser.parse_args()
     print(stage(args.runtime, args.output, native_shell=args.native_shell,
+                native_helper=args.native_helper,
                 include_hub=args.hub, image_runtime=args.image_runtime,
                 unqualified_image_runtime=args.unqualified_image_runtime,
                 video_runtime=args.video_runtime,

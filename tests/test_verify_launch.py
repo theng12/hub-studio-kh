@@ -5,20 +5,21 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
 import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 VERIFIER = ROOT / "qualification" / "verify-launch.sh"
 
 
-SERVICE = r'''#!{python}
-import argparse
+SERVICE = r'''import argparse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
@@ -99,7 +100,8 @@ class VerifyLaunchTests(unittest.TestCase):
             "development_build": True,
         }))
         service = binary / "StudioHubService"
-        service.write_text(SERVICE.replace("{python}", sys.executable))
+        Path(str(service) + ".py").write_text(SERVICE)
+        service.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$0.py" "$@"\n')
         service.chmod(0o755)
 
     def _run(self, mode: str = "healthy", *, app: Path | None = None,
@@ -158,6 +160,17 @@ class VerifyLaunchTests(unittest.TestCase):
 
     def test_rejects_ok_false_and_stops_service(self):
         self.assert_verifier_failed(self._run("ok_false"))
+
+    def test_service_uses_the_exact_spaced_interpreter(self):
+        interpreter = self.root / "Owner's Python Runtime" / "python3"
+        interpreter.parent.mkdir()
+        interpreter.symlink_to(sys.executable)
+        app = self.root / "Owner's Spaced Fixture.app"
+        with mock.patch.object(sys, "executable", str(interpreter)):
+            self._make_app(app)
+        result = self._run(app=app)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("RESULT: PASS", result.stdout)
 
     def test_app_path_with_apostrophe_has_valid_identity_and_health(self):
         quoted_app = self.root / "Owner's Fixture.app"

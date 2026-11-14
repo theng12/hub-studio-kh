@@ -48,7 +48,7 @@ class Fixture(unittest.TestCase):
         self.library = self.root / "models"
         self.out = self.root / "out"
         self.apps = self.root / "Applications"
-        for folder in (self.hub, self.library / ".studiohub", self.out, self.apps / "Studio Hub.app" / "Contents"):
+        for folder in (self.hub, self.library / ".studiohub", self.out, self.apps / "Hub Studio KH.app" / "Contents"):
             folder.mkdir(parents=True)
         (self.library / ".studiohub" / "installed.json").write_text("{}")
         self.other = 0                                   # bytes used by "everything else on the disk"
@@ -116,7 +116,7 @@ class Fixture(unittest.TestCase):
 
     def ctx(self, **overrides) -> dg.Context:
         values = dict(data_dir=self.hub, base_dir=self.base, library=self.library, manifests=[],
-                      app_root=self.apps / "Studio Hub.app", machines=["m"], output_roots=[self.out],
+                      app_root=self.apps / "Hub Studio KH.app", machines=["m"], output_roots=[self.out],
                       settings={"retention_days": 3, "cleanup_enabled": True})
         values.update(overrides)
         return dg.Context(**values)
@@ -180,8 +180,8 @@ class TrashTests(Fixture):
 class AppLeftoverTests(Fixture):
     def test_orphan_old_and_staged_copies_go_after_an_hour_and_only_while_the_app_is_whole(self):
         self.set_free(500)
-        stale_old = self.put(self.apps / ".studiohub-old-1111" / "Studio Hub.app" / "f", 9, age=2 * 3600).parent.parent
-        stale_staged = self.put(self.apps / ".studiohub-staged-2222" / "Studio Hub.app" / "f", 9, age=2 * 3600).parent.parent
+        stale_old = self.put(self.apps / ".studiohub-old-1111" / "Hub Studio KH.app" / "f", 9, age=2 * 3600).parent.parent
+        stale_staged = self.put(self.apps / ".studiohub-staged-2222" / "Hub Studio KH.app" / "f", 9, age=2 * 3600).parent.parent
         os.utime(stale_old, (time.time() - 7200,) * 2)
         os.utime(stale_staged, (time.time() - 7200,) * 2)
         fresh = self.put(self.apps / ".studiohub-staged-3333" / "f", 9)            # an update in progress
@@ -191,7 +191,7 @@ class AppLeftoverTests(Fixture):
         for name in (".studiohub-old-1111", ".studiohub-staged-2222"):
             moved = list(trash.glob(f"orphan-app-copies-*/{name}"))
             self.assertEqual(len(moved), 1, f"{name} was deleted, not moved to the Trash Folder")
-            self.assertTrue((moved[0] / "Studio Hub.app" / "f").is_file())
+            self.assertTrue((moved[0] / "Hub Studio KH.app" / "f").is_file())
         self.assertTrue(fresh.exists(), "an update that is running right now was deleted")
 
     def test_an_old_copy_is_kept_when_the_installed_app_is_not_there(self):
@@ -199,7 +199,7 @@ class AppLeftoverTests(Fixture):
         parent = self.root / "Broken"
         old = self.put(parent / ".studiohub-old-4444" / "f", 9, age=2 * 3600).parent
         os.utime(old, (time.time() - 7200,) * 2)
-        dg.sweep(self.ctx(app_root=parent / "Studio Hub.app"))       # no Contents/: .studiohub-old may be the only app
+        dg.sweep(self.ctx(app_root=parent / "Hub Studio KH.app"))       # no Contents/: .studiohub-old may be the only app
         self.assertTrue(old.exists())
 
     def test_updates_keep_only_the_newest_and_that_goes_too_when_red_and_idle(self):

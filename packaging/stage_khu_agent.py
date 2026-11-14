@@ -37,6 +37,8 @@ _KIT_FILES = (
     "com.khupdater.agent.plist",
     "agent-config.example.json",
 )
+#: The shared icon names the background bundles; a kit built before it still installs.
+_OPTIONAL_KIT_FILES = ("AppIcon.icns",)
 #: Added here from the publisher descriptor; never produced by the kit builder.
 PUBLISHER_FILE = "publisher.json"
 #: Everything that lands in the bundle, and what `khu_agent.KIT_FILES` checks.
@@ -89,17 +91,18 @@ def validate_source_kit(kit: Path) -> Path:
         if path.is_dir() and not path.is_symlink():
             continue
         found.add(relative)
-    if found != set(_KIT_FILES):
+    if not set(_KIT_FILES) <= found or not found <= set(_KIT_FILES) | set(_OPTIONAL_KIT_FILES):
         missing = sorted(set(_KIT_FILES) - found)
-        extra = sorted(found - set(_KIT_FILES))
+        extra = sorted(found - set(_KIT_FILES) - set(_OPTIONAL_KIT_FILES))
         detail = []
         if missing:
             detail.append("missing " + ", ".join(missing))
         if extra:
             detail.append("unexpected " + ", ".join(extra))
         raise ValueError("agent kit contents are wrong: " + "; ".join(detail))
-    for name in _KIT_FILES:
-        _regular_file(kit / name, name)
+    for name in (*_KIT_FILES, *_OPTIONAL_KIT_FILES):
+        if name in found:
+            _regular_file(kit / name, name)
     return kit
 
 
@@ -139,11 +142,12 @@ def finalize_agent_kit(result: AgentKitStageResult) -> None:
     found = {path.relative_to(result.staged_path).as_posix()
              for path in result.staged_path.rglob("*")
              if not path.is_dir() or path.is_symlink()}
-    if found != set(STAGED_FILES) | {"MANIFEST.json"}:
+    if (not set(STAGED_FILES) <= found
+            or not found <= set(STAGED_FILES) | set(_OPTIONAL_KIT_FILES) | {"MANIFEST.json"}):
         raise ValueError("unexpected staged agent kit contents")
     _regular_file(result.manifest_path, "MANIFEST.json")
     files = {}
-    for name in STAGED_FILES:
+    for name in sorted(found - {"MANIFEST.json"}):
         _regular_file(result.staged_path / name, name)
         files[name] = _digest(result.staged_path / name)
     if (result.staged_path / "VERSION").read_text().strip() != result.agent_version:
@@ -184,6 +188,12 @@ def stage_agent_kit(resources: Path, kit: Path, publisher_json: Path, *,
             shutil.copyfile(kit / name, target)
             target.chmod(0o755 if name in _EXECUTABLE else 0o644)
             files[name] = _digest(target)
+        for name in _OPTIONAL_KIT_FILES:
+            if (kit / name).is_file():
+                target = staged / name
+                shutil.copyfile(kit / name, target)
+                target.chmod(0o644)
+                files[name] = _digest(target)
         # Written from the descriptor's own bytes, so the pinned key in the bundle is
         # exactly the one the publisher printed and the per-Mac config will trust.
         publisher_target = staged / PUBLISHER_FILE
@@ -193,7 +203,7 @@ def stage_agent_kit(resources: Path, kit: Path, publisher_json: Path, *,
         files[PUBLISHER_FILE] = _digest(publisher_target)
 
         manifest = build_manifest(version, files)
-        if tuple(manifest["files"]) != STAGED_FILES:
+        if not set(STAGED_FILES) <= set(manifest["files"]):
             raise ValueError("agent kit manifest is missing a file")
         manifest_path = staged / "MANIFEST.json"
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",

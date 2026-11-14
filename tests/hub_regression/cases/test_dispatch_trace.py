@@ -121,7 +121,7 @@ def test_blocked_pass_retries_failed_write_records_only_actual_gate_and_keeps_sn
     monkeypatch.setattr(broker, "_queued_batches", queued_batches)
     monkeypatch.setattr(broker, "_watch_restored_attempts", AsyncMock())
     monkeypatch.setattr(broker, "evict_finished_batches", lambda: 0)
-    monkeypatch.setattr(broker, "discard_stale_uncertain", lambda **_: 0)
+    monkeypatch.setattr(broker, "release_stale_uncertain", lambda **_: 0)
     monkeypatch.setattr(broker, "_expire_genstudio_batch", lambda *_: False)
     monkeypatch.setattr(broker, "every_capable_mac_paused", lambda *_: False)
     monkeypatch.setattr(broker, "admission_refusal", lambda *_: None)

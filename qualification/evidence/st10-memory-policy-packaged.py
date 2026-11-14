@@ -22,7 +22,7 @@ import library_guard  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]
-APP = ROOT / "dist" / "Studio Hub.app"
+APP = ROOT / "dist" / "Hub Studio KH.app"
 RESOURCES = APP / "Contents" / "Resources"
 LIBRARY = ROOT / "scratch-library"   # a repo-local scratch library; library_guard refuses a real one
 EVIDENCE = ROOT / "qualification" / "evidence" / "st10-memory-policy-packaged.json"

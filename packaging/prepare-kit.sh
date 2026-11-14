@@ -21,8 +21,8 @@ KIT="/Volumes/$VOLUME/1 Install Apps/Hub Studio KH"
 if [ -z "${STAGE_DIR:-}" ]; then
   STAGE_DIR=$(ls -d "$ROOT"/.build/StudioHub-[0-9]* 2>/dev/null | sort | tail -1)
 fi
-NEWAPP="${STAGE_DIR%/}/Studio Hub.app"
-NEWTREE="${STAGE_DIR%/}/Studio Hub.app.tree-sha256"
+NEWAPP="${STAGE_DIR%/}/Hub Studio KH.app"
+NEWTREE="${STAGE_DIR%/}/Hub Studio KH.app.tree-sha256"
 echo "### stage: $STAGE_DIR"
 PY="$ROOT/.build/voice-runtime/bin/python3"
 
@@ -149,29 +149,29 @@ echo "### $VOLUME: app"
 # The app it replaces is kept, not deleted: a drive that has to serve a Mac the new build
 # disagrees with is worth being able to walk back to. It goes to the volume's own _trash,
 # stamped with the version it was, alongside everything else displaced from this drive.
-if [ -d "$KIT/Studio Hub.app" ]; then
+if [ -d "$KIT/Hub Studio KH.app" ]; then
   OLDVER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-             "$KIT/Studio Hub.app/Contents/Info.plist" 2>/dev/null || echo unknown)
+             "$KIT/Hub Studio KH.app/Contents/Info.plist" 2>/dev/null || echo unknown)
   mkdir -p "/Volumes/$VOLUME/_trash"
-  chmod -R u+w "$KIT/Studio Hub.app" 2>/dev/null || true
-  DEST="/Volumes/$VOLUME/_trash/Studio Hub.app-$OLDVER"
+  chmod -R u+w "$KIT/Hub Studio KH.app" 2>/dev/null || true
+  DEST="/Volumes/$VOLUME/_trash/Hub Studio KH.app-$OLDVER"
   [ -e "$DEST" ] && DEST="$DEST-$(date +%Y%m%d%H%M%S)"
-  mv "$KIT/Studio Hub.app" "$DEST" && echo "   _trash: Studio Hub.app-$OLDVER"
+  mv "$KIT/Hub Studio KH.app" "$DEST" && echo "   _trash: Hub Studio KH.app-$OLDVER"
 fi
-if [ -e "$KIT/Studio Hub.app" ]; then
+if [ -e "$KIT/Hub Studio KH.app" ]; then
   echo "   ERROR: the old app could not be displaced; leaving this volume untouched"
   exit 1
 fi
-rsync -a "$NEWAPP/" "$KIT/Studio Hub.app/"
-cp -f "$NEWTREE" "$KIT/Studio Hub.app.tree-sha256"
+rsync -a "$NEWAPP/" "$KIT/Hub Studio KH.app/"
+cp -f "$NEWTREE" "$KIT/Hub Studio KH.app.tree-sha256"
 APPVER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-           "$KIT/Studio Hub.app/Contents/Info.plist" 2>/dev/null || echo unknown)
+           "$KIT/Hub Studio KH.app/Contents/Info.plist" 2>/dev/null || echo unknown)
 # The key is `implementation_commit` — the release manifest's own name for the commit the app was
 # staged from. Reading `commit` produced "unknown" on four drives, which is honest but useless when
 # the value is sitting right there under a different name.
 APPCOMMIT=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['implementation_commit'][:7])" \
-              "$KIT/Studio Hub.app/Contents/Resources/release-manifest.json" 2>/dev/null || echo unknown)
-echo "   version $APPVER files $(find "$KIT/Studio Hub.app" -type f | wc -l | tr -d ' ') commit $APPCOMMIT"
+              "$KIT/Hub Studio KH.app/Contents/Resources/release-manifest.json" 2>/dev/null || echo unknown)
+echo "   version $APPVER files $(find "$KIT/Hub Studio KH.app" -type f | wc -l | tr -d ' ') commit $APPCOMMIT"
 # The index document is stamped from the app that is now on this drive, not from whatever the
 # repository said when the file was written. The page exists to answer "which build is this?" and a
 # hand-maintained answer to that question has been wrong three times: 0.6.63 against a 0.6.70
@@ -276,6 +276,6 @@ print(f"   index: pruned {', '.join(gone)} (old index kept: _trash/{backup.name}
 PRUNEINDEX
 
 echo "### $VOLUME: kit manifest"
-"$PY" "$ROOT/packaging/release_kit.py" --app "$KIT/Studio Hub.app" \
+"$PY" "$ROOT/packaging/release_kit.py" --app "$KIT/Hub Studio KH.app" \
       --library "$KIT/model-library" \
       --output "$KIT/focused-release-manifest.json" | tail -14

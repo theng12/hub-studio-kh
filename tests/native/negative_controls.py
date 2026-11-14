@@ -37,7 +37,7 @@ def swift_api_checks() -> int:
     """Compile and run the native API contract binary against the mutated sources."""
     command = ('source native/sdk.sh && xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 '
                'native/ShellCore.swift native/StartupRecovery.swift native/ReleaseNotes.swift '
-               'native/UpdateClient.swift native/StudioAPI.swift tests/native/api_main.swift '
+               'native/StudioAPI.swift tests/native/api_main.swift '
                '-o .build/native-api-negative && .build/native-api-negative')
     return run(["/bin/bash", "-c", command])
 

@@ -33,23 +33,16 @@ enum LegacyLoginItem {
 /// The app-side actions for a redundant launch, kept out of `ExistingInstance` so the decision and
 /// its present/exit contract stay testable in the contract suite.
 enum ExistingInstanceHandler {
-    /// Bring the already-running Studio Hub forward, if it can be found. Both copies share the
-    /// bundle identifier, so the other one is the process that is not this one.
-    static func presentRunningApp() {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return }
-        let current = ProcessInfo.processInfo.processIdentifier
-        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        where app.processIdentifier != current {
-            app.activate(options: [.activateAllWindows])
-            return
-        }
-    }
+    /// A redundant launch must not take the desktop (owner rule, 2026-11-12): no activation, no
+    /// window, no alert. `noteAndExit` leaves one line and exits 0; this stays a no-op so the
+    /// app-side action is explicit rather than an omission.
+    static func stayBehind() {}
 
     /// Leave with status 0 so `KeepAlive` (SuccessfulExit false) never relaunches this copy, and
     /// leave at most one line where a log collects it. No alert, ever: the operator should not see
-    /// "Studio Hub could not open" because they double-clicked an app that is already open.
+    /// "Hub Studio KH could not open" because they double-clicked an app that is already open.
     static func noteAndExit() {
-        FileHandle.standardError.write(Data("Studio Hub is already running; this launch exits.\n".utf8))
+        FileHandle.standardError.write(Data("Hub Studio KH is already running; this launch exits.\n".utf8))
         exit(ExistingInstance.redundantLaunchExitCode)
     }
 }
@@ -58,6 +51,10 @@ enum ExistingInstanceHandler {
 final class StudioController: ObservableObject {
     @Published var selection: StudioPage = .overview
     @Published var status = "Choose a model library"
+    /// Set when a stop has hung: the window draws an in-app dialog instead of a native alert.
+    @Published var forceStopPrompt = false
+    /// Set when Stop Services… is pressed: the window draws the question in-app.
+    @Published var stopPrompt = false
     @Published var failure: String?
     @Published var readyURL: URL?
     /// The credential this app already holds for its own Hub, so Connections can reveal it
@@ -115,7 +112,7 @@ final class StudioController: ObservableObject {
     /// not there - the same reasoning as an unattended update's stop. Cleared with the exit.
     private var forceStopSilently = false
     private var instanceLock: InstanceLock?
-    /// True when the data-folder lock is held by another copy of Studio Hub. The app then presents
+    /// True when the data-folder lock is held by another copy of Hub Studio KH. The app then presents
     /// that copy and exits quietly instead of showing a failure.
     private(set) var existingInstanceDetected = false
     private let serviceExecutable: URL
@@ -131,8 +128,6 @@ final class StudioController: ObservableObject {
     private let now: () -> Date
     private let healthRequest: (URLRequest, URLSession) async throws -> (Data, URLResponse)
     var onStopped: (() -> Void)?
-    /// Set by the app delegate: quit and reopen the (now replaced) app after an update.
-    var onRelaunchRequested: (() -> Void)?
 
     init(configuration: ShellConfiguration, serviceExecutable: URL? = nil,
          appBundle: URL = Bundle.main.bundleURL,
@@ -145,8 +140,11 @@ final class StudioController: ObservableObject {
          now: @escaping () -> Date = Date.init,
          healthRequest: ((URLRequest, URLSession) async throws -> (Data, URLResponse))? = nil) {
         self.configuration = configuration
+        // The helper bundle carries the name the operator sees in Activity Monitor (owner,
+        // 2026-11-12). The old `StudioHubService` shim stays on disk for qualification scripts.
         self.serviceExecutable = serviceExecutable
-            ?? Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioHubService")
+            ?? Bundle.main.bundleURL.appendingPathComponent(
+                "Contents/Resources/helper/Hub Studio KH Helper.app/Contents/MacOS/Hub Studio KH Helper")
         self.appBundle = appBundle
         self.agentPlistURL = agentPlistURL
         let statusReader = loginAgentStatus ?? { LaunchAgent.status(at: $0) }
@@ -162,7 +160,7 @@ final class StudioController: ObservableObject {
         self.loginStatus = statusReader(agentPlistURL)
         do { instanceLock = try InstanceLock(directory: configuration.dataDirectory) }
         catch let error as InstanceLockError {
-            // "Already held" is not a failure: another copy of Studio Hub is the real app. The
+            // "Already held" is not a failure: another copy of Hub Studio KH is the real app. The
             // launch path uses `existingInstanceDetected` to bring it forward and exit 0.
             switch error {
             case .alreadyHeld:
@@ -198,9 +196,6 @@ final class StudioController: ObservableObject {
         }
         // The pinned release key belongs with the membership the app already persists, and the
         // restart after a verified swap is the same path the restart notice uses.
-        workspace.onReleasePublisherKeyChanged = { [weak self] key in
-            self?.rememberReleasePublisherKey(key)
-        }
         // What this Mac starts when it starts, reported up the fleet and changeable from it. The
         // preferences and the launch agent are this app's, so a request from the Gateway arrives
         // here (through the Hub's sync route) and is applied here.
@@ -210,12 +205,6 @@ final class StudioController: ObservableObject {
         }
         workspace.onStartupRequest = { [weak self] request in self?.applyStartupRequest(request) }
         workspace.onFleetRoleObserved = { [weak self] role in self?.observeFleetRole(role) }
-        workspace.onReleaseRestartRequested = { [weak self] in
-            // An installed update replaces the app on disk, so the window in front of the operator
-            // is still the old binary and its version label stays stale. The app relaunches; with
-            // no app around it (tests) the services restart as before.
-            if let relaunch = self?.onRelaunchRequested { relaunch() } else { self?.restartServices() }
-        }
     }
     var running: Bool { worker?.isRunning == true }
     var ownsInstanceLock: Bool { instanceLock != nil }
@@ -446,8 +435,7 @@ final class StudioController: ObservableObject {
                             controllerAddress: self.configuration.controllerAddress ?? "",
                             token: self.fleetToken,
                             boundHosts: self.configuration.listenHosts,
-                            nodeCredential: self.configuration.nodeCredential,
-                            releasePublisherKey: self.pinnedReleasePublisherKey))
+                            nodeCredential: self.configuration.nodeCredential))
                         guard !Task.isCancelled, !self.stopping, process.isRunning,
                               self.worker === process else { return }
                         let session = URLSession(configuration: .ephemeral)
@@ -730,14 +718,14 @@ final class StudioController: ObservableObject {
     var recoveryPending: Bool { restartTask != nil }
     func confirmForceStop() {
         guard let worker, worker.isRunning, canForceStop else { return }
-        let alert = NSAlert()
-        alert.messageText = "The local services are still stopping"
-        alert.informativeText = "You can keep waiting or force it to stop. Force Stop may leave an incomplete output or download; it will not restart the job."
-        alert.addButton(withTitle: "Keep Waiting")
-        alert.addButton(withTitle: "Force Stop")
-        if alert.runModal() == .alertSecondButtonReturn { forceStop() }
+        forceStopPrompt = true
     }
-    /// Set by the relaunch after an installed update: the force-stop escalation then acts by itself.
+    /// The dialog's destructive answer; Escape and Keep Waiting leave the services stopping.
+    func forceStopNow() {
+        forceStopPrompt = false
+        forceStop()
+    }
+    /// Set by Quit: the force-stop escalation then acts by itself.
     var forceStopWithoutAsking = false
     private func forceStop() {
         guard let worker, worker.isRunning else { return }
@@ -746,13 +734,11 @@ final class StudioController: ObservableObject {
         if getpgid(pid) == pid { killpg(pid, SIGKILL) }
         else { kill(pid, SIGKILL) }
     }
-    func confirmStop() {
-        let alert = NSAlert()
-        alert.messageText = "Stop the local services?"
-        alert.informativeText = "Active generation, transcription, or model downloads may be interrupted. Leave the engine running to finish them."
-        alert.addButton(withTitle: "Keep Running")
-        alert.addButton(withTitle: "Stop Engine")
-        if alert.runModal() == .alertSecondButtonReturn { stop() }
+    func confirmStop() { stopPrompt = true }
+    /// The dialog's destructive answer; Escape and Keep Running leave the engine up.
+    func stopNow() {
+        stopPrompt = false
+        stop()
     }
     func select(_ value: StudioPage) { selection = value }
 
@@ -912,22 +898,6 @@ final class StudioController: ObservableObject {
         do { try configuration.save() } catch { failure = error.localizedDescription }
     }
 
-    /// The release key stored with the membership, if it is internally consistent. A stored pair
-    /// whose fingerprint does not match its own key is ignored rather than trusted.
-    var pinnedReleasePublisherKey: ReleasePublisherKey? {
-        guard let publicKey = configuration.releasePublisherPublicKey,
-              let fingerprint = configuration.releasePublisherFingerprint,
-              ReleaseSignature.fingerprint(publicKeyHex: publicKey) == fingerprint else { return nil }
-        return ReleasePublisherKey(publicKey: publicKey, fingerprint: fingerprint)
-    }
-
-    /// Persist a pinned release key, or clear it when the workspace has left the group.
-    func rememberReleasePublisherKey(_ key: ReleasePublisherKey?) {
-        configuration.releasePublisherPublicKey = key?.publicKey
-        configuration.releasePublisherFingerprint = key?.fingerprint
-        do { try configuration.save() } catch { failure = error.localizedDescription }
-    }
-
     /// Persist a configuration change made from a picker, and say that it needs a restart.
     func saveConfiguration() {
         do {
@@ -1026,7 +996,13 @@ final class StudioController: ObservableObject {
         do { try configuration.save() } catch { failure = error.localizedDescription }
     }
     private func enableLoginByDefault() {
-        guard configuration.startAtLogin, loginStatus != .enabled else { return }
+        guard configuration.startAtLogin else { return }
+        // The plist's existence is the operator's "on", but it can name a program this app no longer
+        // is: 0.6.228 renamed the bundle and left every Mac's agent pointing at the old path. Repair
+        // a stale agent here instead of treating "a plist exists" as correct.
+        let executable = LaunchAgent.executablePath(forAppBundle: appBundle)
+        if loginStatus == .enabled,
+           !LaunchAgent.needsRepair(at: agentPlistURL, currentExecutable: executable) { return }
         switch LaunchAgent.installDecision(appBundle: appBundle) {
         case .refuse:
             // A dev build or an app moved out of /Applications cannot be started at login, and
@@ -1043,57 +1019,6 @@ final class StudioController: ObservableObject {
     func openLog() {
         if FileManager.default.fileExists(atPath: configuration.logFile.path) { NSWorkspace.shared.open(configuration.logFile) }
         else { NSWorkspace.shared.open(configuration.dataDirectory) }
-    }
-}
-
-/// The helper that reopens the app after an update, as its own `/bin/sh`. It waits for the old
-/// process to exit and then runs `open`. **Safety net:** if the old process is still alive after
-/// `waitSeconds` (a hung quit, any future bug) it is sent SIGTERM, then SIGKILL after `graceSeconds`,
-/// so an update can never leave a Mac without its Hub. It is spawned in its own session, with no
-/// inherited descriptors: a launchd job (the login agent) kills what is left in its process group
-/// when the app exits, and an inherited data-folder lock descriptor would keep the new copy out.
-enum RelaunchHelper {
-    static let waitSeconds = 120
-    static let graceSeconds = 10
-    /// The waits are counted half-second ticks, not `SECONDS` arithmetic. `SECONDS` is whole
-    /// seconds since the second the shell started in, so `$((SECONDS + 2))` was reached as little
-    /// as 1.0 s later when the shell started late in a second — the helper could SIGTERM a Hub
-    /// that was still quitting normally. Counting the ticks it actually slept makes `wait` mean
-    /// at least `wait`.
-    static let script = """
-    pid=$1; app=$2; wait=$3; grace=$4; opener=$5
-    gone() { ! kill -0 "$pid" 2>/dev/null; }
-    hold() { ticks=$(($1 * 2)); while ! gone && [ "$ticks" -gt 0 ]; do sleep 0.5; ticks=$((ticks - 1)); done; }
-    hold "$wait"
-    if ! gone; then
-      kill -TERM "$pid" 2>/dev/null
-      hold "$grace"
-      if ! gone; then
-        kill -KILL "$pid" 2>/dev/null
-        ticks=25; while ! gone && [ "$ticks" -gt 0 ]; do sleep 0.2; ticks=$((ticks - 1)); done
-      fi
-    fi
-    exec "$opener" "$app"
-    """
-
-    /// Start the helper and return its pid. `wait`, `grace` and `opener` are parameters for the lifecycle test.
-    static func spawn(pid: Int32, app: String, wait: Int = waitSeconds, grace: Int = graceSeconds,
-                      opener: String = "/usr/bin/open") throws -> Int32 {
-        var attributes: posix_spawnattr_t? = nil
-        var actions: posix_spawn_file_actions_t? = nil
-        posix_spawnattr_init(&attributes); posix_spawn_file_actions_init(&actions)
-        defer { posix_spawnattr_destroy(&attributes); posix_spawn_file_actions_destroy(&actions) }
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
-        for descriptor in 0...2 {
-            posix_spawn_file_actions_addopen(&actions, Int32(descriptor), "/dev/null", descriptor == 0 ? O_RDONLY : O_WRONLY, 0)
-        }
-        let arguments: [UnsafeMutablePointer<CChar>?] =
-            ["sh", "-c", script, "sh", String(pid), app, String(wait), String(grace), opener].map { strdup($0) } + [nil]
-        defer { arguments.forEach { free($0) } }
-        var child: pid_t = 0
-        let status = posix_spawn(&child, "/bin/sh", &actions, &attributes, arguments, environ)
-        guard status == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(status)) }
-        return child
     }
 }
 
@@ -1120,8 +1045,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     private var statusItem: NSStatusItem!
     private var quitPending = false
-    /// True while quitting only to reopen after an update, which must not stop to ask.
-    var relaunching = false
     /// True while Quit is deciding whether to ask; a second Quit waits for the first.
     private var quitAsking = false
     /// Fresh count of running work, and the question asked only when it is not zero. Seams for the lifecycle test.
@@ -1136,7 +1059,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let alert = NSAlert()
         alert.messageText = "Quit Hub Studio KH and stop its engine?"
         alert.informativeText = "Active generation, transcription, or downloads may be interrupted. Close the window to keep working in the background."
-        alert.addButton(withTitle: "Keep Running")
+        alert.addButton(withTitle: "Keep Running").keyEquivalent = "\u{1b}"  // Esc keeps running
         alert.addButton(withTitle: "Quit and Stop")
         return alert.runModal() == .alertSecondButtonReturn
     }
@@ -1176,8 +1099,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config: ShellConfiguration
-        /// This copy is an update's reopen (the previous one quit to install it), not someone opening the app.
-        var updateReopen = false
         do {
             config = try ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL)
             controller = StudioController(configuration: config)
@@ -1185,12 +1106,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // running app and exits 0, before any window or alert. The agent's own copy never gets
             // here while the app runs: it stands by in `main` (see `AgentStandby`).
             ExistingInstance.handle(ExistingInstance.decide(lockHeldByAnother: controller.existingInstanceDetected),
-                                    present: ExistingInstanceHandler.presentRunningApp,
+                                    present: ExistingInstanceHandler.stayBehind,
                                     exitQuietly: ExistingInstanceHandler.noteAndExit)
+            // The data-folder lock only covers copies that share a folder. This one is fixed, so a
+            // copy with another --data-dir, another bundle id or another path cannot add a second
+            // menu-bar item; an update's restart waits here for the old owner to exit.
+            guard MenuBarLock.acquire() else {
+                ExistingInstanceHandler.noteAndExit()
+                return
+            }
             // This copy owns the data folder now: settle why the previous one ended (unless the
             // agent's copy already did), then leave the evidence the next settle reads.
-            let settled = StopRecord.settle(directory: config.dataDirectory, relaunching: false)
-            updateReopen = settled?["reason"] as? String == StopReason.updated.rawValue
+            _ = StopRecord.settle(directory: config.dataDirectory, relaunching: false)
             StopRecord.markRunning(directory: config.dataDirectory)
             StopRecord.installSignalMarkers(directory: config.dataDirectory)
             startStopEvidence(directory: config.dataDirectory)
@@ -1228,7 +1155,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let window = self?.window else { return true }
             return window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
         }
-        controller.onRelaunchRequested = { [weak self] in self?.relaunchAfterUpdate() }
         window.center()
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem(); mainMenu.addItem(applicationItem)
@@ -1287,10 +1213,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let agentLaunch = ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1"
         let loginLaunch = agentLaunch || NSAppleEventManager.shared().currentAppleEvent?
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
-        // A Lite Mode Mac opens its window only by hand: an update's reopen must not put Studio Hub in
+        // A Lite Mode Mac opens its window only by hand: an update's reopen must not put Hub Studio KH in
         // front of a cashier. Opening the app from Applications or Spotlight still shows it - with the
         // menu-bar icon hidden, that is the way back to Settings.
-        if (!loginLaunch && !(workstation.quiet && updateReopen)) || !controller.hasLibrary { openWindow() }
+        if (!loginLaunch) || !controller.hasLibrary { openWindow() }
         // A login launch starts the Studios only when the owner asked for it; the default is
         // off, so a Mac that signs in overnight stays idle until someone sends it work. Every
         // other launch starts them, because opening the app is the intent to use it.
@@ -1326,7 +1252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 agentLaunch: agentLaunch, hasCustomDataDirectory: hasCustomDataDirectory,
                 ownsInstanceLock: ownsInstanceLock, plistURL: agentPlist)
             FileHandle.standardError.write(
-                Data("Studio Hub login supervision: \(outcome.sanitizedDescription)\n".utf8))
+                Data("Hub Studio KH login supervision: \(outcome.sanitizedDescription)\n".utf8))
         }
     }
     /// The heartbeat that dates a kill nothing can record, and the stamp of critical memory pressure
@@ -1348,41 +1274,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             StopRecord.notePowerOff(directory: directory)
         }
     }
-    /// A deliberate Quit (menu, update relaunch, logout) tells the agent's standby copy to leave
+    /// A deliberate Quit (menu, logout) tells the agent's standby copy to leave
     /// the app stopped. A crash never gets here, so the standby relaunches it; a Force Quit or a
     /// memory kill never gets here either, and `StopRecord` tells those from a crash.
     func applicationWillTerminate(_ notification: Notification) {
         guard let controller, !controller.existingInstanceDetected else { return }
         AgentStandby.markCleanQuit(directory: controller.configuration.dataDirectory)
     }
-    /// Reopen the app once this process has exited. The data-folder lock is held until then, so a
-    /// second copy started now would hand off to this one and quit; the helper waits for the exit.
-    ///
-    /// The engine is stopped FIRST and the app quits from `onStopped`. Calling `NSApp.terminate`
-    /// while the engine runs answers `.terminateLater` and waits inside a nested event loop - but
-    /// this is reached from the release tick, itself a main-actor task, and the engine's exit is
-    /// delivered as another main-actor task, which cannot run until the first one returns. The app
-    /// then never quit, the helper below waited on it for ever and the Mac stayed without a Hub
-    /// (seen live 2026-10-01: four controllers after 0.6.119 -> 0.6.121).
-    func relaunchAfterUpdate() {
-        do { try spawnRelaunchHelper(ProcessInfo.processInfo.processIdentifier, Bundle.main.bundleURL.path) } catch {
-            // Could not arrange a reopen: leave the app running rather than quit and not come back.
-            controller.failure = "The update is installed, but Hub Studio KH could not relaunch itself (\(error.localizedDescription)). Quit and open it again."
-            return
-        }
-        relaunching = true
-        StopRecord.noteUpdating(directory: controller.configuration.dataDirectory)
-        controller.forceStopWithoutAsking = true
-        if controller.running { controller.stop() } else { terminateApp() }
-    }
-    /// The engine has stopped: finish a Quit that was waiting for it, or the app's quit for a relaunch.
+    /// The engine has stopped after a Quit that was waiting for it: finish that Quit.
     func engineStopped() {
         if quitPending { NSApp.reply(toApplicationShouldTerminate: true) }
-        else if relaunching { terminateApp() }
     }
-    /// Seams for the lifecycle test: starting the reopen helper and quitting the app.
-    var spawnRelaunchHelper: (Int32, String) throws -> Void = { _ = try RelaunchHelper.spawn(pid: $0, app: $1) }
-    var terminateApp: () -> Void = { NSApp.terminate(nil) }
     @objc func openWindow() {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -1405,9 +1307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard controller?.running == true || controller?.recoveryPending == true else { return .terminateNow }
         if quitPending || quitAsking { return .terminateLater }
-        // Nothing running: Quit just quits. Only work in progress is worth a question. An update's
-        // relaunch never asks (its drain guarantees no work, and nobody is there to answer).
-        if relaunching { stopThenQuit(); return controller.running ? .terminateLater : .terminateNow }
+        // Nothing running: Quit just quits. Only work in progress is worth a question.
         quitAsking = true
         Task { @MainActor in
             let busy = await activeWork() > 0
@@ -1426,11 +1326,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 }
 
+/// The headless `--uninstall` path: stop being an app, remove everything the installer put on this
+/// Mac, keep the operator's data. Launched from a terminal so it stays testable and never needs a
+/// window (owner rules 2026-11-12: release everything on delete; don't take the desktop).
+enum Uninstaller {
+    static func run() -> Int32 {
+        let bundle = Bundle.main.bundleURL
+        let plist = LaunchAgent.defaultPlistURL()
+        let runningCopies = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        switch Uninstall.decide(appBundle: bundle, agentInstalled: LaunchAgent.isInstalled(at: plist),
+                                runningCopyDetected: !runningCopies.isEmpty) {
+        case .refuse(let message):
+            FileHandle.standardError.write(Data((message + "\n").utf8))
+            return 2
+        case .proceed(let steps):
+            for step in steps {
+                switch step {
+                case .bootoutAgent:
+                    _ = LaunchAgent.bootout()
+                    print("unloaded the login agent")
+                case .removeAgentPlist:
+                    do {
+                        try LaunchAgent.remove(at: plist)
+                        print("removed \(plist.path)")
+                    } catch {
+                        FileHandle.standardError.write(Data("could not remove \(plist.path): \(error)\n".utf8))
+                        return 1
+                    }
+                case .unregisterLegacyItem:
+                    try? LegacyLoginItem.unregister()
+                    print("cleared any old login item")
+                case .trashAppBundle:
+                    // Trashed, not deleted: the bundle stays recoverable from the Trash.
+                    do {
+                        try FileManager.default.trashItem(at: bundle, resultingItemURL: nil)
+                        print("moved \(bundle.path) to the Trash")
+                    } catch {
+                        FileHandle.standardError.write(Data("could not move the app to the Trash: \(error)\n".utf8))
+                        return 1
+                    }
+                }
+            }
+            print("Hub Studio KH uninstalled. Your data is untouched at ~/Library/Application Support/StudioHub Standalone.")
+            return 0
+        }
+    }
+}
+
 #if !LIFECYCLE_TESTING
 @main
 struct StudioHubApplication {
     @MainActor static func main() {
-        // The agent's copy while another Studio Hub runs: wait for it, before any AppKit setup
+        if CommandLine.arguments.contains("--uninstall") { exit(Uninstaller.run()) }
+        // The agent's copy while another Hub Studio KH runs: wait for it, before any AppKit setup
         // (no Dock icon, no entry in Force Quit), then let launchd decide. See `AgentStandby`.
         if ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1",
            let configuration = try? ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL),

@@ -387,7 +387,7 @@ class MuxerTests(unittest.TestCase):
 
     def test_a_video_capable_ffmpeg_passes(self) -> None:
         self.assertIsNone(self._probe(
-            which="/Applications/Studio Hub.app/Contents/Resources/runtimes/video/bin/ffmpeg",
+            which="/Applications/Hub Studio KH.app/Contents/Resources/runtimes/video/bin/ffmpeg",
             output="Encoder libx264 [libx264 H.264 / AVC / MPEG-4 AVC]:"))
 
     def test_the_packaged_worker_puts_the_bundled_ffmpeg_on_path(self) -> None:

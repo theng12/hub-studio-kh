@@ -2,31 +2,120 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.235 — 2026-11-14
+
+- The current page in the sidebar is a quiet accent tint with a small accent bar; the outline is the system's keyboard focus ring, not a permanent blue block.
+- The footer pill names the app, its version and What's New.
+- Overview, Audio and the footer read one service state: stopped, recovering or running. "Recovering local services…" no longer appears beside "stopped", a missing model or a download.
+- Overview keeps one Start Services primary; the empty in-progress card no longer repeats it. The model-library line says the library is a folder on this Mac and names the next step.
+- While services are stopped, Audio offers Start Services as its only primary and disables Generate, Add Voice, Manage Voices and Manage Audio Models with one reason; the voice picker says services are stopped instead of claiming a read.
+- Audio lays out as Script two-thirds, Recent audio one-third and Generation full width at normal window sizes, with one empty state and one next step.
+- Muted and status text are measured at 4.5:1 in the dark theme as well as light.
+
+### Technical notes
+
+- `ServicePhase` in `StudioViews` is the single stopped/recovering/running source; `audioScriptSection`, `audioGenerationSection` and `audioRecentPane` carry the Audio layout.
+- `tests/test_owner_review_0235.py` pins each owner-review item; `tests/native/view_checks.swift` measures muted and status text on card and page in both themes.
+
+## 0.6.234 — 2026-11-13
+
+- Every page now opens the same way: its name, one plain line saying what is true right now (hub running, models ready, jobs moving), at most one main button, and one menu for the rest.
+- Models say what you can do with each one — Ready, Needs setup, Downloading 42%, Not downloaded — instead of Installed or Not installed. A model's repository id and the library folder moved into Details.
+- Macs on Connections read by health first: name and state, what the Mac is doing, disk and memory, and one Send Here action. Its routing id, address, version and last-seen are in Details, and Remove is in the row's own menu.
+- The long explanations on Connections are one-line summaries now, with the whole text behind Details; the Local API's ids moved there too.
+- Jobs, Models, Voices and Renders say what to do next when they are empty. Jobs counts done, failed and needs-attention separately, and its Mac filter carries a count.
+- Models, Jobs, Voices and Connections each have one search. Selecting a model at a narrow window fills the page, with a back button, instead of squeezing the list and the details side by side.
+- The Jobs and Models tabs fit a narrow window without scrolling sideways, and each tab has an icon at normal widths. The Studio pages switch between Set up and their result pane instead of cutting the result pane off at 768 points.
+- Settings has Appearance with exactly System, Light and Dark, and lays its sections out in two columns at normal widths so the page is shorter.
+- The current page in the sidebar is a filled blue row with a visible icon and label in every window state.
+- Set up this Mac keeps the selected preset's Install button above the cards, so it is on the first screen at a narrow window.
+- What's New says when a build carries no notes and offers Open Studio Launcher; it no longer dresses the fallback up as release notes.
+- Render rows are titled by what and when they were made, never by a job id.
+- Storage sizes are decimal GB, the same unit the Hub's install plan and Finder use, so one card cannot show two different sizes for the same copy.
+- Stop Services asks in the app, like Force Stop; the status dot takes the worst state on the page, and the footer says when local work is paused.
+- Video leaves Create and Overview now that its lane is retired; finished clips stay in Jobs and Renders.
+- A long page's content is clipped to its own region and the sidebar paints above it, so scrolling to the bottom can never paint over the sidebar or its footer.
+- Settings > General has a switchable "Test machine (no models needed)" profile, off by default: it does not ask for a model library or treat one as a blocker, and services may stay off without an error posture.
+- The footer is one column: Support this app, the version/What's New pill with the Launcher control, and one status line; the Mac's name, role and group are in that line and its tooltip.
+
+### Technical notes
+
+- `PageScaffold` now owns the status line, the one primary action and the overflow; `PageStatusLine`, `PagePrimaryAction`, `PageMenuAction`, `DiagnosticDetails`, `DiagnosticValue` and `StudioSplit` are the shared frame pieces in `native/Design.swift`.
+- The render harness gained `STUDIOHUB_RENDER_MEASURE=1`: it walks every `NSScrollView` (document vs clip width) and every control frame, the native equivalent of `documentScrollWidth == innerWidth`. 60/60 page/size/appearance runs pass at 1440x900 and 768x900; evidence in `_orchestra/hub-lead/ui-pass-0.6.234/evidence/`.
+- `tests/native/view_checks.swift` now pins the new render title rule; the fixture renders one model download so the downloading chip is covered.
+- `tests/test_audio_layout.py` already failed on `bca44d1f` (its `HSplitView`/`maxWidth: 440)` parsers predate Chat's column); one boundary string was updated for `StudioSplit` and the rest are recorded as inherited.
+
 ## 0.6.233 — 2026-11-13
-- Hub no longer updates itself. Updates are installed by Studio Launcher KH, and Settings says so in one line.
-- The App Update Key panel, its trust flow and every release check inside Hub are gone with the self-updater.
+
+- Hub no longer checks for or installs its own updates. Its footer button and the App updates section point to Studio Launcher KH, which installs updates for every app on this Mac.
+- The App Update Key settings are gone from Hub; they are no longer how an app here is updated.
+
+### Technical notes
+
+- Retired `native/UpdateClient.swift` and the StudioAPI release feed, download, verify, install, drain and trust paths. `HubTrash` moved to `ShellCore.swift`.
+- Retired the update-error field from the startup report; the Hub's route still accepts it from older builds.
 
 ## 0.6.232 — 2026-11-13
-- Hub shows one menu-bar icon even if another copy starts: the second copy waits a few seconds and exits quietly.
-- Update opens Studio Launcher KH. Hub never installs its own update.
-- A connection failure names the address it actually tried, including the port it filled in.
-- Settings says plainly what the App Update Key signs.
+
+- Hub no longer installs its own updates. When one is offered, the update action opens Studio Launcher KH, which updates every app on this Mac.
+- Connecting to a controller now names the address it actually tried when it fails, including the assumed http:// and port 47873.
+- Hub shows one menu-bar icon even if another copy starts — a second copy waits briefly and then exits, and never steals focus.
+
+### Technical notes
+
+- `installOfferedRelease` has no callers: the manual and automatic paths both hand over to Studio Launcher KH (`openStudioLauncher`). The install machinery is left in place for now and should be deleted in a following build.
+- Test failures in Connections name the normalised URL; the join success note already did.
 
 ## 0.6.231 — 2026-11-13
-- The sidebar footer now lines up: Support this app, a one-line version and What's New, a Check for Updates button, and one short status line.
-- Chat shows a placeholder in the message box and a Send button that looks the same in light and dark.
-- The Models page says where a model is installed and gives you the button that does it.
-- Voices keeps one settings menu per voice instead of four buttons, and shows language names rather than codes.
-- Overview tells you the next step when something is missing.
-- Escape clears the search boxes and answers the stop and quit prompts with the safe choice.
+
+- The sidebar footer is tidier: Support this app, then one version line with What's New, an icon that checks for updates, and one status line.
+- Models says where installation happens and offers the way there; Chat's message box has a hint and an honest disabled Send; Voices keeps its row actions behind one menu.
+- Escape now closes what it should: it clears both model searches, and in the stop/quit prompts it always picks "keep running" rather than stopping work.
+- The Voice Studio's token prompt and its download-failure message are in-app dialogs now; the browser's own dialogs are silently blocked inside a packaged webview.
+
+### Technical notes
+
+- Footer: no repeated role ("Controller" pill plus a "4 Macs" line), version fixed and visible while the product name truncates, per-generator counts on one line, status line last, symbol follows its sentence.
+- `appVersion` reads `STUDIOHUB_VERSION` only in the offscreen render harness (a plain binary); shipped builds read their Info.plist.
+- No Keychain use anywhere; the packaging refusal no longer names Keychain Access.
 
 ## 0.6.230 — 2026-11-12
-- Quitting Hub leaves nothing running behind it, and a second copy says so instead of taking the screen.
-- Uninstalling removes the app, its helper and its login item; your data stays exactly as it was.
+
+- Start at login works again after the rename: an existing login entry that still named the old app is corrected on launch instead of being trusted.
+- A second launch no longer pulls the open Hub to the front; it leaves one line and exits.
+- New: `--uninstall` removes the app, its helper, its login entry and any old login item, moves the app to the Trash, and leaves your data alone.
+
+### Technical notes
+
+- `LaunchAgent.needsRepair`/`installedExecutablePath` compare the agent's `ProgramArguments[0]` with the running bundle; `enableLoginByDefault` now repairs instead of returning early when a plist exists. This is the 0.6.228 rename's leftover: the agent kept `/Applications/Studio Hub.app/Contents/MacOS/StudioHub` from 2026-09-30.
+- `ExistingInstanceHandler.stayBehind` replaces the `activate(options:)` call, so a redundant launch never takes focus.
+- `Uninstall` in ShellCore returns the ordered steps as data; the `--uninstall` path in `StudioHub.swift` executes them and refuses when another copy runs or the app is outside `/Applications`. The operator's data directory is not a step.
+- Boundary tests cover the stale, current, missing and unreadable agent, and the uninstall refusals/steps.
 
 ## 0.6.229 — 2026-11-12
-- Small fixes to startup and the helper's resource guard.
-- Nothing in your existing settings or profiles changes.
+
+- Hub Studio KH starts its local services again. 0.6.228's background helper looked for its runtime one folder too high, so a fresh install had no Hub until this fixes it.
+- Installing an update no longer brings the app to the front; it starts hidden.
+
+### Technical notes
+
+- `native/helper/HelperMain.swift` finds the host app's `Contents/Resources` by its payload (`hub_worker.py` beside `runtimes/voice/bin/python3`) instead of counting parent directories. 0.6.228's count of four landed on `Contents/Resources/helper` and every install exited 127 before starting the worker.
+- `tests/native/main.swift` now stages the built helper in a synthetic bundle and requires `--print-resources` to resolve the host app's `Contents/Resources`; `native/build.sh` builds the helper before the test binaries. The test fails against the 0.6.228 source.
+- `packaging/install_local.sh` starts the installed app with `open -g -j` (hidden), per the owner's desktop rule.
+
+## 0.6.228 — 2026-11-09
+
+- Local-service warnings now sit beside the status as an icon. Click it to read the full message or dismiss it.
+- Jobs name the Mac they were actually assigned to. Work awaiting assignment stays in All jobs.
+- An uncertain job can release its Mac after the recovery window while keeping the details needed to recover its original result later.
+- Memory settings preserve the Mac's explanation when a model or setting is unavailable.
+- Update checks refuse an installer with the wrong build label, and developer checks reserve enough free space before starting.
+
+### Technical notes
+
+- Candidate only until source review, change-aware checks, packaging, isolated launch/update proof, Developer release review, publication and intended-machine verification finish. Retained receipts are under `_orchestra/hub-lead/source-batch-228-20261109/`.
+- Reference-limit writes still refuse with `TIER_UNKNOWN` until the frozen running-Hub prerequisite is proven. This release does not qualify RAM override/reset enforcement, Developer Mode inference, or paired remote final-MP4 rendering.
+- Automatic release preserves the uncertain attempt and its original identity; operator-cancelled or explicitly discarded attempts remain outside automatic recovery. No generation replay or historical resurrection is introduced.
 
 ## 0.6.227 — 2026-11-09
 

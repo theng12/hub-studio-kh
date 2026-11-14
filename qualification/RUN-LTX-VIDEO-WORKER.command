@@ -61,7 +61,7 @@ RUNTIME=""
 RUNTIME_REJECTED=""
 for cand in \
     "${STUDIOHUB_VIDEO_RUNTIME:-}" \
-    "/Applications/Studio Hub.app/Contents/Resources/runtimes/video/bin/python3" \
+    "/Applications/Hub Studio KH.app/Contents/Resources/runtimes/video/bin/python3" \
     "$HERE/video-runtime/bin/python3" \
     "$HERE/../.build/video-runtime/bin/python3"
 do
@@ -78,7 +78,7 @@ if [ -z "$RUNTIME" ]; then
     [ -n "$RUNTIME_REJECTED" ] && echo "  ($RUNTIME_REJECTED)"
     echo
     echo "Install Studio Hub first — this test drives the app's own components and runtime:"
-    echo "  /Applications/Studio Hub.app/Contents/Resources/runtimes/video/bin/python3"
+    echo "  /Applications/Hub Studio KH.app/Contents/Resources/runtimes/video/bin/python3"
     echo
     echo "Then double-click this again."
     echo
@@ -92,7 +92,7 @@ echo "          $("$RUNTIME" -c 'import mlx.core as mx, sys; print(sys.version.s
 HUB_ROOT="${STUDIOHUB_HUB_ROOT:-}"
 if [ -z "$HUB_ROOT" ]; then
     for cand in \
-        "/Applications/Studio Hub.app/Contents/Resources" \
+        "/Applications/Hub Studio KH.app/Contents/Resources" \
         "$HERE/../.build/app/Contents/Resources" \
         "$HERE/.."
     do

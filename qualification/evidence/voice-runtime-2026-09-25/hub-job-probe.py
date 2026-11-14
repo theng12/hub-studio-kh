@@ -11,7 +11,7 @@ Run it the way it was run:
 
     .build/voice-runtime/bin/python3 \
         qualification/evidence/voice-runtime-2026-09-25/hub-job-probe.py \
-        --app ".build/StudioHub-0661/Studio Hub.app" \
+        --app ".build/StudioHub-0661/Hub Studio KH.app" \
         --models "$HOME/StudioHubModels" \
         --clip qualification/evidence/st04-reference-clip.wav \
         --output <receipt.json>

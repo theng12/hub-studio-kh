@@ -51,7 +51,7 @@ class QwenImageQualificationTests(unittest.TestCase):
 
     def test_available_memory_reader_uses_the_pinned_apps_host_memory_formula(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            app = Path(raw) / "Studio Hub.app"
+            app = Path(raw) / "Hub Studio KH.app"
             components = app / "Contents/Resources/components"
             components.mkdir(parents=True)
             (components / "host_memory.py").write_text(
@@ -66,9 +66,9 @@ class QwenImageQualificationTests(unittest.TestCase):
     def test_foreign_process_guard_finds_hub_image_and_native_leaf(self) -> None:
         listing = """\
   100 /usr/bin/safe-helper
-  101 /Applications/Studio Hub.app/Contents/Resources/hub_worker.py --port 0
-  102 /Applications/Studio Hub.app/Contents/Resources/image_worker.py --port 0
-  103 /Applications/Studio Hub.app/Contents/Resources/runtimes/image/mlx-serve/mlx-serve --serve
+  101 /Applications/Hub Studio KH.app/Contents/Resources/hub_worker.py --port 0
+  102 /Applications/Hub Studio KH.app/Contents/Resources/image_worker.py --port 0
+  103 /Applications/Hub Studio KH.app/Contents/Resources/runtimes/image/mlx-serve/mlx-serve --serve
   104 /tmp/qwen_image_qualification.py --tier 24
 """
         found = qwen.foreign_model_processes(listing, current_pid=104)
@@ -77,7 +77,7 @@ class QwenImageQualificationTests(unittest.TestCase):
                          ["pid 101", "pid 102", "pid 103"])
 
     def test_spawn_rechecks_for_a_hub_restart_before_starting_private_worker(self) -> None:
-        listing = "  201 /Applications/Studio Hub.app/Contents/Resources/hub_worker.py --port 0\n"
+        listing = "  201 /Applications/Hub Studio KH.app/Contents/Resources/hub_worker.py --port 0\n"
 
         def must_not_spawn(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("private worker started while the Hub was running")
@@ -166,7 +166,7 @@ class QwenImageQualificationTests(unittest.TestCase):
 
     def test_bundle_identity_must_match_the_pinned_package(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            app = Path(raw) / "Studio Hub.app"
+            app = Path(raw) / "Hub Studio KH.app"
             resources = app / "Contents/Resources"
             (resources / "model-manifests").mkdir(parents=True)
             (resources / "runtimes/image/bin").mkdir(parents=True)
@@ -204,7 +204,7 @@ class QwenImageQualificationTests(unittest.TestCase):
 
     def test_bundle_identity_rejects_runtime_file_corruption_and_wrong_tree_identity(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            app = Path(raw) / "Studio Hub.app"
+            app = Path(raw) / "Hub Studio KH.app"
             resources = app / "Contents/Resources"
             runtime = resources / "runtimes/image"
             (runtime / "bin").mkdir(parents=True)
@@ -310,7 +310,7 @@ class QwenImageQualificationTests(unittest.TestCase):
             }))
 
     def test_worker_command_uses_the_packaged_image_path_and_private_paths(self) -> None:
-        app = Path("/fixture/Kit/Studio Hub.app")
+        app = Path("/fixture/Kit/Hub Studio KH.app")
         data = Path("/fixture/Kit/_qualification-private/run/state")
         library = Path("/fixture/Kit/_qualification-private/run/library")
         token = data / "owner.token"
@@ -377,12 +377,12 @@ class QwenImageQualificationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             kit = Path(raw) / "Portable Kit"
             technical = kit / "Technical"
-            runtime = kit / "Studio Hub.app/Contents/Resources/runtimes/image/bin"
+            runtime = kit / "Hub Studio KH.app/Contents/Resources/runtimes/image/bin"
             technical.mkdir(parents=True)
             runtime.mkdir(parents=True)
             fake_python = runtime / "python3"
             fake_python.write_text('#!/bin/sh\necho WRONG_IMAGE_COLLECTOR\nexit 8\n')
-            collector = kit / "Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3"
+            collector = kit / "Hub Studio KH.app/Contents/Resources/runtimes/voice/bin/python3"
             collector.parent.mkdir(parents=True)
             collector.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
             collector.chmod(0o755)
@@ -391,7 +391,7 @@ class QwenImageQualificationTests(unittest.TestCase):
                          "library_guard.py", "ssd_wear.py", "RUN-QWEN-IMAGE-16GB.command",
                          "RUN-QWEN-IMAGE-24GB.command"):
                 shutil.copy2(root / "qualification" / name, technical / name)
-            environment = {**os.environ, "STUDIOHUB_APP": str(kit / "Studio Hub.app")}
+            environment = {**os.environ, "STUDIOHUB_APP": str(kit / "Hub Studio KH.app")}
             for tier in (16, 24):
                 completed = subprocess.run(
                     [str(technical / f"RUN-QWEN-IMAGE-{tier}GB.command")],

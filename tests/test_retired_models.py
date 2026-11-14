@@ -41,7 +41,7 @@ import release_kit, stage_voice
 
 def offered():
     """Every place a model is listed, as {place: set of package ids}."""
-    app = tmp / 'app' / 'Studio Hub.app'
+    app = tmp / 'app' / 'Hub Studio KH.app'
     resources = app / 'Contents' / 'Resources'
     shutil.rmtree(app.parent, ignore_errors=True)
     resources.mkdir(parents=True)

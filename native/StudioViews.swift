@@ -61,12 +61,16 @@ enum JobMachineFilter: String, CaseIterable, Identifiable {
     case nodes = "Nodes"
 
     var id: String { rawValue }
+    /// The picker's word for the filter: "Other Macs" reads as people, "Nodes" as the roster.
+    var label: String { self == .nodes ? "Other Macs" : rawValue }
 
     func includes(_ job: NativeJob) -> Bool {
         switch self {
         case .all: return true
-        // A row with no machine yet has not been dispatched, so it is this Mac's queue.
-        case .thisMac: return job.machine == nil || job.machine == "local"
+        // Only the Hub's own sentinel is this Mac's. A row with no recorded Mac has not been
+        // placed, or its Mac was never written, so neither Mac filter claims it: unknown is not
+        // a guess for "This Mac".
+        case .thisMac: return job.machine == "local"
         case .nodes: return job.machine != nil && job.machine != "local"
         }
     }
@@ -118,27 +122,19 @@ private struct ActiveAura<Content: View>: View {
     var inset: CGFloat = 0
     @ViewBuilder var content: () -> Content
 
-    private static var rainbow: [Color] {
-        [.pink, .purple, .indigo, .blue, .cyan, .green, .yellow, .orange, .pink]
-    }
-
     var body: some View {
         if active {
-            TimelineView(.animation) { context in
-                let phase = context.date.timeIntervalSinceReferenceDate
-                    .truncatingRemainder(dividingBy: 8) / 8
-                content()
-                    .padding(inset)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: HubRadius.card, style: .continuous)
-                            .stroke(AngularGradient(colors: Self.rainbow, center: .center,
-                                                    angle: .degrees(phase * 360)),
-                                    lineWidth: 3)
-                            .shadow(color: .purple.opacity(0.35), radius: 4)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-            }
+            // One accent ring, the same colour as the app's own action colour. The travelling
+            // rainbow this replaces was decoration that matched nothing else in the app; the ring
+            // still makes running work unmistakable without inventing a second palette.
+            content()
+                .padding(inset)
+                .overlay {
+                    RoundedRectangle(cornerRadius: HubRadius.card, style: .continuous)
+                        .stroke(Color.accentColor, lineWidth: 2)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
         } else {
             content().padding(inset)
         }
@@ -272,7 +268,7 @@ private struct VideoPreviewSheet: View {
                     }
                 }
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             Group {
                 if let url {
@@ -321,7 +317,12 @@ enum RenderCopy {
         // job id the row used to be titled by is still in Details, so nothing is lost by naming
         // the render the way the customer knows it.
         if let named = render.display?.label { return "\(kind) · \(named)" }
-        return "\(kind) \(String(render.id.prefix(8)))"
+        // No name from Story Studio: the kind and the day identify the row; the full time and
+        // machine are in its facts. A job id is never a title.
+        let day = render.createdAt.map {
+            Date(timeIntervalSince1970: $0).formatted(.dateTime.day().month(.abbreviated))
+        }
+        return day.map { "\(kind) · \($0)" } ?? kind
     }
 
     /// The one line under the title: only the parts the render actually states.
@@ -434,7 +435,7 @@ private struct RenderDetailSheet: View {
                 }
                 Spacer(minLength: HubSpace.m)
                 StatusBadge(text: RenderCopy.outcomeLabel(render), status: RenderCopy.status(render))
-                Button("Done") { dismiss() }
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             if let failure = render.failure {
                 HubBanner(status: .bad, symbol: "xmark.octagon.fill", message: failure)
@@ -852,7 +853,7 @@ private struct WorkPolicySettings: View {
             if let policy = workspace.workPolicy {
                 Text(connected
                      ? (policy.machineEnabled ? "Local work is enabled. Gateway or fleet pauses still apply."
-                        : "Local work is paused. Changing these choices keeps it paused. Gateway or fleet pauses still apply.")
+                        : "Local work is paused. Resume it on Gateway's Fleet page; changing these choices keeps it paused.")
                      : "Services are disconnected. The last saved choices are shown below.")
                     .font(HubType.secondary)
                     .foregroundStyle(!policy.machineEnabled && connected ? HubStatus.warn.textColor : Color.secondary)
@@ -901,12 +902,10 @@ private struct WorkPolicySettings: View {
                             Text(policy.priorityOrder.contains(function.id) ? "\(index + 1)." : "Equal")
                                 .font(HubType.secondary).foregroundStyle(.secondary)
                                 .frame(width: 44, alignment: .leading)
-                            Toggle(function.title, isOn: Binding(
-                                get: { function.enabled },
-                                set: { enabled in Task { _ = await workspace.saveWorkFunction(function.id, enabled: enabled) } }))
-                                .toggleStyle(.checkbox)
-                                .foregroundStyle(function.enabled ? .primary : .secondary)
-                                .accessibilityHint("Accept \(function.title) on this Mac")
+                            // A plain label: the enable switch is the checkbox above, and the
+                            // xmark below. A third checkbox here was the same choice twice.
+                            Text(function.title)
+                                .foregroundStyle(.primary)
                             Spacer(minLength: HubSpace.s)
                             Button {
                                 if let order = policy.priorityOrder(moving: function.id, by: -1) {
@@ -1091,7 +1090,7 @@ private struct LiteModeSettings: View {
     static let startFreeHint = "A job starts only when this much memory is free. A running job always finishes; it is "
         + "stopped only if macOS reports critical memory pressure for 20 seconds (very rare), and then moves to another Mac."
     static let quietHint = "No work during these hours. Separate several with commas, like 22:00-07:00, 12:00-13:00."
-    static let hideIconHint = "With the icon hidden, open Studio Hub from Applications or Spotlight to come back to these settings."
+    static let hideIconHint = "With the icon hidden, open Hub Studio KH from Applications or Spotlight to come back to these settings."
 
     /// The draft as it would be saved: quiet hours from the text field.
     private var edited: NativeWorkstationSettings {
@@ -1161,7 +1160,7 @@ private struct LiteModeSettings: View {
                 hint(Self.quietHint)
             }
             group {
-                Toggle("Hide the Studio Hub menu-bar icon", isOn: $draft.hideMenuBarIcon).toggleStyle(.checkbox)
+                Toggle("Hide the Hub Studio KH menu-bar icon", isOn: $draft.hideMenuBarIcon).toggleStyle(.checkbox)
                 hint(Self.hideIconHint)
             }
             HStack {
@@ -1318,6 +1317,18 @@ struct StudioContent: View {
     /// list controls the clip that is actually loaded rather than whichever row was last drawn.
     @State private var loadedAudioJobID: String?
     @State private var historyTab = HistoryTab.all
+    @State private var jobSearch = ""
+    @State private var voiceSearch = ""
+    @State private var fleetSearch = ""
+    /// The Mac whose Details sheet is open; the row's overflow owns the action.
+    @State private var fleetDetailRow: NativeFleetRow?
+    /// Remembered per list: Table or Cards. Cards are forced below the table's minimum width.
+    @AppStorage("hub.fleetView") private var fleetView = "table"
+    @State private var pendingModelRemoval: NativeModel?
+    /// System, Light or Dark — the only three the app offers, saved on this Mac.
+    @AppStorage("studiohub.appearance") private var appearancePreference = "system"
+    /// A test machine runs without a model library: no install blocker, no error posture.
+    @AppStorage("studiohub.testMachine") private var testMachine = false
     /// Which Macs the Jobs page lists. Offered only where more than one Mac's work can land.
     @State private var jobMachineFilter = JobMachineFilter.all
     /// The same choice on Overview's In progress list, kept separate so narrowing one page does
@@ -1353,7 +1364,6 @@ struct StudioContent: View {
     @State private var confirmingFleetReset = false
     @State private var confirmingRotation = false
     @State private var confirmingHandover = false
-    @State private var confirmingInstall = false
     @State private var confirmingRestoreStorage = false
     /// The Trash Folder's contents are moved to macOS Trash only after this confirmation names the
     /// item count and bytes; macOS Trash still holds them, so it is recoverable, not a delete.
@@ -1389,12 +1399,6 @@ struct StudioContent: View {
     @StateObject private var videoThumbnails = VideoThumbnailStore()
     /// The uncertain job the operator asked to discard, held until they confirm.
     @State private var pendingDiscard: PendingDiscard?
-    /// The gateway public key being pasted, and its optional label. Kept as plain text so the
-    /// operator can read back exactly what they pasted before confirming.
-    @State private var publisherKeyDraft = ""
-    @State private var publisherIdDraft = ""
-    /// Set while the confirmation dialog is up. The key is not sent until the operator confirms.
-    @State private var confirmingPublisherKeyChange = false
     /// A sample is seeded into an empty prompt the first time a studio is opened, so a brand-new
     /// user has something to press Generate on. The flag keeps it from refilling a field the
     /// operator deliberately cleared.
@@ -1411,9 +1415,43 @@ struct StudioContent: View {
 
 
     private var connected: Bool { studio.readyURL != nil && !studio.stopping && workspace.isReachable }
+
+    /// The sidebar's status symbol, read from the same facts as `studio.status`: a Mac with no
+    /// model library is not "connected and fine", and the line beside this symbol says so.
+    private var footerStatusSymbol: String {
+        // The sentence decides. "Choose a model library" is an instruction, so it cannot wear a
+        // success tick even when services are connected (page critics, 2026-11-12).
+        if studio.configuration.modelsDirectory == nil || studio.status.hasPrefix("Choose") {
+            return "exclamationmark.circle"
+        }
+        if localServicesReady, workspace.workPolicy?.machineEnabled == false {
+            return "pause.circle.fill"
+        }
+        return connected ? "checkmark.circle.fill" : "circle"
+    }
     /// Enough to attempt an authenticated Nodes read. Model-catalog reachability remains the gate
     /// for generation controls; it is not evidence that the fleet roster itself is unavailable.
     private var localServicesReady: Bool { studio.readyURL != nil && !studio.stopping }
+
+    /// The one service state every page and the footer read. `studio.status` is a sentence, not a
+    /// state: during recovery it says "Recovering local services…" while `readyURL` can still be
+    /// absent, and the page used to call that "stopped" in one place and "recovering" in another.
+    private enum ServicePhase: Equatable { case running, recovering, stopped }
+
+    private var servicePhase: ServicePhase {
+        if localServicesReady { return .running }
+        if studio.starting || studio.recoveryPending
+            || studio.status.localizedCaseInsensitiveContains("recover") { return .recovering }
+        return .stopped
+    }
+
+    private var servicePhaseLine: String {
+        switch servicePhase {
+        case .running: return "Hub running"
+        case .recovering: return "Recovering local services…"
+        case .stopped: return studio.hasLibrary ? "Local services are stopped" : "No model library selected"
+        }
+    }
     private var selectedAudioModel: NativeModel? { workspace.models.first { $0.repo == workspace.audioModel && $0.function == .audio } }
     private var selectedTranscriptionModel: NativeModel? { workspace.models.first { $0.repo == workspace.transcriptionModel && $0.function == .transcription } }
     private var selectedImageModel: NativeModel? { workspace.models.first { $0.repo == workspace.imageModel && $0.function == .image } }
@@ -1442,7 +1480,7 @@ struct StudioContent: View {
                 let count = counts?[filter]
                 return HubSegmentItem(
                     tag: filter,
-                    label: count.map { "\(filter.rawValue) \($0)" } ?? filter.rawValue
+                    label: count.map { "\(filter.label) \($0)" } ?? filter.label
                 )
             },
             accessibilityLabel: "Show jobs made on",
@@ -1565,8 +1603,9 @@ struct StudioContent: View {
                 Text("Stopping…").font(HubType.caption).foregroundStyle(.secondary)
             }
         case "error":
-            Label("Failed", systemImage: "xmark.octagon")
-                .font(HubType.caption).foregroundStyle(HubStatus.bad.textColor)
+            // The badge already says Failed; the row's own error line says why. A second "Failed"
+            // under it was the same fact twice (critic, 2026-11-13).
+            EmptyView()
         case "cancelled":
             Text("Cancelled").font(HubType.caption).foregroundStyle(.secondary)
         default:
@@ -1732,8 +1771,14 @@ struct StudioContent: View {
     /// guess. A raw development executable has no bundle version; "Development" is
     /// more honest there than inventing a number.
     private var appVersion: String {
+        // The offscreen render harness is a plain binary, not a bundle, so it passes the version
+        // it is rendering; without this every footer screenshot showed "Development" and no number
+        // (footer critic, 2026-11-13). Shipped builds always read their own Info.plist.
         let product = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            ?? ProcessInfo.processInfo.environment["STUDIOHUB_VERSION"].flatMap {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+            }
             ?? "Development"
         // The exact build, stamped at packaging time. Two copies of the same product version are
         // otherwise indistinguishable, which is exactly the question an update raises.
@@ -1748,69 +1793,31 @@ struct StudioContent: View {
             // The list takes the height that is left and scrolls; the footer is its own row beneath it,
             // never a layer over it, so a short window cannot draw the footer on top of the last items.
             VStack(spacing: 0) {
-            List(selection: Binding<StudioPage?>(get: { studio.selection }, set: { if let value = $0 { studio.select(value) } })) {
-                Label("Overview", systemImage: StudioPage.overview.symbol).tag(StudioPage.overview)
-                // An empty section is not drawn: "Coming later" is a real section with no pages
-                // the moment every Studio has an engine, and a heading over nothing reads as a
-                // missing list rather than as "none". The declared sections keep their names and
-                // order for the tests; this is only what reaches the screen.
-                ForEach(StudioPage.sidebarSections.filter { !$0.pages.isEmpty }, id: \.title) { section in
-                    Section(section.title) {
-                        ForEach(section.pages) { page in
-                            // "Coming later" pages are reachable but deliberately quieter: they
-                            // work, there is just no engine behind them yet.
-                            Label(page.title, systemImage: page.symbol)
-                                .foregroundStyle(section.title == "Coming later" ? Color.secondary : Color.primary)
-                                // An offered update is otherwise only visible on this page.
-                                .badge(page == .connections && workspace.showingUpdateBanner ? Text("Update") : nil)
-                                .tag(page)
-                        }
-                    }
+            // A drawn sidebar rather than an AppKit List: the List's selection fill is drawn by
+            // the window, and in an inactive window it came out black with a black label and icon.
+            // Drawing the fill and the label together makes the current page readable in every
+            // window state, in both appearances (critic, 2026-11-13).
+            ScrollView { sidebarList }
+            // A drawn list still moves with the arrow keys.
+            .focusable()
+            .onMoveCommand { direction in
+                let pages: [StudioPage] = [.overview] + StudioPage.sidebarSections.flatMap(\.pages)
+                guard let index = pages.firstIndex(of: studio.selection) else { return }
+                switch direction {
+                case .up: if index > 0 { studio.select(pages[index - 1]) }
+                case .down: if index < pages.count - 1 { studio.select(pages[index + 1]) }
+                default: break
                 }
             }
-            .listStyle(.sidebar)
             Divider()
             VStack(alignment: .leading, spacing: HubSpace.tight) {
-                    // The working mode, as a pill. One glance answers "what is this Mac doing?" -
-                    // Controller, Node or Standalone - with the dot beside it saying whether the
-                    // group it belongs to is actually answering.
-                    HStack(spacing: HubSpace.tight) {
-                        StatusBadge(text: roleTitle(workspace.controllerIdentity?.settings.role), status: modeStatus)
-                        if workspace.controllerReachable != nil {
-                            Circle().fill(connectionStateTint).frame(width: 7, height: 7)
-                                .help(workspace.controllerHealthNote ?? "")
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    // Which Mac this is, and where it stands in its group. Both come from what the
-                    // app already reads (the Hub's identity and the fleet overview), so this adds no
-                    // request. The long names are cut to the sidebar and whole in the tooltip.
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(thisMachineName).font(HubType.captionStrong)
-                            .lineLimit(1).truncationMode(.middle)
-                        Text(groupLine).font(HubType.caption).foregroundStyle(.secondary)
-                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                    }
-                    .help("\(thisMachineName)\n\(groupLine)")
-                    .accessibilityElement(children: .combine)
-                    // What this Mac can actually take: one count per kind of generator it is
-                    // running, so a worker that failed to start is visible here.
-                    // Hidden in a short window, where the footer must give height back to the list.
-                    if !generatorSummary.isEmpty, windowHeight >= 760 {
-                        Text(generatorSummary)
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    HStack(alignment: .top, spacing: HubSpace.tight) {
-                        Image(systemName: connected ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(connected ? HubStatus.ok.textColor : Color.secondary)
-                        Text(studio.status).font(HubType.caption).fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
-                    }
-                    if let updating = workspace.updateStatusLine {
-                        Text(updating).font(HubType.caption).foregroundStyle(HubStatus.info.textColor)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    // The fleet footer is three things: support, the version/What's New pill with
+                    // its update control, and one status line. The role, machine name and group
+                    // live in that line's text and tooltip instead of three stacked blocks.
+                    // The services' actual failure, beside the status it explains, kept whole on
+                    // click (owner, 2026-10-28: "can we have it like in a notification icon
+                    // somewhere instead?"). It replaces the old full-width top banner.
+                    StartupFailureIcon(detail: studio.failure) { studio.failure = nil }
                     // A Studio that has stopped answering, beside the status it belongs to - not
                     // across the top of every page (owner, 2026-10-28). It names the Studio and
                     // clears itself the moment the Studio answers.
@@ -1818,38 +1825,36 @@ struct StudioContent: View {
                     // MERGE POINT (feat/remote-startup): one self-contained line. Keep it, and the
                     // `StartupSidebarNote` struct at the end of this file, when merging the footer.
                     StartupSidebarNote(studio: studio)
-                    // The version line carries the display name the operator approved for this
-                    // release; What's New sits beside it and opens the same notes page the
-                    // menu-bar item already reaches — no second notes source.
-                    HStack(alignment: .firstTextBaseline, spacing: HubSpace.tight) {
-                        Text("Hub Studio KH \(appVersion)")
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .accessibilityLabel("Hub Studio KH version \(appVersion)")
-                        Button("What's New") { studio.select(.whatsNew) }
-                            .buttonStyle(.link)
-                            .font(HubType.caption)
-                            .help("Show the release notes for this build.")
-                    }
-                    // The owner asked for this where the version is read: a Mac away from the
-                    // controller should not have to wait ten minutes for the next silent check.
+                    // Owner footer standard (2026-11-12), in order: Support row, one-line version,
+                    // the What's New pill, the icon-only Launcher control, then the single status line,
+                    // with equal insets and even rhythm. Optional and non-blocking throughout.
                     Button {
-                        Task { await workspace.checkForUpdateNow() }
-                    } label: {
-                        if workspace.manualUpdateChecking {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            Text("Check for update now")
+                        if let url = URL(string: "https://nowpayments.io/donation/studiokh") {
+                            NSWorkspace.shared.open(url)
                         }
+                    } label: {
+                        Label("Support this app", systemImage: "heart")
+                            .font(HubType.caption)
                     }
                     .buttonStyle(.link)
-                    .font(HubType.caption)
-                    .disabled(!connected || workspace.manualUpdateChecking || workspace.installingRelease)
-                    .help("Ask the controller now whether a newer release is held. With work running, it updates when that work finishes.")
-                    if let note = workspace.manualUpdateNote {
-                        Text(note).font(HubType.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    .help("Open the donation page in your browser.")
+                    .accessibilityLabel("Support this app")
+                    HStack(alignment: .center, spacing: HubSpace.s) {
+                        footerVersionPill
+                        // Icon-only by the owner's standard; the words live in the hover text.
+                        Button {
+                            NativeWorkspaceStore.openStudioLauncher()
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Updates are installed by Studio Launcher KH.")
+                        .accessibilityLabel("Updates are installed by Studio Launcher KH.")
+                        Spacer(minLength: 0)
                     }
+                    // The single status line, last in the column (owner footer standard, 2026-11-12).
+                    footerStatusLine
             }
             .padding(HubSpace.l)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1859,11 +1864,18 @@ struct StudioContent: View {
             // squeezed (Split View, most obviously) the layout overflowed and macOS clipped it -
             // the sidebar and the page's first column appeared to be cropped away.
             .frame(minWidth: 180, idealWidth: HubSpace.sidebar, maxWidth: HubSpace.sidebar)
+            // An opaque sidebar surface, above the content in stacking order: a page's scroll
+            // content can never paint across it or its footer.
+            .background(HubSurface.sidebar)
+            .zIndex(1)
             Divider()
             VStack(spacing: 0) {
-                if let error = studio.failure ?? workspace.error ?? workspace.startupNote ?? fileActionError {
+                // The local-services failure is the notification icon in the sidebar footer, with
+                // its whole message on click (owner, 2026-10-28). What is left here is a note about
+                // a read or a file action, which is a different thing and still belongs on top.
+                if let error = workspace.error ?? workspace.startupNote ?? fileActionError {
                     HubBanner(status: .warn, symbol: "exclamationmark.triangle.fill", message: error) {
-                        Button("Dismiss") { studio.failure = nil; workspace.error = nil; workspace.clearStartupNote(); fileActionError = nil }
+                        Button("Dismiss") { workspace.error = nil; workspace.clearStartupNote(); fileActionError = nil }
                             .hubRowControl()
                     }
                     .padding(.horizontal, HubSpace.page).padding(.top, HubSpace.m)
@@ -1891,13 +1903,15 @@ struct StudioContent: View {
                 // a Studio to the enum stops this build until its page is wired.
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(HubSurface.page)
             // The version used to sit in the page's lower-right corner. It now lives with the rest
             // of the status, under the sidebar, so everything an operator needs to identify this
             // Mac - mode, what it offers, whether it is up, which build - is in one place.
             .clipped()
             .overlay { imageLightbox }
         }
+        .onAppear { applyAppearance() }
+        .onChange(of: appearancePreference) { _, _ in applyAppearance() }
         .onChange(of: studio.selection) { _, _ in imageModalID = nil }
         // **"Controller · fleet not read" was true only until the Fleet page was opened.** The
         // sidebar read the roster, and the roster was read by that page's own task, so a
@@ -1924,26 +1938,125 @@ struct StudioContent: View {
             } message: { _ in
                 Text("This is you declaring the attempt abandoned. The Hub will stop waiting for it, will not try to reconcile it again, and this Mac is released for new work. Any result the original worker may still produce is ignored.")
             }
-        // Changing the trusted publisher key decides which Macs may update this Mac, so it is a
-        // confirmation like discarding an attempt: the action is spelled out and the cost is named.
         .confirmationDialog(
-            "Change the trusted App Update Key?",
-            isPresented: $confirmingPublisherKeyChange,
+            "Stop the local services?",
+            isPresented: $studio.stopPrompt,
             titleVisibility: .visible) {
-                Button("Change App Update Key", role: .destructive) {
-                    let key = publisherKeyDraft
-                    let publisher = publisherIdDraft
-                    Task {
-                        if await workspace.changePublisherKey(publicKey: key, publisherId: publisher) {
-                            publisherKeyDraft = ""
-                            publisherIdDraft = ""
-                        }
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
+                Button("Stop Engine", role: .destructive) { studio.stopNow() }
+                Button("Keep Running", role: .cancel) { studio.stopPrompt = false }
             } message: {
-                Text("This changes which Macs are allowed to update this Mac. A wrong key means releases will be refused, and putting the right key back requires the owner to paste it on this Mac again.")
+                Text("Active generation, transcription, or model downloads may be interrupted. Leave the engine running to finish them.")
             }
+        .confirmationDialog(
+            "The local services are still stopping",
+            isPresented: $studio.forceStopPrompt,
+            titleVisibility: .visible) {
+                Button("Force Stop", role: .destructive) { studio.forceStopNow() }
+                Button("Keep Waiting", role: .cancel) { studio.forceStopPrompt = false }
+            } message: {
+                Text("You can keep waiting or force it to stop. Force Stop may leave an incomplete output or download; it will not restart the job.")
+            }
+    }
+
+    /// System, Light or Dark applies to the whole app, whether or not the window is open.
+    private func applyAppearance() {
+        switch appearancePreference {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: NSApp.appearance = nil
+        }
+    }
+
+    /// The one status line: symbol, words, and the role/machine/group tooltip.
+    @ViewBuilder private var footerStatusLine: some View {
+        let role = roleTitle(workspace.controllerIdentity?.settings.role)
+        let paused = localServicesReady && workspace.workPolicy?.machineEnabled == false
+        let line: String = {
+            if testMachine { return localServicesReady ? "Test machine · running" : "Test machine · off" }
+            if localServicesReady { return paused ? "Hub running · work paused" : "Hub running" }
+            return servicePhaseLine
+        }()
+        HStack(alignment: .top, spacing: HubSpace.tight) {
+            Image(systemName: footerStatusSymbol)
+                .foregroundStyle(footerStatusSymbol == "checkmark.circle.fill" ? HubStatus.ok.textColor
+                                 : (footerStatusSymbol == "pause.circle.fill" ? HubStatus.warn.textColor : Color.secondary))
+            Text(line).font(HubType.caption).fixedSize(horizontal: false, vertical: true)
+                .help("\(role) · \(thisMachineName) · \(groupLine)")
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The version + What's New pill, extracted so the footer body stays inside the type checker.
+    @ViewBuilder private var footerVersionPill: some View {
+        Button { studio.select(.whatsNew) } label: {
+            // Every app shows its product, its version and What's New; the pill is the one place
+            // this app does it.
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Hub Studio KH")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                HStack(spacing: HubSpace.xs) {
+                    Text(appVersion)
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text("· What's New")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .minimumScaleFactor(0.75)
+            .padding(.horizontal, HubSpace.s).padding(.vertical, 3)
+            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .buttonStyle(.plain)
+        .help("Hub Studio KH \(appVersion). Open What's New.")
+        .accessibilityLabel("Hub Studio KH version \(appVersion). Open What's New.")
+    }
+
+    /// The sidebar's rows and section headings, separate from the window body so the type checker
+    /// does not have to solve the whole page in one expression.
+    @ViewBuilder private var sidebarList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            sidebarRow(.overview)
+            ForEach(StudioPage.sidebarSections.filter { !$0.pages.isEmpty }, id: \.title) { section in
+                Text(section.title)
+                    .font(HubType.captionStrong).foregroundStyle(.secondary)
+                    .padding(.horizontal, HubSpace.s)
+                    .padding(.top, HubSpace.m).padding(.bottom, HubSpace.xs)
+                ForEach(section.pages) { page in
+                    sidebarRow(page, quiet: section.title == "Coming later")
+                }
+            }
+        }
+        .padding(.horizontal, HubSpace.s).padding(.vertical, HubSpace.s)
+    }
+
+    /// One sidebar row: the glyph and the name. The current page carries a small accent bar and a
+    /// quiet tint, not a bright fill; the keyboard focus ring is the system's own and appears only
+    /// when focus arrives from the keyboard.
+    private func sidebarRow(_ page: StudioPage, quiet: Bool = false) -> some View {
+        let selected = studio.selection == page
+        return Button { studio.select(page) } label: {
+            HStack(spacing: HubSpace.s) {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(selected ? Color.accentColor : Color.clear)
+                    .frame(width: 3, height: 18)
+                    .accessibilityHidden(true)
+                Image(systemName: page.symbol).frame(width: 18)
+                Text(page.title).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(HubType.body)
+            .foregroundStyle(quiet ? Color.secondary : Color.primary)
+            .padding(.horizontal, HubSpace.s).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: HubRadius.control)
+                .fill(selected ? Color.accentColor.opacity(0.12) : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityLabel(page.title)
     }
 
     /// Every page's title is the sidebar row's own name (`StudioPage.title`), so the two cannot drift.
@@ -1980,8 +2093,10 @@ struct StudioContent: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
-                if studio.starting || studio.stopping { ProgressView().controlSize(.small); Text(studio.status) }
-                else {
+                if servicePhase == .recovering || studio.stopping {
+                    ProgressView().controlSize(.small)
+                    Text(servicePhase == .recovering ? "Starting local services…" : studio.status)
+                } else {
                     if studio.hasLibrary { Button("Start Services") { studio.start() }.buttonStyle(.borderedProminent).disabled(!studio.canConfigure) }
                     // The models the setup step just copied are one click away, and are offered
                     // first: the alternative on a fresh Mac is an empty folder that would download
@@ -2005,16 +2120,137 @@ struct StudioContent: View {
         }
     }
 
+    /// The one line a Studio page shows under its title: its engine, the model it will use, and
+    /// whether work is moving. The same words as the sidebar's own state, so the two never differ.
+    /// "1 needs attention" / "3 need attention": one phrase, both call sites.
+    private func attentionPhrase(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "needs" : "need") attention"
+    }
+
+    private func studioStatus(_ function: StudioFunction, active: Int,
+                              selected: String? = nil) -> PageStatusLine {
+        guard servicePhase == .running else {
+            return PageStatusLine(servicePhaseLine, tone: servicePhase == .recovering ? .info : .warn)
+        }
+        // The model the page will actually run, not whichever ready model happens to be first:
+        // "Ready · Kokoro" beside a Qwen3 picker was the critic's clearest contradiction.
+        let chosen = selected.flatMap { repo in workspace.models.first { $0.repo == repo } }
+        let ready = chosen ?? workspace.models.first {
+            $0.function == function && $0.cached && $0.supported && $0.runtimeReady && !$0.paused
+        }
+        if let ready, ready.cached, ready.supported, ready.runtimeReady, !ready.paused {
+            if function == .audio, !ready.reportsVoiceModes {
+                return PageStatusLine("\(ready.label) is installed, but its engine has not reported its voice modes — update it or choose another model.",
+                                      tone: .warn)
+            }
+            let work = active == 0 ? "no jobs running"
+                : "\(active) \(active == 1 ? "job" : "jobs") running"
+            // A failed, uncertain or stalled job is the worst state on the page, even when the
+            // model is ready and other work is moving.
+            let recent = workspace.jobHistories.first { $0.function == function }?.jobs ?? []
+            let attention = recent.filter {
+                $0.state == "error" || $0.state == "uncertain" || ($0.stalledSeconds ?? 0) > 0
+            }.count
+            if attention > 0 {
+                return PageStatusLine("Ready · \(ready.label) · \(work) · \(attentionPhrase(attention))",
+                                      tone: .warn)
+            }
+            return PageStatusLine("Ready · \(ready.label) · \(work)", tone: active > 0 ? .ok : .off)
+        }
+        if workspace.models.contains(where: { $0.function == function && $0.cached }) {
+            return PageStatusLine("The installed model needs attention — open Models to check it.", tone: .warn)
+        }
+        let page = StudioPage.page(for: function)?.title ?? function.rawValue
+        return PageStatusLine("No \(page) model is installed — set up this Mac to add one.", tone: .warn)
+    }
+
+    /// The actions every Studio page keeps out of its content: go to the library, go to the work,
+    /// or change what this Mac offers. One overflow instead of a toolbar of four.
+    private var studioPageMenu: [PageMenuAction] {
+        [
+            PageMenuAction("Models", symbol: "externaldrive") { studio.select(.models) },
+            PageMenuAction("All Jobs", symbol: "list.bullet.rectangle") { studio.select(.jobs) },
+            PageMenuAction("Connections", symbol: "network") { studio.select(.connections) },
+            PageMenuAction("Settings", symbol: "gearshape") { studio.select(.settings) },
+        ]
+    }
+
+    /// What this page says under its title: the Hub's state, the library, and live work, in the
+    /// order an operator asks about them.
+    private var overviewStatus: PageStatusLine {
+        if testMachine {
+            return PageStatusLine("Test machine · \(localServicesReady ? "services running" : "services off")",
+                                  tone: localServicesReady ? .ok : .off)
+        }
+        if servicePhase == .recovering {
+            return PageStatusLine("Recovering local services… this page updates when they are ready.", tone: .info)
+        }
+        if servicePhase == .stopped {
+            return PageStatusLine(studio.hasLibrary
+                                  ? "Local services are stopped — start them to create on this Mac."
+                                  : "No model library selected — choose one in Settings, then start services.",
+                                  tone: .warn)
+        }
+        if studio.configuration.modelsDirectory == nil {
+            return PageStatusLine("No model library is selected yet — set up this Mac to install models.", tone: .warn)
+        }
+        let installed = workspace.models.filter(\.cached).count
+        // The same count the All filter shows, so the line and the tab cannot disagree.
+        let running = overviewActiveCounts[.all] ?? 0
+        var parts = ["Hub running", "\(installed) models installed"]
+        parts.append(running == 0 ? "no jobs active" : "\(running) jobs active")
+        if !activeDownloads.isEmpty {
+            parts.append("\(activeDownloads.count) downloading")
+        }
+        // A job that has gone quiet is not a green page, even while others run.
+        let stalledJobs = (activeAudio + activeImages + activeMusic + activeVideo)
+            .filter { ($0.stalledSeconds ?? 0) > 0 }
+        if !stalledJobs.isEmpty {
+            parts.append("\(stalledJobs.count) stalled")
+        }
+        return PageStatusLine(parts.joined(separator: " · "),
+                              tone: !stalledJobs.isEmpty ? .warn
+                                : (running > 0 || !activeDownloads.isEmpty ? .ok : .off))
+    }
+
     private var overview: some View {
         PageScaffold(title: pageTitle(.overview),
-                     subtitle: "Create locally. Keep track of your jobs, models and workspaces in one place.",
-                     scrolls: true) {
+                     status: overviewStatus,
+                     scrolls: true,
+                     primary: localServicesReady
+                        ? PagePrimaryAction((overviewActiveCounts[.all] ?? 0) > 0 ? "Open Jobs" : "Open Audio") {
+                            studio.select((overviewActiveCounts[.all] ?? 0) > 0 ? .jobs : .audio)
+                        }
+                        : nil,
+                     menu: [
+                        PageMenuAction("All Jobs", symbol: "list.bullet.rectangle") { studio.select(.jobs) },
+                        PageMenuAction("Set Up This Mac", symbol: "wand.and.stars") { studio.select(.setup) },
+                        PageMenuAction("Models", symbol: "externaldrive") { studio.select(.models) },
+                        PageMenuAction("Settings", symbol: "gearshape") { studio.select(.settings) },
+                     ]) {
             if !connected { setup }
+            // One honest next step in the column, not only in the sidebar footer: the landing page
+            // should say what to do first when something is missing (page critic, 2026-11-12).
+            if studio.configuration.modelsDirectory == nil, !testMachine, servicePhase == .running {
+                HStack(spacing: HubSpace.s) {
+                    Label("Choose a model library before you create anything.", systemImage: "exclamationmark.circle")
+                        .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
+                    Button("Set up this Mac") { studio.select(.setup) }
+                    Spacer()
+                }
+            } else if !testMachine, servicePhase == .running, !workspace.models.contains(where: { $0.cached }) {
+                HStack(spacing: HubSpace.s) {
+                    Label("No models are installed yet. Install one to start creating.",
+                          systemImage: "exclamationmark.circle")
+                        .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
+                    Button("Set up this Mac") { studio.select(.setup) }
+                    Spacer()
+                }
+            }
             VStack(alignment: .leading, spacing: HubSpace.m) {
                 HStack(alignment: .firstTextBaseline) {
                     sectionTitle("In progress")
                     Spacer(minLength: 0)
-                    Button("View All Jobs") { studio.select(.jobs) }.hubRowControl()
                 }
                 // The same All / This Mac / Nodes filter as the Jobs page (owner, on a controller:
                 // *"there's no way to see which job is its own and which is the fleet's"*), with
@@ -2022,10 +2258,10 @@ struct StudioContent: View {
                 if workspace.controllerIdentity?.settings.role == "controller" {
                     machineFilterPicker($overviewMachineFilter, counts: overviewActiveCounts)
                 }
+                // A download is this Mac's own work, not a job: it has its own strip below the
+                // card, so the All filter counts exactly the job rows the card draws.
+                let downloadsHere = overviewMachineFilter == .nodes ? [] : activeDownloads
                 HubCard {
-                    // A download or a live transcription is this Mac's own work, so neither is
-                    // shown under Nodes: the tabs separate whose jobs ran, not whose disks they use.
-                    let downloadsHere = overviewMachineFilter == .nodes ? [] : activeDownloads
                     let transcribingHere = overviewMachineFilter == .nodes ? false : workspace.transcribing
                     let audio = activeAudio.filter(overviewMachineFilter.includes)
                     let images = activeImages.filter(overviewMachineFilter.includes)
@@ -2033,18 +2269,25 @@ struct StudioContent: View {
                     let video = activeVideo.filter(overviewMachineFilter.includes)
                     let subtitles = activeSubtitles.filter(overviewMachineFilter.includes)
                     if audio.isEmpty && images.isEmpty && music.isEmpty && video.isEmpty
-                        && subtitles.isEmpty && downloadsHere.isEmpty && !transcribingHere {
+                        && subtitles.isEmpty && !transcribingHere {
                         HStack(spacing: HubSpace.m) {
                             Image(systemName: "checkmark.circle").font(HubType.icon).foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: HubSpace.xs) {
                                 Text(overviewMachineFilter == .all ? "No active jobs"
                                      : "No active jobs on \(overviewMachineFilter == .thisMac ? "this Mac" : "the nodes")")
                                     .font(HubType.rowTitle)
-                                Text("Open a workspace to start creating. Completed work stays in Jobs.")
+                                Text(localServicesReady
+                                     ? "Open a workspace to start creating. Completed work stays in Jobs."
+                                     : "Start the local services to create on this Mac. Completed work stays in Jobs.")
                                     .font(HubType.secondary).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button("Open Audio") { studio.select(.audio) }.hubRowControl()
+                            if servicePhase == .running {
+                                Button("Open Audio") { studio.select(.audio) }.hubRowControl()
+                            }
+                            // While services are stopped or recovering, Start Services lives in
+                            // the setup card above; a second primary here was the owner's duplicate.
+
                         }
                     } else {
                         // One divider between rows, none after the last: the card draws its own edge.
@@ -2054,7 +2297,6 @@ struct StudioContent: View {
                             + video.map { AnyView(videoJobRow($0)) }
                             + subtitles.map { AnyView(subtitleJobRow($0)) }
                             + (transcribingHere ? [AnyView(transcriptionActivity)] : [])
-                            + downloadsHere.map { download in AnyView(downloadRow(download)) }
                         VStack(alignment: .leading, spacing: HubSpace.m) {
                             ForEach(rows.indices, id: \.self) { index in
                                 if index > 0 { Divider() }
@@ -2063,26 +2305,50 @@ struct StudioContent: View {
                         }
                     }
                 }
+                if !downloadsHere.isEmpty {
+                    VStack(alignment: .leading, spacing: HubSpace.m) {
+                        sectionTitle("Downloads")
+                        HubCard {
+                            VStack(alignment: .leading, spacing: HubSpace.m) {
+                                ForEach(downloadsHere) { downloadRow($0) }
+                            }
+                        }
+                    }
+                }
             }
             VStack(alignment: .leading, spacing: HubSpace.m) {
                 sectionTitle("Workspaces")
+                // The sidebar already lists every Studio. This card earns its place only when one
+                // needs a step; when they are all ready it is one line, not a second navigation.
+                let needing = StudioPage.create.filter { workspaceStatus($0) != "Ready to create" }
                 HubCard(padding: 0) {
-                    VStack(spacing: 0) {
-                        ForEach(StudioPage.create) { page in
-                            let status = workspaceBadge(page)
-                            HStack(spacing: HubSpace.m) {
-                                Image(systemName: page.symbol).font(HubType.icon).frame(width: 24)
-                                VStack(alignment: .leading, spacing: HubSpace.xs) {
-                                    Text(page.title).font(HubType.rowTitle)
-                                    Text(workspaceDescription(page)).font(HubType.secondary).foregroundStyle(.secondary)
+                    if needing.isEmpty {
+                        HStack(spacing: HubSpace.m) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(HubStatus.ok.color)
+                            Text("All \(StudioPage.create.count) studios are ready — pick one in the sidebar.")
+                                .font(HubType.secondary).foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        .padding(HubSpace.l)
+                    } else {
+                        VStack(spacing: 0) {
+                            ForEach(needing) { page in
+                                let status = workspaceBadge(page)
+                                HStack(spacing: HubSpace.m) {
+                                    Image(systemName: page.symbol).font(HubType.icon).frame(width: 24)
+                                    VStack(alignment: .leading, spacing: HubSpace.xs) {
+                                        Text(page.title).font(HubType.rowTitle)
+                                        Text(workspaceDescription(page)).font(HubType.secondary).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    StatusBadge(text: status.text, status: status.status)
+                                    Button("Open") { studio.select(page) }.hubRowControl()
+                                        .accessibilityLabel("Open \(page.rawValue)")
                                 }
-                                Spacer()
-                                StatusBadge(text: status.text, status: status.status)
-                                Button("Open") { studio.select(page) }.hubRowControl()
-                                    .accessibilityLabel("Open \(page.rawValue)")
+                                .padding(.horizontal, HubSpace.l).padding(.vertical, HubSpace.m)
+                                if page != needing.last { Divider() }
                             }
-                            .padding(.horizontal, HubSpace.l).padding(.vertical, HubSpace.m)
-                            if page != StudioPage.create.last { Divider() }
                         }
                     }
                 }
@@ -2091,7 +2357,11 @@ struct StudioContent: View {
                 sectionTitle("Model library")
                 HubCard {
                     HStack {
-                        Text(connected ? "\(workspace.models.filter(\.cached).count) installed models in the connected library" : "Connect your library to inspect installed models")
+                        Text(testMachine ? "Test machine — no model library is required."
+                             : (connected ? "\(workspace.models.filter(\.cached).count) installed models in the connected library"
+                                : (studio.hasLibrary
+                                   ? "Your model folder is on this Mac. Start local services to list what is installed."
+                                   : "No model folder is selected. Choose one in Settings, or install models in Set up this Mac.")))
                             .font(HubType.body).foregroundStyle(.secondary)
                         Spacer()
                         Button("Manage Models") { studio.select(.models) }.hubRowControl()
@@ -2136,8 +2406,12 @@ struct StudioContent: View {
             VStack(alignment: .leading, spacing: HubSpace.m) {
             if let stats = workspace.statistics {
                 if stats.total == 0 {
-                    Text("No completed generations recorded in this window yet. Run one from any workspace and it appears here.")
-                        .font(HubType.secondary).foregroundStyle(.secondary)
+                    HStack(spacing: HubSpace.m) {
+                        Text("No completed generations recorded in this window yet. Run one from any workspace and it appears here.")
+                            .font(HubType.secondary).foregroundStyle(.secondary)
+                        Button("Open Audio") { studio.select(.audio) }.hubRowControl()
+                        Spacer()
+                    }
                 } else {
                     Text("\(stats.total) completed \(stats.total == 1 ? "generation" : "generations") recorded by this Hub.")
                         .font(HubType.secondary).foregroundStyle(.secondary)
@@ -2226,10 +2500,21 @@ struct StudioContent: View {
 
     private var selectedChatModel: NativeModel? { workspace.models.first { $0.repo == workspace.chatModel && $0.function == .chat } }
 
+    private var canSendChat: Bool {
+        connected && !workspace.submittingChat
+            && !workspace.chatPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && selectedChatModel?.supported == true
+            && selectedChatModel?.cached == true
+            && selectedChatModel?.runtimeReady == true
+    }
+
     private var chatWorkspace: some View {
-        PageScaffold(title: pageTitle(.chat), subtitle: "Work with a language model running on this Mac.") {
+        PageScaffold(title: pageTitle(.chat),
+                     status: studioStatus(.chat, active: workspace.chatJobs.filter { active($0.state) }.count,
+                                   selected: workspace.chatModel),
+                     menu: studioPageMenu) {
             if !connected { setup }
-            HSplitView {
+            StudioSplit(sideTitle: "Conversation", sideSymbol: "bubble.left.and.bubble.right") {
                 // The form, on the left, in the same shape as the Image page: the box, the action
                 // that acts on it, then a divider and the model it will run on. Send used to sit
                 // *below* the model picker, so the one control this page is built around was
@@ -2243,9 +2528,22 @@ struct StudioContent: View {
                             Button("Clear") { workspace.clearChat() }
                                 .disabled(workspace.chatTurns.isEmpty || workspace.submittingChat)
                         }
+                        // An empty composer says what it is for (page critic, 2026-11-12): a blank
+                        // box under an empty conversation left the one control unlabelled.
                         TextEditor(text: $workspace.chatPrompt)
                             .font(HubType.body).padding(HubSpace.s).frame(height: 155)
                             .overlay(RoundedRectangle(cornerRadius: HubRadius.control).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                            // Overlaid, not stacked behind: a TextEditor draws its own opaque
+                            // background, so the placeholder behind it was never visible (page
+                            // critic, 2026-11-12).
+                            .overlay(alignment: .topLeading) {
+                                if workspace.chatPrompt.isEmpty {
+                                    Text("Write a message…").font(HubType.body)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.top, HubSpace.s + 8).padding(.leading, HubSpace.s + 5)
+                                        .allowsHitTesting(false)
+                                }
+                            }
                             .accessibilityLabel("Chat message")
                         if workspace.submittingChat {
                             VStack(alignment: .leading, spacing: HubSpace.xs) {
@@ -2269,13 +2567,16 @@ struct StudioContent: View {
                         }
                         HStack {
                             Spacer()
-                            Button("Send") { Task { await workspace.sendChat() } }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(!connected || workspace.submittingChat
-                                          || workspace.chatPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                          || selectedChatModel?.supported != true
-                                          || selectedChatModel?.cached != true
-                                          || selectedChatModel?.runtimeReady != true)
+                            // A disabled prominent button keeps its saturated fill in dark
+                            // appearance, so an unsendable Send looked like the primary action in
+                            // dark and a dead one in light. When it cannot send it is a plain
+                            // button in both themes (page critic, 2026-11-12).
+                            if canSendChat {
+                                Button("Send") { Task { await workspace.sendChat() } }
+                                    .buttonStyle(.borderedProminent)
+                            } else {
+                                Button("Send") {}.buttonStyle(.bordered).disabled(true)
+                            }
                         }
                         Divider().padding(.top, 8)
                         // The same picker the other four pages use. The page used to name one model
@@ -2313,7 +2614,12 @@ struct StudioContent: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Manage Chat Models") { modelFilter = "Chat"; studio.select(.models) }
                     }.padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
-                }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                // At a wide window the composer column takes a share of the width instead of staying
+                // 390 pt beside 1200 pt of empty conversation (page critic, 2026-11-12).
+                }.frame(minWidth: 350,
+                        idealWidth: windowWidth >= 1500 ? 620 : 390,
+                        maxWidth: windowWidth >= 1500 ? 760 : 440)
+            } side: {
                 // What you said and what the model answered, on the right, in the house shape the
                 // Image preview and the Audio and Subtitle histories use: a fixed heading row, then
                 // the content under it. The heading used to be the first line *inside* the
@@ -2379,9 +2685,11 @@ struct StudioContent: View {
     }
 
     private var imageWorkspace: some View {
-        PageScaffold(title: pageTitle(.image), subtitle: "Describe an image, choose your settings and generate it locally.") {
+        PageScaffold(title: pageTitle(.image),
+                     status: studioStatus(.image, active: activeImages.count, selected: workspace.imageModel),
+                     menu: studioPageMenu) {
             if !connected { setup }
-            HSplitView {
+            StudioSplit(sideTitle: "Preview", sideSymbol: "photo") {
                 ScrollView {
                     VStack(alignment: .leading, spacing: HubSpace.l) {
                         imageModeControl
@@ -2419,6 +2727,7 @@ struct StudioContent: View {
                         Button("Manage Image Models") { modelFilter = "Image"; studio.select(.models) }
                     }.padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
                 }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+            } side: {
                 VStack(alignment: .leading, spacing: HubSpace.m) {
                     HStack {
                         Text("Preview").font(HubType.section)
@@ -2943,7 +3252,7 @@ struct StudioContent: View {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
                     jobMetaLine(job)
                     jobProgress(job)
-                    jobRequestFacts(job, .image)
+                    DiagnosticDetails(title: "Request", summary: "settings used") { jobRequestFacts(job, .image) }
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(HubType.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
@@ -2964,16 +3273,25 @@ struct StudioContent: View {
                     }
                 }
             }
-            if let message = job.error, !message.isEmpty { Text(message).font(HubType.caption).foregroundStyle(HubStatus.bad.textColor).textSelection(.enabled) }
+            if let message = job.error, !message.isEmpty {
+                Text(message).font(HubType.caption).foregroundStyle(HubStatus.bad.textColor).textSelection(.enabled)
+                if message.localizedCaseInsensitiveContains("memory") {
+                    Text("Close other apps on that Mac, or choose a smaller image model, then Retry.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
     /// Music generation, laid out exactly like Image: prompt and settings on the left, the result
     /// and the studio's own history on the right.
     private var musicWorkspace: some View {
-        PageScaffold(title: pageTitle(.music), subtitle: "Describe the music, choose its settings and generate it locally.") {
+        PageScaffold(title: pageTitle(.music),
+                     status: studioStatus(.music, active: activeMusic.count, selected: workspace.musicModel),
+                     menu: studioPageMenu) {
             if !connected { setup }
-            HSplitView {
+            StudioSplit(sideTitle: "Preview", sideSymbol: "music.note") {
                 ScrollView {
                     VStack(alignment: .leading, spacing: HubSpace.l) {
                         HStack {
@@ -2999,9 +3317,18 @@ struct StudioContent: View {
                         // A disabled prominent button with no explanation is the worst state a form
                         // can be in: whatever holds it up is named right below it, first thing first.
                         if let reason = musicBlockedReason {
-                            Label(reason, systemImage: "exclamationmark.circle")
-                                .font(HubType.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                            HStack(alignment: .firstTextBaseline, spacing: HubSpace.s) {
+                                Label(reason, systemImage: "exclamationmark.circle")
+                                    .font(HubType.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if reason.localizedCaseInsensitiveContains("settings")
+                                    || reason.localizedCaseInsensitiveContains("controls") {
+                                    Button("Open Model Defaults") {
+                                        modelFilter = "Music"
+                                        studio.select(.models)
+                                    }.hubRowControl()
+                                }
+                            }
                         }
                         Divider().padding(.top, 8)
                         Text("Generation").font(HubType.section)
@@ -3030,6 +3357,7 @@ struct StudioContent: View {
                         Button("Manage Music Models") { modelFilter = "Music"; studio.select(.models) }
                     }.padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
                 }.frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+            } side: {
                 VStack(alignment: .leading, spacing: HubSpace.m) {
                     Text("Preview").font(HubType.section)
                     ActiveAura(active: !activeMusic.isEmpty, inset: HubSpace.s) {
@@ -3317,7 +3645,7 @@ struct StudioContent: View {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
                     jobMetaLine(job)
                     jobProgress(job)
-                    jobRequestFacts(job, .music)
+                    DiagnosticDetails(title: "Request", summary: "settings used") { jobRequestFacts(job, .music) }
                     if job.state == "done", !job.assetFacts.isEmpty {
                         Text(job.assetFacts).font(HubType.caption).foregroundStyle(.secondary)
                             .accessibilityLabel("Result details: \(job.assetFacts)")
@@ -3365,11 +3693,13 @@ struct StudioContent: View {
     /// cannot offer an option its worker would refuse — and a model that publishes no geometry
     /// control gets a prompt-only form rather than an invented ladder.
     private var videoWorkspace: some View {
-        PageScaffold(title: pageTitle(.video), subtitle: noVideoModel
-                     ? "There is no video model in this version."
-                     : "Generate a clip locally with this Mac's published video model.") {
+        PageScaffold(title: pageTitle(.video),
+                     status: noVideoModel
+                        ? PageStatusLine("The local video model was retired; finished clips stay in Jobs and Renders.", tone: .off)
+                        : studioStatus(.video, active: activeVideo.count, selected: workspace.videoModel),
+                     menu: studioPageMenu) {
             if !connected { setup }
-            HSplitView {
+            StudioSplit(sideTitle: "Recent clips", sideSymbol: "film") {
                 ScrollView {
                     VStack(alignment: .leading, spacing: HubSpace.l) {
                         // The local video model (LTX-2.3) was retired, so a Hub publishes no video
@@ -3479,6 +3809,7 @@ struct StudioContent: View {
                     .padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
                 }
                 .frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+            } side: {
                 VStack(alignment: .leading, spacing: HubSpace.m) {
                     HStack {
                         Text("Recent clips").font(HubType.section)
@@ -3650,7 +3981,7 @@ struct StudioContent: View {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(2)
                     jobMetaLine(job)
                     jobProgress(job)
-                    jobRequestFacts(job, .video)
+                    DiagnosticDetails(title: "Request", summary: "settings used") { jobRequestFacts(job, .video) }
                     // The clip's own facts already carry its length, so the separate "Clip length"
                     // line is gone: it printed the same number twice in one row.
                     if job.state == "done", !job.assetFacts.isEmpty {
@@ -3691,15 +4022,61 @@ struct StudioContent: View {
     }
 
     private var audioWorkspace: some View {
-        PageScaffold(title: pageTitle(.audio), subtitle: "Write a script, choose a voice and generate spoken audio.") {
+        PageScaffold(title: pageTitle(.audio),
+                     status: studioStatus(.audio, active: activeAudio.count, selected: workspace.audioModel),
+                     primary: servicePhase == .stopped
+                        ? PagePrimaryAction("Start Services", isEnabled: studio.canConfigure) { studio.start() }
+                        : nil,
+                     menu: studioPageMenu) {
             if !connected { setup }
-            HSplitView {
-                // The form, on the left, in the same shape as the Image page: everything you set
-                // up, packed from the top, scrolling if it is taller than the window. The Script
-                // box used to be its own column with the controls opposite it, which is why every
-                // control on this page was once clipped and why the page never matched the others.
+            if windowWidth >= 1000 {
+                // Owner layout: the script takes two thirds, Recent audio one third and scrolls in
+                // its own pane, and Generation runs full width underneath.
+                let contentWidth = max(0, windowWidth - HubSpace.sidebar - 1 - 2 * HubSpace.page)
                 ScrollView {
-                    VStack(alignment: .leading, spacing: HubSpace.l) {
+                    VStack(alignment: .leading, spacing: HubSpace.xl) {
+                        HStack(alignment: .top, spacing: HubSpace.xl) {
+                            audioScriptSection
+                                .frame(width: max(420, contentWidth * 2 / 3 - HubSpace.xl / 2),
+                                       alignment: .topLeading)
+                            audioRecentPane
+                                .frame(width: max(280, contentWidth / 3), height: 380, alignment: .topLeading)
+                        }
+                        audioGenerationSection
+                    }
+                    .padding(.bottom, HubSpace.l)
+                }
+            } else {
+                StudioSplit(sideTitle: "Recent audio", sideSymbol: "waveform") {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: HubSpace.l) {
+                            audioScriptSection
+                            Divider().padding(.top, 8)
+                            audioGenerationSection
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
+                    }
+                    .frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                } side: {
+                    audioRecentPane
+                }
+            }
+        }
+        .onAppear { seedSample(Self.audioSamples, binding: $workspace.audioText, seeded: $seededAudioSample) }
+        .task(id: modelDefaultsLoadKey) { await workspace.loadModelDefaultsIfNeeded(for: selectedAudioModel) }
+    }
+
+    @ViewBuilder private var audioScriptSection: some View {
+        VStack(alignment: .leading, spacing: HubSpace.l) {
+                        if servicePhase != .running {
+                            HubBanner(status: servicePhase == .recovering ? .info : .warn,
+                                      symbol: servicePhase == .recovering ? "arrow.clockwise" : "pause.circle.fill",
+                                      title: servicePhase == .recovering ? "Starting local services…" : "Local services are stopped",
+                                      message: servicePhase == .recovering
+                                        ? "Audio controls become available when they are ready."
+                                        : "Start Services above to write, clone and generate audio.")
+                        }
                         HStack {
                             Text("Script").font(HubType.section)
                             Spacer()
@@ -3718,18 +4095,22 @@ struct StudioContent: View {
                             ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio) {
                                 Button("Generate Audio") { Task { await workspace.generateAudio() } }
                                     .buttonStyle(.borderedProminent)
-                                    .disabled(audioBlockedReason != nil)
+                                    .disabled(servicePhase != .running || audioBlockedReason != nil)
                             }
                         }
                         // A disabled prominent button with no explanation is the worst state a form
                         // can be in: the operator can see the control, cannot use it, and has
                         // nothing to act on. Whatever holds it up is named here, first thing first.
-                        if let reason = audioBlockedReason {
+                        if let reason = audioBlockedReason, reason != audioModeDetail {
                             Label(reason, systemImage: "exclamationmark.circle")
                                 .font(HubType.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        Divider().padding(.top, 8)
+        }
+    }
+
+    @ViewBuilder private var audioGenerationSection: some View {
+        VStack(alignment: .leading, spacing: HubSpace.l) {
                         Text("Generation").font(HubType.section)
                         voiceModeTabs
                         modelPicker(.audio)
@@ -3835,11 +4216,14 @@ struct StudioContent: View {
                         Text("Model installation and storage are managed centrally.").font(HubType.secondary).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Manage Audio Models") { modelFilter = "Audio"; studio.select(.models) }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
-                }
-                .frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                            .disabled(servicePhase != .running)
+        }
+        .padding(HubSpace.l)
+        .background(HubSurface.card, in: RoundedRectangle(cornerRadius: HubRadius.card))
+        .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubSurface.border, lineWidth: 1))
+    }
+
+    @ViewBuilder private var audioRecentPane: some View {
                 // What you made, on the right, exactly as the Image page shows its preview.
                 VStack(alignment: .leading, spacing: HubSpace.m) {
                     HStack {
@@ -3859,11 +4243,11 @@ struct StudioContent: View {
                     // out from under the pointer, and on a long history the list jumped by the
                     // height of the transport. Reserving the space is the fix; with nothing loaded
                     // the controls are disabled and say so.
-                    audioTransport(loadedAudioJob)
+                    audioTransport(loadedAudioJob, showHint: !workspace.audioJobs.isEmpty)
                     ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio, inset: HubSpace.s) {
                         Group {
                             if workspace.audioJobs.isEmpty {
-                                empty("Your audio will appear here", "Generated audio collects here, newest first.", symbol: "waveform")
+                                empty("Your audio will appear here", "Write a script and press Generate Audio.", symbol: "waveform")
                             } else {
                                 ScrollView { RecentRows(items: workspace.audioJobs) { jobRow($0, compact: true) } }
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -3871,14 +4255,7 @@ struct StudioContent: View {
                         }
                     }
                 }
-                .padding(.leading, HubSpace.m)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
-        }
-        .onAppear { seedSample(Self.audioSamples, binding: $workspace.audioText, seeded: $seededAudioSample) }
-        // The speaking pace opens on the operator's saved `speed` default for this model when its
-        // lane publishes one, and on the engine's own pace otherwise.
-        .task(id: modelDefaultsLoadKey) { await workspace.loadModelDefaultsIfNeeded(for: selectedAudioModel) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// Where the voice for a clone comes from: the library on the Voices page, and nowhere else.
@@ -3898,9 +4275,11 @@ struct StudioContent: View {
                 // can need to do.
                 Button("Add Voice…") { studio.select(.voices) }
                     .hubRowControl().fixedSize()
+                    .disabled(servicePhase != .running)
                     .help("Add a reference clip and its transcript on the Voices page")
                 Button("Manage Voices") { studio.select(.voices) }
                     .hubRowControl().fixedSize()
+                    .disabled(servicePhase != .running)
             }
             Picker("Voice", selection: Binding(
                 get: { workspace.audioVoiceLibraryID ?? "" },
@@ -3922,8 +4301,13 @@ struct StudioContent: View {
             // Disabled only when there is nothing at all to choose. A disabled control with no
             // visible reason is the worst state a form can be in, so the line below always says
             // which state the library is in: reading, empty, unreadable, or short of transcripts.
-            .disabled(workspace.voices.isEmpty)
-            Text(workspace.voicePickerDetail).font(HubType.caption).foregroundStyle(.secondary)
+            .disabled(workspace.voices.isEmpty || servicePhase != .running)
+            Text(servicePhase == .recovering
+                 ? "Services are starting — saved voices will list when they are ready."
+                 : (servicePhase == .stopped
+                    ? "Services stopped — start them to list voices."
+                    : workspace.voicePickerDetail))
+                .font(HubType.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             // An empty library, honestly read, offers the one action that fills it. A library that
             // could not be read does not: adding a voice would not fix that.
@@ -3944,7 +4328,9 @@ struct StudioContent: View {
     /// form can be in: the operator can see the control, cannot use it, and has nothing to act on.
     /// The owner hit exactly that on a Mac Studio and had to ask what was wrong.
     private var audioBlockedReason: String? {
-        if !connected { return "Start the local services first." }
+        // Services have their own banner and disable the control; a second line here made the
+        // page say the same thing twice.
+        if servicePhase != .running { return nil }
         if workspace.submittingAudio { return "Generating. One job at a time." }
         if workspace.audioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Write the script you want spoken."
@@ -4209,9 +4595,11 @@ struct StudioContent: View {
     }
 
     private var transcriptionWorkspace: some View {
-        PageScaffold(title: pageTitle(.transcription), subtitle: "Import a recording, review its transcript and export text or subtitles.") {
+        PageScaffold(title: pageTitle(.transcription),
+                     status: studioStatus(.transcription, active: activeSubtitles.count, selected: workspace.transcriptionModel),
+                     menu: studioPageMenu) {
             if !connected { setup }
-            HSplitView {
+            StudioSplit(sideTitle: "Transcript", sideSymbol: "text.alignleft") {
                 // The form, on the left, in the same shape as the Audio and Image pages. The
                 // primary action used to sit at the foot of a flexible column, a long way from the
                 // file and format it acts on, with the transcript placeholder floating in between.
@@ -4286,6 +4674,7 @@ struct StudioContent: View {
                     .padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
                 }
                 .frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+            } side: {
                 // What you made, on the right: the transcript itself, then its history underneath.
                 VStack(alignment: .leading, spacing: HubSpace.m) {
                     HStack {
@@ -4386,18 +4775,20 @@ struct StudioContent: View {
     private var modelTabs: some View {
         let counts = modelSections.reduce(into: [StudioFunction: Int]()) { $0[$1.function] = $1.models.count }
         let total = counts.values.reduce(0, +)
-        var items = [HubSegmentItem(tag: "All functions", label: "All \(total)")]
+        let icons = windowWidth >= 980
+        var items = [HubSegmentItem(tag: "All functions", label: "All \(total)",
+                                    symbol: icons ? "square.grid.2x2" : nil)]
         for function in modelTabFunctions {
             let label = "\(StudioPage.page(for: function)?.title ?? function.rawValue) \(counts[function] ?? 0)"
-            items.append(HubSegmentItem(tag: function.rawValue, label: label))
+            items.append(HubSegmentItem(tag: function.rawValue, label: label,
+                                        symbol: icons ? function.symbol : nil))
         }
-        return ScrollView(.horizontal) {
-            HubSegmentedControl(
-                selection: $modelFilter,
-                items: items,
-                accessibilityLabel: "Function"
-            )
-        }
+        return HubSegmentedControl(
+            selection: $modelFilter,
+            items: items,
+            controlSize: icons ? .regular : .small,
+            accessibilityLabel: "Function"
+        )
     }
 
     /// The sections the list draws: every Studio with something in it under "All", the chosen
@@ -4477,7 +4868,8 @@ struct StudioContent: View {
                     .font(HubType.captionStrong)
                     .rotationEffect(.degrees(isModelSectionExpanded(section.function) ? 90 : 0))
                 Image(systemName: section.symbol)
-                Text(section.header).font(HubType.rowTitle)
+                Text(StudioPage.page(for: section.function)?.title ?? section.header)
+                    .font(HubType.rowTitle)
                 Spacer()
             }
             .contentShape(Rectangle())
@@ -4489,8 +4881,23 @@ struct StudioContent: View {
         .id(section.id)
     }
 
+    /// What one catalog row says about the model: the state a person needs before choosing it.
+    /// "Installed" is not "ready" — a paused or unverified model is a different answer, and a
+    /// download in flight is a third. The Hub already publishes every one of these facts.
+    private func modelStateChip(_ model: NativeModel) -> (text: String, status: HubStatus, symbol: String?) {
+        if let download = workspace.downloads.first(where: { $0.repo == model.repo && active($0.state) }) {
+            let percent = Int(min(100, max(0, download.percent)))
+            return ("Downloading \(percent)%", .info, "arrow.down.circle")
+        }
+        if model.paused { return ("Paused", .warn, "pause.circle.fill") }
+        if model.cached, model.runtimeReady, model.supported { return ("Ready", .ok, "checkmark.circle.fill") }
+        if model.cached { return ("Needs setup", .warn, "exclamationmark.triangle.fill") }
+        return ("Not downloaded", .off, "icloud.and.arrow.down")
+    }
+
     private func modelListRow(_ model: NativeModel) -> some View {
-        HStack(spacing: HubSpace.m) {
+        let chip = modelStateChip(model)
+        return HStack(spacing: HubSpace.m) {
             Image(systemName: model.function.symbol).foregroundStyle(.secondary).frame(width: 22)
             VStack(alignment: .leading, spacing: HubSpace.xs) {
                 Text(model.label).font(HubType.rowTitle)
@@ -4507,12 +4914,23 @@ struct StudioContent: View {
                     Text("Sections of \(longForm.chosenSectionMaxCharacters) chars · speed: \(longForm.speedDelivery == "native" ? "engine" : "post-pass")")
                         .font(HubType.caption).foregroundStyle(.tertiary)
                 }
+                // A model with no Download button says why on its own row, not only in Details.
+                if let reason = model.blockReason {
+                    Text(reason).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: HubSpace.m)
-            if model.paused {
-                StatusBadge(text: "Paused", status: .warn, symbol: "pause.circle.fill")
+            if !model.cached, model.supported,
+               !workspace.downloads.contains(where: { $0.repo == model.repo && active($0.state) }) {
+                Button("Download") { Task { await workspace.startDownload(model) } }
+                    .controlSize(.small)
+                    .disabled(!connected || studio.configuration.offline)
+                    .help(studio.configuration.offline
+                          ? "Downloading is off while Offline mode is on. Use Import Folder instead."
+                          : "Download this model into the library")
             }
-            StatusBadge(text: model.cached ? "Installed" : "Not installed", status: model.cached ? .ok : .off)
+            StatusBadge(text: chip.text, status: chip.status, symbol: chip.symbol)
         }
         // The badges keep their own room at the trailing edge instead of being pressed against it.
         .padding(.vertical, HubSpace.s).padding(.trailing, HubSpace.s).tag(model.repo)
@@ -4874,7 +5292,7 @@ struct StudioContent: View {
     /// preset and no package, so a fifth preset or a changed list needs no build of this app.
     private var setupWorkspace: some View {
         PageScaffold(title: pageTitle(.setup),
-                     subtitle: "Choose what this Mac installs. It shows the memory this Mac has, the space on the models' drive, and what each choice will copy - before anything is copied.",
+                     status: setupStatus,
                      scrolls: true) {
             if !connected { setup }
             // This read is **on demand**, deliberately: it is not part of the two-second poll.
@@ -4899,8 +5317,8 @@ struct StudioContent: View {
             } else if !workspace.installPlanSupported && workspace.installPlan == nil {
                 HubCard {
                     VStack(alignment: .leading, spacing: HubSpace.s) {
-                        Text("This Studio Hub does not offer the install screen yet").font(HubType.rowTitle)
-                        Text("Update Studio Hub on this Mac, then reopen this page. The Models page still works for everything else.")
+                        Text("This Hub Studio KH does not offer the install screen yet").font(HubType.rowTitle)
+                        Text("Update Hub Studio KH on this Mac, then reopen this page. The Models page still works for everything else.")
                             .font(HubType.secondary).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -4935,6 +5353,27 @@ struct StudioContent: View {
     /// What this Mac is and what it has, before any choice: memory, the drive, and where the models
     /// come from. The free figure is the **library's** volume - the Hub measures that one, and on a
     /// kit setup it is an external drive, not the startup disk.
+    /// The setup page's one line: what this Mac has and whether a set fits, before any copy.
+    private var setupStatus: PageStatusLine {
+        guard localServicesReady else {
+            return PageStatusLine("Local services are stopped — start them to read this Mac's models.", tone: .warn)
+        }
+        if workspace.installPlanLoading && workspace.installPlan == nil {
+            return PageStatusLine("Reading this Mac's models and free space…", tone: .off)
+        }
+        if workspace.installPlanError != nil, workspace.installPlan == nil {
+            return PageStatusLine("This Mac's models could not be read — try again below.", tone: .warn)
+        }
+        guard let plan = workspace.installPlan else {
+            return PageStatusLine("Reading this Mac's models…", tone: .off)
+        }
+        let memory = plan.memoryGB.map { "\(Int($0)) GB memory" } ?? "memory not reported"
+        let free = plan.diskMeasured && plan.freeBytes != nil
+            ? "\(Self.gigabytes(plan.freeBytes!)) free on the models' drive"
+            : "free space not measured"
+        return PageStatusLine("\(memory) · \(free)", tone: plan.diskMeasured ? .ok : .warn)
+    }
+
     private func setupSummary(_ plan: NativeInstallPlan) -> some View {
         HubCard {
             VStack(alignment: .leading, spacing: HubSpace.m) {
@@ -4955,16 +5394,16 @@ struct StudioContent: View {
                     }
                 }
                 if !plan.library.isEmpty {
-                    Label("Models live in \(plan.library)", systemImage: "folder")
-                        .font(HubType.caption).foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    DiagnosticDetails(title: "Library", summary: "where models are stored") {
+                        DiagnosticValue(label: "Folder", value: plan.library)
+                    }
                 }
                 if !plan.diskMeasured {
                     Text("The Hub could not read the free space on that drive, so it cannot say whether a set fits. Open Models to check the drive is mounted.")
                         .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("To install from an SSD, open the drive and run ‘2 - Copy the models.command’. Choose a preset in Terminal. Otherwise, models download from another Mac or the internet.")
+                Text("To install from an SSD, open the drive and run its copy command, or copy the models into the library in Finder. Otherwise models download from another Mac or the internet.")
                     .font(HubType.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -4972,7 +5411,10 @@ struct StudioContent: View {
     }
 
     private static func gigabytes(_ bytes: Int64) -> String {
-        NativeCapacityDisplay.gigabytes(bytes: Double(bytes))
+        // Storage is decimal GB, the unit Finder and the Hub's own plan use. The binary formatter
+        // is for RAM, where "32 GB" means 34.36e9 bytes; using it for disk made one card show
+        // 93.4 GB and its own refusal say 100.3 GB for the same copy (critic, 2026-11-13).
+        String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
     }
 
     /// The four presets, each with its own count, cost and refusal. Selecting one marks it; nothing
@@ -4986,10 +5428,9 @@ struct StudioContent: View {
                     Text("This Mac suits \(starting.name)").font(HubType.caption).foregroundStyle(.secondary)
                 }
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: HubSpace.m)], spacing: HubSpace.m) {
-                ForEach(plan.presets) { preset in setupPresetCard(preset) }
-            }
-            if let preset = plan.presets.first(where: { $0.id == setupSelectedPreset }) {
+            // The action sits above the cards: at 768 the four tall cards stacked and pushed the
+            // only Install button below the fold (critic, 2026-11-13).
+            if let preset = plan.presets.first(where: { $0.id == setupSelectedPreset }) ?? plan.starting {
                 HStack(spacing: HubSpace.m) {
                     Button(preset.complete ? "Install anything missing" : "Install \(preset.name)") {
                         Task { await workspace.installPreset(preset) }
@@ -5003,11 +5444,18 @@ struct StudioContent: View {
                     Spacer(minLength: 0)
                 }
             }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: HubSpace.m, alignment: .top)],
+                      alignment: .leading, spacing: HubSpace.m) {
+                ForEach(plan.presets) { preset in setupPresetCard(preset) }
+            }
         }
     }
 
     private func setupPresetCard(_ preset: NativePreset) -> some View {
+        // Before a click, the Mac's own preset is the one the Install button acts on, so it wears
+        // the selected edge too.
         let chosen = setupSelectedPreset == preset.id
+            || (setupSelectedPreset == nil && workspace.installPlan?.starting?.id == preset.id)
         return Button {
             setupSelectedPreset = preset.id
         } label: {
@@ -5034,14 +5482,18 @@ struct StudioContent: View {
                     Text(refused).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if !preset.fitsThisMac {
+                if preset.fitsThisMac == false {
                     Text("Sized for a bigger Mac than this one; its models are checked against this Mac's memory individually.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if preset.fitsThisMac == nil {
+                    Text("The Hub did not say whether this preset fits this Mac; its models are checked individually.")
                         .font(HubType.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(HubSpace.l)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: HubRadius.card))
             .overlay(RoundedRectangle(cornerRadius: HubRadius.card)
                 .stroke(chosen ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: chosen ? 2 : 1))
@@ -5061,6 +5513,9 @@ struct StudioContent: View {
     /// measured, so "62 GB to copy" and "380 GB free after" are one claim, not two guesses.
     private func setupPresetCost(_ preset: NativePreset) -> String {
         if preset.complete { return "Every model in this preset is installed and verified." }
+        // A refused preset's own sentence is the authoritative number; a second computed
+        // "copies X GB" beside it showed two different sizes for the same copy.
+        if preset.refused != nil { return "This preset does not fit on the models' drive right now." }
         var parts: [String] = []
         parts.append(preset.installedCount == 0
                      ? "Copies \(Self.gigabytes(preset.toCopyBytes))"
@@ -5079,6 +5534,7 @@ struct StudioContent: View {
                 sectionTitle("Every other model")
                 Spacer(minLength: HubSpace.m)
                 TextField("Search models", text: $setupSearch).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                    .onExitCommand { setupSearch = "" }
             }
             ForEach(plan.groups) { group in
                 let rows = group.models.filter { setupSearch.isEmpty || $0.label.localizedCaseInsensitiveContains(setupSearch) || $0.id.localizedCaseInsensitiveContains(setupSearch) }
@@ -5141,17 +5597,45 @@ struct StudioContent: View {
         .id(model.id)
     }
 
+    /// "11 models · 6 ready · 1 downloading" — the library's state, not a description of the page.
+    private var modelsStatus: PageStatusLine {
+        guard localServicesReady else {
+            return PageStatusLine("Local services are stopped — start them to read the model library.", tone: .warn)
+        }
+        let installed = workspace.models.filter(\.cached).count
+        let ready = workspace.models.filter { $0.cached && $0.supported && $0.runtimeReady && !$0.paused }.count
+        let downloading = activeDownloads.count
+        var parts = ["\(installed) of \(workspace.models.count) models in the library",
+                     "\(ready) ready"]
+        if downloading > 0 { parts.append("\(downloading) downloading") }
+        return PageStatusLine(parts.joined(separator: " · "),
+                              tone: downloading > 0 ? .info : (ready > 0 ? .ok : .warn))
+    }
+
     private var modelsWorkspace: some View {
-        PageScaffold(title: pageTitle(.models), subtitle: "One library for every workspace. Install models here, then choose them where you create.") {
+        PageScaffold(title: pageTitle(.models),
+                     status: modelsStatus,
+                     primary: PagePrimaryAction("Install Models…",
+                                               isEnabled: connected,
+                                               help: "Choose a preset or tick models to install") { studio.select(.setup) },
+                     menu: [
+                        PageMenuAction("Verify All", symbol: "checkmark.seal",
+                                       isEnabled: connected && !workspace.updatingModels) {
+                            Task { await workspace.verifyInstalledModels() }
+                        },
+                        PageMenuAction("Refresh Library", symbol: "arrow.clockwise",
+                                       isEnabled: connected && !workspace.refreshing) {
+                            Task { await workspace.refresh() }
+                        },
+                        PageMenuAction("Show in Finder", symbol: "folder",
+                                       isEnabled: studio.hasLibrary) { _ = studio.revealLibrary() },
+                     ]) {
             if !connected { setup }
             HStack(spacing: HubSpace.m) {
                 TextField("Search models", text: $modelSearch).textFieldStyle(.roundedBorder).frame(maxWidth: 320)
-                Toggle("Installed only", isOn: $installedOnly).toggleStyle(.checkbox)
+                    .onExitCommand { modelSearch = "" }
+                Toggle("Installed only", isOn: $installedOnly).toggleStyle(.checkbox).fixedSize()
                 Spacer(minLength: HubSpace.xl)
-                Button("Verify All") { Task { await workspace.verifyInstalledModels() } }
-                    .help("Re-check every installed model against its pinned file digests")
-                    .disabled(!connected || workspace.updatingModels)
-                Button { Task { await workspace.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh model library").accessibilityLabel("Refresh model library").disabled(!connected || workspace.refreshing)
             }
 
             // One tab per function, each with the count this view would show. This replaced a
@@ -5159,21 +5643,43 @@ struct StudioContent: View {
             // tab or proper spacing. it's squished", and a heading every few rows is not a tab.
             modelTabs
 
-            // Where the models listed below actually live, with the same reveal the Settings row
-            // offers: "where did my model folder go" is asked here, on the page that lists them, and
-            // the path shown is the one the Hub is using rather than one this view assumed.
-            HStack(spacing: HubSpace.s) {
-                Image(systemName: "folder").foregroundStyle(.secondary)
-                Text(studio.configuration.modelsDirectory?.path ?? "No model folder is selected yet.")
-                    .font(HubType.caption).foregroundStyle(.secondary)
-                    .textSelection(.enabled).lineLimit(1).truncationMode(.middle)
-                if studio.hasLibrary {
-                    Button("Show in Finder") { _ = studio.revealLibrary() }
-                    if !studio.libraryFolderExists {
-                        Text("Not on this Mac right now").font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+            // Where the models actually live is a diagnostic, not a headline: one summary line, the
+            // whole path on demand. "Where did my model folder go" is still answered here.
+            DiagnosticDetails(title: "Library", summary: "where models are stored") {
+                DiagnosticValue(label: "Folder", value: studio.configuration.modelsDirectory?.path)
+                if studio.hasLibrary, !studio.libraryFolderExists {
+                    Text("The folder is not on this Mac right now — reconnect the drive or choose another library in Settings.")
+                        .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: 560, alignment: .leading)
+
+            // Downloads sit above the list as one compact strip: a section below it took height
+            // from the catalogue and left the last visible row cut in half (critic, 2026-11-13).
+            if !activeDownloads.isEmpty {
+                VStack(alignment: .leading, spacing: HubSpace.xs) {
+                    ForEach(activeDownloads.prefix(3)) { download in
+                        HStack(spacing: HubSpace.m) {
+                            Image(systemName: "arrow.down.circle").foregroundStyle(HubStatus.info.color)
+                            Text(modelName(download.repo)).font(HubType.rowTitle).lineLimit(1)
+                            StatusBadge(text: "Downloading \(Int(min(100, max(0, download.percent))))%",
+                                        status: .info, symbol: "arrow.down.circle")
+                            ProgressView(value: min(100, max(0, download.percent)), total: 100)
+                                .frame(maxWidth: 220)
+                            Text(download.totalBytes > 0
+                                 ? "\(ByteCountFormatter.string(fromByteCount: download.downloadedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: download.totalBytes, countStyle: .file))"
+                                 : sizeCaption(for: download))
+                                .font(HubType.caption).foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            Button("Cancel") { Task { await workspace.cancelDownload(download) } }
+                                .hubRowControl().disabled(!connected)
+                        }
                     }
                 }
-                Spacer()
+                .padding(HubSpace.m)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: HubRadius.card))
+                .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
             }
 
             // What is actually on disk, per family, with the memory the model declares. This matters
@@ -5213,14 +5719,26 @@ struct StudioContent: View {
                 // about the Hub, and "clear the search" would point at a control that changes
                 // nothing; that tab exists only because the operator arrived from that Studio.
                 if let chosen = StudioFunction(rawValue: modelFilter), !modelLibraryHolds(chosen) {
-                    Text("\(StudioPage.page(for: chosen)?.title ?? chosen.rawValue) has no model in this library yet. It will appear here when the Hub offers one.")
-                        .font(HubType.secondary).foregroundStyle(.secondary)
+                    HStack(spacing: HubSpace.m) {
+                        Text("\(StudioPage.page(for: chosen)?.title ?? chosen.rawValue) has no model in this library yet. It will appear here when the Hub offers one.")
+                            .font(HubType.secondary).foregroundStyle(.secondary)
+                        Button("Set Up This Mac") { studio.select(.setup) }.hubRowControl()
+                        Spacer()
+                    }
                 } else {
-                    Text("No models match this view. Clear the search or turn off Installed only to see the whole library.")
-                        .font(HubType.secondary).foregroundStyle(.secondary)
+                    HStack(spacing: HubSpace.m) {
+                        Text("No models match this view.")
+                            .font(HubType.secondary).foregroundStyle(.secondary)
+                        Button("Show the Whole Library") { modelSearch = ""; installedOnly = false; modelFilter = "All functions" }
+                            .hubRowControl()
+                        Spacer()
+                    }
                 }
             }
             HStack(spacing: 0) {
+                // A selected model takes the whole page on a narrow window; the 380 pt list plus
+                // the 320 pt detail pane cannot both fit beside the sidebar (critic, 2026-11-13).
+                if windowWidth >= 1000 || selectedModel == nil {
                 List(selection: $selectedModel) {
                     // Under "All" the headings are the Studio list itself, so a Studio the Hub
                     // offers a model for is named without an edit here. Inside a function's own
@@ -5240,17 +5758,37 @@ struct StudioContent: View {
                 // remembered column beside an empty panel. Once a model is picked it goes back to
                 // that column, which is what the divider drags and what is remembered.
                 .frame(width: selectedModel == nil ? nil : CGFloat(modelsListWidth))
+                }
                 // Nothing selected, nothing to inspect: the list keeps the whole width rather than
                 // leaving a panel that says only "select a model" across a third of the page.
                 if let model = workspace.models.first(where: { $0.repo == selectedModel }) {
-                    modelSplitDivider
+                    if windowWidth >= 1000 || selectedModel == nil { modelSplitDivider }
                     ScrollView {
+                        let chip = modelStateChip(model)
                         VStack(alignment: .leading, spacing: HubSpace.l) {
-                            Text(model.label).font(HubType.section).textSelection(.enabled)
-                            Text(model.repo).font(HubType.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                            ValueRow("Function", value: model.function.rawValue)
-                            ValueRow("Storage", value: model.cached ? "Installed" : "Not installed")
-                            if let size = model.sizeGB { ValueRow("Estimated size", value: String(format: "%.2f GB", size)) }
+                            if windowWidth < 1000 {
+                                Button { selectedModel = nil } label: {
+                                    Label("All Models", systemImage: "chevron.left")
+                                }
+                                .hubRowControl()
+                                .accessibilityLabel("Back to all models")
+                            }
+                            HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
+                                Text(model.label).font(HubType.section).textSelection(.enabled)
+                                StatusBadge(text: chip.text, status: chip.status, symbol: chip.symbol)
+                                Spacer(minLength: 0)
+                            }
+                            VStack(alignment: .leading, spacing: HubSpace.xs) {
+                                ValueRow("Studio", value: StudioPage.page(for: model.function)?.title ?? model.function.rawValue)
+                                if let size = model.sizeGB { ValueRow("Size", value: String(format: "%.2f GB", size)) }
+                            }
+                            DiagnosticDetails(title: "Model details", summary: model.repo) {
+                                DiagnosticValue(label: "Repository", value: model.repo)
+                                if let size = model.sizeGB {
+                                    DiagnosticValue(label: "Size on disk", value: String(format: "%.2f GB", size))
+                                }
+                                DiagnosticValue(label: "Files", value: model.cached ? "verified library copy" : "not installed")
+                            }
                             // Every fact this model publishes, per generator, with its provenance:
                             // the lane's operation and every parameter with its enforced bound, the
                             // size table with its resolution tiers, the long-form section policy,
@@ -5352,12 +5890,21 @@ struct StudioContent: View {
                     }.frame(minWidth: 320, maxWidth: .infinity)
                 }
             }
-            if !activeDownloads.isEmpty {
-                Divider()
-                Text("Downloads").font(HubType.section)
-                ScrollView { VStack(spacing: HubSpace.m) { ForEach(activeDownloads) { downloadRow($0) } } }.frame(maxHeight: 120)
-            }
         }
+        .confirmationDialog(
+            "Remove downloaded model?",
+            isPresented: Binding(get: { pendingModelRemoval != nil },
+                                 set: { if !$0 { pendingModelRemoval = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingModelRemoval) { model in
+                Button("Remove Download", role: .destructive) {
+                    pendingModelRemoval = nil
+                    Task { await workspace.removeModel(model) }
+                }
+                Button("Keep Model", role: .cancel) { pendingModelRemoval = nil }
+            } message: { model in
+                Text("Move \(model.label) into this library's trash. Nothing is deleted: it can be restored for 30 days, then it goes to the Mac's Trash. Generated files are kept. A model a job is using, or one another installed model needs, is refused and says which.")
+            }
         // The defaults are read when this tab appears, once per Studio and once per connection: it
         // is one request each, and nothing on the two-second poll depends on it. Keyed on the
         // connection, so a reconnect reads the new Hub's answers rather than showing the last one's.
@@ -5379,16 +5926,15 @@ struct StudioContent: View {
     /// them; a render it sent no name for is still titled by its job id, and a name is never
     /// guessed.
     private var rendersWorkspace: some View {
-        PageScaffold(title: pageTitle(.renders), subtitle: "Final videos rendered for Story Studio, newest first: what came out, how long it took, and which Mac made it.", scrolls: true,
-                     trailing: {
-                         // The list is read when the page opens, not on the poll: a render finishing
-                         // while the page is open is one click away rather than two seconds away.
-                         // The grant is read with it: the owner changes the grant on the Gateway,
-                         // and this button is the one way to see the new answer here.
-                         Button("Refresh") {
-                             Task { await workspace.refreshRenders(); await workspace.refreshRenderAuthority() }
-                         }
-                             .hubRowControl().disabled(!connected)
+        PageScaffold(title: pageTitle(.renders),
+                     status: rendersStatus,
+                     scrolls: true,
+                     // The list is read when the page opens, not on the poll: a render finishing
+                     // while the page is open is one click away rather than two seconds away.
+                     // The grant is read with it: the owner changes the grant on the Gateway,
+                     // and this action is the one way to see the new answer here.
+                     primary: PagePrimaryAction("Refresh Renders", isEnabled: connected) {
+                        Task { await workspace.refreshRenders(); await workspace.refreshRenderAuthority() }
                      }) {
             renderGrantLine
             if let history = workspace.renderHistory {
@@ -5399,7 +5945,11 @@ struct StudioContent: View {
                             title: "No renders recorded yet",
                             detail: "A final render appears here the moment this Hub finishes one. Renders made before the build that added this page are not listed, because nothing recorded them. From here on this page lists the last " +
                                 "\(history.retentionDays ?? 90) days.",
-                            symbol: "play.rectangle.on.rectangle")
+                            symbol: "play.rectangle.on.rectangle",
+                            actionTitle: "Refresh",
+                            action: {
+                                Task { await workspace.refreshRenders(); await workspace.refreshRenderAuthority() }
+                            })
                     }
                 } else {
                     VStack(alignment: .leading, spacing: HubSpace.m) {
@@ -5432,6 +5982,26 @@ struct StudioContent: View {
         }
     }
 
+    /// What the render list holds, or why it does not hold anything yet.
+    private var rendersStatus: PageStatusLine {
+        guard localServicesReady else {
+            return PageStatusLine("Local services are stopped — start them to read this Hub's renders.", tone: .warn)
+        }
+        if let history = workspace.renderHistory {
+            let count = history.renders.count
+            let failed = history.totals.failed
+            return PageStatusLine(count == 0
+                                  ? "No final renders yet — videos Story Studio renders here appear automatically."
+                                  : "\(count) final \(count == 1 ? "render" : "renders") · newest first · last \(history.retentionDays ?? 90) days"
+                                    + (failed > 0 ? " · \(failed) failed" : ""),
+                                  tone: failed > 0 ? .warn : (count == 0 ? .off : .ok))
+        }
+        if let problem = workspace.renderHistoryError {
+            return PageStatusLine(problem, tone: .warn)
+        }
+        return PageStatusLine("Reading this Hub's renders…", tone: .off)
+    }
+
     /// The owner's render grant on this Mac, in one plain line, with every exact tuple it covers.
     ///
     /// Read only — the app never changes the grant. A grant the Hub did not answer about says
@@ -5440,7 +6010,9 @@ struct StudioContent: View {
     private var renderGrantLine: some View {
         VStack(alignment: .leading, spacing: HubSpace.xs) {
             if let authority = workspace.renderAuthority {
-                Text(authority.grantLine)
+                // The grant's internal version ("v2") is not something a person acts on.
+                Text(authority.grantLine.replacingOccurrences(of: " \\(v[0-9]+\\)", with: "",
+                                                             options: .regularExpression))
                     .font(HubType.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 let tuples = authority.effectiveTuples
@@ -5449,10 +6021,14 @@ struct StudioContent: View {
                         .font(HubType.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    ForEach(tuples.indices, id: \.self) { index in
-                        Text(tuples[index].line)
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    // Encoder settings are diagnostics: one summary, every tuple on demand.
+                    DiagnosticDetails(title: "Encode details",
+                                      summary: tuples.first?.line ?? "published tuples") {
+                        ForEach(tuples.indices, id: \.self) { index in
+                            Text(tuples[index].line)
+                                .font(HubType.monoCaption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             } else if let problem = workspace.renderAuthorityError {
@@ -5480,39 +6056,59 @@ struct StudioContent: View {
             ?? (totals.succeeded == 0 ? "none yet" : "unknown")
         return HubCard {
             VStack(alignment: .leading, spacing: HubSpace.m) {
-                HStack(alignment: .top, spacing: HubSpace.xl) {
-                    renderStat("Renders", "\(totals.processed)", counts.joined(separator: " · "))
-                    renderStat("Output video", output,
-                               totals.unknownDuration > 0
-                                 ? "\(totals.unknownDuration) with no recorded length"
-                                 : "of finished video")
-                    renderStat("Average render",
-                               totals.averageWallSeconds.map { NativeJob.clock($0) } ?? "not measured",
-                               totals.measuredRenders > 0
-                                 ? "over \(totals.measuredRenders) timed render\(totals.measuredRenders == 1 ? "" : "s")"
-                                 : "no render timed yet")
-                    renderStat("Speed",
-                               totals.speed.map { String(format: "%.1f× real time", $0) } ?? "not measured",
-                               "video seconds per second of rendering")
+                // Four columns wide, 2x2 in a narrow window: a value split mid-phrase
+                // ("6 min / 46 s") is not a metric.
+                if windowWidth >= 1000 {
+                    HStack(alignment: .top, spacing: HubSpace.xl) { renderStats(totals, counts: counts, output: output) }
+                } else {
+                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .topLeading),
+                                                 GridItem(.flexible(), alignment: .topLeading)],
+                              alignment: .leading, spacing: HubSpace.m) {
+                        renderStats(totals, counts: counts, output: output)
+                    }
                 }
                 // Only where the list came from more than one Mac: a node's page is its own.
                 if let machines = history.machines, machines.count > 1 {
                     Divider()
-                    Text(machines.map { machine in
-                        let name = machine.machineName ?? (machine.machine == "local" ? "This Mac" : machine.machine)
-                        return machine.ok ? "\(name) \(machine.renders)" : "\(name) did not answer"
-                    }.joined(separator: "   ·   "))
-                        .font(HubType.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
+                        Text(machines.map { machine in
+                            let name = machine.machineName ?? (machine.machine == "local" ? "This Mac" : machine.machine)
+                            return machine.ok ? "\(name) · \(machine.renders)" : "\(name) did not answer"
+                        }.joined(separator: "   ·   "))
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if machines.contains(where: { !$0.ok }) {
+                            Button("Ask Again") { Task { await workspace.refreshRenders() } }
+                                .hubRowControl()
+                        }
+                        Spacer()
+                    }
                 }
             }
         }
     }
 
+    @ViewBuilder
+    private func renderStats(_ totals: NativeRenderTotals, counts: [String], output: String) -> some View {
+        renderStat("Renders", "\(totals.processed)", counts.joined(separator: " · "))
+        renderStat("Output video", output,
+                   totals.unknownDuration > 0
+                     ? "\(totals.unknownDuration) with no recorded length"
+                     : "of finished video")
+        renderStat("Average render",
+                   totals.averageWallSeconds.map { NativeJob.clock($0) } ?? "not measured",
+                   totals.measuredRenders > 0
+                     ? "over \(totals.measuredRenders) timed render\(totals.measuredRenders == 1 ? "" : "s")"
+                     : "no render timed yet")
+        renderStat("Speed",
+                   totals.speed.map { String(format: "%.1f× real time", $0) } ?? "not measured",
+                   "video seconds per second of rendering")
+    }
+
     private func renderStat(_ title: String, _ value: String, _ detail: String) -> some View {
         VStack(alignment: .leading, spacing: HubSpace.xs) {
             Text(title).font(HubType.caption).foregroundStyle(.secondary)
-            Text(value).font(HubType.figure)
+            Text(value).font(HubType.figure).lineLimit(1).minimumScaleFactor(0.75)
             Text(detail).font(HubType.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -5528,9 +6124,17 @@ struct StudioContent: View {
                 Text(RenderCopy.facts(render)).font(HubType.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let failure = render.failure {
+                    // A cancelled render's note is a fact, not an alarm: the row's own status
+                    // colour says which it is.
                     Text(failure).font(HubType.caption)
-                        .foregroundStyle(HubStatus.bad.textColor)
+                        .foregroundStyle(RenderCopy.status(render) == .bad
+                                         ? HubStatus.bad.textColor : Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if render.outcome == "failed" {
+                        Text("Story Studio owns the retry for this episode; this Hub keeps the failure.")
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             RowActions {
@@ -5547,32 +6151,103 @@ struct StudioContent: View {
             .filter { historyTab == .all || historyTab.studio == $0.function }
             .flatMap { history in
                 history.jobs.filter(jobMachineFilter.includes)
+                    .filter(jobMatchesSearch)
                     .map { (history.function, $0) }
             }
     }
 
+    /// How many jobs each Mac filter would list, so the filter says what it hides.
+    private var jobMachineCounts: [JobMachineFilter: Int] {
+        let all = workspace.jobHistories.flatMap(\.jobs)
+        return Dictionary(uniqueKeysWithValues: JobMachineFilter.allCases.map {
+            ($0, all.filter($0.includes).count)
+        })
+    }
+
+    /// The Jobs page's one search: the prompt, the model's label, its repo, or a failure's words.
+    private func jobMatchesSearch(_ job: NativeJob) -> Bool {
+        let query = jobSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+        return job.text.localizedCaseInsensitiveContains(query)
+            || modelName(job.model).localizedCaseInsensitiveContains(query)
+            || job.model.localizedCaseInsensitiveContains(query)
+            || (job.error ?? "").localizedCaseInsensitiveContains(query)
+    }
+
+    /// Everything this Hub has run, by state: the page's one line, whatever tab is open.
+    private var jobsStatus: PageStatusLine {
+        guard localServicesReady else {
+            return PageStatusLine("Local services are stopped — start them to see this Mac's work.", tone: .warn)
+        }
+        let all = workspace.jobHistories.flatMap(\.jobs)
+        let running = all.filter { JobFacts.stage($0.state) == .running }.count
+        let waiting = all.filter { JobFacts.stage($0.state) == .waiting }.count
+        // "Completed" is done, not "everything that is not running": a failed or cancelled job
+        // was counted as completed before (critic, 2026-11-13).
+        let completed = all.filter { $0.state == "done" }.count
+        let failed = all.filter { $0.state == "error" }.count
+        let attention = all.filter { $0.state == "uncertain" }.count
+        let downloads = workspace.downloads.filter { active($0.state) }.count
+        // The total is the same number the All Mac filter carries; downloads are listed apart
+        // because they are a tab of their own, not a job.
+        var parts = ["\(all.count) jobs", "\(running) running", "\(waiting) queued"]
+        if completed > 0 { parts.append("\(completed) completed") }
+        if failed > 0 { parts.append("\(failed) failed") }
+        if attention > 0 { parts.append(attentionPhrase(attention)) }
+        if downloads > 0 { parts.append("\(downloads) downloading") }
+        return PageStatusLine(parts.joined(separator: " · "),
+                              tone: (failed > 0 || attention > 0 || waiting > 0) ? .warn
+                                : (running > 0 ? .ok : .off))
+    }
+
     private var jobsWorkspace: some View {
-        PageScaffold(title: pageTitle(.jobs), subtitle: "Every local generation in one place, or filtered to a single studio.", scrolls: true) {
-                ScrollView(.horizontal) {
-                    HubSegmentedControl(
-                        selection: $historyTab,
-                        items: HistoryTab.allCases.map { tab in
-                            let running = workspace.downloads.filter { active($0.state) }.count
-                            return HubSegmentItem(
-                                tag: tab,
-                                label: tab == .downloads && running > 0 ? "\(tab.title) (\(running))" : tab.title
-                            )
-                        },
-                        sizing: .equalWidest,
-                        accessibilityLabel: "History filter"
-                    )
-                }
+        PageScaffold(title: pageTitle(.jobs), status: jobsStatus, scrolls: true) {
+                // The tabs keep their order and their counts; at a narrow window they drop to the
+                // small control instead of scrolling sideways off the page.
+                HubSegmentedControl(
+                    selection: $historyTab,
+                    items: HistoryTab.allCases.map { tab in
+                        let running = workspace.downloads.filter { active($0.state) }.count
+                        // Every filter carries its count at a width that fits; a narrow window
+                        // keeps the short labels so the row does not have to scroll.
+                        let jobs = workspace.jobHistories.flatMap(\.jobs)
+                        let count: Int? = {
+                            if tab == .all { return jobs.count }
+                            if tab == .downloads { return running > 0 ? running : nil }
+                            guard let studio = tab.studio else { return nil }
+                            return workspace.jobHistories.first { $0.function == studio }?.jobs.count
+                        }()
+                        let label = (windowWidth >= 980 ? count.map { "\(tab.title) \($0)" } : nil)
+                            ?? (tab == .downloads && running > 0 ? "\(tab.title) (\(running))" : tab.title)
+                        return HubSegmentItem(
+                            tag: tab,
+                            label: label,
+                            symbol: windowWidth < 980 ? nil
+                                : (tab == .all ? "square.grid.2x2"
+                                   : (tab == .downloads ? "arrow.down.circle" : tab.studio?.symbol))
+                        )
+                    },
+                    // Wide windows get equal tabs and glyphs; a narrow one gets each tab at its own
+                    // width, which is what keeps all eight on screen without a sideways scroll.
+                    sizing: windowWidth < 980 ? .stablePerLabel : .equalWidest,
+                    controlSize: windowWidth < 980 ? .small : .regular,
+                    accessibilityLabel: "History filter"
+                )
                 .accessibilityLabel("History filter")
                 // The controller is the only Mac whose Jobs page holds work that ran somewhere
                 // else. A node's list is its own machine throughout, so a split there would be
                 // three names for one list.
                 if workspace.controllerIdentity?.settings.role == "controller" {
-                    machineFilterPicker($jobMachineFilter)
+                    machineFilterPicker($jobMachineFilter, counts: jobMachineCounts)
+                }
+                HStack(spacing: HubSpace.s) {
+                    TextField("Search jobs", text: $jobSearch)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                        .onExitCommand { jobSearch = "" }
+                    if !jobSearch.isEmpty {
+                        Button("Clear") { jobSearch = "" }.hubRowControl()
+                    }
+                    Spacer(minLength: 0)
                 }
                 if workspace.transcribing { transcriptionActivity }
                 // A tab for a Studio the Hub files nothing for is not nothing to show: it is the
@@ -5599,6 +6274,23 @@ struct StudioContent: View {
                 // drawn by its own Studio, honouring the tab and the Mac filter.
                 let running = jobsInScope.filter { JobFacts.stage($0.job.state) == .running }
                 let waiting = jobsInScope.filter { JobFacts.stage($0.job.state) == .waiting }
+                // Failures and uncertain attempts first: they are the work that needs a person,
+                // and they used to sit inside their kind's finished list.
+                let needsYou = jobsInScope.filter { row in
+                    JobFacts.stage(row.job.state) == .finished
+                        && (row.job.state == "error" || row.job.state == "uncertain")
+                }
+                if !needsYou.isEmpty {
+                    VStack(alignment: .leading, spacing: HubSpace.m) {
+                        sectionTitle("Needs you")
+                        LazyVStack(alignment: .leading, spacing: HubSpace.m) {
+                            ForEach(Array(needsYou.enumerated()), id: \.offset) { index, row in
+                                jobRow(row.job, for: row.function)
+                                if index < needsYou.count - 1 { Divider() }
+                            }
+                        }
+                    }
+                }
                 if !running.isEmpty {
                     VStack(alignment: .leading, spacing: HubSpace.m) {
                         sectionTitle("Running now")
@@ -5628,7 +6320,9 @@ struct StudioContent: View {
                 ForEach(workspace.jobHistories, id: \.function) { history in
                     if historyTab == .all || historyTab.studio == history.function {
                       let jobs = history.jobs.filter(jobMachineFilter.includes)
+                          .filter(jobMatchesSearch)
                           .filter { !active($0.state) }
+                          .filter { $0.state != "error" && $0.state != "uncertain" }
                       VStack(alignment: .leading, spacing: HubSpace.m) {
                         sectionTitle(StudioPage.page(for: history.function)?.title ?? history.function.rawValue)
                         // Only when this Studio has nothing at all: a Studio whose work is all
@@ -5636,8 +6330,16 @@ struct StudioContent: View {
                         if jobs.isEmpty && history.jobs.filter(jobMachineFilter.includes).isEmpty {
                             let source = jobMachineFilter == .thisMac ? "this Mac"
                                 : (jobMachineFilter == .nodes ? "the nodes" : "this Mac or its nodes")
-                            Text("No \((StudioPage.page(for: history.function)?.title ?? history.function.rawValue).lowercased()) jobs from \(source) yet.")
-                                .font(HubType.secondary).foregroundStyle(.secondary)
+                            HStack(spacing: HubSpace.m) {
+                                Text(jobSearch.isEmpty
+                                     ? "No \((StudioPage.page(for: history.function)?.title ?? history.function.rawValue).lowercased()) jobs from \(source) yet."
+                                     : "No jobs match “\(jobSearch)” here.")
+                                    .font(HubType.secondary).foregroundStyle(.secondary)
+                                if let page = StudioPage.page(for: history.function) {
+                                    Button("Open \(page.title)") { studio.select(page) }.hubRowControl()
+                                }
+                                Spacer()
+                            }
                         }
                         // Lazy so a row's artifact (an image thumbnail above all) is only fetched
                         // for a row that is actually on screen.
@@ -5656,8 +6358,16 @@ struct StudioContent: View {
                 if historyTab == .downloads {
                   VStack(alignment: .leading, spacing: HubSpace.m) {
                     sectionTitle("Model downloads")
-                    if workspace.downloads.isEmpty { Text("No model downloads.").font(HubType.secondary).foregroundStyle(.secondary) }
-                    ForEach(workspace.downloads) { downloadRow($0) }
+                    if workspace.downloads.isEmpty {
+                        HStack(spacing: HubSpace.m) {
+                            Text("No model downloads. Start one from Models or Set up this Mac.")
+                                .font(HubType.secondary).foregroundStyle(.secondary)
+                            Button("Open Models") { studio.select(.models) }.hubRowControl()
+                            Spacer()
+                        }
+                    }
+                    ForEach(workspace.downloads.filter { jobSearch.isEmpty
+                        || modelName($0.repo).localizedCaseInsensitiveContains(jobSearch) }) { downloadRow($0) }
                   }
                 }
         }
@@ -5777,7 +6487,7 @@ struct StudioContent: View {
                     Text(job.text.isEmpty ? modelName(job.model) : job.text).lineLimit(compact ? 1 : 3)
                     jobMetaLine(job)
                     jobProgress(job)
-                    jobRequestFacts(job, .audio)
+                    DiagnosticDetails(title: "Request", summary: "settings used") { jobRequestFacts(job, .audio) }
                     // What was actually produced: length, size and the size requested. An asset
                     // with no stated facts is hard to tell apart from one that came back wrong.
                     if job.state == "done", !job.assetFacts.isEmpty {
@@ -5795,8 +6505,21 @@ struct StudioContent: View {
                                 } catch { fileActionError = error.localizedDescription }
                             }
                         }.disabled(!connected).rowAction()
-                        Button("Save…") { saveAudio(job) }.disabled(!connected).rowAction()
-                        revealButton(job)
+                        Menu {
+                            Button("Save…") { saveAudio(job) }.disabled(!connected)
+                            Button("Show in Folder") {
+                                if !workspace.revealArtifact(job) { fileActionError = job.revealUnavailableReason }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(width: 22, height: 18)
+                                .contentShape(Rectangle())
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Save or show this clip")
+                        .accessibilityLabel("More actions for this clip")
                     } else if job.state == "uncertain" {
                         Button("Discard…", role: .destructive) { requestDiscard(job, kind: .audio) }.disabled(!connected).rowAction()
                     } else if job.state == "error" { retryButton(job)
@@ -5818,7 +6541,7 @@ struct StudioContent: View {
     /// The parameter is optional so the panel can reserve this control's height before the first
     /// clip is played. When it is nil the transport is inert rather than hidden, and the caption
     /// names the one thing that fills it.
-    @ViewBuilder private func audioTransport(_ job: NativeJob?) -> some View {
+    @ViewBuilder private func audioTransport(_ job: NativeJob?, showHint: Bool = true) -> some View {
         // Both halves of "there is something to control": a job selected *and* the player holding
         // its audio. They arrive one after the other, and a slider bound to a player with no file
         // would otherwise look live while it did nothing.
@@ -5859,7 +6582,7 @@ struct StudioContent: View {
                 .disabled(!ready)
                 .accessibilityLabel("Playback position")
             // The reason the three controls above are grey, said once and only while it is true.
-            if !ready {
+            if !ready, showHint {
                 Text("Choose Play on a clip to load it here.")
                     .font(HubType.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -5871,35 +6594,47 @@ struct StudioContent: View {
     }
 
     private func downloadRow(_ download: NativeDownload) -> some View {
-        VStack(alignment: .leading, spacing: HubSpace.tight) {
-            HStack {
-                Text(modelName(download.repo)).lineLimit(1)
-                Spacer()
-                Text(stateLabel(download.state)).font(HubType.caption).foregroundStyle(.secondary)
-                if active(download.state) { Button("Cancel") { Task { await workspace.cancelDownload(download) } }.disabled(!connected) }
-                else if download.error != nil { Button("Dismiss") { workspace.dismissDownload(download) } }
-            }
-            if active(download.state) {
-                if download.percent > 0 || download.totalBytes > 0 {
-                    ProgressView(value: min(100, max(0, download.percent)), total: 100)
-                    if download.totalBytes > 0 {
-                        Text("\(ByteCountFormatter.string(fromByteCount: download.downloadedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: download.totalBytes, countStyle: .file))")
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                    }
-                } else {
-                    // No byte counts yet (the Hub measures them from the folder the download writes
-                    // into, which does not exist until the first file starts), so there is no honest
-                    // percentage to draw, and a bar pinned at zero reads as "stuck". The size comes
-                    // from the model itself, which is the same figure the Models page shows.
-                    HStack(spacing: HubSpace.s) {
-                        ProgressView().controlSize(.small)
-                        Text(sizeCaption(for: download))
-                            .font(HubType.caption).foregroundStyle(.secondary)
+        // The same row shape as a job: text and progress in the content slot, one action in the
+        // fixed actions column, so a Cancel lines up with the job Cancels above it.
+        ActionRow {
+            VStack(alignment: .leading, spacing: HubSpace.tight) {
+                HStack(spacing: HubSpace.s) {
+                    Text(modelName(download.repo)).lineLimit(1)
+                    if active(download.state) {
+                        StatusBadge(text: "Downloading \(Int(min(100, max(0, download.percent))))%",
+                                    status: .info, symbol: "arrow.down.circle")
+                    } else {
+                        StatusBadge(text: stateLabel(download.state),
+                                    status: download.error != nil ? .bad : .ok)
                     }
                 }
+                if active(download.state) {
+                    if download.percent > 0 || download.totalBytes > 0 {
+                        ProgressView(value: min(100, max(0, download.percent)), total: 100)
+                        if download.totalBytes > 0 {
+                            Text("\(ByteCountFormatter.string(fromByteCount: download.downloadedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: download.totalBytes, countStyle: .file))")
+                                .font(HubType.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        // No byte counts yet: the model's own size, never a bar pinned at zero.
+                        HStack(spacing: HubSpace.s) {
+                            ProgressView().controlSize(.small)
+                            Text(sizeCaption(for: download))
+                                .font(HubType.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let error = download.error, !error.isEmpty {
+                    Text(error).font(HubType.caption).foregroundStyle(HubStatus.bad.textColor).textSelection(.enabled)
+                }
             }
-            if let error = download.error, !error.isEmpty {
-                Text(error).font(HubType.caption).foregroundStyle(HubStatus.bad.textColor).textSelection(.enabled)
+            RowActions {
+                if active(download.state) {
+                    Button("Cancel") { Task { await workspace.cancelDownload(download) } }
+                        .disabled(!connected).rowAction()
+                } else if download.error != nil {
+                    Button("Dismiss") { workspace.dismissDownload(download) }.rowAction()
+                }
             }
         }
     }
@@ -5937,34 +6672,69 @@ struct StudioContent: View {
 
     /// The voices the list draws: all of them, or those carrying the chosen tag.
     private var shownVoices: [NativeVoice] {
-        guard let filter = voiceTagFilter else { return workspace.voices }
-        return workspace.voices.filter { $0.tagList.contains(filter) }
+        let byTag = voiceTagFilter.map { filter in
+            workspace.voices.filter { $0.tagList.contains(filter) }
+        } ?? workspace.voices
+        let query = voiceSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return byTag }
+        return byTag.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || $0.language.localizedCaseInsensitiveContains(query)
+                || $0.notes.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    /// The saved reference library in one line: how many, and what they are for.
+    private var voicesStatus: PageStatusLine {
+        guard localServicesReady else {
+            return PageStatusLine("Local services are stopped — start them to use saved voices.", tone: .warn)
+        }
+        let count = workspace.voices.count
+        return PageStatusLine(count == 0
+                              ? "No saved voices yet — add a reference clip to clone the same voice again."
+                              : "\(count) saved \(count == 1 ? "voice" : "voices") · pick one when cloning",
+                              tone: count == 0 ? .off : .ok)
     }
 
     private var voicesWorkspace: some View {
         PageScaffold(title: pageTitle(.voices),
-                     subtitle: "Saved reference clips. Pick one when cloning so the same voice comes back every time.") {
+                     status: voicesStatus,
+                     primary: PagePrimaryAction("Add Voice…",
+                                               isEnabled: connected && !workspace.savingVoice,
+                                               help: "Save a reference clip and its transcript") {
+                        voiceDraft = VoiceDraft(); showingVoiceEditor = true
+                     },
+                     menu: [
+                        PageMenuAction("Import Folder…", symbol: "folder.badge.plus",
+                                       isEnabled: connected && !workspace.savingVoice) { chooseVoiceImportFolder() },
+                        PageMenuAction("Refresh Voices", symbol: "arrow.clockwise", isEnabled: connected) {
+                            Task { await workspace.refreshVoices() }
+                        },
+                        PageMenuAction("Models", symbol: "externaldrive") { studio.select(.models) },
+                     ]) {
             VStack(alignment: .leading, spacing: HubSpace.m) {
+                if workspace.savingVoice {
+                    HStack(spacing: HubSpace.s) {
+                        ProgressView().controlSize(.small)
+                        Text("Saving the voice…").font(HubType.secondary).foregroundStyle(.secondary)
+                    }
+                }
                 HStack(spacing: HubSpace.s) {
-                    Button("Add Voice…") { voiceDraft = VoiceDraft(); showingVoiceEditor = true }
-                        .hubPrimary()
-                        .disabled(!connected || workspace.savingVoice)
-                    Button("Import Folder…") { chooseVoiceImportFolder() }
-                        .disabled(!connected || workspace.savingVoice)
-                    Button("Refresh") { Task { await workspace.refreshVoices() } }
-                        .disabled(!connected)
-                    if workspace.savingVoice { ProgressView().controlSize(.small) }
-                    Spacer()
+                    TextField("Search voices", text: $voiceSearch)
+                        .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                        .onExitCommand { voiceSearch = "" }
+                    if !voiceSearch.isEmpty { Button("Clear") { voiceSearch = "" }.hubRowControl() }
+                    Spacer(minLength: 0)
                 }
                 // Tags arrive from the Gateway, which owns them; this row narrows the list and is
                 // the only thing this app does with them.
                 if !voiceTagCounts.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: HubSpace.xs) {
-                            voiceTagButton("All tags", count: workspace.voices.count, tag: nil)
-                            ForEach(voiceTagCounts, id: \.tag) { entry in
-                                voiceTagButton(entry.tag, count: entry.count, tag: entry.tag)
-                            }
+                    // Tags wrap instead of scrolling sideways: a clipped last chip is not a filter.
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: HubSpace.xs, alignment: .leading)],
+                              alignment: .leading, spacing: HubSpace.xs) {
+                        voiceTagButton("All tags", count: workspace.voices.count, tag: nil)
+                        ForEach(voiceTagCounts, id: \.tag) { entry in
+                            voiceTagButton(entry.tag, count: entry.count, tag: entry.tag)
                         }
                     }
                 }
@@ -5983,8 +6753,14 @@ struct StudioContent: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: HubSpace.m) {
                         if shownVoices.isEmpty, let filter = voiceTagFilter {
-                            Text("No voice is tagged \(filter).")
-                                .font(HubType.secondary).foregroundStyle(.secondary)
+                            HStack(spacing: HubSpace.m) {
+                                Text(voiceSearch.isEmpty
+                                     ? "No voice is tagged \(filter)."
+                                     : "No voice matches “\(voiceSearch)”.")
+                                    .font(HubType.secondary).foregroundStyle(.secondary)
+                                Button("Show All Voices") { voiceTagFilter = nil; voiceSearch = "" }.hubRowControl()
+                                Spacer()
+                            }
                         }
                         ForEach(shownVoices) { voice in
                             voiceRow(voice)
@@ -6022,10 +6798,14 @@ struct StudioContent: View {
             VStack(alignment: .leading, spacing: HubSpace.xs) {
                 HStack(spacing: HubSpace.tight) {
                     Text(voice.name).font(HubType.rowTitle)
-                    Text(voice.language).font(HubType.caption).foregroundStyle(.secondary)
+                    // A language reads as a word, not an ISO code ("en" -> "English"), and "Fleet"
+                    // explains itself on hover (page critic, 2026-11-12).
+                    Text((Locale.current.localizedString(forLanguageCode: voice.language) ?? voice.language).capitalized)
+                        .font(HubType.caption).foregroundStyle(.secondary)
                     Text(voice.genderLabel).font(HubType.caption).foregroundStyle(.secondary)
                     if voice.fleetManaged {
-                        StatusBadge(text: "Fleet", status: .info)
+                        StatusBadge(text: "Fleet", status: .off)
+                            .help("This voice came with the fleet and can be used on this Mac.")
                     }
                     ForEach(voice.tagList, id: \.self) { tag in jobTag(tag) }
                 }
@@ -6038,7 +6818,9 @@ struct StudioContent: View {
                     Text(voice.notes).font(HubType.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
-            RowActions {
+            // One line, not a two-across block: three controls wrapped the kebab under Play, where
+            // it read as part of the player (critic, 2026-11-13).
+            HStack(spacing: HubSpace.s) {
                 Button("Play") { Task { await playVoice(voice) } }.rowAction()
                 Button("Use") {
                     Task {
@@ -6048,11 +6830,25 @@ struct StudioContent: View {
                 .disabled(!voice.readyForCloning)
                 .help("Use this voice for the next clone")
                 .rowAction()
-                Button("Edit…") { voiceDraft = VoiceDraft(voice: voice); showingVoiceEditor = true }.rowAction()
-                Button("Remove…", role: .destructive) { pendingVoiceDeletion = voice }
-                    .disabled(workspace.savingVoice)
-                    .rowAction()
+                Menu {
+                    if !voice.readyForCloning {
+                        Button("Add Transcript…") { voiceDraft = VoiceDraft(voice: voice); showingVoiceEditor = true }
+                    }
+                    Button("Edit…") { voiceDraft = VoiceDraft(voice: voice); showingVoiceEditor = true }
+                    Button("Remove…", role: .destructive) { pendingVoiceDeletion = voice }
+                        .disabled(workspace.savingVoice)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 26, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Edit or remove this voice")
+                .accessibilityLabel("More actions for \(voice.name)")
             }
+            .layoutValue(key: RowSlotKey.self, value: .actions)
         }
         .padding(.vertical, HubSpace.s)
         .confirmationDialog("Remove \(voice.name)?",
@@ -6223,8 +7019,8 @@ struct StudioContent: View {
         Toggle("Start at login", isOn: Binding(get: { studio.loginStatus == .enabled }, set: { studio.setLogin($0) }))
             .toggleStyle(.checkbox)
         Text(studio.loginStatus == .enabled
-             ? "On: Studio Hub opens by itself when you sign in and relaunches if it crashes. A normal Quit leaves it stopped until you open it or sign in again."
-             : "Off: Studio Hub does not open by itself after a restart.")
+             ? "On: Hub Studio KH opens by itself when you sign in and relaunches if it crashes. A normal Quit leaves it stopped until you open it or sign in again."
+             : "Off: Hub Studio KH does not open by itself after a restart.")
             .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         Toggle("Start services on startup", isOn: Binding(
             get: { studio.configuration.startServicesAtLogin },
@@ -6244,7 +7040,18 @@ struct StudioContent: View {
     }
 
     private var settings: some View {
-        PageScaffold(title: pageTitle(.settings), subtitle: "App behavior, local storage and service controls.", scrolls: true) {
+        PageScaffold(title: pageTitle(.settings),
+                     status: localServicesReady
+                        ? (workspace.workPolicy?.machineEnabled == false
+                           ? PageStatusLine("Hub running · local work is paused (resume on Gateway's Fleet page)", tone: .warn)
+                           : PageStatusLine("Hub running · changes save as you make them", tone: .ok))
+                        : PageStatusLine("Hub stopped — start it in Startup below.", tone: .warn),
+                     scrolls: true,
+                     primary: localServicesReady ? nil
+                        : PagePrimaryAction("Start Services", isEnabled: studio.canConfigure) { studio.start() }) {
+            // Two columns where they fit: eleven sections in one column needed a full-page scroll
+            // at 900 points (critic, 2026-11-13). At 768 it is one column again.
+            MasonryLayout(columns: windowWidth >= 1000 ? 2 : 1, spacing: HubSpace.xl) {
             HubSection("Startup") {
                 startupSettings
             }
@@ -6254,19 +7061,45 @@ struct StudioContent: View {
             HubSection("Lite Mode") {
                 LiteModeSettings(workspace: workspace, connected: connected)
             }
+            HubSection("Appearance") {
+                HubSegmentedControl(
+                    selection: $appearancePreference,
+                    items: [
+                        HubSegmentItem(tag: "system", label: "System"),
+                        HubSegmentItem(tag: "light", label: "Light"),
+                        HubSegmentItem(tag: "dark", label: "Dark"),
+                    ],
+                    accessibilityLabel: "Appearance"
+                )
+                Text("System follows macOS. Light and Dark apply to this app only, on this Mac.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+            }
             HubSection("General") {
+                Toggle("Test machine (no models needed)", isOn: $testMachine)
+                    .toggleStyle(.checkbox)
+                Text("Off by default. On, Hub does not ask for a model library or present one as a blocker; services may stay stopped without an error posture.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 ValueRow("Developer Mode", value: connected ? workspace.developerModeSetting.map {
                     $0.verified ? ($0.enabled ? "On" : "Off") : "Unverified"
                 } ?? "Unavailable" : "Unavailable")
                 if let note = workspace.developerModeNote ?? workspace.developerModeSetting?.reason?.detail {
                     Text(note).font(HubType.secondary).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if connected {
+                    Text("The Hub reported Developer Mode as unavailable without a reason.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                } else {
+                    Text("The Hub has not answered, so it cannot say why.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
                 }
                 Text("Closing the window keeps local jobs running. Quit stops the app and its services.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
             }
             HubSection("Model library") {
-                ValueRow("Location") { Text(studio.configuration.modelsDirectory?.path ?? "Not selected").font(HubType.mono).textSelection(.enabled).multilineTextAlignment(.trailing) }
+                DiagnosticDetails(title: "Location", summary: "where models are stored") {
+                    DiagnosticValue(label: "Folder", value: studio.configuration.modelsDirectory?.path)
+                }
                 if studio.hasLibrary && !studio.libraryFolderExists {
                     // A library on a drive that is not connected stays selected and is recoverable, so
                     // this names which way it failed instead of leaving a grey button with no reason.
@@ -6329,9 +7162,12 @@ struct StudioContent: View {
                 storageControls
             }
             HubSection("App data") {
-                ValueRow("Location") { Text(studio.configuration.dataDirectory.path).font(HubType.mono).textSelection(.enabled).multilineTextAlignment(.trailing) }
+                DiagnosticDetails(title: "Location", summary: "where settings and jobs live") {
+                    DiagnosticValue(label: "Folder", value: studio.configuration.dataDirectory.path)
+                }
                 Button("Show App Data") { NSWorkspace.shared.open(studio.configuration.dataDirectory) }
-                ValueRow("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
+                ValueRow("Version", value: appVersion)
+            }
             }
         }
         .task { if connected { await workspace.refreshDeveloperMode(); await workspace.refreshMemoryPolicy(); await workspace.refreshStorage(); await workspace.refreshTrash() } }
@@ -6397,24 +7233,87 @@ struct StudioContent: View {
         let body = notes.drop(while: { $0.trimmingCharacters(in: .whitespaces).isEmpty
             || $0.trimmingCharacters(in: .whitespaces).hasPrefix("# ") })
         return PageScaffold(title: pageTitle(.whatsNew),
-                            subtitle: "Release notes for Hub Studio KH \(ReleaseNotes.currentVersion), newest first.",
+                            status: ReleaseNotes.hasNotes
+                                ? PageStatusLine("Hub Studio KH \(ReleaseNotes.currentVersion) · newest first")
+                                : PageStatusLine("These notes were not found inside this build — Studio Launcher can reinstall it.", tone: .warn),
                             scrolls: true) {
-            MarkdownText(markdown: body.joined(separator: "\n"))
-                .frame(maxWidth: 760, alignment: .leading)
+            if !ReleaseNotes.hasNotes {
+                // The next step is the build that ships the notes: Studio Launcher installs it.
+                HStack(spacing: HubSpace.m) {
+                    Button("Open Studio Launcher") { NativeWorkspaceStore.openStudioLauncher() }
+                        .hubPrimary()
+                    Text("Reinstall this build there, or install a newer one; its notes ship inside the app.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } else {
+                // Plain-language changes first; engineering detail is a disclosure, not the page.
+                let notes = body.joined(separator: "\n")
+                let parts = notes.components(separatedBy: "### Technical notes")
+                MarkdownText(markdown: parts[0])
+                    .frame(maxWidth: 760, alignment: .leading)
+                if parts.count > 1 {
+                    DiagnosticDetails(title: "Technical notes", summary: "engineering detail") {
+                        MarkdownText(markdown: parts.dropFirst().joined(separator: "### Technical notes"))
+                    }
+                    .frame(maxWidth: 760, alignment: .leading)
+                }
+            }
         }
+    }
+
+    /// "Controller · 4 Macs · 3 reachable" or "This Mac is on its own" — the page's state in one line.
+    private var connectionsStatus: PageStatusLine {
+        guard localServicesReady else {
+            return PageStatusLine("Local services are stopped — start them to see this Mac's group.", tone: .warn)
+        }
+        let role = roleTitle(workspace.controllerIdentity?.settings.role)
+        if workspace.fleetOverview != nil || workspace.fleetNodes != nil {
+            // The same rows the table draws, this Mac included: the summary's total does not
+            // count it, so the line and the table disagreed by one (critic, 2026-11-13).
+            let rows = NativeFleetRow.rows(overview: workspace.fleetOverview, nodes: workspace.fleetNodes)
+            let total = rows.count
+            let reachable = rows.filter(\.isReachable).count
+            let tone: HubStatus = total > 0 && reachable == 0 ? .bad
+                : (reachable < total ? .warn : .ok)
+            return PageStatusLine("\(role) · \(total) \(total == 1 ? "Mac" : "Macs") in this group · \(reachable) reachable now",
+                                  tone: tone)
+        }
+        if let fleet = workspace.fleetNodes {
+            let reachable = fleet.nodes.filter(\.isReachable).count
+            return PageStatusLine("\(role) · \(fleet.nodes.count) joined \(fleet.nodes.count == 1 ? "Mac" : "Macs") · \(reachable) reachable",
+                                  tone: fleet.nodes.isEmpty ? .off : (reachable == 0 ? .bad : .ok))
+        }
+        return PageStatusLine(workspace.fleetReadError ?? "Reading this Mac's group…", tone: .warn)
     }
 
     private var connections: some View {
         PageScaffold(title: pageTitle(.connections),
-                     subtitle: "Local creation works independently. Connecting a controller is optional.",
-                     scrolls: true) {
-            releaseUpdateSection
+                     status: connectionsStatus,
+                     scrolls: true,
+                     primary: PagePrimaryAction("Refresh Fleet",
+                                               isEnabled: localServicesReady && !workspace.fleetRefreshing) {
+                        Task { await workspace.refreshFleetNodes() }
+                     },
+                     menu: [
+                        PageMenuAction("Copy Join Address", symbol: "doc.on.doc",
+                                       isEnabled: studio.nodeFacingAddress != nil) {
+                            if let address = studio.nodeFacingAddress {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(address, forType: .string)
+                                connectionNote = "Address copied: \(address)"
+                            }
+                        },
+                     ]) {
             fleetSection
             appUpdatesSection
             localAPI
             controllerSection
         }
         .task { if connected { await workspace.refreshConnection() } }
+        .sheet(item: $fleetDetailRow) { row in
+            FleetRowDetailSheet(row: row) { fleetDetailRow = nil }
+        }
     }
 
     /// The controller's app update, next to the connection state it comes from.
@@ -6422,202 +7321,15 @@ struct StudioContent: View {
     /// It never installs silently or on a timer: the operator presses Install, and the text says
     /// plainly that the local services restart and running work stops. A release that cannot be
     /// verified against the key already pinned on this Mac is shown without an Install button.
-    @ViewBuilder private var releaseUpdateSection: some View {
-        if workspace.showingUpdateBanner, let release = workspace.offeredRelease {
-            VStack(alignment: .leading, spacing: HubSpace.s) {
-                HStack(alignment: .top, spacing: HubSpace.m) {
-                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(HubStatus.info.color)
-                    VStack(alignment: .leading, spacing: HubSpace.xs) {
-                        Text("Update available — \(release.version) (\(release.build))")
-                            .font(HubType.rowTitle)
-                        Text("\(release.sizeDisplay) · controller App Update Key (fingerprint) \(release.shortSigner)… · from \(release.publisherId)")
-                            .font(HubType.secondary).foregroundStyle(.secondary)
-                        Text("Installing replaces this app and relaunches it. Any work running right now will stop.")
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if let progress = workspace.releaseProgress {
-                            Text(progress).font(HubType.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer(minLength: 8)
-                    // Installing relaunches the app. With nothing running that is just the press; with
-                    // work active it says how much will stop first.
-                    Button(workspace.installingRelease ? "Installing…" : "Install") {
-                        if workspace.activeWorkCount > 0 { confirmingInstall = true }
-                        else { Task { await workspace.installOfferedRelease() } }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(workspace.installingRelease)
-                    .confirmationDialog(
-                        "Install \(release.version) and relaunch?",
-                        isPresented: $confirmingInstall, titleVisibility: .visible) {
-                            Button("Install and Relaunch", role: .destructive) {
-                                Task { await workspace.installOfferedRelease() }
-                            }
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            let count = workspace.activeWorkCount
-                            Text("\(count) job\(count == 1 ? " is" : "s are") still running or waiting on this Mac. Installing relaunches Studio Hub and stops \(count == 1 ? "it" : "them").")
-                        }
-                    Button("Dismiss") { workspace.dismissOfferedRelease() }
-                        .disabled(workspace.installingRelease)
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(HubStatus.info.color.opacity(0.10), in: RoundedRectangle(cornerRadius: HubRadius.card))
-            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubStatus.info.color.opacity(0.35)))
-        } else if workspace.offeredReleaseIsOlder, let release = workspace.offeredRelease {
-            // A stale controller must not be able to roll this Mac backwards, so this is shown as
-            // its own state — not a verification failure — and carries no Install button.
-            HStack(alignment: .top, spacing: HubSpace.m) {
-                Image(systemName: "arrow.down.circle").foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: HubSpace.tight) {
-                    Text("Older release available — this Mac is on a newer version")
-                        .font(HubType.rowTitle)
-                    Text("The controller holds \(release.version) (\(release.build)), older than the \(workspace.currentAppVersion ?? "newer") version installed here. It is not offered, so a stale controller cannot roll this Mac backwards.")
-                        .font(HubType.secondary).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(HubStatus.off.color.opacity(0.10), in: RoundedRectangle(cornerRadius: HubRadius.card))
-            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubStatus.off.color.opacity(0.35)))
-        } else if let refusal = workspace.releaseRefusal {
-            HStack(alignment: .top, spacing: HubSpace.m) {
-                Image(systemName: "lock.trianglebadge.exclamationmark.fill").foregroundStyle(HubStatus.warn.color)
-                VStack(alignment: .leading, spacing: HubSpace.tight) {
-                    Text("Update cannot be verified").font(HubType.rowTitle)
-                    Text(refusal).font(HubType.secondary).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Check Again") { Task { await workspace.refreshRelease() } }
-                        .disabled(workspace.installingRelease)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(HubStatus.warn.color.opacity(0.12), in: RoundedRectangle(cornerRadius: HubRadius.card))
-            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubStatus.warn.color.opacity(0.35)))
-        }
-    }
-
-    /// The owner's front door to the gateway key this Mac trusts for app releases.
-    ///
-    /// Two fingerprints are shown, and the difference matters: this Mac's own publisher key is what
-    /// a joining node pins, while the trusted gateway key is what allows GatewayKH to push a
-    /// release here. Only the second is changeable here, and changing it decides which Macs may
-    /// update this Mac, so the button confirms first and says what a wrong key costs.
+    /// Where updates come from now: one sentence, and nothing in this app installs one.
     @ViewBuilder private var appUpdatesSection: some View {
         HubSection("App updates") {
-            HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
-                Button(workspace.manualUpdateChecking ? "Checking…" : "Check for update now") {
-                    Task { await workspace.checkForUpdateNow() }
-                }
-                .disabled(!connected || workspace.manualUpdateChecking || workspace.installingRelease)
-                if let note = workspace.manualUpdateNote {
-                    Text(note).font(HubType.secondary).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Divider()
-            publisherIdentityRow
-            Divider()
-            trustedPublisherRow
-            Divider()
-            publisherKeyControl
+            Text("Updates are installed by Studio Launcher KH.")
+                .font(HubType.secondary).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    /// This controller's own release-signing key: the fingerprint a joining node pins.
-    @ViewBuilder private var publisherIdentityRow: some View {
-        VStack(alignment: .leading, spacing: HubSpace.xs) {
-            Text("This Mac's App Update Key").font(HubType.rowTitle)
-            if let identity = workspace.controllerReleaseIdentity {
-                ValueRow("App Update Key (fingerprint)") {
-                    Text(identity.fingerprint)
-                        .font(HubType.mono)
-                        .textSelection(.enabled)
-                        .multilineTextAlignment(.trailing)
-                }
-                ValueRow("Algorithm", value: identity.algorithm)
-                Text("A Mac that joins this one pins this App Update Key fingerprint, so this is who it will accept an app release from.")
-                    .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text(connected
-                     ? "This Mac's App Update Key is unavailable until the services refresh."
-                     : "Start the local services to read this Mac's App Update Key.")
-                    .font(HubType.secondary).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    /// The gateway key the owner has installed, or plainly that none is installed.
-    @ViewBuilder private var trustedPublisherRow: some View {
-        VStack(alignment: .leading, spacing: HubSpace.xs) {
-            Text("Trusted Gateway App Update Key").font(HubType.rowTitle)
-            if workspace.trustedPublisher?.installedFingerprint != nil {
-                // The key's own first characters, not the fingerprint. A fingerprint is 64 hex
-                // characters too, so pasting one into the key field is accepted and then refuses
-                // every release silently (the Mac 1607 wedged on 0.6.181 for days). Showing the
-                // stored *key* is what lets the operator see that mistake on this screen.
-                ValueRow("App Update Key") {
-                    Text(workspace.trustedPublisher?.keyPrefix.map { "\($0)…" } ?? "installed")
-                        .font(HubType.mono)
-                        .textSelection(.enabled)
-                        .multilineTextAlignment(.trailing)
-                }
-                if let publisher = workspace.trustedPublisher?.publisherId {
-                    ValueRow("Publisher", value: publisher)
-                }
-                Text("A release pushed by GatewayKH is accepted only when it is signed by this App Update Key.")
-                    .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text("No App Update Key installed yet — this Mac cannot accept an app release.")
-                    .font(HubType.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            // A Mac whose updates are being refused names its own fault here, on the screen that
-            // configures updates, instead of looking merely out of date.
-            if let refusal = workspace.releaseLastSync?.refusal {
-                Text("Updates refused: \(refusal)")
-                    .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
-                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-            }
-        }
-    }
-
-    /// Paste a replacement key. The button confirms before anything is sent, and an empty field is
-    /// refused with a message rather than a request.
-    @ViewBuilder private var publisherKeyControl: some View {
-        VStack(alignment: .leading, spacing: HubSpace.s) {
-            Text("Change App Update Key").font(HubType.rowTitle)
-            HStack {
-                TextField("Paste the key from Gateway → Settings → App Update Key", text: $publisherKeyDraft)
-                    .textFieldStyle(.roundedBorder).frame(maxWidth: 360)
-                    .font(HubType.mono)
-                TextField("Publisher id (optional)", text: $publisherIdDraft)
-                    .textFieldStyle(.roundedBorder).frame(maxWidth: 220)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
-                Button("Change App Update Key") {
-                    // An empty paste has nothing to confirm: refuse it with the same clear message
-                    // the store gives, and never send the route.
-                    if publisherKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Task { _ = await workspace.changePublisherKey(publicKey: publisherKeyDraft,
-                                                                     publisherId: publisherIdDraft) }
-                    } else {
-                        confirmingPublisherKeyChange = true
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!connected)
-                Text("Paste the key from Gateway → Settings → App Update Key (starts with e6b9eece on this fleet). 64 hex characters (either case) or standard base64 — the Public key itself, never the fingerprint printed beside it.")
-                    .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
 
     /// ST-10.2 — the private address, the identity behind it, and the credential, with the
     /// secret masked until the operator reveals or copies it.
@@ -6630,22 +7342,25 @@ struct StudioContent: View {
                 Text("Reachable only from this Mac on the loopback interface. A location controller reaches this Hub over the network; this build serves the loopback address.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
                 if let identity = workspace.controllerIdentity {
-                    ValueRow("Role", value: identity.settings.role.capitalized)
-                    ValueRow("Station", value: identity.settings.siteName)
-                    ValueRow("Station ID", value: identity.settings.siteId)
-                    // `controllerId` is this Mac's own fixed id. On a controller it names the group; on
-                    // a node it is the id the controller routes this Mac by, so "Controller ID" there
-                    // read as the controller's id (live 2026-10-02, a renamed node).
-                    let isController = identity.settings.role == "controller"
-                    ValueRow(isController ? "Controller ID" : "Machine ID", value: identity.settings.controllerId)
-                    ValueRow("This machine", value: identity.settings.machineName)
-                    if !isController {
-                        Text("The machine ID stays the same when this Mac is renamed; only the name above changes.")
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                    }
                     ValueRow("Accepts customer jobs", value: identity.readiness.ready ? "Yes" : "No")
-                    Text("Node-to-node routing is unchanged: GatewayKH sends work to a location controller, and joined nodes keep their existing enrolment. This app does not open a second gateway.")
-                        .font(HubType.secondary).foregroundStyle(.secondary)
+                    DiagnosticDetails(title: "This Hub's identity",
+                                      summary: "\(identity.settings.role.capitalized) · \(identity.settings.machineName)") {
+                        // `controllerId` is this Mac's own fixed id. On a controller it names the group; on
+                        // a node it is the id the controller routes this Mac by, so "Controller ID" there
+                        // read as the controller's id (live 2026-10-02, a renamed node).
+                        let isController = identity.settings.role == "controller"
+                        DiagnosticValue(label: "Role", value: identity.settings.role.capitalized)
+                        DiagnosticValue(label: "Station", value: identity.settings.siteName)
+                        DiagnosticValue(label: "Station ID", value: identity.settings.siteId)
+                        DiagnosticValue(label: isController ? "Controller ID" : "Machine ID",
+                                        value: identity.settings.controllerId)
+                        DiagnosticValue(label: "Machine name", value: identity.settings.machineName)
+                        Text(isController
+                             ? "Node-to-node routing is unchanged: GatewayKH sends work to this location controller, and joined nodes keep their existing enrolment. This app does not open a second gateway."
+                             : "The machine ID stays the same when this Mac is renamed; only the name changes. GatewayKH reaches it through its controller.")
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     Text("Reading this Hub's identity…").font(HubType.secondary).foregroundStyle(.secondary)
                 }
@@ -6826,10 +7541,10 @@ struct StudioContent: View {
                     // edit a JSON file before it can start a group again.
                     fleetResetControl
                 } else {
-                    HStack(alignment: .top) {
+                    HStack(alignment: .center) {
                         Button("Rotate Fleet token…") { confirmingRotation = true }
                             .disabled(!connected || workspace.fleetOperationRunning)
-                        Text("Mints a new Fleet token and pushes it to every joined Mac. Every member — and GatewayKH — has to be given the new value afterwards; a Mac that refuses the old credential needs the manual path.")
+                        Text("Gives every member a new token; hand it to GatewayKH afterwards.")
                             .font(HubType.secondary).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -6841,8 +7556,8 @@ struct StudioContent: View {
                     fleetResetControl
                     VStack(alignment: .leading, spacing: HubSpace.tight) {
                         Text("Hand over to…").font(HubType.rowTitle)
-                        Text("Give this group to a Mac that is running as a controller (promote it first). This controller pushes the new head and the new Fleet token to every node it can reach, then retires itself: it keeps its history and stops taking work.")
-                            .font(HubType.caption).foregroundStyle(.secondary)
+                        Text("Move this group to another controller; this Mac retires and keeps its history.")
+                            .font(HubType.secondary).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack {
                             TextField("New controller's address, e.g. 100.x.y.z:47873", text: $handoverAddress)
@@ -6863,9 +7578,12 @@ struct StudioContent: View {
                             let cleaned = value.filter { !$0.isWhitespace }
                             if cleaned != value { handoverToken = cleaned }
                         }
-                        Text("A node that is switched off cannot be told, and the fallback for it is SSH over Tailscale — gateway-kh/repository/docs/credential-rotation-decision.md. The result below names every Mac that did not follow.")
-                            .font(HubType.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        DiagnosticDetails(title: "If a Mac does not follow",
+                                          summary: "the result below names it") {
+                            Text("A Mac that is switched off cannot be told, and the fallback for it is SSH over Tailscale — gateway-kh/repository/docs/credential-rotation-decision.md. The result below names every Mac that did not follow.")
+                                .font(HubType.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
                 if let notice = FleetCopy.previousTokenNotice(
@@ -6889,12 +7607,18 @@ struct StudioContent: View {
     /// One view so the retired and the working controller show the same control with the same
     /// sentence — the action is local and keeps its records, so it is available in both states.
     @ViewBuilder private var fleetResetControl: some View {
-        HStack(alignment: .top) {
-            Button("Reset the fleet…") { confirmingFleetReset = true }
-                .disabled(!connected || workspace.fleetOperationRunning)
-            Text("Start over: forget every Mac on this roster, revoke every per-node credential and mint a new Fleet token. **Nothing is deleted** — the old roster is kept in this Hub's Trash Folder, and no Mac is barred from joining again. Each Mac leaves from its own Connections page, then joins again with the new token.")
-                .font(HubType.secondary).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: HubSpace.tight) {
+            HStack(alignment: .center) {
+                Button("Reset the fleet…") { confirmingFleetReset = true }
+                    .disabled(!connected || workspace.fleetOperationRunning)
+                Text("Forget this roster and start a new group; nothing is deleted.")
+                    .font(HubType.secondary).foregroundStyle(.secondary)
+            }
+            DiagnosticDetails(title: "What a reset does", summary: "the old roster is kept in Trash") {
+                Text("Every Mac on this roster is forgotten, every per-node credential is revoked and a new Fleet token is minted. The old roster is kept in this Hub's Trash Folder, and no Mac is barred from joining again. Each Mac leaves from its own Connections page, then joins again with the new token.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -6949,7 +7673,7 @@ struct StudioContent: View {
     }
 
     private var controllerSection: some View {
-        HubSection("Studio Hub & GatewayKH") {
+        HubSection("Hub Studio KH & GatewayKH") {
             if let identity = workspace.controllerIdentity, let version = workspace.hubVersion {
                 ValueRow("Hub version", value: version.display)
                 ValueRow("Data store", value: identity.readiness.sqliteAuthoritative == true ? "Local, authoritative" : identity.settings.databaseMode)
@@ -6958,7 +7682,7 @@ struct StudioContent: View {
                 if let warning = identity.readiness.telemetryWarning {
                     Text(warning).font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
                 }
-                Text("Jobs are recorded and claimed on this Mac. GatewayKH sends work to location controllers; Studio Hub manages local execution and reports the capabilities it actually has. This app offers no update channel it cannot honour.")
+                Text("Jobs are recorded and claimed on this Mac. GatewayKH sends work to location controllers; Hub Studio KH manages local execution and reports the capabilities it actually has. This app offers no update channel it cannot honour.")
                     .font(HubType.secondary).foregroundStyle(.secondary)
             } else {
                 Text("Remote control is optional and not required to create assets locally.")
@@ -7031,7 +7755,7 @@ struct StudioContent: View {
             }
 
             // **The identifiers, in plain view** (owner, 2026-10-25: *"what are the identifiers on
-            // Studio Hub for each machine? Make sure they're prominent and easily edited, so I
+            // Hub Studio KH for each machine? Make sure they're prominent and easily edited, so I
             // don't repeat my current mistake, because they're hard to change. With this move I
             // want a clean slate."*).
             //
@@ -7308,6 +8032,10 @@ struct StudioContent: View {
         let settings = workspace.controllerIdentity?.settings
         let inGroup = settings?.fleetCredentialOrigin == "adopted"
         VStack(alignment: .leading, spacing: HubSpace.s) {
+            Text("Identifiers").font(HubType.rowTitle)
+            DiagnosticDetails(title: "Machine ID and site",
+                              summary: "\(settings?.controllerId ?? "not reporting") · \(settings?.siteName ?? "")") {
+        VStack(alignment: .leading, spacing: HubSpace.s) {
             identifierLine("Machine ID", value: settings?.controllerId, copyLabel: "Copy ID",
                            explanation: "The key a controller routes to this Mac by. A join registers "
                                + "it as this Mac's node id.")
@@ -7341,6 +8069,9 @@ struct StudioContent: View {
         .onChange(of: workspace.controllerIdentity?.settings.controllerId) { _, _ in loadIdentityDrafts() }
         .onChange(of: workspace.controllerIdentity?.settings.siteId) { _, _ in loadIdentityDrafts() }
         .onChange(of: workspace.controllerIdentity?.settings.siteName) { _, _ in loadIdentityDrafts() }
+            }
+        }
+        .frame(maxWidth: 620, alignment: .leading)
     }
 
     /// One identifier, printed where it can be read and copied: the value in a monospace face so a
@@ -7440,32 +8171,58 @@ struct StudioContent: View {
             HStack(alignment: .firstTextBaseline, spacing: HubSpace.m) {
                 Text("Nodes").font(HubType.section)
                 Spacer(minLength: 0)
+                if windowWidth - HubSpace.sidebar - 1 - 2 * HubSpace.page >= NodeColumn.wideMinimum {
+                    HubSegmentedControl(
+                        selection: $fleetView,
+                        items: [
+                            HubSegmentItem(tag: "table", label: "Table", symbol: "tablecells"),
+                            HubSegmentItem(tag: "cards", label: "Cards", symbol: "square.grid.2x2"),
+                        ],
+                        controlSize: .small,
+                        accessibilityLabel: "Macs view"
+                    )
+                    .help("Table or cards; remembered for this Mac")
+                }
+                TextField("Search Macs", text: $fleetSearch)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 240)
+                    .onExitCommand { fleetSearch = "" }
+                if !fleetSearch.isEmpty {
+                    Button("Clear") { fleetSearch = "" }.hubRowControl()
+                }
                 fleetRefreshStatus
-                Button("Refresh") { Task { await workspace.refreshFleetNodes() } }
-                    .hubRowControl()
-                    .disabled(!localServicesReady || workspace.fleetRefreshing)
             }
-            let rows = NativeFleetRow.rows(overview: workspace.fleetOverview, nodes: workspace.fleetNodes)
+            let allRows = NativeFleetRow.rows(overview: workspace.fleetOverview, nodes: workspace.fleetNodes)
+            let query = fleetSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rows = query.isEmpty ? allRows : allRows.filter {
+                $0.name.localizedCaseInsensitiveContains(query)
+                    || ($0.address ?? "").localizedCaseInsensitiveContains(query)
+                    || ($0.node?.id ?? "").localizedCaseInsensitiveContains(query)
+            }
             let hasFleetSnapshot = workspace.fleetOverview != nil || workspace.fleetNodes != nil
-            if let catalogError = workspace.catalogReadError {
-                Text(catalogError)
-                    .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let error = workspace.fleetReadError {
-                Text(error + (hasFleetSnapshot ? " Showing what was read last." : ""))
-                    .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let nodeRemovalRefusal {
-                Text(nodeRemovalRefusal)
-                    .font(HubType.secondary).foregroundStyle(HubStatus.warn.textColor)
-                    .fixedSize(horizontal: false, vertical: true)
+            // One grouped warning with its count, not a stack of repeated lines.
+            let warnings = [workspace.catalogReadError,
+                            workspace.fleetReadError.map { $0 + (hasFleetSnapshot ? " Showing what was read last." : "") },
+                            nodeRemovalRefusal].compactMap { $0 }
+            if !warnings.isEmpty {
+                HubBanner(status: .warn, symbol: "exclamationmark.triangle.fill",
+                          title: "\(warnings.count) fleet warning\(warnings.count == 1 ? "" : "s")",
+                          message: warnings.joined(separator: "\n\n")) {
+                    Button(localServicesReady ? "Retry" : "Start Services") {
+                        if localServicesReady {
+                            Task { await workspace.refreshFleetNodes() }
+                        } else {
+                            studio.start()
+                        }
+                    }.hubRowControl()
+                }
             }
             if workspace.fleetOverview != nil || workspace.fleetNodes != nil {
                 nodesSummary
                 if !rows.isEmpty {
                     nodeTable(rows)
+                } else if !query.isEmpty {
+                    Text("No Mac matches “\(query)”.")
+                        .font(HubType.secondary).foregroundStyle(.secondary)
                 }
                 if let removed = workspace.fleetNodes?.removed, !removed.isEmpty {
                     removedNodes(removed)
@@ -7485,7 +8242,8 @@ struct StudioContent: View {
     @ViewBuilder private var nodesSummary: some View {
         VStack(alignment: .leading, spacing: HubSpace.xs) {
             if let overview = workspace.fleetOverview {
-                Text(poolSummary(overview) + " " + countsLine(overview))
+                let rows = NativeFleetRow.rows(overview: workspace.fleetOverview, nodes: workspace.fleetNodes)
+                Text(poolSummary(overview) + " " + countsLine(rows))
                     .font(HubType.secondary).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(pinSummary)
@@ -7507,36 +8265,71 @@ struct StudioContent: View {
         }
     }
 
-    private func countsLine(_ overview: NativeFleetOverview) -> String {
-        var line = "\(overview.summary.reachable) of \(overview.summary.total) reachable now"
+    /// Counts the rows the table draws, this Mac included, so the sentence and the table agree.
+    private func countsLine(_ rows: [NativeFleetRow]) -> String {
+        // The status line says how many are reachable and poolSummary says the list is below; this
+        // sentence carries only the exceptions.
+        var parts: [String] = []
         if let fleet = workspace.fleetNodes {
             if let refused = fleet.summary.unauthorized, refused > 0 {
-                line += " · \(refused) refused this controller's credential"
+                parts.append("\(refused) refused this controller's credential")
             }
-            if fleet.summary.error > 0 { line += " · \(fleet.summary.error) answered with an error" }
+            if fleet.summary.error > 0 { parts.append("\(fleet.summary.error) answered with an error") }
         }
-        return line + "."
+        return parts.isEmpty ? "Every Mac answered." : parts.joined(separator: " · ") + "."
     }
 
     private func nodeTable(_ rows: [NativeFleetRow]) -> some View {
-        // The width the card gets decides the layout: one line per Mac when every column fits, a small
-        // card per Mac when it does not. (`ViewThatFits` cannot say: it asks each layout for its ideal
-        // width, which for a row of text is the whole sentence.)
-        HubCard(padding: 0) {
-            VStack(spacing: 0) {
-                if windowWidth - HubSpace.sidebar - 1 - 2 * HubSpace.page >= NodeColumn.wideMinimum {
-                    nodeTableHeader
-                    ForEach(rows) { row in
-                        Divider()
-                        wideNodeRow(row)
-                    }
-                } else {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        if index > 0 { Divider() }
-                        compactNodeRow(row)
+        // The remembered Table/Cards choice, with cards forced below the table's minimum width.
+        let canTable = windowWidth - HubSpace.sidebar - 1 - 2 * HubSpace.page >= NodeColumn.wideMinimum
+        let cards = fleetView == "cards" || !canTable
+        return Group {
+            if cards {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: HubSpace.m, alignment: .top)],
+                          alignment: .leading, spacing: HubSpace.m) {
+                    ForEach(rows) { row in fleetCard(row) }
+                }
+            } else {
+                HubCard(padding: 0) {
+                    VStack(spacing: 0) {
+                        nodeTableHeader
+                        ForEach(rows) { row in
+                            Divider()
+                            wideNodeRow(row)
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /// One Mac as a card: the same facts as a table row, equal height, actions at the foot.
+    private func fleetCard(_ row: NativeFleetRow) -> some View {
+        HubCard {
+            VStack(alignment: .leading, spacing: HubSpace.s) {
+                HStack(alignment: .top, spacing: HubSpace.m) {
+                    nodeIdentity(row)
+                    Spacer(minLength: 0)
+                    nodeStateCell(row)
+                }
+                nodeDoingNow(row)
+                HStack(alignment: .bottom, spacing: HubSpace.l) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Disk free").font(HubType.caption).foregroundStyle(.secondary)
+                        resourceCell(text: row.machine?.diskText, tier: row.machine?.diskTier ?? .unknown,
+                                     fraction: row.machine?.diskFreeFraction, reachable: row.isReachable,
+                                     total: row.machine?.totalDiskText)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Memory free").font(HubType.caption).foregroundStyle(.secondary)
+                        resourceCell(text: row.machine?.memoryText, tier: row.machine?.memoryTier ?? .unknown,
+                                     fraction: row.machine?.memoryFreeFraction, reachable: row.isReachable)
+                    }
+                    Spacer(minLength: 0)
+                    nodeActions(row)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 168, alignment: .topLeading)
         }
     }
 
@@ -7604,26 +8397,12 @@ struct StudioContent: View {
             HStack(spacing: HubSpace.tight) {
                 Text(row.name).font(HubType.rowTitle).lineLimit(1).truncationMode(.middle)
                 if let role = nodeRoleTitle(row) {
-                    StatusBadge(text: role, status: role == "Controller" ? .info : .off)
+                    StatusBadge(text: role, status: .off)
                 }
             }
             if let facts = nodeFactsLine(row) {
                 Text(facts).font(HubType.caption).foregroundStyle(.secondary)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-            }
-            // **The id beside the name** (owner, 2026-10-25: *"make sure they're prominent and
-            // easily edited, so I don't repeat my current mistake"*). A rename never changes the id
-            // a controller routes by, so two Macs whose names look alike are only told apart by
-            // this — and a row that showed only the name could not be checked against the id a
-            // person is holding in another window. `local` is this controller's own machine, which
-            // is a name and not a roster id, so it is left alone.
-            if let nodeId = row.node?.id, !nodeId.isEmpty, nodeId != "local" {
-                Text("ID \(nodeId)").font(HubType.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-            }
-            if let address = row.address, !address.isEmpty {
-                Text(address).font(HubType.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
             }
             HStack(spacing: HubSpace.xs) {
                 if let startup = row.startupText {
@@ -7641,6 +8420,32 @@ struct StudioContent: View {
             if let readiness = workspace.fleetReadiness[row.id], readiness.cannotRunAnything {
                 Text(readiness.summary).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
             }
+            // Each unhealthy state names what a person can do about it, on the row itself.
+            switch row.state(readiness: workspace.fleetReadiness[row.id]) {
+            case .refused:
+                HStack(spacing: HubSpace.s) {
+                    Text("It has to rejoin this controller with the current Fleet token.")
+                        .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Refresh") { Task { await workspace.refreshFleetNodes() } }.hubRowControl()
+                }
+            case .offline:
+                HStack(spacing: HubSpace.s) {
+                    Text("Start that Mac or check its connection, then refresh.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Refresh") { Task { await workspace.refreshFleetNodes() } }.hubRowControl()
+                }
+            case .error:
+                HStack(spacing: HubSpace.s) {
+                    Text("It answered with an error; its detail above is the reason.")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Refresh") { Task { await workspace.refreshFleetNodes() } }.hubRowControl()
+                }
+            default:
+                EmptyView()
+            }
             if row.node?.hasCredential == false {
                 Text("No credential is held for this Mac, so it has to prove itself on its next join.")
                     .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
@@ -7651,7 +8456,12 @@ struct StudioContent: View {
 
     private func nodeStateCell(_ row: NativeFleetRow) -> some View {
         let state = row.state(readiness: workspace.fleetReadiness[row.id])
-        return StatusBadge(text: state.title, status: nodeStatus(state), symbol: nodeSymbol(state))
+        // A Mac that is answering but has no room, no credential or a startup that will not come
+        // back is not "Ready": the chip takes the worst fact on the row.
+        let resourceTrouble = row.machine?.memoryTier == .bad || row.machine?.diskTier == .bad
+            || row.startupNeedsAttention || row.node?.hasCredential == false
+        let shown: NativeFleetRowState = (state == .ready && resourceTrouble) ? .attention : state
+        return StatusBadge(text: shown.title, status: nodeStatus(shown), symbol: nodeSymbol(shown))
     }
 
     private func nodeStatus(_ state: NativeFleetRowState) -> HubStatus {
@@ -7685,7 +8495,8 @@ struct StudioContent: View {
         } else if row.isReachable, row.machine != nil {
             Text(done(row)).font(HubType.secondary).foregroundStyle(.secondary)
         } else {
-            Text("—").font(HubType.secondary).foregroundStyle(.secondary)
+            Text(row.isReachable ? "—" : "Not answering")
+                .font(HubType.secondary).foregroundStyle(.secondary)
         }
     }
 
@@ -7723,29 +8534,48 @@ struct StudioContent: View {
         }
     }
 
-    /// Send here / Automatic (the pin) and Remove, in one fixed-width column so the buttons line up on
-    /// every row. Remove exists only for a Mac this controller has on its roster.
+    /// One action per Mac (Send Here / Automatic) and a Remove behind the row's own overflow, so a
+    /// row is not a pair of competing buttons. A Mac this controller does not own has no action
+    /// but its details; that is honest, not an empty control.
     @ViewBuilder private func nodeActions(_ row: NativeFleetRow) -> some View {
-        VStack(alignment: .trailing, spacing: HubSpace.tight) {
+        HStack(spacing: HubSpace.xs) {
             if canPinWork, let machine = row.machine {
                 let pinned = workspace.routingPin == "machine:\(machine.machine)"
-                Button(pinned ? "Automatic" : "Send Here") {
-                    workspace.routingPin = pinned ? nil : "machine:\(machine.machine)"
-                }
-                // An offline Mac cannot be pinned; clearing an existing pin to it always works.
-                .disabled(!connected || (!machine.reachable && !pinned))
-                .help("Send new Image, Voice, Subtitle and Music work to this Mac until you clear the pin.")
-                .rowAction()
-            }
-            if let node = row.node {
-                Button("Remove…", role: .destructive) {
-                    nodeRemovalRefusal = nil
-                    pendingNodeRemoval = PendingNodeRemoval(
-                        node: node, connectionGeneration: workspace.connectionGeneration)
-                }
-                    .disabled(!localServicesReady || !workspace.fleetRosterReachable || workspace.fleetRefreshing)
+                // No dead button: an offline Mac has no Send Here at all, and the row's advice
+                // says to start it. Clearing an existing pin to it is still offered.
+                if machine.reachable || pinned {
+                    Button(pinned ? "Automatic" : "Send Here") {
+                        workspace.routingPin = pinned ? nil : "machine:\(machine.machine)"
+                    }
+                    .disabled(!connected)
+                    .help("Send new Image, Voice, Subtitle and Music work to this Mac until you clear the pin.")
                     .rowAction()
+                } else {
+                    Color.clear.frame(width: 78, height: 1).accessibilityHidden(true)
+                }
+            } else if canPinWork {
+                // Keep the Send Here column's left edge on every row, including a Mac the roster
+                // has no live machine row for.
+                Color.clear.frame(width: 78, height: 1).accessibilityHidden(true)
             }
+            Menu {
+                Button("Details") { fleetDetailRow = row }
+                if let node = row.node {
+                    Button("Remove \(node.name)…", role: .destructive) {
+                        nodeRemovalRefusal = nil
+                        pendingNodeRemoval = PendingNodeRemoval(
+                            node: node, connectionGeneration: workspace.connectionGeneration)
+                    }
+                    .disabled(!localServicesReady || !workspace.fleetRosterReachable || workspace.fleetRefreshing)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Details and more actions for \(row.name)")
+            .accessibilityLabel("Details and more actions for \(row.name)")
         }
     }
 
@@ -8069,7 +8899,7 @@ struct StudioContent: View {
     /// and a Mac on its own stays quiet.
     private var modeStatus: HubStatus {
         switch workspace.controllerIdentity?.settings.role {
-        case "controller": return .info
+        case "controller": return .off
         case "agent": return workspace.controllerReachable == true ? .ok : .warn
         default: return .off
         }
@@ -8099,8 +8929,15 @@ struct StudioContent: View {
                 if workspace.fleetReadError != nil { return "Controller · nodes not read" }
                 return "Controller"
             }
-            let count = nodes.count
-            return "Controller · \(count) \(count == 1 ? "node" : "nodes")"
+            // This Mac is in the group too, and Connections counts it; the footer cannot say one
+            // fewer than the table (critic, 2026-11-13).
+            let count = nodes.count + 1
+            // "Macs", not "nodes": the Overview's job filter also counts "Nodes", meaning Macs that
+            // are running work, and two different node counts on one screen read as a contradiction
+            // (page critic, 2026-11-12). This line counts the Macs on the controller's roster.
+            // The role pill already says Controller; repeating it here was the owner's
+            // "nothing repeats itself" failure (footer critic, 2026-11-13).
+            return "\(count) Mac\(count == 1 ? "" : "s")"
         case "agent":
             let address = workspace.controllerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = workspace.fleetOverview?.controller?.label
@@ -8111,21 +8948,6 @@ struct StudioContent: View {
         case "standalone": return "Standalone"
         default: return "Not reporting"
         }
-    }
-
-    /// "Image 1 · Audio 8 · Subtitle 3 · Music 2" - how many models this Mac can run for each
-    /// studio, counted with the same filter the model pickers use, so the sidebar and the picker
-    /// always agree. It counts models, not workers: every Mac runs one worker per studio, so a
-    /// worker count said "1" beside a picker offering eight. The Studios come from
-    /// `StudioFunction.allCases`, so a new one is counted here without a second edit.
-    private var generatorSummary: String {
-        let parts = StudioFunction.allCases.filter { $0.hasEngine }.compactMap { function -> String? in
-            let count = workspace.supportedModels(for: function).filter(NativeWorkspaceStore.runsHere).count
-            guard count > 0 else { return nil }
-            let label = StudioPage.page(for: function)?.title ?? function.rawValue
-            return "\(label) \(count)"
-        }
-        return parts.joined(separator: " · ")
     }
 
     private func roleExplanation(_ role: String?) -> String {
@@ -8294,7 +9116,7 @@ struct StudioContent: View {
                     }
                 }
             }
-            Text("A macOS setting, not Studio Hub's. Files moved to macOS Trash are removed by Finder "
+            Text("A macOS setting, not Hub Studio KH's. Files moved to macOS Trash are removed by Finder "
                  + "after 30 days, which is what stops that Trash from filling the disk.")
                 .font(HubType.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -8523,10 +9345,49 @@ struct StudioContent: View {
             catch { fileActionError = error.localizedDescription }
         }
     }
-    private func confirmRemove(_ model: NativeModel) {
-        let alert = NSAlert(); alert.messageText = "Remove downloaded model?"; alert.informativeText = "Move \(model.label) into this library's trash. Nothing is deleted: it can be restored for 30 days, then it goes to the Mac's Trash. Generated files are kept. A model a job is using, or one another installed model needs, is refused and says which."
-        alert.addButton(withTitle: "Keep Model"); alert.addButton(withTitle: "Remove Download")
-        if alert.runModal() == .alertSecondButtonReturn { Task { await workspace.removeModel(model) } }
+    /// An in-app dialog, never a native alert (owner gate, 2026-11-13): the question and both
+    /// answers are part of the page, so the window cannot lose them.
+    private func confirmRemove(_ model: NativeModel) { pendingModelRemoval = model }
+}
+
+/// One Mac's diagnostic details, opened from its row's overflow. Plain values, selectable, no raw
+/// JSON and no id as a title.
+private struct FleetRowDetailSheet: View {
+    let row: NativeFleetRow
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HubSpace.l) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: HubSpace.xs) {
+                    Text(row.name).font(HubType.section)
+                    Text(row.node?.role == "agent" ? "Node" : (row.node?.role?.capitalized ?? "This Mac"))
+                        .font(HubType.secondary).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            VStack(alignment: .leading, spacing: HubSpace.xs) {
+                if let nodeId = row.node?.id, nodeId != "local" {
+                    DiagnosticValue(label: "ID", value: nodeId)
+                }
+                DiagnosticValue(label: "Address", value: row.address)
+                DiagnosticValue(label: "Version", value: row.version)
+                if let node = row.node {
+                    DiagnosticValue(label: "Joined", value: node.joinedAt.map { NativeWorkspaceStore.moment($0) })
+                    DiagnosticValue(label: "Last seen", value: node.lastSeenAt.map { NativeWorkspaceStore.moment($0) })
+                }
+                if let detail = row.node?.detail ?? row.machine?.detail {
+                    DiagnosticValue(label: "Reported", value: detail)
+                }
+            }
+            .padding(HubSpace.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(HubSurface.card, in: RoundedRectangle(cornerRadius: HubRadius.card))
+            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubSurface.border, lineWidth: 1))
+        }
+        .padding(HubSpace.xl)
+        .frame(width: 460)
     }
 }
 
@@ -8587,6 +9448,51 @@ struct StudioTroubleNote: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(width: 320, alignment: .leading)
                     .padding(HubSpace.m)
+            }
+        }
+    }
+}
+
+/// The local services' failure as one notification icon, with the actual message kept whole.
+///
+/// Owner, 2026-10-28: *"can we have it like in a notification icon somewhere instead?"* The
+/// full-width top banner said the same sentence on every page, so the icon sits beside the
+/// status line it explains. The hover and the click carry the operator's own failure text,
+/// verbatim, and Dismiss - the one control the banner offered - stays in the popover.
+struct StartupFailureIcon: View {
+    let detail: String?
+    let onDismiss: () -> Void
+    @State private var showing = false
+
+    /// The accessible name carries the whole failure: the icon is all VoiceOver has, and opening
+    /// the popover must not be the only way to hear what went wrong.
+    static func label(for detail: String) -> String {
+        "Local services need attention. \(detail)"
+    }
+
+    var body: some View {
+        if let detail {
+            Button { showing.toggle() } label: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(HubStatus.warn.textColor)
+            }
+            .buttonStyle(.plain)
+            .help(detail)
+            .accessibilityLabel(Self.label(for: detail))
+            .popover(isPresented: $showing) {
+                VStack(alignment: .leading, spacing: HubSpace.m) {
+                    Text(detail)
+                        .font(HubType.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 320, alignment: .leading)
+                    Button("Dismiss") {
+                        showing = false
+                        onDismiss()
+                    }
+                    .hubRowControl()
+                }
+                .padding(HubSpace.m)
             }
         }
     }

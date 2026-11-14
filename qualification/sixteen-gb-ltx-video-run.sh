@@ -50,7 +50,7 @@ for cand in \
     "${STUDIOHUB_LTX_RUNTIME:-}" \
     "$HERE/ltx-runtime/env/bin/python" \
     "$HERE/video-runtime/bin/python3" \
-    "/Applications/Studio Hub.app/Contents/Resources/runtimes/video/bin/python3" \
+    "/Applications/Hub Studio KH.app/Contents/Resources/runtimes/video/bin/python3" \
     "$HERE/../.build/ltx-2-mlx/env/bin/python" \
     "$HERE/../.build/video-runtime/bin/python3" \
     "$HOME/StudioHubModels/ltx-runtime/env/bin/python"
@@ -67,7 +67,7 @@ if [ -z "$RUNTIME" ]; then
     echo "The LTX runtime is not on this Mac, so there is nothing to measure with."
     [ -n "$RUNTIME_REJECTED" ] && echo "  ($RUNTIME_REJECTED)"
     echo
-    echo "The Studio Hub app ships it: /Applications/Studio Hub.app/Contents/Resources/runtimes/video"
+    echo "The Studio Hub app ships it: /Applications/Hub Studio KH.app/Contents/Resources/runtimes/video"
     echo "is the same Python 3.11 environment the packaged video worker runs on, so a Mac with the"
     echo "app installed already has everything this script needs. Otherwise it is a separate"
     echo "Python 3.11 environment (the Image runtime is 3.12 and cannot host it)."

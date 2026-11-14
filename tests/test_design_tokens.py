@@ -95,15 +95,47 @@ class PageTests(unittest.TestCase):
 
     def test_the_sidebar_is_220_and_keeps_its_footer(self) -> None:
         self.assertIn("idealWidth: HubSpace.sidebar, maxWidth: HubSpace.sidebar", VIEWS)
-        # The owner accepted the footer: this Mac's name and its group line stay.
-        self.assertIn("Text(thisMachineName)", VIEWS)
-        self.assertIn("Text(groupLine)", VIEWS)
+        # The fleet footer is one status line now; the Mac's name and group live in its tooltip.
+        self.assertIn("thisMachineName", VIEWS)
+        self.assertIn("groupLine", VIEWS)
+        self.assertIn('.help("\(role) · \(thisMachineName) · \(groupLine)")', VIEWS)
 
     def test_scrolling_pages_say_so_and_split_pages_do_not(self) -> None:
         for name in ("overview", "jobsWorkspace", "connections", "whatsNew", "settings"):
             self.assertIn("scrolls: true", page_body(name), f"{name} is a long column and must scroll")
         for name in ("audioWorkspace", "imageWorkspace", "musicWorkspace", "chatWorkspace", "modelsWorkspace"):
             self.assertNotIn("scrolls: true", page_body(name), f"{name} scrolls inside its panes, not as a page")
+
+
+class KeyboardTests(unittest.TestCase):
+    def test_escape_closes_dialogs_and_clears_searches(self) -> None:
+        """Escape is the app's cancel: sheets, the image lightbox and every search field."""
+        for needle in (
+            'Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)',
+            'Button("Close") { imageModalID = nil }',
+            '.onExitCommand { modelSearch = "" }',
+            '.onExitCommand { jobSearch = "" }',
+            '.onExitCommand { voiceSearch = "" }',
+            'Button("Cancel", role: .cancel)',
+        ):
+            self.assertIn(needle, VIEWS, f"Escape lost its route: {needle}")
+
+
+class OwnerFixTests(unittest.TestCase):
+    def test_sidebar_content_and_footer_keep_their_edges(self) -> None:
+        # Content is clipped and the sidebar paints above it, so a long page cannot cross it.
+        self.assertIn(".clipped()", VIEWS)
+        self.assertIn(".zIndex(1)", VIEWS)
+        self.assertIn(".background(Color(nsColor: .controlBackgroundColor))", VIEWS)
+        # The test-machine profile is off unless switched on.
+        self.assertIn('@AppStorage("studiohub.testMachine") private var testMachine = false', VIEWS)
+        # One attention phrase, so "1 need" and "3 needs" cannot both appear.
+        self.assertIn("private func attentionPhrase(_ count: Int) -> String", VIEWS)
+        self.assertEqual(VIEWS.count("attentionPhrase("), 3,
+                         "the helper and both status lines must use the one phrase")
+        # One remembered view choice per fleet list, and Details is a row-menu action.
+        self.assertIn('@AppStorage("hub.fleetView") private var fleetView = "table"', VIEWS)
+        self.assertIn('Button("Details") { fleetDetailRow = row }', VIEWS)
 
 
 class FormTests(unittest.TestCase):
@@ -121,7 +153,9 @@ class RowTests(unittest.TestCase):
         row = VIEWS[VIEWS.index("private func voiceRow"):]
         row = row[:row.index("\n    /// One editor for both adding and editing")]
         self.assertIn("ActionRow {", row)
-        self.assertIn("RowActions {", row)
+        # The three controls sit on one line (the kebab used to wrap under Play); they still
+        # declare themselves as the row's action slot.
+        self.assertIn(".layoutValue(key: RowSlotKey.self, value: .actions)", row)
         self.assertNotIn("Spacer()", row, "the actions column is ActionRow's, not a Spacer's guess")
 
     def test_removed_nodes_rows_are_action_rows(self) -> None:
@@ -153,7 +187,7 @@ class ConnectionsTableTests(unittest.TestCase):
 
     def test_disk_and_memory_are_badges_in_the_shared_status_colours(self) -> None:
         cell = VIEWS[VIEWS.index("private func resourceCell"):]
-        cell = cell[:cell.index("/// Send here / Automatic")]
+        cell = cell[:cell.index("/// One action per Mac")]
         self.assertIn("StatusBadge(", cell)
         self.assertIn("HubStatus(tier)", cell)
         self.assertIn("MeterBar(", cell)

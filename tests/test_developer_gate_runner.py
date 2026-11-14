@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import shutil
+import shlex
 import signal
 import stat
 import subprocess
@@ -46,6 +47,13 @@ from components.hub.developer_image_runner import Metrics, ReleaseProof, stop_ex
 import components.hub.developer_image_runner as image_runner
 
 _LIBPROC: Any = None
+
+
+def _write_python_tool(path: Path, source: str) -> None:
+    # A shell exec preserves child identity when the exact Python path contains spaces.
+    Path(str(path) + ".py").write_text(source)
+    path.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$0.py" "$@"\n')
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
 def _real_create_time(pid: int) -> float | None:
@@ -145,16 +153,13 @@ class TestDeveloperGateRunner(unittest.TestCase):
         self.tools_bin.mkdir(parents=True, mode=0o700)
 
         self.mock_python = self.tools_bin / "mock_python"
-        self.mock_python.write_text(f"#!{sys.executable}\nimport sys; sys.exit(0)\n")
-        self.mock_python.chmod(self.mock_python.stat().st_mode | stat.S_IEXEC)
+        _write_python_tool(self.mock_python, "import sys; sys.exit(0)\n")
 
         self.mock_node = self.tools_bin / "mock_node"
-        self.mock_node.write_text(f"#!{sys.executable}\nimport sys; sys.exit(0)\n")
-        self.mock_node.chmod(self.mock_node.stat().st_mode | stat.S_IEXEC)
+        _write_python_tool(self.mock_node, "import sys; sys.exit(0)\n")
 
         self.mock_go = self.tools_bin / "mock_go"
-        self.mock_go.write_text(f"#!{sys.executable}\nimport sys; sys.exit(0)\n")
-        self.mock_go.chmod(self.mock_go.stat().st_mode | stat.S_IEXEC)
+        _write_python_tool(self.mock_go, "import sys; sys.exit(0)\n")
 
         self.trusted_tools = {
             "python": {"available": True, "executable": str(self.mock_python), "version": "3.15.0"},
@@ -167,12 +172,33 @@ class TestDeveloperGateRunner(unittest.TestCase):
 
     def _write_marker_tool(self) -> Path:
         marker = self.root / "tool_ran"
-        self.mock_python.write_text(
-            f"#!{sys.executable}\n"
+        _write_python_tool(self.mock_python,
             f"open({str(marker)!r}, 'w').write('ran')\n"
             f"raise SystemExit(0)\n"
         )
         return marker
+
+    def test_spaced_interpreter_preserves_pid_arguments_exit_and_rewrites(self) -> None:
+        interpreter = self.root / "Owner's Python Runtime" / "python3"
+        interpreter.parent.mkdir()
+        interpreter.symlink_to(sys.executable)
+        arguments = ["space arg", "quote'arg", "$(unused)", ""]
+        with mock.patch.object(sys, "executable", str(interpreter)):
+            _write_python_tool(self.mock_python,
+                               "import json, os, sys\n"
+                               "print(json.dumps({'pid': os.getpid(), 'args': sys.argv[1:]}))\n"
+                               "sys.exit(7)\n")
+        with subprocess.Popen([str(self.mock_python), *arguments], stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, env={"PATH": "/nonexistent"}) as child:
+            stdout, stderr = child.communicate(timeout=5)
+            self.assertEqual(child.returncode, 7, stderr)
+            self.assertEqual(json.loads(stdout), {"pid": child.pid, "args": arguments})
+        with mock.patch.object(sys, "executable", str(interpreter)):
+            marker = self._write_marker_tool()
+        result = subprocess.run([str(self.mock_python)], capture_output=True, text=True,
+                                env={"PATH": "/nonexistent"}, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(marker.read_text(), "ran")
 
     def test_fixture_hash_and_command_count(self) -> None:
         fixture = load_commands_fixture()
@@ -279,11 +305,10 @@ class TestDeveloperGateRunner(unittest.TestCase):
         # Script that writes its env to a file so we can assert sanitization
         env_dump_file = self.root / "env_dump.json"
         script = (
-            f"#!{sys.executable}\n"
             f"import os, json\n"
             f"open({str(env_dump_file)!r}, 'w').write(json.dumps(dict(os.environ)))\n"
         )
-        self.mock_python.write_text(script)
+        _write_python_tool(self.mock_python, script)
 
         # Set dirty environment in parent process
         with mock.patch.dict(os.environ, {
@@ -334,10 +359,9 @@ class TestDeveloperGateRunner(unittest.TestCase):
     def test_preemption_during_execution(self) -> None:
         # Script that sleeps to allow preemption detection
         sleep_script = (
-            f"#!{sys.executable}\n"
             f"import time; time.sleep(10)\n"
         )
-        self.mock_python.write_text(sleep_script)
+        _write_python_tool(self.mock_python, sleep_script)
 
         preempt_flag = [False]
 
@@ -381,13 +405,12 @@ class TestDeveloperGateRunner(unittest.TestCase):
     def test_log_cap_overflow_stops_process_and_fails(self) -> None:
         # Script that spams output beyond limit
         spam_script = (
-            f"#!{sys.executable}\n"
             f"import sys\n"
             f"for _ in range(10000):\n"
             f"    sys.stdout.write('A' * 1024)\n"
             f"    sys.stdout.flush()\n"
         )
-        self.mock_python.write_text(spam_script)
+        _write_python_tool(self.mock_python, spam_script)
 
         result = run_gate(
             workspace_dir=self.ws_dir,
@@ -407,8 +430,7 @@ class TestDeveloperGateRunner(unittest.TestCase):
     def test_fast_child_log_overflow_after_exit_still_fails(self) -> None:
         # The child exits before the sampling loop observes the overflow; the drained sink
         # must still fail the check and the retained log must stay bounded.
-        self.mock_python.write_text(
-            f"#!{sys.executable}\n"
+        _write_python_tool(self.mock_python,
             f"import sys\n"
             f"sys.stdout.write('A' * (64 * 1024))\n"
             f"sys.stdout.flush()\n"
@@ -765,7 +787,7 @@ class TestDeveloperGateRunner(unittest.TestCase):
             leader.wait(timeout=2)
 
     def test_budget_stop_reports_killed_command_as_null_exit(self) -> None:
-        self.mock_python.write_text(f"#!{sys.executable}\nimport time; time.sleep(10)\n")
+        _write_python_tool(self.mock_python, f"import time; time.sleep(10)\n")
 
         result = run_gate(
             workspace_dir=self.ws_dir,
@@ -790,9 +812,9 @@ class TestDeveloperGateRunner(unittest.TestCase):
         # its real signal; it never becomes 0 or 1.
         for name, expected in (("SIGTERM", 15), ("SIGKILL", 9)):
             with self.subTest(signal=name):
-                self.mock_python.write_text(
-                    f"#!{sys.executable}\n"
-                    f"import os, signal\n"
+                _write_python_tool(
+                    self.mock_python,
+                    "import os, signal\n"
                     f"os.kill(os.getpid(), signal.{name})\n")
 
                 result = run_gate(
@@ -813,7 +835,7 @@ class TestDeveloperGateRunner(unittest.TestCase):
                 self.assertTrue(result.process_release["confirmed"], result.process_release)
 
     def test_command_failure_keeps_its_actual_exit_code(self) -> None:
-        self.mock_python.write_text(f"#!{sys.executable}\nimport sys; sys.exit(3)\n")
+        _write_python_tool(self.mock_python, f"import sys; sys.exit(3)\n")
 
         result = run_gate(
             workspace_dir=self.ws_dir,
@@ -951,9 +973,9 @@ class TestDeveloperGateRunner(unittest.TestCase):
 
     def test_all_six_known_commands_execute_cleanly(self) -> None:
         # Echo unique identifier for each tool invocation
-        self.mock_python.write_text(f"#!{sys.executable}\nimport sys; sys.stdout.write('python ok\\n'); sys.exit(0)\n")
-        self.mock_node.write_text(f"#!{sys.executable}\nimport sys; sys.stdout.write('node ok\\n'); sys.exit(0)\n")
-        self.mock_go.write_text(f"#!{sys.executable}\nimport sys; sys.stdout.write('go ok\\n'); sys.exit(0)\n")
+        _write_python_tool(self.mock_python, f"import sys; sys.stdout.write('python ok\\n'); sys.exit(0)\n")
+        _write_python_tool(self.mock_node, f"import sys; sys.stdout.write('node ok\\n'); sys.exit(0)\n")
+        _write_python_tool(self.mock_go, f"import sys; sys.stdout.write('go ok\\n'); sys.exit(0)\n")
 
         recorded = []
         result = run_gate(
@@ -1109,8 +1131,8 @@ class TestDeveloperGateRunner(unittest.TestCase):
         self.assertEqual(len(calls), 3)
 
     def test_low_disk_while_running_stops_owned_process(self) -> None:
-        self.mock_python.write_text(
-            f"#!{sys.executable}\nimport time; time.sleep(10)\n")
+        _write_python_tool(self.mock_python,
+            f"import time; time.sleep(10)\n")
         sampler, _calls = self._sequence_sampler(
             99 * self.GIB, 99 * self.GIB, 99 * self.GIB, MINIMUM_FREE_BYTES - 1)
         result = self._run_with_disk(sampler)
@@ -1121,8 +1143,8 @@ class TestDeveloperGateRunner(unittest.TestCase):
         self.assertEqual(result.process_release["owned_processes_remaining"], 0)
 
     def test_disk_sample_error_while_running_stops_owned_process(self) -> None:
-        self.mock_python.write_text(
-            f"#!{sys.executable}\nimport time; time.sleep(10)\n")
+        _write_python_tool(self.mock_python,
+            f"import time; time.sleep(10)\n")
         sampler, _calls = self._sequence_sampler(
             99 * self.GIB, 99 * self.GIB, 99 * self.GIB, OSError("statvfs failed"))
         result = self._run_with_disk(sampler)

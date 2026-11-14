@@ -22,7 +22,7 @@ import library_guard  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_APP = Path("/Applications/Studio Hub.app")
+DEFAULT_APP = Path("/Applications/Hub Studio KH.app")
 MODEL = "AITRADER/FLUX2-klein-4B-mlx-4bit"
 PROMPT = ("A quiet riverside garden at sunrise, soft mist over the water, "
           "green trees, natural light, photographic detail.")

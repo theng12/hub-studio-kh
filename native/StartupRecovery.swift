@@ -106,9 +106,9 @@ enum LaunchStart {
     static func decide(loginLaunch: Bool, startServicesOnLaunch: Bool,
                        hasLibrary: Bool, canConfigure: Bool) -> LaunchStartDecision {
         guard hasLibrary else { return .nothingToStart }
-        // A copy that does not own the data folder cannot start anything: another Studio Hub is
+        // A copy that does not own the data folder cannot start anything: another Hub Studio KH is
         // the real app, and this copy presents it and exits.
-        guard canConfigure else { return .stayStopped("another copy of Studio Hub is already running") }
+        guard canConfigure else { return .stayStopped("another copy of Hub Studio KH is already running") }
         guard loginLaunch else { return .start }
         return startServicesOnLaunch ? .start : .stayStopped(stoppedByChoice)
     }

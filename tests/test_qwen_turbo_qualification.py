@@ -219,7 +219,7 @@ class QwenTurboQualificationTests(unittest.TestCase):
             qwen.workloads(True, turbo=True)
 
     def test_worker_command_opts_in_only_for_the_turbo_candidate(self) -> None:
-        app = Path("/fixture/Kit/Studio Hub.app")
+        app = Path("/fixture/Kit/Hub Studio KH.app")
         data = Path("/fixture/Kit/_qualification-private/run/state")
         library = Path("/fixture/Kit/_qualification-private/run/library")
         token = data / "owner.token"
@@ -255,7 +255,7 @@ class QwenTurboQualificationTests(unittest.TestCase):
         worker = load_image_worker()
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
-            resources = root / "Studio Hub.app/Contents/Resources"
+            resources = root / "Hub Studio KH.app/Contents/Resources"
             manifests = resources / "model-manifests"
             manifests.mkdir(parents=True)
             candidate = json.loads(
@@ -287,8 +287,8 @@ class QwenTurboQualificationTests(unittest.TestCase):
 
     def test_private_worker_refuses_all_known_foreign_model_processes_before_spawn(self) -> None:
         commands = (
-            "/Applications/Studio Hub.app/Contents/Resources/voice_worker.py --port 0",
-            "/Applications/Studio Hub.app/Contents/Resources/chat_worker.py --port 0",
+            "/Applications/Hub Studio KH.app/Contents/Resources/voice_worker.py --port 0",
+            "/Applications/Hub Studio KH.app/Contents/Resources/chat_worker.py --port 0",
             "/runtime/python3 -m mlx_lm.generate --model private",
             "/runtime/bin/mflux-generate --model private",
             "/runtime/bin/mflux-generate-z-image-turbo --model private",

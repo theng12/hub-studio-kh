@@ -290,7 +290,7 @@ def test_a_controller_that_already_runs_the_release_needs_no_blobs_and_serves_th
     _trust(hub, seed)
     _d, body, entries, blobs = _release(seed, FILES_A, tmp_path)
     # This Hub is running from an installed app that is already that release (read-only, as installed).
-    app = _tree(tmp_path / "Applications" / "Studio Hub.app", FILES_A)
+    app = _tree(tmp_path / "Applications" / "Hub Studio KH.app", FILES_A)
     monkeypatch.setenv("STUDIOHUB_RELEASE_MANIFEST", str(app / R / "release-manifest.json"))
     answer = _push(hub, body).json()
     assert answer["need"] == [], "everything is already in the installed app"
@@ -336,7 +336,7 @@ def test_a_blob_put_does_no_rescan_and_runs_off_the_event_loop(hub, tmp_path, mo
     assert hub.get("/api/hub/release/need", headers=_fleet_headers()).json() == {"need": []}
     assert len(rescans) == 1, "the sender asks once, at the end"
 
-    app = _tree(tmp_path / "Applications" / "Studio Hub.app", FILES_A)
+    app = _tree(tmp_path / "Applications" / "Hub Studio KH.app", FILES_A)
     first = release_delta.installed_by_sha(app)
     assert release_delta.installed_by_sha(app) is first, "the installed app's sha index is built once, not per blob"
 
@@ -349,7 +349,7 @@ def test_a_push_says_which_installed_app_its_need_is_measured_against(hub, tmp_p
     _d, body, _entries_, blobs = _release(seed, FILES_A, tmp_path)
     lost = _push(hub, body).json()
     assert lost["basis"] == {"installed_app": None, "wanted_blobs": len(blobs), "needed_blobs": len(blobs)}
-    app = _tree(tmp_path / "Applications" / "Studio Hub.app", FILES_A)
+    app = _tree(tmp_path / "Applications" / "Hub Studio KH.app", FILES_A)
     monkeypatch.setenv("STUDIOHUB_RELEASE_MANIFEST", str(app / R / "release-manifest.json"))
     found = _push(hub, body).json()
     assert found["basis"] == {"installed_app": str(app), "wanted_blobs": len(blobs), "needed_blobs": 0}
@@ -553,7 +553,7 @@ def _wait_for_stage(hub, timeout=30):
 
 def _installed_app(tmp_path, files, *, with_manifest=True):
     from components.hub.backend import file_manifest as fm
-    app = _tree(tmp_path / "Applications" / "Studio Hub.app", files)
+    app = _tree(tmp_path / "Applications" / "Hub Studio KH.app", files)
     if with_manifest:
         fm.write(app, destination=app / fm.DIR_REL)
     from components.hub.backend import release_delta

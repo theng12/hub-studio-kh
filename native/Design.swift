@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// The Studio Hub design tokens: one place for the type scale, the spacing grid, the corner radii, the
+// The Hub Studio KH design tokens: one place for the type scale, the spacing grid, the corner radii, the
 // status colours, the status badge, the shared page scaffold and the row/section/empty-state pieces.
 //
 // Why this file exists: before it, 13 pages each wrote their own `.padding(28)`, fonts came from 22
@@ -88,6 +88,26 @@ enum HubType {
     static let icon = Font.system(size: 15)
 }
 
+// MARK: - Neutral surfaces
+
+/// One neutral ramp for the whole app: page, sidebar, card, border, muted text, body text. Every
+/// surface resolves through here so light and dark keep the same layering (page < card < sidebar
+/// separation) and no view invents its own grey.
+enum HubSurface {
+    /// The window behind the content.
+    static var page: Color { Color(nsColor: .windowBackgroundColor) }
+    /// The sidebar column: one step away from the page, never the same fill.
+    static var sidebar: Color { Color(nsColor: .underPageBackgroundColor) }
+    /// A card, panel or field surface.
+    static var card: Color { Color(nsColor: .controlBackgroundColor) }
+    /// The one hairline colour for cards, rows and dividers.
+    static var border: Color { Color(nsColor: .separatorColor) }
+    /// Secondary and help text.
+    static var muted: Color { Color(nsColor: .secondaryLabelColor) }
+    /// Body and titles.
+    static var body: Color { Color(nsColor: .labelColor) }
+}
+
 // MARK: - Status colours
 
 /// One vocabulary for every state in the app, shared with the Gateway.
@@ -116,28 +136,32 @@ enum HubStatus: Equatable {
         }
     }
 
-    /// The colour for *text* in this state: the status colour blended 40 % toward the label colour
-    /// (black in light, white in dark). Plain system orange on white is about 2.3:1, and the same
-    /// blend in the Gateway keeps both apps readable. Resolved per appearance, so it follows a
-    /// switch between light and dark without a redraw of the data.
-    var textColor: Color {
-        let base: NSColor
+    /// The status colour as an AppKit colour, before the text blend.
+    var baseNSColor: NSColor {
         switch self {
-        case .ok: base = .systemGreen
-        case .warn: base = .systemOrange
-        case .bad: base = .systemRed
-        case .off: base = .systemGray
-        case .info: base = .systemBlue
+        case .ok: return .systemGreen
+        case .warn: return .systemOrange
+        case .bad: return .systemRed
+        case .off: return .systemGray
+        case .info: return .systemBlue
         }
-        return Color(nsColor: NSColor(name: nil) { appearance in
-            var resolved = base
-            appearance.performAsCurrentDrawingAppearance {
-                let from = base.usingColorSpace(.sRGB) ?? base
-                let label = NSColor.labelColor.usingColorSpace(.sRGB) ?? NSColor.labelColor
-                resolved = from.blended(withFraction: 0.4, of: label) ?? from
-            }
-            return resolved
-        })
+    }
+
+    /// The colour for *text* in this state, resolved for one appearance: the status colour blended
+    /// 50 % toward the label colour. The native view checks measure every pair against its badge
+    /// fill at 4.5:1; change this blend only with that check.
+    func textNSColor(for appearance: NSAppearance) -> NSColor {
+        var resolved = baseNSColor
+        appearance.performAsCurrentDrawingAppearance {
+            let from = baseNSColor.usingColorSpace(.sRGB) ?? baseNSColor
+            let label = NSColor.labelColor.usingColorSpace(.sRGB) ?? NSColor.labelColor
+            resolved = from.blended(withFraction: 0.5, of: label) ?? from
+        }
+        return resolved
+    }
+
+    var textColor: Color {
+        Color(nsColor: NSColor(name: nil) { appearance in textNSColor(for: appearance) })
     }
 
     /// The status a disk or memory tier is drawn in. An unknown tier is grey, never green.
@@ -223,12 +247,15 @@ public struct HubSegmentItem<T: Hashable>: Identifiable {
     public let tag: T
     public let label: String
     public let accessibilityLabel: String?
+    /// The segment's own glyph, so a tab says what a person does there before the words are read.
+    public let symbol: String?
     public var id: AnyHashable { AnyHashable(tag) }
 
-    public init(tag: T, label: String, accessibilityLabel: String? = nil) {
+    public init(tag: T, label: String, accessibilityLabel: String? = nil, symbol: String? = nil) {
         self.tag = tag
         self.label = label
         self.accessibilityLabel = accessibilityLabel
+        self.symbol = symbol
     }
 }
 
@@ -334,7 +361,16 @@ public struct HubSegmentedControl<T: Hashable>: NSViewRepresentable {
                 sc.setLabel(item.label, forSegment: i)
             }
             sc.setToolTip(item.accessibilityLabel, forSegment: i)
-            let boldW = (item.label as NSString).size(withAttributes: [.font: boldFont]).width
+            var glyph: CGFloat = 0
+            if let symbol = item.symbol,
+               let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
+                sc.setImage(image, forSegment: i)
+                sc.setImageScaling(.scaleProportionallyDown, forSegment: i)
+                glyph = font.pointSize + 4
+            } else {
+                sc.setImage(nil, forSegment: i)
+            }
+            let boldW = (item.label as NSString).size(withAttributes: [.font: boldFont]).width + glyph
             boldWidths.append(boldW)
             if boldW > maxBold { maxBold = boldW }
         }
@@ -354,14 +390,70 @@ public struct HubSegmentedControl<T: Hashable>: NSViewRepresentable {
 
 // MARK: - Page scaffold
 
-/// Every page: the title and subtitle named like the sidebar row, the one page margin, content below.
+/// The one plain line under every page title: a state dot and a sentence a person can act on.
+struct PageStatusLine {
+    let text: String
+    var tone: HubStatus = .off
+
+    init(_ text: String, tone: HubStatus = .off) {
+        self.text = text
+        self.tone = tone
+    }
+
+    /// The tone a page's own answer implies: started is green, a stopped Hub or a missing model is
+    /// amber, a live refusal is red, and a plain fact is grey. Pages pass their words; only this
+    /// table chooses the colour, so two pages cannot draw the same state differently.
+    static func tone(connected: Bool, warning: Bool, failure: Bool) -> HubStatus {
+        if failure { return .bad }
+        if !connected { return .warn }
+        return warning ? .warn : .ok
+    }
+}
+
+/// The page's one prominent action. Kept beside the title rather than inside a page's own toolbar so
+/// every page offers it in the same place; a page that has none passes nil.
+struct PagePrimaryAction {
+    let title: String
+    let action: () -> Void
+    var isEnabled = true
+    var help: String?
+
+    init(_ title: String, isEnabled: Bool = true, help: String? = nil, action: @escaping () -> Void) {
+        self.title = title
+        self.isEnabled = isEnabled
+        self.help = help
+        self.action = action
+    }
+}
+
+/// Everything a page used to lay out as a row of buttons, behind one overflow.
+struct PageMenuAction: Identifiable {
+    let id = UUID()
+    let title: String
+    var symbol: String?
+    var isEnabled: Bool
+    let action: () -> Void
+
+    init(_ title: String, symbol: String? = nil, isEnabled: Bool = true, action: @escaping () -> Void) {
+        self.title = title
+        self.symbol = symbol
+        self.isEnabled = isEnabled
+        self.action = action
+    }
+}
+
+/// Every page: the title, one plain status line, at most one primary action and one overflow, the
+/// one page margin, content below. Tabs, searches and filters live inside the content; actions that
+/// used to sit in a toolbar of four now live in the overflow.
 ///
 /// `scrolls` is for pages that are one long column (Overview, Jobs, Connections, Settings); the
 /// workspace pages are split panes that scroll inside themselves, so a page never resizes the window.
 struct PageScaffold<Trailing: View, Content: View>: View {
     let title: String
-    let subtitle: String
+    let status: PageStatusLine?
     var scrolls = false
+    var primary: PagePrimaryAction?
+    var menu: [PageMenuAction] = []
     @ViewBuilder var trailing: Trailing
     @ViewBuilder var content: Content
 
@@ -370,11 +462,47 @@ struct PageScaffold<Trailing: View, Content: View>: View {
             HStack(alignment: .top, spacing: HubSpace.l) {
                 VStack(alignment: .leading, spacing: HubSpace.tight) {
                     Text(title).font(HubType.pageTitle)
-                    Text(subtitle).font(HubType.body).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if let status {
+                        HStack(spacing: HubSpace.s) {
+                            Circle().fill(status.tone.color).frame(width: 7, height: 7)
+                                .accessibilityHidden(true)
+                            Text(status.text).font(HubType.body).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
                 }
                 Spacer(minLength: 0)
-                trailing
+                HStack(spacing: HubSpace.s) {
+                    trailing
+                    if let primary {
+                        Button(primary.title, action: primary.action)
+                            .hubPrimary()
+                            .disabled(!primary.isEnabled)
+                            .help(primary.help ?? primary.title)
+                    }
+                    if !menu.isEmpty {
+                        Menu {
+                            ForEach(menu) { item in
+                                Button { item.action() } label: {
+                                    if let symbol = item.symbol {
+                                        Label(item.title, systemImage: symbol)
+                                    } else {
+                                        Text(item.title)
+                                    }
+                                }
+                                .disabled(!item.isEnabled)
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("More actions")
+                        .accessibilityLabel("More actions")
+                    }
+                }
             }
             content
         }
@@ -389,8 +517,135 @@ struct PageScaffold<Trailing: View, Content: View>: View {
 }
 
 extension PageScaffold where Trailing == EmptyView {
-    init(title: String, subtitle: String, scrolls: Bool = false, @ViewBuilder content: () -> Content) {
-        self.init(title: title, subtitle: subtitle, scrolls: scrolls, trailing: { EmptyView() }, content: content)
+    init(title: String, status: PageStatusLine? = nil, scrolls: Bool = false,
+         primary: PagePrimaryAction? = nil, menu: [PageMenuAction] = [],
+         @ViewBuilder content: () -> Content) {
+        self.init(title: title, status: status, scrolls: scrolls, primary: primary, menu: menu,
+                  trailing: { EmptyView() }, content: content)
+    }
+}
+
+// MARK: - Two-column pages
+
+/// A Studio's form and its result pane: side by side when the window can hold both columns, one at
+/// a time in a labelled switch when it cannot. Below 1000 points the two fixed columns used to be
+/// pushed under the sidebar, which cut the result pane off the right edge of a 768-point window.
+struct StudioSplit<Form: View, Side: View>: View {
+    let sideTitle: String
+    var sideSymbol: String = "clock"
+    @ViewBuilder var form: Form
+    @ViewBuilder var side: Side
+    @Environment(\.hubWindowWidth) private var windowWidth
+    @State private var showingSide = false
+
+    var body: some View {
+        if windowWidth >= 1000 {
+            HSplitView {
+                form
+                side
+            }
+        } else {
+            VStack(alignment: .leading, spacing: HubSpace.m) {
+                HubSegmentedControl(
+                    selection: $showingSide,
+                    items: [
+                        HubSegmentItem(tag: false, label: "Set up", symbol: "slider.horizontal.3"),
+                        HubSegmentItem(tag: true, label: sideTitle, symbol: sideSymbol),
+                    ],
+                    sizing: .stablePerLabel,
+                    controlSize: .small,
+                    accessibilityLabel: "Page pane"
+                )
+                if showingSide { side } else { form }
+            }
+        }
+    }
+}
+
+// MARK: - Masonry columns
+
+/// Sections of different heights in the shortest column: two columns of cards without the empty
+/// band a row-aligned grid leaves under the shorter card. One column below the width that fits two.
+struct MasonryLayout: Layout {
+    var columns: Int = 2
+    var spacing: CGFloat = HubSpace.xl
+
+    private func columnWidth(_ width: CGFloat) -> CGFloat {
+        (width - spacing * CGFloat(max(1, columns) - 1)) / CGFloat(max(1, columns))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 0
+        let columnWidth = columnWidth(width)
+        var heights = [CGFloat](repeating: 0, count: max(1, columns))
+        for subview in subviews {
+            let height = subview.sizeThatFits(.init(width: columnWidth, height: nil)).height
+            let column = heights.enumerated().min { $0.element < $1.element }?.offset ?? 0
+            heights[column] += height + spacing
+        }
+        return CGSize(width: width, height: max(0, (heights.max() ?? 0) - spacing))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let columnWidth = columnWidth(bounds.width)
+        var heights = [CGFloat](repeating: 0, count: max(1, columns))
+        for subview in subviews {
+            let height = subview.sizeThatFits(.init(width: columnWidth, height: nil)).height
+            let column = heights.enumerated().min { $0.element < $1.element }?.offset ?? 0
+            let x = bounds.minX + CGFloat(column) * (columnWidth + spacing)
+            let y = bounds.minY + heights[column]
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading,
+                          proposal: .init(width: columnWidth, height: height))
+            heights[column] += height + spacing
+        }
+    }
+}
+
+// MARK: - Diagnostics
+
+/// Raw facts on demand: one plain summary line, the identifiers, paths, addresses or hashes behind
+/// it. A page shows what a person acts on; anything an engineer reads lives here.
+struct DiagnosticDetails<Content: View>: View {
+    var title = "Details"
+    var summary: String
+    @ViewBuilder var content: Content
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: HubSpace.xs) {
+                content
+            }
+            .padding(.top, HubSpace.s)
+            .padding(.leading, HubSpace.s)
+        } label: {
+            HStack(spacing: HubSpace.tight) {
+                Text(title).font(HubType.captionStrong)
+                Text(summary).font(HubType.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            .contentShape(Rectangle())
+        }
+        .disclosureGroupStyle(.automatic)
+        .accessibilityLabel("\(title). \(summary)")
+    }
+}
+
+/// One raw value in a diagnostics block: its label, the value in monospace, selectable, and Copy.
+struct DiagnosticValue: View {
+    let label: String
+    let value: String?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: HubSpace.s) {
+            Text(label).font(HubType.caption).foregroundStyle(.secondary)
+                .frame(minWidth: 92, alignment: .leading)
+            Text(value?.isEmpty == false ? value! : "Unavailable")
+                .font(HubType.monoCaption).textSelection(.enabled)
+                .lineLimit(1).truncationMode(.middle)
+            CopyValueButton(value: value, title: "Copy")
+                .accessibilityLabel("Copy \(label)")
+        }
     }
 }
 
@@ -405,9 +660,9 @@ struct HubCard<Content: View>: View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: HubRadius.card))
+            .background(HubSurface.card, in: RoundedRectangle(cornerRadius: HubRadius.card))
             .overlay(RoundedRectangle(cornerRadius: HubRadius.card)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                .stroke(HubSurface.border, lineWidth: 1))
     }
 }
 
@@ -416,9 +671,9 @@ extension View {
     /// background, a one point separator border and an 8-point radius, clipped to it.
     func hubCardSurface() -> some View {
         self
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: HubRadius.card))
+            .background(HubSurface.card, in: RoundedRectangle(cornerRadius: HubRadius.card))
             .clipShape(RoundedRectangle(cornerRadius: HubRadius.card))
-            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubSurface.border, lineWidth: 1))
     }
 }
 
@@ -498,11 +753,15 @@ extension ValueRow where Value == Text {
     }
 }
 
-/// Nothing to show: a 28-point light symbol, a title, a line of detail and, optionally, the one action.
+/// Nothing to show: a 28-point light symbol, a title, a line of detail and, when there is one, the
+/// next step as a button. An empty state that names no next step is a dead end, so callers with an
+/// action pass it here rather than leaving the operator to find the control themselves.
 struct EmptyState: View {
     let title: String
     let detail: String
     let symbol: String
+    var actionTitle: String?
+    var action: (() -> Void)?
 
     var body: some View {
         VStack(spacing: HubSpace.s) {
@@ -510,6 +769,9 @@ struct EmptyState: View {
             Text(title).font(HubType.rowTitle)
             Text(detail).font(HubType.secondary).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 440)
+            if let actionTitle, let action {
+                Button(actionTitle, action: action).hubPrimary().padding(.top, HubSpace.xs)
+            }
         }
         .padding(HubSpace.xl).frame(maxWidth: .infinity, maxHeight: .infinity)
     }

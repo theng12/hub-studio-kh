@@ -15,8 +15,9 @@ What these tests pin, one per sentence of the brief:
   * a rerun never reposts: the receipt and the controller's own held release both stop it;
   * the owner's generation pause is read and recorded, and no code path here can write it.
 
-The artifact acceptance is exercised with a fake `hdiutil`: the mount is read-only, the mountpoint
-is private, only that mountpoint is detached, and no call is ever made against `/Volumes`.
+The artifact acceptance is exercised with a fake `hdiutil`: the mount is read-only and only the
+attached device is detached. Fake mount fixtures stay on the configured test volume; the real
+private mountpoint guard is tested separately.
 """
 from __future__ import annotations
 
@@ -249,6 +250,19 @@ class IdleRuleTests(unittest.TestCase):
                                                gateway_error='RuntimeError: no db')))
 
 
+class PrivateMountpointTests(unittest.TestCase):
+    def test_a_mountpoint_under_volumes_is_refused(self):
+        with mock.patch.object(hub.tempfile, 'mkdtemp', return_value='/Volumes/test-mount'):
+            with self.assertRaisesRegex(SystemExit, 'refusing to mount under /Volumes'):
+                hub._private_mountpoint('hub-rollout-test-')
+
+    def test_a_private_mountpoint_is_returned(self):
+        with mock.patch.object(hub.tempfile, 'mkdtemp', return_value='/private/tmp/test-mount') as make:
+            self.assertEqual(hub._private_mountpoint('hub-rollout-test-'),
+                             Path('/private/tmp/test-mount'))
+            make.assert_called_once_with(prefix='hub-rollout-test-')
+
+
 class AcceptArtifactTests(unittest.TestCase):
     """The read-only mount rig, driven by a fake `hdiutil`."""
 
@@ -256,14 +270,17 @@ class AcceptArtifactTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix='hub-rollout-accept-test-'))
         self.dmg = self.tmp / f'StudioHub-{VERSION}-{BUILD}.dmg'
         self.dmg.write_bytes(b'image bytes')
+        # The fake hdiutil uses disposable files on the configured test volume.
+        self.enterContext(mock.patch.object(hub, '_private_mountpoint',
+            side_effect=lambda prefix: Path(tempfile.mkdtemp(prefix=prefix))))
 
-    def runner(self, version=VERSION, commit=BUILD + 'deadbeef', fail=False):
+    def runner(self, version=VERSION, commit=BUILD + 'deadbeef', fail=False,
+                   studio_build=None):
         calls = []
         self.mounts = {}
 
         def run(argv, **kwargs):
             calls.append(list(argv))
-            self.assertNotIn('/Volumes', ' '.join(argv))
             if argv[0] != 'hdiutil':
                 raise AssertionError(f'unextected call {argv}')
             if argv[1] == 'verify':
@@ -273,10 +290,12 @@ class AcceptArtifactTests(unittest.TestCase):
                 self.assertIn('-readonly', argv)
                 self.assertIn('-nobrowse', argv)
                 mount = Path(argv[argv.index('-mountpoint') + 1])
-                app = mount / 'Studio Hub.app' / 'Contents'
+                app = mount / 'Hub Studio KH.app' / 'Contents'
                 (app / 'Resources').mkdir(parents=True)
-                (app / 'Info.plist').write_bytes(plistlib.dumps(
-                    {'CFBundleShortVersionString': '0.0.1' if fail else version}))
+                info = {'CFBundleShortVersionString': '0.0.1' if fail else version}
+                if studio_build is not None:
+                    info['StudioHubBuild'] = studio_build
+                (app / 'Info.plist').write_bytes(plistlib.dumps(info))
                 (app / 'Resources' / 'release-manifest.json').write_text(json.dumps(
                     {'version': version, 'implementation_commit': commit}))
                 self.mounts['/dev/disk99'] = mount
@@ -284,6 +303,7 @@ class AcceptArtifactTests(unittest.TestCase):
                     {'dev-entry': '/dev/disk99s1', 'mount-point': str(mount)},
                     {'dev-entry': '/dev/disk99'}]}))
             if argv[1] == 'detach':
+                self.assertEqual(argv, ['hdiutil', 'detach', '/dev/disk99'])
                 # A real detach unmounts, leaving the (empty) mountpoint behind.
                 mount = self.mounts[argv[2]]
                 for child in sorted(mount.rglob('*'), reverse=True):
@@ -325,6 +345,79 @@ class AcceptArtifactTests(unittest.TestCase):
             return SimpleNamespace(returncode=1, stdout='checksum failed', stderr='')
         with self.assertRaises(SystemExit):
             hub.accept_artifact(self.dmg, VERSION, BUILD, run=run)
+
+
+class BuildLabelTests(unittest.TestCase):
+    """The offered build label must be the artifact's own StudioHubBuild — a plain refusal."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='hub-rollout-build-label-test-'))
+        self.dmg = self.tmp / f'StudioHub-{VERSION}-{BUILD}.dmg'
+        self.dmg.write_bytes(b'image bytes')
+        # The fake hdiutil uses disposable files on the configured test volume.
+        self.enterContext(mock.patch.object(hub, '_private_mountpoint',
+            side_effect=lambda prefix: Path(tempfile.mkdtemp(prefix=prefix))))
+
+    def runner(self, studio_build):
+        """The same fake hdiutil rig, mounting an app that carries StudioHubBuild."""
+        mounts = {}
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append(list(argv))
+            if argv[1] == 'attach':
+                mount = Path(argv[argv.index('-mountpoint') + 1])
+                contents = mount / 'Hub Studio KH.app' / 'Contents'
+                contents.mkdir(parents=True)
+                plist = {'CFBundleShortVersionString': VERSION}
+                if studio_build is not None:
+                    plist['StudioHubBuild'] = studio_build
+                (contents / 'Info.plist').write_bytes(plistlib.dumps(plist))
+                mounts['/dev/disk99'] = mount
+                return SimpleNamespace(returncode=0, stderr='', stdout=plistlib.dumps(
+                    {'system-entities': [
+                        {'dev-entry': '/dev/disk99s1', 'mount-point': str(mount)},
+                        {'dev-entry': '/dev/disk99'}]}))
+            if argv[1] == 'detach':
+                self.assertEqual(argv, ['hdiutil', 'detach', '/dev/disk99'])
+                mount = mounts[argv[2]]
+                for child in sorted(mount.rglob('*'), reverse=True):
+                    child.rmdir() if child.is_dir() else child.unlink()
+                return SimpleNamespace(returncode=0, stdout='', stderr='')
+            raise AssertionError(f'unexpected hdiutil verb {argv[1]}')
+        return run, calls
+
+    def test_matching_label_is_verified_and_the_mount_is_detached(self):
+        run, calls = self.runner(BUILD)
+        verified = hub.verify_build_label(self.dmg, BUILD, run=run)
+        self.assertEqual(verified, {'offered': BUILD, 'artifact_build': BUILD, 'match': True})
+        self.assertTrue(any(call[1] == 'detach' for call in calls))
+
+    def test_a_label_that_is_not_the_artifacts_own_is_a_plain_refusal(self):
+        run, calls = self.runner('ffff000')
+        with self.assertRaises(SystemExit) as caught:
+            hub.verify_build_label(self.dmg, BUILD, run=run)
+        message = str(caught.exception)
+        # The plain refusal names both sides the way a Mac's own refusal does.
+        self.assertIn('ffff000', message)
+        self.assertIn(BUILD, message)
+        self.assertIn('does not match this update', message)
+        self.assertTrue(any(call[1] == 'detach' for call in calls),
+                        'a refused label still detaches the mount it made')
+
+    def test_an_artifact_without_a_build_label_is_refused_not_guessed(self):
+        run, calls = self.runner(None)
+        with self.assertRaises(SystemExit) as caught:
+            hub.verify_build_label(self.dmg, BUILD, run=run)
+        self.assertIn('no StudioHubBuild', str(caught.exception))
+        self.assertTrue(any(call[1] == 'detach' for call in calls))
+
+    def test_publishing_without_an_offered_label_is_refused_before_any_mount(self):
+        run, calls = self.runner(BUILD)
+        with self.assertRaises(SystemExit) as caught:
+            hub.verify_build_label(self.dmg, '', run=run)
+        self.assertIn('no build label', str(caught.exception))
+        self.assertEqual(calls, [], 'a label-less refusal never touches the artifact')
 
 
 class FanOutTests(Harness):
@@ -821,8 +914,10 @@ class MainTests(unittest.TestCase):
                          'mtime_ns': self.artifact.stat().st_mtime_ns,
                          'hdiutil_verify_exit': 0, 'app_version': VERSION, 'build': BUILD}
         self.evidence = self.tmp / 'rollout-evidence.json'
-        self.originals = (hub.Gateway, hub.accept_artifact, hub.Rollout)
+        self.originals = (hub.Gateway, hub.accept_artifact, hub.Rollout, hub.verify_build_label)
         hub.accept_artifact = lambda *args, **kwargs: dict(self.accepted)
+        hub.verify_build_label = lambda artifact, build, run=None: {
+            'offered': build, 'artifact_build': build, 'match': True}
         hub.Gateway = lambda *args, **kwargs: self.gateway
 
         class FastRollout(hub.Rollout):
@@ -834,7 +929,8 @@ class MainTests(unittest.TestCase):
         hub.Rollout = FastRollout
 
     def tearDown(self):
-        hub.Gateway, hub.accept_artifact, hub.Rollout = self.originals
+        (hub.Gateway, hub.accept_artifact, hub.Rollout,
+         hub.verify_build_label) = self.originals
 
     def run_main(self, *sites, only=None, full=False):
         self.gateway = FakeGateway(list(sites), identity=self.identity)
@@ -854,6 +950,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(receipt['schema'], hub.SCHEMA)
         self.assertEqual(receipt['version'], VERSION)
         self.assertEqual(receipt['artifact']['sha256'], self.identity['sha256'])
+        self.assertEqual(receipt['build_label']['offered'], BUILD)
         self.assertEqual([row['state'] for row in receipt['sites']], ['verified', 'verified'])
         self.assertIn('verified', receipt['table'])
         self.assertFalse(receipt['pause']['written_by_tool'])

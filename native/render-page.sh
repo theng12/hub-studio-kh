@@ -24,7 +24,7 @@
 set -euo pipefail
 ROOT_DIR=$(cd -- "$(dirname -- "$0")/.." && pwd)
 PAGE="${1:-audio}"
-[ "$PAGE" = "all" ] && PAGE="overview,audio,subtitle,image,music,video,chat,setup,models,voices,jobs,renders,connections,whats-new,settings"
+[ "$PAGE" = "all" ] && PAGE="overview,audio,subtitle,image,music,chat,setup,models,voices,jobs,renders,connections,whats-new,settings"
 OUT="${2:-/tmp/studiohub-render}"
 shift 2 2>/dev/null || true
 source "$ROOT_DIR/native/sdk.sh"

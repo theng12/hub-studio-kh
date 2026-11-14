@@ -180,13 +180,13 @@ def kit_root(script: Path) -> Path:
 
 def find_app(explicit: Path | None, kit: Path) -> Path:
     candidates = [explicit, Path(os.environ["STUDIOHUB_APP"]) if os.environ.get("STUDIOHUB_APP") else None,
-                  kit / "Studio Hub.app", Path("/Applications/Studio Hub.app"),
-                  Path.home() / "Applications/Studio Hub.app"]
+                  kit / "Hub Studio KH.app", Path("/Applications/Hub Studio KH.app"),
+                  Path.home() / "Applications/Hub Studio KH.app"]
     marker = Path("Contents/Resources/image_worker.py")
     for candidate in candidates:
         if candidate and (candidate.expanduser() / marker).is_file():
             return candidate.expanduser().resolve()
-    raise SystemExit("NOT MEASURED: no complete Studio Hub.app was found on the kit or this Mac")
+    raise SystemExit("NOT MEASURED: no complete Hub Studio KH.app was found on the kit or this Mac")
 
 
 def sha256_file(path: Path) -> str:

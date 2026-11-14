@@ -18,7 +18,7 @@ build time, so every Mac that receives the kit can press Prepare Voice and have 
 fresher timings of its own.
 
     python3 tools/time_kit_voices.py --voices /Volumes/KH-STUDIO-ATLAS/Studio\ Hub\ App/voices \\
-        --app "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Hub Studio KH/Studio Hub.app" \\
+        --app "/Volumes/KH-STUDIO-ATLAS/1 Install Apps/Hub Studio KH/Hub Studio KH.app" \\
         --models "$HOME/StudioHubModels"
 
 It starts the app's own Hub, transcribes each long clip with the app's own Whisper, writes the
@@ -107,7 +107,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--voices", type=Path, required=True, help="the kit's voices folder")
-    parser.add_argument("--app", type=Path, required=True, help="a staged Studio Hub.app")
+    parser.add_argument("--app", type=Path, required=True, help="a staged Hub Studio KH.app")
     parser.add_argument("--models", type=Path, required=True, help="the model library")
     parser.add_argument("--model", default="whisper-turbo", help="transcription package to use")
     parser.add_argument("--force", action="store_true", help="re-time clips already timed")

@@ -41,7 +41,7 @@ def make_app(root: Path, files: dict[str, tuple[bytes, bool]],
              links: dict[str, str] | None = None, *, readonly: bool = True,
              manifest: bool = False) -> Path:
     """An ``.app`` shaped like an installed one: 0444/0555 files, 0555 directories."""
-    app = root / "Studio Hub.app"
+    app = root / "Hub Studio KH.app"
     for rel, (data, executable) in files.items():
         target = app / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -146,7 +146,7 @@ class Fixture(unittest.TestCase):
             self.stage(**overrides)
         self.assertEqual(caught.exception.code, code, caught.exception.message)
         self.assertEqual(self.tree_state(self.old), before, "the running app was modified")
-        self.assertEqual([p.name for p in self.old.parent.iterdir()], ["Studio Hub.app"],
+        self.assertEqual([p.name for p in self.old.parent.iterdir()], ["Hub Studio KH.app"],
                          "a refused delta left a staging directory behind")
 
 
@@ -397,7 +397,7 @@ class StageTests(Fixture):
         with self.assertRaises(KeyboardInterrupt):
             self.stage(get_blob=killed)
         self.assertEqual(self.tree_state(self.old), before)
-        self.assertEqual([p.name for p in self.old.parent.iterdir()], ["Studio Hub.app"])
+        self.assertEqual([p.name for p in self.old.parent.iterdir()], ["Hub Studio KH.app"])
 
     def test_a_kill_during_the_write_phase_also_leaves_it_untouched(self) -> None:
         before = self.tree_state(self.old)
@@ -405,7 +405,7 @@ class StageTests(Fixture):
             with self.assertRaises(KeyboardInterrupt):
                 self.stage()
         self.assertEqual(self.tree_state(self.old), before)
-        self.assertEqual([p.name for p in self.old.parent.iterdir()], ["Studio Hub.app"])
+        self.assertEqual([p.name for p in self.old.parent.iterdir()], ["Hub Studio KH.app"])
 
     def test_refuses_a_delta_that_is_most_of_a_full_download(self) -> None:
         self.assert_refused_cleanly("over_threshold", artifact_bytes=10)

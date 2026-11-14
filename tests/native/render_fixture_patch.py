@@ -31,11 +31,14 @@ for decl, kind in (("models", "[NativeModel]"), ("voices", "[NativeVoice]"), ("h
                    ("fleetReadiness", "[String: NativeMachineReadiness]"), ("workstation", "NativeWorkstation?"),
                    ("workPolicy", "NativeWorkPolicy?"),
                    # The Render page's list, seeded by render_main's own fixture (2026-10-26).
-                   ("renderHistory", "NativeRenderHistory?")):
+                   ("renderHistory", "NativeRenderHistory?"),
+                   # A download in flight, so the Models page's downloading chip is rendered.
+                   ("downloads", "[NativeDownload]")):
     needle = f"@Published private(set) var {decl}: {kind}"
     assert needle in text, f"{decl} moved; update render_fixture_patch.py"
     text = text.replace(needle, f"@Published var {decl}: {kind}", 1)
-for name in ("controllerIdentity", "fleetOverview", "fleetNodes", "controllerReachable"):
+for name in ("controllerIdentity", "fleetOverview", "fleetNodes", "controllerReachable",
+             "catalogReadError", "fleetReadError"):
     needle = f"@Published private(set) var {name}:"
     assert needle in text, f"{name} moved; update render_fixture_patch.py"
     text = text.replace(needle, f"@Published var {name}:", 1)
@@ -64,7 +67,8 @@ needle = "private var connected: Bool { studio.readyURL != nil && !studio.stoppi
 assert needle in text, "connected moved; update render_fixture_patch.py"
 text = text.replace(
     needle,
-    'private var connected: Bool { ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" '
+    'private var connected: Bool { (ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FIXTURES"] == "1" '
+    '&& ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_SERVICES"] != "off") '
     '|| (studio.readyURL != nil && !studio.stopping && workspace.isReachable) }', 1)
 needle = "@State private var selectedModel: String?"
 assert needle in text, "selectedModel moved; update render_fixture_patch.py"

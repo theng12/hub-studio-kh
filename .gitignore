@@ -1,6 +1,7 @@
 .DS_Store
 .build/
 dist/
+/.release-dist.lock
 .venv/
 __pycache__/
 *.pyc

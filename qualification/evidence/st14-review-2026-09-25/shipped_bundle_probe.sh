@@ -6,7 +6,7 @@
 # completion is requested, so this costs seconds and does not touch the 6 GB snapshot.
 set -u
 ROOT=/build/Developer/studio-hub-kh
-APP="$ROOT/.build/StudioHub-0662/Studio Hub.app"
+APP="$ROOT/.build/StudioHub-0662/Hub Studio KH.app"
 RES="$APP/Contents/Resources"
 PY="$RES/runtimes/voice/bin/python3"
 OUT="$ROOT/.build/chat-review-2026-09-25"

@@ -478,7 +478,9 @@ def test_cancelled_voice_batch_keeps_active_worker_fenced_during_reconcile(
     serialized = str(result)
     assert result["reconciled"] is False
     assert item["state"] == "uncertain"
-    assert item["recovery"]["phase"] == "health_wait"
+    # The operator cancelled the batch: the reconciler writes no recovery or terminal
+    # state from the worker receipt, which belongs to the cancellation lifecycle.
+    assert "recovery" not in item and item.get("error") is None
     assert studio["machine"] in broker.busy_machines()
     assert "fixture-secret" not in serialized
     assert "/Users/example" not in serialized
@@ -487,7 +489,7 @@ def test_cancelled_voice_batch_keeps_active_worker_fenced_during_reconcile(
     assert client.gets == 1
 
 
-def test_cancelled_voice_batch_adopts_worker_cancelled_receipt(fixture_monitor):
+def test_cancelled_voice_batch_settles_nothing_from_the_worker_receipt(fixture_monitor):
     batch, item, studio, accepted = voice_attempt(fixture_monitor)
     batch["cancelled"] = True
     item.update(
@@ -511,11 +513,11 @@ def test_cancelled_voice_batch_adopts_worker_cancelled_receipt(fixture_monitor):
         broker.reconcile_voice_item(batch["id"], item["index"], client=client)
     )
 
-    assert result["reconciled"] is True
-    assert item["state"] == "cancelled"
+    assert result["reconciled"] is False
+    assert item["state"] == "uncertain"
     assert item["studio_job_id"] == accepted["id"]
-    assert item["recovery"]["phase"] == "reconciled"
-    assert studio["machine"] not in broker.busy_machines()
+    assert item.get("recovery") is None
+    assert studio["machine"] in broker.busy_machines()
     assert client.posts == 0
     assert client.deletes == 1
     assert client.gets == 1

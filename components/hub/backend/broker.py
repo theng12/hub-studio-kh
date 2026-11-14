@@ -2981,6 +2981,41 @@ class preparing_machine:
         return False
 
 
+def _machine_release_state(item: dict) -> float | None:
+    """A durably persisted automatic-release marker, or ``None``.
+
+    Recovery owns the release metadata. The marker is a finite timestamp, never a
+    bool: an unknown or malformed value counts as *not* released, so the machine
+    stays fenced (a stale hold is safe, a wrongly freed one is not).
+    """
+    recovery = item.get("recovery")
+    if not isinstance(recovery, dict):
+        return None
+    value = recovery.get("machine_released_at")
+    if type(value) not in (int, float) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def _uncertain_hold_counts(by_id: dict) -> dict[str, int]:
+    """How many receipt-durable uncertain attempts currently pin each Mac."""
+    counts: dict[str, int] = {}
+    for batch in batches.values():
+        if batch.get("modality") not in RECEIPT_DURABLE_MODALITIES:
+            continue
+        for item in batch.get("items") or []:
+            if item.get("state") != "uncertain":
+                continue
+            # Automatic age-out durably released this attempt's reservation: the item stays
+            # uncertain and reconcilable but no longer keeps its Mac from later work.
+            if _machine_release_state(item) is not None:
+                continue
+            machine = item.get("machine") or (by_id.get(item.get("studio")) or {}).get("machine")
+            if machine:
+                counts[str(machine)] = counts.get(str(machine), 0) + 1
+    return counts
+
+
 def busy_machines() -> set[str]:
     """Physical machines holding a non-preemptive heavy-work lease."""
     by_id = {s["id"]: s for s in _monitor().registry}
@@ -3001,14 +3036,7 @@ def busy_machines() -> set[str]:
         for sid in _busy
         if sid in by_id
     }
-    for batch in batches.values():
-        if batch.get("modality") in RECEIPT_DURABLE_MODALITIES:
-            for item in batch.get("items") or []:
-                if item.get("state") == "uncertain":
-                    machine = item.get("machine") or (
-                        by_id.get(item.get("studio")) or {}).get("machine")
-                    if machine:
-                        occupied.add(str(machine))
+    occupied |= set(_uncertain_hold_counts(by_id))
     from . import transcription_jobs
     if transcription_jobs._packaged():
         for batch in transcription_jobs.batches.values():
@@ -4157,15 +4185,50 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
                                  and request_id else None),
         )
         if _voice_recovery_owns(item) and not recovery:
-            return
+            return False
     if _superseded(item):
-        return
+        return False
     _persist_worker_execution_started_at(b, item, job)
     if item.get("state") == "done" and item.get("asset_id"):
-        return  # terminal polling/recovery is idempotent
+        return False  # terminal polling/recovery is idempotent
     target = item
     before = dict(item)
     item = dict(before)  # metadata awaits must never mutate a competing winner
+    # The accepted attempt this caller found; every post-await fence below re-reads the
+    # canonical row against it, so a replaced or discarded attempt can never be adopted.
+    owner = {key: before.get(key) for key in
+             ("studio_job_id", "studio", "machine", "model_revision",
+              "runtime_revision", "worker_id")}
+
+    def _same_attempt() -> bool:
+        if any(target.get(key) != value for key, value in owner.items()):
+            return False
+        if target.get("error_code") == "DISCARDED_UNCERTAIN":
+            return False
+        # A recovery caller owns the row only while the operator has not cancelled the batch
+        # and its accepted attempt is still undecided. Normal polling and the abandoned-rerun
+        # adoption keep their existing cancellation handling.
+        if recovery and (b.get("cancelled") or target.get("state") != "uncertain"):
+            return False
+        canonical = batches.get(b.get("id"))
+        if recovery:
+            # Recovery callers must hold the exact canonical batch AND row throughout every
+            # await; an absent or replaced one means ownership was lost mid-read.
+            if canonical is None or canonical is not b:
+                return False
+            row = next((row for row in canonical.get("items") or []
+                        if row.get("index") == target.get("index")), None)
+            if row is None or row is not target:
+                return False
+        else:
+            if canonical is not None and canonical is not b:
+                return False  # the batch object was replaced; a captured batch authorizes nothing
+            if adoption_item is None:
+                row = next((row for row in (canonical or b).get("items") or []
+                            if row.get("index") == target.get("index")), None)
+                if row is not None and row is not target:
+                    return False  # the canonical row was replaced; never publish onto a copy
+        return True
     _record_worker_resource_usage(item, job)
     _record_worker_section_quality(item, job)
     item["artifact_path"] = job.get("output_path")
@@ -4247,10 +4310,11 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
             logging.getLogger("studiohub.broker").warning(
                 "voice job %s on %s delivered an unusable file (%s; worker reported %r bytes): %s",
                 job.get("id"), studio.get("id"), exc.code, job.get("bytes"), exc)
-            target["error_code"] = exc.code
+            if _same_attempt():
+                target["error_code"] = exc.code
             raise _worker_terminal_error(f"The voice output is unusable: {exc}", exc.code) from exc
         if _voice_recovery_owns(target) and not recovery:
-            return
+            return False
     else:
         item["sha256"] = job.get("sha256")
         item["bytes"] = job.get("bytes")
@@ -4270,12 +4334,15 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         item["delivery_fallback_reason"] = job["delivery_fallback_reason"][:400]
     # The final metadata await can lose to original adoption or another terminal
     # result. Recheck before writing any asset; the losing candidate stays private.
-    if (target.get("error_code") == "DISCARDED_UNCERTAIN"
+    # Ownership first: a recovery caller that already lost this attempt (another
+    # reconciler won, a newer attempt replaced it, an operator discarded it) records
+    # nothing - not an asset, not an error - even though its receipt looks valid.
+    if (not _same_attempt()
             or _superseded(target) or (target.get("state") == "done" and target.get("asset_id"))
             or (adoption_item is not None and (
                 b.get("cancelled") or adoption_item.get("state") not in ("queued", "running")
                 or _superseded(adoption_item)))):
-        return
+        return False
     item["finished_at"] = time.time()
     item["last_progress_at"] = item["finished_at"]
     item["asset_id"] = ledger.record_asset(
@@ -4321,6 +4388,7 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         target.pop(key, None)
     target.update((key, value) for key, value in item.items()
                   if key not in before or value != before[key])
+    return True  # this call adopted the winner; callers must not infer it from state alone
 
 
 class _VoiceReceiptError(ValueError):
@@ -4602,12 +4670,43 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
     if item.get("state") != "uncertain":
         raise ValueError(f"{label} item is not uncertain")
     batches[batch_id] = batch
+    # The exact accepted attempt this handler found; re-read against the canonical row
+    # after every await, so a replaced, discarded or newer-won attempt is never mutated.
+    owner = {key: item.get(key) for key in
+             ("studio_job_id", "studio", "machine", "model_revision",
+              "runtime_revision", "worker_id")}
+
+    def still_uncertain(*, allow_cancelled: bool = False) -> bool:
+        if batch.get("cancelled") and not allow_cancelled:
+            return False  # operator cancellation owns the remaining lifecycle
+        if batches.get(batch_id) is not batch:
+            return False  # canonical batch was replaced; a captured dict authorizes nothing
+        if next((row for row in batch.get("items") or []
+                 if row.get("index") == item_index), None) is not item:
+            return False  # the canonical row was replaced; never mutate a captured dict
+        if item.get("state") != "uncertain" or _superseded(item):
+            return False
+        if item.get("error_code") == "DISCARDED_UNCERTAIN":
+            return False
+        return all(item.get(key) == value for key, value in owner.items())
 
     def result(reconciled: bool) -> dict:
-        return {"batch_id": batch_id, "clientRequestId": batch.get("client_request_id"),
-                "reconciled": reconciled, "item": public_item(batch, item)}
+        current = batches.get(batch_id)
+        if current is None:
+            # A removed batch has no current item to report.
+            return {"batch_id": batch_id, "clientRequestId": None,
+                    "reconciled": False, "item": None}
+        row = next((row for row in current.get("items") or []
+                    if row.get("index") == item_index), None)
+        return {"batch_id": batch_id, "clientRequestId": current.get("client_request_id"),
+                "reconciled": reconciled and current is batch and row is item,
+                "item": public_item(current, row) if row is not None else None}
 
     def pending(reason: str) -> dict:
+        if not still_uncertain():
+            # Lost during an await (explicit discard, newer attempt, another winner):
+            # return the current state instead of stamping this call's reason on it.
+            return result(False)
         recovery = dict(item.get("recovery") or {})
         recovery.update(phase="manual_action_required", reason=reason,
                         updated_at=time.time())
@@ -4633,8 +4732,17 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
         client = httpx.AsyncClient(follow_redirects=False)
     try:
         if batch.get("cancelled") and not item.get("cancel_signal_sent_at"):
-            await _signal_worker_cancel(client, item)
-            ledger.save_batch(batch)
+            # Signal on a private copy so a lost ownership during the await cannot
+            # write cancel fields onto a replaced or discarded canonical row.
+            private = dict(item)
+            await _signal_worker_cancel(client, private)
+            if still_uncertain(allow_cancelled=True):
+                for key in ("cancel_signal_sent_at", "cancel_error"):
+                    if key in private:
+                        item[key] = private[key]
+                    else:
+                        item.pop(key, None)
+                ledger.save_batch(batch)
         try:
             url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
             response = await client.get(url, headers=headers, timeout=15.0)
@@ -4645,6 +4753,9 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
             return pending(f"The original {label} worker response was unavailable or malformed.")
         if not isinstance(job, dict):
             return pending(f"The original {label} worker response was malformed.")
+        if not still_uncertain():
+            # The attempt was discarded or superseded while the worker was read.
+            return result(False)
         remote = not peers.is_local_studio(studio)
         try:
             _validate_durable_worker_job(modality, item, job, remote=remote)
@@ -4698,12 +4809,16 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
             return pending(f"The original {label} worker cannot prove a final receipt; manual reconciliation is required.")
         if state == "done" and not job.get("error"):
             try:
-                await _record_worker_success(
+                adopted = await _record_worker_success(
                     client, batch, item, studio, job, body,
                     float(item.get("run_started") or batch["created_at"]), recovery=True,
                 )
             except Exception:
                 return pending(f"The original {label} output could not be verified by the Hub.")
+            if adopted is False:
+                # Another reconciler already owns this attempt's winner, or it was
+                # discarded/replaced during the metadata await: adopt nothing, mutate nothing.
+                return result(False)
             if item.get("state") != "done":
                 return pending(f"The original {label} output could not be adopted by the Hub.")
             item["error"] = None
@@ -4766,16 +4881,50 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
                                client: httpx.AsyncClient | None = None) -> dict:
     """Read and adopt only the original accepted Voice job after Hub recovery."""
     batch, item = voice_recovery_item(batch_id, item_index)
+    # The exact accepted attempt this handler found; re-read against the canonical row
+    # after every await, so a replaced, discarded or newer-won attempt is never mutated.
+    owner = {key: item.get(key) for key in
+             ("studio_job_id", "studio", "machine", "model_revision",
+              "runtime_revision", "worker_id")}
+
+    def still_uncertain(*, allow_cancelled: bool = False) -> bool:
+        if batch.get("cancelled") and not allow_cancelled:
+            return False  # operator cancellation owns the remaining lifecycle
+        if batches.get(batch_id) is not batch:
+            return False  # canonical batch was replaced; a captured dict authorizes nothing
+        if next((row for row in batch.get("items") or []
+                 if row.get("index") == item_index), None) is not item:
+            return False  # the canonical row was replaced; never mutate a captured dict
+        if item.get("state") != "uncertain" or _superseded(item):
+            return False
+        if item.get("error_code") == "DISCARDED_UNCERTAIN":
+            return False
+        return all(item.get(key) == value for key, value in owner.items())
 
     def result(reconciled: bool) -> dict:
+        current = batches.get(batch_id)
+        if current is None:
+            # A removed batch has no current item to report.
+            return {
+                "batch_id": batch_id,
+                "clientRequestId": None,
+                "reconciled": False,
+                "item": None,
+            }
+        row = next((row for row in current.get("items") or []
+                    if row.get("index") == item_index), None)
         return {
             "batch_id": batch_id,
-            "clientRequestId": batch.get("client_request_id"),
-            "reconciled": reconciled,
-            "item": public_item(batch, item),
+            "clientRequestId": current.get("client_request_id"),
+            "reconciled": reconciled and current is batch and row is item,
+            "item": public_item(current, row) if row is not None else None,
         }
 
     def pending(reason: str) -> dict:
+        if not still_uncertain():
+            # Lost during an await (explicit discard, newer attempt, another winner):
+            # return the current state instead of stamping this call's reason on it.
+            return result(False)
         set_voice_recovery(item, "manual_action_required", reason)
         item["error"] = reason
         ledger.save_batch(batch)
@@ -4797,8 +4946,17 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
     try:
         job_id = item["studio_job_id"]
         if batch.get("cancelled") and not item.get("cancel_signal_sent_at"):
-            await _signal_worker_cancel(client, item)
-            ledger.save_batch(batch)
+            # Signal on a private copy so a lost ownership during the await cannot
+            # write cancel fields onto a replaced or discarded canonical row.
+            private = dict(item)
+            await _signal_worker_cancel(client, private)
+            if still_uncertain(allow_cancelled=True):
+                for key in ("cancel_signal_sent_at", "cancel_error"):
+                    if key in private:
+                        item[key] = private[key]
+                    else:
+                        item.pop(key, None)
+                ledger.save_batch(batch)
         try:
             url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
             response = await client.get(url, headers=headers, timeout=15.0)
@@ -4825,6 +4983,9 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
             return pending(
                 "The original Voice worker status or artifact receipt was malformed."
             )
+        if not still_uncertain():
+            # The attempt was discarded or superseded while the worker was read.
+            return result(False)
         state = job["state"]
         if state in {"queued", "running", "cancel_requested"}:
             set_voice_recovery(
@@ -4847,7 +5008,7 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
                     "The original Voice worker returned a contradictory terminal status."
                 )
             try:
-                await _record_worker_success(
+                adopted = await _record_worker_success(
                     client, batch, item, studio, job, body,
                     float(item.get("run_started") or batch["created_at"]),
                     recovery=True,
@@ -4856,6 +5017,10 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
                 return pending(
                     "The original Voice output could not be verified by the Hub."
                 )
+            if adopted is False:
+                # Another reconciler already owns this attempt's winner, or it was
+                # discarded/replaced during the metadata await: adopt nothing, mutate nothing.
+                return result(False)
             if item.get("state") != "done":
                 return pending(
                     "The original Voice output could not be adopted by the Hub."
@@ -4866,8 +5031,15 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
                 float(item.get("run_started") or batch["created_at"]),
             )
             if state == "error":
-                await _attach_review_candidate(client, batch, item, studio,
+                # Fetch into a private copy: the live row may have gained a newer winner's
+                # locator while this read awaited, and this call must write nothing to it.
+                private = dict(item)
+                await _attach_review_candidate(client, batch, private, studio,
                                                str(job.get("error_code") or ""))
+                if not still_uncertain():
+                    return result(False)
+                if private.get("_review_candidate") is not None:
+                    item["_review_candidate"] = private["_review_candidate"]
             item.update(
                 state=state,
                 error=str(job.get("error") or state)[:500],
@@ -4881,6 +5053,17 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
         )
         ledger.save_batch(batch)
         await _post_item_webhook(client, batch, item)
+        # Recheck canonical ownership after the webhook await: a replacement or
+        # discard that landed during delivery must not be overwritten by this
+        # captured batch's terminal finish. still_uncertain() is False for
+        # already-done items, so check canonical identity directly.
+        canonical = batches.get(batch_id)
+        if canonical is not batch:
+            return result(False)
+        canonical_row = next((row for row in canonical.get("items") or []
+                              if row.get("index") == item_index), None)
+        if canonical_row is not item:
+            return result(False)
         await _maybe_finish(client, batch)
         _wakeup.set()
         return result(True)
@@ -4977,26 +5160,65 @@ def retry_failed_item(batch_id: str, item_index: int) -> dict:
 
 
 # An uncertain attempt reserves its Mac because it may still be running. That is
-# right for a while, but an attempt that has been silent for this long is not coming
-# back, and leaving it reserved blocks every later job with no reason shown. The
-# operator can discard sooner by hand; this sweep is the walk-away backstop.
+# right for a while, but an attempt silent for this long is not coming back, and
+# leaving it reserved blocks every later job with no reason shown. Automatic
+# age-out only releases the machine reservation: the attempt keeps its state and
+# exact identity so a late result can still be reconciled. Discarding by hand is
+# the operator's separate, permanent decision, see discard_uncertain_item.
 UNCERTAIN_AUTO_DISCARD_SECONDS = float(
     os.environ.get("STUDIOHUB_UNCERTAIN_DISCARD_SECONDS", 1800.0))
 
 
-def discard_stale_uncertain(*, now: float | None = None,
+def _release_uncertain_machine(batch: dict, item: dict, reason: str) -> bool:
+    """Durably release one stale uncertain attempt's Mac reservation.
+
+    The candidate recovery dict is written first; the marker reaches memory only
+    after the save returns, so capacity is never published on a failed write.
+    Recovery metadata merges, so identity, phase trail and marker survive.
+    """
+    recovery = dict(item.get("recovery") or {})
+    recovery.update(machine_released_at=time.time(),
+                    phase="manual_action_required", reason=reason[:500],
+                    updated_at=time.time())
+    candidate = {**item, "recovery": recovery}
+    try:
+        ledger.save_batch({**batch, "items": [
+            candidate if row is item else row for row in batch["items"]]})
+    except Exception as exc:
+        logging.getLogger("studiohub.broker").warning(
+            "machine release for %s:%s not persisted (%s); its hold stays",
+            batch.get("id"), item.get("index"), type(exc).__name__)
+        return False
+    item["recovery"] = recovery  # single-threaded publish, no await before this
+    _wakeup.set()
+    return True
+
+
+def release_stale_uncertain(*, now: float | None = None,
                             max_age: float | None = None) -> list[str]:
     """Release Macs held by uncertain attempts nobody is coming back for.
 
-    Returns the ``batch:item`` identifiers it discarded, so a caller can log them.
+    Only the reservation goes: the item stays ``uncertain`` with its accepted
+    identity, so its original receipt can still be reconciled later. A hold stays
+    put (never released by age) when the item is cancelled, already released,
+    still active on its Mac, shares its Mac with another uncertain attempt, or
+    has an identity too incomplete to record a release against.
+    Returns ``batch:item`` for every released hold, so a caller can log them.
     """
     limit = UNCERTAIN_AUTO_DISCARD_SECONDS if max_age is None else max_age
     moment = time.time() if now is None else now
-    discarded: list[str] = []
+    released: list[str] = []
     for batch in list(batches.values()):
+        if batch.get("cancelled"):
+            continue  # operator cancellation lifecycle, never age-out recovery
+        counts = _uncertain_hold_counts({s["id"]: s for s in _monitor().registry})
         for item in batch.get("items") or []:
             if item.get("state") != "uncertain":
                 continue
+            if _machine_release_state(item) is not None:
+                continue
+            if item.get("studio") in _busy:
+                continue  # an actual execution on that Mac is authoritative; hold stays
             stamps = [item.get(key) for key in
                       ("last_progress_at", "finished_at", "execution_started_at")]
             newest = max((value for value in stamps
@@ -5008,15 +5230,28 @@ def discard_stale_uncertain(*, now: float | None = None,
                 newest = batch.get("created_at")
             if newest is None or moment - newest < limit:
                 continue
-            try:
-                discard_uncertain_item(batch["id"], item["index"], reason=(
-                    "The attempt stayed uncertain past the automatic reconciliation "
-                    "window, so the machine was released. Any late result is discarded "
-                    "because a newer attempt may already have been accepted."))
-            except ValueError:
+            machine = item.get("machine") or next(
+                (row.get("machine") for row in _monitor().registry
+                 if row.get("id") == item.get("studio")), None)
+            if machine:
+                others = counts.get(str(machine), 0) - 1  # minus this attempt's own hold
+                if others > 0:
+                    counts[str(machine)] = others
+                    continue  # another attempt on the same Mac still needs it
+            if not all(isinstance(item.get(field), str) and item.get(field)
+                       for field in ("studio", "studio_job_id", "machine")):
+                # Incomplete identity: releasing the Mac would not be recorded against
+                # anything an operator can reconcile later. Keep it visible instead.
                 continue
-            discarded.append(f"{batch['id']}:{item['index']}")
-    return discarded
+            reason = (
+                "The attempt stayed uncertain past the automatic reconciliation "
+                "window, so its machine reservation was released. The attempt stays "
+                "uncertain: a late result of this same attempt may still be reconciled.")
+            if _release_uncertain_machine(batch, item, reason):
+                if machine:
+                    counts[str(machine)] = 0
+                released.append(f"{batch['id']}:{item['index']}")
+    return released
 
 
 async def _maybe_finish(client: httpx.AsyncClient, b: dict):
@@ -5058,6 +5293,15 @@ def _retain_async_terminal_persistence_uncertainty(
     publication_state: dict | None = None,
 ) -> bool:
     """Keep a terminal async worker receipt fenced when Hub publication fails."""
+    # Never mutate or persist if the canonical batch or row was replaced or
+    # removed during the failed await — that would resurrect a detached winner.
+    current = batches.get(batch.get("id"))
+    if current is not batch:
+        return False
+    canonical_row = next((row for row in current.get("items") or []
+                          if row.get("index") == item.get("index")), None)
+    if canonical_row is not item:
+        return False
     modality = batch.get("modality")
     if (modality not in DURABLE_ASYNC_MODALITIES
             or item.get("state") not in {"done", "error", "cancelled"}
@@ -5424,8 +5668,9 @@ async def _dispatch_loop():
                 last_sweep = sweep_now
                 evict_finished_batches()
                 # An uncertain attempt that nobody reconciles must not pin the Mac
-                # forever; release it so later work can run.
-                discard_stale_uncertain(now=sweep_now)
+                # forever; release its reservation so later work can run. The attempt
+                # itself stays uncertain and reconcilable, see release_stale_uncertain.
+                release_stale_uncertain(now=sweep_now)
             assigned = False
             if _render_executor is not None:
                 assigned = await _render_executor.dispatch_ready()

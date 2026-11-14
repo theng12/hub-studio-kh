@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install a staged build into /Applications, and prove it landed.
 #
-#   bash packaging/install_local.sh .build/StudioHub-0644/Studio Hub.app
+#   bash packaging/install_local.sh .build/StudioHub-0644/Hub Studio KH.app
 #   STUDIOHUB_INSTALL_START=0 bash packaging/install_local.sh <app>   # install, leave it stopped
 #
 # The previous ad-hoc version of this step chained the swap with `|| true`, so a swap that did
@@ -9,11 +9,11 @@
 # unnoticed until its Music worker refused to start. This one checks the result and fails loudly.
 set -u
 
-STAGED="${1:?usage: install_local.sh <path to Studio Hub.app>}"
+STAGED="${1:?usage: install_local.sh <path to Hub Studio KH.app>}"
 # The install target and the measured free space are overridable so the two guards below can be
 # proved to fail on their defect (`tests/test_install_local.py`), which is the only way a guard is
 # worth having. Production passes neither and gets the real paths.
-TARGET="${STUDIOHUB_INSTALL_TARGET:-/Applications/Studio Hub.app}"
+TARGET="${STUDIOHUB_INSTALL_TARGET:-/Applications/Hub Studio KH.app}"
 DATA="${STUDIOHUB_INSTALL_DATA:-$HOME/Library/Application Support/StudioHub Standalone}"
 TARGET_PARENT="$(dirname -- "$TARGET")"
 TRASH="${STUDIOHUB_INSTALL_TRASH:-$TARGET_PARENT/_trash}"
@@ -57,7 +57,7 @@ STAGED_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' 
 # **A copy that runs out of space leaves a half-app, and the rollback used to make it worse.**
 # Measured 2026-09-26, on a full disk: `cp -Rp` stopped after ~1.4 GB of a 2.9 GB bundle, `rm -rf`
 # could not clear the wreckage (see `restore_previous`), and the `mv` put the previous app *inside*
-# it. `/Applications/Studio Hub.app` then existed with no `Info.plist` and no `MacOS` at all.
+# it. `/Applications/Hub Studio KH.app` then existed with no `Info.plist` and no `MacOS` at all.
 # There is no sensible repair for that at this point in the script, so refuse before touching
 # anything the operator would have to reconstruct by hand. **This check also runs before the app is
 # quit**: being told there is no room is not a reason to interrupt the app someone is using.
@@ -85,9 +85,25 @@ echo "== stopping any running copy"
 # only when that is what we are replacing. The kill loop below is matched on the target path for the
 # same reason. Without both, an install into a temp path would interrupt the app someone is using -
 # which is exactly what the guard tests do.
-if [ "$TARGET" = "/Applications/Studio Hub.app" ]; then
-  osascript -e 'quit app "Studio Hub"' >/dev/null 2>&1 || true
+if [ "$TARGET" = "/Applications/Hub Studio KH.app" ]; then
+  osascript -e 'quit app "Hub Studio KH"' >/dev/null 2>&1 || true
   sleep 3
+  # The app used to install as "Studio Hub.app" (renamed 2026-11-12). A Mac upgrading across
+  # that rename would otherwise keep two copies; stop the old one and keep it recoverably.
+  OLD="/Applications/Studio Hub.app"
+  if present "$OLD"; then
+    echo "== retiring the old Studio Hub.app to _trash"
+    osascript -e 'quit app "Studio Hub"' >/dev/null 2>&1 || true
+    for attempt in 1 2 3; do
+      pids=$(pgrep -f "$OLD/Contents" || true)
+      [ -z "$pids" ] && break
+      kill $pids 2>/dev/null || true
+      sleep 2
+    done
+    pids=$(pgrep -f "$OLD/Contents" || true)
+    [ -z "$pids" ] || { kill -9 $pids 2>/dev/null || true; sleep 1; }
+    archive "$OLD" "$TRASH" old-name || echo "note: could not archive $OLD; the new app is still installed"
+  fi
 fi
 # Matched on **this** target, not on the app's name: an install into a different path must not quit
 # or kill the copy that is actually running, which is also what keeps the guard tests above from
@@ -170,9 +186,11 @@ echo "== installed $STAGED_VERSION / $INSTALLED_BUILD"
 #
 # Only for the real install target, for the same reason the stop above is: an install into a temp
 # path must not start an app, which is also what keeps the guard tests from launching anything.
-if [ "$TARGET" = "/Applications/Studio Hub.app" ] && [ "$START" = 1 ]; then
-  echo "== starting Studio Hub"
-  open -a "$TARGET" >/dev/null 2>&1 || true
+if [ "$TARGET" = "/Applications/Hub Studio KH.app" ] && [ "$START" = 1 ]; then
+  echo "== starting Hub Studio KH"
+  # Hidden and unfocused (-g -j): the owner's desktop is not part of an install (owner,
+  # 2026-11-12 "Don't take the owner's desktop").
+  open -g -j -a "$TARGET" >/dev/null 2>&1 || true
   # Wait for the **Hub**, not for the app bundle: `hub-ready.json` is written by the Hub service once
   # it is actually serving, so this cannot report success for a process that is merely running.
   READY="$DATA/hub-ready.json"

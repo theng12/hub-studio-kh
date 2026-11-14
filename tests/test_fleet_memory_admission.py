@@ -1,9 +1,10 @@
 """Focused regressions for the frozen r5 fleet memory-admission route and relay.
 
 The local Models-screen route is not exercised here: the fleet route's strict body, its one
-RAM pair/reset, the explicit reference-write refusal, the 64-hex CAS and the relay's pending /
-unknown / passthrough rules are. No live Hub, network, model library or Image worker is touched;
-the store is a temp file and the target is a fake client.
+RAM pair/reset, the explicit reference-write refusal (no running-Hub D4 proof yet, so a
+combined RAM+reference body must write nothing), the named UNKNOWN_MODEL 404, the 64-hex
+CAS and the relay's pending / unknown / passthrough rules are. No live Hub, network, model
+library or Image worker is touched; the store is a temp file and the target is a fake client.
 """
 from __future__ import annotations
 
@@ -98,9 +99,9 @@ class LocalAdmissionTests(unittest.TestCase):
             model=model, mode=mode, entry=ROW if model == MODEL else None,
             node=node, node_id=node_id))
 
-    def write(self, body: dict) -> tuple[int, dict]:
+    def write(self, body: dict, *, entry: dict | None = ROW) -> tuple[int, dict]:
         return payload(standalone._fleet_memory_admission_write(
-            body=body, entry=ROW, node="local", node_id="machine-a",
+            body=body, entry=entry, node="local", node_id="machine-a",
             total_memory_bytes=TIER_16))
 
     def revision(self, mode: str | None = None) -> str:
@@ -201,6 +202,35 @@ class LocalAdmissionTests(unittest.TestCase):
         self.assertIn("nothing was written", body["detail"])
         self.assertFalse(self.settings.exists())
 
+    def test_a_combined_ram_and_reference_request_writes_nothing_at_all(self) -> None:
+        # The refusal must fire before change(), so a combined body never persists its RAM half.
+        token = self.revision("edit")
+        status, body = self.write({"model": MODEL, "mode": "edit", "expected_revision": token,
+                                   "min_free_memory_gb": 3, "min_total_memory_gb": 12,
+                                   "reference": {"allowed": True, "max_reference_images": 1},
+                                   "reference_count": 1})
+        self.assertEqual((status, body["code"]), (400, "TIER_UNKNOWN"))
+        self.assertFalse(self.settings.exists(),
+                         "a refused combined write must persist no RAM either")
+        _, after = self.read(mode="edit")
+        self.assertEqual((after["effective_min_total_memory_gb"],
+                          after["effective_min_free_memory_gb"]), (8.0, 2.0),
+                         "the mode scope still reads the published pair after the refusal")
+
+    def test_an_unknown_model_on_this_mac_is_a_named_structured_404(self) -> None:
+        status, body = self.read(model="nobody/nothing")
+        self.assertEqual(status, 404)
+        self.assertEqual((body["code"], body["field"], body["ok"]),
+                         ("UNKNOWN_MODEL", "model", False))
+        self.assertEqual((body["node"], body["node_id"]), ("local", "machine-a"))
+        status, body = self.write({"model": "nobody/nothing",
+                                   "expected_revision": "d" * 64,
+                                   "min_free_memory_gb": 3, "min_total_memory_gb": 9},
+                                  entry=None)
+        self.assertEqual(status, 404)
+        self.assertEqual(body["code"], "UNKNOWN_MODEL")
+        self.assertFalse(self.settings.exists())
+
     def test_reference_identity_and_shape_are_strict(self) -> None:
         revision = self.revision()
         base = {"model": MODEL, "mode": "edit", "expected_revision": revision}
@@ -290,6 +320,30 @@ class RelayTests(unittest.TestCase):
             self.relay("GET", FakeClient(FakeAnswer(404, {"detail": "unknown model"})))
         self.assertEqual(caught.exception.status, 502)
         self.assertEqual(caught.exception.body["code"], "NODE_REFUSED")
+        # A structured 404 that is not this route's vocabulary never passes through as truth.
+        with self.assertRaises(fleet_nodes.StartupRelayError) as caught:
+            self.relay("GET", FakeClient(FakeAnswer(
+                404, {"ok": False, "code": "some legacy answer", "detail": "x"})))
+        self.assertEqual((caught.exception.status, caught.exception.body["code"]),
+                         (502, "NODE_REFUSED"))
+
+    def test_a_coded_target_404_survives_the_relay_unchanged(self) -> None:
+        body = {"ok": False, "code": "UNKNOWN_MODEL", "field": "model",
+                "detail": "this Mac has no model like that", "model": MODEL,
+                "node": "node-a", "node_id": "node-a"}
+        for method in ("GET", "PUT"):
+            with self.assertRaises(fleet_nodes.StartupRelayError) as caught:
+                self.relay(method, FakeClient(FakeAnswer(404, body)))
+            self.assertEqual((caught.exception.status, caught.exception.body),
+                             (404, body), method)
+
+    def test_auth_errors_and_405_still_read_as_node_refused(self) -> None:
+        for status in (401, 403, 405):
+            with self.assertRaises(fleet_nodes.StartupRelayError) as caught:
+                self.relay("GET", FakeClient(FakeAnswer(
+                    status, {"ok": False, "code": "UNKNOWN_MODEL"})))
+            self.assertEqual((caught.exception.status, caught.exception.body["code"]),
+                             (502, "NODE_REFUSED"), status)
 
     def test_an_unknown_node_is_a_404(self) -> None:
         with self.assertRaises(fleet_nodes.StartupRelayError) as caught:
@@ -411,6 +465,16 @@ class RouteTests(unittest.TestCase):
                                   headers={"X-Hub-Token": self.token})
         self.assertEqual(answer.status_code, 404)
         self.assertEqual(answer.json()["code"], "NOT_CONTROLLER")
+
+    def test_an_unknown_model_answers_404_unknown_model_on_the_fleet_route(self) -> None:
+        answer = self.request("GET", "/api/hub/fleet/nodes/local/memory/admission",
+                              params={"model": "nobody/nothing"},
+                              headers={"X-Hub-Token": self.token})
+        self.assertEqual(answer.status_code, 404, answer.text)
+        body = answer.json()
+        self.assertEqual((body["ok"], body["code"]), (False, "UNKNOWN_MODEL"))
+        self.assertEqual((body["node"], body["node_id"]), ("local", "machine-a"))
+        self.assertEqual(body["field"], "model")
 
 
     def _controller(self, client: FakeClient):

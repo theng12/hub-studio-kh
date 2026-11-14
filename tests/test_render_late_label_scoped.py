@@ -39,6 +39,7 @@ from components.hub.backend.render_service import (  # noqa: E402
     register_relay_routes,
     register_routes,
 )
+from _render_authority_root import anchor_root  # noqa: E402
 
 HUB_TOKEN = "late-label-scope-hub"
 INTENT_ID = "11111111-1111-1111-1111-111111111111"
@@ -148,6 +149,7 @@ class ScopedCase(unittest.TestCase):
         self.now = 1_000
         self.root = ROOT / "_trash/render-late-label-scoped-testroots" / uuid4().hex
         # Retain synthetic fixtures under _trash; that directory is never emptied by tests.
+        anchor_root(self, self.root)
         self.resources = self.root / "resources"
         self.tools_root = self.resources / "render-tools"
         self.data_root = self.root / "data"

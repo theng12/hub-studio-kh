@@ -23,6 +23,7 @@ from components.hub.backend.render_executor import (  # noqa: E402
     OPT_IN_PROVENANCE,
     InstalledRenderAuthorityLoader,
 )
+from _render_authority_root import anchor_root  # noqa: E402
 
 NODE = "shop-m4-controller-01"
 OTHER_NODE = "shop-m4-controller-02"
@@ -39,9 +40,10 @@ class GrantFixture(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         # The strict reader refuses a symlinked ancestor, so the temp root is resolved.
-        self.data_root = Path(os.path.realpath(self.temporary.name)) / "data"
+        self.root = anchor_root(self, Path(os.path.realpath(self.temporary.name)))
+        self.data_root = self.root / "data"
         self.data_root.mkdir()
-        self.resources = Path(os.path.realpath(self.temporary.name)) / "resources"
+        self.resources = self.root / "resources"
         self.resources.mkdir()
         self.loader = InstalledRenderAuthorityLoader(
             self.resources, data_root=self.data_root, clock=lambda: 1_000,

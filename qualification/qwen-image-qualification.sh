@@ -22,14 +22,14 @@ for file in qwen_image_qualification.py library_guard.py ssd_wear.py; do
 done
 
 APP="${STUDIOHUB_APP:-}"
-for candidate in "$APP" "$KIT/Studio Hub.app" "/Applications/Studio Hub.app" "$HOME/Applications/Studio Hub.app"; do
+for candidate in "$APP" "$KIT/Hub Studio KH.app" "/Applications/Hub Studio KH.app" "$HOME/Applications/Hub Studio KH.app"; do
     if [ -n "$candidate" ] && [ -x "$candidate/Contents/Resources/runtimes/image/bin/python3" ] && [ -x "$candidate/Contents/Resources/runtimes/voice/bin/python3" ]; then
         APP="$candidate"
         break
     fi
 done
 if [ -z "$APP" ] || [ ! -x "$APP/Contents/Resources/runtimes/image/bin/python3" ] || [ ! -x "$APP/Contents/Resources/runtimes/voice/bin/python3" ]; then
-    echo "NOT MEASURED: no complete Studio Hub.app with Image and Voice runtimes was found." >&2
+    echo "NOT MEASURED: no complete Hub Studio KH.app with Image and Voice runtimes was found." >&2
     exit 3
 fi
 

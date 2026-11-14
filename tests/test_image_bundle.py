@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -15,7 +16,7 @@ import httpx
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILD_PYTHON = ROOT / '.build/voice-runtime/bin/python3'
+BUILD_PYTHON = Path(sys.executable)
 IMAGE_RUNTIME = ROOT / '.build/st03-image-runtime-worker'
 
 

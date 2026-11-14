@@ -99,25 +99,32 @@ def build(app: Path, output: Path) -> None:
     app, output = app.expanduser().resolve(), output.expanduser().absolute()
     if not (app / 'Contents/Info.plist').is_file():
         raise ValueError('source must be a staged .app bundle')
-    if output.parent.resolve() != (ROOT / 'dist').resolve() or output.suffix != '.dmg':
-        raise ValueError('DMG output must be in this project dist folder')
+    dist = ROOT / 'dist'
+    candidates = dist / '.candidates'
+    if output.parent.resolve() not in (dist.resolve(), candidates.resolve()) or output.suffix != '.dmg':
+        raise ValueError('DMG output must be in this project dist or dist/.candidates folder')
+    if dist.is_symlink() or candidates.is_symlink():
+        raise ValueError('DMG staging folders must not be symlinks')
+    if output.parent.resolve() == dist.resolve() and (dist / '.release-dist.json').exists():
+        raise ValueError('accepted release dist is managed; stage candidates in dist/.candidates')
     validate_stage(app)
     manifest_dir = app.with_name(app.name + '.file-manifest')
     if not manifest_dir.is_dir():
         manifest_dir = app.parent / 'file-manifest'
     output.parent.mkdir(parents=True, exist_ok=True)
-    for old in sorted(output.parent.glob('*.dmg')):
-        print('Previous installer preserved:', preserve(old, ROOT, 'dist'))
+    if output.exists() or output.is_symlink():
+        print('Previous installer preserved:', preserve(output, ROOT, 'dist'))
     scratch_parent = ROOT / '.build'
     scratch_parent.mkdir(exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix='dmg-stage-', dir=scratch_parent))
     complete = False
     try:
-        subprocess.run(['/bin/cp', '-cRp', str(app), str(scratch / 'Studio Hub.app')], check=True)
+        # The bundle keeps the name it was staged with ("Hub Studio KH.app").
+        subprocess.run(['/bin/cp', '-cRp', str(app), str(scratch / app.name)], check=True)
         subprocess.run(['/bin/cp', '-cRp', str(manifest_dir), str(scratch / 'file-manifest')], check=True)
         # hdiutil's image copier and another Mac must read owner-only auxiliary runtime tools.
         # Content/link identity and the manifest's executable flags remain unchanged.
-        subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / 'Studio Hub.app')], check=True)
+        subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / app.name)], check=True)
         subprocess.run(['/bin/chmod', '-R', 'a+rX', str(scratch / 'file-manifest')], check=True)
         (scratch / 'Applications').symlink_to('/Applications', target_is_directory=True)
         subprocess.run(['diskutil', 'image', 'create', 'from', '--volumeName', 'Hub Studio KH',

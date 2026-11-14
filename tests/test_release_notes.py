@@ -67,12 +67,9 @@ class VersionAgreementTests(unittest.TestCase):
         the file: the comment explaining this decision has to be allowed to mention the old name.
         """
         text = STAGE.read_text()
-        # The bundle's *display* name is the fixed identity; the version rides in the plist and the
-        # release manifest, and the folder name is chosen by the caller (the kit stages
-        # `Studio Hub.app`).
-        self.assertIn("'CFBundleName': 'Studio Hub'", text)
-        # The approved visible name rides on the display key; the short internal name and
-        # the on-disk `Studio Hub.app` stay put so launchers and lookups keep working.
+        # The app is Hub Studio KH everywhere it is seen: short name, display name and bundle
+        # filename (owner, 2026-11-12). The bundle id and data folder are the unchanged internals.
+        self.assertIn("'CFBundleName': 'Hub Studio KH'", text)
         self.assertIn("'CFBundleDisplayName': 'Hub Studio KH'", text)
         self.assertIn("'CFBundleShortVersionString': version", text)
         self.assertIn("'version': version", text)
@@ -80,9 +77,7 @@ class VersionAgreementTests(unittest.TestCase):
     def test_the_launchers_prefer_the_unversioned_app_name(self):
         for name in ("install_app.command", "copy-models.command"):
             text = (ROOT / name).read_text()
-            first = text.index("Studio Hub")
-            self.assertTrue(text[first:].startswith("Studio Hub.app") or 'Studio Hub.app"' in text,
-                            f"{name} must try the unversioned name")
+            self.assertIn("Hub Studio KH.app", text, f"{name} must try the unversioned name")
             # The versioned name may remain only as a fallback for a Mac carrying an older kit.
             self.assertLessEqual(text.count("Studio Hub 0.4.0.app"), 4,
                                  f"{name} still leans on the old versioned name")
@@ -179,7 +174,7 @@ class StagedBundleTests(unittest.TestCase):
 
     def staged(self):
         return self.select_bundle(os.environ.get("STUDIOHUB_TEST_APP"),
-                                  ROOT / "dist" / "Studio Hub.app")
+                                  ROOT / "dist" / "Hub Studio KH.app")
 
     def test_explicit_bundle_path_is_selected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -191,11 +186,11 @@ class StagedBundleTests(unittest.TestCase):
 
     def test_explicit_missing_bundle_path_fails(self):
         with self.assertRaises(AssertionError):
-            self.select_bundle("/definitely/missing/Studio Hub.app", ROOT / "missing.app")
+            self.select_bundle("/definitely/missing/Hub Studio KH.app", ROOT / "missing.app")
 
     def test_default_selection_skips_when_no_repo_artifact_exists(self):
         with tempfile.TemporaryDirectory() as temporary:
-            self.assertIsNone(self.select_bundle(None, Path(temporary) / "Studio Hub.app"))
+            self.assertIsNone(self.select_bundle(None, Path(temporary) / "Hub Studio KH.app"))
 
     def test_the_packaged_plist_carries_the_current_version(self):
         bundle = self.staged()
@@ -204,7 +199,7 @@ class StagedBundleTests(unittest.TestCase):
         with (bundle / "Contents/Info.plist").open("rb") as stream:
             plist = plistlib.load(stream)
         self.assertEqual(plist["CFBundleShortVersionString"], current_version())
-        self.assertEqual(plist["CFBundleName"], "Studio Hub")
+        self.assertEqual(plist["CFBundleName"], "Hub Studio KH")
 
     def test_the_notes_are_readable_from_inside_the_bundle(self):
         bundle = self.staged()

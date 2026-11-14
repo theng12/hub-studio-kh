@@ -146,6 +146,13 @@ def _as_int(value: object) -> int | None:
 # Artifact acceptance — the accept-artifact rig, generalised to "whatever artifact was named".
 # ---------------------------------------------------------------------------
 
+def _private_mountpoint(prefix: str) -> Path:
+    mount = Path(tempfile.mkdtemp(prefix=prefix))
+    if str(mount).startswith('/Volumes'):
+        raise SystemExit(f'refusing to mount under /Volumes: {mount}')
+    return mount
+
+
 def accept_artifact(artifact: Path, version: str, build: str, run=subprocess.run) -> dict:
     """Prove the artifact before a byte of it is offered to any site.
 
@@ -172,9 +179,7 @@ def accept_artifact(artifact: Path, version: str, build: str, run=subprocess.run
     if verify.returncode != 0 or 'is VALID' not in text:
         raise SystemExit(f'hdiutil verify did not accept the image (exit {verify.returncode})')
 
-    mount = Path(tempfile.mkdtemp(prefix='hub-rollout-accept-'))
-    if str(mount).startswith('/Volumes'):
-        raise SystemExit(f'refusing to mount under /Volumes: {mount}')
+    mount = _private_mountpoint('hub-rollout-accept-')
     try:
         attached = run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-plist', '-mountpoint', str(mount),
                         str(artifact)], check=True, capture_output=True, timeout=600)
@@ -226,6 +231,57 @@ def same_file_as_accepted(artifact: Path, accepted: dict) -> bool:
     """Cheap re-check before a POST: the bytes offered must be the bytes accepted."""
     stat = Path(artifact).stat()
     return stat.st_size == accepted['bytes'] and stat.st_mtime_ns == accepted['mtime_ns']
+
+
+def verify_build_label(artifact: Path, build: str, run=subprocess.run) -> dict:
+    """Publishing preflight: the offered build label must be the artifact's own.
+
+    A Mac names its release by `StudioHubBuild` in its own Info.plist (native/UpdateClient.swift,
+    StudioAPI), and the native refusal for a mismatched bundle already reads
+    "This app does not match this update: build <installed>, offered <offered>."
+    (`native/StudioAPI.swift` releaseRefusal). This tool must offer exactly what the artifact
+    says before any publication remote write, so it reads the **mounted app's own**
+    `StudioHubBuild` — never a label quoted on the command line. The mount is read-only at a
+    private temp directory (never under `/Volumes`) and detached here, exactly like
+    `accept_artifact`.
+    """
+    artifact = Path(artifact)
+    if not build:
+        raise SystemExit('refusing to publish: no build label was offered (--build is empty); '
+                         f'the artifact {artifact.name} carries StudioHubBuild and only that '
+                         'label may be published')
+    mount = _private_mountpoint('hub-rollout-build-')
+    try:
+        attached = run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-plist', '-mountpoint', str(mount),
+                        str(artifact)], check=True, capture_output=True, timeout=600)
+        device = min(e['dev-entry'] for e in plistlib.loads(attached.stdout)['system-entities'])
+    except Exception as exc:  # noqa: BLE001 - a mount we made is a mount we clean up
+        try:
+            mount.rmdir()
+        except OSError:
+            pass
+        raise SystemExit(f'hdiutil attach failed while reading the build label: {exc}') from exc
+    try:
+        app = next((p for p in mount.iterdir() if p.suffix == '.app'), None)
+        if app is None:
+            raise SystemExit('the mounted image carries no .app bundle, so it has no StudioHubBuild')
+        info = plistlib.loads((app / 'Contents' / 'Info.plist').read_bytes())
+        offered = str(info.get('StudioHubBuild') or '')
+        if not offered:
+            raise SystemExit('the mounted app carries no StudioHubBuild in its Info.plist; '
+                             'this tool cannot verify what it would publish')
+        if offered != build:
+            raise SystemExit(
+                f'build mismatch: the artifact carries StudioHubBuild {offered}, offered {build}. '
+                f'This app does not match this update: build {offered}, offered {build}; '
+                'publishing refused, nothing was offered to any site')
+        return {'offered': build, 'artifact_build': offered, 'match': True}
+    finally:
+        run(['hdiutil', 'detach', device], check=False, capture_output=True, timeout=300)
+        try:
+            mount.rmdir()
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -1075,6 +1131,10 @@ def main(argv: list[str] | None = None) -> int:
     accepted = accept_artifact(artifact, args.version, args.build)
     note(f'artifact accepted: {accepted["name"]} {accepted["bytes"]} bytes '
          f'sha256 {accepted["sha256"]}')
+    # Publishing preflight, before any remote write: the offered label must be the
+    # artifact's own StudioHubBuild, or a Mac would be offered an update it must refuse.
+    build_label = verify_build_label(artifact, args.build)
+    note(f'build label verified against the artifact: {build_label["artifact_build"]}')
 
     rollout = Rollout(gateway, accepted, artifact, args.version, args.build,
                       receipts=evidence.parent / 'hub-rollout-site-receipts',
@@ -1105,6 +1165,7 @@ def main(argv: list[str] | None = None) -> int:
         'schema': SCHEMA, 'tool': 'scripts/hub_rollout.py',
         'generated_at': utc_now(), 'version': args.version, 'build': args.build,
         'artifact': accepted,
+        'build_label': build_label,
         # Which shape was offered: a full push is the only one an older Hub can take when its
         # delta refusal (MAX_DELTA_FRACTION) covers this release.
         'force_full': args.full,

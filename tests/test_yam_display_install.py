@@ -219,7 +219,7 @@ class LaunchersInstallYamDisplayTests(unittest.TestCase):
                                  shutil.rmtree(self.tmp, ignore_errors=True)))
         self.kit = self.tmp / "kit"
         self.kit.mkdir()
-        make_hub_app(self.kit / "Studio Hub.app")
+        make_hub_app(self.kit / "Hub Studio KH.app")
         shutil.copy(ROOT / "install_app.command", self.kit / "1 - Install the app.command")
         shutil.copy(ROOT / "Update this Mac.command", self.kit / "Update this Mac.command")
         (self.kit / "2 - Copy the models.command").write_text("#!/bin/sh\ntouch \"$(dirname \"$0\")/models-ran\"\n")
@@ -253,13 +253,13 @@ class LaunchersInstallYamDisplayTests(unittest.TestCase):
         self.with_extras()
         result = self.run_script("1 - Install the app.command")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue((self.applications / "Studio Hub.app").is_dir())
+        self.assertTrue((self.applications / "Hub Studio KH.app").is_dir())
         self.assertTrue(self.yam().is_dir(), result.stdout)
 
     def test_install_app_without_extras_says_so_in_one_line_and_installs_the_hub(self):
         result = self.run_script("1 - Install the app.command")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue((self.applications / "Studio Hub.app").is_dir())
+        self.assertTrue((self.applications / "Hub Studio KH.app").is_dir())
         self.assertIn("Yam Display: not in this kit", result.stdout)
         self.assertFalse(self.yam().exists())
 
@@ -267,9 +267,9 @@ class LaunchersInstallYamDisplayTests(unittest.TestCase):
         self.with_extras()
         result = self.run_script("1 - Install the app.command", FAKE_ATTACH_FAIL="1")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue((self.applications / "Studio Hub.app").is_dir())
+        self.assertTrue((self.applications / "Hub Studio KH.app").is_dir())
         self.assertIn("Yam Display was NOT installed", result.stdout)
-        self.assertIn("Installed Studio Hub", result.stdout)
+        self.assertIn("Installed Hub Studio KH", result.stdout)
         self.assertFalse(self.yam().exists())
 
     def test_install_app_stands_aside_when_the_update_script_drives(self):
@@ -290,8 +290,8 @@ class LaunchersInstallYamDisplayTests(unittest.TestCase):
     def test_update_this_mac_still_installs_yam_display_when_the_hub_app_is_already_current(self):
         # The Hub step is skipped for an identical build; Yam Display must not ride on it.
         manifest = json.dumps({"version": "1.2.3", "implementation_commit": "abc1234"})
-        make_hub_app(self.applications / "Studio Hub.app")
-        for app in (self.kit / "Studio Hub.app", self.applications / "Studio Hub.app"):
+        make_hub_app(self.applications / "Hub Studio KH.app")
+        for app in (self.kit / "Hub Studio KH.app", self.applications / "Hub Studio KH.app"):
             (app / "Contents/Resources/release-manifest.json").write_text(manifest)
         self.with_extras()
         result = self.run_script("Update this Mac.command")
@@ -302,7 +302,7 @@ class LaunchersInstallYamDisplayTests(unittest.TestCase):
         self.with_extras()
         result = self.run_script("Update this Mac.command", FAKE_ATTACH_FAIL="1")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue((self.applications / "Studio Hub.app").is_dir())
+        self.assertTrue((self.applications / "Hub Studio KH.app").is_dir())
         self.assertTrue((self.kit / "models-ran").exists())
         self.assertIn("Yam Display was NOT installed (see above)", result.stdout)
 

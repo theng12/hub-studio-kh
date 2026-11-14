@@ -132,7 +132,11 @@ class EndToEndDryRunTests(unittest.TestCase):
         }
         kit = self.kit_dir
         (kit / "publisher.json").write_text(json.dumps(publisher))
-        files = {name: _read_pin(kit / name) for name in KIT_FILES}
+        present = {path.relative_to(kit).as_posix() for path in kit.rglob("*")
+                   if not path.is_dir()}
+        # The builder may also carry the shared icon; anything else is drift to catch here.
+        self.assertEqual(present - KIT_OPTIONAL, set(KIT_FILES))
+        files = {name: _read_pin(kit / name) for name in sorted(present)}
         (kit / "MANIFEST.json").write_text(json.dumps({"files": files}))
         self.kit = kit
         self.publisher = publisher
@@ -171,6 +175,7 @@ class EndToEndDryRunTests(unittest.TestCase):
 
 KIT_FILES = {"VERSION", "bin/khu", "bin/khu-stub", "install-agent.sh",
              "com.khupdater.agent.plist", "agent-config.example.json", "publisher.json"}
+KIT_OPTIONAL = {"AppIcon.icns"}
 
 
 def _read_pin(path: Path) -> dict:

@@ -40,7 +40,7 @@ def load_fixture() -> dict:
 
 def make_fixture_app(root: Path, data: dict, *, embedded: dict | None = None) -> Path:
     """The fixture's app bytes on disk; ``embedded`` writes legacy records declaring digests."""
-    app = root / "Studio Hub.app"
+    app = root / "Hub Studio KH.app"
     for rel, spec in data["valid_sealed_release"]["app_files"].items():
         target = app / rel
         target.parent.mkdir(parents=True, exist_ok=True)

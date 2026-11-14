@@ -14,11 +14,27 @@ import SwiftUI
 enum ReleaseNotes {
     /// The version this build is, from the bundle rather than a constant that can drift.
     static var currentVersion: String {
+        // The offscreen render harness is a plain binary with no Info.plist; it passes the version
+        // it is rendering, so What's New names the same build as the footer.
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "unknown"
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            ?? ProcessInfo.processInfo.environment["STUDIOHUB_VERSION"]
+                .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            ?? "unknown"
     }
 
-    static var title: String { "Studio Hub \(currentVersion)" }
+    static var title: String { "Hub Studio KH \(currentVersion)" }
+
+    /// Whether this build actually carries its notes. The fallback text is deliberately readable,
+    /// so "the body is non-empty" cannot answer this; the page uses this flag to offer the update
+    /// path instead of dressing the fallback up as notes.
+    static var hasNotes: Bool {
+        // The offscreen render harness points the notes at a file instead of a bundle.
+        if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_NOTES"] != nil { return true }
+        guard let url = Bundle.main.url(forResource: "release-notes", withExtension: "md"),
+              let body = try? String(contentsOf: url, encoding: .utf8) else { return false }
+        return !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     /// The whole notes file, or a plain explanation if the bundle is missing it.
     static func text() -> String {
@@ -28,8 +44,8 @@ enum ReleaseNotes {
             return """
             # What's new
 
-            These notes were not found inside the app. The full history is in the `CHANGELOG.md`
-            that ships beside it.
+            These notes were not found inside this build. The full history is in the changelog
+            that ships beside the app.
             """
         }
         return body

@@ -20,7 +20,7 @@ set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 KIT=$(dirname "$HERE")
-APP="$KIT/Studio Hub.app"
+APP="$KIT/Hub Studio KH.app"
 LIB="$KIT/model-library"
 PY="$APP/Contents/Resources/runtimes/voice/bin/python3"
 

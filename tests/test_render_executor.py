@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import sys
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -40,6 +41,7 @@ from components.hub.backend.render_jobs import (  # noqa: E402
     ValidatedOutputReceipt,
 )
 from components.hub.backend.render_service import RenderService  # noqa: E402
+from _render_authority_root import anchor_root  # noqa: E402
 
 
 class FakeBroker:
@@ -278,6 +280,7 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.root = ROOT / "_trash/render-executor-testroots" / uuid4().hex
         self.root.mkdir(parents=True)
+        anchor_root(self, self.root)
         self.raw = (ROOT / "tests/fixtures/final-render-compiler-v1.json").read_bytes()
 
     def authority(self) -> InstalledRenderAuthority:
@@ -1058,6 +1061,11 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         refused("UNSAFE_FILE")
         (authority / "qualify.json").unlink()
         refused("MISSING")
+        self.root.chmod(0o775)
+        try:
+            refused("UNSAFE_PATH")
+        finally:
+            self.root.chmod(0o700)
         real = self.root / "real-authority"
         authority.rename(real)
         authority.symlink_to(real)
@@ -1402,9 +1410,11 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(runtime.job["state"], "failed")
 
     async def test_validation_failure_and_unknown_ledger_evidence_never_release_physical_hold(self) -> None:
+        packet = json.loads(
+            (ROOT / "tests/fixtures/final-render-compiler-v1.json").read_text()
+        )["f0_base_audio"]["packet"]
         raw = json.dumps({
-            "packet": {"recipe": {"profile_digest": "1" * 64}},
-            "assets": {},
+            "packet": packet, "assets": {"audio": "b" * 32, "base": "a" * 32},
         }, sort_keys=True, separators=(",", ":")).encode()
 
         for evidence in (None, {}, RuntimeError("ledger unavailable")):
@@ -1412,27 +1422,37 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
                 events: list[str] = []
                 runtime = FakeRuntime(self.root / uuid4().hex, raw, self.authority().qualification, events)
                 broker = FakeBroker(events)
+                files = {}
+                for handle, payload in (("a" * 32, self.mp4_bytes()),
+                                        ("b" * 32, self.wav_bytes())):
+                    path = runtime.root / handle
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(payload)
+                    files[handle] = path
 
                 def get(_owner_scope, _job_id):
                     if isinstance(evidence, BaseException):
                         raise evidence
                     return evidence
 
-                runtime.get = get
-
                 async def spawn(*_args, **_kwargs):
-                    return FakeProcess(self.root / "out.mp4")
+                    return FakeProcess(Path(runtime.claim["output_path"]))
+
+                def reject_output(*_args):
+                    events.append("validate")
+                    runtime.get = get
+                    raise RuntimeError("probe rejected output")
 
                 executor = RenderExecutor(
-                    runtime, FakeAssets({}), authority=lambda: self.authority(),
+                    runtime, FakeAssets(files), authority=lambda: self.authority(),
                     machine="local", broker_api=broker,
-                    compile_plan=lambda *_args: FinalRenderPlan(
+                    compile_plan=lambda _raw, local, output: FinalRenderPlan(
                         tiers=(EncodeTier("hardware-h264", (
-                            "-c:v", "h264_videotoolbox", str(self.root / "out.mp4"))),),
+                            "-i", local["base"], "-i", local["audio"],
+                            "-c:v", "h264_videotoolbox", output)),),
                         requested_burn_ins=(), input_uses=()),
                     spawn=spawn,
-                    output_validator=lambda *_args: (_ for _ in ()).throw(
-                        RuntimeError("probe rejected output")),
+                    output_validator=reject_output,
                     process_identity=lambda process, executable: ProcessIdentity(
                         pid=process.pid, process_group_id=process.pid,
                         start_token=f"boot:1:{executable}"),
@@ -1440,8 +1460,15 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
 
                 self.assertTrue(await executor.dispatch_ready())
+                outcomes = await asyncio.gather(*executor._tasks, return_exceptions=True)
                 await executor.stop()
 
+                self.assertEqual(events.count("validate"), 1)
+                self.assertIn("stopped", events)
+                self.assertEqual(len(outcomes), 1)
+                self.assertIsInstance(outcomes[0], RuntimeError)
+                self.assertEqual(str(outcomes[0]), "probe rejected output")
+                self.assertNotIn("publish", events)
                 self.assertIsNotNone(broker.owner)
                 self.assertNotIn("release", events)
 
@@ -2454,6 +2481,31 @@ class RenderExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [key for key in activity.live_batches() if key.startswith("render:")], [],
             "an unconfigured Hub must not advertise a render lane it does not have")
+
+
+class DefaultAnchorTests(unittest.TestCase):
+    """The reader's own root stays the real "/"; foreign and escaping roots are refused."""
+
+    def test_the_default_anchor_is_the_real_root_and_foreign_or_escaping_roots_are_refused(
+            self) -> None:
+        from components.hub.backend import render_authority_files as files
+
+        self.assertEqual(files._ROOT_ANCHOR, Path("/"),
+                         "production must keep walking every real ancestor from /")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(os.path.realpath(directory))
+            anchor = root / "anchor"
+            anchor.mkdir()
+            data_root = root / "data"
+            (data_root / "render-authority").mkdir(parents=True)
+            (data_root / "render-authority").chmod(0o700)
+            for candidate in (
+                    data_root,                              # outside the anchor
+                    anchor / ".." / "data"):                # ".." escaped the anchor
+                with mock.patch.object(files, "_ROOT_ANCHOR", anchor):
+                    with self.assertRaises(files.RenderAuthorityRecordError) as raised:
+                        files.read_record(candidate, "qualify.json", expected_uid=os.getuid())
+                self.assertEqual(raised.exception.code, "UNSAFE_PATH", candidate)
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ def check_valid_bytes_and_closure(fixture: dict, fm) -> None:
     app_files = valid["app_files"]
     # Every declared byte: size + sha256 from actual base64 content.
     with tempfile.TemporaryDirectory(prefix="sealed-fixture-app-") as tmp:
-        app_root = Path(tmp) / "Studio Hub.app"
+        app_root = Path(tmp) / "Hub Studio KH.app"
         for rel, row in app_files.items():
             data = base64.b64decode(row["content_b64"], validate=True)
             assert len(data) == row["size"], f"{rel}: size mismatch"

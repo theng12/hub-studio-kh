@@ -277,10 +277,10 @@ class EndToEndTests(unittest.TestCase):
     REVISION = "c" * 40
     # The unversioned name every kit ships. It used to be `Studio Hub 0.4.0.app`, and once the
     # launcher stopped looking for a pinned name the fixture's app was no longer found — at which
-    # point the helper fell through to the **owner's real `/Applications/Studio Hub.app`** and read
+    # point the helper fell through to the **owner's real `/Applications/Hub Studio KH.app`** and read
     # its (older) `model_packages`. A test that reaches out of its sandbox is a worse bug than the
     # one it was hiding; the fixture now uses the name the drives actually carry.
-    APP = Path("Studio Hub.app")
+    APP = Path("Hub Studio KH.app")
 
     def _manifest(self, package_id: str, revision: str, files: dict) -> dict:
         entries = []
@@ -335,7 +335,7 @@ class EndToEndTests(unittest.TestCase):
         # written for; `test_copy_models_for_this_mac.KitNoLongerChoosesTests` pins the default.
         os.environ["STUDIOHUB_KIT_COPY"] = "1"
         # **Point the helper at this fixture's app bundle.** It prefers an *installed*
-        # `/Applications/Studio Hub.app` now, and without this it read the owner's real thirty
+        # `/Applications/Hub Studio KH.app` now, and without this it read the owner's real thirty
         # manifests against this fixture's library — every model came back "not on this SSD". The
         # sibling suite (`test_copy_models_for_this_mac.py`) had the same hole and the same fix.
         os.environ["STUDIOHUB_APP_ROOT"] = str(kit / self.APP)
@@ -596,8 +596,8 @@ class LauncherTests(unittest.TestCase):
 
     def test_the_copy_launcher_finds_the_app_in_the_root_or_next_to_it(self):
         text = (ROOT / "copy-models.command").read_text()
-        for candidate in ("$HERE/Studio Hub.app", "$KIT/Studio Hub.app",
-                          "/Applications/Studio Hub.app"):
+        for candidate in ("$HERE/Hub Studio KH.app", "$KIT/Hub Studio KH.app",
+                          "/Applications/Hub Studio KH.app"):
             self.assertIn(candidate, text)
         # The bundle's name carries no version, on purpose (`packaging/stage_voice.py` dropped
         # it so a new release replaces the old install instead of sitting beside it). A launcher
@@ -608,8 +608,8 @@ class LauncherTests(unittest.TestCase):
 
     def test_the_install_launcher_finds_the_app_from_the_root_too(self):
         text = (ROOT / "install_app.command").read_text()
-        self.assertIn("$HERE/Studio Hub.app", text)
-        self.assertIn("$KIT/Studio Hub.app", text)
+        self.assertIn("$HERE/Hub Studio KH.app", text)
+        self.assertIn("$KIT/Hub Studio KH.app", text)
         self.assertNotRegex(
             text, r"Studio Hub \d+\.\d+",
             "install_app.command looks for a version-pinned app name; the bundle has none")
@@ -839,7 +839,7 @@ class TheUpdateCommandSkipsAnUnchangedAppTest(unittest.TestCase):
                       "an empty kit identity could be compared and match an empty installed one")
 
     def test_the_two_steps_run_in_order_never_beside_each_other(self):
-        """Step 1 replaces /Applications/Studio Hub.app; step 2 executes code from inside it."""
+        """Step 1 replaces /Applications/Hub Studio KH.app; step 2 executes code from inside it."""
         install = self.text.index("1 - Install the app.command")
         models = self.text.index("2 - Copy the models.command")
         # Both are *mentioned* in the header comment; the runs are the lines that invoke them.

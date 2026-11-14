@@ -25,7 +25,7 @@ import library_guard  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[3]
-APP = Path("/Applications/Studio Hub.app")
+APP = Path("/Applications/Hub Studio KH.app")
 CLIP = ROOT / "qualification/evidence/st04-reference-clip.wav"
 WHISPER = "mlx-community/whisper-large-v3-turbo"
 

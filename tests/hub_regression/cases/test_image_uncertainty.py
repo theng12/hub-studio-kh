@@ -282,8 +282,14 @@ def test_expired_image_lease_requests_cancel_and_keeps_original_fenced(
     assert studio["machine"] in broker.busy_machines()
     client.poll_result = response(200, {"job": {**job, "state": "cancelled",
         "error": "cancelled", "error_code": "CANCELLED"}})
-    assert asyncio.run(broker.reconcile_image_item(batch["id"], 0, client))["reconciled"]
-    assert studio["machine"] not in broker.busy_machines()
+    second = asyncio.run(broker.reconcile_image_item(batch["id"], 0, client))
+    # The operator's cancellation owns the remaining lifecycle: the worker receipt settles
+    # nothing, so the attempt stays uncertain and keeps its hold until discard.
+    # Age-out intentionally skips cancelled batches (operator cancellation lifecycle).
+    assert not second["reconciled"]
+    assert second["item"]["state"] == "uncertain"
+    assert item["state"] == "uncertain"
+    assert studio["machine"] in broker.busy_machines()
 
 
 def test_user_cancel_after_image_acceptance_without_a_worker_answer_stays_uncertain(
