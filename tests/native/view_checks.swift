@@ -41,6 +41,16 @@ enum ViewChecks {
             appearance.performAsCurrentDrawingAppearance {
                 card = NSColor.controlBackgroundColor.usingColorSpace(.sRGB) ?? .white
             }
+            var page = NSColor.windowBackgroundColor
+            var muted = NSColor.secondaryLabelColor
+            appearance.performAsCurrentDrawingAppearance {
+                page = NSColor.windowBackgroundColor.usingColorSpace(.sRGB) ?? .white
+                muted = NSColor.secondaryLabelColor.usingColorSpace(.sRGB) ?? .gray
+            }
+            for (surfaceName, surface) in [("card", card), ("page", page)] {
+                check(contrast(muted, surface) >= 4.5,
+                      "\(appearanceName) muted text on \(surfaceName) is \(String(format: "%.2f", contrast(muted, surface))):1, below 4.5:1")
+            }
             for status in [HubStatus.ok, HubStatus.warn, HubStatus.bad, HubStatus.off, HubStatus.info] {
                 var base = status.baseNSColor
                 appearance.performAsCurrentDrawingAppearance {
@@ -50,6 +60,8 @@ enum ViewChecks {
                 let fill = composited(base.withAlphaComponent(0.14), over: card)
                 check(contrast(text, fill) >= 4.5,
                       "\(appearanceName) status text \(status) is \(String(format: "%.2f", contrast(text, fill))):1, below 4.5:1")
+                check(contrast(text, page) >= 4.5,
+                      "\(appearanceName) status text \(status) on the page is \(String(format: "%.2f", contrast(text, page))):1, below 4.5:1")
             }
         }
         check(HistoryTab.downloads.studio == nil, "the Downloads tab shows no Studio's history")
