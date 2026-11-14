@@ -2,6 +2,21 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.235 — 2026-11-14
+
+- The current page in the sidebar is a quiet accent tint with a small accent bar; the outline is the system's keyboard focus ring, not a permanent blue block.
+- The footer pill names the app, its version and What's New.
+- Overview, Audio and the footer read one service state: stopped, recovering or running. "Recovering local services…" no longer appears beside "stopped", a missing model or a download.
+- Overview keeps one Start Services primary; the empty in-progress card no longer repeats it. The model-library line says the library is a folder on this Mac and names the next step.
+- While services are stopped, Audio offers Start Services as its only primary and disables Generate, Add Voice, Manage Voices and Manage Audio Models with one reason; the voice picker says services are stopped instead of claiming a read.
+- Audio lays out as Script two-thirds, Recent audio one-third and Generation full width at normal window sizes, with one empty state and one next step.
+- Muted and status text are measured at 4.5:1 in the dark theme as well as light.
+
+### Technical notes
+
+- `ServicePhase` in `StudioViews` is the single stopped/recovering/running source; `audioScriptSection`, `audioGenerationSection` and `audioRecentPane` carry the Audio layout.
+- `tests/test_owner_review_0235.py` pins each owner-review item; `tests/native/view_checks.swift` measures muted and status text on card and page in both themes.
+
 ## 0.6.234 — 2026-11-13
 
 - Every page now opens the same way: its name, one plain line saying what is true right now (hub running, models ready, jobs moving), at most one main button, and one menu for the rest.
