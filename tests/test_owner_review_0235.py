@@ -85,5 +85,23 @@ class AudioServiceStateTests(unittest.TestCase):
         self.assertIn(".disabled(servicePhase != .running)", audio)
 
 
+class AudioLayoutTests(unittest.TestCase):
+    def test_script_two_thirds_recent_one_third_generation_full_width(self) -> None:
+        audio = VIEWS[VIEWS.index("private var audioWorkspace"):]
+        audio = audio[:audio.index("private var audioScriptSection")]
+        self.assertIn("contentWidth * 2 / 3", audio)
+        self.assertIn("contentWidth / 3", audio)
+        self.assertIn("audioGenerationSection", audio)
+        # Generation is after the HStack, not inside the narrow column.
+        self.assertLess(audio.index("HStack(alignment: .top"), audio.index("audioGenerationSection"))
+
+    def test_recent_audio_has_one_empty_state_and_one_next_step(self) -> None:
+        pane = VIEWS[VIEWS.index("private var audioRecentPane"):]
+        pane = pane[:pane.index("private var voiceSourcePicker")]
+        self.assertIn('empty("Your audio will appear here", "Write a script and press Generate Audio."', pane)
+        self.assertIn("showHint: !workspace.audioJobs.isEmpty", pane)
+        self.assertEqual(pane.count('empty("Your audio will appear here"'), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

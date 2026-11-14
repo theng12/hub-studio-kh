@@ -4029,13 +4029,46 @@ struct StudioContent: View {
                         : nil,
                      menu: studioPageMenu) {
             if !connected { setup }
-            StudioSplit(sideTitle: "Recent audio", sideSymbol: "waveform") {
-                // The form, on the left, in the same shape as the Image page: everything you set
-                // up, packed from the top, scrolling if it is taller than the window. The Script
-                // box used to be its own column with the controls opposite it, which is why every
-                // control on this page was once clipped and why the page never matched the others.
+            if windowWidth >= 1000 {
+                // Owner layout: the script takes two thirds, Recent audio one third and scrolls in
+                // its own pane, and Generation runs full width underneath.
+                let contentWidth = max(0, windowWidth - HubSpace.sidebar - 1 - 2 * HubSpace.page)
                 ScrollView {
-                    VStack(alignment: .leading, spacing: HubSpace.l) {
+                    VStack(alignment: .leading, spacing: HubSpace.xl) {
+                        HStack(alignment: .top, spacing: HubSpace.xl) {
+                            audioScriptSection
+                                .frame(width: max(420, contentWidth * 2 / 3 - HubSpace.xl / 2),
+                                       alignment: .topLeading)
+                            audioRecentPane
+                                .frame(width: max(280, contentWidth / 3), height: 380, alignment: .topLeading)
+                        }
+                        audioGenerationSection
+                    }
+                    .padding(.bottom, HubSpace.l)
+                }
+            } else {
+                StudioSplit(sideTitle: "Recent audio", sideSymbol: "waveform") {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: HubSpace.l) {
+                            audioScriptSection
+                            Divider().padding(.top, 8)
+                            audioGenerationSection
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
+                    }
+                    .frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
+                } side: {
+                    audioRecentPane
+                }
+            }
+        }
+        .onAppear { seedSample(Self.audioSamples, binding: $workspace.audioText, seeded: $seededAudioSample) }
+        .task(id: modelDefaultsLoadKey) { await workspace.loadModelDefaultsIfNeeded(for: selectedAudioModel) }
+    }
+
+    @ViewBuilder private var audioScriptSection: some View {
+        VStack(alignment: .leading, spacing: HubSpace.l) {
                         if servicePhase != .running {
                             HubBanner(status: servicePhase == .recovering ? .info : .warn,
                                       symbol: servicePhase == .recovering ? "arrow.clockwise" : "pause.circle.fill",
@@ -4073,7 +4106,11 @@ struct StudioContent: View {
                                 .font(HubType.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        Divider().padding(.top, 8)
+        }
+    }
+
+    @ViewBuilder private var audioGenerationSection: some View {
+        VStack(alignment: .leading, spacing: HubSpace.l) {
                         Text("Generation").font(HubType.section)
                         voiceModeTabs
                         modelPicker(.audio)
@@ -4180,12 +4217,13 @@ struct StudioContent: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Manage Audio Models") { modelFilter = "Audio"; studio.select(.models) }
                             .disabled(servicePhase != .running)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
-                }
-                .frame(minWidth: 350, idealWidth: 390, maxWidth: 440)
-            } side: {
+        }
+        .padding(HubSpace.l)
+        .background(HubSurface.card, in: RoundedRectangle(cornerRadius: HubRadius.card))
+        .overlay(RoundedRectangle(cornerRadius: HubRadius.card).stroke(HubSurface.border, lineWidth: 1))
+    }
+
+    @ViewBuilder private var audioRecentPane: some View {
                 // What you made, on the right, exactly as the Image page shows its preview.
                 VStack(alignment: .leading, spacing: HubSpace.m) {
                     HStack {
@@ -4205,11 +4243,11 @@ struct StudioContent: View {
                     // out from under the pointer, and on a long history the list jumped by the
                     // height of the transport. Reserving the space is the fix; with nothing loaded
                     // the controls are disabled and say so.
-                    audioTransport(loadedAudioJob)
+                    audioTransport(loadedAudioJob, showHint: !workspace.audioJobs.isEmpty)
                     ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio, inset: HubSpace.s) {
                         Group {
                             if workspace.audioJobs.isEmpty {
-                                empty("Your audio will appear here", "Generated audio collects here, newest first.", symbol: "waveform")
+                                empty("Your audio will appear here", "Write a script and press Generate Audio.", symbol: "waveform")
                             } else {
                                 ScrollView { RecentRows(items: workspace.audioJobs) { jobRow($0, compact: true) } }
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -4217,14 +4255,7 @@ struct StudioContent: View {
                         }
                     }
                 }
-                .padding(.leading, HubSpace.m)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
-        }
-        .onAppear { seedSample(Self.audioSamples, binding: $workspace.audioText, seeded: $seededAudioSample) }
-        // The speaking pace opens on the operator's saved `speed` default for this model when its
-        // lane publishes one, and on the engine's own pace otherwise.
-        .task(id: modelDefaultsLoadKey) { await workspace.loadModelDefaultsIfNeeded(for: selectedAudioModel) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// Where the voice for a clone comes from: the library on the Voices page, and nowhere else.
@@ -6510,7 +6541,7 @@ struct StudioContent: View {
     /// The parameter is optional so the panel can reserve this control's height before the first
     /// clip is played. When it is nil the transport is inert rather than hidden, and the caption
     /// names the one thing that fills it.
-    @ViewBuilder private func audioTransport(_ job: NativeJob?) -> some View {
+    @ViewBuilder private func audioTransport(_ job: NativeJob?, showHint: Bool = true) -> some View {
         // Both halves of "there is something to control": a job selected *and* the player holding
         // its audio. They arrive one after the other, and a slider bound to a player with no file
         // would otherwise look live while it did nothing.
@@ -6551,7 +6582,7 @@ struct StudioContent: View {
                 .disabled(!ready)
                 .accessibilityLabel("Playback position")
             // The reason the three controls above are grey, said once and only while it is true.
-            if !ready {
+            if !ready, showHint {
                 Text("Choose Play on a clip to load it here.")
                     .font(HubType.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
