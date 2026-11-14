@@ -57,5 +57,31 @@ class ServiceStateTests(unittest.TestCase):
         self.assertNotIn("Connect your library to inspect installed models", VIEWS)
 
 
+class AudioServiceStateTests(unittest.TestCase):
+    def test_audio_has_one_service_banner_and_one_primary(self) -> None:
+        audio = VIEWS[VIEWS.index("private var audioWorkspace"):]
+        audio = audio[:audio.index("private var voiceSourcePicker")]
+        self.assertIn('primary: servicePhase == .stopped', audio)
+        self.assertIn('title: servicePhase == .recovering ? "Starting local services…" : "Local services are stopped"', audio)
+        self.assertIn(".disabled(servicePhase != .running || audioBlockedReason != nil)", audio)
+        self.assertNotIn('"Start the local services first."', VIEWS)
+
+    def test_voice_select_says_services_stopped(self) -> None:
+        picker = VIEWS[VIEWS.index("private var voiceSourcePicker"):]
+        picker = picker[:picker.index("private var audioBlockedReason")]
+        self.assertIn("Services stopped — start them to list voices.", picker)
+        self.assertIn("Services are starting — saved voices will list when they are ready.", picker)
+        self.assertIn(".disabled(workspace.voices.isEmpty || servicePhase != .running)", picker)
+
+    def test_voice_and_model_actions_disable_while_stopped(self) -> None:
+        picker = VIEWS[VIEWS.index("private var voiceSourcePicker"):]
+        picker = picker[:picker.index("private var audioBlockedReason")]
+        self.assertEqual(picker.count(".disabled(servicePhase != .running)"), 2)
+        audio = VIEWS[VIEWS.index("private var audioWorkspace"):]
+        audio = audio[:audio.index("private var voiceSourcePicker")]
+        self.assertIn('Button("Manage Audio Models") { modelFilter = "Audio"; studio.select(.models) }
+                            .disabled(servicePhase != .running)', audio)
+
+
 if __name__ == "__main__":
     unittest.main()

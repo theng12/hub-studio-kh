@@ -4024,6 +4024,9 @@ struct StudioContent: View {
     private var audioWorkspace: some View {
         PageScaffold(title: pageTitle(.audio),
                      status: studioStatus(.audio, active: activeAudio.count, selected: workspace.audioModel),
+                     primary: servicePhase == .stopped
+                        ? PagePrimaryAction("Start Services", isEnabled: studio.canConfigure) { studio.start() }
+                        : nil,
                      menu: studioPageMenu) {
             if !connected { setup }
             StudioSplit(sideTitle: "Recent audio", sideSymbol: "waveform") {
@@ -4033,6 +4036,14 @@ struct StudioContent: View {
                 // control on this page was once clipped and why the page never matched the others.
                 ScrollView {
                     VStack(alignment: .leading, spacing: HubSpace.l) {
+                        if servicePhase != .running {
+                            HubBanner(status: servicePhase == .recovering ? .info : .warn,
+                                      symbol: servicePhase == .recovering ? "arrow.clockwise" : "pause.circle.fill",
+                                      title: servicePhase == .recovering ? "Starting local services…" : "Local services are stopped",
+                                      message: servicePhase == .recovering
+                                        ? "Audio controls become available when they are ready."
+                                        : "Start Services above to write, clone and generate audio.")
+                        }
                         HStack {
                             Text("Script").font(HubType.section)
                             Spacer()
@@ -4051,7 +4062,7 @@ struct StudioContent: View {
                             ActiveAura(active: !activeAudio.isEmpty || workspace.submittingAudio) {
                                 Button("Generate Audio") { Task { await workspace.generateAudio() } }
                                     .buttonStyle(.borderedProminent)
-                                    .disabled(audioBlockedReason != nil)
+                                    .disabled(servicePhase != .running || audioBlockedReason != nil)
                             }
                         }
                         // A disabled prominent button with no explanation is the worst state a form
@@ -4168,6 +4179,7 @@ struct StudioContent: View {
                         Text("Model installation and storage are managed centrally.").font(HubType.secondary).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Manage Audio Models") { modelFilter = "Audio"; studio.select(.models) }
+                            .disabled(servicePhase != .running)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.trailing, HubSpace.m).padding(.bottom, HubSpace.l)
@@ -4232,9 +4244,11 @@ struct StudioContent: View {
                 // can need to do.
                 Button("Add Voice…") { studio.select(.voices) }
                     .hubRowControl().fixedSize()
+                    .disabled(servicePhase != .running)
                     .help("Add a reference clip and its transcript on the Voices page")
                 Button("Manage Voices") { studio.select(.voices) }
                     .hubRowControl().fixedSize()
+                    .disabled(servicePhase != .running)
             }
             Picker("Voice", selection: Binding(
                 get: { workspace.audioVoiceLibraryID ?? "" },
@@ -4256,8 +4270,13 @@ struct StudioContent: View {
             // Disabled only when there is nothing at all to choose. A disabled control with no
             // visible reason is the worst state a form can be in, so the line below always says
             // which state the library is in: reading, empty, unreadable, or short of transcripts.
-            .disabled(workspace.voices.isEmpty)
-            Text(workspace.voicePickerDetail).font(HubType.caption).foregroundStyle(.secondary)
+            .disabled(workspace.voices.isEmpty || servicePhase != .running)
+            Text(servicePhase == .recovering
+                 ? "Services are starting — saved voices will list when they are ready."
+                 : (servicePhase == .stopped
+                    ? "Services stopped — start them to list voices."
+                    : workspace.voicePickerDetail))
+                .font(HubType.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             // An empty library, honestly read, offers the one action that fills it. A library that
             // could not be read does not: adding a voice would not fix that.
@@ -4278,7 +4297,9 @@ struct StudioContent: View {
     /// form can be in: the operator can see the control, cannot use it, and has nothing to act on.
     /// The owner hit exactly that on a Mac Studio and had to ask what was wrong.
     private var audioBlockedReason: String? {
-        if !connected { return "Start the local services first." }
+        // Services have their own banner and disable the control; a second line here made the
+        // page say the same thing twice.
+        if servicePhase != .running { return nil }
         if workspace.submittingAudio { return "Generating. One job at a time." }
         if workspace.audioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Write the script you want spoken."
