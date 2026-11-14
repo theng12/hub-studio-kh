@@ -2005,21 +2005,26 @@ struct StudioContent: View {
         .padding(.horizontal, HubSpace.s).padding(.vertical, HubSpace.s)
     }
 
-    /// One sidebar row: the glyph and the name, with the selected one filled in the accent colour
-    /// and written in white so the current page is always readable.
+    /// One sidebar row: the glyph and the name. The current page carries a small accent bar and a
+    /// quiet tint, not a bright fill; the keyboard focus ring is the system's own and appears only
+    /// when focus arrives from the keyboard.
     private func sidebarRow(_ page: StudioPage, quiet: Bool = false) -> some View {
         let selected = studio.selection == page
         return Button { studio.select(page) } label: {
             HStack(spacing: HubSpace.s) {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(selected ? Color.accentColor : Color.clear)
+                    .frame(width: 3, height: 18)
+                    .accessibilityHidden(true)
                 Image(systemName: page.symbol).frame(width: 18)
                 Text(page.title).lineLimit(1)
                 Spacer(minLength: 0)
             }
             .font(HubType.body)
-            .foregroundStyle(selected ? Color.white : (quiet ? Color.secondary : Color.primary))
+            .foregroundStyle(quiet ? Color.secondary : Color.primary)
             .padding(.horizontal, HubSpace.s).padding(.vertical, 5)
             .background(RoundedRectangle(cornerRadius: HubRadius.control)
-                .fill(selected ? Color.accentColor : Color.clear))
+                .fill(selected ? Color.accentColor.opacity(0.12) : Color.clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
