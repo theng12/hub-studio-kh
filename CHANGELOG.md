@@ -2,6 +2,19 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.238 — 2026-11-15
+
+- Hub Studio KH no longer quits itself when it was started at login and has no window. It stays available in the menu bar and keeps its local services ready.
+- Image and Voice jobs now record whether they reused a model that was already loaded and how long a fresh model took to load. Jobs that the worker could not measure say nothing rather than guessing.
+- When several queued jobs are ready, the Hub may serve one whose model is already resident first, within the same priority. An older waiting job is never pushed behind for more than 30 seconds, and unknown or stale resident evidence leaves the queue exactly as it was. `STUDIOHUB_WARM_FIRST=0` turns this ordering off.
+
+### Technical notes
+
+- The native bundle declares `NSSupportsAutomaticTermination: false`; a login launch stays alive without a window. The login agent's `KeepAlive` only restarts a non-zero exit, so this declaration is the fix.
+- Worker manifests gain additive `model_reused`/`load_s`; the broker copies them only when stated, and the asset ledger stores NULL when unknown.
+- Warm-first uses the memory-policy `loaded_models` evidence on demand (one-second deadline, three-second cache) and an exact model-string match; the worker still owns the exact model+configuration reuse decision.
+- Multi-prompt batching is not part of this release: no lane publishes a multi-prompt request shape.
+
 ## 0.6.237 — 2026-11-15
 
 - The sidebar no longer draws the system's blue focus ring around itself. Arrow keys still move between pages, and the selected row's fill remains the position cue.
