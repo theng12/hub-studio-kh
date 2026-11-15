@@ -2,6 +2,14 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.237 — 2026-11-15
+
+- The sidebar no longer draws the system's blue focus ring around itself. Arrow keys still move between pages, and the selected row's fill remains the position cue.
+
+### Technical notes
+
+- `.focusEffectDisabled()` follows `.focusable()` on the sidebar ScrollView; the macOS 14 target already supports it.
+
 ## 0.6.236 — 2026-11-15
 
 - Local services now come up after a restart. The app was waiting for a startup handshake that named the background helper, while the Hub reported the helper's own child instead, so every start was rejected and retried. The handshake now names the process the app actually launched.
