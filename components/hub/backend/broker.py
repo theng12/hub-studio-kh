@@ -4167,6 +4167,18 @@ async def _verify_compressed_voice_artifact(client: httpx.AsyncClient, item: dic
     item.pop("artifact_metadata_error", None)
 
 
+def _copy_load_telemetry(item: dict, job: dict) -> None:
+    """Carry the worker's load telemetry onto the item only when the job states it.
+
+    Presence-gated on purpose: absent stays absent, false stays false, 0.0 stays 0.0 —
+    nothing is derived or backfilled from runtime or from an earlier attempt.
+    """
+    if "model_reused" in job:
+        item["model_reused"] = job["model_reused"]
+    if "load_s" in job:
+        item["load_s"] = job["load_s"]
+
+
 async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
                                  studio: dict, job: dict, body: dict,
                                  t_start: float, *, recovery: bool = False,
@@ -4300,6 +4312,7 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         runtime = round(time.time() - t_start, 2)
     item["runtime_s"] = runtime
     item["duration_s"] = runtime  # compatibility: historic duration_s meant runtime
+    _copy_load_telemetry(item, job)
     if b["modality"] == "voice" and worker_url:
         try:
             await _cache_voice_artifact_metadata(
@@ -4353,6 +4366,8 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
         params=body, artifact_path=item["artifact_path"],
         artifact_url=worker_url, batch_id=b["id"],
         item_index=item["index"], duration_s=runtime, runtime_s=runtime,
+        model_reused=job["model_reused"] if "model_reused" in job else None,
+        load_s=job["load_s"] if "load_s" in job else None,
     )
     # The Hub owns the deletion index. A worker path is only accepted when the
     # packaged descriptor supplied that exact managed root.
@@ -5609,6 +5624,181 @@ def _queued_batches() -> list[tuple[float, dict]]:
     )
 
 
+# Warm-first scan constants. Evidence is pulled on demand from the dispatch loop only —
+# no background polling, no timer: the cache window, the fetch deadline, and the age past
+# which a queued batch can never be demoted below a warm one (FIFO aging therefore bounds
+# any warm-first delay to WARM_BATCH_STALE_S).
+WARM_EVIDENCE_FRESH_S = 3.0
+WARM_EVIDENCE_DEADLINE_S = 1.0
+WARM_BATCH_STALE_S = 30.0
+_WARM_EVIDENCE_CACHE: dict = {"at": 0.0, "residents": None}
+_WARM_LAST_LOGGED_BATCH: str | None = None
+
+
+def _warm_first_enabled() -> bool:
+    """STUDIOHUB_WARM_FIRST=0 turns warm-first off; unset (or any other value) leaves it on.
+
+    No new setting or memory behavior: warmth can only exist when the owner's existing
+    memory modes already left a model resident.
+    """
+    return os.environ.get("STUDIOHUB_WARM_FIRST") != "0"
+
+
+def _warm_residents_from_inventory(inventory, *, now: float | None = None) -> dict:
+    """(machine, modality) -> resident model strings from a fleet memory-policy inventory.
+
+    Only a `ready` row whose policy says busy is false, loaded_models is non-empty and
+    next_release_at is null or in the future contributes. Unknown shapes are skipped, never
+    guessed; the result then falls back toward the original order.
+    """
+    if not isinstance(inventory, dict) or not isinstance(inventory.get("studios"), list):
+        return {}
+    now = time.time() if now is None else now
+    residents: dict = {}
+    for row in inventory["studios"]:
+        if not isinstance(row, dict) or row.get("state") != "ready":
+            continue
+        policy = row.get("policy")
+        if not isinstance(policy, dict) or policy.get("busy") is not False:
+            continue
+        due = policy.get("next_release_at")
+        if due is not None and (
+                isinstance(due, bool) or not isinstance(due, (int, float)) or due <= now):
+            continue  # due for release, or an unknown stamp: stale, not warm
+        loaded = policy.get("loaded_models")
+        models: set = set()
+        if isinstance(loaded, str) and loaded:
+            models.add(loaded)
+        elif isinstance(loaded, (list, tuple)):
+            for entry in loaded:
+                # Workers report `["repo", ...]` keys; the fleet vocabulary entry is the
+                # first element. An unparseable entry is skipped, never guessed.
+                if isinstance(entry, str) and entry:
+                    models.add(entry)
+                elif (isinstance(entry, (list, tuple)) and entry
+                        and isinstance(entry[0], str) and entry[0]):
+                    models.add(entry[0])
+        if not models:
+            continue
+        key = (str(row.get("machine") or "local"), str(row.get("modality") or ""))
+        residents.setdefault(key, set()).update(models)
+    return residents
+
+
+def _batch_is_warm(batch: dict, residents: dict) -> bool:
+    """True only on an exact `batch["model"]` string match in some machine's resident set
+    for this batch's modality."""
+    model = batch.get("model")
+    if not isinstance(model, str) or not model:
+        return False
+    modality = batch.get("modality")
+    return any(model in models
+               for (_machine, row_modality), models in residents.items()
+               if row_modality == modality)
+
+
+def _warm_first_order(rows, residents, now):
+    """Ordering-only helper: existing sort group first, then warm/aged rank, then FIFO.
+
+    Key: (sort_group, rank, created_at, id). Rank 0 = resident-warm, or queued for at
+    least WARM_BATCH_STALE_S (never demoted, so a continuous warm stream cannot starve a
+    cold batch past 30 s). Never reorders across render/other groups. Empty or unknown
+    residents leave the original order untouched — with no warmth every rank collapses and
+    aging alone already agrees with FIFO, so no reorder is possible.
+    """
+    if not residents:
+        return list(rows)
+
+    def key(row):
+        _group, batch = row
+        created = float(batch.get("created_at") or 0)
+        aged = now - created >= WARM_BATCH_STALE_S
+        rank = 0 if (aged or _batch_is_warm(batch, residents)) else 1
+        return (row[0], rank, created, batch.get("id", ""))
+
+    return sorted(rows, key=key)
+
+
+def _warm_justifying_machine(batch: dict, residents: dict) -> str | None:
+    """The machine whose fresh resident evidence makes this batch warm, deterministically."""
+    model = batch.get("model")
+    modality = batch.get("modality")
+    if not isinstance(model, str) or not model:
+        return None
+    for (machine, row_modality), models in sorted(residents.items()):
+        if row_modality == modality and model in models:
+            return machine
+    return None
+
+
+def _log_warm_first_reorder(rows, ordered, residents) -> None:
+    """One existing-style dispatch line per warm choice; nothing while order is unchanged
+    and nothing again while the same warm batch stays ahead of the scan."""
+    global _WARM_LAST_LOGGED_BATCH
+    moved = next(((before, after) for before, after in zip(rows, ordered)
+                  if before[1] is not after[1]), None)
+    if moved is None:
+        return
+    batch = moved[1]
+    batch_id = str(batch.get("id") or "")
+    if batch_id and batch_id == _WARM_LAST_LOGGED_BATCH:
+        return  # same warm choice as last pass: one choice, one line
+    machine = _warm_justifying_machine(batch, residents)
+    if machine is None:
+        return  # changed without resident evidence naming a machine: never log a guess
+    _WARM_LAST_LOGGED_BATCH = batch_id
+    logging.getLogger("studiohub.broker").info(
+        "warm-first scan batch=%s model=%s machine=%s",
+        batch.get("id"), batch.get("model"), machine)
+
+
+async def _fetch_warm_residents(client: httpx.AsyncClient) -> dict:
+    """Fresh resident evidence, fetched at most once per WARM_EVIDENCE_FRESH_S seconds.
+
+    The deadline bounds a dispatch pass to about a second: FleetMemoryControl's own
+    requests allow 15 s each, and an offline Studio must never stall the loop. Timeout,
+    error, non-200 or an unknown response shape all yield no evidence (empty dict) and are
+    cached for the same window, so a dead Studio costs one bounded attempt per 3 s.
+    """
+    now = time.time()
+    cached = _WARM_EVIDENCE_CACHE
+    if cached["residents"] is not None and now - cached["at"] < WARM_EVIDENCE_FRESH_S:
+        return cached["residents"]
+    residents: dict = {}
+    try:
+        inventory = await asyncio.wait_for(
+            FleetMemoryControl(_monitor(), client).inventory(),
+            timeout=WARM_EVIDENCE_DEADLINE_S,
+        )
+        residents = _warm_residents_from_inventory(inventory)
+    except Exception:  # noqa: BLE001 - any failure means no evidence, today's order
+        residents = {}
+    _WARM_EVIDENCE_CACHE["at"] = time.time()
+    _WARM_EVIDENCE_CACHE["residents"] = residents
+    return residents
+
+
+async def _warm_first_queued(rows, client: httpx.AsyncClient) -> list:
+    """Scan order for this pass: warm-first when reordering is possible, else today's order.
+
+    Evidence is fetched only when at least two queued batches compete with different
+    (model, modality) pairs — same-model batches on the same modality cannot reorder, and
+    warmth is keyed per modality — and the env switch is on: no fetch, no timer, nothing
+    while the Hub is idle. Warmth can only reorder scan order among queued batches; every
+    eligibility, rank, admission and pause check after this loop still applies unchanged.
+    """
+    if len(rows) < 2 or not _warm_first_enabled():
+        return list(rows)
+    if len({(batch.get("model"), batch.get("modality"))
+            for _group, batch in rows}) < 2:
+        return list(rows)  # one model/modality everywhere: warm-first cannot change order
+    residents = await _fetch_warm_residents(client)
+    ordered = _warm_first_order(rows, residents, time.time())
+    if [b.get("id") for _group, b in ordered] != [b.get("id") for _group, b in rows]:
+        _log_warm_first_reorder(rows, ordered, residents)
+    return ordered
+
+
 def evict_finished_batches(*, keep_recent: int = 20, older_than_s: float = 900.0) -> int:
     """Drop finished batches from memory. The ledger keeps them; nothing an operator sees is lost.
 
@@ -5685,7 +5875,10 @@ async def _dispatch_loop():
                             ledger.save_batch(batch)
             # Render first, then FIFO. The final per-Mac rank/eligibility check
             # immediately before the lease is the shared ordering authority.
-            for _sort_group, b in _queued_batches():
+            # Warm-first only reorders within a sort group, only when fresh resident
+            # evidence says a queued batch's model is already loaded, and only when at
+            # least two batches compete; everything below this scan is unchanged.
+            for _sort_group, b in await _warm_first_queued(_queued_batches(), client):
                 if _expire_genstudio_batch(b):
                     ledger.save_batch(b)
                     continue
@@ -6092,6 +6285,7 @@ _ATTEMPT_EVIDENCE_FIELDS = (
     "machine", "worker_id", "model_revision", "runtime_revision",
     "resource_usage", "error_code", "runtime_s", "duration_s", "finished_at",
     "worker_accepted_params", "section_quality", "deadline_s",
+    "model_reused", "load_s",
 )
 
 
