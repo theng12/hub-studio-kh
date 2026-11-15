@@ -3016,12 +3016,113 @@ def _uncertain_hold_counts(by_id: dict) -> dict[str, int]:
     return counts
 
 
+# -- update hold (contract: _orchestra/youtube-stack/update-hold/CONTRACT.md, owner 2026-11-15) --
+#: Monotonic deadline of the update hold; 0 when no hold is active. One in-memory float,
+#: written nowhere: a restart resumes by itself, and an install that aborts mid-hold can
+#: never leave this Hub refusing work.
+_hold_until = 0.0
+
+
+def dispatch_paused() -> bool:
+    """True while the update hold keeps this Hub from claiming any new work."""
+    return time.monotonic() < _hold_until
+
+
+def pause_dispatch(seconds: float) -> None:
+    """Fence every claim path for `seconds` — in-memory and self-expiring, never persisted."""
+    global _hold_until
+    _hold_until = time.monotonic() + seconds
+
+
+def resume_dispatch() -> None:
+    """Open the claim path at once (`DELETE /api/maintenance/hold`)."""
+    global _hold_until
+    was_held = dispatch_paused()
+    _hold_until = 0.0
+    if was_held:
+        logging.getLogger("studiohub.broker").info(
+            "update hold resumed: dispatch open again")
+
+
+def in_flight() -> int:
+    """Running work right now across the queues this Hub dispatches for."""
+    total = sum(1 for b in list(batches.values()) for it in b.get("items") or []
+                if it.get("state") in ("running", "cancel_requested"))
+    from . import chat_jobs, transcription_jobs
+    total += sum(1 for b in list(chat_jobs.batches.values()) for p in b.get("packs") or []
+                 if p.get("state") == "running")
+    total += sum(1 for b in list(transcription_jobs.batches.values())
+                 for it in b.get("items") or [] if it.get("state") == "running")
+    # A claimed render is an executor task; its store row already holds the durable attempt id.
+    if _render_executor is not None:
+        total += len(getattr(_render_executor, "_tasks", ()))
+    return total
+
+
+def unsettled_sends() -> list[str]:
+    """In-flight ids a restart now would fence `uncertain` (unknown outcome) instead of
+    re-dispatching — `restore_batches` is the authority mirrored here.
+
+    A running item of a live batch keeps its queue row: the next start re-dispatches it or
+    watches its persisted attempt, so it is followable and not listed. A cancel in flight is
+    not: restore marks a `cancel_requested` or a cancelled batch's running voice/image/music/
+    video item `uncertain`, and a cancelled batch's running transcription is `uncertain` when
+    packaged. Chat restores running packs straight back to `queued` and a render row keeps its
+    durable attempt id — neither can strand, so neither is listed."""
+    left = []
+    for b in list(batches.values()):
+        if b.get("modality") not in RECEIPT_DURABLE_MODALITIES:
+            continue  # any other running row restores as re-dispatchable `queued`
+        for it in b.get("items") or []:
+            state = it.get("state")
+            if state not in ("running", "cancel_requested"):
+                continue
+            if state == "cancel_requested" or b.get("cancelled"):
+                left.append(f"{b['id']}:{it.get('index')}")
+    from . import transcription_jobs
+    if transcription_jobs._packaged():
+        for b in list(transcription_jobs.batches.values()):
+            if b.get("cancelled"):
+                for it in b.get("items") or []:
+                    if it.get("state") == "running":
+                        left.append(f"transcription:{b['id']}:{it.get('index')}")
+    return left
+
+
+def hold(timeout: float, pause_s: float) -> list[str]:
+    """Take the update hold: close the claim path first, then wait up to `timeout` for
+    stranding in-flight work to settle. Returns the unsettled ids — empty means a restart now
+    would strand nothing (`safe: true`). Queued rows are never touched; running work runs on,
+    and the pause expires by itself after `pause_s`."""
+    pause_dispatch(pause_s)
+    log = logging.getLogger("studiohub.broker")
+    log.info("update hold taken: in_flight=%d, dispatch paused for %.0fs",
+             in_flight(), pause_s)
+    deadline = time.monotonic() + timeout
+    left = unsettled_sends()
+    while left and time.monotonic() < deadline:
+        time.sleep(0.25)
+        left = unsettled_sends()
+    if left:
+        log.warning("update hold unsettled: %s", ",".join(left))
+    else:
+        log.info("update hold settled: nothing a restart would strand")
+    return left
+
+
 def busy_machines() -> set[str]:
     """Physical machines holding a non-preemptive heavy-work lease."""
     by_id = {s["id"]: s for s in _monitor().registry}
     # A Developer Mode test holds the same lease production does; during an update drain the
     # drain answers below omit lease rows, so union the test hold explicitly.
     test_held = developer_test_admission.held_machines()
+    if dispatch_paused():
+        # Update hold: every Mac this Hub could dispatch to is fenced at once — local studios,
+        # joined nodes and render leases — so no lane (broker, Chat, Subtitle, render, or a new
+        # submission at the door) claims work while in-flight settles. Queued rows are untouched
+        # (`every_capable_mac_paused` reads pause flags, not this), and running work runs on.
+        return ({s.get("machine", "local") for s in by_id.values()} | {"local"}
+                | test_held | set(_external_machine_leases))
     if update_drain.draining():
         # This Mac is finishing its work to install an update: its own machine is taken. A
         # controller's joined nodes are other Macs and keep taking work while this Mac's own work
