@@ -260,6 +260,17 @@ struct PageRenderHarness {
                     window.displayIfNeeded()
                 }
             }
+            // Temporary proof seam: report any AppKit focus ring the SwiftUI focus system
+            // installs around the sidebar, without activating the app.
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FOCUS_RING"] == "1" {
+                func walkFocus(_ view: NSView, depth: Int) {
+                    if view.focusRingType != .none {
+                        print("FOCUS_RING view=\(type(of: view)) frame=\(view.frame) type=\(view.focusRingType.rawValue) depth=\(depth)")
+                    }
+                    for child in view.subviews { walkFocus(child, depth: depth + 1) }
+                }
+                walkFocus(hosting, depth: 0)
+            }
             // Temporary proof seam: move the drawn sidebar with the same arrow-key action the
             // shipped `.onMoveCommand` handles, without a visible window or app activation.
             if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_KEYBOARD"] == "1" {
