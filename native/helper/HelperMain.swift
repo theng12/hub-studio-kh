@@ -54,6 +54,13 @@ var arguments = Array(CommandLine.arguments.dropFirst())
 if let index = arguments.firstIndex(of: "--parent-pid"), index + 1 < arguments.count {
     arguments[index + 1] = String(getpid())
 }
+// The app waits for a ready record whose pid is the process it launched: this helper, not
+// the python child. Keep the record honest about the owned process.
+if let index = arguments.firstIndex(of: "--ready-pid"), index + 1 < arguments.count {
+    arguments[index + 1] = String(getpid())
+} else {
+    arguments += ["--ready-pid", String(getpid())]
+}
 
 let child = Process()
 child.executableURL = python

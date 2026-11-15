@@ -51,6 +51,11 @@ def stop_child(process, pgid=None):
             os.killpg(owned_group, signal.SIGTERM)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # The child's group is gone and its pid was reused, or it is no longer ours to
+            # signal. Fall back to the process handle so shutdown never dies here.
+            if process.poll() is None:
+                process.terminate()
     elif process.poll() is None:
         process.terminate()
     if process.poll() is None:
@@ -60,7 +65,7 @@ def stop_child(process, pgid=None):
             if owned_group is not None:
                 try:
                     os.killpg(owned_group, signal.SIGKILL)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
             else:
                 process.kill()
@@ -72,7 +77,7 @@ def stop_child(process, pgid=None):
         if _group_exists(owned_group):
             try:
                 os.killpg(owned_group, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
 
 
@@ -489,6 +494,9 @@ def main():
     parser.add_argument('--models-dir', type=Path, required=True)
     parser.add_argument('--ready-file', type=Path, required=True)
     parser.add_argument('--parent-pid', type=int)
+    # The app owns the helper process, and the helper spawns this worker as its child. The
+    # readiness record must name the process the app actually launched, not this child.
+    parser.add_argument('--ready-pid', type=int, default=None)
     parser.add_argument('--port', type=int, default=0)
     # Loopback unless asked otherwise: this is the switch that decides whether the Hub is a
     # private local service or something another Mac can reach. A comma-separated list lets a
@@ -503,6 +511,8 @@ def main():
     parser.add_argument('--recovery-attempts', default=None)
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
+    if args.ready_pid is not None and args.ready_pid != args.parent_pid:
+        parser.error('--ready-pid must name the owning parent process')
     set_recovery_attempts(args.recovery_attempts)
     data, models = args.data_dir.expanduser().resolve(), args.models_dir.expanduser().resolve()
     ready = args.ready_file.expanduser().absolute()
@@ -701,7 +711,8 @@ def main():
         os.environ['STUDIOHUB_BOUND_PORT'] = str(args.port)
         run_server(load_app, args.port, ready, release['version'], args.parent_pid, pgid,
                    token=token, factory=True, shutdown_callback=cleanup,
-                   shutdown_started=child_watch_stop.set, host=_bind_host(args.host))
+                   shutdown_started=child_watch_stop.set, host=_bind_host(args.host),
+                   ready_pid=args.ready_pid)
     finally:
         cleanup()
 

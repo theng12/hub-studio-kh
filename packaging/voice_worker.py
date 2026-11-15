@@ -65,7 +65,8 @@ def single_engine_manifest(catalog: Path, engine: str, *, component: str) -> tup
     return matches[0]
 
 
-def write_ready_file(path: Path, url: str, version: str, *, token: str | None = None) -> None:
+def write_ready_file(path: Path, url: str, version: str, *, token: str | None = None,
+                     pid: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent, prefix=f'.{path.name}.', suffix='.tmp')
@@ -73,7 +74,8 @@ def write_ready_file(path: Path, url: str, version: str, *, token: str | None = 
     try:
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, 'w') as stream:
-            value = {'url': url, 'pid': os.getpid(), 'version': version}
+            value = {'url': url, 'pid': os.getpid() if pid is None else int(pid),
+                     'version': version}
             if token is not None:
                 value['token'] = token
             json.dump(value, stream)
@@ -322,7 +324,8 @@ def start_log_rotation(stop: threading.Event, path: Path | None = None,
 
 
 def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token=None, factory=False,
-               shutdown_callback=None, shutdown_started=None, host='127.0.0.1'):
+               shutdown_callback=None, shutdown_started=None, host='127.0.0.1',
+               ready_pid=None):
     """Shared owned-process lifecycle for the private Voice worker and local Hub.
 
     ``host`` defaults to loopback: the Hub is reachable from this Mac only unless the operator
@@ -376,7 +379,8 @@ def run_server(app, port, ready_file, version, parent_pid, worker_pgid, *, token
                     if (ready_file is not None and not self.should_exit
                             and not parent_lost.is_set()):
                         write_ready_file(ready_file,
-                            f'http://{client_host}:{port}', version, token=token)
+                            f'http://{client_host}:{port}', version, token=token,
+                            pid=ready_pid)
 
             async def shutdown(self, sockets=None):
                 # Before the graceful wait: an owner must stop reacting to children that exit
