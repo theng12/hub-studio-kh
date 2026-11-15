@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS assets (
   item_index INTEGER,
   recipe_id TEXT,
   duration_s REAL,                -- legacy alias for runtime_s
-  runtime_s REAL                  -- generation/processing time in seconds
+  runtime_s REAL,                 -- generation/processing time in seconds
+  model_reused INTEGER,           -- worker reused a resident model; NULL unknown
+  load_s REAL                     -- model load seconds; NULL unknown
 );
 CREATE INDEX IF NOT EXISTS idx_assets_created ON assets(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assets_batch ON assets(batch_id);
@@ -158,6 +160,8 @@ def _conn() -> sqlite3.Connection:
         # Migrations for DBs created before newer columns existed.
         for ddl in ("ALTER TABLE assets ADD COLUMN duration_s REAL",
                     "ALTER TABLE assets ADD COLUMN runtime_s REAL",
+                    "ALTER TABLE assets ADD COLUMN model_reused INTEGER",
+                    "ALTER TABLE assets ADD COLUMN load_s REAL",
                     "ALTER TABLE activity_events ADD COLUMN activity_received_at REAL",
                     "ALTER TABLE activity_events ADD COLUMN reported_at REAL",
                     "ALTER TABLE activity_events ADD COLUMN hub_owned INTEGER NOT NULL DEFAULT 0",
@@ -907,6 +911,8 @@ def record_asset(**fields) -> str:
         "recipe_id": fields.pop("recipe_id", None),
         "duration_s": fields.pop("duration_s", None),
         "runtime_s": fields.pop("runtime_s", None),
+        "model_reused": fields.pop("model_reused", None),
+        "load_s": fields.pop("load_s", None),
     }
     with _conn() as conn:
         conn.execute(

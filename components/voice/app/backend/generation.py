@@ -2198,6 +2198,11 @@ class GenerationJob:
     # (in memory only, never persisted).
     section_language: Optional[str] = None
     error_code: Optional[str] = None
+    # Actual load evidence for this job, only on a path that can measure it: whether the
+    # exact (repo, runtime) model was already resident, and the seconds spent loading when
+    # it was not. None stays unknown; serialize() omits it rather than claiming false/0.
+    model_reused: Optional[bool] = None
+    load_s: Optional[float] = None
     client_request_params: Optional[dict] = None  # immutable idempotency comparison
     origin: str = "unknown"
     origin_device: Optional[str] = None
@@ -2261,6 +2266,12 @@ class GenerationJob:
             "reference_profile_audited": self.params.get("_reference_profile_audited"),
             "reference_profile_sources": self.params.get("_reference_profile_sources"),
         }
+        # Additive load evidence: absent when the engine path cannot measure it, so an
+        # older or unmeasured path never reads as a cold load or a reuse it did not have.
+        if self.model_reused is not None:
+            result["model_reused"] = self.model_reused
+        if self.load_s is not None:
+            result["load_s"] = self.load_s
         if self.delivery is not None:
             result["delivery"] = self.delivery
             if self.delivery_fallback_reason:
@@ -4115,6 +4126,20 @@ class GenerationManager:
         self._last_model_activity_at = time.time()
         return model
 
+    def _mlx_audio_load_with_telemetry(self, job: GenerationJob, repo: str):
+        """Load or reuse the mlx-audio model and record only what was actually measured.
+
+        Reuse is exact: the same repo on the same `tts-mlx` runtime must already be in
+        `loaded_model_keys()`. `load_s` times the getter, which contains the model load
+        (or the eviction before it) and nothing from generation; a reuse is 0.0.
+        """
+        reused = (repo, "tts-mlx") in self.loaded_model_keys()
+        started = time.perf_counter()
+        model = self._mlx_audio_get_model(repo)
+        job.model_reused = reused
+        job.load_s = 0.0 if reused else round(max(0.0, time.perf_counter() - started), 3)
+        return model
+
     def _generate_mlx_audio(self, job: GenerationJob, model_entry, output_path: Path,
                             *, postprocess_speed: bool = True) -> None:
         """
@@ -4202,7 +4227,7 @@ class GenerationManager:
         if job.cancel_event.is_set():
             return
 
-        model = self._mlx_audio_get_model(model_entry.repo)
+        model = self._mlx_audio_load_with_telemetry(job, model_entry.repo)
 
         # Unique temp dir per job so concurrent jobs (when we eventually allow
         # them) don't collide on the audio_000.wav name.
