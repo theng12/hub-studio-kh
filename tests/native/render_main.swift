@@ -291,8 +291,20 @@ struct PageRenderHarness {
                     for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
                 }
                 let down = studio.selection
+                window.makeFirstResponder(hosting)
+                for _ in 0..<2 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
                 NSApp.sendAction(#selector(NSResponder.moveUp(_:)), to: nil, from: nil)
                 for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                if studio.selection == down,
+                   let event = NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
+                    isARepeat: false, keyCode: 126) {
+                    window.sendEvent(event)
+                    for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                }
                 print("KEYBOARD before=\(before) down=\(down) up=\(studio.selection)")
             }
             // The page's own scroll view, taken to its bottom: proves a long page's content never
