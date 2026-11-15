@@ -2,6 +2,15 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.239 — unreleased
+
+- An update now holds the job queue first instead of racing it: the installer asks Hub to stop claiming new work, running jobs get up to 30 seconds to settle, and Hub answers exactly what is safe to restart. Jobs still busy keep their place in the queue and run again after the update — nothing is left guessing — and the queue opens again on its own if an install never finishes.
+
+### Technical notes
+
+- `POST`/`DELETE /api/maintenance/hold` sit beside the existing update-drain route and answer exactly `{safe, unsettled, dispatch_paused_s, in_flight}`. The pause is one in-memory deadline in `broker` (never written anywhere; expiry-driven), checked inside `busy_machines()` — the single gate every claim path already reads (broker, Chat, Subtitle, render, and new submissions at the door).
+- `unsettled` mirrors `restore_batches`: a running row of a live batch is re-dispatchable (its queue row is the id the next start follows), while a cancel in flight and a cancelled batch’s running Subtitle item would restore `uncertain` and are named until they settle. Logs: hold taken (with `in_flight`), settled or unsettled (with job ids), resumed.
+
 ## 0.6.238 — 2026-11-15
 
 - Hub Studio KH no longer quits itself when it was started at login and has no window. It stays available in the menu bar and keeps its local services ready.
