@@ -24,9 +24,10 @@ from components.voice.app.backend.generation import (  # noqa: E402
 
 
 class _FakeManager:
-    def __init__(self, loaded, *, delay=0.0):
+    def __init__(self, loaded, *, delay=0.0, error=None):
         self.loaded = list(loaded)
         self.delay = delay
+        self.error = error
         self.calls = 0
 
     def loaded_model_keys(self):
@@ -36,6 +37,8 @@ class _FakeManager:
         self.calls += 1
         if self.delay:
             time.sleep(self.delay)
+        if self.error is not None:
+            raise self.error
         return object()
 
 
@@ -59,6 +62,16 @@ class VoiceLoadTelemetryTests(unittest.TestCase):
         self.assertIs(j.model_reused, False)
         self.assertGreater(j.load_s, 0.0)
         self.assertLess(j.load_s, 1.0)
+
+    def test_a_failed_load_leaves_telemetry_unknown(self):
+        manager = _FakeManager([], error=RuntimeError("load failed"))
+        j = job()
+        with self.assertRaises(RuntimeError):
+            GenerationManager._mlx_audio_load_with_telemetry(manager, j, "org/model")
+        self.assertIsNone(j.model_reused)
+        self.assertIsNone(j.load_s)
+        self.assertNotIn("model_reused", j.serialize())
+        self.assertNotIn("load_s", j.serialize())
 
     def test_a_different_runtime_key_is_not_a_reuse(self):
         manager = _FakeManager([("org/model", "other-runtime")], delay=0.01)

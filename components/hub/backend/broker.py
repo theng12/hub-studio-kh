@@ -5739,7 +5739,7 @@ def _log_warm_first_reorder(rows, ordered, residents) -> None:
                   if before[1] is not after[1]), None)
     if moved is None:
         return
-    batch = moved[1]
+    batch = moved[1][1]  # (sort_group, batch), not the row itself
     batch_id = str(batch.get("id") or "")
     if batch_id and batch_id == _WARM_LAST_LOGGED_BATCH:
         return  # same warm choice as last pass: one choice, one line

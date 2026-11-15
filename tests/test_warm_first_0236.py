@@ -162,6 +162,24 @@ class WarmOrderTests(unittest.TestCase):
         self.assertFalse(broker._batch_is_warm(rows[1][1], residents))
         self.assertEqual(broker._warm_first_order(rows, residents, NOW), rows)
 
+    def test_reorder_logger_unpacks_row_tuple_and_logs_once(self):
+        # Regression: `_log_warm_first_reorder` once treated the `(sort_group, batch)`
+        # row as the batch, so any real reorder raised AttributeError. Exercise the
+        # exact row shape the dispatch scan passes in.
+        residents = broker._warm_residents_from_inventory(
+            {"studios": [ready_studio()]}, now=NOW)
+        rows = [row("cold", "model-x", created_at=NOW - 5),
+                row("warm", "model-a", created_at=NOW - 1)]
+        ordered = broker._warm_first_order(rows, residents, NOW)
+        broker._WARM_LAST_LOGGED_BATCH = None
+        with self.assertLogs("studiohub.broker", level="INFO") as captured:
+            broker._log_warm_first_reorder(rows, ordered, residents)
+            broker._log_warm_first_reorder(rows, ordered, residents)
+        lines = [line for line in captured.output if "warm-first scan" in line]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("batch=warm", lines[0])
+        self.assertIn("machine=m1", lines[0])
+
 
 class WarmFetchTests(unittest.IsolatedAsyncioTestCase):
     """On-demand fetch: only with >= 2 batches, env on, bounded and cached."""
