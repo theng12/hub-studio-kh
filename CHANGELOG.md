@@ -2,6 +2,16 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.239 — 2026-11-15
+
+- Quitting Hub Studio KH while it is working no longer leaves an installer waiting forever. The "still working" question is only shown when the app is in front with its window visible; a login launch or any unattended quit stops cleanly. The question itself has a bounded wait, so it cannot hang.
+
+### Technical notes
+
+- `applicationShouldTerminate` asks only when `quitIsAttended` (app active and window visible); otherwise it goes straight to `stopThenQuit`. The stop path has a 20-second bounded reply.
+- `QuitPrompt.run` schedules its timeout in `.modalPanel`, so it fires inside `NSAlert.runModal`'s run loop; the lifecycle test fails the process if it does not.
+- `tests/native/lifecycle_main.swift` adds the unattended-busy case and the modal-deadline proof. A launch probe (`STUDIOHUB_QUIT_ATTENDED_PROBE=1`) proves a login launch reads as inactive with no visible window.
+
 ## 0.6.238 — 2026-11-15
 
 - Hub Studio KH no longer quits itself when it was started at login and has no window. It stays available in the menu bar and keeps its local services ready.

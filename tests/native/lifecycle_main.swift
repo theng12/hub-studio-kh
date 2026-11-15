@@ -479,6 +479,7 @@ struct NativeLifecycleTests {
                 let delegate = AppDelegate()
                 delegate.controller = controller
                 delegate.activeWork = { busy }
+                delegate.quitIsAttended = { true }
                 delegate.confirmQuitWhileBusy = { asked += 1; return answer }
                 let reply = delegate.applicationShouldTerminate(NSApplication.shared)
                 requireLifecycle(reply == .terminateLater, "\(name): Quit must answer later, got \(reply)")
@@ -498,6 +499,62 @@ struct NativeLifecycleTests {
                 requireLifecycle(asked == (busy > 0 ? 1 : 0),
                                  "\(name): asked \(asked) times; only Quit over running work asks, once")
             }
+            // The case the installer actually hits: busy, no window, app not active. It must not
+            // wait on an alert; it must stop and let the quit continue.
+            let unattendedController = try makeController(
+                root: temporary.appendingPathComponent("quit-unattended"),
+                server: server, now: Date.init)
+            unattendedController.start()
+            let unattendedStarted = await waitUntil {
+                readyPID(unattendedController) != nil && unattendedController.running
+            }
+            requireLifecycle(unattendedStarted, "unattended: the service did not start")
+            var askedUnattended = 0
+            let unattended = AppDelegate()
+            unattended.controller = unattendedController
+            unattended.activeWork = { 2 }
+            unattended.quitIsAttended = { false }
+            unattended.confirmQuitWhileBusy = { askedUnattended += 1; return false }
+            let unattendedReply = unattended.applicationShouldTerminate(NSApplication.shared)
+            requireLifecycle(unattendedReply == .terminateLater,
+                             "unattended: Quit must still answer later")
+            let unattendedGone = await waitUntil { !unattendedController.running }
+            requireLifecycle(unattendedGone, "unattended: Quit did not stop the engine")
+            requireLifecycle(askedUnattended == 0,
+                             "unattended: an alert was shown without a window or active app")
+        }
+
+        // The prompt deadline must fire inside NSAlert.runModal's modal run loop. A watchdog
+        // fails the process instead of hanging if the timer never fires.
+        if runs("quit-deadline") {
+            let alert = NSAlert()
+            alert.messageText = "Quit Hub Studio KH and stop its engine?"
+            alert.addButton(withTitle: "Keep Running")
+            alert.addButton(withTitle: "Quit and Stop")
+            alert.window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+            let deadlineLock = NSLock()
+            var deadlineFinished = false
+            let watchdog = Thread {
+                Thread.sleep(forTimeInterval: 3)
+                deadlineLock.lock()
+                let finished = deadlineFinished
+                deadlineLock.unlock()
+                if !finished {
+                    FileHandle.standardError.write(Data("quit-deadline: timer never fired\n".utf8))
+                    exit(2)
+                }
+            }
+            watchdog.start()
+            let began = Date()
+            let response = QuitPrompt.run(alert, deadline: 0.2)
+            let elapsed = Date().timeIntervalSince(began)
+            deadlineLock.lock()
+            deadlineFinished = true
+            deadlineLock.unlock()
+            requireLifecycle(response == .alertSecondButtonReturn,
+                             "quit-deadline: timeout must choose Quit and Stop, got \(response.rawValue)")
+            requireLifecycle(elapsed < 2,
+                             "quit-deadline: the modal deadline did not fire promptly (\(elapsed)s)")
         }
 
         // Supervision is allowed only for a normal, default-data launch that actually owns the
