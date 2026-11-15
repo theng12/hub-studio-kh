@@ -1798,8 +1798,10 @@ struct StudioContent: View {
             // Drawing the fill and the label together makes the current page readable in every
             // window state, in both appearances (critic, 2026-11-13).
             ScrollView { sidebarList }
-            // A drawn list still moves with the arrow keys.
+            // A drawn list still moves with the arrow keys; the drawn selection fill is the
+            // position cue, so the system focus ring is not drawn around the whole sidebar.
             .focusable()
+            .focusEffectDisabled()
             .onMoveCommand { direction in
                 let pages: [StudioPage] = [.overview] + StudioPage.sidebarSections.flatMap(\.pages)
                 guard let index = pages.firstIndex(of: studio.selection) else { return }
