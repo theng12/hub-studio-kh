@@ -1280,6 +1280,10 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
             # this app in System Settings > Privacy & Security > Local Network.
             'NSLocalNetworkUsageDescription':
                 'Hub Studio KH talks to your other Macs on this network to send and receive work.',
+            # A login launch opens no window, and AppKit may automatically terminate a
+            # windowless app after idle (observed 2026-11-15, ~8 minutes). Declare the intent
+            # once in the bundle rather than relying on a call racing AppKit at launch.
+            'NSSupportsAutomaticTermination': False,
         })
         plist.pop('LSUIElement')
     with (contents / 'Info.plist').open('wb') as stream:

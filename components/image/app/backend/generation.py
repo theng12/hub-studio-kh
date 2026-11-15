@@ -3155,6 +3155,8 @@ class GenerationManager:
                 guard.check(event)
                 with self.lock:
                     job['model_reused'] = reused
+                    # No `load_s` here: mflux reads weights lazily inside the first denoise
+                    # step, so `_acquire` time is construction, not the model load.
                     job['memory_hooks'] = list(plan.get('hooks') or [])
                 del plan
                 with Image.open(staged) as image:
