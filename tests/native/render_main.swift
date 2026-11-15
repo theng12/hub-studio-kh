@@ -280,6 +280,16 @@ struct PageRenderHarness {
                 for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
                 NSApp.sendAction(#selector(NSResponder.moveDown(_:)), to: nil, from: nil)
                 for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                if studio.selection == before,
+                   let event = NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}",
+                    isARepeat: false, keyCode: 125) {
+                    window.sendEvent(event)
+                    for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                }
                 let down = studio.selection
                 NSApp.sendAction(#selector(NSResponder.moveUp(_:)), to: nil, from: nil)
                 for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
