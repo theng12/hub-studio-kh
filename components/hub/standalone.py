@@ -3443,6 +3443,29 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         while it waits) or to resume (``false``). Hub token only. See ``update_drain``."""
         return await update_drain.request(bool(body.get("want")))
 
+    @app.post("/api/maintenance/hold")
+    def maintenance_hold(timeout_s: float = 20, pause_s: float = 120) -> dict[str, Any]:
+        """Update hold (``_orchestra/youtube-stack/update-hold/CONTRACT.md``, owner 2026-11-15):
+        close the claim path first, wait up to ``timeout_s`` (ceiling 30) for stranding in-flight
+        work to settle, and say whether a restart is safe now. Queued work stays queued and nothing
+        is cancelled; the pause expires by itself after ``pause_s``, so an install that aborts can
+        never leave this Hub refusing work. The reply is exactly the contract's four keys."""
+        timeout_s = min(max(timeout_s, 0.0), 30.0)
+        pause_s = min(max(pause_s, 1.0), 900.0)
+        left = broker.hold(timeout_s, pause_s)
+        return {"safe": not left, "unsettled": left, "dispatch_paused_s": pause_s,
+                "in_flight": broker.in_flight()}
+
+    @app.delete("/api/maintenance/hold")
+    def maintenance_resume() -> dict[str, Any]:
+        """Open the claim path at once. Never required — the pause expires by itself — and the
+        reply keeps the contract's four keys: nothing is paused, so ``dispatch_paused_s`` is 0
+        and `safe`/`unsettled` state what a restart would face right now."""
+        broker.resume_dispatch()
+        left = broker.unsettled_sends()
+        return {"safe": not left, "unsettled": left, "dispatch_paused_s": 0,
+                "in_flight": broker.in_flight()}
+
     @app.get("/api/hub/startup")
     def startup_state() -> dict[str, Any]:
         """What starts when this Mac starts, and the last things the fleet asked of it."""
