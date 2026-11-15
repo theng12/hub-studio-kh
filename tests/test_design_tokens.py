@@ -108,6 +108,12 @@ class PageTests(unittest.TestCase):
 
 
 class KeyboardTests(unittest.TestCase):
+    def test_sidebar_focus_ring_is_disabled_but_arrow_keys_remain(self) -> None:
+        # The drawn selection fill is the position cue; the system ring around the whole
+        # sidebar was the persistent blue outline the owner reported.
+        self.assertRegex(VIEWS, r"\.focusable\(\)\s*\n\s*\.focusEffectDisabled\(\)")
+        self.assertIn(".onMoveCommand", VIEWS)
+
     def test_escape_closes_dialogs_and_clears_searches(self) -> None:
         """Escape is the app's cancel: sheets, the image lightbox and every search field."""
         for needle in (
