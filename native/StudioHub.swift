@@ -1039,6 +1039,27 @@ struct WorkstationQuiet: Equatable {
     }
 }
 
+/// A quit prompt that cannot outlive the installer's patience.
+///
+/// `NSAlert.runModal()` runs the modal panel run loop. A timer added to `.modalPanel` fires
+/// inside that loop, so the deadline can abort a prompt nobody is there to answer. A deadline
+/// scheduled only in `.default` would never fire while the modal runs.
+enum QuitPrompt {
+    static let deadline: TimeInterval = 20
+
+    static func run(_ alert: NSAlert, deadline: TimeInterval = deadline) -> NSApplication.ModalResponse {
+        var timedOut = false
+        let timer = Timer(timeInterval: deadline, repeats: false) { _ in
+            timedOut = true
+            NSApp.abortModal()
+        }
+        RunLoop.current.add(timer, forMode: .modalPanel)
+        let response = alert.runModal()
+        timer.invalidate()
+        return timedOut ? .alertSecondButtonReturn : response
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var controller: StudioController!
@@ -1061,7 +1082,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         alert.informativeText = "Active generation, transcription, or downloads may be interrupted. Close the window to keep working in the background."
         alert.addButton(withTitle: "Keep Running").keyEquivalent = "\u{1b}"  // Esc keeps running
         alert.addButton(withTitle: "Quit and Stop")
-        return alert.runModal() == .alertSecondButtonReturn
+        return QuitPrompt.run(alert) == .alertSecondButtonReturn
+    }
+    /// A quit is attended only when the app is frontmost and its window is on screen. A login
+    /// launch has no window and is not active: an installer's quit must never wait on an alert.
+    lazy var quitIsAttended: () -> Bool = { [weak self] in
+        NSApp.isActive && self?.window?.isVisible == true
     }
     private var statusObserver: AnyCancellable?
     private var failureObserver: AnyCancellable?
@@ -1098,6 +1124,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The plist declaration alone did not hold for a launchd-started copy. The opt-out
+        // counter only has effect when automatic termination is supported, and AppKit reads the
+        // plist after this process starts; set support here, then disable termination.
+        ProcessInfo.processInfo.automaticTerminationSupportEnabled = true
+        ProcessInfo.processInfo.disableAutomaticTermination(
+            "Hub Studio KH keeps its local services available in the menu bar")
         let config: ShellConfiguration
         do {
             config = try ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL)
@@ -1213,6 +1245,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let agentLaunch = ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1"
         let loginLaunch = agentLaunch || NSAppleEventManager.shared().currentAppleEvent?
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+        // Test seam: prove what a login launch looks like to the quit path, without a window.
+        if ProcessInfo.processInfo.environment["STUDIOHUB_QUIT_ATTENDED_PROBE"] == "1" {
+            print("QUIT_ATTENDED isActive=\(NSApp.isActive) windowVisible=\(window?.isVisible ?? false) login=\(loginLaunch) autoTermination=\(ProcessInfo.processInfo.automaticTerminationSupportEnabled)")
+            exit(0)
+        }
         // A Lite Mode Mac opens its window only by hand: an update's reopen must not put Hub Studio KH in
         // front of a cashier. Opening the app from Applications or Spotlight still shows it - with the
         // menu-bar icon hidden, that is the way back to Settings.
@@ -1312,9 +1349,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Task { @MainActor in
             let busy = await activeWork() > 0
             quitAsking = false
-            if busy, !confirmQuitWhileBusy() { NSApp.reply(toApplicationShouldTerminate: false); return }
+            // Only a person looking at the window can answer an alert. A login launch has no
+            // window and is not active, so an unattended installer quit goes straight to stop.
+            if busy, quitIsAttended(), !confirmQuitWhileBusy() {
+                NSApp.reply(toApplicationShouldTerminate: false)
+                return
+            }
             stopThenQuit()
-            if !controller.running { NSApp.reply(toApplicationShouldTerminate: true) }
+            // One reply: when the engine stops, or after a bounded wait if it does not.
+            Task { @MainActor [weak self] in
+                let deadline = Date().addingTimeInterval(20)
+                while self?.controller?.running == true && Date() < deadline {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
         }
         return .terminateLater
     }
