@@ -260,6 +260,53 @@ struct PageRenderHarness {
                     window.displayIfNeeded()
                 }
             }
+            // Temporary proof seam: report any AppKit focus ring the SwiftUI focus system
+            // installs around the sidebar, without activating the app.
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_FOCUS_RING"] == "1" {
+                func walkFocus(_ view: NSView, depth: Int) {
+                    if view.focusRingType != .none {
+                        print("FOCUS_RING view=\(type(of: view)) frame=\(view.frame) type=\(view.focusRingType.rawValue) depth=\(depth)")
+                    }
+                    for child in view.subviews { walkFocus(child, depth: depth + 1) }
+                }
+                walkFocus(hosting, depth: 0)
+            }
+            // Temporary proof seam: move the drawn sidebar with the same arrow-key action the
+            // shipped `.onMoveCommand` handles, without a visible window or app activation.
+            if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_KEYBOARD"] == "1" {
+                let before = studio.selection
+                window.makeKey()
+                window.makeFirstResponder(hosting)
+                for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                NSApp.sendAction(#selector(NSResponder.moveDown(_:)), to: nil, from: nil)
+                for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                if studio.selection == before,
+                   let event = NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}",
+                    isARepeat: false, keyCode: 125) {
+                    window.sendEvent(event)
+                    for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                }
+                let down = studio.selection
+                window.makeFirstResponder(hosting)
+                for _ in 0..<2 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                NSApp.sendAction(#selector(NSResponder.moveUp(_:)), to: nil, from: nil)
+                for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                if studio.selection == down,
+                   let event = NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
+                    isARepeat: false, keyCode: 126) {
+                    window.sendEvent(event)
+                    for _ in 0..<3 { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+                }
+                print("KEYBOARD before=\(before) down=\(down) up=\(studio.selection)")
+            }
             // The page's own scroll view, taken to its bottom: proves a long page's content never
             // paints across the sidebar or its footer.
             if ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_SCROLL_BOTTOM"] == "1" {
