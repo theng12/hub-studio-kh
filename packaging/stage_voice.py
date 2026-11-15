@@ -1281,9 +1281,11 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
             'NSLocalNetworkUsageDescription':
                 'Hub Studio KH talks to your other Macs on this network to send and receive work.',
             # A login launch opens no window, and AppKit may automatically terminate a
-            # windowless app after idle (observed 2026-11-15, ~8 minutes). Declare the intent
-            # once in the bundle rather than relying on a call racing AppKit at launch.
-            'NSSupportsAutomaticTermination': False,
+            # windowless app after idle (observed 2026-11-15, ~8 minutes). The opt-out counter
+            # only has effect when support is enabled, so declare support here and call
+            # `disableAutomaticTermination` at launch; declaring support off made the opt-out
+            # a no-op (observed 2026-11-15).
+            'NSSupportsAutomaticTermination': True,
         })
         plist.pop('LSUIElement')
     with (contents / 'Info.plist').open('wb') as stream:
