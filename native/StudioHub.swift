@@ -1124,6 +1124,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The plist declaration alone did not hold for a launchd-started copy. The opt-out
+        // counter only has effect when automatic termination is supported, and AppKit reads the
+        // plist after this process starts; set support here, then disable termination.
+        ProcessInfo.processInfo.automaticTerminationSupportEnabled = true
+        ProcessInfo.processInfo.disableAutomaticTermination(
+            "Hub Studio KH keeps its local services available in the menu bar")
         let config: ShellConfiguration
         do {
             config = try ShellConfiguration(arguments: CommandLine.arguments, bundle: Bundle.main.bundleURL)
@@ -1437,13 +1443,6 @@ struct StudioHubApplication {
            AgentStandby.shouldStayStopped(directory: configuration.dataDirectory) {
             exit(0)
         }
-        // The plist declaration alone did not hold for a launchd-started copy (observed
-        // 2026-11-15 12:55: AppKit still sent a termination request). The opt-out counter only
-        // has effect when automatic termination is supported, so enable support and then
-        // disable termination at the first moment of launch, before AppKit can act.
-        ProcessInfo.processInfo.automaticTerminationSupportEnabled = true
-        ProcessInfo.processInfo.disableAutomaticTermination(
-            "Hub Studio KH keeps its local services available in the menu bar")
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
