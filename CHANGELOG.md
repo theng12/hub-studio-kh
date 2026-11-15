@@ -2,6 +2,17 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.236 — 2026-11-15
+
+- Local services now come up after a restart. The app was waiting for a startup handshake that named the background helper, while the Hub reported the helper's own child instead, so every start was rejected and retried. The handshake now names the process the app actually launched.
+- Shutdown also tolerates a worker group that is no longer ours to signal instead of failing its cleanup.
+
+### Technical notes
+
+- `HelperMain.swift` passes `--ready-pid`; `hub_worker.py` writes it and requires it to match `--parent-pid`; direct launches keep their own PID.
+- `voice_worker.write_ready_file`/`run_server` accept an optional `ready_pid`; `stop_child` catches `PermissionError` and falls back to the process handle.
+- `tests/test_hub_ready_pid.py` pins the helper-PID override, the own-PID default and the permission fallback.
+
 ## 0.6.235 — 2026-11-14
 
 - The current page in the sidebar is a quiet accent tint with a small accent bar; the outline is the system's keyboard focus ring, not a permanent blue block.
