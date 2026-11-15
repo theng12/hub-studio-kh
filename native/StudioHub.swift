@@ -1241,7 +1241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
         // Test seam: prove what a login launch looks like to the quit path, without a window.
         if ProcessInfo.processInfo.environment["STUDIOHUB_QUIT_ATTENDED_PROBE"] == "1" {
-            print("QUIT_ATTENDED isActive=\(NSApp.isActive) windowVisible=\(window?.isVisible ?? false) login=\(loginLaunch) autoTermination=\(ProcessInfo.processInfo.isAutomaticTerminationSupportEnabled)")
+            print("QUIT_ATTENDED isActive=\(NSApp.isActive) windowVisible=\(window?.isVisible ?? false) login=\(loginLaunch) autoTermination=\(ProcessInfo.processInfo.automaticTerminationSupportEnabled)")
             exit(0)
         }
         // A Lite Mode Mac opens its window only by hand: an update's reopen must not put Hub Studio KH in
@@ -1438,8 +1438,10 @@ struct StudioHubApplication {
             exit(0)
         }
         // The plist declaration alone did not hold for a launchd-started copy (observed
-        // 2026-11-15 12:55: AppKit still sent a termination request). Disable it at the first
-        // moment of launch, before AppKit can act.
+        // 2026-11-15 12:55: AppKit still sent a termination request). The opt-out counter only
+        // has effect when automatic termination is supported, so enable support and then
+        // disable termination at the first moment of launch, before AppKit can act.
+        ProcessInfo.processInfo.automaticTerminationSupportEnabled = true
         ProcessInfo.processInfo.disableAutomaticTermination(
             "Hub Studio KH keeps its local services available in the menu bar")
         let app = NSApplication.shared
