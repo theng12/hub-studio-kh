@@ -1852,14 +1852,8 @@ struct NativeTrashFolder: Decodable, Equatable {
 /// automatic off in words the window and the Gateway both show.
 struct NativeRemoteEmptyState: Decodable, Equatable {
     let effective: Bool
-    let source: String
+    let source: String?
     let reason: String?
-    let rule: NativeRemoteEmptyRule
-}
-
-struct NativeRemoteEmptyRule: Decodable, Equatable {
-    let enabled: Bool
-    let windowDays: Int
 }
 
 /// `GET /api/hub/trash`'s `empty`: the Hub Trash Folder and each macOS Trash folder, measured now.
@@ -1910,7 +1904,6 @@ struct NativeRemoteEmpty: Decodable, Equatable {
     let effective: Bool?
     let source: String?
     let reason: String?
-    let rule: NativeRemoteEmptyRule?
 }
 
 /// The answer to `POST /api/hub/macos-trash-auto-empty/enable`: the value **read back** after the write.
@@ -7210,15 +7203,15 @@ final class NativeWorkspaceStore: ObservableObject {
         return row.state == "emptied" ? freed + left + why : "Not fully emptied. " + freed + left + why
     }
 
-    /// This Mac's "Allow remote empty" choice and rule (`POST /api/hub/trash/allow-remote-empty`),
-    /// read back. `mode` is `automatic`, `on` or `off`; the rule's own switch and window go beside it.
-    func setRemoteEmpty(mode: String, ruleEnabled: Bool? = nil, windowDays: Int? = nil) async {
+    /// This Mac's "Allow remote empty" switch (`POST /api/hub/trash/allow-remote-empty`), read back.
+    /// Off until someone turns it on; a Mac in the middle of a job is still skipped by the fleet.
+    func setRemoteEmpty(mode: String) async {
         guard let requestConnection = connectionID else { return }
         trashNote = nil
         do {
             let _: NativeRemoteEmpty = try await sendJSON(
                 ["api", "hub", "trash", "allow-remote-empty"], method: "POST",
-                body: RemoteEmptyBody(mode: mode, ruleEnabled: ruleEnabled, windowDays: windowDays))
+                body: RemoteEmptyBody(mode: mode))
             guard connectionID == requestConnection else { return }
             await refreshTrash()
         } catch {
@@ -11116,8 +11109,6 @@ private struct TrashEmptyBody: Encodable {
 
 private struct RemoteEmptyBody: Encodable {
     let mode: String
-    let ruleEnabled: Bool?
-    let windowDays: Int?
 }
 private struct CatalogReferenceAudio: Decodable {
     let declared: Bool?

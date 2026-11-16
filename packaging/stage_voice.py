@@ -964,7 +964,8 @@ def staged_import_gaps(resources: Path) -> list[str]:
 def archive_failed_stage(output: Path) -> Path:
     """Keep a failed fresh bundle and its diagnostics under a unique project archive."""
     archive = ROOT / '_trash' / 'failed-stages'
-    archive.mkdir(parents=True, exist_ok=True)
+    # An emptied Desktop trash leaves `_trash` dangling; recreate its target rather than fail (2026-11-16).
+    archive.resolve().mkdir(parents=True, exist_ok=True)
     destination = Path(tempfile.mkdtemp(prefix='stage-', dir=archive)) / output.name
     shutil.move(str(output), str(destination))
     return destination

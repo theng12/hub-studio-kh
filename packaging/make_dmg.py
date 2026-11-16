@@ -26,6 +26,9 @@ def preserve(path: Path, project: Path, bucket: str) -> Path | None:
     parent = path.parent.resolve()
     if parent == canonical_archive or canonical_archive in parent.parents:
         raise ValueError('refusing to move an archive through an alias')
+    # The owner may empty the Desktop trash at any time, which leaves `_trash` a dangling link: create
+    # the folder it points at instead of dying on ENOENT (2026-11-16 - it broke a DMG build).
+    archive.resolve().mkdir(parents=True, exist_ok=True)
     destination_root = archive / bucket
     destination_root.mkdir(parents=True, exist_ok=True)
     item = Path(tempfile.mkdtemp(prefix='item-', dir=destination_root))

@@ -23,8 +23,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from components.hub import output_storage, standalone, workstation  # noqa: E402
-from components.hub.backend import auth, ledger, resources, startup_control  # noqa: E402
+from components.hub import output_storage, standalone  # noqa: E402
+from components.hub.backend import auth, broker, ledger, resources, startup_control  # noqa: E402
 
 TODAY = time.strftime("%Y-%m-%d", time.gmtime())
 
@@ -48,26 +48,10 @@ class Fixture(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         for module, name, value in ((ledger, "DATA_DIR", self.data), (ledger, "DB_FILE", self.data / "hub.db"),
-                                    (output_storage, "QUIET_S", 0.0), (output_storage, "_PREVIEW", (0.0, None)),
-                                    (workstation, "load", lambda: {**workstation.DEFAULTS})):
+                                    (output_storage, "QUIET_S", 0.0), (output_storage, "_PREVIEW", (0.0, None))):
             self.stack.enter_context(mock.patch.object(module, name, value))
         self.stack.enter_context(mock.patch.dict(os.environ, {"HOME": str(self.home)}))
         self.addCleanup(self._unlock)
-
-    def history(self, days_ago: float = 1, machine: str = "local", job: str = "done",
-                studio: str = "image") -> None:
-        """Real generation history in this Mac's own ledger: a job this Hub owned on its own worker."""
-        self.data.mkdir(parents=True, exist_ok=True)
-        when = time.time() - days_ago * 86400
-        with ledger.activity_transaction() as conn:
-            ledger.record_activity_event(
-                machine=machine, studio=studio, job_id=f"j{time.time_ns()}", state=job,
-                model="m", source="job", hub_owned=machine == "local", observed_at=when,
-                activity_received_at=when, conn=conn)
-
-    def workstation_on(self) -> None:
-        self.stack.enter_context(mock.patch.object(
-            workstation, "load", lambda: {**workstation.DEFAULTS, "enabled": True}))
 
     def _unlock(self) -> None:
         os.chmod(self.macos, 0o700)
@@ -161,93 +145,44 @@ class EmptyAll(Fixture):
             output_storage.empty_all(expected_count=1)
         self.assertEqual(refused.exception.body["code"], "EXPECTED_REQUIRED")
 
-class RemoteEmptyRule(Fixture):
-    """"Allow remote empty" is derived, not a plain default (owner, 2026-11-16: *"default it off on
-    Macs you use"*): on only where this Mac's own history shows generation work inside the window and
-    Lite Mode is off; an explicit choice always wins; a workstation Mac someone is using is never
-    emptied from elsewhere."""
+class RemoteEmptySwitch(Fixture):
+    """The switch is off until someone turns it on (owner, 2026-11-16: *"it's default off. but i will
+    have it turned on when it's released"*): no derived default, no role test, no history window.
+    A Mac in the middle of a job is skipped even when it is on, because that would cost the job."""
 
-    def test_a_mac_with_recent_generation_work_defaults_on(self) -> None:
-        self.history(days_ago=2)
-        decision = output_storage.remote_empty_decision()
-        self.assertEqual((decision["effective"], decision["source"], decision["reason"]), (True, "automatic", None))
-        self.assertEqual(decision["rule"], {"enabled": True, "window_days": 7})
-        self.assertTrue(output_storage.remote_empty_refusal() is None)
-
-    def test_a_mac_without_generation_work_defaults_off_with_that_reason(self) -> None:
+    def test_a_mac_with_no_setting_and_no_history_is_off(self) -> None:
         decision = output_storage.remote_empty_decision()
         self.assertFalse(decision["effective"])
-        self.assertEqual((decision["source"], decision["reason"]),
-                         ("automatic", "no generation work in 7 days"))
+        self.assertEqual(decision["reason"], output_storage.REMOTE_OFF_DETAIL)
         self.assertEqual(output_storage.remote_empty_refusal(),
-                         ("REMOTE_EMPTY_OFF", "no generation work in 7 days"))
+                         ("REMOTE_EMPTY_OFF", output_storage.REMOTE_OFF_DETAIL))
 
-    def test_another_macs_work_does_not_count(self) -> None:
-        # A controller records the jobs its nodes run; that is not "this Mac generates".
-        self.history(days_ago=1, machine="blue-1")
-        self.assertFalse(output_storage.remote_empty_decision()["effective"])
+    def test_an_explicit_on_wins(self) -> None:
+        self.assertEqual(output_storage.set_remote_empty("on")["effective"], True)
+        self.assertTrue(output_storage.remote_empty_allowed())
+        self.assertIsNone(output_storage.remote_empty_refusal())
+        self.assertEqual(stat.S_IMODE(os.stat(self.data / output_storage.TRASH_SETTINGS_FILE).st_mode), 0o600)
+        self.assertFalse(output_storage.set_remote_empty(enabled=False)["effective"])
+        self.assertFalse(output_storage.remote_empty_allowed())
 
-    def test_chat_alone_is_not_generation_work(self) -> None:
-        self.history(days_ago=1, studio="chat")
-        self.assertFalse(output_storage.remote_empty_decision()["effective"])
-
-    def test_an_activity_this_hub_did_not_own_does_not_count(self) -> None:
-        self.data.mkdir(parents=True, exist_ok=True)
-        with ledger.activity_transaction() as conn:
-            ledger.record_activity_event(machine="local", studio="image", job_id="j-x", state="done",
-                                         model="m", source="worker", hub_owned=False, conn=conn)
-        self.assertFalse(output_storage.remote_empty_decision()["effective"])
-
-    def test_an_explicit_choice_beats_the_rule_both_ways(self) -> None:
+    def test_a_working_mac_is_skipped_even_with_the_switch_on(self) -> None:
         output_storage.set_remote_empty("on")
-        off = output_storage.remote_empty_decision()                     # no history, still on
-        self.assertEqual((off["effective"], off["source"]), (True, "you"))
-        self.history(days_ago=1)
-        output_storage.set_remote_empty("off")
-        on = output_storage.remote_empty_decision()                      # history, still off
-        self.assertEqual((on["effective"], on["source"]), (False, "you"))
-        self.assertIn("only be emptied from its own Hub window", on["reason"])
-        self.assertEqual(output_storage.remote_empty_settings()["mode"], "off")
-
-    def test_the_window_is_the_setting_not_a_number_in_the_code(self) -> None:
-        self.history(days_ago=10)
-        self.assertFalse(output_storage.remote_empty_decision()["effective"])
-        output_storage.set_remote_empty(window_days=14)
-        decision = output_storage.remote_empty_decision()
-        self.assertTrue(decision["effective"])
-        self.assertEqual(decision["rule"]["window_days"], 14)
-
-    def test_the_rule_can_be_switched_off_in_settings(self) -> None:
-        self.history(days_ago=1)
-        output_storage.set_remote_empty(rule_enabled=False)
-        decision = output_storage.remote_empty_decision()
-        self.assertFalse(decision["effective"])
-        self.assertIn("automatic rule is off", decision["reason"])
-
-    def test_a_workstation_mac_defaults_off_and_is_refused_even_when_switched_on(self) -> None:
-        self.history(days_ago=1)
-        self.workstation_on()
-        self.assertEqual(output_storage.remote_empty_decision()["reason"], "workstation in use")
-        self.assertFalse(output_storage.remote_empty_decision()["effective"])
-        output_storage.set_remote_empty("on")                       # the owner says yes...
-        with mock.patch.object(workstation, "in_use", lambda: True):  # ...but someone is at the Mac
+        with mock.patch.object(broker, "in_flight", lambda: 2):
             self.assertEqual(output_storage.remote_empty_refusal(),
-                             ("REMOTE_EMPTY_OFF", "workstation in use: someone is using this Mac"))
-        with mock.patch.object(workstation, "in_use", lambda: False):
+                             ("MACHINE_WORKING", "working: this Mac is in the middle of a job; "
+                                                 "the next run takes it"))
+        with mock.patch.object(broker, "in_flight", lambda: 0):
             self.assertIsNone(output_storage.remote_empty_refusal())
 
-    def test_a_settings_file_is_owner_only_and_a_bad_value_is_refused(self) -> None:
-        output_storage.set_remote_empty("automatic")
-        self.assertEqual(stat.S_IMODE(os.stat(self.data / output_storage.TRASH_SETTINGS_FILE).st_mode), 0o600)
-        for body in ({"mode": "sometimes"}, {"window_days": 0}, {"window_days": "7"}, {"rule_enabled": "no"}):
+    def test_a_bad_value_is_refused(self) -> None:
+        for mode, enabled in (("sometimes", None), ("automatic", None), (None, "yes")):
             with self.assertRaises(output_storage.TrashRefused):
-                output_storage.set_remote_empty(body.get("mode"), rule_enabled=body.get("rule_enabled"),
-                                                window_days=body.get("window_days"))
+                output_storage.set_remote_empty(mode, enabled=enabled)
 
-    def test_the_first_cut_setting_file_still_counts_as_an_explicit_choice(self) -> None:
+    def test_the_first_cut_setting_file_still_counts(self) -> None:
         self.data.mkdir(parents=True, exist_ok=True)
-        (self.data / output_storage.TRASH_SETTINGS_FILE).write_text(json.dumps({"allow_remote_empty": False}))
-        self.assertEqual(output_storage.remote_empty_settings()["mode"], "off")
+        (self.data / output_storage.TRASH_SETTINGS_FILE).write_text(json.dumps({"allow_remote_empty": True}))
+        self.assertTrue(output_storage.remote_empty_allowed())
 
 
 class FleetFields(unittest.TestCase):
@@ -343,30 +278,29 @@ class Routes(unittest.TestCase):
         self.assertEqual((changed.status_code, changed.json()["code"]), (409, "TRASH_CHANGED"))
         self.assertTrue((self.home / ".Trash" / "old.mov").exists())
 
-    def test_a_mac_that_never_generates_is_skipped_with_that_reason(self) -> None:
+    def test_the_first_state_is_off_and_the_row_says_so_plainly(self) -> None:
         with ExitStack() as stack:
             client = self.client(stack)
             self.put()
             answer = client.post("/api/hub/fleet/nodes/local/empty-trash", json={}, headers=self.FLEET)
         row = answer.json()["machines"][0]
         self.assertEqual((answer.status_code, row["state"], row["code"]), (409, "skipped", "REMOTE_EMPTY_OFF"))
-        self.assertEqual(row["reason"], "no generation work in 7 days")
-        self.assertEqual(row["remote_empty"]["source"], "automatic")
+        self.assertEqual(row["reason"], output_storage.REMOTE_OFF_DETAIL)
+        self.assertIn("only be emptied from its own Hub window", row["reason"])
+        self.assertFalse(row["remote_empty"]["effective"])
         self.assertTrue((self.home / ".Trash" / "old.mov").exists(), "a skipped Mac deletes nothing")
 
-    def test_a_workstation_mac_in_use_is_skipped_even_with_the_switch_on(self) -> None:
-        from components.hub import workstation
+    def test_a_working_mac_is_skipped_even_with_the_switch_on(self) -> None:
         with ExitStack() as stack:
             client = self.client(stack)
             self.put()
             client.post("/api/hub/trash/allow-remote-empty", json={"mode": "on"}, headers=self.OWNER)
-            stack.enter_context(mock.patch.object(workstation, "in_use", lambda: True))
+            stack.enter_context(mock.patch.object(broker, "in_flight", lambda: 1))
             answer = client.post("/api/hub/fleet/empty-trash", json={}, headers=self.FLEET)
         row = answer.json()["machines"][0]
-        self.assertEqual((row["state"], row["code"]), ("skipped", "REMOTE_EMPTY_OFF"))
-        self.assertEqual(row["reason"], "workstation in use: someone is using this Mac")
+        self.assertEqual((row["state"], row["code"]), ("skipped", "MACHINE_WORKING"))
+        self.assertTrue(row["reason"].startswith("working: "))
         self.assertTrue((self.home / ".Trash" / "old.mov").exists())
-        # The window is not the fleet: the owner's own click still empties it.
         self.assertEqual(answer.json()["ok"], True, "a skipped Mac is not a failed run")
 
     def test_a_controller_answers_one_row_per_mac_each_terminal(self) -> None:

@@ -9127,12 +9127,6 @@ struct StudioContent: View {
         }
     }
 
-    /// Who decided "Allow remote empty", in words, and why when it is off.
-    static func remoteEmptyLabel(_ state: NativeRemoteEmptyState) -> String {
-        if state.source == "you" { return state.effective ? "Set by you: on" : "Set by you: off" }
-        return state.effective ? "Automatic: on" : "Automatic: off" + (state.reason.map { " — \($0)" } ?? "")
-    }
-
     /// The "Empty All Trash" dialog: each location, what it really frees, and what it cannot touch.
     static func emptyAllMessage(_ plan: NativeEmptyPreview) -> String {
         let gb: (Int64) -> String = NativeWorkspaceStore.gigabytes
@@ -9204,43 +9198,19 @@ struct StudioContent: View {
                 }
             }
             if let state = folder.remoteEmpty {
-                // The owner can always override; the rule is published beside it, not buried in code.
+                // Off until someone turns it on (owner, 2026-11-16). Off is the normal first state,
+                // not a fault, so it is said plainly rather than flagged.
                 ValueRow("Allow remote empty") {
-                    Text(Self.remoteEmptyLabel(state))
-                        .foregroundStyle(state.effective ? .secondary : HubStatus.warn.textColor)
-                        .multilineTextAlignment(.trailing)
+                    Text(state.effective ? "On (set by you)" : "Off")
+                        .foregroundStyle(.secondary).multilineTextAlignment(.trailing)
                 }
-                ValueRow("When") {
-                    Picker("", selection: Binding(
-                        get: { state.source == "you" ? (state.effective ? "on" : "off") : "automatic" },
-                        set: { value in Task { await workspace.setRemoteEmpty(mode: value) } })) {
-                            Text("Automatic").tag("automatic")
-                            Text("Always on").tag("on")
-                            Text("Always off").tag("off")
-                        }
-                        .labelsHidden().pickerStyle(.menu).fixedSize().disabled(!connected)
-                }
-                if state.source == "automatic" {
-                    ValueRow("Automatic rule") {
-                        Toggle("On", isOn: Binding(
-                            get: { state.rule.enabled },
-                            set: { value in Task { await workspace.setRemoteEmpty(mode: "automatic", ruleEnabled: value) } }))
-                            .toggleStyle(.checkbox).labelsHidden().disabled(!connected)
-                    }
-                    ValueRow("Generation work within") {
-                        HStack(spacing: HubSpace.tight) {
-                            NumberField(title: "", value: Binding(
-                                get: { state.rule.windowDays },
-                                set: { value in Task { await workspace.setRemoteEmpty(mode: "automatic", windowDays: value) } }),
-                                range: 1...365, width: 70)
-                            Text("days").foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                Text("Lets the Gateway, and agents with its key, empty this Mac's trash for good. "
-                     + "Automatic keeps it off on a Mac the owner uses: on only where this Mac ran "
-                     + "generation work in the last \(state.rule.windowDays) days and Lite Mode is off. "
-                     + "A Mac someone is using is never emptied from elsewhere.")
+                Toggle("Let the Gateway and agents empty this Mac's trash", isOn: Binding(
+                    get: { state.effective },
+                    set: { value in Task { await workspace.setRemoteEmpty(mode: value ? "on" : "off") } }))
+                    .toggleStyle(.checkbox).disabled(!connected)
+                Text(state.effective
+                     ? "The Gateway, and agents with its key, can empty this Mac's trash. A Mac in the middle of a job is still skipped; this window always works."
+                     : "Only this window can empty this Mac's trash. Turn this on to let the Gateway and agents do it.")
                     .font(HubType.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

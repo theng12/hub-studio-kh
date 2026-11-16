@@ -4387,25 +4387,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.post("/api/hub/trash/allow-remote-empty")
     async def hub_trash_allow_remote_empty(request: Request) -> JSONResponse:
-        """This Mac's "Allow remote empty" choice and rule. Its own window only.
-        Body `{"mode": "automatic"|"on"|"off", "rule_enabled": bool, "window_days": int}`; any field
-        left out keeps its value, and the first cut's `{"enabled": bool}` still means on/off."""
+        """This Mac's "Allow remote empty" switch, from its own window only. Off until turned on:
+        body `{"mode": "on"|"off"}`, or the first cut's `{"enabled": bool}`."""
         body = await _empty_body(request)
         if body is None:
             return JSONResponse({"ok": False, "code": "BAD_BODY",
                                  "detail": "The request body must be a JSON object."}, status_code=400)
-        mode = body.get("mode")
-        if mode is None and "enabled" in body:
-            mode = "on" if body.get("enabled") is True else "off"
         try:
             decision = await run_in_threadpool(
-                output_storage.set_remote_empty, mode,
-                rule_enabled=body.get("rule_enabled"), window_days=body.get("window_days"))
+                output_storage.set_remote_empty, body.get("mode"), enabled=body.get("enabled"))
         except output_storage.TrashRefused as refusal:
             return JSONResponse(refusal.body, status_code=refusal.status)
-        startup_control.audit("trash_remote_empty", {"mode": output_storage.remote_empty_settings()["mode"],
-                                                     "effective": decision["effective"],
-                                                     "source": decision["source"]})
+        startup_control.audit("trash_remote_empty", {"effective": decision["effective"]})
         return JSONResponse({"ok": True, **decision, "allow_remote_empty": decision["effective"]})
 
     @app.post("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}/share")
