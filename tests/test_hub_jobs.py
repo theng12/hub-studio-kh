@@ -467,8 +467,11 @@ class HubJobProofTests(unittest.TestCase):
             self.assertEqual(waited["items"][0]["state"], "queued")
             self.assertIn("execution requirements are not ready", waited["governor_note"])
 
-        # A persisted accepted Voice attempt runs again after a restart under a fresh request id
-        # (owner, 2026-10-05), and the original is watched so a finished one is adopted.
+        # A persisted accepted Voice attempt runs again after a restart. It keeps its accepted
+        # request id (2026-11-16): the worker still holds that job, so the re-dispatch reattaches to
+        # it instead of paying for a second generation. A worker that restarted too answers
+        # EXECUTION_IDENTITY_LOST and the dispatch takes a fresh `:rerun-N` id then. The original is
+        # watched either way, so a finished one is adopted.
         app = standalone.create_app(start_background=False)
         with TestClient(app) as client:
             response = client.post("/api/hub/jobs", json={"modality": "voice", "model": "fixture/voice",
@@ -481,7 +484,9 @@ class HubJobProofTests(unittest.TestCase):
             restored = ledger.load_batch(batch["id"])
             self.assertEqual(restored["items"][0]["state"], "queued")
             self.assertEqual(restored["items"][0]["tries"], 1)
-            self.assertTrue(restored["items"][0]["client_request_id"].endswith(":rerun-1"))
+            self.assertEqual(restored["items"][0]["client_request_id"],
+                             f"studiohub:{batch['id']}:0",
+                             "the restart keeps the accepted id so the worker reattaches")
             self.assertEqual([row[3] for row in broker._restored_attempts], ["accepted-before-restart"])
             broker._restored_attempts.clear()
 

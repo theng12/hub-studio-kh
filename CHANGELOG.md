@@ -2,6 +2,24 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.242 — 2026-11-16
+
+- A brief connection drop no longer kills a long job. The Hub now waits as long as that kind of job is allowed to take for the worker to report back — a long narration runs for many minutes — instead of giving up after two.
+- A retry after a drop picks up the job the Mac is already running instead of starting a second one, so one drop no longer costs two generations.
+- A job that fails repeatedly now ends only because of failures in the current run. One failure remembered from earlier in the day no longer counts against it. When a job does end, its record says how many tries it used, when this run began, and which rule ended it.
+- If a result arrives after a job was already reported failed, the Hub keeps it beside the verdict instead of throwing it away. The row stays failed; the late result is evidence.
+- The Hub no longer offers work to a Mac that has told it its output disk is full, and a full Trash Folder on a Mac is no longer treated as a bad voice reference: it waits for space and lets another Mac take the job, exactly as a full disk does on every other path.
+
+### Technical notes
+
+- `broker._record_infra_failure` counts transport failures per **episode**: a failure older than `INFRA_RETRY_WINDOW_S` starts a new one instead of ending the item, and every success route clears both fields through `_reset_infra_episode` (called from `_record_worker_success`). The terminal record carries `infra_failures`, `infra_failure_started_at` and `terminal_clause` (`max_infra_tries`), and `public_item` already passes them through. Before this, the two fields were written once and never reset, so one drop after a 30-minute-old failure ended a row — the shape that killed six production audio jobs in a 260 ms burst.
+- `_recovery_budget_s` derives the post-drop reconcile window from `standalone.deadline_floor_seconds` (the number the Hub both publishes and enforces) raised by the worker's own `deadline_s`, less elapsed time, plus the reservation grace, floored at `RECOVERY_WINDOW_S` 120 s. Voice's floor is 1,800 s; the flat 120 s it replaces was ~7% of a measured 1,747 s Breeze section. A worker that answers nothing for `RECOVERY_UNREACHABLE_S` 60 s ends the wait instead of holding the item to the ceiling.
+- `_abandon_attempt` and `_rerun_after_restart` keep the item's `client_request_id`, so a voice retry reattaches to the worker's existing job (`generation.py: start_txt2speech` returns it). `retry_failed_item` (the owner's Retry) takes a fresh `:rerun-N`, and so does a reattached id that answers `EXECUTION_IDENTITY_LOST` (a restarted worker cannot resume it).
+- `_watch_abandoned_attempt` records a late `done` on a terminal item as `late_result` (studio job id, finished time, bytes/sha256 when stated) and never changes its state.
+- `_disk_gate` skips a Mac whose published snapshot (`disk_governor.snapshot` in the same host dict the memory gate reads — `/api/hub/resources` for a peer, `resources.host_stats()` here) is in the governor's `stop`/`red` tier, before any attempt. `_reference_refusal_verdict` sends an `OUTPUT_STORAGE_BLOCKED` / `DISK_FULL` refusal of a voice-reference upload to the disk-full wait (no try spent, `DISK_FULL_AVOID_S` 300 s avoid) instead of the terminal `VOICE_REFERENCE_REJECTED` it used to write. `_placement_key` is unchanged.
+- `tests/test_infra_recovery.py` (23 cases) pins the episode, the window, reattachment, the late result, the disk gate and both refusal verdicts; `tests/_hub_dispatch_proof.py` and its embedded twin in `tests/test_hub_jobs.py` assert the restart keeps the accepted id.
+- This release is also the **automatic-path proof** 0.6.241 was held for: the hold route is unchanged, so the launcher-driven update proof runs against this artifact.
+
 ## 0.6.241 — 2026-11-16
 
 - Hub Studio KH can now be updated by the Studio Launcher while it is running, without losing work. Hub stops taking new jobs, lets what is already running keep its place, the Launcher installs the new version, and Hub starts again by itself and carries on with the queue. If an update is interrupted, Hub starts taking work again on its own after two minutes.

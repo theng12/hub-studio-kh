@@ -498,7 +498,14 @@ MAX_TRIES = 3
 MAX_INFRA_TRIES = 8
 INFRA_RETRY_WINDOW_S = 30 * 60
 POLL_S = 2.0
-RECOVERY_WINDOW_S = 120.0  # cover a full slow M1 generation after a dropped connection
+# The shortest a dropped attempt is reconciled for. It used to be the whole window, under a comment
+# claiming it covered a slow M1 generation: it did not — a measured Breeze section took 1,747 s and
+# the request cap is 900 s on the slowest Mac, so a healthy worker was abandoned by design. The
+# window now comes from the lane's own published deadline (`_recovery_budget_s`); this is its floor.
+RECOVERY_WINDOW_S = 120.0
+# A worker that stops answering leaves nothing to reconcile: stop waiting after this long of
+# consecutive failed polls, inside the lane's own ceiling, and let the transport branch name it.
+RECOVERY_UNREACHABLE_S = 60.0
 RETRY_DELAYS_S = (3.0, 10.0)
 INFRA_RETRY_DELAYS_S = (5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 300.0)
 CAPACITY_RETRY_S = 30.0
@@ -653,6 +660,38 @@ def _memory_gate(mem: dict, host: dict, reserved_gb: float = 0.0) -> tuple[str, 
         return ("wait", f"waiting for memory: needs ~{need_free:.1f}GB, "
                         f"~{max(0.0, effective_free):.1f}GB free")
     return ("run", None)
+
+
+def _disk_gate(host: dict | None) -> tuple[str, str | None]:
+    """Whether this Mac may be offered work now, from the disk figures it already publishes.
+
+    No probe: the snapshot the memory gate reads carries it too — this Mac's
+    `resources.host_stats()` or the peer's `/api/hub/resources?local_only=true` — with
+    `disk` = `disk_governor.snapshot(DATA_DIR)` and its own tier words (`stop`, `red`, `amber`,
+    `green`). A Mac in `stop`/`red` has told the fleet its output storage cannot take another job;
+    skip it, as memory is skipped. Unknown figures are not a refusal: the worker still refuses at
+    the door and that refusal waits and avoids the Mac (`_is_disk_full_refusal`).
+    """
+    snapshot = (host or {}).get("disk")
+    tier = str((snapshot or {}).get("state") or "") if isinstance(snapshot, dict) else ""
+    free = (snapshot or {}).get("free_gb") if isinstance(snapshot, dict) else None
+    if not isinstance(free, (int, float)) or isinstance(free, bool):
+        free = (host or {}).get("disk_free_gb")
+    if tier in {"stop", "red"}:
+        amount = f" ({float(free):.1f} GB free)" if isinstance(free, (int, float)) else ""
+        return ("skip", f"output storage is {tier}{amount}; empty the Trash Folder")
+    return ("run", None)
+
+
+def _disk_allows(b: dict, studio: dict, trace: list | None) -> bool:
+    """Offer this studio to the batch only when its published disk can take another job."""
+    decision, note = _disk_gate(_host_for_studio(studio))
+    if decision == "run":
+        return True
+    b["governor_note"] = f"{studio['id']}: {note}"
+    if trace is not None:
+        _record_dispatch_gate(trace, studio, "disk_skip")
+    return False
 
 
 def _machine_has_active_work(studio: dict) -> bool:
@@ -1676,6 +1715,53 @@ def _mark_machine_failure(studio: dict, message: str) -> None:
         )
 
 
+def _reset_infra_episode(item: dict) -> None:
+    """A successful attempt ends the transport-failure episode.
+
+    The two counters used to live for the whole item, so one drop after a failure from hours earlier
+    ended a row for a reason that no longer existed. Run from every success route (a completed
+    generation, an adopted abandoned attempt, a clean terminal poll — all through
+    `_record_worker_success`).
+    """
+    item.pop("infra_failures", None)
+    item.pop("infra_failure_started_at", None)
+
+
+def _record_infra_failure(item: dict, studio: dict, message: str, now: float) -> str:
+    """Count one transport failure inside its episode; return ``"retry"`` or ``"terminal"``.
+
+    An episode is a run of consecutive failures. A failure older than `INFRA_RETRY_WINDOW_S` starts
+    a fresh one rather than ending the item, so an item ends only for a reason that exists now. The
+    terminal record carries what decided it (`infra_failures`, `infra_failure_started_at`,
+    `terminal_clause`) so a later reader can audit the verdict.
+    """
+    previous = item.get("infra_failure_started_at")
+    started = (float(previous) if isinstance(previous, (int, float))
+               and not isinstance(previous, bool) else 0.0)
+    if not started or now - started >= INFRA_RETRY_WINDOW_S:
+        failures = 0            # the previous failure expired: this is a new episode
+        started = now
+    else:
+        failures = int(item.get("infra_failures") or 0)
+    failures += 1
+    item["infra_failures"] = failures
+    item["infra_failure_started_at"] = started
+    item.setdefault("avoid_machines", {})[
+        studio.get("machine", "local")] = now + FAILED_WORKER_AVOID_S
+    if failures < MAX_INFRA_TRIES:
+        item["state"] = "queued"
+        item["error"] = (f"connection failure {failures}/{MAX_INFRA_TRIES}; "
+                         f"recovering automatically: {message}")
+        delay_index = min(failures - 1, len(INFRA_RETRY_DELAYS_S) - 1)
+        item["retry_at"] = now + INFRA_RETRY_DELAYS_S[delay_index]
+        return "retry"
+    item["state"] = "error"
+    item["error"] = f"connection recovery exhausted: {message}"
+    item["terminal_clause"] = "max_infra_tries"
+    item["retry_at"] = None
+    return "terminal"
+
+
 def _mark_machine_success(studio: dict) -> None:
     machine = studio.get("machine", "local")
     state = _machine_protection.get(machine)
@@ -1958,12 +2044,20 @@ def _another_machine_free(b: dict, machine: str) -> bool:
                for studio in _eligible_studios(b["modality"], b["routing"], b.get("model")))
 
 
+def _is_disk_full_refusal_text(code: object, detail: object) -> bool:
+    """Whether this typed refusal is the Mac's own output storage being full."""
+    return (str(code or "") in {"OUTPUT_STORAGE_BLOCKED", "DISK_FULL"}
+            or any(token in str(detail or "").lower() for token in
+                   ("insufficient free space", "empty the trash folder", "disk is full")))
+
+
 def _is_disk_full_refusal(exc: BaseException) -> bool:
-    """Whether a Mac answered "my disk is full": HTTP 507, or the OUTPUT_STORAGE_BLOCKED /
-    DISK_FULL code (`standalone._peer_refusal_response` writes both for a full node). Nothing was
-    submitted, so nothing was attempted."""
+    """Whether a Mac answered "my disk is full": HTTP 507, the OUTPUT_STORAGE_BLOCKED / DISK_FULL
+    code (`standalone._peer_refusal_response` writes both for a full node), or the governor's own
+    sentence when a worker answers it without a code. Nothing was submitted, so nothing was
+    attempted."""
     return (getattr(exc, "status_code", None) == 507
-            or str(getattr(exc, "error_code", "") or "") in {"OUTPUT_STORAGE_BLOCKED", "DISK_FULL"})
+            or _is_disk_full_refusal_text(getattr(exc, "error_code", None), str(exc)))
 
 
 def _item_allows_studio(item: dict, studio: dict, now: float) -> bool:
@@ -2365,9 +2459,10 @@ def _rerun_after_restart(b: dict, it: dict) -> bool:
         return True
     it.update(state="queued", studio=None, studio_job_id=None, retry_at=None,
               error="the Hub restarted while this was running; running it again")
-    if b.get("modality") == "voice":
-        it["reruns"] = int(it.get("reruns") or 0) + 1
-        it["client_request_id"] = f"studiohub:{b['id']}:{it['index']}:rerun-{it['reruns']}"
+    # The item keeps its client_request_id: if only this Hub restarted, the worker still holds the
+    # job and the re-dispatch reattaches to it instead of generating it twice. If the worker
+    # restarted too, its restored job answers `EXECUTION_IDENTITY_LOST` and the dispatch takes a
+    # fresh id then (`_bump_rerun_id`).
     return True
 
 
@@ -3640,16 +3735,48 @@ def _abandon_attempt(client: httpx.AsyncClient, b: dict, item: dict, studio: dic
     - every modality is re-run, on any capable Mac (the same one after a worker restart, whichever
     is free first). The original is watched in the background (`_watch_abandoned_attempt`): it is
     told to stop when its Mac answers again, and if it had already finished, its result is used
-    and the re-run is cancelled instead. A voice re-run takes a fresh client request id, or a
-    restarted worker would answer the new POST with the old, dead job.
+    and the re-run is cancelled instead.
+
+    The item keeps its `client_request_id` on purpose. A voice worker answers a POST for an id it
+    already holds with that job (`generation.py: start_txt2speech`), so the retry reattaches to the
+    original instead of paying for a second generation — the drop cost one job, not two. Only a
+    person asking for the work again (`retry_failed_item`) takes a fresh `:rerun-N` id, and so does
+    a reattached id that comes back as the job a restarted worker could not resume.
     """
     job_id = item.pop("studio_job_id", None)
     item.pop("studio", None)
     if job_id:
         _watch_abandoned_attempt(client, b, item, studio, str(job_id), body, t_start)
-    if b.get("modality") == "voice":
-        item["reruns"] = int(item.get("reruns") or 0) + 1
-        item["client_request_id"] = f"studiohub:{b['id']}:{item['index']}:rerun-{item['reruns']}"
+
+
+def _bump_rerun_id(b: dict, item: dict) -> str:
+    """Give this item a new `:rerun-N` request id: an explicit re-run, never a plain retry."""
+    item["reruns"] = int(item.get("reruns") or 0) + 1
+    item["client_request_id"] = f"studiohub:{b['id']}:{item['index']}:rerun-{item['reruns']}"
+    return item["client_request_id"]
+
+
+def _record_late_result(b: dict, item: dict, studio: dict, job: dict, log) -> None:
+    """Keep a result that arrived after the item was terminal, beside the verdict, never over it.
+
+    The row stays `error`/`cancelled` and a later reader can see that the worker did produce an
+    artifact — evidence the old code dropped silently whenever the exhausted attempt's job finished
+    moments later. Written once; the ledger save is the durable copy.
+    """
+    if item.get("late_result"):
+        return
+    late = {"studio": studio.get("id"), "studio_job_id": job.get("id"), "state": "done",
+            "finished_at": job.get("finished_at") or time.time(),
+            "recorded_at": time.time()}
+    for field in ("bytes", "sha256", "media_type"):
+        value = job.get(field)
+        if value not in (None, ""):
+            late[field] = value
+    item["late_result"] = late
+    if batches.get(b.get("id")) is b:
+        ledger.save_batch(b)
+    log.info("late result kept beside the verdict: batch %s item %s is %s, job %s finished",
+             b.get("id"), item.get("index"), item.get("state"), job.get("id"))
 
 
 def _watch_abandoned_attempt(client: httpx.AsyncClient, b: dict, item: dict, studio: dict,
@@ -3684,6 +3811,10 @@ def _watch_abandoned_attempt(client: httpx.AsyncClient, b: dict, item: dict, stu
                 if state == "done" and not job.get("error"):
                     if item.get("state") in ("queued", "running") and not b.get("cancelled"):
                         await _adopt_abandoned_attempt(client, b, item, studio, job, body, t_start)
+                    elif item.get("state") in ("error", "cancelled"):
+                        # Terminal is terminal (owner, 2026-11-15): the late answer sits beside the
+                        # verdict as evidence, and never moves the row back to running or done.
+                        _record_late_result(b, item, studio, job, log)
                     return
                 if state in ("queued", "running"):
                     sent = await _signal_worker_cancel(client, probe)
@@ -4494,6 +4625,7 @@ async def _record_worker_success(client: httpx.AsyncClient, b: dict, item: dict,
     # stable asset identity are complete. Pollers must never observe a partial
     # "done" result while the Hub is still finalizing the worker artifact.
     item["state"] = "done"
+    _reset_infra_episode(item)   # a completed generation ends the failure episode
     # A finished item is 100% done, whatever the last progress poll caught. A six-section long-form
     # job reported 0.788 - the value after section five - because the worker finished between polls
     # and the final update was never read, so a completed artifact displayed as four fifths rendered.
@@ -4696,21 +4828,47 @@ def _validate_durable_worker_job(modality: str, item: dict, job: object, *,
         _validate_video_worker_job(item, job, remote=remote)
 
 
+def _recovery_budget_s(b: dict, t_start: float, job: dict | None = None) -> float:
+    """How long a dropped attempt may still be reconciled, from the request's own duration.
+
+    The lane's published deadline (`standalone.deadline_floor_seconds` — the number the Hub both
+    enforces and publishes) raised by the worker's own stated `deadline_s`, less the time the
+    attempt has already spent, plus the reservation grace. Floored at `RECOVERY_WINDOW_S`: a job
+    that has already outlived its ceiling is still given one plain retry window, not zero.
+    """
+    from .. import standalone   # lazy: one deadline table, and standalone imports this module
+    ceiling = float(standalone.deadline_floor_seconds(b.get("modality")))
+    stated = (job or {}).get("deadline_s")
+    if isinstance(stated, (int, float)) and not isinstance(stated, bool) and math.isfinite(stated):
+        ceiling = max(ceiling, float(stated))
+    elapsed = max(0.0, time.time() - float(t_start or time.time()))
+    return max(RECOVERY_WINDOW_S, ceiling + PREFERRED_RESERVATION_GRACE_S - elapsed)
+
+
 async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
                               body: dict, t_start: float) -> bool | dict:
     """Reconcile a worker job after a transport failure.
 
     A generation request is not safely retryable once the worker has accepted
-    it. Keep the Hub lease while reconnecting and poll the original job for a
-    bounded window. Return True after adopting success, the exact terminal job
-    for failure classification, or False when its outcome remains unknown.
+    it. Keep the Hub lease while reconnecting and poll the original job while the
+    worker still reports it unfinished, inside the lane's own expected duration
+    (`_recovery_budget_s`) — a slow TTS request outlives any flat constant. A
+    worker that stops answering for `RECOVERY_UNREACHABLE_S` ends the wait early.
+    Return True after adopting success, the exact terminal job for failure
+    classification, or False when its outcome remains unknown.
     """
     job_id = item.get("studio_job_id")
     if not job_id or b.get("cancelled"):
         return False
-    deadline = time.monotonic() + RECOVERY_WINDOW_S
+    # Two bounds. The lane ceiling is how long a job that the worker still says is unfinished may be
+    # waited on. Anything else (a garbled or invalid answer, a drop) gets only RECOVERY_WINDOW_S
+    # since the worker last said "still working", so a bad receipt is not polled for the full ceiling.
+    ceiling = time.monotonic() + _recovery_budget_s(
+        b, t_start, {"deadline_s": item.get("deadline_s")})
+    working_until = time.monotonic() + RECOVERY_WINDOW_S
+    last_answer = time.monotonic()
     delay = 1.0
-    while time.monotonic() < deadline:
+    while time.monotonic() < min(ceiling, working_until):
         if _expire_genstudio_batch(b):
             await _signal_worker_cancel(client, item)
             return False
@@ -4718,6 +4876,7 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
             url, headers = studio_request(studio, f"/api/generate/jobs/{job_id}")
             jr = await client.get(
                 url, headers=headers, timeout=10.0)
+            last_answer = time.monotonic()
             if jr.status_code >= 400:
                 return False  # 404/4xx means the worker no longer has the job
             if b.get("modality") == "voice":
@@ -4746,6 +4905,8 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
             if state in ("queued", "running", "cancel_requested"):
                 _record_worker_progress(item, job.get("progress"),
                                         job.get("progress_stage"))
+                # The worker says it is still on it: keep waiting, up to the lane ceiling.
+                working_until = time.monotonic() + RECOVERY_WINDOW_S
                 await asyncio.sleep(POLL_S)
                 continue
             if state == "done" and not job.get("error"):
@@ -4763,6 +4924,11 @@ async def _recover_worker_job(client, b: dict, item: dict, studio: dict,
                 # The job finished but its file is unusable: a failed job, not a dropped link.
                 return {**job, "state": "error", "error": str(exc),
                         "error_code": getattr(exc, "error_code", None)}
+            # A worker that has not answered one poll for RECOVERY_UNREACHABLE_S has nothing to
+            # reconcile; the transport branch then names the original error. Anything shorter is
+            # the transient drop this window exists for.
+            if time.monotonic() - last_answer > RECOVERY_UNREACHABLE_S:
+                return False
             # Tailscale/Wi-Fi and a busy worker can briefly drop the HTTP
             # connection. Back off while retaining the same worker lease.
             await asyncio.sleep(delay)
@@ -5257,12 +5423,16 @@ def retry_failed_item(batch_id: str, item_index: int) -> dict:
     item["state"] = "queued"
     item["tries"] = 0
     item["retry_at"] = None
+    # A person asked for this work again: it is a new generation, so it takes a new request id and
+    # must not reattach to the failed job the worker still remembers.
+    _bump_rerun_id(batch, item)
     for field in ("error", "error_code", "finished_at", "studio", "studio_job_id",
                   "worker_id", "worker_artifact_url", "machine", "recovery",
                   "model_revision", "runtime_revision", "worker_accepted_params",
                   "cancel_signal_sent_at", "cancel_error", "artifact_path",
                   "artifact_url", "asset_id", "progress", "progress_stage",
-                  "last_progress_at"):
+                  "last_progress_at", "terminal_clause", "late_result",
+                  "infra_failures", "infra_failure_started_at"):
         item.pop(field, None)
     batch["finished_at"] = None
     batch["done_notified"] = False
@@ -6084,6 +6254,14 @@ async def _dispatch_loop():
                     # is the last input: a reference (edit) item asks for the model's edit
                     # floors, which are the measured ones for that lane.
                     candidate_mode = _item_mode(queued[compatible_index])
+                    # ── fleet disk governor ──
+                    # The same host snapshot that carries free memory also carries the Mac's own
+                    # disk verdict (`disk_governor.snapshot`, published on /api/hub/resources).
+                    # A Mac whose output storage is in the governor's stop/red tier cannot take
+                    # another job: skip it here, before any attempt, instead of spending one on a
+                    # worker refusal and learning it after the fact.
+                    if not _disk_allows(b, studio, trace_candidates):
+                        continue
                     mem = _admission_requirements(b["model"], entry, mode=candidate_mode)
                     reserve = 0.0
                     if mem is not None:
@@ -6395,6 +6573,36 @@ def _clear_worker_attempt_evidence(item: dict) -> None:
     for field in _ATTEMPT_EVIDENCE_FIELDS:
         item.pop(field, None)
     item["error"] = None
+
+
+def _reference_refusal_verdict(item: dict, rejection: BaseException, reason: str) -> str:
+    """What a refused Voice-reference upload means: ``"raise"`` (the caller's wait) or ``"terminal"``.
+
+    Two refusals are not about the reference at all and must reach the handler's wait branches:
+
+    * **A reserved Mac** answered its lease before its worker saw the reference — the same 409 the
+      generate POST meets, so the same brief wait and the try given back (2026-10-09: 276 attempts
+      overnight without it).
+    * **A full disk.** **Same refusal, two verdicts (fixed 2026-11-16):** a full Trash Folder used to
+      become a terminal `VOICE_REFERENCE_REJECTED` here while the generate path treats the identical
+      answer as a 300 s disk-full wait. The terminal verdict spent a Gateway attempt on a Mac that
+      could not have taken the job and kept that Mac in the pool.
+
+    Anything else keeps the worker's own reason. Until that existed the refusal was discarded, the
+    job accepted with no reference attached, and the operator saw only "Voice cloning needs a
+    reference voice" three retries later.
+    """
+    code = getattr(rejection, "error_code", None)
+    if _is_machine_reservation_refusal(rejection):
+        item["error_code"] = _sanitize_public_error_code(code)
+        return "raise"
+    if _is_disk_full_refusal(rejection):
+        item["error_code"] = _sanitize_public_error_code(code or "OUTPUT_STORAGE_BLOCKED")
+        return "raise"
+    item["state"] = "error"
+    item["error_code"] = "VOICE_REFERENCE_REJECTED"
+    item["error"] = f"the Voice worker rejected the reference: {reason}"
+    return "terminal"
 
 
 def _worker_reason(response: httpx.Response) -> str:
@@ -6779,23 +6987,8 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             )
             if r.status_code >= 400:
                 rejection = _worker_http_error(r)
-                if _is_machine_reservation_refusal(rejection):
-                    # The serving Mac's lease answered before its worker saw the reference: the
-                    # same 409 MACHINE_BUSY the generate POST below meets, so the same wait (the
-                    # `_is_machine_reservation_refusal` branch of the handler) - queued, that Mac
-                    # avoided briefly, the try given back. 2026-10-09: 276 attempts overnight.
-                    item["error_code"] = _sanitize_public_error_code(rejection.error_code)
+                if _reference_refusal_verdict(item, rejection, _worker_reason(r)) == "raise":
                     raise rejection
-                # The worker refused the reference. Until this check existed the refusal was
-                # discarded, the job was accepted anyway with no reference attached, and the
-                # operator saw only "Voice cloning needs a reference voice or private reference
-                # upload" three retries later - or the 502 "worker artifact reference is
-                # invalid" from a job that never produced anything. Surface the worker's own
-                # reason instead: it names the actual cause, such as a model whose audited
-                # reference contract is not installed.
-                item["state"] = "error"
-                item["error_code"] = "VOICE_REFERENCE_REJECTED"
-                item["error"] = f"the Voice worker rejected the reference: {_worker_reason(r)}"
                 return
             item["voice_reference_asset_id"] = voice_reference_asset_id
         elif refs:
@@ -6852,11 +7045,18 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             except (ValueError, AttributeError):
                 worker_detail = None
             if isinstance(worker_detail, dict) and worker_detail.get("code"):
+                code = str(worker_detail["code"])
+                detail = str(worker_detail.get("detail") or "Voice reference preparation failed.")
+                if _is_disk_full_refusal_text(code, detail):
+                    # The Mac's output storage is full, not the reference bad: wait for space and
+                    # leave that Mac out of selection, exactly as the generate path does.
+                    refusal = RuntimeError(f"HTTP {r.status_code}: {detail}")
+                    refusal.status_code = r.status_code
+                    refusal.error_code = code
+                    raise refusal
                 item["state"] = "error"
-                item["error_code"] = str(worker_detail["code"])
-                item["error"] = str(
-                    worker_detail.get("detail") or "Voice reference preparation failed."
-                )
+                item["error_code"] = code
+                item["error"] = detail
                 return
         if r.status_code >= 400:
             durable_post_rejected = b["modality"] in DURABLE_ASYNC_MODALITIES
@@ -6873,6 +7073,15 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             raise rejection
         if b["modality"] == "voice":
             job = _voice_job_from_response(r)
+            if (isinstance(job, dict) and job.get("state") == "uncertain"
+                    and job.get("error_code") == "EXECUTION_IDENTITY_LOST"):
+                # The id reattached to the job a restarted worker can never resume. That attempt is
+                # dead, so take the explicit re-run id and let the dispatcher send it again.
+                _bump_rerun_id(b, item)
+                error = RuntimeError(
+                    "the Voice worker restarted under this job and never resumes it; re-running it")
+                error.error_code = "WORKER_RESTART_UNCERTAIN"
+                raise error
             _validate_voice_worker_job(item, job)
         else:
             payload = r.json()
@@ -7282,26 +7491,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             # genuine generation errors. The stable worker job id was already
             # reconciled above, so retrying cannot duplicate a known result.
             _mark_machine_failure(studio, message)
-            failures = int(item.get("infra_failures") or 0) + 1
-            started = float(item.get("infra_failure_started_at") or now)
-            item["infra_failures"] = failures
-            item["infra_failure_started_at"] = started
-            item.setdefault("avoid_machines", {})[
-                studio.get("machine", "local")
-            ] = now + FAILED_WORKER_AVOID_S
-            within_window = now - started < INFRA_RETRY_WINDOW_S
-            if failures < MAX_INFRA_TRIES and within_window:
-                item["state"] = "queued"
-                item["error"] = (
-                    f"connection failure {failures}/{MAX_INFRA_TRIES}; "
-                    f"recovering automatically: {message}"
-                )
-                delay_index = min(failures - 1, len(INFRA_RETRY_DELAYS_S) - 1)
-                item["retry_at"] = now + INFRA_RETRY_DELAYS_S[delay_index]
-            else:
-                item["state"] = "error"
-                item["error"] = f"connection recovery exhausted: {message}"
-                item["retry_at"] = None
+            _record_infra_failure(item, studio, message, now)
         elif retryable and item["tries"] < MAX_TRIES and not b["cancelled"]:
             item["state"] = "queued"  # work-stealing retry, possibly elsewhere
             item["error"] = f"try {item['tries']} failed: {message}"
