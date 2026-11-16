@@ -237,6 +237,8 @@ class OverviewShape(Fixture):
         self.assertIn("remote_empty", got)
         self.assertEqual(got["remote_empty"], got["empty"]["remote_empty"])
         self.assertIs(got["allow_remote_empty"], got["remote_empty"]["effective"])
+        # An untouched Mac says this, not a rule's verdict - the normal state on ~50 Macs.
+        self.assertEqual(got["remote_empty"]["source"], "off until you enable it")
 
 
 class FleetFields(unittest.TestCase):
