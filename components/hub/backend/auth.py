@@ -803,6 +803,12 @@ FLEET_ALLOWED = (
     # The Gateway allows the delete only from the owner's own app window. Not in `NODE_ALLOWED`.
     ("GET", r"^/api/hub/fleet/nodes/[^/]+/trash$"),
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/trash/(move-to-macos-trash|delete)$"),
+    # **Empty all trash from the Gateway (owner, 2026-11-16, Studio Hub 0.6.243).** The Hub Trash Folder
+    # and the whole macOS Trash, for good - the owner's one exception, which agents may trigger with the
+    # fleet credential. One Mac, or this Mac and every Mac it controls; each Mac's own "Allow remote
+    # empty" switch can refuse it. Not in `NODE_ALLOWED`: a leaf Mac cannot empty another.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/empty-trash$"),
+    ("POST", r"^/api/hub/fleet/empty-trash$"),
     # **The Render tab's one cross-Mac read (owner, 2026-10-26).** A controller asks each joined
     # Mac for the final renders it ran, which that Mac already recorded, and this is that read.
     # Read-only, bounded, and it grants nothing: the rows are the render lane's own history, the

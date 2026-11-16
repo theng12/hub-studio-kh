@@ -1368,6 +1368,8 @@ struct StudioContent: View {
     /// The Trash Folder's contents are moved to macOS Trash only after this confirmation names the
     /// item count and bytes; macOS Trash still holds them, so it is recoverable, not a delete.
     @State private var confirmingTrashMove = false
+    /// "Empty All Trash" deletes for good, so its dialog names the count, the bytes and what it frees.
+    @State private var confirmingEmptyAll = false
     /// What cleanup would delete under the limits typed in the storage editor; nil while unknown.
     @State private var draftWouldDelete: Int64?
     @State private var draftTrashHandoffDays = 7
@@ -9122,7 +9124,41 @@ struct StudioContent: View {
                  + "after 30 days, which is what stops that Trash from filling the disk.")
                 .font(HubType.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if let allowed = folder.allowRemoteEmpty {
+                Toggle("Allow remote empty", isOn: Binding(
+                    get: { allowed }, set: { value in Task { await workspace.setAllowRemoteEmpty(value) } }))
+                    .toggleStyle(.checkbox).disabled(!connected)
+                Text("Lets the Gateway, and agents with its key, empty this Mac's trash for good. "
+                     + "When it is off, only this window can.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    /// The "Empty All Trash" dialog: each location, what it really frees, and what it cannot touch.
+    static func emptyAllMessage(_ plan: NativeEmptyPreview) -> String {
+        let gb: (Int64) -> String = NativeWorkspaceStore.gigabytes
+        var lines = plan.locations.map { row -> String in
+            let name = row.location == "hub_trash" ? "Hub Trash Folder" : "macOS Trash (\(row.path))"
+            guard let count = row.count, let bytes = row.bytes else {
+                return "\(name): \(row.code == "FULL_DISK_ACCESS_NEEDED" ? "needs Full Disk Access, so it stays" : "cannot be read, so it stays")."
+            }
+            return "\(name): \(count) item\(count == 1 ? "" : "s"), \(gb(bytes))."
+        }
+        let busy = plan.locations.compactMap(\.busyCount).reduce(0, +)
+        lines.append("This cannot be undone. It frees about \(gb(plan.freesBytes))"
+                     + (busy > 0 ? "; \(busy) item\(busy == 1 ? "" : "s") still being written stay." : "."))
+        if let disk = plan.disk {
+            if let free = disk.freeGb {
+                lines.append("Free disk goes from \(String(format: "%.1f", free)) GB to about "
+                             + "\(String(format: "%.1f", free + Double(plan.freesBytes) / 1_000_000_000)) GB.")
+            }
+            let untouched = [disk.swapUsedGb.map { "swap (\(String(format: "%.1f", $0)) GB)" },
+                             disk.otherGb.map { "other files (\(String(format: "%.1f", $0)) GB)" }].compactMap { $0 }
+            if !untouched.isEmpty { lines.append("It does not touch " + untouched.joined(separator: " or ") + ".") }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func memoryStateLabel(_ state: String) -> String {
@@ -9174,6 +9210,28 @@ struct StudioContent: View {
                     } message: {
                         Text("This uses macOS Trash, so anything moved can still be put back. The Trash Folder itself stays; empty macOS Trash when you want the space back.")
                     }
+                if let plan = folder.empty {
+                    HStack {
+                        Button("Empty All Trash…") { confirmingEmptyAll = true }
+                            .disabled(!connected || workspace.emptyingTrash || plan.count == 0)
+                        if workspace.emptyingTrash { ProgressView().controlSize(.small) }
+                    }
+                    .confirmationDialog(
+                        "Empty all trash on this Mac for good?",
+                        isPresented: $confirmingEmptyAll, titleVisibility: .visible) {
+                            Button("Delete \(plan.count) item\(plan.count == 1 ? "" : "s") (\(NativeWorkspaceStore.gigabytes(plan.bytes)))",
+                                   role: .destructive) {
+                                Task { await workspace.emptyAllTrash(expectedCount: plan.count, expectedBytes: plan.bytes) }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text(Self.emptyAllMessage(plan))
+                        }
+                    if let blocked = plan.locations.first(where: { $0.code == "FULL_DISK_ACCESS_NEEDED" }), let detail = blocked.detail {
+                        Text(detail).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 ForEach(folder.roots.filter { !($0.primary ?? false) && $0.count > 0 }) { root in
                     Text("\(root.path): \(root.count) item\(root.count == 1 ? "" : "s"), \(NativeWorkspaceStore.gigabytes(root.bytes))"
                          + (root.crossVolume == true ? " (on another volume; move these from Finder)" : ""))

@@ -1315,8 +1315,10 @@ _CURRENT_JOB_KEYS = ("job_id", "modality", "model", "label", "started_at")
 #: Why a Mac's Studio Hub last stopped, as that Mac recorded it. ``stopped_answering`` is the app's
 #: record of services that were running and went silent (it ends them to start a fresh set); the
 #: app itself did not stop, and the next app stop overwrites the record with its own reason.
+#: ``services_exited`` (0.6.243) is the same for services that exited on their own; its label
+#: carries the exit code or signal.
 LAST_STOP_REASONS = frozenset({"quit", "crashed", "updated", "force_quit", "low_memory", "mac_restarted",
-                              "stopped_answering"})
+                              "stopped_answering", "services_exited"})
 
 
 def last_stop_of(value: object) -> dict[str, Any] | None:

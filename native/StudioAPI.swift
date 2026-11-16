@@ -1839,6 +1839,57 @@ struct NativeTrashFolder: Decodable, Equatable {
     /// fills until the owner empties it by hand. `nil` is a Hub that predates the field - unknown,
     /// never off. The Hub can turn it on and has no route that turns it off.
     let macosTrashAutoEmpty: Bool?
+    /// What "Empty All Trash" would remove now and really free (0.6.243). Nil from an older Hub.
+    let empty: NativeEmptyPreview?
+    /// This Mac's "Allow remote empty" switch (0.6.243): on by default. Nil from an older Hub.
+    let allowRemoteEmpty: Bool?
+}
+
+/// `GET /api/hub/trash`'s `empty`: the Hub Trash Folder and each macOS Trash folder, measured now.
+/// `freesBytes` leaves out items still being written; `blocked` names a folder macOS keeps private.
+struct NativeEmptyPreview: Decodable, Equatable {
+    let count: Int
+    let bytes: Int64
+    let freesBytes: Int64
+    let blocked: [String]
+    let locations: [NativeEmptyLocation]
+    let disk: NativeEmptyDisk?
+}
+
+struct NativeEmptyLocation: Decodable, Equatable, Identifiable {
+    let location: String
+    let path: String
+    let count: Int?
+    let bytes: Int64?
+    let busyCount: Int?
+    let code: String?
+    let detail: String?
+    var id: String { path }
+}
+
+/// The disk use emptying cannot touch, shown so nobody expects it to fix a disk full of swap.
+struct NativeEmptyDisk: Decodable, Equatable {
+    let freeGb: Double?
+    let swapUsedGb: Double?
+    let otherGb: Double?
+}
+
+/// The answer to `POST /api/hub/trash/empty`: this Mac's one row, terminal.
+struct NativeEmptyRun: Decodable, Equatable {
+    let machines: [NativeEmptyMachine]
+}
+
+struct NativeEmptyMachine: Decodable, Equatable {
+    let state: String
+    let reason: String?
+    let freedBytes: Int64?
+    let deletedCount: Int?
+    let leftCount: Int?
+    let leftBytes: Int64?
+}
+
+struct NativeRemoteEmpty: Decodable, Equatable {
+    let allowRemoteEmpty: Bool
 }
 
 /// The answer to `POST /api/hub/macos-trash-auto-empty/enable`: the value **read back** after the write.
@@ -3782,6 +3833,7 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var movingTrash = false
     /// True while the Hub is writing macOS's Trash preference; the button shows a spinner.
     @Published private(set) var turningOnTrashAutoEmpty = false
+    @Published private(set) var emptyingTrash = false
     @Published private(set) var storageNote: String?
     @Published private(set) var savingStorage = false
     /// Measured generation history from the Hub, refreshed on demand.
@@ -7102,6 +7154,53 @@ final class NativeWorkspaceStore: ObservableObject {
         } catch {
             if connectionID == requestConnection {
                 trashNote = Self.actionable(error, action: "Move the Trash Folder to macOS Trash")
+            }
+        }
+    }
+
+    /// Empty the Hub Trash Folder and the macOS Trash for good (`POST /api/hub/trash/empty`, 0.6.243).
+    /// Sends the count and bytes the dialog showed; the Hub measures again and refuses (409) if they
+    /// changed, deleting nothing. The outcome says what was freed and what is left, and why.
+    func emptyAllTrash(expectedCount: Int, expectedBytes: Int64) async {
+        guard let requestConnection = connectionID else { return }
+        emptyingTrash = true
+        trashNote = nil
+        defer { if connectionID == requestConnection { emptyingTrash = false } }
+        do {
+            let answer: NativeEmptyRun = try await sendJSON(
+                ["api", "hub", "trash", "empty"], method: "POST",
+                body: TrashEmptyBody(expectedCount: expectedCount, expectedBytes: expectedBytes))
+            guard connectionID == requestConnection else { return }
+            await refreshTrash()
+            trashNote = answer.machines.first.map(Self.emptyOutcome) ?? "The Hub answered without an outcome."
+        } catch {
+            if connectionID == requestConnection {
+                await refreshTrash()
+                trashNote = Self.actionable(error, action: "Empty all trash")
+            }
+        }
+    }
+
+    static func emptyOutcome(_ row: NativeEmptyMachine) -> String {
+        let freed = "Freed \(gigabytes(row.freedBytes ?? 0)), \(row.deletedCount ?? 0) item\((row.deletedCount ?? 0) == 1 ? "" : "s")."
+        let left = (row.leftCount ?? 0) > 0
+            ? " \(row.leftCount ?? 0) left (\(gigabytes(row.leftBytes ?? 0)))." : ""
+        let why = row.reason.map { " \($0)" } ?? ""
+        return row.state == "emptied" ? freed + left + why : "Not fully emptied. " + freed + left + why
+    }
+
+    /// This Mac's "Allow remote empty" switch (`POST /api/hub/trash/allow-remote-empty`), read back.
+    func setAllowRemoteEmpty(_ enabled: Bool) async {
+        guard let requestConnection = connectionID else { return }
+        trashNote = nil
+        do {
+            let _: NativeRemoteEmpty = try await sendJSON(
+                ["api", "hub", "trash", "allow-remote-empty"], method: "POST", body: RemoteEmptyBody(enabled: enabled))
+            guard connectionID == requestConnection else { return }
+            await refreshTrash()
+        } catch {
+            if connectionID == requestConnection {
+                trashNote = Self.actionable(error, action: "Change Allow remote empty")
             }
         }
     }
@@ -10986,6 +11085,15 @@ private struct HubModelState: Decodable {
     let macosVersion: String?
 }
 private struct EmptyBody: Encodable {}
+
+private struct TrashEmptyBody: Encodable {
+    let expectedCount: Int
+    let expectedBytes: Int64
+}
+
+private struct RemoteEmptyBody: Encodable {
+    let enabled: Bool
+}
 private struct CatalogReferenceAudio: Decodable {
     let declared: Bool?
     let supported: Bool?

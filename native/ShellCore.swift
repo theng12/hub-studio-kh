@@ -1530,6 +1530,10 @@ enum StopReason: String, Equatable {
     /// `recordSilentServices` instead, so the fleet's `last_stop` says "stopped answering" rather
     /// than showing a Mac that is merely offline.
     case stoppedAnswering = "stopped_answering"
+    /// The services exited on their own (a crash, or a kill such as a memory kill) while the app
+    /// stayed up. Written by `recordSilentServices` with the exit code or signal in the label: the
+    /// app never ends here, so without it `last_stop` kept an older app stop (1200, 2026-11-16).
+    case servicesExited = "services_exited"
 
     /// Plain English without a time; the Gateway adds the time in its own time zone.
     func label(relaunched: Bool) -> String {
@@ -1540,6 +1544,7 @@ enum StopReason: String, Equatable {
         case .lowMemory: return "Stopped for low memory"
         case .macRestarted: return "Mac restarted, shut down or lost power"
         case .stoppedAnswering: return "Local services stopped answering"
+        case .servicesExited: return "Local services exited"
         }
     }
 }
@@ -1657,9 +1662,10 @@ enum StopRecord {
     /// hung Hub is the same kind of unexplained outage. The app stays up to restart them, so this
     /// is not an app stop; the next `settle` overwrites it, because that is the newer fact.
     static func recordSilentServices(directory: URL, now: Date = Date(),
-                                     reason: StopReason = .stoppedAnswering) {
+                                     reason: StopReason = .stoppedAnswering, how: String? = nil) {
+        let label = reason.label(relaunched: false) + (how.map { " (\($0))" } ?? "")
         let record: [String: Any] = ["reason": reason.rawValue, "at": now.timeIntervalSince1970,
-                                     "label": reason.label(relaunched: false), "relaunched": false]
+                                     "label": label, "relaunched": false]
         guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
         else { return }
         try? data.write(to: directory.appendingPathComponent(fileName), options: .atomic)

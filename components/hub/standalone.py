@@ -7,6 +7,7 @@ registered by the packaged application.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import hashlib
 import json
@@ -906,6 +907,15 @@ def _summary(batch: dict[str, Any]) -> dict[str, Any]:
     return {**broker.batch_summary(batch), "items": [
         broker.public_item(batch, item) for item in batch["items"]
     ]}
+
+
+#: The fleet-row fields of 0.6.243: both trashes `{count, bytes}`, and where the memory went. Taken from
+#: the Mac's own host snapshot; a Hub that predates them sends none, so the row says None, never 0.
+_TRASH_AND_MEMORY_KEYS = ("hub_trash", "macos_trash", "wired_gb", "compressed_gb", "swap_used_gb", "top_processes")
+
+
+def _trash_and_memory(host: dict[str, Any]) -> dict[str, Any]:
+    return {key: host.get(key) for key in _TRASH_AND_MEMORY_KEYS}
 
 
 def _app_version() -> str:
@@ -2640,6 +2650,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"),
                 "disk": host.get("disk"),
+                **_trash_and_memory(host),
                 "current_job": working_on.get(machine) or (member or {}).get("current_job"),
                 "chip": host.get("chip"),
                 # This Mac's own IPv4 interface addresses (resources.network_addresses), so the
@@ -2699,6 +2710,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "memory_gb": host.get("total_gb"), "available_gb": host.get("available_gb"),
                 "disk_free_gb": host.get("disk_free_gb"),
                 "disk_total_gb": host.get("disk_total_gb"), "disk": host.get("disk"),
+                **_trash_and_memory(host),
                 "current_job": working_on.get(machine) or member.get("current_job"),
                 "chip": host.get("chip"),
                 # This Mac's own IPv4 interface addresses (resources.network_addresses), so the
@@ -4145,6 +4157,142 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             items=body.get("items"), confirm=body.get("confirm"),
             expected_count=body.get("expected_count"), expected_bytes=body.get("expected_bytes")))
 
+    # **Empty all trash (owner, 2026-11-16, Studio Hub 0.6.243).** The Hub Trash Folder and the whole
+    # macOS Trash on a Mac, for good: the one delete an agent may ask for with the fleet credential. Each
+    # Mac answers `machines: [{machine, label, state: emptied|skipped|failed, code, reason, freed_bytes,
+    # deleted_count, left_count, left_bytes, locations}]`; a Mac whose "Allow remote empty" is off is
+    # skipped with its reason (409 REMOTE_EMPTY_OFF on its own route). One audit line per run.
+    EMPTY_TRASH_HUB = "0.6.243"
+
+    def _this_mac() -> tuple[str, str]:
+        from .backend import fleet_nodes as fleet
+        me = fleet.this_machine()
+        return me["id"], me["name"]
+
+    def _empty_row(machine: str, label: str, state: str, *, code: str | None = None, reason: str | None = None,
+                   result: dict | None = None) -> dict[str, Any]:
+        result = result or {}
+        return {"machine": machine, "label": label, "state": state, "code": code, "reason": reason,
+                **{key: result.get(key) for key in ("freed_bytes", "deleted_count", "left_count", "left_bytes")},
+                "locations": result.get("locations")}
+
+    def _empty_here(body: dict[str, Any], *, remote: bool) -> tuple[int, dict[str, Any]]:
+        """Empty this Mac (status, row). `remote` honours its "Allow remote empty" switch."""
+        machine, label = _this_mac()
+        if remote and not output_storage.remote_empty_allowed():
+            return 409, _empty_row(machine, label, "skipped", code="REMOTE_EMPTY_OFF",
+                                   reason=output_storage.REMOTE_OFF_DETAIL)
+        try:
+            result = output_storage.empty_all(expected_count=body.get("expected_count"),
+                                              expected_bytes=body.get("expected_bytes"))
+        except output_storage.TrashRefused as refusal:
+            return refusal.status, _empty_row(machine, label, "failed", code=refusal.body["code"],
+                                              reason=refusal.body["detail"]) | {
+                key: refusal.body[key] for key in ("count", "bytes") if key in refusal.body}
+        return 200, _empty_row(machine, label, "emptied" if result["ok"] else "failed",
+                               code=result["code"], reason=result["detail"], result=result)
+
+    def _empty_envelope(rows: list[dict[str, Any]], status: int = 200, **extra) -> JSONResponse:
+        ok = all(row["state"] != "failed" for row in rows)
+        first = next((row for row in rows if row["state"] != "emptied"), None)
+        body = {"ok": ok and status == 200, "machines": rows, "hub_version": _app_version(), **extra}
+        if status != 200 and first:
+            body |= {"code": first["code"], "detail": first["reason"]}
+        return JSONResponse(body, status_code=status)
+
+    def _relayed_rows(node_id: str, label: str, answer: dict[str, Any] | None,
+                      error: "Exception | None") -> list[dict[str, Any]]:
+        """A node's answer (or its relay error) as its rows; an offline or older Mac is skipped, with why."""
+        from .backend import fleet_nodes as fleet
+        if isinstance(error, fleet.StartupRelayError):
+            answer, code = error.body, str(error.body.get("code") or "")
+            if isinstance(answer.get("machines"), list) and answer["machines"]:
+                return answer["machines"]
+            if answer.get("queued"):
+                return [_empty_row(node_id, label, "skipped", code="QUEUED", reason=str(answer.get("detail")))]
+            if code == "NODE_REFUSED" or error.status in (404, 405):
+                return [_empty_row(node_id, label, "skipped", code="HUB_TOO_OLD",
+                                   reason=f"That Mac needs Studio Hub {EMPTY_TRASH_HUB} to empty its trash "
+                                          "from the Gateway (or it holds a different Fleet token).")]
+            if code in ("NODE_UNREACHABLE", "UNKNOWN_NODE"):
+                return [_empty_row(node_id, label, "skipped", code=code, reason=str(answer.get("detail")))]
+            return [_empty_row(node_id, label, "failed", code=code or "RELAY_FAILED",
+                               reason=str(answer.get("detail") or f"that Mac answered HTTP {error.status}"))]
+        if error is not None:
+            return [_empty_row(node_id, label, "failed", code="RELAY_FAILED", reason=str(error)[:300])]
+        rows = (answer or {}).get("machines")
+        return rows if isinstance(rows, list) and rows else [
+            _empty_row(node_id, label, "skipped", code="NO_ANSWER", reason="that Mac answered without naming itself")]
+
+    async def _relay_empty(node_id: str, label: str, body: dict[str, Any]) -> list[dict[str, Any]]:
+        from .backend import fleet_nodes as fleet
+        try:
+            answer = await fleet.relay_model(
+                node_id, "POST", "/empty-trash", payload=body, timeout=httpx.Timeout(900.0, connect=4.0),
+                feature=f"emptying its trash from the Gateway (Studio Hub {EMPTY_TRASH_HUB})")
+        except Exception as error:   # noqa: BLE001 - every Mac ends with a row, never a lost run
+            return _relayed_rows(node_id, label, None, error)
+        return _relayed_rows(node_id, label, answer, None)
+
+    async def _empty_body(request: Request) -> dict[str, Any] | None:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {} if not await request.body() else None
+        return body if isinstance(body, dict) else None
+
+    def _audit_empty(actor: str, scope: str, rows: list[dict[str, Any]]) -> None:
+        startup_control.audit("trash_empty", {
+            "actor": actor, "scope": scope, "machines": len(rows),
+            **{state: sum(1 for row in rows if row["state"] == state) for state in ("emptied", "skipped", "failed")},
+            "freed_bytes": sum(row.get("freed_bytes") or 0 for row in rows),
+            "deleted_count": sum(row.get("deleted_count") or 0 for row in rows)})
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/empty-trash")
+    async def fleet_node_empty_trash(node_id: str, request: Request) -> JSONResponse:
+        """Empty one Mac's trash (this one as `local` or its id, or a joined node through its controller)."""
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        body = await _empty_body(request)
+        if body is None:
+            return JSONResponse({"ok": False, "code": "BAD_BODY",
+                                 "detail": "The request body must be a JSON object."}, status_code=400)
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            status, row = await run_in_threadpool(_empty_here, body, remote=True)
+            rows = [row]
+        else:
+            if control_plane.load_settings().get("role") != "controller":
+                raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+            node = fleet._read().get(wanted) or {}
+            rows = await _relay_empty(wanted, str(node.get("name") or node.get("label") or wanted), body)
+            status = 200
+        _audit_empty(actor, wanted, rows)
+        return _empty_envelope(rows, status)
+
+    @app.post("/api/hub/fleet/empty-trash")
+    async def fleet_empty_trash(request: Request) -> JSONResponse:
+        """Empty this Mac and, on a controller, every joined Mac - one row per Mac, each terminal."""
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        actor = str(hub_auth._fleet_actor(request).get("kind") or "hub")
+        body = await _empty_body(request)
+        if body is None:
+            return JSONResponse({"ok": False, "code": "BAD_BODY",
+                                 "detail": "The request body must be a JSON object."}, status_code=400)
+        # Expected figures belong to one Mac's window; across Macs each one measures for itself.
+        _status, here = await run_in_threadpool(_empty_here, {}, remote=True)
+        rows = [here]
+        if control_plane.load_settings().get("role") == "controller":
+            nodes = fleet._read()
+            answers = await asyncio.gather(*(
+                _relay_empty(node_id, str(node.get("name") or node.get("label") or node_id), {})
+                for node_id, node in nodes.items()))
+            rows += [row for answer in answers for row in answer]
+        _audit_empty(actor, "all", rows)
+        return _empty_envelope(rows)
+
     # **macOS's own Trash setting (owner request 2026-10-19).** Finder > Settings > Advanced >
     # "Remove items from the Trash after 30 days" is `com.apple.finder FXRemoveOldTrashItems`. Every
     # retirement this Hub makes ends in macOS Trash, so a Mac without it fills its disk until someone
@@ -4219,6 +4367,30 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except output_storage.TrashRefused as refusal:
             return JSONResponse(refusal.body, status_code=refusal.status)
         return JSONResponse({"ok": True, **result})
+
+    @app.post("/api/hub/trash/empty")
+    async def hub_trash_empty(request: Request) -> JSONResponse:
+        """This Mac's own window: body `{expected_count, expected_bytes}` as its dialog showed them.
+        Re-measured here; a difference is 409 TRASH_CHANGED and nothing is deleted. Not a fleet route."""
+        body = await _empty_body(request)
+        if body is None or body.get("expected_count") is None or body.get("expected_bytes") is None:
+            return JSONResponse({"ok": False, "code": "EXPECTED_REQUIRED",
+                                 "detail": "Send the expected_count and expected_bytes the dialog showed."},
+                                status_code=400)
+        status, row = await run_in_threadpool(_empty_here, body, remote=False)
+        _audit_empty("owner", "local", [row])
+        return _empty_envelope([row], status)
+
+    @app.post("/api/hub/trash/allow-remote-empty")
+    async def hub_trash_allow_remote_empty(request: Request) -> JSONResponse:
+        """Body `{"enabled": bool}`: this Mac's "Allow remote empty" switch. Its own window only."""
+        body = await _empty_body(request)
+        try:
+            enabled = output_storage.set_remote_empty_allowed((body or {}).get("enabled"))
+        except output_storage.TrashRefused as refusal:
+            return JSONResponse(refusal.body, status_code=refusal.status)
+        startup_control.audit("trash_remote_empty", {"enabled": enabled})
+        return JSONResponse({"ok": True, "allow_remote_empty": enabled})
 
     @app.post("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}/share")
     async def fleet_node_model_share(node_id: str, package_id: str, request: Request) -> JSONResponse:

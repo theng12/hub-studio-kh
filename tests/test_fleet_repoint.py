@@ -905,8 +905,9 @@ class NativeRepointWiringTests(unittest.TestCase):
         body = self.API[self.API.index("func followHubMembershipIfMoved()"):
                         self.API.index("static func membershipAddressesDiffer")]
         self.assertIn("fleetCredentialOrigin == \"adopted\"", body)
-        # The four fields of the membership that must be carried across untouched.
-        for field in ("token:", "boundHosts:", "nodeCredential:", "releasePublisherKey:"):
+        # The fields of the membership that must be carried across untouched. `releasePublisherKey`
+        # left with the in-app self-update in 0.6.233 (test_native_operator_surfaces checks it is gone).
+        for field in ("token:", "boundHosts:", "nodeCredential:"):
             self.assertIn(field, body, f"the membership rebuild drops {field}")
         # The preferences write, so the move survives a restart, and the fences, so an attempt
         # already in flight cannot write the old address back.

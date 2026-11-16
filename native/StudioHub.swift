@@ -541,11 +541,13 @@ final class StudioController: ObservableObject {
         canForceStop = false
         workspace.disconnect()
         if !expectedStop {
-            // The only record of how the services ended: the app stays up, so `last-stop.json` (an
-            // app stop) is untouched, and this status line is replaced by the restart. On 2026-10-05
-            // a controller's services restarted at 22:14 and nothing said whether it was a crash
-            // (code), a kill such as a memory kill (signal 9) or an abort (signal 6).
+            // The app stays up, so no app stop will be settled: the fleet's `last_stop` is written
+            // here, or it keeps an older app stop (1200 read "Quit" from the day before while its
+            // services went up and down). On 2026-10-05 a controller's services restarted at 22:14
+            // and nothing said whether it was a crash (code), a memory kill (signal 9) or an abort (6).
             let how = process.terminationReason == .uncaughtSignal ? "signal \(code)" : "exit code \(code)"
+            StopRecord.recordSilentServices(directory: configuration.dataDirectory, now: now(),
+                                            reason: .servicesExited, how: how)
             let stamp = ISO8601DateFormatter().string(from: Date())
             try? logHandle?.write(contentsOf: Data(
                 "[app \(stamp)] the local services stopped unexpectedly (\(how)); restarting them\n".utf8))

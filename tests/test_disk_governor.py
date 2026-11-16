@@ -420,8 +420,9 @@ class SnapshotTests(Fixture):
                     "last_sweep", "warnings"):
             self.assertIn(key, disk)
         self.assertEqual(disk["swap_used_gb"], 3.5)
-        self.assertEqual(set(disk["consumers"]), {"outputs_gb", "trash_gb", "logs_gb", "apps_gb", "models_gb", "other_gb"})
-        self.assertEqual({item["name"] for item in disk["top"]}, {"outputs", "trash", "logs", "apps", "models", "other"})
+        self.assertEqual(set(disk["consumers"]), {"outputs_gb", "trash_gb", "macos_trash_gb", "logs_gb", "apps_gb", "models_gb",
+                                                   "swap_gb", "other_gb"})
+        self.assertEqual({item["name"] for item in disk["top"]}, {"outputs", "trash", "macos_trash", "logs", "apps", "models", "swap", "other"})
         self.assertEqual([item["gb"] for item in disk["top"]], sorted((i["gb"] for i in disk["top"]), reverse=True))
         self.assertEqual(set(disk["last_sweep"]), {"at", "reclaimed_gb", "actions"})
 

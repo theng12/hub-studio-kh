@@ -260,6 +260,9 @@ struct NativeLifecycleTests {
                 return pid != previousPID && controller.running
             }
             requireLifecycle(restarted, "unhealthy service did not use its one restart")
+            // Services that exited on their own leave the fleet's `last_stop` (0.6.243).
+            requireLifecycle(lastStopReason(root: temporary.appendingPathComponent("unhealthy")) == "services_exited",
+                "an unexpected service exit must be recorded as services_exited")
             previousPID = readyPID(controller)
             server.resetHealthReadCount()
             let secondUnhealthy = await waitUntil {

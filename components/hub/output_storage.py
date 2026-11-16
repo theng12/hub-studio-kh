@@ -95,19 +95,24 @@ def trash_stats() -> dict:
     return dict(_TRASH_STATS)
 
 
+def _managed_roots() -> list[str]:
+    """Every output root the Hub has written to, from its index."""
+    if not ledger.DB_FILE.exists():
+        return []
+    try:
+        with ledger._conn() as conn:
+            return [row[0] for row in conn.execute("SELECT DISTINCT managed_root FROM output_files") if row[0]]
+    except sqlite3.Error:
+        return []
+
+
 def _trash_bases() -> list[Path]:
     """Every Trash Folder: the Hub's, and the one inside each managed root that needed its own."""
     bases = [trash_root()]
-    if ledger.DB_FILE.exists():
-        try:
-            with ledger._conn() as conn:
-                roots = [row[0] for row in conn.execute("SELECT DISTINCT managed_root FROM output_files")]
-        except sqlite3.Error:
-            roots = []
-        for root in roots:
-            fallback = Path(root) / FALLBACK_TRASH_NAME
-            if fallback.is_dir() and not fallback.is_symlink():
-                bases.append(fallback)
+    for root in _managed_roots():
+        fallback = Path(root) / FALLBACK_TRASH_NAME
+        if fallback.is_dir() and not fallback.is_symlink():
+            bases.append(fallback)
     return bases
 
 
@@ -512,6 +517,9 @@ def trash_overview(now: float | None = None) -> dict:
     result["roots"] = roots
     # macOS's own Trash setting, beside the folder it feeds: the app shows it and offers to turn it on.
     result["macos_trash_auto_empty"] = finder_trash_auto_empty()
+    # "Empty all trash" (0.6.243): what it would remove now and really free, and this Mac's remote switch.
+    result["empty"] = empty_preview()
+    result["allow_remote_empty"] = result["empty"]["allow_remote_empty"]
     return result
 
 
@@ -725,6 +733,270 @@ def trash_delete(*, items: object, confirm: object, expected_count: object, expe
                 len(deleted), freed, len(failed))
     return {"ok": not failed, "deleted": deleted, "deleted_count": len(deleted), "freed_bytes": freed,
             "failed": failed}
+
+
+# ── Empty all trash (owner, 2026-11-16) ─────────────────────────────────────────────────────────────
+# The owner's one exception to "only the owner deletes": the Hub Trash Folder and the whole macOS Trash
+# on this Mac are removed for good - from this Mac's window, or from the Gateway by the owner or an
+# agent unless this Mac's "Allow remote empty" switch is off. Only what was just measured is touched;
+# an item changed in the last `QUIET_S` seconds may still be being written and stays. Reading the macOS
+# Trash needs Full Disk Access; without it macOS refuses silently (EPERM, never a prompt) and that is
+# the named failure.
+
+TRASH_SETTINGS_FILE = "trash-settings.json"
+QUIET_S = 60.0
+FDA_NEEDED = "FULL_DISK_ACCESS_NEEDED"
+FDA_DETAIL = ("macOS keeps the Trash private, so Hub Studio KH needs Full Disk Access to empty it. Turn it on "
+              "in System Settings > Privacy & Security > Full Disk Access, then try again.")
+REMOTE_OFF_DETAIL = "Allow remote empty is off on this Mac, so its trash can only be emptied from its own Hub window."
+_EMPTY = threading.Lock()                           # one empty at a time
+_PREVIEW: tuple[float, dict | None] = (0.0, None)
+
+
+def remote_empty_allowed() -> bool:
+    """This Mac's "Allow remote empty" switch: on unless it was turned off here."""
+    try:
+        return json.loads((ledger.DATA_DIR / TRASH_SETTINGS_FILE).read_text()).get("allow_remote_empty") is not False
+    except (OSError, ValueError, AttributeError):
+        return True
+
+
+def set_remote_empty_allowed(enabled: object) -> bool:
+    if not isinstance(enabled, bool):
+        raise TrashRefused(400, "BAD_VALUE", "enabled must be true or false.")
+    path = ledger.DATA_DIR / TRASH_SETTINGS_FILE
+    temporary = path.with_name(path.name + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary.write_text(json.dumps({"allow_remote_empty": enabled}))
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    return enabled
+
+
+def macos_trash_dirs() -> list[Path]:
+    """`~/.Trash`, and `.Trashes/<uid>` on every other volume the Hub writes output to."""
+    home = Path.home()
+    dirs = [home / ".Trash"]
+    try:
+        seen = {os.stat(home).st_dev}
+    except OSError:
+        seen = set()
+    for root in (str(ledger.DATA_DIR), *_managed_roots()):
+        try:
+            path = Path(os.path.realpath(root))
+            device = os.stat(path).st_dev
+            if device in seen:
+                continue
+            seen.add(device)
+            while path != path.parent and os.stat(path.parent).st_dev == device:
+                path = path.parent
+        except OSError:
+            continue
+        dirs.append(path / ".Trashes" / str(os.getuid()))
+    return dirs
+
+
+def _location(kind: str, path: Path, **fields) -> dict:
+    return {"location": kind, "path": str(path), "count": 0, "bytes": 0, "busy_count": 0, "busy_bytes": 0,
+            "code": None, "detail": None, "items": []} | fields
+
+
+def _hub_location(now: float) -> dict:
+    from . import disk_governor
+    found = _trash_items()
+    return _location("hub_trash", trash_root(), count=len(found),
+                     bytes=sum(disk_governor.cached_physical(path, now) for _item, path in found))
+
+
+def _macos_location(base: Path, now: float) -> dict:
+    """One macOS Trash folder: its top-level items with physical bytes and a stamp, or why it cannot be read."""
+    from . import disk_governor
+    try:
+        names = sorted(os.listdir(base))
+    except FileNotFoundError:
+        return _location("macos_trash", base)       # no Trash on that volume yet: empty, not a failure
+    except PermissionError:
+        return _location("macos_trash", base, count=None, bytes=None, code=FDA_NEEDED, detail=FDA_DETAIL)
+    except OSError as error:
+        return _location("macos_trash", base, count=None, bytes=None, code="TRASH_UNREADABLE",
+                         detail=f"Could not read {base}: {error.strerror or error}")
+    row = _location("macos_trash", base)
+    for name in names:
+        if name == ".DS_Store":                     # Finder's own view file, recreated at once
+            continue
+        try:
+            info = os.lstat(base / name)
+        except OSError:
+            continue
+        size = disk_governor.cached_physical(base / name, now)
+        # shortcut: "still being written" is the item's own change time, not every file inside it;
+        # items reach the Trash by rename, which stamps the item itself.
+        busy = now - max(info.st_mtime, info.st_ctime) < QUIET_S
+        row["items"].append({"name": name, "bytes": size, "stamp": (info.st_ino, info.st_mtime_ns), "busy": busy})
+        row["count"] += 1
+        row["bytes"] += size
+        if busy:
+            row["busy_count"] += 1
+            row["busy_bytes"] += size
+    return row
+
+
+def _plan(locations: list[dict], now: float) -> dict:
+    readable = [row for row in locations if row["code"] is None]
+    total = sum(row["bytes"] for row in readable)
+    return {"locations": [{k: v for k, v in row.items() if k != "items"} for row in locations],
+            "count": sum(row["count"] for row in readable), "bytes": total,
+            "frees_bytes": total - sum(row["busy_bytes"] for row in readable),
+            "blocked": [row["code"] for row in locations if row["code"]], "measured_at": now}
+
+
+def empty_preview(max_age: float = 0.0) -> dict:
+    """What "Empty all trash" would remove on this Mac now, per location, and how much it really frees
+    (physical bytes, minus items still being written), beside the disk use it cannot touch."""
+    global _PREVIEW
+    if max_age and _PREVIEW[1] is not None and time.monotonic() - _PREVIEW[0] < max_age:
+        return _PREVIEW[1]
+    from . import disk_governor
+    now = time.time()
+    plan = _plan([_hub_location(now), *(_macos_location(base, now) for base in macos_trash_dirs())], now)
+    disk = disk_governor.snapshot()
+    plan["disk"] = {"free_gb": disk.get("free_gb"), "swap_used_gb": disk.get("swap_used_gb"),
+                    "other_gb": (disk.get("consumers") or {}).get("other_gb")}
+    plan["allow_remote_empty"] = remote_empty_allowed()
+    _PREVIEW = (time.monotonic(), plan)
+    return plan
+
+
+def trash_sizes(max_age: float = 60.0) -> dict:
+    """`hub_trash` and `macos_trash` as `{count, bytes}` for the fleet row; the macOS one is None figures
+    with its `code` when it cannot be read, never 0."""
+    plan = empty_preview(max_age)
+    hub = next(row for row in plan["locations"] if row["location"] == "hub_trash")
+    macos = [row for row in plan["locations"] if row["location"] == "macos_trash"]
+    blocked = next((row for row in macos if row["code"]), None)
+    return {"hub_trash": {"count": hub["count"], "bytes": hub["bytes"]},
+            "macos_trash": ({"count": None, "bytes": None, "code": blocked["code"]} if blocked else
+                            {"count": sum(r["count"] for r in macos), "bytes": sum(r["bytes"] for r in macos)})}
+
+
+def _outcome(row: dict, *, freed: int, deleted: int, left_count: int | None, left_bytes: int | None,
+             code: str | None = None, detail: str | None = None) -> dict:
+    return {"location": row["location"], "path": row["path"], "state": "failed" if code else "emptied",
+            "code": code, "detail": detail, "freed_bytes": freed, "deleted_count": deleted,
+            "left_count": left_count, "left_bytes": left_bytes}
+
+
+def _empty_hub(row: dict) -> dict:
+    """The Hub Trash Folder through `trash_delete`, with the figures just measured."""
+    try:
+        done = trash_delete(items="all", confirm=True, expected_count=row["count"], expected_bytes=row["bytes"])
+    except TrashRefused as refusal:
+        if refusal.body["code"] == "TRASH_CHANGED":
+            raise                                   # it runs first, so nothing was deleted anywhere
+        return _outcome(row, freed=0, deleted=0, left_count=row["count"], left_bytes=row["bytes"],
+                        code=refusal.body["code"], detail=refusal.body["detail"])
+    left = _hub_location(time.time())
+    failed = done["failed"]
+    return _outcome(row, freed=done["freed_bytes"], deleted=done["deleted_count"], left_count=left["count"],
+                    left_bytes=left["bytes"], code="DELETE_REFUSED" if failed else None,
+                    detail=(f"{len(failed)} item{'s' if len(failed) != 1 else ''} could not be deleted: "
+                            f"{failed[0]['error']}") if failed else None)
+
+
+def _empty_macos(row: dict) -> dict:
+    """One macOS Trash folder: each measured, quiet, unchanged top-level item removed (a link itself)."""
+    from . import disk_governor
+    base = Path(row["path"])
+    if row["code"]:
+        return _outcome(row, freed=0, deleted=0, left_count=None, left_bytes=None, code=row["code"], detail=row["detail"])
+    freed = deleted = 0
+    busy, errors, kept = 0, [], []
+    if row["items"]:
+        try:
+            fd = os.open(base, _OPEN_DIR)
+        except OSError as error:
+            code = FDA_NEEDED if isinstance(error, PermissionError) else "TRASH_UNREADABLE"
+            return _outcome(row, freed=0, deleted=0, left_count=row["count"], left_bytes=row["bytes"], code=code,
+                            detail=FDA_DETAIL if code == FDA_NEEDED else f"Could not open {base}: {error.strerror}")
+        try:
+            for item in row["items"]:
+                try:
+                    info = os.lstat(item["name"], dir_fd=fd)
+                except FileNotFoundError:
+                    continue                        # someone else emptied it meanwhile
+                if item["busy"] or (info.st_ino, info.st_mtime_ns) != item["stamp"]:
+                    busy += 1                       # still being written, or changed since it was measured
+                    kept.append(item)
+                    continue
+                try:
+                    _purge_entry(item["name"], fd)
+                except OSError as error:
+                    errors.append(f"{item['name']}: {error.strerror or error}")
+                    kept.append(item)
+                else:
+                    freed += item["bytes"]
+                    deleted += 1
+        finally:
+            os.close(fd)
+    now, left_count, left_bytes = time.time(), 0, 0
+    for item in kept:
+        path = base / item["name"]
+        if not os.path.lexists(path):
+            freed, deleted = freed + item["bytes"], deleted + 1
+            continue
+        remaining = disk_governor.cached_physical(path, now)
+        freed += max(0, item["bytes"] - remaining)  # a refused folder may be partly gone
+        left_count, left_bytes = left_count + 1, left_bytes + remaining
+    if errors:
+        return _outcome(row, freed=freed, deleted=deleted, left_count=left_count, left_bytes=left_bytes,
+                        code="DELETE_REFUSED",
+                        detail=f"macOS refused to delete {len(errors)} item{'s' if len(errors) != 1 else ''} "
+                               f"(first: {errors[0]}). A locked item stays until it is unlocked in Finder.")
+    return _outcome(row, freed=freed, deleted=deleted, left_count=left_count, left_bytes=left_bytes,
+                    detail=f"Left {busy} item(s) changed in the last minute: they may still be being written."
+                    if busy else None)
+
+
+def empty_all(*, expected_count: object = None, expected_bytes: object = None) -> dict:
+    """Empty the Hub Trash Folder and the macOS Trash on this Mac, for good.
+
+    Measured here first. With `expected_count`/`expected_bytes` (what the window showed) a different
+    measure is 409 `TRASH_CHANGED` and nothing is deleted. Answers each location's freed bytes and
+    items and what is left, or its named failure; `ok` is false when any location failed."""
+    global _PREVIEW
+    given = (expected_count is not None, expected_bytes is not None)
+    if given[0] != given[1] or any(value is not None and (type(value) is not int or value < 0)
+                                   for value in (expected_count, expected_bytes)):
+        raise TrashRefused(400, "EXPECTED_REQUIRED",
+                           "expected_count and expected_bytes go together: the count and bytes that were shown.")
+    if not _EMPTY.acquire(blocking=False):
+        raise TrashRefused(409, "EMPTY_RUNNING", "This Mac is already emptying its trash; look again when it ends.")
+    try:
+        now = time.time()
+        hub = _hub_location(now)
+        macos = [_macos_location(base, now) for base in macos_trash_dirs()]
+        plan = _plan([hub, *macos], now)
+        if given[0] and (plan["count"], plan["bytes"]) != (expected_count, expected_bytes):
+            raise TrashRefused(409, "TRASH_CHANGED",
+                               f"The trash now holds {plan['count']} items ({plan['bytes']} bytes), not the "
+                               f"{expected_count} items ({expected_bytes} bytes) shown. Nothing was deleted.",
+                               count=plan["count"], bytes=plan["bytes"])
+        rows = [_empty_hub(hub), *(_empty_macos(row) for row in macos)]
+    finally:
+        _PREVIEW = (0.0, None)
+        _EMPTY.release()
+
+    def total(field: str) -> int | None:
+        values = [row[field] for row in rows]
+        return None if any(v is None for v in values) else sum(values)
+
+    failed = [row for row in rows if row["code"]]
+    log.warning("Empty all trash: freed %d bytes, %d items; %d location(s) failed",
+                sum(r["freed_bytes"] for r in rows), sum(r["deleted_count"] for r in rows), len(failed))
+    return {"ok": not failed, "code": failed[0]["code"] if failed else None,
+            "detail": failed[0]["detail"] if failed else None, "locations": rows,
+            "freed_bytes": sum(r["freed_bytes"] for r in rows), "deleted_count": sum(r["deleted_count"] for r in rows),
+            "left_count": total("left_count"), "left_bytes": total("left_bytes")}
 
 
 def _to_trash(path: Path, group, file_id: int, now: float, managed_root: object = None) -> bool:

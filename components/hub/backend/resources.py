@@ -163,6 +163,15 @@ def host_stats() -> dict:
         stats["disk"] = disk_governor.snapshot(DATA_DIR)
     except Exception:
         stats["disk"] = None
+    # Where the memory went (0.6.243), display only: wired, compressed, swap used and the three
+    # biggest processes. A Hub that predates them sends none, which reads "not reported", never 0.
+    stats.update(memory_detail(vm))
+    try:
+        # The Hub Trash Folder and the whole macOS Trash, each `{count, bytes}` (0.6.243).
+        from components.hub import output_storage
+        stats.update(output_storage.trash_sizes())
+    except Exception:
+        stats["hub_trash"] = stats["macos_trash"] = None
     speed = measured_render_speed()
     if speed is not None:
         stats["render_speed"] = speed
@@ -174,6 +183,42 @@ def host_stats() -> dict:
     except Exception:
         stats["connection"] = None
     return stats
+
+
+_TOP_TTL_S = 30.0
+_top_cache: tuple[float, list | None] = (0.0, None)
+
+
+def top_processes(count: int = 3, *, max_age: float = _TOP_TTL_S) -> list[dict] | None:
+    """The `count` processes using the most memory (resident), as `{name, gb}`; another user's
+    process macOS will not show is skipped. Cached: the peer probe is read every few seconds."""
+    global _top_cache
+    if _top_cache[1] is not None and time.monotonic() - _top_cache[0] < max_age:
+        return _top_cache[1]
+    rows = []
+    try:
+        for process in psutil.process_iter(["name", "memory_info"]):
+            info = process.info.get("memory_info")
+            if info is not None:
+                rows.append({"name": process.info.get("name") or "?", "gb": round(info.rss / 1e9, 2)})
+    except Exception:
+        return None
+    top = sorted(rows, key=lambda row: row["gb"], reverse=True)[:count]
+    _top_cache = (time.monotonic(), top)
+    return top
+
+
+def memory_detail(vm) -> dict:
+    """`wired_gb`, `compressed_gb`, `swap_used_gb` and `top_processes`, each None when unreadable."""
+    compressed = host_memory._sysctl("vm.compressor_bytes_used")
+    try:
+        swap = round(psutil.swap_memory().used / 1e9, 2)
+    except Exception:
+        swap = None
+    wired = getattr(vm, "wired", None)
+    return {"wired_gb": round(wired / 1e9, 2) if wired is not None else None,
+            "compressed_gb": round(compressed / 1e9, 2) if compressed is not None else None,
+            "swap_used_gb": swap, "top_processes": top_processes()}
 
 
 #: How long a measured render speed is reused before the history is read again. This route is the

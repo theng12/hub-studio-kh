@@ -638,6 +638,25 @@ require(silentJSON?["label"] as? String == "Local services stopped answering", "
 require((silentJSON?["at"] as? Double) == 1_800_000_000, "the recorded time")
 require(silentJSON?["relaunched"] as? Bool == false, "the app itself did not stop")
 
+// Services that exit on their own are recorded with their code or signal (0.6.243), and a later app
+// stop still overwrites that record: 1200 kept a day-old "Quit" while its services went up and down.
+StopRecord.recordSilentServices(directory: silentRecord, now: Date(timeIntervalSince1970: 1_700_000_000),
+                                reason: .servicesExited, how: "signal 9")
+let exitedJSON = try JSONSerialization.jsonObject(
+    with: Data(contentsOf: silentRecord.appendingPathComponent(StopRecord.fileName))) as? [String: Any]
+require(exitedJSON?["reason"] as? String == "services_exited", "services that exited are recorded")
+require(exitedJSON?["label"] as? String == "Local services exited (signal 9)", "with the signal in the label")
+require(!StopRecord.relaunches(.servicesExited), "services that exited are not an app crash")
+let noReports = temporary.appendingPathComponent("No Crash Reports")
+try FileManager.default.createDirectory(at: noReports, withIntermediateDirectories: true)
+StopRecord.markRunning(directory: silentRecord)
+AgentStandby.markCleanQuit(directory: silentRecord)
+StopRecord.settle(directory: silentRecord, relaunching: false, crashReports: noReports, boot: .distantPast)
+let quitJSON = try JSONSerialization.jsonObject(
+    with: Data(contentsOf: silentRecord.appendingPathComponent(StopRecord.fileName))) as? [String: Any]
+require(quitJSON?["reason"] as? String == "quit", "a later Quit overwrites the services record")
+require(((quitJSON?["at"] as? Double) ?? 0) > 1_700_000_000, "with the newer time")
+
 // The background helper must find the host app's Contents/Resources by its payload. 0.6.228 counted
 // four parent directories, looked under Contents/Resources/helper, and shipped a helper that could
 // not start its worker on any Mac (exit 127). Run the built guard against the real launch layout.
