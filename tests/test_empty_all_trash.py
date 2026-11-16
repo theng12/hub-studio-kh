@@ -54,11 +54,16 @@ class Fixture(unittest.TestCase):
         self.stack.enter_context(mock.patch.dict(os.environ, {"HOME": str(self.home)}))
         self.addCleanup(self._unlock)
 
-    def history(self, days_ago: float = 1, modality: str = "image", state: str = "done") -> None:
-        """Real generation history in this Mac's own ledger: a finished batch, written through."""
+    def history(self, days_ago: float = 1, machine: str = "local", job: str = "done",
+                studio: str = "image") -> None:
+        """Real generation history in this Mac's own ledger: a job this Hub owned on its own worker."""
         self.data.mkdir(parents=True, exist_ok=True)
-        ledger.save_batch({"id": f"h{time.time_ns()}", "created_at": time.time() - days_ago * 86400,
-                           "modality": modality, "items": [{"index": 0, "state": state}]})
+        when = time.time() - days_ago * 86400
+        with ledger.activity_transaction() as conn:
+            ledger.record_activity_event(
+                machine=machine, studio=studio, job_id=f"j{time.time_ns()}", state=job,
+                model="m", source="job", hub_owned=machine == "local", observed_at=when,
+                activity_received_at=when, conn=conn)
 
     def workstation_on(self) -> None:
         self.stack.enter_context(mock.patch.object(
@@ -177,12 +182,20 @@ class RemoteEmptyRule(Fixture):
         self.assertEqual(output_storage.remote_empty_refusal(),
                          ("REMOTE_EMPTY_OFF", "no generation work in 7 days"))
 
-    def test_chat_alone_is_not_generation_work(self) -> None:
-        self.history(days_ago=1, modality="chat")
+    def test_another_macs_work_does_not_count(self) -> None:
+        # A controller records the jobs its nodes run; that is not "this Mac generates".
+        self.history(days_ago=1, machine="blue-1")
         self.assertFalse(output_storage.remote_empty_decision()["effective"])
 
-    def test_an_unfinished_batch_is_not_work_this_mac_finished(self) -> None:
-        self.history(days_ago=1, state="queued")
+    def test_chat_alone_is_not_generation_work(self) -> None:
+        self.history(days_ago=1, studio="chat")
+        self.assertFalse(output_storage.remote_empty_decision()["effective"])
+
+    def test_an_activity_this_hub_did_not_own_does_not_count(self) -> None:
+        self.data.mkdir(parents=True, exist_ok=True)
+        with ledger.activity_transaction() as conn:
+            ledger.record_activity_event(machine="local", studio="image", job_id="j-x", state="done",
+                                         model="m", source="worker", hub_owned=False, conn=conn)
         self.assertFalse(output_storage.remote_empty_decision()["effective"])
 
     def test_an_explicit_choice_beats_the_rule_both_ways(self) -> None:

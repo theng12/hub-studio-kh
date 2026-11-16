@@ -776,21 +776,32 @@ def remote_empty_settings() -> dict:
 
 
 def recent_generation(days: int) -> bool:
-    """Whether this Mac's own history shows it ran generation work in the last `days` - a finished
-    batch of any Studio but Chat, or an output a job produced."""
+    """Whether **this Mac** ran generation work in the last `days`.
+
+    Only rows keyed to this Mac count: a controller also records the jobs its nodes run, so a batch
+    (or a peer's activity) is not evidence that *this* Mac generates - 1301 controls a fleet it never
+    renders for. A job this Hub owned on its own workers (`activity_events.hub_owned`, machine `local`
+    or this Mac's id) or an output it produced (`assets.source = 'job'`) is."""
     if not ledger.DB_FILE.exists():
         return False
     cutoff = time.time() - days * 86400
     try:
+        from .backend import fleet_nodes
+        mine = ("local", str(fleet_nodes.this_machine()["id"]))
+    except Exception:
+        mine = ("local",)
+    try:
         with ledger._conn() as conn:
             if conn.execute(
-                    "SELECT 1 FROM batches WHERE finished = 1 AND created_at > ? AND "
-                    "COALESCE(json_extract(payload, '$.modality'), '') != 'chat' LIMIT 1",
-                    (cutoff,)).fetchone():
+                    "SELECT 1 FROM activity_events WHERE hub_owned = 1 AND COALESCE(observed_at, 0) > ? "
+                    "AND COALESCE(studio, '') != 'chat' "
+                    f"AND machine IN ({','.join('?' * len(mine))}) LIMIT 1",
+                    (cutoff, *mine)).fetchone():
                 return True
             return conn.execute(
-                "SELECT 1 FROM assets WHERE source = 'job' AND created_at > ? AND "
-                "COALESCE(modality, '') != 'chat' LIMIT 1", (cutoff,)).fetchone() is not None
+                "SELECT 1 FROM assets WHERE source = 'job' AND created_at > ? "
+                "AND COALESCE(modality, '') != 'chat' "
+                f"AND machine IN ({','.join('?' * len(mine))}) LIMIT 1", (cutoff, *mine)).fetchone() is not None
     except sqlite3.Error:
         return False
 
