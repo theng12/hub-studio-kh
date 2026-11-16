@@ -519,6 +519,9 @@ def trash_overview(now: float | None = None) -> dict:
     result["macos_trash_auto_empty"] = finder_trash_auto_empty()
     # "Empty all trash" (0.6.243): what it would remove now and really free, and this Mac's remote switch.
     result["empty"] = empty_preview()
+    # Top level too: the app's Settings reads them here (`NativeTrashFolder.remoteEmpty`), and the
+    # fleet's window proof reads them here. Inside `empty` they are the same answer for the dialog.
+    result["remote_empty"] = result["empty"]["remote_empty"]
     result["allow_remote_empty"] = result["empty"]["allow_remote_empty"]
     return result
 

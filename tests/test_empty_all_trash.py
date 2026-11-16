@@ -227,6 +227,18 @@ class RemoteEmptyModes(Fixture):
         self.assertEqual((decision["effective"], decision["source"]), (True, "you"))
 
 
+class OverviewShape(Fixture):
+    def test_the_trash_overview_carries_the_switch_at_the_level_the_app_reads(self) -> None:
+        # `NativeTrashFolder.remoteEmpty` and `.allowRemoteEmpty` are top-level keys of
+        # `GET /api/hub/trash`; publishing them only inside `empty` left the Settings switch undrawn
+        # (caught by the gate's window proof, not by these tests, so this pins it).
+        self.hub_item("batch_1")
+        got = output_storage.trash_overview()
+        self.assertIn("remote_empty", got)
+        self.assertEqual(got["remote_empty"], got["empty"]["remote_empty"])
+        self.assertIs(got["allow_remote_empty"], got["remote_empty"]["effective"])
+
+
 class FleetFields(unittest.TestCase):
     def test_an_older_hub_reads_not_reported_never_zero(self) -> None:
         self.assertEqual(set(standalone._trash_and_memory({}).values()), {None})
