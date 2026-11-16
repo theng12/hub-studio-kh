@@ -4387,18 +4387,22 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.post("/api/hub/trash/allow-remote-empty")
     async def hub_trash_allow_remote_empty(request: Request) -> JSONResponse:
-        """This Mac's "Allow remote empty" switch, from its own window only. Off until turned on:
-        body `{"mode": "on"|"off"}`, or the first cut's `{"enabled": bool}`."""
+        """This Mac's "Allow remote empty" choice and rule, from its own window only. Off until the
+        owner turns it on: `{"mode": "automatic"|"on"|"off", "rule_enabled": bool, "window_days": int}`
+        (the first cut's `{"enabled": bool}` still means on/off)."""
         body = await _empty_body(request)
         if body is None:
             return JSONResponse({"ok": False, "code": "BAD_BODY",
                                  "detail": "The request body must be a JSON object."}, status_code=400)
         try:
             decision = await run_in_threadpool(
-                output_storage.set_remote_empty, body.get("mode"), enabled=body.get("enabled"))
+                output_storage.set_remote_empty, body.get("mode"), enabled=body.get("enabled"),
+                rule_enabled=body.get("rule_enabled"), window_days=body.get("window_days"))
         except output_storage.TrashRefused as refusal:
             return JSONResponse(refusal.body, status_code=refusal.status)
-        startup_control.audit("trash_remote_empty", {"effective": decision["effective"]})
+        startup_control.audit("trash_remote_empty", {"mode": output_storage.remote_empty_settings()["mode"],
+                                                     "effective": decision["effective"],
+                                                     "source": decision["source"]})
         return JSONResponse({"ok": True, **decision, "allow_remote_empty": decision["effective"]})
 
     @app.post("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}/share")

@@ -263,6 +263,14 @@ def current() -> tuple[dict[str, Any], str, str | None]:
     return settings, state, why
 
 
+def in_use() -> bool:
+    """Whether someone is at this Mac right now, by the step-aside rule: Lite Mode on, and the state
+    its own logic calls standing by because of input. A locked screen is nobody at the keyboard, so it
+    is not "in use"; a Mac with Lite Mode off never is."""
+    settings, state, _why = current()
+    return bool(settings["enabled"]) and state == "standing_by"
+
+
 def status() -> dict[str, Any]:
     """The ``workstation`` object every fleet row publishes for this Mac."""
     settings, state, why = current()

@@ -754,51 +754,136 @@ _EMPTY = threading.Lock()                           # one empty at a time
 _PREVIEW: tuple[float, dict | None] = (0.0, None)
 
 
-def remote_empty_allowed() -> bool:
-    """This Mac's "Allow remote empty" switch: **off until someone turns it on** (owner, 2026-11-16).
-    Deliberately not derived from role, history or a name list: the owner turns it on, per Mac."""
+REMOTE_EMPTY_WINDOW_DAYS = 7      # published in Settings and changeable there
+DEFAULT_MODE = "off"              # the shipped first state on every Mac (owner, 2026-11-16)
+OFF_UNTIL_ENABLED = "off until you enable it"
+
+
+def remote_empty_settings() -> dict:
+    """This Mac's "Allow remote empty" choice: `mode` (`automatic`, `on` or `off`), whether anyone chose
+    it, the rule's own switch, and its window.
+
+    The first state on a freshly installed Mac is **off** - the owner turns it on when the release
+    lands, per Mac. `automatic` and the 1-365 day window are what they use after that; the rule's
+    switch and window are published in Settings rather than buried in code. The first cut's bare
+    `allow_remote_empty` boolean still counts as an explicit on/off."""
     try:
         raw = json.loads((ledger.DATA_DIR / TRASH_SETTINGS_FILE).read_text())
     except (OSError, ValueError):
         raw = {}
     raw = raw if isinstance(raw, dict) else {}
-    if isinstance(raw.get("allow_remote_empty"), bool):
-        return raw["allow_remote_empty"]
-    return raw.get("mode") == "on"
+    mode, explicit = raw.get("mode"), True
+    if mode not in ("automatic", "on", "off"):
+        legacy = raw.get("allow_remote_empty")
+        if isinstance(legacy, bool):
+            mode = "on" if legacy else "off"
+        else:
+            mode, explicit = DEFAULT_MODE, False
+    days = raw.get("window_days")
+    return {"mode": mode, "explicit": explicit, "rule_enabled": raw.get("rule_enabled") is not False,
+            "window_days": days if type(days) is int and 1 <= days <= 365 else REMOTE_EMPTY_WINDOW_DAYS}
+
+
+def recent_generation(days: int) -> bool:
+    """Whether **this Mac** ran generation work in the last `days`.
+
+    Only rows keyed to this Mac count: a controller also records the jobs its nodes run, so a batch
+    (or a peer's activity) is not evidence that *this* Mac generates - 1301 controls a fleet it never
+    renders for. Chat is not generation work either. A job this Hub owned on its own workers
+    (`activity_events.hub_owned`, machine `local` or this Mac's id) or an output it produced
+    (`assets.source = 'job'`) is."""
+    if not ledger.DB_FILE.exists():
+        return False
+    cutoff = time.time() - days * 86400
+    try:
+        from .backend import fleet_nodes
+        mine = ("local", str(fleet_nodes.this_machine()["id"]))
+    except Exception:
+        mine = ("local",)
+    try:
+        with ledger._conn() as conn:
+            if conn.execute(
+                    "SELECT 1 FROM activity_events WHERE hub_owned = 1 AND COALESCE(observed_at, 0) > ? "
+                    "AND COALESCE(studio, '') != 'chat' "
+                    f"AND machine IN ({','.join('?' * len(mine))}) LIMIT 1",
+                    (cutoff, *mine)).fetchone():
+                return True
+            return conn.execute(
+                "SELECT 1 FROM assets WHERE source = 'job' AND created_at > ? "
+                "AND COALESCE(modality, '') != 'chat' "
+                f"AND machine IN ({','.join('?' * len(mine))}) LIMIT 1", (cutoff, *mine)).fetchone() is not None
+    except sqlite3.Error:
+        return False
 
 
 def remote_empty_decision() -> dict:
-    """The switch as the window and the fleet read it: `effective`, who set it, and the sentence a
-    skipped Mac shows. A first run is off, and that is a normal state, not an error."""
-    on = remote_empty_allowed()
-    return {"effective": on, "source": "you", "reason": None if on else REMOTE_OFF_DETAIL}
+    """Whether the fleet may empty this Mac's trash, why, and who decided.
+
+    `off` is the shipped default, and a Mac nobody has touched says so - "off until you enable it" -
+    rather than looking like a fault or blaming a rule. `on` is the owner's own yes. `automatic` (a
+    choice they make after turning it on) is on only where this Mac's own history shows generation
+    work inside the window."""
+    settings = remote_empty_settings()
+    rule = {"enabled": settings["rule_enabled"], "window_days": settings["window_days"]}
+    if settings["mode"] == "on":
+        return {"effective": True, "source": "you", "reason": None, "rule": rule}
+    if settings["mode"] == "off":
+        return {"effective": False, "source": "you" if settings["explicit"] else OFF_UNTIL_ENABLED,
+                "reason": REMOTE_OFF_DETAIL, "rule": rule}
+    if not settings["rule_enabled"]:
+        return {"effective": False, "source": "automatic",
+                "reason": "the automatic rule is off in Settings", "rule": rule}
+    if not recent_generation(settings["window_days"]):
+        return {"effective": False, "source": "automatic",
+                "reason": f"no generation work in {settings['window_days']} days", "rule": rule}
+    return {"effective": True, "source": "automatic", "reason": None, "rule": rule}
+
+
+def remote_empty_allowed() -> bool:
+    return remote_empty_decision()["effective"]
 
 
 def remote_empty_refusal() -> tuple[str, str] | None:
     """`(code, reason)` when the fleet route must leave this Mac alone, or None to empty it.
 
-    First the switch (off on every Mac until someone turns it on), then the job guard: a Mac in the
-    middle of work is skipped as `working` **even with the switch on**, because that would cost a
-    job, not because its files matter. The next run takes it."""
-    if not remote_empty_allowed():
+    The switch first: off is the normal first state, with a sentence rather than an error. Then a
+    Mac someone is using - the same input test its step-aside rule makes, and a locked screen means
+    nobody is at it. Then a Mac in the middle of a job, skipped even with the switch on because that
+    would cost the job; the next run takes it."""
+    from . import workstation
+    decision = remote_empty_decision()
+    if not decision["effective"]:
         return "REMOTE_EMPTY_OFF", REMOTE_OFF_DETAIL
+    if workstation.in_use():
+        return "REMOTE_EMPTY_OFF", "workstation in use: someone is using this Mac"
     from .backend import broker
     if broker.in_flight() > 0:
         return "MACHINE_WORKING", "working: this Mac is in the middle of a job; the next run takes it"
     return None
 
 
-def set_remote_empty(mode: object = None, *, enabled: object = None) -> dict:
-    """Turn this Mac's switch on or off from its own window. `mode` is `on`/`off`; the first cut's
-    `enabled` boolean means the same two."""
-    if mode is None and isinstance(enabled, bool):
+def set_remote_empty(mode: object = None, *, enabled: object = None, rule_enabled: object = None,
+                     window_days: object = None) -> dict:
+    """Change the choice or the rule from this Mac's own window. `mode` is `automatic`, `on` or `off`;
+    the first cut's `enabled` boolean means on/off."""
+    if enabled is not None and not isinstance(enabled, bool):
+        raise TrashRefused(400, "BAD_VALUE", "enabled must be true or false.")
+    if mode is None and enabled is not None:
         mode = "on" if enabled else "off"
-    if mode not in ("on", "off"):
-        raise TrashRefused(400, "BAD_VALUE", "mode must be on or off.")
+    current = remote_empty_settings()
+    if mode is not None and mode not in ("automatic", "on", "off"):
+        raise TrashRefused(400, "BAD_VALUE", "mode must be automatic, on or off.")
+    if rule_enabled is not None and not isinstance(rule_enabled, bool):
+        raise TrashRefused(400, "BAD_VALUE", "rule_enabled must be true or false.")
+    if window_days is not None and (type(window_days) is not int or not 1 <= window_days <= 365):
+        raise TrashRefused(400, "BAD_VALUE", "window_days must be a whole number of days from 1 to 365.")
+    values = {"mode": mode if mode is not None else current["mode"],
+              "rule_enabled": current["rule_enabled"] if rule_enabled is None else rule_enabled,
+              "window_days": current["window_days"] if window_days is None else window_days}
     path = ledger.DATA_DIR / TRASH_SETTINGS_FILE
     temporary = path.with_name(path.name + ".tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary.write_text(json.dumps({"allow_remote_empty": mode == "on"}))
+    temporary.write_text(json.dumps(values))
     os.chmod(temporary, 0o600)
     os.replace(temporary, path)
     return remote_empty_decision()
