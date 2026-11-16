@@ -145,10 +145,17 @@ class MaintenanceHoldRouteTests(unittest.TestCase):
         token_file.write_text("same-existing-hub-token\n")
         os.chmod(token_file, 0o600)
         self.old_environ = os.environ.copy()
+        self.installer_token = "installer-hold-token-0123456789abcdef"
+        self.installer_token_file = self.root / "launcher-hold-token"
+        self.installer_token_file.write_text(self.installer_token + "\n")
+        os.chmod(self.installer_token_file, 0o600)
         os.environ.update({
             "STUDIOHUB_DATA_DIR": str(self.data_dir),
             "STUDIOHUB_WORKERS_FILE": str(self.workers_file),
             "STUDIOHUB_PACKAGED": "1",
+            # The packaged app always requires auth, including loopback.
+            "STUDIOHUB_REQUIRE_AUTH": "1",
+            "STUDIOHUB_INSTALLER_HOLD_TOKEN_FILE": str(self.installer_token_file),
         })
         self.addCleanup(self._restore)
 
@@ -203,6 +210,16 @@ class MaintenanceHoldRouteTests(unittest.TestCase):
         from components.hub.standalone import create_app
         client = stack.enter_context(TestClient(create_app(start_background=False)))
         # Leave the app's own monitor behind us; this file swapped the broker's.
+        self.addCleanup(broker.configure_monitor, client.app.state.monitor)
+        broker.configure_monitor(_Monitor())
+        return client
+
+    def _open_local(self, stack: ExitStack):
+        from fastapi.testclient import TestClient
+        from components.hub.backend import broker
+        from components.hub.standalone import create_app
+        client = stack.enter_context(TestClient(
+            create_app(start_background=False), client=("127.0.0.1", 50000)))
         self.addCleanup(broker.configure_monitor, client.app.state.monitor)
         broker.configure_monitor(_Monitor())
         return client
@@ -340,6 +357,82 @@ class MaintenanceHoldRouteTests(unittest.TestCase):
                 "the pause expires by itself; no DELETE and no restart needed")
             self.assertNotIn("local", broker.busy_machines(),
                              "the claim path is open again after expiry")
+
+
+    def test_installer_hold_token_is_rejected_off_loopback(self) -> None:
+        with ExitStack() as stack:
+            client = self._open(stack)
+            self.assertEqual(
+                client.post("/api/maintenance/hold?timeout_s=0",
+                            headers={"X-Hub-Token": self.installer_token}).status_code,
+                401)
+
+    def test_installer_hold_token_is_scoped_and_read_fresh(self) -> None:
+        """The Launcher token opens only the two hold routes, only from loopback, header only."""
+        broker = self.broker
+        with ExitStack() as stack:
+            client = self._open_local(stack)
+            broker.batches["live"] = _batch("live", "image", [_item("running", job_id="job-1")])
+
+            # No header, even while Hub has work: the hold is refused (fail closed).
+            self.assertEqual(
+                client.post("/api/maintenance/hold?timeout_s=0").status_code, 401)
+
+            # Header accepted; Bearer accepted for resume.
+            answer = client.post("/api/maintenance/hold?timeout_s=0&pause_s=60",
+                                 headers={"X-Hub-Token": self.installer_token})
+            self.assertEqual(answer.status_code, 200)
+            self.assertEqual(
+                client.delete("/api/maintenance/hold",
+                              headers={"Authorization": f"Bearer {self.installer_token}"}).status_code,
+                200)
+
+            # Query value, cookie and another route are never the handoff.
+            self.assertEqual(
+                client.post(f"/api/maintenance/hold?timeout_s=0&token={self.installer_token}").status_code,
+                401)
+            self.assertEqual(
+                client.post("/api/maintenance/hold?timeout_s=0",
+                            cookies={"kh_hub_token": self.installer_token}).status_code,
+                401)
+            self.assertEqual(
+                client.get("/api/hub/resources",
+                           headers={"X-Hub-Token": self.installer_token}).status_code,
+                401)
+            self.assertEqual(
+                client.post("/api/maintenance/hold?timeout_s=0",
+                            headers={"X-Hub-Token": "x" * 32}).status_code,
+                401)
+
+            # Rotation is a file replace; the next request reads the new value, no restart.
+            rotated = "rotated-installer-hold-token-123456"
+            self.installer_token_file.write_text(rotated + "\n")
+            os.chmod(self.installer_token_file, 0o600)
+            self.assertEqual(
+                client.post("/api/maintenance/hold?timeout_s=0",
+                            headers={"X-Hub-Token": self.installer_token}).status_code,
+                401)
+            self.assertEqual(
+                client.post("/api/maintenance/hold?timeout_s=0",
+                            headers={"X-Hub-Token": rotated}).status_code,
+                200)
+
+            # A world-readable file, or a symlink, is not a credential.
+            os.chmod(self.installer_token_file, 0o644)
+            self.assertEqual(
+                client.post("/api/maintenance/hold?timeout_s=0",
+                            headers={"X-Hub-Token": rotated}).status_code,
+                401)
+            os.chmod(self.installer_token_file, 0o600)
+            real = self.root / "hold-token-real"
+            real.write_text(rotated + "\n")
+            os.chmod(real, 0o600)
+            os.unlink(self.installer_token_file)
+            self.installer_token_file.symlink_to(real)
+            self.assertEqual(
+                client.post("/api/maintenance/hold?timeout_s=0",
+                            headers={"X-Hub-Token": rotated}).status_code,
+                401)
 
 
 if __name__ == "__main__":
