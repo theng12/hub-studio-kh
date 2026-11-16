@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -26,16 +27,23 @@ import wave
 from types import SimpleNamespace
 
 
-_TEMP = tempfile.TemporaryDirectory(prefix="studiohub-job-proof-")
-atexit.register(_TEMP.cleanup)
-_ROOT = Path(_TEMP.name)
+# --serve (the automatic-update proof) gets a directory that outlives one process, because the
+# update quits this Hub and starts it again on the same queue.
+_SERVE = sys.argv[1:2] == ["--serve"]
+if _SERVE:
+    _ROOT = Path(sys.argv[sys.argv.index("--root") + 1]).resolve()
+    _ROOT.mkdir(parents=True, exist_ok=True)
+else:
+    _TEMP = tempfile.TemporaryDirectory(prefix="studiohub-job-proof-")
+    atexit.register(_TEMP.cleanup)
+    _ROOT = Path(_TEMP.name)
 _DATA = _ROOT / "data"
 _LIBRARY = _ROOT / "models"
 _MANIFESTS = _ROOT / "manifests"
 _WORKERS = _ROOT / "workers.json"
 _TOKEN = "fixture-existing-hub-token"
 for directory in (_DATA, _LIBRARY, _MANIFESTS):
-    directory.mkdir(mode=0o700)
+    directory.mkdir(mode=0o700, exist_ok=True)
 (_DATA / ".hub_token").write_text(_TOKEN + "\n")
 os.chmod(_DATA / ".hub_token", 0o600)
 
@@ -43,6 +51,8 @@ os.chmod(_DATA / ".hub_token", 0o600)
 os.environ.update({
     "STUDIOHUB_DATA_DIR": str(_DATA),
     "STUDIOHUB_WORKERS_FILE": str(_WORKERS),
+    # --serve: the same 0600 file the Launcher reads, so the hold route is gated exactly as shipped.
+    "STUDIOHUB_INSTALLER_HOLD_TOKEN_FILE": str(_ROOT / "hold-token"),
     "STUDIOHUB_MODELS_DIR": str(_LIBRARY),
     "STUDIOHUB_MODEL_MANIFESTS": str(_MANIFESTS),
     "STUDIOHUB_PACKAGED": "1",
@@ -172,6 +182,15 @@ class FixtureWorker:
                 if job_id in self.jobs:
                     self.jobs[job_id]["state"] = "cancelled"
             return {"ok": True}
+
+        @self.app.post("/__release")
+        async def release():
+            """Finish the jobs a "hold" submit left running (--serve proof only)."""
+            with self.lock:
+                for record in self.jobs.values():
+                    if record.get("state") == "running":
+                        record["state"] = "done"
+            return {"released": True}
 
         @self.app.get("/api/generate/jobs/{job_id}/audio")
         async def audio(job_id: str, request: Request):
@@ -769,5 +788,50 @@ class DispatchPersistenceRollbackTests(unittest.TestCase):
                            "and it must wait before another attempt, or the same pass retries it")
 
 
+def _serve(port: int) -> None:
+    """`tests/_hub_dispatch_proof.py --serve --root DIR --port N`: this fixture Hub as a real
+    server on a real socket, for the automatic-update proof (lead 2026-11-16). It is the thing the
+    Studio Launcher quits and starts again, so its data dir and workers file are the only state.
+    Writes `DIR/serving.json` once the port accepts, with the fixture worker's port too."""
+    worker = FixtureWorker()
+    worker.start()
+    _WORKERS.write_text(json.dumps([{
+        "id": "voice", "modality": "voice", "title": "Fixture Voice",
+        "host": "127.0.0.1", "port": worker.port, "machine": "local", "local": True,
+        "runtime_identity": {"id": "fixture-runtime", "compatible": True}, "hub_token": _TOKEN,
+    }]))
+    os.chmod(_WORKERS, 0o600)
+    if not (_MANIFESTS / "fixture-voice.json").exists():
+        _manifest("fixture-voice", "fixture/voice")
+    # `/api/version` answers the release bundle's own manifest version (components/app_version.py's
+    # shape), so the Launcher's health check judges the build that is really serving.
+    resource_root = Path(standalone.__file__).resolve().parents[2]
+    manifest = resource_root / "release-manifest.json"
+    if manifest.is_file():
+        os.environ.setdefault("STUDIOHUB_RELEASE_MANIFEST", str(manifest))
+    app = standalone.create_app(start_background=True)
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning",
+                                           access_log=False))
+
+    def announce() -> None:
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            probe = socket.socket()
+            try:
+                probe.connect(("127.0.0.1", port))
+                break
+            except OSError:
+                time.sleep(.05)
+            finally:
+                probe.close()
+        (_ROOT / "serving.json").write_text(json.dumps(
+            {"url": f"http://127.0.0.1:{port}", "work": worker.port, "pid": os.getpid()}))
+        print(f"SERVING {port} worker={worker.port} pid={os.getpid()}", flush=True)
+    threading.Thread(target=announce, daemon=True).start()
+    server.run()
+
 if __name__ == "__main__":
-    unittest.main()
+    if _SERVE:
+        _serve(int(sys.argv[sys.argv.index("--port") + 1]))
+    else:
+        unittest.main()

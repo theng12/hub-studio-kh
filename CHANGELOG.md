@@ -2,6 +2,16 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.241 — 2026-11-16
+
+- Hub Studio KH can now be updated by the Studio Launcher while it is running, without losing work. Hub stops taking new jobs, lets what is already running keep its place, the Launcher installs the new version, and Hub starts again by itself and carries on with the queue. If an update is interrupted, Hub starts taking work again on its own after two minutes.
+
+### Technical notes
+
+- No Hub source change: this release is the **automatic-path proof** for the hold shipped in 0.6.240. The installed 0.6.240 app is the old side, a Studio Launcher install of 0.6.241 is the new side.
+- Proof (this batch): a hidden Hub instance on a temp data dir with a real queued voice queue and a fixture worker; the real Launcher caller (`Agent.runOnce`, real feed, real `Recipe.appDmg` DMG swap, real quit, restart via the app's own service resume, real `DELETE`) drove the update. Evidence: hold before any byte, `safe:true` with `in_flight`, paused N s, DMG swap, restart, queue drained afterwards.
+- The Launcher's own hold-window and refusal behaviour is unchanged from 0.1.42/0.1.43 (`UpdateHold.ceiling` 30 s, `timeout_s` 20, `pause_s` 120, one retry inside the window).
+
 ## 0.6.240 — 2026-11-16
 
 - The Studio Launcher can now ask the Hub to pause before an update and resume afterwards, using its own Launcher-issued credential. The Hub token stays private to Hub, and the hold is accepted only from this Mac and only on the two hold requests.
