@@ -1841,8 +1841,25 @@ struct NativeTrashFolder: Decodable, Equatable {
     let macosTrashAutoEmpty: Bool?
     /// What "Empty All Trash" would remove now and really free (0.6.243). Nil from an older Hub.
     let empty: NativeEmptyPreview?
-    /// This Mac's "Allow remote empty" switch (0.6.243): on by default. Nil from an older Hub.
+    /// This Mac's "Allow remote empty" answer (0.6.243): its effective value. Nil from an older Hub.
     let allowRemoteEmpty: Bool?
+    /// Whether the fleet may empty this Mac, who decided and why (0.6.243, derived default).
+    let remoteEmpty: NativeRemoteEmptyState?
+}
+
+/// The derived "Allow remote empty" answer (owner, 2026-11-16: *"default it off on Macs you use"*).
+/// `source` is `you` when the owner set it or `automatic` when the rule decided; `reason` explains an
+/// automatic off in words the window and the Gateway both show.
+struct NativeRemoteEmptyState: Decodable, Equatable {
+    let effective: Bool
+    let source: String
+    let reason: String?
+    let rule: NativeRemoteEmptyRule
+}
+
+struct NativeRemoteEmptyRule: Decodable, Equatable {
+    let enabled: Bool
+    let windowDays: Int
 }
 
 /// `GET /api/hub/trash`'s `empty`: the Hub Trash Folder and each macOS Trash folder, measured now.
@@ -1890,6 +1907,10 @@ struct NativeEmptyMachine: Decodable, Equatable {
 
 struct NativeRemoteEmpty: Decodable, Equatable {
     let allowRemoteEmpty: Bool
+    let effective: Bool?
+    let source: String?
+    let reason: String?
+    let rule: NativeRemoteEmptyRule?
 }
 
 /// The answer to `POST /api/hub/macos-trash-auto-empty/enable`: the value **read back** after the write.
@@ -7189,13 +7210,15 @@ final class NativeWorkspaceStore: ObservableObject {
         return row.state == "emptied" ? freed + left + why : "Not fully emptied. " + freed + left + why
     }
 
-    /// This Mac's "Allow remote empty" switch (`POST /api/hub/trash/allow-remote-empty`), read back.
-    func setAllowRemoteEmpty(_ enabled: Bool) async {
+    /// This Mac's "Allow remote empty" choice and rule (`POST /api/hub/trash/allow-remote-empty`),
+    /// read back. `mode` is `automatic`, `on` or `off`; the rule's own switch and window go beside it.
+    func setRemoteEmpty(mode: String, ruleEnabled: Bool? = nil, windowDays: Int? = nil) async {
         guard let requestConnection = connectionID else { return }
         trashNote = nil
         do {
             let _: NativeRemoteEmpty = try await sendJSON(
-                ["api", "hub", "trash", "allow-remote-empty"], method: "POST", body: RemoteEmptyBody(enabled: enabled))
+                ["api", "hub", "trash", "allow-remote-empty"], method: "POST",
+                body: RemoteEmptyBody(mode: mode, ruleEnabled: ruleEnabled, windowDays: windowDays))
             guard connectionID == requestConnection else { return }
             await refreshTrash()
         } catch {
@@ -11092,7 +11115,9 @@ private struct TrashEmptyBody: Encodable {
 }
 
 private struct RemoteEmptyBody: Encodable {
-    let enabled: Bool
+    let mode: String
+    let ruleEnabled: Bool?
+    let windowDays: Int?
 }
 private struct CatalogReferenceAudio: Decodable {
     let declared: Bool?

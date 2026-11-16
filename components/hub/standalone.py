@@ -4174,14 +4174,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         result = result or {}
         return {"machine": machine, "label": label, "state": state, "code": code, "reason": reason,
                 **{key: result.get(key) for key in ("freed_bytes", "deleted_count", "left_count", "left_bytes")},
-                "locations": result.get("locations")}
+                "locations": result.get("locations"),
+                # Whether this Mac may be emptied from elsewhere, who decided, and the rule behind it
+                # (owner, 2026-11-16): so a skipped Mac reads "no generation work in 7 days", not a bare off.
+                "remote_empty": output_storage.remote_empty_decision()}
 
     def _empty_here(body: dict[str, Any], *, remote: bool) -> tuple[int, dict[str, Any]]:
-        """Empty this Mac (status, row). `remote` honours its "Allow remote empty" switch."""
+        """Empty this Mac (status, row). `remote` applies its "Allow remote empty" rule, including a
+        workstation Mac someone is using, which is never emptied from elsewhere."""
         machine, label = _this_mac()
-        if remote and not output_storage.remote_empty_allowed():
-            return 409, _empty_row(machine, label, "skipped", code="REMOTE_EMPTY_OFF",
-                                   reason=output_storage.REMOTE_OFF_DETAIL)
+        refusal = output_storage.remote_empty_refusal() if remote else None
+        if refusal is not None:
+            return 409, _empty_row(machine, label, "skipped", code=refusal[0], reason=refusal[1])
         try:
             result = output_storage.empty_all(expected_count=body.get("expected_count"),
                                               expected_bytes=body.get("expected_bytes"))
@@ -4383,14 +4387,26 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.post("/api/hub/trash/allow-remote-empty")
     async def hub_trash_allow_remote_empty(request: Request) -> JSONResponse:
-        """Body `{"enabled": bool}`: this Mac's "Allow remote empty" switch. Its own window only."""
+        """This Mac's "Allow remote empty" choice and rule. Its own window only.
+        Body `{"mode": "automatic"|"on"|"off", "rule_enabled": bool, "window_days": int}`; any field
+        left out keeps its value, and the first cut's `{"enabled": bool}` still means on/off."""
         body = await _empty_body(request)
+        if body is None:
+            return JSONResponse({"ok": False, "code": "BAD_BODY",
+                                 "detail": "The request body must be a JSON object."}, status_code=400)
+        mode = body.get("mode")
+        if mode is None and "enabled" in body:
+            mode = "on" if body.get("enabled") is True else "off"
         try:
-            enabled = output_storage.set_remote_empty_allowed((body or {}).get("enabled"))
+            decision = await run_in_threadpool(
+                output_storage.set_remote_empty, mode,
+                rule_enabled=body.get("rule_enabled"), window_days=body.get("window_days"))
         except output_storage.TrashRefused as refusal:
             return JSONResponse(refusal.body, status_code=refusal.status)
-        startup_control.audit("trash_remote_empty", {"enabled": enabled})
-        return JSONResponse({"ok": True, "allow_remote_empty": enabled})
+        startup_control.audit("trash_remote_empty", {"mode": output_storage.remote_empty_settings()["mode"],
+                                                     "effective": decision["effective"],
+                                                     "source": decision["source"]})
+        return JSONResponse({"ok": True, **decision, "allow_remote_empty": decision["effective"]})
 
     @app.post("/api/hub/fleet/nodes/{node_id}/model-packages/{package_id}/share")
     async def fleet_node_model_share(node_id: str, package_id: str, request: Request) -> JSONResponse:

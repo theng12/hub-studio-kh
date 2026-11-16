@@ -9127,6 +9127,12 @@ struct StudioContent: View {
         }
     }
 
+    /// Who decided "Allow remote empty", in words, and why when it is off.
+    static func remoteEmptyLabel(_ state: NativeRemoteEmptyState) -> String {
+        if state.source == "you" { return state.effective ? "Set by you: on" : "Set by you: off" }
+        return state.effective ? "Automatic: on" : "Automatic: off" + (state.reason.map { " — \($0)" } ?? "")
+    }
+
     /// The "Empty All Trash" dialog: each location, what it really frees, and what it cannot touch.
     static func emptyAllMessage(_ plan: NativeEmptyPreview) -> String {
         let gb: (Int64) -> String = NativeWorkspaceStore.gigabytes
@@ -9197,12 +9203,44 @@ struct StudioContent: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if let allowed = folder.allowRemoteEmpty {
-                Toggle("Allow remote empty", isOn: Binding(
-                    get: { allowed }, set: { value in Task { await workspace.setAllowRemoteEmpty(value) } }))
-                    .toggleStyle(.checkbox).disabled(!connected)
+            if let state = folder.remoteEmpty {
+                // The owner can always override; the rule is published beside it, not buried in code.
+                ValueRow("Allow remote empty") {
+                    Text(Self.remoteEmptyLabel(state))
+                        .foregroundStyle(state.effective ? .secondary : HubStatus.warn.textColor)
+                        .multilineTextAlignment(.trailing)
+                }
+                ValueRow("When") {
+                    Picker("", selection: Binding(
+                        get: { state.source == "you" ? (state.effective ? "on" : "off") : "automatic" },
+                        set: { value in Task { await workspace.setRemoteEmpty(mode: value) } })) {
+                            Text("Automatic").tag("automatic")
+                            Text("Always on").tag("on")
+                            Text("Always off").tag("off")
+                        }
+                        .labelsHidden().pickerStyle(.menu).fixedSize().disabled(!connected)
+                }
+                if state.source == "automatic" {
+                    ValueRow("Automatic rule") {
+                        Toggle("On", isOn: Binding(
+                            get: { state.rule.enabled },
+                            set: { value in Task { await workspace.setRemoteEmpty(mode: "automatic", ruleEnabled: value) } }))
+                            .toggleStyle(.checkbox).labelsHidden().disabled(!connected)
+                    }
+                    ValueRow("Generation work within") {
+                        HStack(spacing: HubSpace.tight) {
+                            NumberField(title: "", value: Binding(
+                                get: { state.rule.windowDays },
+                                set: { value in Task { await workspace.setRemoteEmpty(mode: "automatic", windowDays: value) } }),
+                                range: 1...365, width: 70)
+                            Text("days").foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 Text("Lets the Gateway, and agents with its key, empty this Mac's trash for good. "
-                     + "When it is off, only this window can.")
+                     + "Automatic keeps it off on a Mac the owner uses: on only where this Mac ran "
+                     + "generation work in the last \(state.rule.windowDays) days and Lite Mode is off. "
+                     + "A Mac someone is using is never emptied from elsewhere.")
                     .font(HubType.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

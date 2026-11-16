@@ -8,6 +8,7 @@ no test reads or writes the real ~/.Trash or the owner's data.
 """
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -22,7 +23,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from components.hub import output_storage, standalone  # noqa: E402
+from components.hub import output_storage, standalone, workstation  # noqa: E402
 from components.hub.backend import auth, ledger, resources, startup_control  # noqa: E402
 
 TODAY = time.strftime("%Y-%m-%d", time.gmtime())
@@ -47,10 +48,21 @@ class Fixture(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         for module, name, value in ((ledger, "DATA_DIR", self.data), (ledger, "DB_FILE", self.data / "hub.db"),
-                                    (output_storage, "QUIET_S", 0.0), (output_storage, "_PREVIEW", (0.0, None))):
+                                    (output_storage, "QUIET_S", 0.0), (output_storage, "_PREVIEW", (0.0, None)),
+                                    (workstation, "load", lambda: {**workstation.DEFAULTS})):
             self.stack.enter_context(mock.patch.object(module, name, value))
         self.stack.enter_context(mock.patch.dict(os.environ, {"HOME": str(self.home)}))
         self.addCleanup(self._unlock)
+
+    def history(self, days_ago: float = 1, modality: str = "image", state: str = "done") -> None:
+        """Real generation history in this Mac's own ledger: a finished batch, written through."""
+        self.data.mkdir(parents=True, exist_ok=True)
+        ledger.save_batch({"id": f"h{time.time_ns()}", "created_at": time.time() - days_ago * 86400,
+                           "modality": modality, "items": [{"index": 0, "state": state}]})
+
+    def workstation_on(self) -> None:
+        self.stack.enter_context(mock.patch.object(
+            workstation, "load", lambda: {**workstation.DEFAULTS, "enabled": True}))
 
     def _unlock(self) -> None:
         os.chmod(self.macos, 0o700)
@@ -144,13 +156,85 @@ class EmptyAll(Fixture):
             output_storage.empty_all(expected_count=1)
         self.assertEqual(refused.exception.body["code"], "EXPECTED_REQUIRED")
 
-    def test_the_switch_defaults_on_and_persists_off(self) -> None:
-        self.assertTrue(output_storage.remote_empty_allowed())
-        output_storage.set_remote_empty_allowed(False)
-        self.assertFalse(output_storage.remote_empty_allowed())
+class RemoteEmptyRule(Fixture):
+    """"Allow remote empty" is derived, not a plain default (owner, 2026-11-16: *"default it off on
+    Macs you use"*): on only where this Mac's own history shows generation work inside the window and
+    Lite Mode is off; an explicit choice always wins; a workstation Mac someone is using is never
+    emptied from elsewhere."""
+
+    def test_a_mac_with_recent_generation_work_defaults_on(self) -> None:
+        self.history(days_ago=2)
+        decision = output_storage.remote_empty_decision()
+        self.assertEqual((decision["effective"], decision["source"], decision["reason"]), (True, "automatic", None))
+        self.assertEqual(decision["rule"], {"enabled": True, "window_days": 7})
+        self.assertTrue(output_storage.remote_empty_refusal() is None)
+
+    def test_a_mac_without_generation_work_defaults_off_with_that_reason(self) -> None:
+        decision = output_storage.remote_empty_decision()
+        self.assertFalse(decision["effective"])
+        self.assertEqual((decision["source"], decision["reason"]),
+                         ("automatic", "no generation work in 7 days"))
+        self.assertEqual(output_storage.remote_empty_refusal(),
+                         ("REMOTE_EMPTY_OFF", "no generation work in 7 days"))
+
+    def test_chat_alone_is_not_generation_work(self) -> None:
+        self.history(days_ago=1, modality="chat")
+        self.assertFalse(output_storage.remote_empty_decision()["effective"])
+
+    def test_an_unfinished_batch_is_not_work_this_mac_finished(self) -> None:
+        self.history(days_ago=1, state="queued")
+        self.assertFalse(output_storage.remote_empty_decision()["effective"])
+
+    def test_an_explicit_choice_beats_the_rule_both_ways(self) -> None:
+        output_storage.set_remote_empty("on")
+        off = output_storage.remote_empty_decision()                     # no history, still on
+        self.assertEqual((off["effective"], off["source"]), (True, "you"))
+        self.history(days_ago=1)
+        output_storage.set_remote_empty("off")
+        on = output_storage.remote_empty_decision()                      # history, still off
+        self.assertEqual((on["effective"], on["source"]), (False, "you"))
+        self.assertIn("only be emptied from its own Hub window", on["reason"])
+        self.assertEqual(output_storage.remote_empty_settings()["mode"], "off")
+
+    def test_the_window_is_the_setting_not_a_number_in_the_code(self) -> None:
+        self.history(days_ago=10)
+        self.assertFalse(output_storage.remote_empty_decision()["effective"])
+        output_storage.set_remote_empty(window_days=14)
+        decision = output_storage.remote_empty_decision()
+        self.assertTrue(decision["effective"])
+        self.assertEqual(decision["rule"]["window_days"], 14)
+
+    def test_the_rule_can_be_switched_off_in_settings(self) -> None:
+        self.history(days_ago=1)
+        output_storage.set_remote_empty(rule_enabled=False)
+        decision = output_storage.remote_empty_decision()
+        self.assertFalse(decision["effective"])
+        self.assertIn("automatic rule is off", decision["reason"])
+
+    def test_a_workstation_mac_defaults_off_and_is_refused_even_when_switched_on(self) -> None:
+        self.history(days_ago=1)
+        self.workstation_on()
+        self.assertEqual(output_storage.remote_empty_decision()["reason"], "workstation in use")
+        self.assertFalse(output_storage.remote_empty_decision()["effective"])
+        output_storage.set_remote_empty("on")                       # the owner says yes...
+        with mock.patch.object(workstation, "in_use", lambda: True):  # ...but someone is at the Mac
+            self.assertEqual(output_storage.remote_empty_refusal(),
+                             ("REMOTE_EMPTY_OFF", "workstation in use: someone is using this Mac"))
+        with mock.patch.object(workstation, "in_use", lambda: False):
+            self.assertIsNone(output_storage.remote_empty_refusal())
+
+    def test_a_settings_file_is_owner_only_and_a_bad_value_is_refused(self) -> None:
+        output_storage.set_remote_empty("automatic")
         self.assertEqual(stat.S_IMODE(os.stat(self.data / output_storage.TRASH_SETTINGS_FILE).st_mode), 0o600)
-        with self.assertRaises(output_storage.TrashRefused):
-            output_storage.set_remote_empty_allowed("off")
+        for body in ({"mode": "sometimes"}, {"window_days": 0}, {"window_days": "7"}, {"rule_enabled": "no"}):
+            with self.assertRaises(output_storage.TrashRefused):
+                output_storage.set_remote_empty(body.get("mode"), rule_enabled=body.get("rule_enabled"),
+                                                window_days=body.get("window_days"))
+
+    def test_the_first_cut_setting_file_still_counts_as_an_explicit_choice(self) -> None:
+        self.data.mkdir(parents=True, exist_ok=True)
+        (self.data / output_storage.TRASH_SETTINGS_FILE).write_text(json.dumps({"allow_remote_empty": False}))
+        self.assertEqual(output_storage.remote_empty_settings()["mode"], "off")
 
 
 class FleetFields(unittest.TestCase):
@@ -198,7 +282,9 @@ class Routes(unittest.TestCase):
         with ExitStack() as stack:
             client = self.client(stack)
             self.put()
+            # Uncredentialed first: the owner call below leaves a session cookie that would authenticate it.
             self.assertEqual(client.post("/api/hub/fleet/nodes/local/empty-trash", json={}).status_code, 401)
+            client.post("/api/hub/trash/allow-remote-empty", json={"mode": "on"}, headers=self.OWNER)
             answer = client.post("/api/hub/fleet/nodes/local/empty-trash", json={}, headers=self.FLEET)
         self.assertEqual(answer.status_code, 200, answer.text)
         row = answer.json()["machines"][0]
@@ -207,6 +293,8 @@ class Routes(unittest.TestCase):
         self.assertFalse((self.home / ".Trash" / "old.mov").exists())
         self.assertEqual(len(self.runs()), 1, "one audit line per run")
         self.assertEqual(self.runs()[0]["emptied"], 1)
+        self.assertEqual(row["remote_empty"]["source"], "you")
+        self.assertTrue(row["remote_empty"]["effective"])
 
     def test_the_switch_off_refuses_the_fleet_and_still_lets_the_window_empty(self) -> None:
         with ExitStack() as stack:
@@ -223,6 +311,7 @@ class Routes(unittest.TestCase):
         self.assertEqual((refused.status_code, refused.json()["code"]), (409, "REMOTE_EMPTY_OFF"))
         self.assertEqual(refused.json()["machines"][0]["state"], "skipped")
         self.assertIn("Allow remote empty is off", refused.json()["detail"])
+        self.assertEqual(refused.json()["machines"][0]["reason"], output_storage.REMOTE_OFF_DETAIL)
         self.assertEqual(everyone.json()["machines"][0]["state"], "skipped")
         self.assertTrue(still_there, "a refused run deletes nothing")
         self.assertIs(listed["allow_remote_empty"], False)
@@ -240,6 +329,32 @@ class Routes(unittest.TestCase):
         self.assertEqual((missing.status_code, missing.json()["code"]), (400, "EXPECTED_REQUIRED"))
         self.assertEqual((changed.status_code, changed.json()["code"]), (409, "TRASH_CHANGED"))
         self.assertTrue((self.home / ".Trash" / "old.mov").exists())
+
+    def test_a_mac_that_never_generates_is_skipped_with_that_reason(self) -> None:
+        with ExitStack() as stack:
+            client = self.client(stack)
+            self.put()
+            answer = client.post("/api/hub/fleet/nodes/local/empty-trash", json={}, headers=self.FLEET)
+        row = answer.json()["machines"][0]
+        self.assertEqual((answer.status_code, row["state"], row["code"]), (409, "skipped", "REMOTE_EMPTY_OFF"))
+        self.assertEqual(row["reason"], "no generation work in 7 days")
+        self.assertEqual(row["remote_empty"]["source"], "automatic")
+        self.assertTrue((self.home / ".Trash" / "old.mov").exists(), "a skipped Mac deletes nothing")
+
+    def test_a_workstation_mac_in_use_is_skipped_even_with_the_switch_on(self) -> None:
+        from components.hub import workstation
+        with ExitStack() as stack:
+            client = self.client(stack)
+            self.put()
+            client.post("/api/hub/trash/allow-remote-empty", json={"mode": "on"}, headers=self.OWNER)
+            stack.enter_context(mock.patch.object(workstation, "in_use", lambda: True))
+            answer = client.post("/api/hub/fleet/empty-trash", json={}, headers=self.FLEET)
+        row = answer.json()["machines"][0]
+        self.assertEqual((row["state"], row["code"]), ("skipped", "REMOTE_EMPTY_OFF"))
+        self.assertEqual(row["reason"], "workstation in use: someone is using this Mac")
+        self.assertTrue((self.home / ".Trash" / "old.mov").exists())
+        # The window is not the fleet: the owner's own click still empties it.
+        self.assertEqual(answer.json()["ok"], True, "a skipped Mac is not a failed run")
 
     def test_a_controller_answers_one_row_per_mac_each_terminal(self) -> None:
         from components.hub.backend import control_plane, fleet_nodes

@@ -749,28 +749,121 @@ FDA_NEEDED = "FULL_DISK_ACCESS_NEEDED"
 FDA_DETAIL = ("macOS keeps the Trash private, so Hub Studio KH needs Full Disk Access to empty it. Turn it on "
               "in System Settings > Privacy & Security > Full Disk Access, then try again.")
 REMOTE_OFF_DETAIL = "Allow remote empty is off on this Mac, so its trash can only be emptied from its own Hub window."
+REMOTE_EMPTY_WINDOW_DAYS = 7      # published in Settings and changeable there
 _EMPTY = threading.Lock()                           # one empty at a time
 _PREVIEW: tuple[float, dict | None] = (0.0, None)
 
 
-def remote_empty_allowed() -> bool:
-    """This Mac's "Allow remote empty" switch: on unless it was turned off here."""
+def remote_empty_settings() -> dict:
+    """This Mac's "Allow remote empty" choice, as Settings shows and changes it.
+
+    `mode` is the owner's explicit word - `on`, `off`, or `automatic` when they never chose - and the
+    rule's own switch and window ride beside it, published rather than buried in code (owner,
+    2026-11-16: default it off on the Macs they use). The first cut wrote a bare
+    `allow_remote_empty`; it is still read as an explicit choice."""
     try:
-        return json.loads((ledger.DATA_DIR / TRASH_SETTINGS_FILE).read_text()).get("allow_remote_empty") is not False
-    except (OSError, ValueError, AttributeError):
-        return True
+        raw = json.loads((ledger.DATA_DIR / TRASH_SETTINGS_FILE).read_text())
+    except (OSError, ValueError):
+        raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    mode = raw.get("mode")
+    if mode not in ("automatic", "on", "off"):
+        legacy = raw.get("allow_remote_empty")
+        mode = "automatic" if legacy is None else ("on" if legacy is True else "off")
+    days = raw.get("window_days")
+    return {"mode": mode, "rule_enabled": raw.get("rule_enabled") is not False,
+            "window_days": days if type(days) is int and 1 <= days <= 365 else REMOTE_EMPTY_WINDOW_DAYS}
 
 
-def set_remote_empty_allowed(enabled: object) -> bool:
-    if not isinstance(enabled, bool):
-        raise TrashRefused(400, "BAD_VALUE", "enabled must be true or false.")
+def recent_generation(days: int) -> bool:
+    """Whether this Mac's own history shows it ran generation work in the last `days` - a finished
+    batch of any Studio but Chat, or an output a job produced."""
+    if not ledger.DB_FILE.exists():
+        return False
+    cutoff = time.time() - days * 86400
+    try:
+        with ledger._conn() as conn:
+            if conn.execute(
+                    "SELECT 1 FROM batches WHERE finished = 1 AND created_at > ? AND "
+                    "COALESCE(json_extract(payload, '$.modality'), '') != 'chat' LIMIT 1",
+                    (cutoff,)).fetchone():
+                return True
+            return conn.execute(
+                "SELECT 1 FROM assets WHERE source = 'job' AND created_at > ? AND "
+                "COALESCE(modality, '') != 'chat' LIMIT 1", (cutoff,)).fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
+def remote_empty_decision() -> dict:
+    """Whether the fleet may empty this Mac's trash, why, and who decided.
+
+    An explicit choice wins. With none, the derived rule (owner, 2026-11-16: *"default it off on Macs
+    you use"*): on only on a Mac whose own history shows generation work inside the window and whose
+    Lite Mode is off. The site heads and this Mac's own workstations never render, so they fall to off
+    without anyone naming them; role is not the test."""
+    settings = remote_empty_settings()
+    rule = {"enabled": settings["rule_enabled"], "window_days": settings["window_days"]}
+    if settings["mode"] != "automatic":
+        return {"effective": settings["mode"] == "on", "source": "you", "reason":
+                None if settings["mode"] == "on" else REMOTE_OFF_DETAIL, "rule": rule}
+    if not settings["rule_enabled"]:
+        return {"effective": False, "source": "automatic",
+                "reason": "the automatic rule is off in Settings", "rule": rule}
+    from . import workstation
+    if workstation.load()["enabled"]:
+        return {"effective": False, "source": "automatic", "reason": "workstation in use", "rule": rule}
+    if not recent_generation(settings["window_days"]):
+        return {"effective": False, "source": "automatic",
+                "reason": f"no generation work in {settings['window_days']} days", "rule": rule}
+    return {"effective": True, "source": "automatic", "reason": None, "rule": rule}
+
+
+def remote_empty_allowed() -> bool:
+    return remote_empty_decision()["effective"]
+
+
+def remote_empty_refusal() -> tuple[str, str] | None:
+    """`(code, reason)` when the fleet route must leave this Mac alone, or None to empty it.
+
+    A switch that is off is one answer; so is someone using a workstation Mac, which is never
+    emptied from elsewhere **even with the switch on** - the same reading of input its step-aside
+    rule already makes."""
+    from . import workstation
+    if workstation.in_use():
+        return "REMOTE_EMPTY_OFF", "workstation in use: someone is using this Mac"
+    decision = remote_empty_decision()
+    if not decision["effective"]:
+        return "REMOTE_EMPTY_OFF", decision["reason"] or REMOTE_OFF_DETAIL
+    return None
+
+
+def set_remote_empty(mode: object = None, *, rule_enabled: object = None, window_days: object = None) -> dict:
+    """Change the choice or the rule from Settings (this Mac's window only). Returns the decision."""
+    current = remote_empty_settings()
+    if mode is not None and mode not in ("automatic", "on", "off"):
+        raise TrashRefused(400, "BAD_VALUE", "mode must be automatic, on or off.")
+    if rule_enabled is not None and not isinstance(rule_enabled, bool):
+        raise TrashRefused(400, "BAD_VALUE", "rule_enabled must be true or false.")
+    if window_days is not None and (type(window_days) is not int or not 1 <= window_days <= 365):
+        raise TrashRefused(400, "BAD_VALUE", "window_days must be a whole number of days from 1 to 365.")
+    values = {**current, "mode": mode if mode is not None else current["mode"],
+              "rule_enabled": current["rule_enabled"] if rule_enabled is None else rule_enabled,
+              "window_days": current["window_days"] if window_days is None else window_days}
     path = ledger.DATA_DIR / TRASH_SETTINGS_FILE
     temporary = path.with_name(path.name + ".tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary.write_text(json.dumps({"allow_remote_empty": enabled}))
+    temporary.write_text(json.dumps(values))
     os.chmod(temporary, 0o600)
     os.replace(temporary, path)
-    return enabled
+    return remote_empty_decision()
+
+
+def set_remote_empty_allowed(enabled: object) -> bool:
+    """The first cut's entry point (a plain on/off), kept for its callers."""
+    if not isinstance(enabled, bool):
+        raise TrashRefused(400, "BAD_VALUE", "enabled must be true or false.")
+    return bool(set_remote_empty("on" if enabled else "off")["effective"])
 
 
 def macos_trash_dirs() -> list[Path]:
@@ -862,7 +955,8 @@ def empty_preview(max_age: float = 0.0) -> dict:
     disk = disk_governor.snapshot()
     plan["disk"] = {"free_gb": disk.get("free_gb"), "swap_used_gb": disk.get("swap_used_gb"),
                     "other_gb": (disk.get("consumers") or {}).get("other_gb")}
-    plan["allow_remote_empty"] = remote_empty_allowed()
+    plan["remote_empty"] = remote_empty_decision()
+    plan["allow_remote_empty"] = plan["remote_empty"]["effective"]
     _PREVIEW = (time.monotonic(), plan)
     return plan
 

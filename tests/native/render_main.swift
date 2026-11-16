@@ -885,6 +885,7 @@ struct PageRenderHarness {
             {"trash_folder":"/Users/owner/Library/Application Support/Hub Studio KH/state/trash",
              "count":14,"bytes":12884901888,"roots":[{"path":"/Users/owner/Library/Application Support/Hub Studio KH/state/trash","count":14,"bytes":12884901888,"primary":true}],
              "macos_trash_auto_empty":true,"allow_remote_empty":true,
+             "remote_empty":{"effective":false,"source":"automatic","reason":"no generation work in 7 days","rule":{"enabled":true,"window_days":7}},
              "empty":{"count":98,"bytes":90194313216,"frees_bytes":68622719385,"blocked":[],
                "locations":[{"location":"hub_trash","path":"/Users/owner/Library/Application Support/Hub Studio KH/state/trash","count":14,"bytes":12884901888,"busy_count":0},
                             {"location":"macos_trash","path":"/Users/owner/.Trash","count":84,"bytes":77309411328,"busy_count":1}],
