@@ -7179,6 +7179,11 @@ final class NativeWorkspaceStore: ObservableObject {
         }
     }
 
+    /// The budget for "Empty all trash". The Hub deletes every item itself and a real Trash Folder
+    /// holds about 90,000 files, so the 30 s default cut the delete short: the owner read "request
+    /// timed out" while the Hub was still working. Same budget as the replay hop below.
+    static let trashEmptyBudget: TimeInterval = 900
+
     /// Empty the Hub Trash Folder and the macOS Trash for good (`POST /api/hub/trash/empty`, 0.6.243).
     /// Sends the count and bytes the dialog showed; the Hub measures again and refuses (409) if they
     /// changed, deleting nothing. The outcome says what was freed and what is left, and why.
@@ -7190,7 +7195,8 @@ final class NativeWorkspaceStore: ObservableObject {
         do {
             let answer: NativeEmptyRun = try await sendJSON(
                 ["api", "hub", "trash", "empty"], method: "POST",
-                body: TrashEmptyBody(expectedCount: expectedCount, expectedBytes: expectedBytes))
+                body: TrashEmptyBody(expectedCount: expectedCount, expectedBytes: expectedBytes),
+                timeout: Self.trashEmptyBudget)
             guard connectionID == requestConnection else { return }
             await refreshTrash()
             trashNote = answer.machines.first.map(Self.emptyOutcome) ?? "The Hub answered without an outcome."
@@ -10435,8 +10441,9 @@ final class NativeWorkspaceStore: ObservableObject {
         return try await perform(request)
     }
 
-    private func sendJSON<T: Decodable, Body: Encodable>(_ components: [String], method: String, body: Body) async throws -> T {
-        var request = try makeRequest(components, method: method)
+    private func sendJSON<T: Decodable, Body: Encodable>(_ components: [String], method: String, body: Body,
+                                                         timeout: TimeInterval? = nil) async throws -> T {
+        var request = try makeRequest(components, method: method, timeout: timeout)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase

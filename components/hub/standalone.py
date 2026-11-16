@@ -4190,10 +4190,12 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             result = output_storage.empty_all(expected_count=body.get("expected_count"),
                                               expected_bytes=body.get("expected_bytes"))
         except output_storage.TrashRefused as refusal:
-            return refusal.status, _empty_row(machine, label, "failed", code=refusal.body["code"],
+            # Already emptying is a skip: the Mac is doing exactly what this run asked for.
+            state = "skipped" if refusal.body["code"] == "EMPTY_RUNNING" else "failed"
+            return refusal.status, _empty_row(machine, label, state, code=refusal.body["code"],
                                               reason=refusal.body["detail"]) | {
                 key: refusal.body[key] for key in ("count", "bytes") if key in refusal.body}
-        return 200, _empty_row(machine, label, "emptied" if result["ok"] else "failed",
+        return 200, _empty_row(machine, label, result["state"],
                                code=result["code"], reason=result["detail"], result=result)
 
     def _empty_envelope(rows: list[dict[str, Any]], status: int = 200, **extra) -> JSONResponse:

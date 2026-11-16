@@ -66,6 +66,12 @@ class Fixture(unittest.TestCase):
         patcher = mock.patch.object(dg, "system_settings_warnings", return_value=[])   # never ask the real Mac
         patcher.start()
         self.addCleanup(patcher.stop)
+        # The macOS Trash lives under the real HOME; a fake disk must not depend on what that Trash
+        # looks like (this Mac's Python has no Full Disk Access, so the real one reads as unknown).
+        self.trash_sizes = {"hub_trash": {"count": 0, "bytes": 0}, "macos_trash": {"count": 0, "bytes": 0}}
+        patcher = mock.patch.object(output_storage, "trash_sizes", side_effect=lambda **_: self.trash_sizes)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         output_storage._ADMISSION_SNAPSHOT.clear()
 
     # the fake disk -----------------------------------------------------------
@@ -425,6 +431,18 @@ class SnapshotTests(Fixture):
         self.assertEqual({item["name"] for item in disk["top"]}, {"outputs", "trash", "macos_trash", "logs", "apps", "models", "swap", "other"})
         self.assertEqual([item["gb"] for item in disk["top"]], sorted((i["gb"] for i in disk["top"]), reverse=True))
         self.assertEqual(set(disk["last_sweep"]), {"at", "reclaimed_gb", "actions"})
+
+    def test_a_macos_trash_it_cannot_read_is_not_known_never_zero(self):
+        # No Full Disk Access: the Trash cannot be read, so it is not "0 GB", and "other files" must
+        # not quietly absorb it (owner: "no data" never reads as $0).
+        self.trash_sizes = {"hub_trash": {"count": 0, "bytes": 0},
+                            "macos_trash": {"count": None, "bytes": None, "code": "FULL_DISK_ACCESS_NEEDED"}}
+        dg.sweep(self.ctx(), startup=True)
+        disk = dg.snapshot(self.hub)
+        self.assertIsNone(disk["consumers"]["macos_trash_gb"])
+        self.assertIsNone(disk["consumers"]["other_gb"])
+        self.assertNotIn("macos_trash", {item["name"] for item in disk["top"]})
+        self.assertIsNotNone(disk["consumers"]["trash_gb"])
 
     def test_state_and_warning_follow_the_tier(self):
         for free, state in ((500, "green"), (100, "amber"), (55, "red"), (30, "stop")):

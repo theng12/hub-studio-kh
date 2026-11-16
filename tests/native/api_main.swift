@@ -7763,6 +7763,11 @@ struct NativeAPITests {
                 && wrappedTuple.contains("bitrate uncapped"),
                 "a wrapped tuple must read the same as a flat one: \(wrappedTuple)")
 
+        // "Empty all trash" deletes every item itself and a real Trash Folder holds about 90,000
+        // files: the window's call must outlast the 30 s default that cut the delete short.
+        require(NativeWorkspaceStore.trashEmptyBudget >= 900,
+                "the window's empty call must outlast a long delete")
+
         print("Native API contract checks passed")
     }
 }

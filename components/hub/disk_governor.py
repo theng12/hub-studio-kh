@@ -662,8 +662,9 @@ def _measure(ctx: Context, now: float, *, force: bool = False) -> None:
             except OSError:
                 pass
     measured["logs"] = logs
-    # The whole macOS Trash (0.6.243) is its own consumer, so "other" shrinks by it; 0 when unreadable.
-    measured["macos_trash"] = output_storage.trash_sizes(max_age=60.0)["macos_trash"]["bytes"] or 0
+    # The whole macOS Trash (0.6.243) is its own consumer, so "other" shrinks by it. None when macOS
+    # keeps the Trash private (no Full Disk Access): "no data" must never read as 0.
+    measured["macos_trash"] = output_storage.trash_sizes(max_age=60.0)["macos_trash"]["bytes"]
     if force or now - _STATE["measured_at"] >= MEASURE_EVERY_S:
         _STATE["measured_at"] = now
         measured["apps"] = logical_allocated(ctx.app_root) if ctx.app_root else 0
@@ -762,11 +763,15 @@ def snapshot(data_dir: Path | None = None) -> dict:
     measured = dict(_STATE["measured"])
     used = max(0, usage.total - usage.free)
     known = {name: int(measured.get(name) or 0)
-             for name in ("outputs", "trash", "macos_trash", "logs", "apps", "models")}
+             for name in ("outputs", "trash", "logs", "apps", "models")}
+    known["macos_trash"] = measured.get("macos_trash")   # None when it could not be read, never 0
     known["swap"] = _swap_file_bytes()     # the swap files share this APFS container's space
-    consumers = {f"{name}_gb": round(size / GB, 2) for name, size in known.items()}
-    consumers["other_gb"] = round(max(0, used - sum(known.values())) / GB, 2)
-    top = sorted(({"name": name.removesuffix("_gb"), "gb": gb} for name, gb in consumers.items()),
+    consumers = {f"{name}_gb": (None if size is None else round(size / GB, 2)) for name, size in known.items()}
+    # With the Trash unknown, "other" would silently absorb it: say not known rather than overstate it.
+    consumers["other_gb"] = (None if None in known.values()
+                             else round(max(0, used - sum(known.values())) / GB, 2))
+    top = sorted(({"name": name.removesuffix("_gb"), "gb": gb} for name, gb in consumers.items()
+                  if gb is not None),
                  key=lambda item: item["gb"], reverse=True)
     if not measured:                       # before the first sweep has measured anything, say nothing rather than guess
         consumers, top = None, []

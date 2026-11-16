@@ -122,9 +122,20 @@ class EmptyAll(Fixture):
         with mock.patch.object(output_storage, "QUIET_S", 10_000.0):
             done = output_storage.empty_all()
         macos = done["locations"][1]
-        self.assertEqual((macos["state"], macos["left_count"]), ("emptied", 2))  # ctime is recent for both
+        # Both were kept, so nothing was emptied: "skipped" is the honest word over honest figures
+        # (critic, 2026-11-17; "emptied" with deleted_count 0 was the defect).
+        self.assertEqual((macos["state"], macos["left_count"]), ("skipped", 2))  # ctime is recent for both
         self.assertIn("may still be being written", macos["detail"])
         self.assertTrue(fresh.exists())
+
+    def test_a_trash_that_was_entirely_kept_is_skipped_with_a_reason(self) -> None:
+        self.macos_item("copying.mov")
+        with mock.patch.object(output_storage, "QUIET_S", 10_000.0):
+            done = output_storage.empty_all()
+        self.assertTrue(done["ok"])
+        self.assertEqual((done["state"], done["deleted_count"], done["left_count"]), ("skipped", 0, 1))
+        self.assertEqual(done["detail"], "Left 1 item changed in the last minute: they may still be being written.")
+        self.assertTrue((self.macos / "copying.mov").exists())
 
     def test_without_full_disk_access_it_says_so_and_never_prompts(self) -> None:
         self.hub_item("batch_1")
@@ -333,6 +344,34 @@ class Routes(unittest.TestCase):
         self.assertEqual((missing.status_code, missing.json()["code"]), (400, "EXPECTED_REQUIRED"))
         self.assertEqual((changed.status_code, changed.json()["code"]), (409, "TRASH_CHANGED"))
         self.assertTrue((self.home / ".Trash" / "old.mov").exists())
+
+    def test_a_window_run_that_deleted_nothing_is_skipped_not_emptied(self) -> None:
+        # The Gateway keeps this row's word verbatim, so "emptied" with 0 deleted and 1 left told the
+        # Fleet page something that did not happen (critic, 2026-11-17).
+        with ExitStack() as stack:
+            client = self.client(stack)
+            self.put()
+            stack.enter_context(mock.patch.object(output_storage, "QUIET_S", 10_000.0))
+            plan = output_storage.empty_preview()
+            answer = client.post("/api/hub/trash/empty", headers=self.OWNER,
+                                 json={"expected_count": plan["count"], "expected_bytes": plan["bytes"]})
+        row = answer.json()["machines"][0]
+        self.assertEqual((answer.status_code, row["state"], row["deleted_count"], row["left_count"]),
+                         (200, "skipped", 0, 1))
+        self.assertIn("Left 1 item changed in the last minute", row["reason"])
+
+    def test_a_second_press_while_emptying_is_skipped_not_failed(self) -> None:
+        # A Mac already emptying is doing what this run asked: a skip, never an error on the Fleet page.
+        with ExitStack() as stack:
+            client = self.client(stack)
+            client.post("/api/hub/trash/allow-remote-empty", json={"mode": "on"}, headers=self.OWNER)
+            busy = output_storage.TrashRefused(409, "EMPTY_RUNNING",
+                                               "This Mac is already emptying its trash; look again when it ends.")
+            stack.enter_context(mock.patch.object(output_storage, "empty_all", side_effect=busy))
+            answer = client.post("/api/hub/fleet/nodes/local/empty-trash", json={}, headers=self.FLEET)
+        row = answer.json()["machines"][0]
+        self.assertEqual((answer.status_code, row["state"], row["code"]), (409, "skipped", "EMPTY_RUNNING"))
+        self.assertIn("already emptying", row["reason"])
 
     def test_the_first_state_is_off_and_the_row_says_so_plainly(self) -> None:
         with ExitStack() as stack:

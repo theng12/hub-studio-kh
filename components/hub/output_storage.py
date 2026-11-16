@@ -999,9 +999,19 @@ def trash_sizes(max_age: float = 60.0) -> dict:
                             {"count": sum(r["count"] for r in macos), "bytes": sum(r["bytes"] for r in macos)})}
 
 
+def run_state(*, deleted: int, left_count: int | None, code: str | None) -> str:
+    """The word a run earns. `failed` is a refusal; `skipped` is nothing removed and something left
+    (a Mac whose whole trash was still being written is not "emptied"); `emptied` means at least one
+    item really went."""
+    if code:
+        return "failed"
+    return "skipped" if deleted == 0 and (left_count or 0) > 0 else "emptied"
+
+
 def _outcome(row: dict, *, freed: int, deleted: int, left_count: int | None, left_bytes: int | None,
              code: str | None = None, detail: str | None = None) -> dict:
-    return {"location": row["location"], "path": row["path"], "state": "failed" if code else "emptied",
+    return {"location": row["location"], "path": row["path"],
+            "state": run_state(deleted=deleted, left_count=left_count, code=code),
             "code": code, "detail": detail, "freed_bytes": freed, "deleted_count": deleted,
             "left_count": left_count, "left_bytes": left_bytes}
 
@@ -1111,12 +1121,17 @@ def empty_all(*, expected_count: object = None, expected_bytes: object = None) -
         return None if any(v is None for v in values) else sum(values)
 
     failed = [row for row in rows if row["code"]]
+    deleted, left = sum(r["deleted_count"] for r in rows), total("left_count")
     log.warning("Empty all trash: freed %d bytes, %d items; %d location(s) failed",
-                sum(r["freed_bytes"] for r in rows), sum(r["deleted_count"] for r in rows), len(failed))
+                sum(r["freed_bytes"] for r in rows), deleted, len(failed))
+    why = failed[0]["detail"] if failed else (
+        f"Left {left} item{'s' if left != 1 else ''} changed in the last minute: they may still be being written."
+        if deleted == 0 and left else None)
     return {"ok": not failed, "code": failed[0]["code"] if failed else None,
-            "detail": failed[0]["detail"] if failed else None, "locations": rows,
-            "freed_bytes": sum(r["freed_bytes"] for r in rows), "deleted_count": sum(r["deleted_count"] for r in rows),
-            "left_count": total("left_count"), "left_bytes": total("left_bytes")}
+            "state": run_state(deleted=deleted, left_count=left, code=failed[0]["code"] if failed else None),
+            "detail": why, "locations": rows,
+            "freed_bytes": sum(r["freed_bytes"] for r in rows), "deleted_count": deleted,
+            "left_count": left, "left_bytes": total("left_bytes")}
 
 
 def _to_trash(path: Path, group, file_id: int, now: float, managed_root: object = None) -> bool:
