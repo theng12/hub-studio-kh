@@ -24,8 +24,10 @@ import hmac
 import ipaddress
 import json
 import os
+from pathlib import Path
 import re
 import secrets
+import stat
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -38,6 +40,13 @@ from .registry import DATA_DIR
 TOKEN_FILE = DATA_DIR / ".hub_token"
 PASSWORD_FILE = DATA_DIR / ".hub_password.json"
 SESSIONS_FILE = DATA_DIR / ".hub_sessions.json"
+# The Launcher's own update-hold credential. It lives in the Launcher's data folder, never
+# Hub's; Hub reads it per request so an atomic Launcher rotation needs no Hub restart. It is
+# accepted only on the two hold routes, only from loopback and only from a native client.
+INSTALLER_HOLD_TOKEN_ENV = "STUDIOHUB_INSTALLER_HOLD_TOKEN_FILE"
+DEFAULT_INSTALLER_HOLD_TOKEN_FILE = (
+    Path.home() / "Library/KHUpdater/state/hold-token"
+)
 
 # Paths any client may hit without a token.
 PUBLIC_PATHS = {"/", "/api/health", "/api/version", "/health/live",
@@ -399,6 +408,52 @@ def valid_machine_token(request: Request, hub_token: str) -> bool:
     from . import peers
     fleet = peers.fleet_token()
     return bool(fleet and secrets.compare_digest(offered, fleet))
+
+
+def installer_hold_token_file() -> Path:
+    override = os.environ.get(INSTALLER_HOLD_TOKEN_ENV, "").strip()
+    return Path(override).expanduser() if override else DEFAULT_INSTALLER_HOLD_TOKEN_FILE
+
+
+def _installer_hold_token() -> str | None:
+    """The Launcher's current hold token, read fresh on every request.
+
+    Owner-only, non-symlink, size-bounded and shaped like the Hub token. A missing, partial,
+    rotated, or unreadable file is simply no credential; the caller then follows the normal
+    Hub-token path and gets 401.
+    """
+    path = installer_hold_token_file()
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(descriptor, "r") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or info.st_mode & 0o077 or info.st_size > 257):
+                return None
+            token = stream.read(257).strip()
+    except OSError:
+        return None
+    return token if re.fullmatch(r"[A-Za-z0-9_-]{24,256}", token) else None
+
+
+def installer_hold_request(request: Request) -> bool:
+    """The one route and caller shape allowed to use the Launcher's hold credential.
+
+    Header only: never a query parameter, cookie or fleet credential. Loopback and no Origin,
+    because this is the native Launcher on this Mac, not a browser page.
+    """
+    if request.method not in ("POST", "DELETE"):
+        return False
+    if request.url.path != "/api/maintenance/hold":
+        return False
+    if not is_loopback(request) or request.headers.get("origin"):
+        return False
+    offered = presented_machine_token(request)
+    expected = _installer_hold_token()
+    return bool(offered and expected and secrets.compare_digest(offered, expected))
 
 
 def presented_owner_token(request: Request, hub_token: str) -> bool:
@@ -1002,6 +1057,10 @@ def make_middleware(token: str):
         # A LAN model share: the unguessable, expiring, single-package token in the path is the
         # credential, checked by the route (an unknown or expired one is a 404). Read-only.
         if request.method in {"GET", "HEAD"} and request.url.path.startswith("/api/hub/model-share/"):
+            return await call_next(request)
+        # The Launcher's update-hold credential is deliberately narrower than every other
+        # credential: two routes, loopback, no Origin, header only, read fresh per request.
+        if installer_hold_request(request):
             return await call_next(request)
         if (is_loopback(request)
                 and os.environ.get("STUDIOHUB_REQUIRE_AUTH") != "1"):
