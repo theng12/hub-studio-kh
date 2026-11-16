@@ -9107,7 +9107,7 @@ struct StudioContent: View {
     /// and has no route that turns it off, so this is a button, never a switch to flick back. `nil` is a
     /// Hub too old to report it, said as such rather than drawn as off.
     @ViewBuilder private var macosTrashSetting: some View {
-        if let folder = workspace.trashFolder {
+        if let folder = workspace.trashFolder {   // nil from a Hub older than the field: not drawn
             let state = folder.macosTrashAutoEmpty
             ValueRow("Remove Trash items after 30 days") {
                 HStack(spacing: HubSpace.s) {
@@ -9124,15 +9124,6 @@ struct StudioContent: View {
                  + "after 30 days, which is what stops that Trash from filling the disk.")
                 .font(HubType.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if let allowed = folder.allowRemoteEmpty {
-                Toggle("Allow remote empty", isOn: Binding(
-                    get: { allowed }, set: { value in Task { await workspace.setAllowRemoteEmpty(value) } }))
-                    .toggleStyle(.checkbox).disabled(!connected)
-                Text("Lets the Gateway, and agents with its key, empty this Mac's trash for good. "
-                     + "When it is off, only this window can.")
-                    .font(HubType.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
     }
 
@@ -9148,7 +9139,7 @@ struct StudioContent: View {
         }
         let busy = plan.locations.compactMap(\.busyCount).reduce(0, +)
         lines.append("This cannot be undone. It frees about \(gb(plan.freesBytes))"
-                     + (busy > 0 ? "; \(busy) item\(busy == 1 ? "" : "s") still being written stay." : "."))
+                     + (busy > 0 ? "; \(busy) item\(busy == 1 ? " is" : "s are") still being written, so \(busy == 1 ? "it stays" : "they stay")." : "."))
         if let disk = plan.disk {
             if let free = disk.freeGb {
                 lines.append("Free disk goes from \(String(format: "%.1f", free)) GB to about "
@@ -9179,7 +9170,50 @@ struct StudioContent: View {
     }
 
     /// Per-device storage limits, with the bytes that cleanup may not touch shown beside them.
+    /// "Empty All Trash" (0.6.243) and this Mac's "Allow remote empty" switch. Emptying deletes for
+    /// good, so the dialog names the count, the bytes, what it really frees and what it cannot touch;
+    /// the Hub measures again and refuses if anything changed, so the figures shown stay honest.
+    @ViewBuilder private var emptyAllTrash: some View {
+        if let folder = workspace.trashFolder {
+            if let plan = folder.empty {
+                HStack {
+                    Button("Empty All Trash…") { confirmingEmptyAll = true }
+                        .disabled(!connected || workspace.emptyingTrash || plan.count == 0)
+                    if workspace.emptyingTrash { ProgressView().controlSize(.small) }
+                }
+                .confirmationDialog(
+                    "Empty all trash on this Mac for good?",
+                    isPresented: $confirmingEmptyAll, titleVisibility: .visible) {
+                        Button("Delete \(plan.count) item\(plan.count == 1 ? "" : "s") (\(NativeWorkspaceStore.gigabytes(plan.bytes)))",
+                               role: .destructive) {
+                            Task { await workspace.emptyAllTrash(expectedCount: plan.count, expectedBytes: plan.bytes) }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text(Self.emptyAllMessage(plan))
+                    }
+                if let blocked = plan.locations.first(where: { $0.code == "FULL_DISK_ACCESS_NEEDED" }), let detail = blocked.detail {
+                    Text(detail).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let allowed = folder.allowRemoteEmpty {
+                Toggle("Allow remote empty", isOn: Binding(
+                    get: { allowed }, set: { value in Task { await workspace.setAllowRemoteEmpty(value) } }))
+                    .toggleStyle(.checkbox).disabled(!connected)
+                Text("Lets the Gateway, and agents with its key, empty this Mac's trash for good. "
+                     + "When it is off, only this window can.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     @ViewBuilder private var storageControls: some View {
+        // From the Hub's Trash overview alone: a Mac whose storage limits could not be read can still
+        // see what emptying would remove, and empty it.
+        emptyAllTrash
+        macosTrashSetting
         if let settings = workspace.deviceSettings {
             ValueRow("Size limit", value: NativeWorkspaceStore.gigabytes(settings.effective.maxBytes))
             ValueRow("Move to Trash after",
@@ -9210,28 +9244,6 @@ struct StudioContent: View {
                     } message: {
                         Text("This uses macOS Trash, so anything moved can still be put back. The Trash Folder itself stays; empty macOS Trash when you want the space back.")
                     }
-                if let plan = folder.empty {
-                    HStack {
-                        Button("Empty All Trash…") { confirmingEmptyAll = true }
-                            .disabled(!connected || workspace.emptyingTrash || plan.count == 0)
-                        if workspace.emptyingTrash { ProgressView().controlSize(.small) }
-                    }
-                    .confirmationDialog(
-                        "Empty all trash on this Mac for good?",
-                        isPresented: $confirmingEmptyAll, titleVisibility: .visible) {
-                            Button("Delete \(plan.count) item\(plan.count == 1 ? "" : "s") (\(NativeWorkspaceStore.gigabytes(plan.bytes)))",
-                                   role: .destructive) {
-                                Task { await workspace.emptyAllTrash(expectedCount: plan.count, expectedBytes: plan.bytes) }
-                            }
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            Text(Self.emptyAllMessage(plan))
-                        }
-                    if let blocked = plan.locations.first(where: { $0.code == "FULL_DISK_ACCESS_NEEDED" }), let detail = blocked.detail {
-                        Text(detail).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
                 ForEach(folder.roots.filter { !($0.primary ?? false) && $0.count > 0 }) { root in
                     Text("\(root.path): \(root.count) item\(root.count == 1 ? "" : "s"), \(NativeWorkspaceStore.gigabytes(root.bytes))"
                          + (root.crossVolume == true ? " (on another volume; move these from Finder)" : ""))
@@ -9244,7 +9256,6 @@ struct StudioContent: View {
                 ValueRow("Trash Folder", value: "\(NativeWorkspaceStore.gigabytes(trash.bytes)), items older than \(settings.effective.trashHandoffDays ?? 7) days or beyond \(settings.effective.trashHandoffGb ?? 20) GB go to macOS Trash")
                 Button("Show Trash Folder in Finder") { NSWorkspace.shared.activateFileViewerSelecting([HubTrash.live]) }
             }
-            macosTrashSetting
             ForEach(workspace.storageUsage) { usage in
                 VStack(alignment: .leading, spacing: HubSpace.xs) {
                     HStack {

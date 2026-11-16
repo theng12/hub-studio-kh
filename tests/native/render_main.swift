@@ -140,6 +140,7 @@ struct PageRenderHarness {
             seedFixtures(studio.workspace, scratch: scratch)
             seedLibrary(studio.workspace)
             seedRenders(studio.workspace)
+            seedTrash(studio.workspace)
             // Running services and both tokens, so Connections draws its (masked) credential rows.
             studio.readyURL = URL(string: "http://127.0.0.1:47873")
             // The footer's status line is the app's own field; a fixture Hub is running, so the
@@ -878,6 +879,19 @@ struct PageRenderHarness {
 
     /// The Models, Voices and Connections fixtures: a small library, five saved voices and a controller
     /// with four Macs in different conditions. Only in the throwaway copy render-page.sh builds.
+    /// Settings > Local storage's Trash Folder row and Empty All Trash (0.6.243), which need a Hub answer.
+    @MainActor private static func seedTrash(_ workspace: NativeWorkspaceStore) {
+        workspace.trashFolder = decode(NativeTrashFolder.self, """
+            {"trash_folder":"/Users/owner/Library/Application Support/Hub Studio KH/state/trash",
+             "count":14,"bytes":12884901888,"roots":[{"path":"/Users/owner/Library/Application Support/Hub Studio KH/state/trash","count":14,"bytes":12884901888,"primary":true}],
+             "macos_trash_auto_empty":true,"allow_remote_empty":true,
+             "empty":{"count":98,"bytes":90194313216,"frees_bytes":68622719385,"blocked":[],
+               "locations":[{"location":"hub_trash","path":"/Users/owner/Library/Application Support/Hub Studio KH/state/trash","count":14,"bytes":12884901888,"busy_count":0},
+                            {"location":"macos_trash","path":"/Users/owner/.Trash","count":84,"bytes":77309411328,"busy_count":1}],
+               "disk":{"free_gb":41.2,"swap_used_gb":6.8,"other_gb":52.4}}}
+            """)
+    }
+
     @MainActor private static func seedLibrary(_ workspace: NativeWorkspaceStore) {
         func model(_ repo: String, _ label: String, _ family: String, _ function: StudioFunction, cached: Bool,
                    size: Double, block: String? = nil, memory: String? = nil) -> NativeModel {

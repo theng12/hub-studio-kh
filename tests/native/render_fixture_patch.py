@@ -37,8 +37,9 @@ for decl, kind in (("models", "[NativeModel]"), ("voices", "[NativeVoice]"), ("h
     needle = f"@Published private(set) var {decl}: {kind}"
     assert needle in text, f"{decl} moved; update render_fixture_patch.py"
     text = text.replace(needle, f"@Published var {decl}: {kind}", 1)
+# Settings > Local storage: the Trash Folder row and the Empty All Trash button (0.6.243).
 for name in ("controllerIdentity", "fleetOverview", "fleetNodes", "controllerReachable",
-             "catalogReadError", "fleetReadError"):
+             "catalogReadError", "fleetReadError", "trashFolder"):
     needle = f"@Published private(set) var {name}:"
     assert needle in text, f"{name} moved; update render_fixture_patch.py"
     text = text.replace(needle, f"@Published var {name}:", 1)
