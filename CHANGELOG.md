@@ -10,7 +10,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 
 - `components/hub/backend/auth.py` reads the Launcher's 0600 `~/Library/KHUpdater/state/hold-token` per request and accepts it only for `POST`/`DELETE /api/maintenance/hold`, loopback, no Origin, header `X-Hub-Token` or Bearer. Missing, wrong, world-readable or symlinked files stay 401; existing Hub-token auth is unchanged.
 - `tests/test_update_hold.py` covers token present (200), absent while work is queued (401), wrong token, query/cookie/off-route/off-loopback rejection, rotation and file-mode/symlink refusal.
-- This is the **bootstrap** release: 0.6.240 needs a bootstrap install by the lead (hidden launch, temp data dir); 0.6.241 proves the automatic Launcher path. The feed `hold` field depends on Updater/Launcher 1.0.24.
+- This is the **bootstrap** release: 0.6.240 needs a bootstrap install by the lead (hidden launch, temp data dir); 0.6.241 proves the automatic Launcher path. The publisher supports `--hold-url`; this release publishes the hold endpoint in its feed entry.
 
 ## 0.6.239 — 2026-11-15
 
