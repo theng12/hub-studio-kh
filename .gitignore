@@ -36,3 +36,4 @@ components/trash/
 
 # Recoverable "delete". The owner sorts this folder; it is never committed.
 _trash/
+/_trash
