@@ -3309,6 +3309,21 @@ struct NativeAPITests {
                 "the date is read out of the controller's own words")
         require(FleetCopy.removalDate(in: "refused for another reason") == nil,
                 "a refusal that is not a removal must not invent a date")
+        // Hub 0.6.245: the refusal carries a code, and the Mac classifies on it rather than on the
+        // words. The sentence still decides, because a Mac may be updated before its controller.
+        let revoked: [String: Any] = ["ok": false, "state": "revoked", "code": "IDENTITY_REVOKED",
+                                      "removed_at": "2026-09-28", "reconnect": "join",
+                                      "detail": FixtureProtocol.removalSentence]
+        require(FleetCopy.isRevoked(revoked), "a revoked body must be classified by its code")
+        require(FleetCopy.isRevoked(["code": "IDENTITY_REVOKED"]), "the code alone is enough")
+        require(FleetCopy.isRevoked(["detail": FixtureProtocol.removalSentence]),
+                "an older controller that only sends the sentence must still be understood")
+        require(!FleetCopy.isRevoked(["detail": "The Fleet token is wrong"]),
+                "a wrong token must not read as a removal")
+        require(FleetCopy.removalDate(in: revoked) == "2026-09-28",
+                "the date comes from the controller's field, not from its words")
+        require(FleetCopy.removalDate(in: ["detail": FixtureProtocol.removalSentence]) == "2026-09-28",
+                "with no field, the date still comes out of the sentence")
         // The removal must survive a later lifecycle refresh: the loop is stopped, not merely
         // interrupted, and the startup attempt is not allowed to start a new one.
         FixtureProtocol.resetFleetRequests()

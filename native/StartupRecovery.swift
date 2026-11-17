@@ -213,9 +213,14 @@ enum FleetCopy {
             ? "this Mac's controller" : "the controller at \(address)"
         let when = date.map { " on \($0)" } ?? ""
         return "\(machine.prefix(1).uppercased() + machine.dropFirst()) removed this Mac\(when). "
-            + "Re-admitting it is a decision on that controller: open its Connections page, "
-            + "use Re-admit, then join again from here. This Mac has stopped trying to re-join "
-            + "and no longer holds the group's credential."
+            + "To reconnect, press Reconnect… and paste that controller's Fleet token, the one it "
+            + "hands out on its Connections page. Re-admitting it is a decision on that controller. "
+            + "This Mac has stopped trying to re-join and no longer holds the group's credential. "
+            // Said plainly, because it is what a person wonders next: the work the group had queued
+            // for this Mac was dropped with the removal and does not come back, while this Mac's own
+            // files were never touched — the Hub does not delete a Mac's work as a side effect.
+            + "Work that controller had queued for this Mac was dropped and is not restored; "
+            + "files already on this Mac stay here."
     }
 
     /// What a Mac says when its controller no longer lists it at all (not removed, just gone from

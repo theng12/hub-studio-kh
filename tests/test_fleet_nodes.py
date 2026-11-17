@@ -475,6 +475,8 @@ class RemovalIsAnEvictionTest(unittest.TestCase):
         again = self._join("sold-mac")
         self.assertTrue(again["credential"], "a re-admitted Mac is issued a fresh credential")
         self.assertTrue(fleet_nodes.verify_node_credential("sold-mac", again["credential"]))
+        # One join is enough, and it is the same Mac: the roster holds one row under the same id.
+        self.assertEqual(list(fleet_nodes._read()), ["sold-mac"], "it rejoins as itself, not as a second Mac")
 
     def test_a_wiped_mac_holds_nothing_that_works(self) -> None:
         # A wiped Mac has no credential at all. It can only re-join by being given the group
