@@ -4299,6 +4299,49 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             "freed_bytes": sum(row.get("freed_bytes") or 0 for row in rows),
             "deleted_count": sum(row.get("deleted_count") or 0 for row in rows)})
 
+    async def _attention_answer(fresh: bool) -> JSONResponse:
+        """This Mac's report: the last measurement, or a bounded fresh one (`?now=1`)."""
+        from . import attention
+        if not fresh:
+            return JSONResponse(attention.cached())
+        try:
+            result = await _asyncio.wait_for(
+                run_in_threadpool(attention.refresh, activity_state=_recent_job_state()), timeout=3.0)
+        except _asyncio.TimeoutError:
+            return JSONResponse({**attention.cached(), "state": "unknown", "source": "timeout",
+                                 "reasons": [{"code": "MEASURE_TIMEOUT",
+                                              "detail": "This Mac did not answer within 3 s."}]})
+        return JSONResponse(result)
+
+    @app.get("/api/hub/fleet/nodes/{node_id}/attention")
+    async def fleet_node_attention(node_id: str, request: Request) -> JSONResponse:
+        """One Mac's attention report; `?now=1` re-measures that Mac only.
+
+        `local` (or this Mac's id) answers here; a joined node is relayed through its controller, the
+        same way its empty-trash route is, so the Fleet page can refresh a single row without holding
+        the node's own address (Gateway - Lead - 001, 2026-11-17).
+        """
+        from .backend import fleet_nodes as fleet
+        fresh = request.query_params.get("now") in ("1", "true", "yes")
+        wanted = node_id.strip().lower()
+        if wanted in ("local", fleet.this_machine()["id"].lower()):
+            return await _attention_answer(fresh)
+        if control_plane.load_settings().get("role") != "controller":
+            raise HTTPException(404, "this Mac is not a controller, so it has no nodes to reach")
+        try:
+            answer = await fleet.relay_model(wanted, "GET", "/attention?now=1" if fresh else "/attention")
+        except fleet.StartupRelayError as error:
+            return JSONResponse({"state": "unknown",
+                                 "reasons": [{"code": "LOCATION_UNREACHABLE",
+                                              "detail": f"{wanted} could not be reached through its controller."}],
+                                 "source": "unreachable",
+                                 "measured_at": None, "checked_in_at": None,
+                                 "interval_s": None, "relayed": {"status": error.status,
+                                                                 **(error.body or {})}},
+                                status_code=502)
+        payload = (answer or {}).get("attention_report") or answer or {}
+        return JSONResponse({**payload, "relayed": {"node": wanted}})
+
     @app.post("/api/hub/fleet/nodes/{node_id}/empty-trash")
     async def fleet_node_empty_trash(node_id: str, request: Request) -> JSONResponse:
         """Empty one Mac's trash (this one as `local` or its id, or a joined node through its controller)."""
@@ -4405,17 +4448,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         `?now=1` re-measures for a caller that needs the current answer, bounded in time; without it
         the answer is the last measurement and says `source: "cached"` beside its own `measured_at`.
         """
-        from . import attention
-        fresh = request.query_params.get("now") in ("1", "true", "yes")
-        if not fresh:
-            return JSONResponse(attention.cached())
-        try:
-            result = await _asyncio.wait_for(
-                run_in_threadpool(attention.refresh, activity_state=_recent_job_state()), timeout=3.0)
-        except _asyncio.TimeoutError:
-            return JSONResponse({**attention.cached(), "state": "unknown", "source": "timeout",
-                                 "reason": "MEASURE_TIMEOUT: this Mac did not answer within 3 s."})
-        return JSONResponse(result)
+        return await _attention_answer(request.query_params.get("now") in ("1", "true", "yes"))
 
     @app.get("/api/hub/trash")
     async def hub_trash(request: Request) -> JSONResponse:

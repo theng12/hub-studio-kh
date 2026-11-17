@@ -104,6 +104,17 @@ class Caching(Fixture):
         self.assertGreaterEqual(got["checked_in_at"], 500.0, "but contact is now")
 
 
+class Codes(Fixture):
+    def test_every_code_it_can_emit_is_in_the_closed_set(self) -> None:
+        emitted = {attention.STORAGE_REASONS[tier][0] for tier in attention.STORAGE_REASONS}
+        emitted |= {attention.ACTIVITY_REASONS[state][0] for state in attention.ACTIVITY_REASONS}
+        emitted |= {"MEASURE_TIMEOUT", "LOCATION_UNREACHABLE", "UNKNOWN"}
+        self.assertTrue(emitted <= attention.REASON_CODES, emitted - attention.REASON_CODES)
+        # The Gateway maps these; a code it does not know renders neutral rather than guessed.
+        for code in ("SWAP_GROWTH_EXCEEDED", "INSUFFICIENT_MEMORY", "OUTPUT_STORAGE_FULL", "HEALTH_DOWN"):
+            self.assertIn(code, attention.REASON_CODES)
+
+
 class FleetRow(Fixture):
     def test_the_row_carries_the_attention_block(self) -> None:
         from components.hub import standalone

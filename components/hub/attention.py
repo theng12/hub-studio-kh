@@ -29,6 +29,14 @@ MIN_INTERVAL_S = 60
 MAX_INTERVAL_S = 24 * 3600
 
 _CACHE: dict = {"result": None, "checked_in_at": None}
+#: The closed set of reason codes. The Gateway maps these; anything outside renders neutral on its
+#: page (Gateway - Lead - 001, 2026-11-17), so this list is the contract, not a suggestion.
+REASON_CODES = frozenset({
+    "OUTPUT_STORAGE_RED", "OUTPUT_STORAGE_STOP", "OUTPUT_STORAGE_FULL", "LAST_JOB_FAILED",
+    "MEASURE_TIMEOUT", "SWAP_GROWTH_EXCEEDED", "INSUFFICIENT_MEMORY", "LOCATION_UNREACHABLE",
+    "HEALTH_DOWN", "UNKNOWN",
+})
+
 #: Storage tiers that need a person. `amber` is a warning the governor itself acts on, not a fault.
 STORAGE_REASONS = {
     "stop": ("OUTPUT_STORAGE_STOP", "Output storage is full enough that the Hub has stopped taking work."),
