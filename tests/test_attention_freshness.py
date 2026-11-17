@@ -45,6 +45,7 @@ class Measurement(Fixture):
         self.assertEqual(got["source"], "measured")
         self.assertEqual(got["storage"]["state"], "red")
         self.assertEqual(got["storage"]["measured_at"], 1000.0, "storage carries its own time")
+        self.assertEqual(got["checked_in_at"], 1000.0, "a fresh answer is contact at the same moment")
 
     def test_a_cleared_condition_clears_the_flag_on_the_next_measurement(self) -> None:
         attention.refresh(disk=RED, activity_state="ready", now=1000.0)
@@ -99,7 +100,8 @@ class Caching(Fixture):
         attention.refresh(disk=GREEN, activity_state="ready", now=500.0)
         got = attention.cached()
         self.assertEqual(got["source"], "cached")
-        self.assertEqual(got["measured_at"], 500.0)
+        self.assertEqual(got["measured_at"], 500.0, "a cached verdict keeps its own time")
+        self.assertGreaterEqual(got["checked_in_at"], 500.0, "but contact is now")
 
 
 class FleetRow(Fixture):
@@ -107,9 +109,12 @@ class FleetRow(Fixture):
         from components.hub import standalone
         attention.refresh(disk=GREEN, activity_state="ready", now=42.0)
         row = standalone._trash_and_memory({})
-        self.assertIn("attention", row)
-        self.assertEqual(row["attention"]["state"], "ok")
-        self.assertEqual(row["attention"]["measured_at"], 42.0)
+        # `attention_report`, not `attention`: the Gateway's row already uses that key for a sentence.
+        self.assertIn("attention_report", row)
+        self.assertNotIn("attention", row)
+        self.assertEqual(row["attention_report"]["state"], "ok")
+        self.assertEqual(row["attention_report"]["measured_at"], 42.0)
+        self.assertGreaterEqual(row["attention_report"]["checked_in_at"], 42.0)
 
 
 if __name__ == "__main__":

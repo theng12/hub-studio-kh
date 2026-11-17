@@ -956,7 +956,9 @@ def _trash_and_memory(host: dict[str, Any]) -> dict[str, Any]:
     # The attention block travels with the row so the fleet page can print when it was measured
     # (owner, 2026-11-17: "signals every 30 minutes so we don't have to keep checking").
     from . import attention
-    return {**{key: host.get(key) for key in _TRASH_AND_MEMORY_KEYS}, "attention": attention.cached()}
+    # `attention_report`, not `attention`: the Gateway's row already uses `attention` for its own
+    # sentence, and an object under that key would break every reader (Gateway - Lead - 001, 3ff4686).
+    return {**{key: host.get(key) for key in _TRASH_AND_MEMORY_KEYS}, "attention_report": attention.cached()}
 
 
 def _app_version() -> str:

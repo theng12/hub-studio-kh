@@ -28,7 +28,7 @@ DEFAULT_INTERVAL_S = 1800
 MIN_INTERVAL_S = 60
 MAX_INTERVAL_S = 24 * 3600
 
-_CACHE: dict = {"result": None}
+_CACHE: dict = {"result": None, "checked_in_at": None}
 #: Storage tiers that need a person. `amber` is a warning the governor itself acts on, not a fault.
 STORAGE_REASONS = {
     "stop": ("OUTPUT_STORAGE_STOP", "Output storage is full enough that the Hub has stopped taking work."),
@@ -88,6 +88,9 @@ def measure(*, disk: dict | None = None, activity_state: str | None = None, now:
         "state": "attention" if reasons else ("unknown" if storage == "unknown" else "ok"),
         "reasons": reasons,
         "measured_at": moment,
+        # Contact, not verdict: the last moment this Hub answered for itself. The Gateway keeps its
+        # own contact time too; this one is what a row can carry when it is read off the Mac.
+        "checked_in_at": moment,
         "interval_s": settings()["interval_s"],
         "source": "measured",
         # Storage carries its own time so a 507 from yesterday cannot read as today's.
@@ -104,6 +107,7 @@ def refresh(*, disk: dict | None = None, activity_state: str | None = None) -> d
     """Measure and keep it: what the background loop calls every interval."""
     result = measure(disk=disk, activity_state=activity_state)
     _CACHE["result"] = result
+    _CACHE["checked_in_at"] = time.time()
     return result
 
 
@@ -113,9 +117,11 @@ def cached() -> dict:
     result = _CACHE["result"]
     if result is None:
         return refresh()
-    return {**result, "source": "cached"}
+    _CACHE["checked_in_at"] = time.time()          # answering is contact, even when the verdict is old
+    return {**result, "source": "cached", "checked_in_at": _CACHE["checked_in_at"]}
 
 
 def reset_cache() -> None:
     """Tests only: forget the last measurement."""
     _CACHE["result"] = None
+    _CACHE["checked_in_at"] = None
