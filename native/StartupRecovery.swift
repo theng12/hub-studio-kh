@@ -220,7 +220,7 @@ enum FleetCopy {
             // for this Mac was dropped with the removal and does not come back, while this Mac's own
             // files were never touched — the Hub does not delete a Mac's work as a side effect.
             + "Work that controller had queued for this Mac was dropped and is not restored; "
-            + "files already on this Mac stay here."
+            + "no files or jobs on this Mac were removed, so everything that was here is still here."
     }
 
     /// What a Mac says when its controller no longer lists it at all (not removed, just gone from
