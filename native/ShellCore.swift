@@ -442,23 +442,24 @@ struct ShellConfiguration {
         return usable.isEmpty ? "127.0.0.1" : usable.joined(separator: ",")
     }
 
-    /// What the saved list becomes when this Mac is allowed to answer for itself.
+    /// What the listen list becomes when this Mac is allowed to answer for itself.
     ///
-    /// **Additive**: every address already saved is kept, and every private or Tailscale address
-    /// this Mac has right now is added. Nothing is removed, so this can never take away a way in
-    /// that was working; the worst case is an address that is no longer present, which
-    /// `unavailableListenAddresses` already drops for the launch and names.
+    /// **Derived, not remembered** (owner, 2026-11-17: *"did it store it's old assigned DHCP IP
+    /// too? that's wrong"*). This used to be additive - every saved address was kept forever - so a
+    /// Mac that moved networks accumulated the leases it had left behind and queued services behind
+    /// addresses it did not have. The address list is now computed from the interfaces that exist
+    /// at this launch; nothing from a previous network survives it.
     ///
-    /// Current addresses come first so the tailnet leads the list, which is the order the
-    /// Connections screen shows and the order the owner asked for.
-    static func automaticListenHost(keeping saved: String) -> String {
-        var ordered: [String] = []
-        let candidates = LocalAddresses.current().filter(\.isPrivate).map(\.address)
-            + saved.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        for candidate in candidates where !candidate.isEmpty && !ordered.contains(candidate) {
-            ordered.append(candidate)
-        }
-        return ordered.isEmpty ? "127.0.0.1" : ordered.joined(separator: ",")
+    /// One exception, and it is the case the wait exists for: at boot on a headless Mac the network
+    /// is often not up yet, so "no addresses now" is not "no addresses ever". Only then does the
+    /// saved list stand in - as the set to wait for this launch, not as a way in - and the first
+    /// launch that finds a real address replaces it for good.
+    static func automaticListenHost(keeping saved: String,
+                                   current: [String] = LocalAddresses.current().filter(\.isPrivate).map(\.address)) -> String {
+        let derived = current.filter { !$0.isEmpty }
+        if !derived.isEmpty { return derived.joined(separator: ",") }
+        let waiting = saved.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return waiting.isEmpty ? "127.0.0.1" : waiting.joined(separator: ",")
     }
 
     /// The addresses the Hub should listen on: loopback (always added by the Hub itself) plus
@@ -736,10 +737,13 @@ struct ShellConfiguration {
         /// loopback (or on a LAN address from a network it had since left) forever. The owner
         /// asked for the tailnet to be on without having to remember it.
         ///
-        /// Automatic is **additive**: the saved addresses are kept and the Mac's current private
-        /// and tailnet addresses are added. It never removes an address. An operator who really
-        /// wants loopback only sets this to `false`, which the Connections list does on the first
-        /// manual change, and which `--listen-host` does when the kit pins an exact list.
+        /// Automatic is **derived**: the list is recomputed from this Mac's interfaces at every
+        /// launch, so a lease it has left behind does not survive (owner, 2026-11-17: a Mac had
+        /// accumulated five addresses from networks it no longer had, and services waited on them).
+        /// The saved list is used only when nothing is assigned yet — a headless boot before DHCP —
+        /// and the first launch that sees a real address replaces it. An operator who really wants
+        /// loopback only sets this to `false`, which the Connections list does on the first manual
+        /// change, and which `--listen-host` does when the kit pins an exact list.
         let listenHostAutomatic: Bool?
         /// Absent in a preferences file written before the port was pinned, and absent means the
         /// Hub's own default rather than whatever the operating system hands out next time.

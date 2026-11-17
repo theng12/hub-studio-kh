@@ -529,13 +529,21 @@ require(legacy.listenHost == ShellConfiguration.automaticListenHost(keeping: "12
         "an older preference file must follow this Mac's networks, got \(legacy.listenHost)")
 require(legacy.clientHost == "127.0.0.1", "a default configuration must reach its own Hub on loopback")
 
-// Automatic is ADDITIVE: an address already saved survives, and this Mac's current addresses are
-// added to it. Nothing may be removed, so an upgrade can never take away a way in that worked.
-let additive = ShellConfiguration.automaticListenHost(keeping: "10.44.0.9")
-require(additive.split(separator: ",").map(String.init).contains("10.44.0.9"),
-        "an address already configured must survive, got \(additive)")
-require(additive == ShellConfiguration.automaticListenHost(keeping: "10.44.0.9"),
-        "automatic must be a function of the saved list and this Mac, not of call order")
+// Automatic is DERIVED, not additive (owner, 2026-11-17: "did it store it's old assigned DHCP IP
+// too? that's wrong"). A Mac that left a network must not keep queueing services behind the lease
+// it left. `current` is injected so the rule is testable on any Mac.
+let derived = ShellConfiguration.automaticListenHost(keeping: "10.44.0.9,192.168.18.30",
+                                                     current: ["192.168.0.153", "100.76.125.18"])
+require(derived == "192.168.0.153,100.76.125.18",
+        "a stored lease from another network must not survive a launch, got \(derived)")
+// The one case the save is for: a headless boot before DHCP, where "none now" is not "none ever".
+require(ShellConfiguration.automaticListenHost(keeping: "10.44.0.9", current: []) == "10.44.0.9",
+        "with no network up yet, the saved list is what this launch waits for")
+require(ShellConfiguration.automaticListenHost(keeping: "", current: []) == "127.0.0.1",
+        "nothing to derive and nothing saved must still leave this Mac reachable")
+require(ShellConfiguration.automaticListenHost(keeping: "10.44.0.9", current: ["192.168.0.153"])
+        == "192.168.0.153",
+        "the first launch that sees a real address replaces the saved list for good")
 
 // An explicit choice stays an explicit choice. `--listen-host` pins the exact list and says so,
 // and — the part that was missing — it is written down, so it lasts past this launch.
