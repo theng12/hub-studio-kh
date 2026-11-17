@@ -111,9 +111,10 @@ def measure(*, disk: dict | None = None, activity_state: str | None = None, now:
     }
 
 
-def refresh(*, disk: dict | None = None, activity_state: str | None = None) -> dict:
+def refresh(*, disk: dict | None = None, activity_state: str | None = None,
+            now: float | None = None) -> dict:
     """Measure and keep it: what the background loop calls every interval."""
-    result = measure(disk=disk, activity_state=activity_state)
+    result = measure(disk=disk, activity_state=activity_state, now=now)
     _CACHE["result"] = result
     _CACHE["checked_in_at"] = time.time()
     return result
