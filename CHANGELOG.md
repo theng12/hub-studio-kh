@@ -4,18 +4,18 @@ Plain-language changes appear first in each release and feed the app’s What’
 
 ## 0.6.244 — 2026-11-17
 
-- Nothing in the app itself changes. This release is about the tests that guard it: 49 older Hub tests had never once been run by a release gate, because the gate looked for test files in the top-level `tests/` folder and these sit one folder down. A regression they would have caught could have shipped unnoticed.
-- The gate now runs all 49 and prints their tally in its own summary, so "all suites passed" can never again quietly leave 49 cases out.
-- Four of those cases were failing: they described the old rule that a retried voice job gets a new request id. Version 0.6.242 changed that on purpose — a retry keeps the id so the worker hands back the job it already has instead of generating it twice. The four now assert the rule that actually ships, and the 49 run green.
+- Nothing in the app itself changes. This release is about the tests that guard it: 48 older Hub test files (485 tests) had never once been run by a release gate, because the gate looked for test files in the top-level `tests/` folder and these sit one folder down. A regression they would have caught could have shipped unnoticed.
+- The gate now runs all 48 and prints their tally in its own summary, so "all suites passed" can never again quietly leave 485 tests out.
+- Four of those cases were failing: they described the old rule that a retried voice job gets a new request id. Version 0.6.242 changed that on purpose — a retry keeps the id so the worker hands back the job it already has instead of generating it twice. The four now assert the rule that actually ships, and the 48 files run green.
 
 ### Technical notes
 
-- **Discovery, not dependency.** `gate-*.sh` built its module list with `grep -lE … tests/test_*.py`. `tests/hub_regression/` is a package (`__init__.py`, `conftest.py`, `test_regression.py`, `cases/` with 49 `test_*.py`), so no glob of that shape could reach it, and every previous gate reported `tests/hub_regression: needs pytest` — a runner problem's clothes on a discovery problem. Installing pytest would have changed nothing. The entry point is now named in the gate's module list (`hub_regression.test_regression`) and the summary prints `hub_regression cases=49 files <passed/failed tally>`.
+- **Discovery, not dependency.** `gate-*.sh` built its module list with `grep -lE … tests/test_*.py`. `tests/hub_regression/` is a package (`__init__.py`, `conftest.py`, `test_regression.py`, and `cases/` with 48 `test_*.py`; the folder holds 49 entries because `conftest.py` is one of them), so no glob of that shape could reach it, and every previous gate reported `tests/hub_regression: needs pytest` — a runner problem's clothes on a discovery problem. Installing pytest would have changed nothing. The entry point is now named in the gate's module list (`hub_regression.test_regression`) and the summary prints `hub_regression cases=48 files <passed/failed tally>`.
 - pytest is taken from the shared `_worktrees/.build/test-deps` (or the worktree's own `.build/test-deps`), prepended to `PYTHONPATH` for the child, so no system interpreter needs it. `tests/hub_regression/test_regression.py` already fails when pytest collects nothing (`assertIn("passed", …)`), so a broken wiring cannot pass silently.
 - Four stale assertions, all red at `2ab3e03e` as well as at `5e3b06b2` (verified on a clean scratch worktree), so none was caused by 0.6.243:
   - `test_free_work_reroute.py::test_a_worker_that_crashed_and_restarted_reruns_its_job[voice]` and `…::test_a_hub_restart_reruns_the_job_and_holds_no_mac[local-voice|node-a-voice]` expected `studiohub:<batch>:0:rerun-1`; the broker keeps `studiohub:<batch>:0` (`broker.py:2462` and the rule documented at `broker.py:3740`), so a retry reattaches to the job the worker already holds. A fresh `:rerun-N` now belongs to a person's retry (`_bump_rerun_id`) or an id answered `EXECUTION_IDENTITY_LOST`, both later than these assertions observe.
   - `test_voice_durability.py::test_restart_adopts_the_exact_finished_voice_job_without_another_post` raised `KeyError`: its fixture item omitted `client_request_id`, which every real item carries (`broker.py:2889`), so it asked a restored item for a field the fixture never gave it. The fixture now sets it, and the assertion expects the original id — the same id the test's own adopt callback already asserted.
-- Result: `485 passed` across the 49 files, run in the gate on the commit that is shipped.
+- Result: `485 passed` across the 48 files, run in the gate on the commit that is shipped.
 
 
 ## 0.6.243 — 2026-11-16
