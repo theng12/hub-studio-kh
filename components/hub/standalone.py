@@ -914,8 +914,49 @@ def _summary(batch: dict[str, Any]) -> dict[str, Any]:
 _TRASH_AND_MEMORY_KEYS = ("hub_trash", "macos_trash", "wired_gb", "compressed_gb", "swap_used_gb", "top_processes")
 
 
+def _recent_job_state() -> str | None:
+    """This Mac's newest finished job, in `backend.activity`'s own words.
+
+    `needs_attention` only for an error inside the activity module's recent window: an error from
+    last night is history, not a reason to flag the Mac now (the rule `activity._state_at` uses).
+    """
+    from .backend import activity
+    now, latest = time.time(), None
+    for batch in broker.batches.values():
+        for item in batch.get("items") or []:
+            if item.get("state") not in ("error", "done", "cancelled"):
+                continue
+            when = item.get("finished_at") or 0
+            if latest is None or when > latest[0]:
+                latest = (when, item)
+    if latest is None:
+        return None
+    when, item = latest
+    if item.get("state") == "error" and now - when < activity.JUST_FINISHED_S:
+        return "needs_attention"
+    return "ready"
+
+
+async def _attention_loop() -> None:
+    """Measure this Mac's attention state unprompted, every `attention.settings()["interval_s"]`.
+
+    The point is that a cleared condition clears the flag with nobody touching the Mac, and that
+    every row carries the time it was measured. The interval is a setting (default 30 minutes).
+    """
+    from . import attention
+    while True:
+        try:
+            await run_in_threadpool(attention.refresh, activity_state=_recent_job_state())
+        except Exception:                                    # a failed measurement must not kill the loop
+            log.exception("attention measurement failed; the last one stays with its own time")
+        await _asyncio.sleep(max(60, attention.settings()["interval_s"]))
+
+
 def _trash_and_memory(host: dict[str, Any]) -> dict[str, Any]:
-    return {key: host.get(key) for key in _TRASH_AND_MEMORY_KEYS}
+    # The attention block travels with the row so the fleet page can print when it was measured
+    # (owner, 2026-11-17: "signals every 30 minutes so we don't have to keep checking").
+    from . import attention
+    return {**{key: host.get(key) for key in _TRASH_AND_MEMORY_KEYS}, "attention": attention.cached()}
 
 
 def _app_version() -> str:
@@ -1978,6 +2019,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             storage_sweep = _asyncio.create_task(
                 job_storage.budget_loop(standalone_config.cleanup_interval_seconds()))
             peer_lease_sweep = _asyncio.create_task(_peer_lease_loop(monitor))
+            attention_sweep = _asyncio.create_task(_attention_loop())
 
             def held_jobs() -> list[tuple[str, str]]:
                 """Every job this Mac is running: a controller's (peer surface) and its own queue's."""
@@ -2047,6 +2089,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 subtitle_probe_control.stop())
             if start_background:
                 if storage_sweep is not None:
+                    attention_sweep.cancel()
                     storage_sweep.cancel()
                     try:
                         await storage_sweep
@@ -4353,6 +4396,25 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     # **This Mac's Trash Folder in the app (owner request 2026-10-15).** The same unified root the
     # Gateway manages: list it (with its per-root detail) and move its contents to macOS Trash. The
     # app never deletes permanently; the owner empties macOS Trash himself.
+    @app.get("/api/hub/attention")
+    async def hub_attention(request: Request) -> JSONResponse:
+        """This Mac's attention state, with the time it was measured.
+
+        `?now=1` re-measures for a caller that needs the current answer, bounded in time; without it
+        the answer is the last measurement and says `source: "cached"` beside its own `measured_at`.
+        """
+        from . import attention
+        fresh = request.query_params.get("now") in ("1", "true", "yes")
+        if not fresh:
+            return JSONResponse(attention.cached())
+        try:
+            result = await _asyncio.wait_for(
+                run_in_threadpool(attention.refresh, activity_state=_recent_job_state()), timeout=3.0)
+        except _asyncio.TimeoutError:
+            return JSONResponse({**attention.cached(), "state": "unknown", "source": "timeout",
+                                 "reason": "MEASURE_TIMEOUT: this Mac did not answer within 3 s."})
+        return JSONResponse(result)
+
     @app.get("/api/hub/trash")
     async def hub_trash(request: Request) -> JSONResponse:
         """The unified Trash Folder: item count, physical bytes, and every root that holds retired files."""
