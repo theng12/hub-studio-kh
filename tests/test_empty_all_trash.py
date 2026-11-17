@@ -254,7 +254,13 @@ class OverviewShape(Fixture):
 
 class FleetFields(unittest.TestCase):
     def test_an_older_hub_reads_not_reported_never_zero(self) -> None:
-        self.assertEqual(set(standalone._trash_and_memory({}).values()), {None})
+        row = standalone._trash_and_memory({})
+        # Every *measure* is "not reported" (None), never 0: an older Mac that cannot say must not
+        # read as an empty, healthy one. Named one by one rather than as a set of values, because the
+        # row also carries a block (`attention_report`) and a block is not a measurement.
+        self.assertEqual({key: value for key, value in row.items() if key != "attention_report"},
+                         {key: None for key in standalone._TRASH_AND_MEMORY_KEYS})
+        self.assertIn("measured_at", row["attention_report"], "the block carries its own time")
 
     def test_memory_detail_names_wired_compressed_swap_and_the_top_three(self) -> None:
         import psutil
