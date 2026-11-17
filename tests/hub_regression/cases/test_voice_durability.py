@@ -140,6 +140,9 @@ def voice_attempt(fixture_monitor, *, accepted_state: str = "queued"):
         "studio_job_id": None,
         "retry_at": None,
         "error": None,
+        # Every real item carries the id it was submitted with; the fixture omitted it, so the
+        # test asked the restored item for an id production always has.
+        "client_request_id": f"studiohub:{batch['id']}:0",
     }
     batch["items"] = [item]
     broker.batches[batch["id"]] = batch
@@ -587,7 +590,9 @@ def test_restart_adopts_the_exact_finished_voice_job_without_another_post(
     assert broker.restore_batches() == 1
     restored = broker.batches[batch["id"]]["items"][0]
     assert restored["state"] == "queued"
-    assert restored["client_request_id"] == f"studiohub:{batch['id']}:0:rerun-1"
+    # The restored item keeps the id it was submitted with, so the original is adopted by that id
+    # and nothing is generated twice (0.6.242). The adopt callback below asserts the same id.
+    assert restored["client_request_id"] == f"studiohub:{batch['id']}:0"
     assert studio["machine"] not in broker.busy_machines()
 
     adopted: list[str] = []

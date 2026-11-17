@@ -175,8 +175,10 @@ def test_a_worker_that_crashed_and_restarted_reruns_its_job(fixture_monitor, mon
     assert "node-a" not in (item.get("avoid_machines") or {}), "the restarted worker may take it again"
     assert broker._item_allows_studio(item, studio, time.time() + 60)
     if modality == "voice":
-        # Same id again would be answered with the dead job by the restarted worker.
-        assert item["client_request_id"] == f"studiohub:{batch['id']}:0:rerun-1"
+        # The id is kept (0.6.242): a worker still holding the job answers that id with the job it
+        # already has, so the retry reattaches instead of generating it twice. A fresh `:rerun-N`
+        # belongs to a person's retry, or to an id answered EXECUTION_IDENTITY_LOST - both later.
+        assert item["client_request_id"] == f"studiohub:{batch['id']}:0"
 
 
 def test_the_original_finishing_first_wins_and_the_rerun_is_cancelled(fixture_monitor, monkeypatch):
@@ -268,7 +270,8 @@ def test_a_hub_restart_reruns_the_job_and_holds_no_mac(fixture_monitor, monkeypa
     assert broker.busy_machines() == set(), "no Mac is held for an item nobody runs"
     assert [(row[2], row[3]) for row in broker._restored_attempts] == [(studio["id"], "job-1")]
     if modality == "voice":
-        assert restored["client_request_id"] == f"studiohub:{batch['id']}:0:rerun-1"
+        # Kept across a Hub restart for the same reason: the original is adopted by its own id.
+        assert restored["client_request_id"] == f"studiohub:{batch['id']}:0"
 
 
 def test_a_restart_adopts_an_original_that_finished_meanwhile(fixture_monitor, monkeypatch):
