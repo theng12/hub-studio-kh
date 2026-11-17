@@ -244,6 +244,23 @@ enum FleetCopy {
         detail.contains("removed this Mac")
     }
 
+    /// Whether a refusal **body** is this controller's removal decision — by its code, not its
+    /// sentence (agreed with Gateway - Lead - 001, 2026-11-17). The sentence stays as the fallback
+    /// for a controller that predates `IDENTITY_REVOKED`, so a Mac never loses the notice it had.
+    static func isRevoked(_ body: [String: Any]?) -> Bool {
+        if body?["code"] as? String == "IDENTITY_REVOKED"
+            || body?["state"] as? String == "revoked" { return true }
+        return isRemoval((body?["detail"] as? String) ?? "")
+    }
+
+    /// The day the controller removed this Mac: its own `removed_at` when it sends one, else the
+    /// date in its sentence.
+    static func removalDate(in body: [String: Any]?) -> String? {
+        if let at = body?["removed_at"] as? String,
+           !at.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return at }
+        return removalDate(in: (body?["detail"] as? String) ?? "")
+    }
+
     /// What an operator has to do about machines a rotation or handover could not reach.
     ///
     /// Named rather than implied: `manual` and `unreachable` are both "this Mac did not follow",

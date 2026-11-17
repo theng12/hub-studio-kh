@@ -872,6 +872,18 @@ def status(node_id: str) -> dict[str, Any]:
     return {"id": node_id, "state": "unknown"}
 
 
+def _revoked_row(offered: str | None) -> tuple[str, dict[str, Any]] | None:
+    """The tombstone (node id, row) whose revoked credential this is, else `None`."""
+    if not offered:
+        return None
+    digest = hash_credential(offered)
+    for node_id, row in _removed().items():
+        stored = str(row.get("revoked_hash") or "")
+        if stored and hmac.compare_digest(stored, digest):
+            return node_id, row
+    return None
+
+
 def revoked_detail(offered: str | None) -> str | None:
     """The removal sentence for a credential this controller revoked by removing its Mac, else `None`.
 
@@ -879,14 +891,33 @@ def revoked_detail(offered: str | None) -> str | None:
     a controller that lost its roster. The tombstone keeps the hash, so the refusal can say what
     happened and the date.
     """
-    if not offered:
+    found = _revoked_row(offered)
+    return None if found is None else str(NodeRemovedError(found[0], found[1].get("removed_at")))
+
+
+def revoked_refusal(offered: str | None) -> dict[str, Any] | None:
+    """The 403 body for a credential this controller revoked, or `None` if it revoked nothing.
+
+    Machine-readable on purpose (agreed with Gateway - Lead - 001, 2026-11-17): a Mac must tell
+    "this controller removed me" from "wrong credential" by a code, not by matching a sentence, and
+    it must have the date as data rather than parsing prose. `detail` keeps the human sentence.
+    """
+    found = _revoked_row(offered)
+    if found is None:
         return None
-    digest = hash_credential(offered)
-    for node_id, row in _removed().items():
-        stored = str(row.get("revoked_hash") or "")
-        if stored and hmac.compare_digest(stored, digest):
-            return str(NodeRemovedError(node_id, row.get("removed_at")))
-    return None
+    node_id, row = found
+    removed_at = row.get("removed_at")
+    return {
+        "ok": False,
+        "state": "revoked",
+        "code": "IDENTITY_REVOKED",
+        "detail": str(NodeRemovedError(node_id, removed_at)),
+        "node_id": node_id,
+        "removed_at": (time.strftime("%Y-%m-%d", time.localtime(removed_at))
+                       if removed_at else None),
+        # Where this Mac gets back in: it re-joins; the re-admit itself is the controller's call.
+        "reconnect": "join",
+    }
 
 
 def rename(node_id: str, name: str) -> bool:

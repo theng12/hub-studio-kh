@@ -606,6 +606,23 @@ class NodeStatusAndLabelTest(unittest.TestCase):
         fleet_nodes.readmit("sold")
         self.assertIsNone(fleet_nodes.revoked_detail(sold["credential"]))
 
+    def test_a_revoked_credential_is_refused_by_code_not_by_sentence(self) -> None:
+        sold = self._join("sold")
+        self.assertIsNone(fleet_nodes.revoked_refusal(sold["credential"]))
+        fleet_nodes.remove("sold", by="operator")
+        body = fleet_nodes.revoked_refusal(sold["credential"])
+        # The Mac classifies on these; the sentence stays for the person reading it.
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["state"], "revoked")
+        self.assertEqual(body["code"], "IDENTITY_REVOKED")
+        self.assertEqual(body["reconnect"], "join")
+        self.assertEqual(body["node_id"], "sold")
+        self.assertRegex(body["removed_at"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertIn("removed this Mac on", body["detail"])
+        self.assertNotIn("revoked_hash", json.dumps(body), "the hash never leaves the roster")
+        fleet_nodes.readmit("sold")
+        self.assertIsNone(fleet_nodes.revoked_refusal(sold["credential"]))
+
     def test_a_rename_on_the_mac_updates_the_roster_name(self) -> None:
         self._join("studio-mac-1102-x", "studio-mac-1102")
         self.assertTrue(fleet_nodes.rename("studio-mac-1102-x", "studio-mac-1501"))

@@ -2,6 +2,15 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.245 — 2026-11-17
+
+- **The Hub now checks in on itself every 30 minutes, so you do not have to keep looking.** Its health answer carries the moment it was measured, so a page can say "not checked in since 9:41" instead of showing yesterday's verdict as today's. The interval is a setting, 30 minutes by default.
+- **A Mac removed from its group now says so by name, and reconnecting is one press.** The controller's refusal carries a code as well as the sentence, so the Mac cannot mistake "this Mac was removed" for "wrong password" — and the day it was removed comes from the controller, not from the words in a message. The notice now offers **Reconnect…**, which opens Connections with that controller's address already filled in; the Fleet token is the one thing a removal really takes away, so the form still asks for it.
+
+### Technical notes
+- `components/hub/attention.py` — a closed set of reason codes, `measured_at`, `checked_in_at`, `interval_s` (default 1800 s, 60–86400), `source: measured|cached`, and storage with its own measurement time. Unprompted loop plus `GET /api/hub/attention?now=1` (3 s bound) and the controller relay `GET /api/hub/fleet/nodes/<id>/attention?now=1`. The fleet row publishes it as **`attention_report`** — never `attention`, which the Gateway's row already uses for a sentence.
+- `fleet_nodes.revoked_refusal()` answers a revoked credential with `{ok:false, state:"revoked", code:"IDENTITY_REVOKED", node_id, removed_at, detail, reconnect:"join"}`. It shares one tombstone scan with `revoked_detail()` and never publishes the hash. The native side (`FleetCopy.isRevoked`, `FleetCopy.removalDate(in:)`) reads the code first and falls back to the sentence, so a Mac updated ahead of its controller still gets the removal notice.
+
 ## 0.6.244 — 2026-11-17
 
 - **The Hub no longer serves on addresses this Mac does not have.** It had been keeping every address it was ever set up with, so a Mac that changed networks carried its old leases and queued its services behind them — one Mac was waiting on five addresses from networks it left long ago. The list is now worked out from the Mac's own interfaces at every start; an address the Mac does not have is not waited on. Loopback and Tailscale are always there, a private address only when the Mac is actually on that network, and never a public one. Existing Macs clear themselves on the next start; no one has to fix them by hand.

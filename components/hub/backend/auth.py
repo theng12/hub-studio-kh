@@ -809,6 +809,11 @@ FLEET_ALLOWED = (
     # empty" switch can refuse it. Not in `NODE_ALLOWED`: a leaf Mac cannot empty another.
     ("POST", r"^/api/hub/fleet/nodes/[^/]+/empty-trash$"),
     ("POST", r"^/api/hub/fleet/empty-trash$"),
+    # **One Mac's attention report (owner, 2026-11-17).** The Gateway reads a row's health through the
+    # controller, and the controller relays it to the node with this same fleet credential, so the one
+    # line covers both hops (`local` is the node's own id on its own Hub). Read-only, no work, and the
+    # node refuses it cross-Mac: only a controller may answer for a node other than `local`.
+    ("GET", r"^/api/hub/fleet/nodes/[^/]+/attention$"),
     # **The Render tab's one cross-Mac read (owner, 2026-10-26).** A controller asks each joined
     # Mac for the final renders it ran, which that Mac already recorded, and this is that read.
     # Read-only, bounded, and it grants nothing: the rows are the render lane's own history, the
@@ -1164,9 +1169,9 @@ def make_middleware(token: str):
         # instead of a bare 401 the Mac cannot tell from a controller that lost its roster.
         if offered:
             from . import fleet_nodes
-            removed_detail = fleet_nodes.revoked_detail(offered)
-            if removed_detail:
-                return JSONResponse({"detail": removed_detail}, status_code=403)
+            revoked = fleet_nodes.revoked_refusal(offered)
+            if revoked:
+                return JSONResponse(revoked, status_code=403)
         return JSONResponse(
             {"detail": credential_refusal_detail(request, token)},
             status_code=401,

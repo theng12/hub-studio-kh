@@ -128,5 +128,20 @@ class FleetRow(Fixture):
         self.assertGreaterEqual(row["attention_report"]["checked_in_at"], 42.0)
 
 
+class RelayReach(Fixture):
+    def test_the_gateway_can_read_a_row_through_the_fleet_credential(self) -> None:
+        # The route existed and no fleet credential could reach it: the Gateway asks with the group
+        # token and the controller relays with the same one, so this one allowlist line is both hops.
+        from components.hub.backend import auth
+        self.assertTrue(auth.fleet_path_allowed(
+            "GET", "/api/hub/fleet/nodes/studio-mac-1102-x/attention"))
+        self.assertTrue(auth.fleet_path_allowed("GET", "/api/hub/fleet/nodes/local/attention"))
+        # Reaching a Mac's attention grants nothing else on that path.
+        self.assertFalse(auth.fleet_path_allowed(
+            "POST", "/api/hub/fleet/nodes/studio-mac-1102-x/attention"))
+        self.assertFalse(auth.fleet_path_allowed(
+            "GET", "/api/hub/fleet/nodes/studio-mac-1102-x/attention/extra"))
+
+
 if __name__ == "__main__":
     unittest.main()

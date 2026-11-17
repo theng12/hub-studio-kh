@@ -7873,8 +7873,9 @@ final class NativeWorkspaceStore: ObservableObject {
                 // **A removal is terminal.** It is a decision the controller already made, not a
                 // credential this Mac can replace, so the re-join loop stops here and the page says
                 // who removed this Mac and when.
-                if http.statusCode == 403, FleetCopy.isRemoval(reason) {
-                    await handleControllerRemoval(detail: reason, address: address, target: target)
+                if http.statusCode == 403, FleetCopy.isRevoked(body) {
+                    await handleControllerRemoval(detail: reason, address: address, target: target,
+                                                 removedAt: FleetCopy.removalDate(in: body))
                     return false
                 }
                 throw NativeAPIError.message(reason.isEmpty
@@ -7959,11 +7960,11 @@ final class NativeWorkspaceStore: ObservableObject {
     /// actually takes the group's token off this Mac), and keeps the controller's own sentence on
     /// screen with the date it named.
     private func handleControllerRemoval(detail: String, address: String, target: URL,
-                                         notice: String? = nil) async {
+                                         notice: String? = nil, removedAt: String? = nil) async {
         // This Mac's own credential was revoked the moment it was removed; keeping it would only
         // invite a retry the controller has already refused.
         setNodeCredential(nil)
-        let date = FleetCopy.removalDate(in: detail)
+        let date = removedAt ?? FleetCopy.removalDate(in: detail)
         let shown = address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "\(target.host ?? ""):\(target.port ?? 0)" : address
         // **The local leave runs before the loops are cancelled.** Cancelling first would tear down
@@ -8218,8 +8219,9 @@ final class NativeWorkspaceStore: ObservableObject {
         guard connectionID == requestConnection, controllerRemoval == nil else { return }
         let detail = (answer.1["detail"] as? String) ?? ""
         let state = answer.1["state"] as? String
-        if (answer.0 == 403 && FleetCopy.isRemoval(detail)) || (answer.0 == 200 && state == "removed") {
-            await handleControllerRemoval(detail: detail, address: membership.controllerAddress, target: target)
+        if (answer.0 == 403 && FleetCopy.isRevoked(answer.1)) || (answer.0 == 200 && state == "removed") {
+            await handleControllerRemoval(detail: detail, address: membership.controllerAddress, target: target,
+                                          removedAt: FleetCopy.removalDate(in: answer.1))
         } else if answer.0 == 200, state == "unknown" {
             membershipUnknownStreak += 1
             if membershipUnknownStreak >= Self.unknownAnswersBeforeLeaving {
@@ -8734,7 +8736,7 @@ final class NativeWorkspaceStore: ObservableObject {
         let detail = (body?["detail"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if (200..<300).contains(status) { return .removed }
-        if status == 403, FleetCopy.isRemoval(detail) { return .removedEarlier(detail) }
+        if status == 403, FleetCopy.isRevoked(body) { return .removedEarlier(detail) }
         return .refused(status, detail)
     }
 

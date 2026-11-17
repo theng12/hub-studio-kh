@@ -7497,6 +7497,14 @@ struct StudioContent: View {
                     }
                 }
                 Spacer(minLength: 8)
+                Button("Reconnect…") {
+                    // One press to the place the reconnect happens, with the address already filled:
+                    // the token is what the removal took away, so the form asks for it instead of
+                    // this Mac pretending it still has one.
+                    controllerDraft = removal.address
+                    studio.select(.connections)
+                }
+                .help("Open Connections with this controller's address filled in. Paste its Fleet token to join again.")
                 Button("Dismiss") { workspace.dismissControllerRemoval() }
             }
         }
