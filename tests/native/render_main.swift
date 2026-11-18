@@ -676,10 +676,11 @@ struct PageRenderHarness {
     @MainActor static func applyInstallPlan(_ workspace: NativeWorkspaceStore) {
         func model(_ package: String, _ label: String, _ job: String, _ purpose: String,
                    _ bits: String?, _ gb: Double, _ floor: Int, installed: Bool = false,
-                   reason: String? = nil, sources: [String] = ["kit", "internet"]) -> NativeInstallModel {
+                   reason: String? = nil, sources: [String] = ["ssd", "lan", "internet"]) -> NativeInstallModel {
             NativeInstallModel(id: package, label: label, job: job, purpose: purpose,
                                quantization: bits, bytes: Int64(gb * 1e9), floorGB: floor,
-                               installed: installed, reason: reason, sources: sources)
+                               installed: installed, reason: reason, sources: sources,
+                               sourceDetail: ["ssd": "ATLAS", "lan": "Mac mini"])
         }
         let presets = [
             NativePreset(id: "essentials-8", name: "Essentials · 8 GB", tierGB: 8,
@@ -689,9 +690,12 @@ struct PageRenderHarness {
                          packageIDs: ["whisper-turbo"]),
             NativePreset(id: "creator-16", name: "Creator · 16 GB", tierGB: 16,
                          summary: "Adds the larger image model, the writing model, a better captioner, the second voice and the 16 GB voice tier.",
-                         installedCount: 9, packageCount: 14, complete: false, fitsThisMac: true,
+                         installedCount: 6, packageCount: 8, complete: false, fitsThisMac: true,
                          toCopyBytes: 22_500_000_000, freeAfterBytes: 357_700_000_000, refused: nil,
-                         packageIDs: ["whisper-turbo"]),
+                         packageIDs: ["z-image-turbo-mflux-4bit", "qwen-image-2-1-turbo-mflux-q4",
+                                      "qwen-image-2-1-mlx-serve-4bit", "qwen3-tts-12hz-0-6b-base-4bit",
+                                      "breeze-tts-2-mlx-4bit", "qwen36-35b-4bit",
+                                      "florence-2-large-ft", "whisper-turbo"]),
             NativePreset(id: "creator-plus-24", name: "Creator Plus · 24 GB", tierGB: 24,
                          summary: "Adds music generation and Gemma 3 12B for longer writing.",
                          installedCount: 0, packageCount: 16, complete: false, fitsThisMac: true,
@@ -733,12 +737,31 @@ struct PageRenderHarness {
                       "Transcribes audio and video; the default subtitle model.", nil, 1.6, 8,
                       installed: true)])
         ]
+        let setupMode = ProcessInfo.processInfo.environment["STUDIOHUB_RENDER_SETUP_STATE"]
+        // "refused" renders the per-drive answer: this drive could not be read, its contents stay
+        // unknown, and no other drive's answer is implied.
+        let refused = setupMode == "refused"
         workspace.seedInstallPlanForRendering(NativeInstallPlan(
             memoryGB: 32, library: "/Volumes/KH-STUDIO-ATLAS/model-target",
             diskPath: "/Volumes/KH-STUDIO-ATLAS/model-target", freeBytes: 380_200_000_000,
             diskMeasured: true, stopBytes: 5_000_000_000,
             presets: presets,
-            startingPreset: "creator-16", groups: groups, problems: []))
+            startingPreset: "creator-16", groups: groups, problems: []),
+            drives: [NativeDrive(name: "ATLAS", path: "/Volumes/KH-STUDIO-ATLAS", mounted: true,
+                                 checked: !refused, checkedAt: Date().timeIntervalSince1970 - 3600,
+                                 has: refused ? [] : ["z-image-turbo-mflux-4bit", "qwen-image-2-1-mlx-serve-4bit",
+                                                      "qwen3-tts-12hz-0-6b-base-4bit", "breeze-tts-2-mlx-4bit",
+                                                      "qwen36-35b-4bit", "whisper-turbo"],
+                                 state: refused ? "refused" : "ok", detail: nil)])
+        // The drive-failure state, rendered on demand: a sha256 mismatch mid-copy leaves the rest
+        // to Resume and says how much arrived.
+        if setupMode == "failure" {
+            workspace.downloads.append(NativeDownload(
+                id: "fixture-ssd-failure", repo: "qwen-image-2-1-turbo-mflux-q4", state: "error",
+                percent: 12, downloadedBytes: 1_200_000_000, totalBytes: 10_000_000_000,
+                error: "sha256 mismatch on model.safetensors", source: "ssd:ATLAS",
+                finishedAt: Date().timeIntervalSince1970))
+        }
     }
 
     @MainActor private static func applyRole(_ role: String, to workspace: NativeWorkspaceStore) {
@@ -936,10 +959,16 @@ struct PageRenderHarness {
                 """)
         }
         workspace.hubVersion = decode(NativeVersion.self, #"{"version":"0.6.126","build":"a1b2c3d","source":"app"}"#)
-        // One download in flight, so the catalogue's "Downloading 42%" chip is looked at too.
+        // One download in flight, so the catalogue's "Downloading 42%" chip is looked at too, and
+        // one finished today, so the Set up sheet's two groups both have a row.
         workspace.downloads = [
             NativeDownload(id: "fixture-download", repo: "vanch007/mlx-Yue2-3B", state: "running",
-                           percent: 42, downloadedBytes: 3_000_000_000, totalBytes: 7_200_000_000, error: nil),
+                           percent: 42, downloadedBytes: 3_000_000_000, totalBytes: 7_200_000_000,
+                           error: nil, source: "lan", finishedAt: nil),
+            NativeDownload(id: "fixture-finished", repo: "whisper-turbo", state: "done",
+                           percent: 100, downloadedBytes: 1_600_000_000, totalBytes: 1_600_000_000,
+                           error: nil, source: "internet",
+                           finishedAt: Date().timeIntervalSince1970 - 1800),
         ]
         // One job in every live or failed state, so the badges and progress lines are looked at too.
         func live(_ id: String, _ state: String, _ model: String, _ prompt: String, progress: Double = 0,
