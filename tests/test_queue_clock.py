@@ -29,11 +29,13 @@ class QueueClock(unittest.TestCase):
         self.assertIsNone(item["retry_at"])
         self.assertEqual(item["finished_at"], now)
 
-    def test_an_item_seen_for_the_first_time_is_stamped_not_ended(self) -> None:
+    def test_an_item_seen_for_the_first_time_is_stamped_not_ended_or_saved(self) -> None:
         now = 5.0
         item = {"id": "i2", "state": "queued"}
         ended, changed = broker.expire_queue_wait(batch(item), now, ceiling=10.0)
-        self.assertEqual((ended, changed), (0, 1))
+        # Stamped, but not a reason to write: the stamp only starts a clock, and a write here
+        # would be the dispatcher saving on every pass (see the dispatch-trace regression).
+        self.assertEqual((ended, changed), (0, 0))
         self.assertEqual(item["queue_wait_started_at"], now)
         self.assertEqual(item["state"], "queued")
 

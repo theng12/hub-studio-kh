@@ -97,7 +97,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
             '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
             '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
             '<plist version="1.0"><dict>'
-            '<key>CFBundleExecutable</key><string>StudioHub</string>'
+            '<key>CFBundleExecutable</key><string>Hub Studio KH</string>'
             '<key>CFBundleIdentifier</key><string>local.studiohub.test</string>'
             '<key>CFBundleName</key><string>Studio Hub</string>'
             '<key>CFBundleShortVersionString</key><string>0.6.225</string>'

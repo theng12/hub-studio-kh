@@ -787,7 +787,7 @@ class StagingTests(unittest.TestCase):
             self.assertTrue((contents / 'Resources/components/hub/backend/migrations/001.sql').is_file())
             with (contents / 'Info.plist').open('rb') as stream:
                 plist = plistlib.load(stream)
-            self.assertEqual(plist['CFBundleExecutable'], 'StudioHub')
+            self.assertEqual(plist['CFBundleExecutable'], 'Hub Studio KH')
             self.assertEqual(plist['CFBundleName'], 'Hub Studio KH')
             self.assertEqual(plist['CFBundleDisplayName'], 'Hub Studio KH')
             self.assertEqual(plist['CFBundleIdentifier'], 'local.studiohub.standalone')

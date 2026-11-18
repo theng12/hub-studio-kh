@@ -6129,12 +6129,16 @@ def expire_queue_wait(batch: dict, now: float, ceiling: float | None = None) -> 
     """End items that have waited in the queue with nothing happening.
 
     Returns ``(ended, changed)``: ``ended`` items moved to a terminal, retryable ``error`` because
-    the wait passed its ceiling; ``changed`` also counts the first sight of an item, whose wait is
-    stamped so the clock starts when the queue first held it.
+    the wait passed its ceiling; ``changed`` says whether the batch needs saving.
 
     A wait parked on a scheduled retry is not counted: that ladder ends itself through
     ``MAX_TRIES``. This is the other kind — the machine-reservation and capacity waits, where the
     item's tries are restored on every refusal, so nothing else could ever end it.
+
+    **The first sight of a queued item is stamped but not a reason to save.** The stamp only starts
+    a clock; losing it to a restart restarts that clock, which is the safe direction for a bound (a
+    wait can only ever be ended later, never sooner), and it keeps the dispatcher's writes exactly
+    the ones that carry evidence.
     """
     limit = QUEUE_WAIT_CEILING_S if ceiling is None else float(ceiling)
     ended = changed = 0
@@ -6146,7 +6150,6 @@ def expire_queue_wait(batch: dict, now: float, ceiling: float | None = None) -> 
         started = item.get("queue_wait_started_at")
         if not isinstance(started, (int, float)):
             item["queue_wait_started_at"] = now
-            changed += 1
             continue
         waited = float(now) - float(started)
         if waited < limit:
