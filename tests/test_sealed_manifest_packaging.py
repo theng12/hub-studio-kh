@@ -89,8 +89,8 @@ class SealedManifestPackagingTests(unittest.TestCase):
         macos_dir = app / "Contents/MacOS"
         macos_dir.mkdir(parents=True)
         # Copy a real tiny system Mach-O binary
-        shutil.copyfile(SYSTEM_MACHO, macos_dir / "StudioHub")
-        (macos_dir / "StudioHub").chmod(0o755)
+        shutil.copyfile(SYSTEM_MACHO, macos_dir / "Hub Studio KH")
+        (macos_dir / "Hub Studio KH").chmod(0o755)
 
         info_plist = (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -179,7 +179,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="payload-postsign-") as temp_dir:
             app = self._build_real_app(Path(temp_dir))
             contents = app / "Contents"
-            native = contents / "MacOS/StudioHub"
+            native = contents / "MacOS/Hub Studio KH"
             exclude = {Path("Resources/release-manifest.json"), Path("_CodeSignature")}
             native_before = hashlib.sha256(native.read_bytes()).hexdigest()
 
@@ -328,7 +328,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
             script.chmod(0o755)
             items = self.stage_voice._signable_items(app)
             self.assertIn(script, items)
-            self.assertLess(items.index(script), items.index(app / "Contents/MacOS/StudioHub"))
+            self.assertLess(items.index(script), items.index(app / "Contents/MacOS/Hub Studio KH"))
             self.stage_voice.sign_app(app)
             verify = subprocess.run(
                 ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
@@ -375,10 +375,10 @@ class SealedManifestPackagingTests(unittest.TestCase):
             # 4. Native executable and CodeResources indexed with closure
             index, groups = self.file_manifest.load_dir(sidecar)
             flattened = self.file_manifest.flatten(groups)
-            self.assertIn("Contents/MacOS/StudioHub", flattened)
+            self.assertIn("Contents/MacOS/Hub Studio KH", flattened)
             self.assertIn("Contents/_CodeSignature/CodeResources", flattened)
-            self.assertEqual(flattened["Contents/MacOS/StudioHub"][0], "f")
-            self.assertTrue(flattened["Contents/MacOS/StudioHub"][1])  # executable
+            self.assertEqual(flattened["Contents/MacOS/Hub Studio KH"][0], "f")
+            self.assertTrue(flattened["Contents/MacOS/Hub Studio KH"][1])  # executable
 
             # 5. validate_stage passes cleanly
             self.make_dmg.validate_stage(app)
@@ -388,7 +388,7 @@ class SealedManifestPackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="mutate-native-") as temp_dir:
             app = self._create_real_signed_app(Path(temp_dir))
             # Mutate native binary
-            native = app / "Contents/MacOS/StudioHub"
+            native = app / "Contents/MacOS/Hub Studio KH"
             content = bytearray(native.read_bytes())
             content[0x200] ^= 0x55
             native.write_bytes(bytes(content))

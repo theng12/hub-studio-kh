@@ -555,7 +555,7 @@ class StagingTests(unittest.TestCase):
                 plist = plistlib.load(stream)
             self.assertEqual(plist['CFBundleExecutable'], 'StudioHubVoice')
             self.assertTrue(plist['LSUIElement'])
-            self.assertFalse((artifact/'Contents/MacOS/StudioHub').exists())
+            self.assertFalse((artifact/'Contents/MacOS/Hub Studio KH').exists())
             self.assertEqual((base/'Proof.app.tree-sha256').read_text().strip(), module.tree_digest(artifact))
             (resources/'voice_worker.py').write_text('# changed worker')
             self.assertNotEqual(manifest['payload_sha256'],
@@ -779,8 +779,8 @@ class StagingTests(unittest.TestCase):
                 except TypeError as exc:
                     self.fail(f'stage must accept native_shell: {exc}')
             contents = artifact / 'Contents'
-            self.assertEqual((contents / 'MacOS/StudioHub').read_bytes(), b'native-shell')
-            self.assertTrue(os.access(contents / 'MacOS/StudioHub', os.X_OK))
+            self.assertEqual((contents / 'MacOS/Hub Studio KH').read_bytes(), b'native-shell')
+            self.assertTrue(os.access(contents / 'MacOS/Hub Studio KH', os.X_OK))
             self.assertTrue((contents / 'MacOS/StudioHubService').is_file())
             self.assertFalse((contents / 'MacOS/StudioHubVoice').exists())
             self.assertTrue((contents / 'Resources/components/hub/standalone.py').is_file())
@@ -861,9 +861,9 @@ class StagingTests(unittest.TestCase):
             index, groups = file_manifest.load_dir(sidecar)
             self.assertEqual(file_manifest.flatten(groups), file_manifest.scan(contents.parent))
             self.assertIn('Contents/Resources/release-manifest.json', file_manifest.flatten(groups))
-            self.assertIn('Contents/MacOS/StudioHub', file_manifest.flatten(groups))
+            self.assertIn('Contents/MacOS/Hub Studio KH', file_manifest.flatten(groups))
             self.assertFalse((contents / 'Resources/file-manifest').exists())
-            (contents / 'MacOS/StudioHub').write_bytes(b'changed-native-shell')
+            (contents / 'MacOS/Hub Studio KH').write_bytes(b'changed-native-shell')
             self.assertNotEqual(manifest['payload_sha256'], module.tree_digest(
                 contents, exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')}))
             return manifest

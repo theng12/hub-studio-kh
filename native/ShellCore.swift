@@ -1087,8 +1087,14 @@ enum LoginMigration {
 /// `KeepAlive` is `SuccessfulExit: false`, so launchd relaunches after a crash (a non-zero exit or
 /// a signal) and leaves the app stopped after a deliberate Quit, which exits 0.
 enum LaunchAgent {
-    static let label = "local.studiohub.standalone"
-    static let executableRelativePath = "Contents/MacOS/StudioHub"
+    /// The agent's own label. It used to be `local.studiohub.standalone` — the same string as the
+    /// bundle id — which is why macOS listed the background item under the app's internal name
+    /// (owner, 2026-11-18). The bundle id stays `local.studiohub.standalone` (the updater, the fleet
+    /// and the kit installer key on it); only the label moves.
+    static let label = "kh.studiohub.standalone"
+    /// The label every Mac set up before 0.6.247 carries. Removed once, by `migrateLegacyAgent`.
+    static let legacyLabel = "local.studiohub.standalone"
+    static let executableRelativePath = "Contents/MacOS/Hub Studio KH"
     static let defaultApplicationsRoot = URL(fileURLWithPath: "/Applications")
     /// Set in the agent's environment so a launchd launch is still recognisable as a login launch.
     /// launchd starts the executable directly, so the AppleEvent that marked a login item is absent;
@@ -1109,6 +1115,47 @@ enum LaunchAgent {
 
     static func defaultPlistURL(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL {
         home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    }
+
+    static func legacyPlistURL(home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL {
+        home.appendingPathComponent("Library/LaunchAgents/\(legacyLabel).plist")
+    }
+
+    /// Replace the pre-0.6.247 agent with this build's, keeping the operator's choice.
+    ///
+    /// The old registration is booted out and its plist removed — after the executable rename its
+    /// `KeepAlive` would point at a program that no longer exists, and a second background item is
+    /// worse than the old name — and when the old one was installed the new plist is written at
+    /// once, so start-at-login is never silently lost. Idempotent: with no legacy plist it does
+    /// nothing and says so. It never bootstraps, because the plist sets `RunAtLoad` and loading it
+    /// while this copy runs would start a second app.
+    @discardableResult
+    static func migrateLegacyAgent(
+        appBundle: URL, home: URL = URL(fileURLWithPath: NSHomeDirectory()),
+        applicationsRoot: URL = defaultApplicationsRoot,
+        executableExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
+        bootoutLabel: (String) -> Void = { _ = bootout(label: $0) }
+    ) -> String {
+        let legacy = legacyPlistURL(home: home)
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return "no earlier agent" }
+        bootoutLabel(legacyLabel)                       // exit 3 = already absent, and that is fine
+        do {
+            try FileManager.default.removeItem(at: legacy)
+        } catch {
+            return "could not remove \(legacy.path): \(error)"
+        }
+        var note = "replaced the earlier agent \(legacyLabel)"
+        let plist = defaultPlistURL(home: home)
+        if !isInstalled(at: plist) {
+            do {
+                try write(appBundle: appBundle, to: plist, applicationsRoot: applicationsRoot,
+                          executableExists: executableExists)
+                note += "; start at login kept on"
+            } catch {
+                note += "; start at login is now off: \(error)"
+            }
+        }
+        return note
     }
 
     /// Whether the agent may be written, as a pure decision over the bundle path and whether its
@@ -1602,7 +1649,7 @@ enum StopRecord {
 
     /// The newest crash report of this app written at or after `since`.
     static func crashReport(since: Date, in directory: URL = defaultCrashReports,
-                            process: String = "StudioHub") -> Date? {
+                            process: String = "Hub Studio KH") -> Date? {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         return names.filter { $0.hasPrefix(process + "-") && $0.hasSuffix(".ips") }
             .compactMap { modified(directory.appendingPathComponent($0)) }

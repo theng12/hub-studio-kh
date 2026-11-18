@@ -25,4 +25,4 @@ xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -D LIFECYCLE_TESTING
 "$ROOT_DIR/.build/native-lifecycle-tests"
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -O -parse-as-library \
   "$ROOT_DIR"/native/*.swift \
-  -o "$ROOT_DIR/.build/StudioHub"
+  -o "$ROOT_DIR/.build/Hub Studio KH"

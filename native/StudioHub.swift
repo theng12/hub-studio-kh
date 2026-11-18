@@ -1287,6 +1287,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let ownsInstanceLock = controller.ownsInstanceLock
         let hasCustomDataDirectory = CommandLine.arguments.contains("--data-dir")
         DispatchQueue.global(qos: .utility).async {
+            // One time only (0.6.247): the agent's label used to carry the app's internal name, so
+            // macOS listed the background item as "studio hub". The old registration is replaced,
+            // never duplicated, and the operator's start-at-login choice survives it.
+            if ownsInstanceLock && !hasCustomDataDirectory {
+                let note = LaunchAgent.migrateLegacyAgent(appBundle: Bundle.main.bundleURL)
+                FileHandle.standardError.write(
+                    Data("Hub Studio KH login agent: \(note)\n".utf8))
+            }
             let outcome = LoginAgentSupervision.refreshIfEligible(
                 agentLaunch: agentLaunch, hasCustomDataDirectory: hasCustomDataDirectory,
                 ownsInstanceLock: ownsInstanceLock, plistURL: agentPlist)
@@ -1387,7 +1395,12 @@ enum Uninstaller {
         let runningCopies = NSRunningApplication.runningApplications(
             withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
             .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        switch Uninstall.decide(appBundle: bundle, agentInstalled: LaunchAgent.isInstalled(at: plist),
+        // A Mac set up before 0.6.247 carries the earlier agent label and nothing else; uninstalling
+        // must clear that one too, so the decision sees either plist.
+        let legacyPlist = LaunchAgent.legacyPlistURL()
+        let anyAgent = LaunchAgent.isInstalled(at: plist)
+            || FileManager.default.fileExists(atPath: legacyPlist.path)
+        switch Uninstall.decide(appBundle: bundle, agentInstalled: anyAgent,
                                 runningCopyDetected: !runningCopies.isEmpty) {
         case .refuse(let message):
             FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -1397,8 +1410,13 @@ enum Uninstaller {
                 switch step {
                 case .bootoutAgent:
                     _ = LaunchAgent.bootout()
+                    _ = LaunchAgent.bootout(label: LaunchAgent.legacyLabel)
                     print("unloaded the login agent")
                 case .removeAgentPlist:
+                    if FileManager.default.fileExists(atPath: legacyPlist.path) {
+                        try? FileManager.default.removeItem(at: legacyPlist)
+                        print("removed \(legacyPlist.path)")
+                    }
                     do {
                         try LaunchAgent.remove(at: plist)
                         print("removed \(plist.path)")

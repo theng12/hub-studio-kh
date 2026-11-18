@@ -79,7 +79,7 @@ def fetcher_from(app: Path, calls: list | None = None):
 OLD_FILES = {
     R + "release-manifest.json": (b'{"version":"0.6.1"}', False),
     "Contents/Info.plist": (b"<plist>build-old</plist>", False),
-    "Contents/MacOS/StudioHub": (b"\xcf\xfa\xed\xfe native shell old", True),
+    "Contents/MacOS/Hub Studio KH": (b"\xcf\xfa\xed\xfe native shell old", True),
     R + "components/hub/backend/broker.py": (b"# broker v1\n", False),
     R + "components/hub/backend/removed.py": (b"# going away\n", False),
     R + "components/hub/backend/moved_from.py": (b"# moves without changing\n" * 50, False),
@@ -93,7 +93,7 @@ OLD_LINKS = {R + "runtimes/voice/bin/python": "python3"}
 NEW_FILES = {
     R + "release-manifest.json": (b'{"version":"0.6.2"}', False),
     "Contents/Info.plist": (b"<plist>build-new</plist>", False),
-    "Contents/MacOS/StudioHub": (b"\xcf\xfa\xed\xfe native shell old", True),   # unchanged
+    "Contents/MacOS/Hub Studio KH": (b"\xcf\xfa\xed\xfe native shell old", True),   # unchanged
     R + "components/hub/backend/broker.py": (b"# broker v2 - changed\n", False),
     R + "components/hub/backend/added.py": (b"# brand new file\n", False),
     R + "components/hub/backend/moved_to.py": (b"# moves without changing\n" * 50, False),

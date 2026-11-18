@@ -30,7 +30,7 @@ from components.hub.backend import release_delta as rd
 
 FIXTURE_PATH = PROJECT_ROOT / "tests" / "fixtures" / "sealed_manifest" / "sealed_manifest_fixture.json"
 IDENTITY = "Contents/Resources/release-manifest.json"
-NATIVE = "Contents/MacOS/StudioHub"
+NATIVE = "Contents/MacOS/Hub Studio KH"
 SIGNATURE = "Contents/_CodeSignature/CodeResources"
 
 

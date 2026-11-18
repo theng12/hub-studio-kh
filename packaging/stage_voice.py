@@ -1264,11 +1264,11 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         'CFBundleIconFile': 'app-icon',
         'LSMinimumSystemVersion': '14.0', 'LSUIElement': True}
     if native_shell is not None:
-        native_executable = contents / 'MacOS/StudioHub'
+        native_executable = contents / 'MacOS/Hub Studio KH'
         shutil.copyfile(native_shell, native_executable)
         native_executable.chmod(0o755)
         plist.update({
-            'CFBundleExecutable': 'StudioHub',
+            'CFBundleExecutable': 'Hub Studio KH',
             'CFBundleIdentifier': 'local.studiohub.standalone',
             # The app is "Hub Studio KH" everywhere an operator can see it: bundle filename,
             # Finder, Dock, About, window title and this short name (owner, 2026-11-12; it

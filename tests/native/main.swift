@@ -703,7 +703,7 @@ require(probe.terminationStatus == 0 && probePrinted == expectedResources,
 // to "Hub Studio KH.app" while every Mac kept an agent naming "Studio Hub.app", so login start ran a
 // program that no longer existed; `status` reads the plist's existence, so only a path check catches it.
 let agentPlist = temporary.appendingPathComponent("local.studiohub.standalone.plist")
-require(!LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+require(!LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/Hub Studio KH"),
         "no agent is not a repair")
 let staleAgent = ["Label": LaunchAgent.label,
                   "ProgramArguments": ["/Applications/Studio Hub.app/Contents/MacOS/StudioHub"],
@@ -711,16 +711,46 @@ let staleAgent = ["Label": LaunchAgent.label,
 try PropertyListSerialization.data(fromPropertyList: staleAgent, format: .xml, options: 0).write(to: agentPlist)
 require(LaunchAgent.installedExecutablePath(at: agentPlist) == "/Applications/Studio Hub.app/Contents/MacOS/StudioHub",
         "the agent's program is readable")
-require(LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+require(LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/Hub Studio KH"),
         "an agent naming the pre-rename app must be repaired")
 let currentAgent = ["Label": LaunchAgent.label,
                     "ProgramArguments": ["/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"]] as [String: Any]
 try PropertyListSerialization.data(fromPropertyList: currentAgent, format: .xml, options: 0).write(to: agentPlist)
-require(!LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+require(!LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/Hub Studio KH"),
         "an agent naming this app needs no repair")
 try Data("not a plist".utf8).write(to: agentPlist)
-require(LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"),
+require(LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/Hub Studio KH"),
         "an unreadable agent must be repaired")
+
+// 0.6.247 moved the agent's label off the app's internal name (macOS listed the background item as
+// "studio hub"). An older agent is replaced once, never joined by a second one, and the operator's
+// start-at-login is kept: the new plist is written in the same pass.
+let migrationHome = temporary.appendingPathComponent("migration-home", isDirectory: true)
+let migrationAgents = migrationHome.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+try FileManager.default.createDirectory(at: migrationAgents, withIntermediateDirectories: true)
+let oldAgentPlist = migrationAgents.appendingPathComponent("\(LaunchAgent.legacyLabel).plist")
+try PropertyListSerialization.data(from: staleAgent, format: .xml, options: 0).write(to: oldAgentPlist)
+let fakeRoot = temporary.appendingPathComponent("migration-apps", isDirectory: true)
+let fakeApp = fakeRoot.appendingPathComponent("Hub Studio KH.app", isDirectory: true)
+try FileManager.default.createDirectory(at: fakeApp.appendingPathComponent("Contents/MacOS", isDirectory: true),
+                                        withIntermediateDirectories: true)
+var bootedOut: [String] = []
+let migrationNote = LaunchAgent.migrateLegacyAgent(
+    appBundle: fakeApp, home: migrationHome, applicationsRoot: fakeRoot,
+    executableExists: { _ in true }, bootoutLabel: { bootedOut.append($0) })
+require(bootedOut == [LaunchAgent.legacyLabel], "the earlier registration is booted out, once")
+require(!FileManager.default.fileExists(atPath: oldAgentPlist.path), "the earlier plist is removed")
+let newAgent = LaunchAgent.defaultPlistURL(home: migrationHome)
+require(FileManager.default.fileExists(atPath: newAgent.path),
+        "start at login survives the rename: the new agent is written in the same pass")
+require(LaunchAgent.installedExecutablePath(at: newAgent) == fakeApp.appendingPathComponent(LaunchAgent.executableRelativePath).path,
+        "the new agent supervises the renamed executable")
+require(migrationNote.contains("replaced the earlier agent") && migrationNote.contains("start at login kept on"),
+        "the migration says what it did: \(migrationNote)")
+require(LaunchAgent.migrateLegacyAgent(appBundle: fakeApp, home: migrationHome, applicationsRoot: fakeRoot,
+                                       executableExists: { _ in true }, bootoutLabel: { bootedOut.append($0) })
+        == "no earlier agent", "a second launch finds nothing to migrate")
+require(bootedOut == [LaunchAgent.legacyLabel], "the second pass boots nothing out")
 
 // Uninstall must remove the app and the login mechanisms and never touch the operator's data: the
 // step list has no data step at all, and a running copy or a copy outside /Applications is refused.

@@ -47,7 +47,7 @@ def _stage(root: Path, *, poison: bool = False, read_only_dir: bool = False) -> 
         "</dict></plist>",
         encoding="utf-8",
     )
-    (app / "Contents" / "MacOS" / "StudioHub").write_text("#!/bin/sh\n", encoding="utf-8")
+    (app / "Contents" / "MacOS" / "Hub Studio KH").write_text("#!/bin/sh\n", encoding="utf-8")
     runtime = app / "Contents" / "Resources" / "runtimes" / "voice" / "bin"
     runtime.mkdir(parents=True)
     interpreter = runtime / "python3"
@@ -74,7 +74,7 @@ def _previous_app(root: Path) -> Path:
     (target / "Contents").mkdir(parents=True)
     (target / "Contents" / "Info.plist").write_text("<plist>previous</plist>", encoding="utf-8")
     (target / "Contents" / "MacOS").mkdir()
-    (target / "Contents" / "MacOS" / "StudioHub").write_text("previous build\n", encoding="utf-8")
+    (target / "Contents" / "MacOS" / "Hub Studio KH").write_text("previous build\n", encoding="utf-8")
     return target
 
 
@@ -162,7 +162,7 @@ class TheInstallGuardsTest(unittest.TestCase):
         # The previous app is back in place, whole...
         self.assertEqual((target / "Contents" / "Info.plist").read_text(encoding="utf-8"),
                          "<plist>previous</plist>")
-        self.assertEqual((target / "Contents" / "MacOS" / "StudioHub").read_text(encoding="utf-8"),
+        self.assertEqual((target / "Contents" / "MacOS" / "Hub Studio KH").read_text(encoding="utf-8"),
                          "previous build\n")
         # ...and nothing was nested inside it, which is the shape that made the bundle unusable.
         self.assertEqual(list(target.glob(".studiohub-old-*")), [],
