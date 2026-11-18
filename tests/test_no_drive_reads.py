@@ -2,8 +2,9 @@
 
 The defect this pins: an automatic read of a mounted drive is what makes macOS ask an ad-hoc
 signed app for permission after every update, and an unanswered prompt held Hub routes until the
-Mac looked frozen. 0.6.212 removes the probe entirely, so the only way a volume can be read is a
-model library the person chose under it.
+Mac looked frozen. 0.6.212 removed the probe entirely. The setup ladder (0.6.248) allows exactly
+one free exception: `os.listdir` of the volume root, which never prompts. Nothing inside a volume
+is read unless a person asked for that drive (the drive-check route or a drive copy).
 
 **What this test cannot catch.** It reads source and audits this Python process only. It cannot
 see a path assembled at runtime from a chosen library (which is allowed), a read by the native
@@ -30,12 +31,16 @@ def _hub_modules() -> list[Path]:
     return sorted(path for path in HUB.rglob("*.py") if "__pycache__" not in path.parts)
 
 
-def _unexpected_volume_reads(paths, allowed_roots):
+def _unexpected_volume_reads(paths, allowed_roots, allow_root=False):
     roots = [Path(root).resolve() for root in allowed_roots]
     unexpected = []
     for path in paths:
         target = Path(os.path.abspath(path))
-        if (target == Path('/Volumes') or Path('/Volumes') in target.parents) and not any(
+        if target == Path('/Volumes'):
+            if not allow_root:
+                unexpected.append(path)
+            continue
+        if Path('/Volumes') in target.parents and not any(
                 target.is_relative_to(root) for root in roots):
             unexpected.append(path)
     return unexpected
@@ -45,9 +50,12 @@ class SourceTests(unittest.TestCase):
     def test_audit_allows_only_explicit_volume_subtrees(self):
         selected = '/Volumes/fixture/source'
         allowed = selected + '/components/hub.py'
-        other = ['/Volumes', '/Volumes/unselected/model.bin',
+        other = ['/Volumes/unselected/model.bin',
                  selected + '-other/file', selected + '/../private/file']
         self.assertEqual(_unexpected_volume_reads([allowed, *other], [selected]), other)
+        # The volume root itself is the one free listing; the same paths are refused without it.
+        self.assertEqual(_unexpected_volume_reads(['/Volumes'], [selected], allow_root=True), [])
+        self.assertEqual(_unexpected_volume_reads(['/Volumes'], [selected]), ['/Volumes'])
 
     def test_no_hub_module_names_a_volume_root(self) -> None:
         offenders = []
@@ -123,8 +131,13 @@ print(json.dumps({"answers": answers, "opened": opened, "probe": probe}))
         self.assertEqual(answer["answers"],
                          {"/api/health": 200, "/api/hub/resources": 200,
                           "/api/hub/model-presets": 200})
-        volume_reads = _unexpected_volume_reads(answer["opened"], [ROOT, tmp, sys.prefix])
-        self.assertEqual(volume_reads, [], "a status route opened a volume root")
+        volume_reads = _unexpected_volume_reads(answer["opened"], [ROOT, tmp, sys.prefix],
+                                                allow_root=True)
+        self.assertEqual(volume_reads, [], "a status route opened a path inside a volume")
+        # The plan route lists the root to name plugged drives, and that listing is the only
+        # volume-root access allowed. Prove it happened rather than silently passing.
+        roots = [path for path in answer["opened"] if os.path.abspath(path) == "/Volumes"]
+        self.assertEqual(len(roots), 1, "the plan route lists the volume root exactly once")
         # The hook has to be able to record something, or an empty log proves nothing.
         self.assertIn(answer["probe"], answer["opened"],
                       "the audit hook recorded nothing at all")

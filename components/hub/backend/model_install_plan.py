@@ -25,8 +25,8 @@ Read-only: this module reads manifests, receipts, the disk and the kit folders *
 never copies, moves or deletes anything - the screen's Apply is the existing
 ``model-packages/{id}/download`` route, one request per package.
 
-The Hub reads its chosen model library, never a mounted kit. SSD copying is started by the person
-using the kit's Terminal command.
+The Hub reads its chosen model library. A mounted kit drive appears only as far as its cached
+check says, and the snapshot itself never stats inside a volume.
 """
 from __future__ import annotations
 
@@ -83,7 +83,8 @@ PURPOSES: dict[str, str] = {
 #: model lands in a group without an edit; an engine whose modality is not here falls into "other".
 JOB_ORDER = ("image", "voice", "writing", "vision", "music", "transcription", "embeddings", "video", "other")
 
-#: Download sources reported by the Hub; SSD copying is a separate person-run command.
+#: Where a package's bytes can come from, in the owner's fixed order: SSD, then LAN, then internet.
+SOURCE_SSD = "ssd"
 SOURCE_LAN = "lan"
 SOURCE_INTERNET = "internet"
 
@@ -184,7 +185,8 @@ def _installed(receipts: dict[str, dict], package_id: str) -> bool:
 
 def model_rows(*, manifests: dict[str, dict], receipts: dict[str, dict], memory_gb: float | None,
                modality_of, presets: list[dict] | None = None,
-               lan_source: dict[str, str] | None = None) -> list[dict]:
+               lan_source: dict[str, str] | None = None,
+               ssd_source: dict[str, str] | None = None) -> list[dict]:
     """One row per package: what it is, what it costs, whether it is here, and how it would arrive.
 
     A dependency (a tokenizer, a codec) is **not** a row: nobody chooses it, and it arrives with the
@@ -210,7 +212,8 @@ def model_rows(*, manifests: dict[str, dict], receipts: dict[str, dict], memory_
             "installed": _installed(receipts, package_id),
             "state": (receipts.get(package_id) or {}).get("state") or "not_installed",
             "reason": _refusal(package_id, manifest, memory_gb),
-            "sources": _sources(package_id, manifest, lan_source),
+            "sources": _sources(package_id, manifest, lan_source, ssd_source),
+            "source_detail": _source_detail(package_id, lan_source, ssd_source),
         })
     return rows
 
@@ -225,18 +228,32 @@ def _refusal(package_id: str, manifest: dict, memory_gb: float | None) -> str | 
     return model_presets.refusal(package_id, manifest, memory_gb)
 
 
-def _sources(package_id: str, manifest: dict,
-             lan_source: dict[str, str] | None) -> list[str]:
+def _sources(package_id: str, manifest: dict, lan_source: dict[str, str] | None,
+             ssd_source: dict[str, str] | None = None) -> list[str]:
     """Where this package's bytes could come from, best first, **as it stands right now**.
 
-    The downloader tries another Mac's LAN share before the pinned internet URLs.
+    The owner's order is fixed: the SSD, then another Mac's LAN share, then the pinned internet
+    URLs. A rung is listed only when it can actually serve this package.
     """
     found: list[str] = []
+    if ssd_source and package_id in ssd_source:
+        found.append(SOURCE_SSD)
     if lan_source and package_id in lan_source:
         found.append(SOURCE_LAN)
     if any(entry.get("urls") for entry in manifest.get("files") or []):
         found.append(SOURCE_INTERNET)
     return found
+
+
+def _source_detail(package_id: str, lan_source: dict[str, str] | None,
+                   ssd_source: dict[str, str] | None) -> dict[str, str]:
+    """The drive or Mac behind each rung, so the screen can say `ATLAS` rather than `SSD`."""
+    detail: dict[str, str] = {}
+    if ssd_source and package_id in ssd_source:
+        detail[SOURCE_SSD] = ssd_source[package_id]
+    if lan_source and package_id in lan_source:
+        detail[SOURCE_LAN] = lan_source[package_id]
+    return detail
 
 
 def projection(*, packages: list[str], rows: dict[str, dict], disk_state: dict,
@@ -314,16 +331,22 @@ def preset_rows(*, presets: list[dict], rows: dict[str, dict], manifests: dict[s
 
 def snapshot(*, manifests: dict[str, dict], receipts: dict[str, dict],
              library: Path, memory_gb: float | None, stop_bytes: int, modality_of,
-             lan_source: dict[str, str] | None = None) -> dict:
+             lan_source: dict[str, str] | None = None,
+             volumes_root: Path | None = None) -> dict:
     """The whole screen: this Mac, four presets, and every model grouped by its job.
 
     One read, computed fresh: a cached projection is a number the screen shows that a model
-    switch, an install or a disk change has already made wrong.
+    switch, an install or a disk change has already made wrong. The `drives` block comes from
+    `kit_drives.report`, which lists the volume root and reads the cache - never a stat inside a
+    volume, which is what can raise the macOS permission prompt.
     """
+    from . import kit_drives
+    drives, drives_checked_at = kit_drives.report(volumes_root)
     disk_state = disk(library)
     shipped = model_presets.load()
     rows = model_rows(manifests=manifests, receipts=receipts, memory_gb=memory_gb,
-                      modality_of=modality_of, presets=shipped, lan_source=lan_source)
+                      modality_of=modality_of, presets=shipped, lan_source=lan_source,
+                      ssd_source=kit_drives.ssd_sources(drives))
     by_id = {row["package_id"]: row for row in rows}
     presets = preset_rows(presets=shipped, rows=by_id, manifests=manifests,
                           memory_gb=memory_gb, disk_state=disk_state, stop_bytes=stop_bytes)
@@ -344,6 +367,8 @@ def snapshot(*, manifests: dict[str, dict], receipts: dict[str, dict],
         "starting_preset": chosen,
         "groups": groups,
         "models": rows,
+        "drives": drives,
+        "drives_checked_at": drives_checked_at,
         "problems": _preset_problems(manifests),
     }
 
