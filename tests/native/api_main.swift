@@ -6469,7 +6469,7 @@ struct NativeAPITests {
                                                 withIntermediateDirectories: true)
         try Data("#!/bin/sh\n".utf8).write(to: agentExecutable)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agentExecutable.path)
-        let agentPlist = agentRoot.appendingPathComponent("LaunchAgents/local.studiohub.standalone.plist")
+        let agentPlist = agentRoot.appendingPathComponent("LaunchAgents/\(LaunchAgent.label).plist")
 
         let decision = LaunchAgent.installDecision(appBundle: appBundle, applicationsRoot: appRoot,
                                                    executableExists: { _ in true })
@@ -6484,7 +6484,8 @@ struct NativeAPITests {
         // a deliberate Quit (exit 0) does not.
         let agentValues = try PropertyListSerialization.propertyList(
             from: Data(contentsOf: agentPlist), options: [], format: nil) as? [String: Any]
-        require(agentValues?["Label"] as? String == "local.studiohub.standalone", "the agent label")
+        require(agentValues?["Label"] as? String == LaunchAgent.label, "the agent label")
+        require(LaunchAgent.label != LaunchAgent.legacyLabel, "the agent label is not the bundle id")
         let program = agentValues?["ProgramArguments"] as? [String]
         require(program == [agentExecutable.path],
                 "the agent must supervise the app executable, never open: \(String(describing: program))")
@@ -6962,7 +6963,7 @@ struct NativeAPITests {
             case "crash signal":
                 FileManager.default.createFile(atPath: standbyDirectory.appendingPathComponent(StopRecord.crashedMarkerName).path, contents: Data([11]))
             case "crash report only":
-                FileManager.default.createFile(atPath: reports.appendingPathComponent("StudioHub-2026-10-03-093600.ips").path, contents: Data())
+                FileManager.default.createFile(atPath: reports.appendingPathComponent("\(StopRecord.crashReportProcess)-2026-10-03-093600.ips").path, contents: Data())
             case "SIGTERM":
                 FileManager.default.createFile(atPath: standbyDirectory.appendingPathComponent(StopRecord.terminatedMarkerName).path, contents: Data([15]))
             case "SIGKILL under critical memory pressure": StopRecord.noteCriticalMemory(directory: standbyDirectory)
@@ -6984,7 +6985,7 @@ struct NativeAPITests {
             require(StopRecord.settle(directory: standbyDirectory, relaunching: false, crashReports: noReports) == nil,
                     "a settled stop is not settled twice")
             require(lastStop()?["reason"] as? String == reason, "a second settle keeps the record")
-            try? FileManager.default.removeItem(at: reports.appendingPathComponent("StudioHub-2026-10-03-093600.ips"))
+            try? FileManager.default.removeItem(at: reports.appendingPathComponent("\(StopRecord.crashReportProcess)-2026-10-03-093600.ips"))
         }
         require(lastStop() != nil && (StopRecord.settle(directory: standbyDirectory, relaunching: true) == nil),
                 "nothing to settle without evidence")

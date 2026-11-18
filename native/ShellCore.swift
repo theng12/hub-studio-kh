@@ -1647,9 +1647,13 @@ enum StopRecord {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
+    /// The name macOS gives this app's crash reports: the executable's, so renaming the
+    /// executable renames them too (0.6.247).
+    static let crashReportProcess = "Hub Studio KH"
+
     /// The newest crash report of this app written at or after `since`.
     static func crashReport(since: Date, in directory: URL = defaultCrashReports,
-                            process: String = "Hub Studio KH") -> Date? {
+                            process: String = crashReportProcess) -> Date? {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         return names.filter { $0.hasPrefix(process + "-") && $0.hasSuffix(".ips") }
             .compactMap { modified(directory.appendingPathComponent($0)) }
