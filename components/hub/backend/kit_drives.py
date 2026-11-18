@@ -165,15 +165,17 @@ def report(root: Path | str | None = None) -> tuple[list[dict], float | None]:
         row = {"name": name_of(drive), "path": key, "mounted": True}
         cached = cache.get(key)
         if cached and isinstance(cached.get("checked_at"), (int, float)):
-            row.update(checked=True, checked_at=cached["checked_at"], has=list(cached.get("has") or []))
+            row.update(checked=True, checked_at=cached["checked_at"], has=list(cached.get("has") or []),
+                       state="ok")
         else:
-            row["checked"] = False
+            row.update(checked=False, state="unknown")
         entries.append(row)
     for key, cached in sorted(cache.items()):
         if key in seen or not isinstance(cached.get("checked_at"), (int, float)):
             continue
         entries.append({"name": name_of(key), "path": key, "mounted": False, "checked": True,
-                        "checked_at": cached["checked_at"], "has": list(cached.get("has") or [])})
+                        "checked_at": cached["checked_at"], "has": list(cached.get("has") or []),
+                        "state": "ok"})
     checked_at = max((float(row["checked_at"]) for row in cache.values()
                       if isinstance(row.get("checked_at"), (int, float))), default=None)
     return entries, checked_at
@@ -184,20 +186,24 @@ def check(manifests: dict[str, dict], root: Path | str | None = None) -> dict:
     base = volumes_root(root)
     cache = _cache()
     deadline = time.monotonic() + TOTAL_SECONDS
-    for drive in mounted(base):
+    mounted_now = mounted(base)
+    refused: dict[str, str] = {}
+    read_any = False
+    for drive in mounted_now:
+        name = name_of(drive)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            print(f"[hub] drive: {name_of(drive)} could not be read: the check ran out of time",
-                  flush=True)
-            raise DriveRefused("NEEDS_PERMISSION",
-                               f"macOS needs your permission to read {name_of(drive)} once.")
+            refused[name] = "the check ran out of time"
+            print(f"[hub] drive: {name} could not be read: the check ran out of time", flush=True)
+            continue
         library = drive_library(drive)
         try:
             value = _read(library, manifests, min(PER_DRIVE_SECONDS, remaining))
         except DriveRefused as exc:
-            print(f"[hub] drive: {name_of(drive)} could not be read: {exc.detail}", flush=True)
-            raise DriveRefused("NEEDS_PERMISSION",
-                               f"macOS needs your permission to read {name_of(drive)} once.") from None
+            refused[name] = exc.detail
+            print(f"[hub] drive: {name} could not be read: {exc.detail}", flush=True)
+            continue
+        read_any = True
         key = str(drive)
         cached = cache.get(key) or {}
         fresh = (isinstance(cached.get("checked_at"), (int, float))
@@ -207,6 +213,16 @@ def check(manifests: dict[str, dict], root: Path | str | None = None) -> dict:
             cache[key] = {"checked_at": time.time(), "has": list(value["has"])}
             _write_cache(cache)
     entries, checked_at = report(base)
+    # One drive that cannot be read never hides another drive's answer: the screen says which
+    # drive needs permission and carries on with the rest of the ladder.
+    for entry in entries:
+        if not entry.get("mounted"):
+            continue
+        if entry["name"] in refused:
+            entry.update(state="refused", detail=refused[entry["name"]])
+    if mounted_now and not read_any:
+        name, detail = next(iter(refused.items()))
+        raise DriveRefused("NEEDS_PERMISSION", f"macOS needs your permission to read {name} once.")
     return {"drives": entries, "drives_checked_at": checked_at}
 
 

@@ -71,7 +71,8 @@ class LadderTests(unittest.TestCase):
                                memory_gb=32, stop_bytes=1, modality_of=modality_of,
                                volumes_root=self.volumes)
         self.assertEqual(screen["drives"],
-                         [{"name": "ATLAS", "path": str(drive), "mounted": True, "checked": False}])
+                         [{"name": "ATLAS", "path": str(drive), "mounted": True, "checked": False,
+                           "state": "unknown"}])
         self.assertNotIn("has", screen["drives"][0])
         self.assertIsNone(screen["drives_checked_at"])
         # Unknown is never a claim: the SSD does not appear as a source until it has been checked.
