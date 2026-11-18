@@ -289,6 +289,42 @@ class RuntimePackagingTests(unittest.TestCase):
         self.assertNotIn("/private/build", result)
         self.assertIn("print('server')", result)
 
+    def test_uv_polyglot_shebangs_with_spaces_become_bundle_relative(self):
+        packaging = load_packager()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "bin").mkdir()
+            entrypoint = root / "bin" / "uvicorn"
+            entrypoint.write_text(
+                "#!/bin/sh\n"
+                "'''exec' '/Users/builder/My Own Apps/stage/bin/python3' \"$0\" \"$@\"\n"
+                "' '''\n"
+                "# -*- coding: utf-8 -*-\n"
+                "print('server')\n",
+                encoding="utf-8",
+            )
+            entrypoint.chmod(0o755)
+            relative = root / "bin" / "2to3-3.12"
+            relative_text = (
+                "#!/bin/sh\n"
+                "'''exec' \"$(dirname -- \"$(realpath -- \"$0\")\")/python3.12\" \"$0\" \"$@\"\n"
+                "' '''\n"
+                "import sys\n"
+            )
+            relative.write_text(relative_text, encoding="utf-8")
+
+            changed = packaging.normalize_python_shebangs(root)
+            result = entrypoint.read_text(encoding="utf-8")
+            untouched = relative.read_text(encoding="utf-8")
+            second_pass = packaging.normalize_python_shebangs(root)
+
+        self.assertEqual(changed, ["bin/uvicorn"])
+        self.assertEqual(second_pass, [])
+        self.assertTrue(result.startswith("#!/bin/sh\n'''exec' \"$(dirname \"$0\")/python3\""))
+        self.assertNotIn("/Users/builder", result)
+        self.assertIn("print('server')", result)
+        self.assertEqual(untouched, relative_text)
+
 
 class RuntimeTestOnlyContentTests(unittest.TestCase):
     """Nothing that exists only to run tests may ship inside the Voice runtime.

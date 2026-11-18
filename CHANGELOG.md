@@ -2,6 +2,22 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.246 — 2026-11-18
+
+- **Remove and Connect in the Gateway now reach this Mac's group.** Removing a Mac there removes it here too: its row goes, the credential it was given is revoked, and whatever was queued for it is dropped. The Gateway is told *why* an answer came back, so "that Mac is already gone" and "this Hub is too old to do this" no longer look the same.
+- **A removed Mac that asks again is refused by name, and stays removed.** Its next check-in is answered "this Mac was removed from the fleet and its credential was revoked — reconnect it to receive a new one", and nothing it carries is written down. It cannot put itself back on the roster.
+- **A Mac that comes back is the same Mac, once, and starts empty.** Connect hands out a one-time join code. The Mac that uses it takes over its own removed record — one row, never two — under the name the operator asked for (or its own), with a fresh credential. Its old queue and old measurements stay in its last life: the group starts a new registration for it, so nothing from before is shown as this one's.
+- Nothing else changes for a Mac that is still in its group.
+
+### Technical notes
+- `POST /api/hub/fleet/nodes/{machine_id}/unregister` (`components/hub/standalone.py`) takes `{"requested_by", "purge"}`, evicts through `fleet_nodes.remove()` and answers `{ok, removed, machine, revoked}`. An unknown machine answers **404 with `code: "NODE_NOT_FOUND"`** — the code is load-bearing, because the Gateway reads a route-missing 404 as `HUB_TOO_OLD`. A missing or wrong credential stays a 401/403 with no `code`, which the Gateway reads as `CONTROLLER_REFUSED`.
+- Both new routes are on `auth.FLEET_ALLOWED`, and neither is on `NODE_ALLOWED`: the caller is the Gateway, which holds the Fleet token. **`unregister` is the one place a shared credential may take any machine off this roster** — deliberate, and it stays an eviction (tombstone + revoked credential) rather than a quiet forget. A *node* credential may still unregister only itself, and the `DELETE` route's `self_removal_allowed` rule is unchanged. `connect` mints a ticket and nothing else.
+- `POST /api/hub/fleet/nodes/connect` mints a join ticket: `secrets.token_urlsafe(32)`, stored as a SHA-256 hash in `fleet_join_tickets.json` (0600), 3600 s, **single use**, spent only after the row is written so a failed join does not burn it. The auth middleware accepts a ticket as `{"kind": "join"}` and **only** on `POST /api/hub/fleet/nodes`.
+- `fleet_nodes.revoked_refusal()` now answers **`code: "NODE_REMOVED"`** (the name the Gateway's design agreed) and keeps `state: "revoked"`, which is what every Mac app shipped before 0.6.246 reads, so the removal notice does not regress on an older Mac. No row is ever re-created by a check-in: `record_checkin` returns `None` for an unknown id and the route writes nothing.
+- The reconnect rule: `join()` takes `ticket_token`, replaces the tombstone for that id, applies the ticket's name over the Mac's own, mints a new credential, and — where both sides know it — requires the same `hardware_id` / `machine_uuid`, so a different Mac under a removed name is still refused with the tombstone's sentence. The tombstone keeps that identity, and `removed()` strips it from everything published.
+- Fresh state is the registration epoch, not a deletion: `ledger.reconcile_machine_registrations()` closes the epoch on unregister and opens a new one at a ticket join, and activity and machine state are read per epoch (`observed_at >= active_since`), so the previous life's rows are kept but attributed to a closed registration.
+- Tests: `tests/test_fleet_node_removal.py` (10, real app through its middleware) covers both invariants — a removed Mac's check-in never re-creates its row, and a reconnect replaces the tombstone without a second row, with a new epoch and a spent ticket. `tests/test_fleet_nodes.py` asserts the new code. Neighbouring suites (`fleet_nodes`, `node_rename`, `fleet_credentials`, `fleet_credential_refusal`, `fleet_pull`, `fleet_status_presence`) unchanged and green.
+
 ## 0.6.245 — 2026-11-17
 
 - **The Hub now checks in on itself every 30 minutes, so you do not have to keep looking.** Its health answer carries the moment it was measured, so a page can say "not checked in since 9:41" instead of showing yesterday's verdict as today's. The interval is a setting, 30 minutes by default.

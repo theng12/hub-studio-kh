@@ -46,9 +46,13 @@ RENDER_AUTHORITY_MODES: tuple[RenderAuthorityMode, ...] = (
 # the mistake impossible rather than merely documented.
 # 0.6.222 appends psutil 7.2.2 without changing engine files; native audit, isolated smoke
 # and the live admission reader passed. See qualification/evidence/image-runtime-psutil-20261106.json.
-IMAGE_RUNTIME_SHA256 = '810a725d20ef9bbc942d53bfea39e56327964d519d3cb4f33a5eea13a4a08178'
+# 0.6.246 rebuilt the exact same lock (`cd8cd947...`), CPython (`3.12.14`), and `mlx-serve 26.10.1`
+# after the cached Nov 6 tree was retired (`smoke_imports.py` also includes `multipart` since `f3b8c3e1`).
+IMAGE_RUNTIME_SHA256 = '9fa3c8435e393d7f69f0050952e7b299390c0e8da0c17519760f3b78e51b9e9a'
 # Kept so the refusal can name what it was handed and where that tree came from.
 IMAGE_RUNTIME_SUPERSEDED = {
+    '810a725d20ef9bbc942d53bfea39e56327964d519d3cb4f33a5eea13a4a08178':
+        'mflux 0.23.0 + mlx 0.32.4 + psutil 7.2.2 built 2026-11-06 before smoke_imports multipart pin',
     'c5ac478f85d5687e0bd6df715eec5d55a3a59e36aae4f14da352f45ea546923a':
         'mflux 0.20.0 + mlx 0.32.2, shipped through 0.6.201',
     'c3acf7661fb9e214c2273f01a61d9ac810250847274959a30ebc2e80c646491f':

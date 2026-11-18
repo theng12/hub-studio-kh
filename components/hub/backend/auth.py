@@ -853,6 +853,17 @@ FLEET_ALLOWED = (
     # continues the group it is already in, and every node checks the operation's
     # `expected_controller_url` against its own membership before it writes anything.
     ("POST", r"^/api/hub/fleet/repoint$"),
+    # **The Gateway's two node actions (owner-accepted design, 2026-11-18).** Removing one Mac
+    # and connecting a Mac back are the Gateway's buttons on a controller it does not own; it
+    # holds the Fleet token and nothing else, so these two are here or the button refuses.
+    # `unregister` evicts by name and is the one place a *shared* credential may take a machine
+    # off this roster — deliberate, because the Gateway is the only caller that acts for the
+    # owner on a Mac it cannot reach, and the removal is recorded (tombstone) rather than
+    # forgotten, so it cannot be undone by the removed Mac itself.
+    # `connect` mints a one-time join ticket, which is the only thing it can do here; the Mac
+    # that redeems it is authenticated by that ticket, not by this token.
+    ("POST", r"^/api/hub/fleet/nodes/[^/]+/unregister$"),
+    ("POST", r"^/api/hub/fleet/nodes/connect$"),
 )
 _FLEET_ALLOWED = tuple((method, re.compile(pattern)) for method, pattern in FLEET_ALLOWED)
 
@@ -1150,6 +1161,16 @@ def make_middleware(token: str):
                 response.set_cookie("kh_studio_token", fleet, httponly=True,
                                     samesite="strict")
                 return response
+            # **A one-time join ticket** this controller's operator minted (`.../nodes/connect`)
+            # and handed to a Mac. It buys exactly one thing — `POST /api/hub/fleet/nodes` — and
+            # that join spends it, so a ticket still sitting in a chat window is worth nothing
+            # once its Mac has reconnected.
+            if request.method == "POST" and request.url.path == "/api/hub/fleet/nodes":
+                from . import fleet_nodes
+                if fleet_nodes.join_ticket(offered) is not None:
+                    request.state.fleet_actor = {"kind": "join", "node_id": None,
+                                                 "ticket": offered}
+                    return await call_next(request)
             # **The previous Fleet token, for a node that missed the rotation.** Only while that node
             # is still waiting to be moved over, and only for what a node itself may do (register,
             # read its group, read the release): it is a leaked-token risk the controller accepts for

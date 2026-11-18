@@ -2901,8 +2901,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
     async def fleet_join(body: dict[str, Any], request: Request) -> dict[str, Any]:
         from .backend import auth as hub_auth
         from .backend import fleet_nodes as fleet
+        actor = hub_auth._fleet_actor(request)
         try:
-            joined = fleet.join(body, actor=hub_auth._fleet_actor(request))
+            joined = fleet.join(body, actor=actor, ticket_token=actor.get("ticket"))
         except fleet.NodeRemovedError as exc:
             # **403, not 400.** The asking Mac is well formed and known by name; it is refused
             # on purpose, and the app stops its re-join loop on this status instead of retrying
@@ -2914,6 +2915,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # The registry is otherwise loaded once at startup, so without this the node was
         # listed as reachable but no work routed to it until the Hub was restarted.
         monitor.reload_registry()
+        if actor.get("kind") == "join":
+            # A Mac that came back on a ticket is registered afresh: activity and machine state
+            # are read per registration epoch, so this Mac's record starts here and none of its
+            # previous life is shown as this one's.
+            ledger.reconcile_machine_registrations(set(fleet._read()))
         # `credential` travels back to the joining Mac **once**, in this answer, and is never
         # published on any read route. The caller stores it 0600 in its own data dir and
         # presents it on every later call home (A8).
@@ -2957,6 +2963,65 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 raise HTTPException(404, "unknown node")
         monitor.reload_registry()
         return {"ok": True, "removed": removed}
+
+    @app.post("/api/hub/fleet/nodes/{node_id}/unregister")
+    async def fleet_unregister_node(node_id: str, body: dict[str, Any] | None,
+                                    request: Request) -> Any:
+        """**Remove one Mac from this controller with the credential a Gateway holds** (design 3.1).
+
+        The Gateway's "Remove This Mac…" has to reach the machine through the only token it has,
+        which is the group's Fleet token, so this route is on that allowlist. Two callers are
+        still distinguished: a *node* credential may unregister only the Mac that holds it, and
+        the Fleet token — the Gateway acting for the operator — may name any Mac on this roster.
+
+        The removal is an **eviction** (`fleet.remove`): the row goes, the credential it was
+        issued is revoked, the work queued for it is dropped, and the id is tombstoned so the
+        Mac cannot put itself back. Everything the Hub held for it was in those two files, so
+        there is nothing else to purge and `purge` is honoured by construction.
+
+        `404` carries `NODE_NOT_FOUND` **as a code**, not just a status: the Gateway reads a
+        route-missing 404 as "this Hub is too old" and a bare one cannot be told from it.
+        """
+        from .backend import auth as hub_auth
+        from .backend import fleet_nodes as fleet
+        asked = node_id.strip().lower()
+        actor = hub_auth._fleet_actor(request)
+        if actor.get("kind") == "node" and asked != str(actor.get("node_id") or "").strip().lower():
+            raise HTTPException(403, "a node credential may unregister only the Mac that holds it")
+        payload = body if isinstance(body, dict) else {}
+        removed = fleet.remove(asked, by=str(payload.get("requested_by") or "operator"))
+        if removed is None:
+            return JSONResponse({"ok": False, "code": "NODE_NOT_FOUND",
+                                 "detail": "No such node."}, status_code=404)
+        # Activity and machine state are read per registration epoch (`ledger`), so closing this
+        # Mac's epoch here is what makes a later reconnect start with no record of its last life.
+        ledger.reconcile_machine_registrations(set(fleet._read()))
+        monitor.reload_registry()
+        return {"ok": True, "removed": True, "machine": asked, "revoked": True}
+
+    @app.post("/api/hub/fleet/nodes/connect")
+    def fleet_connect_node(body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """**Hand out a one-time join ticket for a Mac** (design 3.3) — the Gateway's Connect.
+
+        The ticket is the whole answer. This controller never dials a Mac that is not on its
+        roster, so there is no second "pair by address" path here: the Mac redeems the ticket at
+        `POST /api/hub/fleet/nodes` with its own hardware identity, and that join replaces any
+        tombstone for it, mints a fresh credential and starts it with an empty row — its old
+        metrics and its old queue went with the removal.
+
+        `name` is applied by that join if the operator gave one; left out, the Mac's own name is.
+        """
+        from .backend import fleet_nodes as fleet
+        payload = body if isinstance(body, dict) else {}
+        try:
+            ticket = fleet.mint_join_ticket(name=str(payload.get("name") or "").strip() or None,
+                                            by=str(payload.get("requested_by") or ""))
+        except ValueError as exc:
+            # The Gateway shows this after "No Mac was connected — ", so it is a phrase, not a
+            # sentence: no leading capital, no full stop.
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True, "token": ticket["token"], "expires_at": ticket["expires_at"],
+                "name": ticket["name"], "detail": "Ready to connect."}
 
     @app.get("/api/hub/fleet/nodes/{node_id}/status")
     async def fleet_node_status(node_id: str, request: Request,

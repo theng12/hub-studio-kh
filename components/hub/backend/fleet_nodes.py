@@ -36,6 +36,10 @@ from .vocabulary import NODE_MODALITIES
 log = logging.getLogger("studiohub.fleet_nodes")
 
 FILE_NAME = "fleet_nodes.json"
+#: Join tickets handed to a Mac the Gateway asked this controller to connect. One use each,
+#: short-lived, and stored as a hash like every other credential here.
+JOIN_TICKET_FILE = "fleet_join_tickets.json"
+JOIN_TICKET_LIFETIME_S = 3600
 MAX_NODES = 64
 ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 # A join request is authenticated with the controller's own credential, so it is not a public
@@ -157,7 +161,9 @@ def _removed() -> dict[str, dict[str, Any]]:
 
 def removed() -> dict[str, dict[str, Any]]:
     """The machines this controller has evicted, newest first."""
-    rows = {key: {k: v for k, v in row.items() if k != "revoked_hash"}
+    # The hardware identity stays in the file: it is what tells the same Mac returning from a
+    # different one taking over the name, and a sold Mac's identity is nobody else's to read.
+    rows = {key: {k: v for k, v in row.items() if k not in {"revoked_hash", "hardware_id"}}
             for key, row in _removed().items()}
     return dict(sorted(rows.items(), key=lambda item: item[1].get("removed_at") or 0,
                        reverse=True))
@@ -165,10 +171,12 @@ def removed() -> dict[str, dict[str, Any]]:
 
 def _write(nodes: dict[str, dict[str, Any]],
            removed_rows: dict[str, dict[str, Any]] | None = None) -> None:
-    path = store_path()
+    _atomic_write(store_path(), {"version": 2, "nodes": nodes,
+                                 "removed": _removed() if removed_rows is None else removed_rows})
+
+
+def _atomic_write(path: Path, document: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    document = {"version": 2, "nodes": nodes,
-                "removed": _removed() if removed_rows is None else removed_rows}
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
     temporary = Path(name)
     try:
@@ -742,6 +750,20 @@ class NodeRemovedError(ValueError):
         super().__init__(REMOVED_DETAIL.format(when=when))
 
 
+def _hardware_id(payload: dict[str, Any]) -> str:
+    """The Mac's stable hardware identity from a join body, if it sent one.
+
+    Optional on purpose: a Hub that predates this sends nothing, and an absent identity must
+    not refuse a join. It is used only to tell "the same Mac came back" from "another Mac took
+    its name", and when either side has none that question is answered by the join ticket.
+    """
+    for key in ("hardware_id", "machine_uuid"):
+        value = str(payload.get(key) or "").strip().lower()
+        if value:
+            return value[:128]
+    return ""
+
+
 def _proves_identity(node_id: str, payload: dict[str, Any],
                      actor: dict[str, Any] | None,
                      existing: dict[str, Any] | None = None) -> bool:
@@ -757,7 +779,9 @@ def _proves_identity(node_id: str, payload: dict[str, Any],
     Anything else is a second Mac claiming an id that is already taken.
     """
     kind = str((actor or {}).get("kind") or "")
-    if kind == "hub":
+    if kind in {"hub", "join"}:
+        # `join` is a one-time ticket the controller's operator minted (`.../nodes/connect`):
+        # the same deliberate decision as pressing it on this Mac, made from the Gateway.
         return True
     if kind == "node" and str((actor or {}).get("node_id") or "").lower() == node_id:
         return True
@@ -770,7 +794,8 @@ def _proves_identity(node_id: str, payload: dict[str, Any],
 
 
 def join(payload: dict[str, Any], *,
-         actor: dict[str, Any] | None = None) -> dict[str, Any]:
+         actor: dict[str, Any] | None = None,
+         ticket_token: str | None = None) -> dict[str, Any]:
     """Record one node, or refresh what a rejoining node reports about itself.
 
     **Returns the machine's own credential, once.** The shared Fleet token enrols a Mac; it
@@ -782,7 +807,12 @@ def join(payload: dict[str, Any], *,
     **A removed machine is refused by name.** The owner removes Macs to sell them, so a
     removal has to survive the machine's next start: `removed()` holds the id, and this
     raises `NodeRemovedError` before anything is written. Re-admitting is a deliberate action
-    on the controller (`readmit`), not something the removed Mac can do for itself.
+    on the controller (`readmit`), not something the removed Mac can do for itself — **unless
+    the operator minted a join ticket** (`mint_join_ticket`, the Gateway's Connect). That
+    ticket is the controller saying "this Mac comes back", so it replaces the tombstone once:
+    the Mac returns with a fresh row (the old one was deleted with its metrics and its queue),
+    by its own hardware identity where both sides know it, and the ticket's name if the
+    operator gave one. A ticket is spent by the first join that uses it.
 
     **Backwards compatible on purpose.** A node that joins with only the Fleet token still
     works: it is issued its own credential on that first join, so the rollout needs no flag
@@ -792,10 +822,19 @@ def join(payload: dict[str, Any], *,
     if not ID_PATTERN.fullmatch(node_id):
         raise ValueError("node_id must be lowercase letters, numbers, dots, dashes or underscores")
     document = _document()
+    ticket = join_ticket(ticket_token)
     gone = document["removed"].get(node_id)
     if gone is not None:
-        raise NodeRemovedError(node_id, gone.get("removed_at"))
-    name = valid_name(payload.get("name"))
+        if ticket is None:
+            raise NodeRemovedError(node_id, gone.get("removed_at"))
+        # A different Mac under a removed name is a new Mac, and its new name is the operator's
+        # to choose: the tombstone stays until that Mac joins as something else.
+        asked = _hardware_id(payload)
+        was = str(gone.get("hardware_id") or "")
+        if asked and was and asked != was:
+            raise NodeRemovedError(node_id, gone.get("removed_at"))
+        del document["removed"][node_id]
+    name = valid_name((ticket or {}).get("name") or payload.get("name"))
     address = validate_address(payload.get("address"))
     studios = _studios(payload.get("studios"))
     nodes = document["nodes"]
@@ -814,6 +853,7 @@ def join(payload: dict[str, Any], *,
             f"rename this Mac in Connections, or remove the other one first.")
     credential = _mint_credential()
     now = time.time()
+    hardware = _hardware_id(payload) or str(existing.get("hardware_id") or "")
     nodes[node_id] = {
         "id": node_id,
         "name": name,
@@ -827,8 +867,15 @@ def join(payload: dict[str, Any], *,
         "last_seen_at": existing.get("last_seen_at") or now,
         "credential_hash": hash_credential(credential),
         "credential_issued_at": now,
+        # What the Mac is, as opposed to what it is called: a removal keeps this, so the same
+        # Mac coming back on a ticket can be told from a different one taking over its name.
+        "hardware_id": hardware or None,
     }
     _write(nodes, document["removed"])
+    if ticket is not None:
+        # Spent only once the row is written: a join that failed has not used the operator's
+        # ticket, and the Mac can try again.
+        consume_join_ticket(ticket_token)
     # The plaintext is returned here and **nowhere else**: it is not written to the roster,
     # not logged, and not published on any read route.
     # The controller's own roster identity, so the joining Mac can record the actual controller
@@ -910,7 +957,9 @@ def revoked_refusal(offered: str | None) -> dict[str, Any] | None:
     return {
         "ok": False,
         "state": "revoked",
-        "code": "IDENTITY_REVOKED",
+        # The wire name the Gateway's design agreed on (`NODE_REMOVED`). `state` carries the
+        # same fact and is what every Mac app shipped before this build reads, so both stay.
+        "code": "NODE_REMOVED",
         "detail": str(NodeRemovedError(node_id, removed_at)),
         "node_id": node_id,
         "removed_at": (time.strftime("%Y-%m-%d", time.localtime(removed_at))
@@ -966,6 +1015,9 @@ def remove(node_id: str, *, by: str = "") -> dict[str, Any] | None:
         "role": row.get("role"),
         "studios": row.get("studios") or [],
         "joined_at": row.get("joined_at"),
+        # So the same Mac coming back on a join ticket is recognised as itself, and a different
+        # Mac that took over the name is not.
+        "hardware_id": row.get("hardware_id"),
     }
     _write(document["nodes"], document["removed"])
     confirm_node(node_id)   # a removed Mac is not waited for: it is not in the group any more
@@ -982,6 +1034,59 @@ def readmit(node_id: str) -> dict[str, Any] | None:
         return None
     _write(document["nodes"], document["removed"])
     return dict(row)
+
+
+# -- join tickets ------------------------------------------------------------
+def _tickets_path() -> Path:
+    return DATA_DIR / JOIN_TICKET_FILE
+
+
+def _tickets() -> dict[str, dict[str, Any]]:
+    try:
+        value = json.loads(_tickets_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def mint_join_ticket(*, name: str | None = None, by: str = "",
+                     now: float | None = None) -> dict[str, Any]:
+    """**A ticket a Mac joins with once**, minted when the Gateway asks this controller to connect one.
+
+    The value is returned here and never stored: the file keeps its hash, the same rule as a node
+    credential. Expired tickets are dropped as it is written, so the file cannot grow.
+    """
+    at = time.time() if now is None else now
+    token = secrets.token_urlsafe(32)
+    clean = valid_name(name) if name else None
+    tickets = {key: row for key, row in _tickets().items()
+               if float(row.get("expires_at") or 0) > at}
+    tickets[hash_credential(token)] = {"name": clean, "created_at": at,
+                                       "expires_at": at + JOIN_TICKET_LIFETIME_S,
+                                       "created_by": str(by or "")}
+    _atomic_write(_tickets_path(), tickets)
+    return {"token": token, "expires_at": at + JOIN_TICKET_LIFETIME_S, "name": clean}
+
+
+def join_ticket(offered: str | None, *, now: float | None = None) -> dict[str, Any] | None:
+    """The live ticket `offered` is, or `None`. Read-only — `consume_join_ticket` spends it."""
+    if not offered:
+        return None
+    at = time.time() if now is None else now
+    row = _tickets().get(hash_credential(offered))
+    if not row or float(row.get("expires_at") or 0) <= at:
+        return None
+    return dict(row)
+
+
+def consume_join_ticket(offered: str | None) -> bool:
+    """Spend a ticket: one Mac joins per ticket, and a second use is refused like an old one."""
+    digest = hash_credential(offered or "")
+    tickets = _tickets()
+    if tickets.pop(digest, None) is None:
+        return False
+    _atomic_write(_tickets_path(), tickets)
+    return True
 
 
 def reset_fleet(*, by: str = "operator") -> dict[str, Any]:

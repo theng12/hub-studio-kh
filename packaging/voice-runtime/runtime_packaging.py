@@ -456,6 +456,33 @@ def strip_test_only(root: Path) -> dict[str, object]:
     }
 
 
+def _strip_absolute_python_header(contents: bytes) -> bytes | None:
+    """Return the script body after an absolute Python shebang or uv polyglot header."""
+    first_line, separator, body = contents.partition(b"\n")
+    if not separator:
+        return None
+    if first_line.startswith(b"#!") and b"python" in first_line.lower():
+        return body
+    # When the build directory path contains spaces (e.g. `My Own Apps`), uv writes a 3-line
+    # `#!/bin/sh` polyglot wrapper whose second line hardcodes the absolute python3 path.
+    lines = contents.splitlines(keepends=True)
+    if len(lines) < 3:
+        return None
+    line0 = lines[0].rstrip(b"\r\n")
+    line1 = lines[1].rstrip(b"\r\n")
+    line2 = lines[2].rstrip(b"\r\n")
+    prefix = b"'''exec' "
+    suffix = b' "$0" "$@"'
+    if line0 != b"#!/bin/sh" or line2 != b"' '''":
+        return None
+    if not (line1.startswith(prefix) and line1.endswith(suffix)):
+        return None
+    target = line1[len(prefix) : len(line1) - len(suffix)]
+    if (target.startswith(b"'/") or target.startswith(b'"/')) and b"python" in target.lower():
+        return b"".join(lines[3:])
+    return None
+
+
 def normalize_python_shebangs(root: Path) -> list[str]:
     """Replace absolute Python shebangs with a script-relative polyglot header."""
     bin_dir = root / "bin"
@@ -466,9 +493,8 @@ def normalize_python_shebangs(root: Path) -> list[str]:
     for path in sorted(bin_dir.iterdir()):
         if not path.is_file() or path.is_symlink() or is_macho(path):
             continue
-        contents = path.read_bytes()
-        first_line, separator, body = contents.partition(b"\n")
-        if not separator or not first_line.startswith(b"#!") or b"python" not in first_line.lower():
+        body = _strip_absolute_python_header(path.read_bytes())
+        if body is None:
             continue
         path.write_bytes(header + body)
         changed.append(path.relative_to(root).as_posix())

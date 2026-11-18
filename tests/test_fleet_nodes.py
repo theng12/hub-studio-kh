@@ -616,7 +616,7 @@ class NodeStatusAndLabelTest(unittest.TestCase):
         # The Mac classifies on these; the sentence stays for the person reading it.
         self.assertFalse(body["ok"])
         self.assertEqual(body["state"], "revoked")
-        self.assertEqual(body["code"], "IDENTITY_REVOKED")
+        self.assertEqual(body["code"], "NODE_REMOVED")
         self.assertEqual(body["reconnect"], "join")
         self.assertEqual(body["node_id"], "sold")
         self.assertRegex(body["removed_at"], r"^\d{4}-\d{2}-\d{2}$")

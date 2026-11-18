@@ -5,7 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 source "$PROJECT_ROOT/packaging/voice-runtime/pins.env"
 BUILD_ROOT="$PROJECT_ROOT/.build"
-TRASH_ROOT="$PROJECT_ROOT/_trash/image-runtime-build"
+# Straight at the owner's one trash on the Desktop: there is no `_trash` link in a checkout
+# (owner, 2026-11-18: "i hated link folders so it must be point at the direct one instead").
+TRASH_ROOT="$HOME/Desktop/_trash/hub-studio-kh/image-runtime-build"
 SMOKE_STATES=()
 stash_path() {
   local source="$1" base stamp destination suffix
@@ -65,7 +67,10 @@ cleanup() {
   stash_path "$STAGE"
   stash_path "$RELOCATION_PARENT"
   local state
-  for state in "${SMOKE_STATES[@]}"; do
+  # `SMOKE_STATES` is empty until the smoke phase, and this Mac's bash is 3.2, where `set -u` makes
+  # an empty array expansion fatal — so the EXIT trap itself crashed and hid the real error
+  # (measured 2026-11-18: the build died with "SMOKE_STATES[@]: unbound variable").
+  for state in ${SMOKE_STATES[@]+"${SMOKE_STATES[@]}"}; do
     stash_path "$state"
   done
 }
