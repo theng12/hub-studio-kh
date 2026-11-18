@@ -232,6 +232,41 @@ class KhAgentKitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             khu_agent.publisher_config(bad, allow_test=True)
 
+    # A build staged for the public carries the pinned key and **no address** (owner, 2026-11-18):
+    # the DMG anyone downloads must not name this estate's publisher host.
+    def test_a_public_build_takes_the_address_from_the_updater_and_keeps_the_key(self):
+        shipped = {**self.publisher, "feedURL": "", "enrolURL": ""}
+        resolved = khu_agent.publisher_config(
+            shipped, allow_test=True,
+            authority={"feedURL": "https://mirror.example/kh/release.json",
+                       "enrolURL": "https://mirror.example/kh/enrol",
+                       "publicKey": self.publisher["publicKey"]})
+        self.assertEqual(resolved["feedURL"], "https://mirror.example/kh/release.json")
+        self.assertEqual(resolved["enrolURL"], "https://mirror.example/kh/enrol")
+        self.assertEqual(resolved["publicKey"], self.publisher["publicKey"])
+
+    def test_a_public_build_refuses_to_enrol_without_an_updater_address(self):
+        shipped = {**self.publisher, "feedURL": "", "enrolURL": ""}
+        with self.assertRaisesRegex(ValueError, "KH Updater"):
+            khu_agent.publisher_config(shipped, allow_test=True)
+
+    def test_an_updater_config_trusting_another_key_is_refused(self):
+        shipped = {**self.publisher, "feedURL": "", "enrolURL": ""}
+        with self.assertRaisesRegex(ValueError, "another publisher"):
+            khu_agent.publisher_config(
+                shipped, allow_test=True,
+                authority={"feedURL": "https://mirror.example/kh/release.json",
+                           "enrolURL": "https://mirror.example/kh/enrol",
+                           "publicKey": "AAAA"})
+
+    def test_plain_http_to_a_public_host_is_refused(self):
+        shipped = {**self.publisher, "feedURL": "", "enrolURL": ""}
+        with self.assertRaisesRegex(ValueError, "HTTPS"):
+            khu_agent.publisher_config(
+                shipped, allow_test=True,
+                authority={"feedURL": "http://example.com/release.json",
+                           "enrolURL": "http://example.com/enrol"})
+
 
 class KhAgentBootstrapTests(unittest.TestCase):
     def setUp(self):

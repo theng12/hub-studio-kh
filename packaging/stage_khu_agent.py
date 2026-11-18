@@ -194,10 +194,12 @@ def stage_agent_kit(resources: Path, kit: Path, publisher_json: Path, *,
                 shutil.copyfile(kit / name, target)
                 target.chmod(0o644)
                 files[name] = _digest(target)
-        # Written from the descriptor's own bytes, so the pinned key in the bundle is
-        # exactly the one the publisher printed and the per-Mac config will trust.
+        # The pinned **key** from the descriptor's own bytes, and no address: a DMG anyone can
+        # download must not name this estate's publisher host (owner, 2026-11-18). The agent takes
+        # the address from the updater's config when it enrols, and refuses to enrol without one.
         publisher_target = staged / PUBLISHER_FILE
-        publisher_target.write_text(json.dumps(descriptor, indent=2, sort_keys=True) + "\n",
+        shipped = {**descriptor, "feedURL": "", "enrolURL": ""}
+        publisher_target.write_text(json.dumps(shipped, indent=2, sort_keys=True) + "\n",
                                     encoding="utf-8")
         publisher_target.chmod(0o644)
         files[PUBLISHER_FILE] = _digest(publisher_target)

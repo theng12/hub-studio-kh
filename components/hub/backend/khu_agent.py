@@ -58,31 +58,114 @@ def version(value: str) -> tuple[int, ...]:
     return values + (0,) * (6 - len(values))
 
 
-def publisher_config(raw: dict, *, allow_test: bool = False) -> dict:
+def publisher_key(raw: dict, *, allow_test: bool = False) -> dict:
+    """The trust anchor a shipped bundle carries: the pinned public key and nothing else.
+
+    The publisher's **address** is deliberately not part of a public build (owner, 2026-11-18):
+    a DMG anyone downloads must not name this estate's private infrastructure. It comes from the
+    updater's own config when the agent enrols, and `publisher_config` refuses to enrol without
+    one. The public key stays: it is not a secret, and it is what verifies the feed.
+    """
     if set(raw) != {"feedURL", "enrolURL", "publicKey", "testAuthority"}:
         raise ValueError("invalid publisher configuration")
     if type(raw["testAuthority"]) is not bool or (raw["testAuthority"] and not allow_test):
         raise ValueError("test authority cannot enrol a real Hub")
     if len(base64.b64decode(raw["publicKey"], validate=True)) != 32:
         raise ValueError("invalid public key")
-    import ipaddress
-    addresses = []
-    # The publisher serves the feed and enrolment on ONE port (8790), not one each.
-    for key, path in (("feedURL", "/release.json"), ("enrolURL", "/enrol")):
-        parsed = urlsplit(raw[key])
-        address = ipaddress.ip_address(parsed.hostname or "")
-        # In test mode, accept loopback OR Tailscale; otherwise require Tailscale range and port 8790.
-        if (parsed.scheme != "http" or parsed.username or parsed.password or parsed.query
-                or parsed.fragment or parsed.path != path
-                or (not allow_test and (address not in ipaddress.ip_network("100.64.0.0/10")
-                                        or parsed.port != 8790))
-                or (allow_test and not (address.is_loopback
-                                        or address in ipaddress.ip_network("100.64.0.0/10")))):
-            raise ValueError("publisher must use its configured Tailscale address on port 8790")
-        addresses.append(address)
-    if addresses[0] != addresses[1]:
-        raise ValueError("publisher origins disagree")
     return raw
+
+
+def updater_authority(home: Path) -> dict | None:
+    """The updater's own config, or None. Where a shipped build learns its publisher's address.
+
+    `~/Library/KHUpdater/base/config.json` is written by KH Updater when this Mac is set up. Its
+    `publicKey` must equal the key this bundle pins — that comparison is what stops a rewritten
+    config from redirecting enrolments to another publisher.
+    """
+    try:
+        value = json.loads((Path(home) / "Library/KHUpdater/base/config.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get("feedURL"), str):
+        return None
+    return {"feedURL": value["feedURL"], "publicKey": value.get("publicKey")}
+
+
+def _authority_urls(authority: dict) -> tuple[str, str]:
+    """The feed and enrol URLs of a run-time authority, validated as strictly as a bundled one.
+
+    HTTPS on any host (the mirror is a public HTTPS site); plain HTTP only on loopback or the
+    tailnet, on the publisher's single port 8790 — never plain HTTP to a public host, which macOS
+    refuses anyway and which would carry the enrolment reply in the clear.
+    """
+    import ipaddress
+    urls: list[str] = []
+    plain_http_hosts: list[str] = []
+    for key, path in (("feedURL", "/release.json"), ("enrolURL", "/enrol")):
+        parsed = urlsplit(str(authority.get(key) or ""))
+        if (parsed.username or parsed.password or parsed.query or parsed.fragment
+                or not parsed.hostname or not parsed.path.rstrip("/").endswith(path.rstrip("/"))):
+            raise ValueError("the updater's publisher address is not a feed origin")
+        if parsed.scheme == "https":
+            urls.append(str(authority[key]))          # a public mirror, any host
+            continue
+        try:
+            address = ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            # A name on plain HTTP: macOS already refuses it, and it would carry the enrolment
+            # reply in the clear.
+            raise ValueError("publisher must use HTTPS, or its Tailscale address on port 8790") from None
+        if (parsed.scheme != "http" or parsed.port != 8790
+                or not (address.is_loopback
+                        or (address.version == 4 and address in ipaddress.ip_network("100.64.0.0/10")))):
+            raise ValueError("publisher must use HTTPS, or its Tailscale address on port 8790")
+        plain_http_hosts.append(parsed.netloc)
+        urls.append(str(authority[key]))
+    # Two plain-HTTP origins must be the same host: one publisher, one port. An HTTPS mirror may
+    # legitimately be a different host from the tailnet's enrolment service.
+    if len(plain_http_hosts) == 2 and plain_http_hosts[0] != plain_http_hosts[1]:
+        raise ValueError("publisher origins disagree")
+    return urls[0], urls[1]
+
+
+def publisher_config(raw: dict, *, allow_test: bool = False,
+                     authority: dict | None = None) -> dict:
+    """The descriptor with usable addresses: bundled, or resolved from the updater's config.
+
+    A build staged for the public carries blank addresses and the pinned key; enrolment fills
+    them from `updater_authority`. A descriptor with real addresses (an older build, or the
+    updater's own file) is validated exactly as strictly as before.
+    """
+    publisher_key(raw, allow_test=allow_test)
+    has_feed, has_enrol = bool(raw["feedURL"]), bool(raw["enrolURL"])
+    if has_feed != has_enrol:
+        raise ValueError("publisher addresses disagree")
+    if has_feed:
+        import ipaddress
+        addresses = []
+        # The publisher serves the feed and enrolment on ONE port (8790), not one each.
+        for key, path in (("feedURL", "/release.json"), ("enrolURL", "/enrol")):
+            parsed = urlsplit(raw[key])
+            address = ipaddress.ip_address(parsed.hostname or "")
+            if (parsed.scheme != "http" or parsed.username or parsed.password or parsed.query
+                    or parsed.fragment or parsed.path != path
+                    or (not allow_test and (address not in ipaddress.ip_network("100.64.0.0/10")
+                                            or parsed.port != 8790))
+                    or (allow_test and not (address.is_loopback
+                                            or address in ipaddress.ip_network("100.64.0.0/10")))):
+                raise ValueError("publisher must use its configured Tailscale address on port 8790")
+            addresses.append(address)
+        if addresses[0] != addresses[1]:
+            raise ValueError("publisher origins disagree")
+        return raw
+    if authority is None:
+        raise ValueError("the publisher's address is not configured on this Mac: KH Updater "
+                         "has to be set up once before the Hub can enrol for updates")
+    pinned = authority.get("publicKey")
+    if pinned and pinned != raw["publicKey"]:
+        raise ValueError("the updater trusts another publisher key")
+    feed, enrol = _authority_urls(authority)
+    return {**raw, "feedURL": feed, "enrolURL": enrol}
 
 
 def verify_kit(kit: Path, *, allow_test: bool = False) -> dict:
@@ -104,7 +187,7 @@ def verify_kit(kit: Path, *, allow_test: bool = False) -> dict:
         if len(data) != pin["bytes"] or hashlib.sha256(data).hexdigest() != pin["sha256"]:
             raise ValueError("agent kit checksum mismatch")
     version((kit / "VERSION").read_text().strip())
-    publisher_config(json.loads((kit / "publisher.json").read_text()), allow_test=allow_test)
+    publisher_key(json.loads((kit / "publisher.json").read_text()), allow_test=allow_test)
     return manifest
 
 
@@ -227,7 +310,8 @@ class Bootstrap:
     async def enrol(self, machine: str) -> str:
         config_file = self.base / "config.json"
         publisher = publisher_config(json.loads((self.kit / "publisher.json").read_text()),
-                                     allow_test=self.allow_test)
+                                     allow_test=self.allow_test,
+                                     authority=updater_authority(self.home))
         re_enrolling = False
         if config_file.exists():
             saved = json.loads(config_file.read_text())
