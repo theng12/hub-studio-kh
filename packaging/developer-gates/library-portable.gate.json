@@ -10,7 +10,7 @@
     "media_type": "application/x-tar"
   },
   "command_fixture_sha256": "d0b8658d783c7680a96ad0c12526d3ab2ce2ae12c87edb733be20f25cbb3d9df",
-  "dependency_manifest_sha256": "834672b41e83673892b7b9d5dc81d4e21066e39795bbf9ee10e9d52c0db74f23",
+  "dependency_manifest_sha256": "69f66e288b2dabe4182277524d1709da8f3bd58a4d99ade118707dfbec9ca8b1",
   "tool_manifest": {
     "format": "studio.tool-manifest.v1",
     "id": "library-portable-official-tools",

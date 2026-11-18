@@ -3,7 +3,7 @@
   "revision": "library-portable-2026-11-08.1",
   "gate": {
     "file": "library-portable.gate.json",
-    "sha256": "a52e426b6863611cec2821a7632ccbcbf11bbd74e1565b8f562cece6dacda2de"
+    "sha256": "8ceb1c2c743a30b29d7ebabb643426f5e6812e5aae08c3f78f6c91b3bf9dbca2"
   },
   "command_fixture": {
     "file": "library-portable.commands.json",
@@ -11,7 +11,7 @@
   },
   "dependency_manifest": {
     "file": "library-portable.dependency-manifest.json",
-    "sha256": "834672b41e83673892b7b9d5dc81d4e21066e39795bbf9ee10e9d52c0db74f23"
+    "sha256": "69f66e288b2dabe4182277524d1709da8f3bd58a4d99ade118707dfbec9ca8b1"
   },
   "tool_manifest": {
     "file": "official-tools.json",
