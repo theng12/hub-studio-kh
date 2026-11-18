@@ -3170,6 +3170,10 @@ struct NativeDownload: Identifiable, Equatable {
     let downloadedBytes: Int64
     let totalBytes: Int64
     let error: String?
+    /// Where the bytes came from, in the Hub's own words: "lan", "internet", "ssd:ATLAS".
+    let source: String?
+    /// When a finished run ended; nil while it runs, and on rows that do not say.
+    let finishedAt: Double?
 }
 
 /// One saved reference clip in the voice library.
@@ -4149,14 +4153,20 @@ final class NativeWorkspaceStore: ObservableObject {
     @Published private(set) var installPlanSupported = true
     /// Package ids with an install or a removal in flight, so a row's button can say so.
     @Published private(set) var installBusy: Set<String> = []
+    /// The kit drives the Hub reported with the install answer, and what the last drive read said.
+    /// The read is a click only: it can raise macOS's Removable Volumes prompt, so the poll and the
+    /// page opening never ask for it.
+    @Published private(set) var installDrives: [NativeDrive] = []
+    @Published private(set) var setupDriveState: SetupDriveState = .idle
     /// The install screen's state, as the offscreen renderer seeds it.
     ///
     /// `internal`, not `private(set)`: the renderer compiles into this same module and renders the
     /// page that ships, so it needs the same seam `workspace.models`, `fleetOverview` and
     /// `controllerIdentity` already give it. Nothing outside a render uses it - the app's own value
     /// always comes from `refresh()`.
-    func seedInstallPlanForRendering(_ plan: NativeInstallPlan?) {
+    func seedInstallPlanForRendering(_ plan: NativeInstallPlan?, drives: [NativeDrive] = []) {
         installPlan = plan
+        installDrives = drives
         installPlanSupported = plan != nil
     }
     private var hubDownloadRuns: [String: String] = [:]
@@ -6608,7 +6618,8 @@ final class NativeWorkspaceStore: ObservableObject {
                                job: row.job ?? "other", purpose: row.purpose ?? "",
                                quantization: row.quantization, bytes: row.bytes,
                                floorGB: row.floorGb, installed: row.installed ?? false,
-                               reason: row.reason, sources: row.sources ?? [])
+                               reason: row.reason, sources: row.sources ?? [],
+                               sourceDetail: row.sourceDetail ?? [:])
         }
         return NativeInstallPlan(
             memoryGB: wire.memoryGb,
@@ -6634,6 +6645,17 @@ final class NativeWorkspaceStore: ObservableObject {
             problems: wire.problems ?? [])
     }
 
+    /// One drive as the page keeps it. The snapshot lists mounted volumes; a drive it also reports
+    /// while unmounted arrives with `mounted: false` and keeps its cached `has` answer.
+    fileprivate static func drive(from wire: HubDriveWire) -> NativeDrive {
+        NativeDrive(name: wire.name, path: wire.path ?? wire.name,
+                    mounted: wire.mounted ?? true,
+                    checked: wire.checked ?? false,
+                    checkedAt: wire.checkedAt, has: wire.has ?? [],
+                    state: wire.state ?? ((wire.checked ?? false) ? "ok" : "unknown"),
+                    detail: wire.detail)
+    }
+
     /// Read the install screen's answer **now**, because somebody opened the page (or pressed
     /// Refresh). Deliberately not part of `refresh()`: that poll runs every two to ten seconds on
     /// every Mac, and this route used to walk `/Volumes` - which on an ad-hoc signed build can wait
@@ -6649,6 +6671,7 @@ final class NativeWorkspaceStore: ObservableObject {
             let wire: HubModelPresetsWire = try await get(["api", "hub", "model-presets"])
             guard connectionID == requestConnection else { return }
             installPlan = Self.installPlan(from: wire)
+            installDrives = (wire.drives ?? []).map(Self.drive(from:))
             installPlanSupported = true
             installPlanError = nil
         } catch {
@@ -6664,22 +6687,17 @@ final class NativeWorkspaceStore: ObservableObject {
     /// single one, and a set that fails on its fourth package has installed three rather than
     /// reported a set as failed. The Hub answers "already downloading" as a reused run, so a
     /// double click is harmless.
+    ///
+    /// Busy follows the run, not the request: the id stays in `installBusy` until the Hub says the
+    /// copy is done, failed or interrupted, so the spinner stops when the bytes stop.
     func installPackage(_ packageID: String) async {
-        guard let requestConnection = connectionID else { return }
+        guard connectionID != nil else { return }
         installBusy.insert(packageID)
-        defer { if connectionID == requestConnection { installBusy.remove(packageID) } }
-        do {
-            let run: HubModelDownload = try await sendHubJSON(
-                ["api", "hub", "model-packages", packageID, "download"], body: EmptyBody())
-            guard connectionID == requestConnection else { return }
-            hubDownloadRuns[run.id] = packageID
-            try saveHubDownloadRuns()
-            await refresh()
-            await loadInstallPlan()
-        } catch {
-            if connectionID == requestConnection {
-                self.error = Self.actionable(error, action: "Start the model download")
-            }
+        await ensureDriveRead()
+        if let run = await startDownload(packageID, fromDrive: driveSource(packageID)) {
+            await settle(packageIDs: [packageID], runIDs: [run])
+        } else {
+            installBusy.remove(packageID)
         }
     }
 
@@ -6694,10 +6712,112 @@ final class NativeWorkspaceStore: ObservableObject {
         let wanted = preset.packageIDs.filter { id in
             (plan.model(id)?.installed ?? false) == false && (plan.model(id)?.refusedHere ?? false) == false
         }
+        guard !wanted.isEmpty else { return }
+        installBusy.formUnion(wanted)
+        // The ladder's first rung is read once, on this click. If macOS refuses, the copy still
+        // runs — from the network — and the page says so rather than leaving the button dead.
+        await ensureDriveRead()
+        var runIDs: [String] = []
         for id in wanted {
-            guard connectionID == requestConnection else { return }
-            await installPackage(id)
+            guard connectionID == requestConnection else { installBusy.subtract(wanted); return }
+            if let run = await startDownload(id, fromDrive: driveSource(id)) { runIDs.append(run) }
         }
+        await settle(packageIDs: wanted, runIDs: runIDs)
+    }
+
+    /// The installer's first rung: ask the Hub to read the kit drives once. Only a click reaches
+    /// this, because any stat inside a `KH-STUDIO-*` volume can raise macOS's prompt.
+    private func ensureDriveRead() async {
+        guard installDrives.contains(where: { $0.mounted && !$0.checked }) else { return }
+        _ = await checkDrives()
+    }
+
+    /// `ATLAS` when any readable drive holds the package; nil otherwise. Per drive on purpose: a
+    /// drive that refused or was never read must not stop another drive's answer from counting.
+    private func driveSource(_ packageID: String) -> String? {
+        installDrives.first { $0.usable && $0.has.contains(packageID) }?.name
+    }
+
+    /// POST the drive check. A refusal leaves the contents **unknown**, never an empty list, and is
+    /// worded as a permission question the operator can answer.
+    @discardableResult
+    private func checkDrives() async -> Bool {
+        guard let requestConnection = connectionID else { return false }
+        setupDriveState = .checking
+        do {
+            let answer: HubDrivesAnswer = try await sendHubJSON(
+                ["api", "hub", "model-packages", "drive-check"], body: EmptyBody(), timeout: 75)
+            guard connectionID == requestConnection else { return false }
+            installDrives = (answer.drives ?? []).map(Self.drive(from:))
+            setupDriveState = .idle
+            return true
+        } catch {
+            guard connectionID == requestConnection else { return false }
+            setupDriveState = .needsPermission(installDrives.first { $0.mounted }?.name
+                                               ?? installDrives.first?.name ?? "the kit drive")
+            return false
+        }
+    }
+
+    /// The `Allow…` sentence's button: ask macOS again. A 409 is the one case where no mounted
+    /// drive could be read, so the sentence stays until the answer changes.
+    func retryDrivePermission() async {
+        _ = await checkDrives()
+    }
+
+    /// One run, from the drive when it holds the package. A drive that stopped serving it falls
+    /// through to the network rather than failing the install - a rung is claimed only when it can
+    /// actually serve the package.
+    private func startDownload(_ packageID: String, fromDrive drive: String?) async -> String? {
+        guard let requestConnection = connectionID else { return nil }
+        do {
+            let route = ["api", "hub", "model-packages", packageID, "download"]
+            var run: HubModelDownload
+            if let drive {
+                do {
+                    run = try await sendHubJSON(route, body: DriveCopyBody(fromDrive: drive))
+                } catch {
+                    guard connectionID == requestConnection else { return nil }
+                    run = try await sendHubJSON(route, body: EmptyBody())
+                }
+            } else {
+                run = try await sendHubJSON(route, body: EmptyBody())
+            }
+            guard connectionID == requestConnection else { return nil }
+            hubDownloadRuns[run.id] = packageID
+            try? saveHubDownloadRuns()
+            return run.id
+        } catch {
+            if connectionID == requestConnection {
+                self.error = Self.actionable(error, action: "Start the model download")
+            }
+            return nil
+        }
+    }
+
+    /// Hold the package ids until every started run is terminal, then reload the page's numbers.
+    /// One read of the Hub's list per tick; nothing is published per tick, so the page draws no
+    /// per-byte progress and only the sheet's rows change.
+    private func settle(packageIDs: [String], runIDs: [String]) async {
+        defer { installBusy.subtract(packageIDs) }
+        guard !runIDs.isEmpty else { return }
+        var pending = Set(runIDs)
+        // Four hours is this app's ceiling for one copy; the Hub keeps the run either way, and the
+        // Jobs page adopts it if the screen has stopped waiting.
+        let deadline = Date().addingTimeInterval(4 * 60 * 60)
+        while !pending.isEmpty, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if Task.isCancelled { break }
+            guard let list: HubModelDownloads = try? await get(["api", "hub", "model-downloads"]) else { continue }
+            let states = Dictionary(list.runs.map { ($0.id, $0.state) }, uniquingKeysWith: { first, _ in first })
+            // A run the Hub no longer lists is settled for this wait; a still-running one is not.
+            pending = pending.filter { id in
+                guard let state = states[id] else { return false }
+                return !["done", "cancelled", "error", "interrupted"].contains(state)
+            }
+        }
+        await refresh()
+        await loadInstallPlan()
     }
 
     /// Remove one installed package: the Hub moves it into that library's `_trash`, never deletes.
@@ -10382,7 +10502,8 @@ final class NativeWorkspaceStore: ObservableObject {
             id: run.id, repo: repo, state: run.state,
             percent: total > 0 ? min(100, Double(done) / Double(total) * 100) : 0,
             downloadedBytes: done, totalBytes: total,
-            error: failed ? (reason.isEmpty ? "Hub model download \(run.state)." : reason) : nil)
+            error: failed ? (reason.isEmpty ? "Hub model download \(run.state)." : reason) : nil,
+            source: run.sourceUsed ?? run.source, finishedAt: run.finishedAt)
     }
 
     /// The Hub answers 404 for a run it no longer knows; `validateResponse` carries the status
@@ -10393,7 +10514,8 @@ final class NativeWorkspaceStore: ObservableObject {
     private static func mapDownload(_ wire: DownloadWire) -> NativeDownload {
         NativeDownload(
             id: wire.id, repo: wire.repo, state: wire.state, percent: wire.percent ?? 0,
-            downloadedBytes: wire.bytesDone ?? wire.bytesObserved ?? 0, totalBytes: wire.bytesTotal ?? 0, error: wire.error
+            downloadedBytes: wire.bytesDone ?? wire.bytesObserved ?? 0, totalBytes: wire.bytesTotal ?? 0, error: wire.error,
+            source: nil, finishedAt: nil
         )
     }
 
@@ -10910,8 +11032,22 @@ private struct HubInstallModelWire: Decodable {
     let state: String?
     let reason: String?
     let sources: [String]?
+    /// "ssd": "ATLAS", "lan": "Mac mini" — the name of the place each rung would read from.
+    let sourceDetail: [String: String]?
 }
 private struct HubInstallGroupWire: Decodable { let job: String; let models: [HubInstallModelWire] }
+/// One mounted kit drive from the presets snapshot. `checked: false` means **unknown**, never empty.
+private struct HubDriveWire: Decodable {
+    let name: String
+    let path: String?
+    let mounted: Bool?
+    let checked: Bool?
+    let checkedAt: Double?
+    let has: [String]?
+    /// "ok", "refused" or "unknown" — per drive, so one refusal never hides another drive's answer.
+    let state: String?
+    let detail: String?
+}
 private struct HubModelPresetsWire: Decodable {
     let memoryGb: Double?
     let disk: HubDiskWire?
@@ -10921,6 +11057,32 @@ private struct HubModelPresetsWire: Decodable {
     let startingPreset: String?
     let groups: [HubInstallGroupWire]
     let problems: [String]?
+    let drives: [HubDriveWire]?
+    let drivesCheckedAt: Double?
+}
+/// The ladder's first rung, as the Hub reports it. A drive that is not mounted keeps its cached
+/// answer but says so, and an unchecked drive is unknown — the screen never reads it as empty.
+struct NativeDrive: Identifiable, Equatable {
+    let name: String
+    let path: String
+    let mounted: Bool
+    let checked: Bool
+    let checkedAt: Double?
+    let has: [String]
+    /// The Hub's per-drive answer: "ok", "refused" or "unknown".
+    let state: String
+    let detail: String?
+    var id: String { path }
+    /// A drive whose contents are really known: the only kind the ladder may copy from.
+    var usable: Bool { mounted && checked && state != "refused" }
+}
+/// What the drive read last said, so the page can word it without guessing.
+enum SetupDriveState: Equatable {
+    case idle
+    case checking
+    /// Every mounted drive refused — the only case the route answers 409, and the one macOS can
+    /// still be allowed.
+    case needsPermission(String)
 }
 /// The install screen's whole read, as the app keeps it between polls.
 struct NativeInstallPlan: Equatable {
@@ -10979,6 +11141,8 @@ struct NativeInstallModel: Identifiable, Equatable {
     let installed: Bool
     let reason: String?
     let sources: [String]
+    /// The name of the place each rung reads from, when the Hub names it.
+    let sourceDetail: [String: String]
     /// A model too big for this Mac. Shown, greyed out and with its reason - never hidden.
     var refusedHere: Bool { reason != nil }
 }
@@ -10999,9 +11163,10 @@ struct NativePreset: Identifiable, Equatable {
 }
 /// How a package's bytes would arrive, in the Hub's words, as the screen words it.
 enum NativeInstallSource: String {
-    case lan, kit, internet
+    case ssd, lan, kit, internet
     var text: String {
         switch self {
+        case .ssd: return "from the SSD"
         case .lan: return "from another Mac"
         case .kit: return "from the SSD"
         case .internet: return "from the internet"
@@ -11026,8 +11191,15 @@ private struct HubStorageMemory: Decodable {
 private struct HubModelDownload: Decodable {
     let id: String; let packageId: String; let state: String
     let bytesDone: Int64?; let totalBytes: Int64?; let errorTail: String?
+    /// "lan", "internet" or "ssd:ATLAS" — the rung the copy really used.
+    let source: String?; let sourceUsed: String?
+    let finishedAt: Double?
 }
 private struct HubModelDownloads: Decodable { let runs: [HubModelDownload] }
+/// `POST /api/hub/model-packages/drive-check` — the same drive block the presets snapshot carries.
+private struct HubDrivesAnswer: Decodable { let drives: [HubDriveWire]?; let drivesCheckedAt: Double? }
+/// The copy request's optional first rung. Absent means "use the ladder from the network".
+private struct DriveCopyBody: Encodable { let fromDrive: String }
 private struct HubModelImport: Encodable { let sourceFolder: String }
 private struct RenameRequest: Codable { let name: String }
 private struct ModelHealthRecheck: Encodable { let model: String; let studio: String? }

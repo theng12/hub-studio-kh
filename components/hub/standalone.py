@@ -738,8 +738,8 @@ def _lan_sources(catalog: dict[str, dict[str, Any]], library: Path,
                  monitor: StudioMonitor) -> dict[str, str]:
     """Package id -> another Mac's address that has it installed, from this Hub's own registry.
 
-    The picker's source order is "another Mac on the LAN, then the SSD, then the internet". This
-    answers only the **first**: which packages some *other* machine in this Hub's group is running
+    The picker's source order is "the SSD, then another Mac on the LAN, then the internet". This
+    answers only the **middle**: which packages some *other* machine in this Hub's group is running
     with a model cached, so the screen can say "from <machine>" instead of silently offering an
     internet download of 9 GB that a Mac two desks away already holds. It is a hint for the
     download: `POST /api/hub/model-packages/{id}/download` still takes its own `source` share and
@@ -4058,9 +4058,27 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except model_removal.RemoveRefused as exc:
             raise _removal_refusal(exc) from exc
 
+    @app.post("/api/hub/model-packages/drive-check")
+    def check_model_drives(body: dict[str, Any]) -> Any:
+        """Read each mounted KH-STUDIO kit drive once, bounded, and cache what it holds.
+
+        The only route that stats inside a removable volume besides a drive copy. A refusal is
+        `409 NEEDS_PERMISSION` - never an empty `has` list, which would read as "does not have".
+        """
+        from .backend import kit_drives
+        try:
+            catalog = _model_catalog()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        try:
+            return kit_drives.check(catalog)
+        except kit_drives.DriveRefused as exc:
+            return JSONResponse(status_code=409, content={"code": exc.code, "detail": exc.detail})
+
     @app.post("/api/hub/model-packages/{package_id}/download")
-    def download_model_package(package_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    def download_model_package(package_id: str, body: dict[str, Any]) -> Any:
         from . import model_downloads
+        from .backend import kit_drives
         try:
             catalog = _model_catalog()
             manifest = catalog[package_id]
@@ -4070,10 +4088,21 @@ def create_app(*, start_background: bool = True) -> FastAPI:
             peer_only = body.get("peer_only", False)
             if not isinstance(peer_only, bool):
                 raise ValueError("peer_only must be true or false")
+            drive_library = None
+            drive_name = str(body.get("from_drive") or "").strip()
+            if drive_name:
+                drive = kit_drives.resolve(drive_name)
+                if not kit_drives.has_package(drive, manifest):
+                    raise kit_drives.DriveRefused(
+                        "DRIVE_LACKS_PACKAGE", f"{drive_name} does not have {package_id}.")
+                drive_library = kit_drives.drive_library(drive)
             return model_downloads.start(package_id=package_id, manifest=manifest,
                                          catalog=catalog, library=_model_library(), sources=sources,
-                                         peer=_peer_source(body.get("source"), manifest, peer_only),
-                                         peer_only=peer_only)
+                                         peer=None if drive_library else _peer_source(
+                                             body.get("source"), manifest, peer_only),
+                                         peer_only=peer_only, drive=drive_library)
+        except kit_drives.DriveRefused as exc:
+            return JSONResponse(status_code=409, content={"code": exc.code, "detail": exc.detail})
         except model_downloads.InsufficientDiskSpace as exc:
             # 507, like the output-storage refusal: the disk is the reason, not the request.
             raise HTTPException(507, str(exc)) from exc

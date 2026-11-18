@@ -1586,6 +1586,58 @@ def _download_file(entry, staged, urls, root, peer=None, peer_only=False):
     raise PackageError(f'Download incomplete or invalid: {entry["path"]}')
 
 
+def _unlink_quiet(name, dir_fd):
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        pass
+
+
+def _copy_from_drive(entry, staged, root, folder):
+    """Copy one file from a mounted kit drive and hash it; never touch the network.
+
+    A file the drive lacks, or one whose bytes differ from the manifest, fails the package with
+    that file named. Bytes already staged stay, so a resume copies only what is missing.
+    """
+    target = staged / entry['path']
+    relative = target.parent.relative_to(root).as_posix()
+    with _directory(root, relative, create=True) as parent_fd:
+        try:
+            with os.fdopen(os.open(target.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                   dir_fd=parent_fd), 'rb') as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise PackageError('Regular model file required')
+                _check_stream(stream, entry)
+            return
+        except (OSError, PackageError):
+            pass
+        partial = target.name + '.part'
+        try:
+            with _open_regular(folder, entry['path']) as source:
+                flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_TRUNC
+                with os.fdopen(os.open(partial, flags, 0o600, dir_fd=parent_fd), 'wb') as out:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                        out.write(chunk)
+                    out.flush()
+                    os.fsync(out.fileno())
+            with os.fdopen(os.open(partial, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                   dir_fd=parent_fd), 'rb') as stream:
+                _check_stream(stream, entry)
+            os.replace(partial, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except FileNotFoundError:
+            _unlink_quiet(partial, parent_fd)
+            raise PackageError(
+                f'The drive does not have {entry["path"]} for this package') from None
+        except PackageError as error:
+            _unlink_quiet(partial, parent_fd)
+            raise PackageError(
+                f'The drive copy of {entry["path"]} is not usable: {error}') from None
+        except OSError as error:
+            _unlink_quiet(partial, parent_fd)
+            raise PackageError(f'Could not copy {entry["path"]} from the drive: {error}') from None
+
+
 def _seed_from_installed(manifest, root, staged):
     """Hard-link the files an older install of this package already holds into its staging folder.
 
@@ -1620,7 +1672,7 @@ def _seed_from_installed(manifest, root, staged):
             pass
 
 
-def _download_one(manifest, root, sources, peer=None, peer_only=False, used=None):
+def _download_one(manifest, root, sources, peer=None, peer_only=False, used=None, drive=None):
     validate_manifest(manifest)
     with _lock(root):
         current = preflight(manifest, root)
@@ -1629,7 +1681,14 @@ def _download_one(manifest, root, sources, peer=None, peer_only=False, used=None
             return root / record['folder']
         staged = _stage(manifest, root)
         _seed_from_installed(manifest, root, staged)
+        folder = (Path(drive) / manifest['package_id'] / str(manifest.get('revision') or '')
+                  if drive is not None else None)
         for entry in manifest['files']:
+            if folder is not None:
+                _copy_from_drive(entry, staged, root, folder)
+                if used is not None:
+                    used.add('ssd')
+                continue
             urls = (sources or {}).get(entry['path'], entry.get('urls', []))
             if not isinstance(urls, list) or (not urls and not (peer_only and peer)):
                 raise PackageError(f'No download source for {entry["path"]}')
@@ -1639,12 +1698,17 @@ def _download_one(manifest, root, sources, peer=None, peer_only=False, used=None
         return _publish(manifest, staged, root)
 
 
-def download_package(manifest, library, *, sources=None, catalog=None, peer=None, peer_only=False, used=None):
+def download_package(manifest, library, *, sources=None, catalog=None, peer=None, peer_only=False,
+                     used=None, drive=None):
     """An explicit download includes its catalog-declared companion packages.
 
     ``peer`` is another Mac's share of this package (`peer_base`), tried before the internet for
     this package's own files. ``peer_only`` forbids that fallback and requires companion packages
-    to be verified already; ``used`` collects ``lan``/``internet`` for every file fetched."""
+    to be verified already; ``used`` collects ``lan``/``internet`` for every file fetched.
+    ``drive`` is a kit drive's model library: every package, companions included, is copied from
+    it and no network source is consulted."""
+    if drive is not None:
+        peer, peer_only = None, False
     if not isinstance(peer_only, bool):
         raise PackageError('peer_only must be true or false')
     if peer_only and not peer:
@@ -1679,7 +1743,7 @@ def download_package(manifest, library, *, sources=None, catalog=None, peer=None
     for current in ordered:
         mine = current is manifest
         result = _download_one(current, root, sources if mine else None, peer if mine else None,
-                               peer_only, used)
+                               peer_only, used, drive=drive)
     # Every package this download installed, companions included, is mirrored into the engine
     # cache: a downloaded kit is exactly the case where the network is about to go away.
     for current in ordered:
@@ -1729,6 +1793,8 @@ def main():
     parser.add_argument('--source', type=Path, help='Source folder for import')
     parser.add_argument('--sources', type=Path, help='Optional JSON mapping of file paths to HTTPS mirror URL lists')
     parser.add_argument('--peer', type=Path, help="Optional JSON string: another Mac's share URL, tried first")
+    parser.add_argument('--drive', type=Path,
+                        help="A kit drive's model-library folder: copy from it, never the network")
     parser.add_argument('--peer-only', action='store_true',
                         help="Require every newly fetched file to come from --peer")
     args = parser.parse_args()
@@ -1755,7 +1821,8 @@ def main():
                 peer = json.loads(args.peer.read_text()) if args.peer else None
                 used = set()
                 folder = download_package(manifest, args.library, sources=sources, catalog=catalog,
-                                          peer=peer, peer_only=args.peer_only, used=used)
+                                          peer=peer, peer_only=args.peer_only, used=used,
+                                          drive=args.drive)
                 result = {'folder': str(folder),
                           'companion_cache': companion_cache_status(manifest, args.library,
                                                                     catalog=catalog),

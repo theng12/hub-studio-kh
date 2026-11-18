@@ -1277,6 +1277,8 @@ struct StudioContent: View {
     /// pressed, so it must not be published, persisted or shared with the Gateway.
     @State private var setupSearch = ""
     @State private var setupSelectedPreset: String? = nil
+    /// The page's one sheet: `workspace.downloads`, the same rows the Jobs page lists.
+    @State private var setupDownloadsShown = false
     @State private var modelFilter = "All functions"
     @State private var installedOnly = false
     @State private var selectedModel: String?
@@ -5329,6 +5331,7 @@ struct StudioContent: View {
                 }
             } else if let plan = workspace.installPlan {
                 setupSummary(plan)
+                setupLadder(plan)
                 if !plan.problems.isEmpty {
                     HubCard {
                         VStack(alignment: .leading, spacing: HubSpace.xs) {
@@ -5352,6 +5355,9 @@ struct StudioContent: View {
             }
         }
         .task { if connected { await workspace.loadInstallPlan() } }
+        .sheet(isPresented: $setupDownloadsShown) {
+            SetupDownloadsSheet(workspace: workspace) { setupDownloadsShown = false }
+        }
     }
 
     /// What this Mac is and what it has, before any choice: memory, the drive, and where the models
@@ -5407,11 +5413,103 @@ struct StudioContent: View {
                         .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("To install from an SSD, open the drive and run its copy command, or copy the models into the library in Finder. Otherwise models download from another Mac or the internet.")
-                    .font(HubType.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// The ladder the page states, in the order it is tried, and one line about the rung this
+    /// preset will really use. Nothing here is a setting: the order is the Hub's, and the screen
+    /// only says where the bytes are coming from.
+    private func setupLadder(_ plan: NativeInstallPlan) -> some View {
+        let preset = plan.presets.first { $0.id == setupSelectedPreset } ?? plan.starting
+        let drive = workspace.installDrives.first { $0.usable }
+            ?? workspace.installDrives.first { $0.mounted }
+            ?? workspace.installDrives.first
+        let lan = plan.allModels.compactMap { $0.sourceDetail["lan"] }.first
+        let failure = setupDriveFailure(preset)
+        let line = setupDriveLine(preset, drive: drive, failure: failure)
+        return HubCard {
+            VStack(alignment: .leading, spacing: HubSpace.s) {
+                HStack(spacing: HubSpace.s) {
+                    Text("SSD").font(HubType.caption.weight(.semibold))
+                    if let drive { Text(drive.name).font(HubType.caption).foregroundStyle(.secondary) }
+                    Image(systemName: "arrow.right").font(HubType.caption).foregroundStyle(.tertiary)
+                    Text("LAN").font(HubType.caption.weight(.semibold))
+                    if let lan { Text(lan).font(HubType.caption).foregroundStyle(.secondary) }
+                    Image(systemName: "arrow.right").font(HubType.caption).foregroundStyle(.tertiary)
+                    Text("internet").font(HubType.caption.weight(.semibold))
+                    Spacer(minLength: HubSpace.m)
+                    Button("View downloads") { setupDownloadsShown = true }.hubRowControl()
+                }
+                Text("Models copy from the first place that has them, in this order.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: HubSpace.s) {
+                    Text(line.text).font(HubType.caption).foregroundStyle(line.tone)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if case .needsPermission = workspace.setupDriveState {
+                        Button("Allow…") { Task { await workspace.retryDrivePermission() } }.hubRowControl()
+                    }
+                    if failure != nil, let preset {
+                        Button("Resume") { Task { await workspace.installPreset(preset) } }.hubRowControl()
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    /// One sentence, and only one: the loudest true thing about the drive rung right now.
+    private func setupDriveLine(_ preset: NativePreset?, drive: NativeDrive?,
+                                failure: SetupDriveFailure?) -> (text: String, tone: Color) {
+        switch workspace.setupDriveState {
+        case .checking:
+            return ("Reading \(drive?.name ?? "the kit drive")…", .secondary)
+        case let .needsPermission(name):
+            return ("macOS needs your permission to read \(name) once.", HubStatus.warn.textColor)
+        case .idle:
+            break
+        }
+        if let failure {
+            let done = preset?.installedCount ?? 0
+            let total = preset?.packageCount ?? 0
+            return ("Stopped copying from \(failure.drive): \(failure.reason). \(done) of \(total) are done.",
+                    HubStatus.bad.textColor)
+        }
+        // Per drive: this one refused, while any other drive's answer still counts on its own.
+        if let drive, drive.state == "refused" {
+            return ("Couldn't read \(drive.name). Using the network instead.", HubStatus.warn.textColor)
+        }
+        guard let drive, drive.mounted else { return ("SSD — not plugged in", .secondary) }
+        guard drive.checked, drive.state != "unknown" else {
+            return ("\(drive.name) — checked on first install", .secondary)
+        }
+        if let preset, !preset.packageIDs.isEmpty {
+            let missing = preset.packageIDs.filter { !drive.has.contains($0) }.count
+            if missing > 0 {
+                let lan = workspace.installPlan?.allModels
+                    .compactMap { $0.sourceDetail["lan"] }.first ?? "another Mac"
+                return ("\(missing) of \(preset.packageIDs.count) aren't on \(drive.name) — they'll come from \(lan)",
+                        .secondary)
+            }
+            return ("Every model in \(preset.name) is on \(drive.name).", .secondary)
+        }
+        return ("\(drive.name) is ready to copy from.", .secondary)
+    }
+
+    /// The last drive copy that failed, in the page's words. A run's `source` is what proves it
+    /// read the drive, so a network failure is never blamed on the SSD.
+    private struct SetupDriveFailure { let drive: String; let reason: String }
+
+    private func setupDriveFailure(_ preset: NativePreset?) -> SetupDriveFailure? {
+        guard let preset, !preset.packageIDs.isEmpty else { return nil }
+        return workspace.downloads.compactMap { download -> SetupDriveFailure? in
+            guard let source = download.source, source.hasPrefix("ssd:"),
+                  let error = download.error, !error.isEmpty,
+                  preset.packageIDs.contains(download.repo) else { return nil }
+            let reason = error.components(separatedBy: .newlines).last { !$0.isEmpty }?
+                .trimmingCharacters(in: .whitespaces) ?? error
+            return SetupDriveFailure(drive: String(source.dropFirst(4)), reason: reason)
+        }.last
     }
 
     private static func gigabytes(_ bytes: Int64) -> String {
@@ -5444,6 +5542,12 @@ struct StudioContent: View {
                     if preset.refused != nil {
                         Text("Not enough space on the models' drive for this set.")
                             .font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                    }
+                    if !workspace.installBusy.isEmpty {
+                        // Rule: a disabled button always says why. Busy follows the copies, not the
+                        // request, so this sentence is true for as long as the spinner is.
+                        Text("Copying now — this button returns by itself when every copy finishes or fails.")
+                            .font(HubType.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                 }
@@ -9616,5 +9720,92 @@ struct StartupFailureIcon: View {
                 .padding(HubSpace.m)
             }
         }
+    }
+}
+
+/// The Set up page's downloads, read from `workspace.downloads` and nothing else — the same rows
+/// the Jobs page lists, with the source that proves which rung served each copy. Its own view, so a
+/// progress tick redraws this sheet and not the page behind it.
+private struct SetupDownloadsSheet: View {
+    @ObservedObject var workspace: NativeWorkspaceStore
+    let close: () -> Void
+
+    var body: some View {
+        let running = workspace.downloads.filter { Self.active($0.state) }
+        let today = workspace.downloads.filter { download in
+            !Self.active(download.state)
+                && (download.finishedAt.map { Calendar.current.isDateInToday(Date(timeIntervalSince1970: $0)) } ?? false)
+        }
+        VStack(alignment: .leading, spacing: HubSpace.m) {
+            HStack {
+                Text("Downloads").font(HubType.section)
+                Spacer(minLength: HubSpace.m)
+                Button("Done") { close() }.hubRowControl()
+            }
+            if running.isEmpty && today.isEmpty {
+                Text("No model downloads yet.").font(HubType.body).foregroundStyle(.secondary)
+            }
+            if !running.isEmpty {
+                Text("Downloading").font(HubType.rowTitle).foregroundStyle(.secondary)
+                ForEach(running) { row($0) }
+            }
+            if !today.isEmpty {
+                Text("Finished today").font(HubType.rowTitle).foregroundStyle(.secondary)
+                ForEach(today) { row($0) }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(HubSpace.l)
+        .frame(minWidth: 560, minHeight: 300, alignment: .topLeading)
+    }
+
+    private func row(_ download: NativeDownload) -> some View {
+        HStack(alignment: .top, spacing: HubSpace.m) {
+            VStack(alignment: .leading, spacing: HubSpace.tight) {
+                HStack(spacing: HubSpace.s) {
+                    Text(label(download.repo)).font(HubType.rowTitle)
+                    if let source = sourceLabel(download.source) {
+                        Text(source).font(HubType.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if Self.active(download.state) {
+                    if download.totalBytes > 0 {
+                        ProgressView(value: min(100, max(0, download.percent)), total: 100)
+                        Text("\(Int(min(100, max(0, download.percent))))% · \(Self.gigabytes(download.downloadedBytes)) of \(Self.gigabytes(download.totalBytes))")
+                            .font(HubType.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Measuring the copy…").font(HubType.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(download.error ?? "Finished").font(HubType.caption)
+                        .foregroundStyle(download.error == nil ? Color.secondary : HubStatus.bad.textColor)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: HubSpace.m)
+            if Self.active(download.state) {
+                Button("Cancel") { Task { await workspace.cancelDownload(download) } }.hubRowControl()
+            }
+        }
+        .padding(.vertical, HubSpace.xs)
+    }
+
+    private func label(_ repo: String) -> String {
+        workspace.models.first { $0.repo == repo }?.label ?? repo.components(separatedBy: "/").last ?? repo
+    }
+
+    /// "from ATLAS", "from another Mac", "from the internet" — the run's own `source`.
+    private func sourceLabel(_ source: String?) -> String? {
+        guard let source, !source.isEmpty else { return nil }
+        if source.hasPrefix("ssd:") { return "from \(source.dropFirst(4))" }
+        return NativeInstallSource(rawValue: source)?.text ?? source
+    }
+
+    private static func active(_ state: String) -> Bool {
+        ["queued", "running", "cancel_requested", "cancelling", "paused", "recovery_pending"].contains(state)
+    }
+
+    private static func gigabytes(_ bytes: Int64) -> String {
+        String(format: "%.1f GB", Double(bytes) / 1_000_000_000)
     }
 }

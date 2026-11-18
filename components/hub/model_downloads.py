@@ -120,7 +120,8 @@ def _mark_exited(value: dict, run_id: str, process: subprocess.Popen) -> bool:
     if run is not None and run.get("state") == "running" and result is not None:
         run.update(state="done" if result == 0 else "error", exit_code=result,
                    finished_at=time.time())
-        if result == 0 and (used := _source_used(run_id)):
+        if result == 0 and not str(run.get("source") or "").startswith("ssd:") \
+                and (used := _source_used(run_id)):
             run["source_used"] = used
         changed = True
     if result is not None:
@@ -176,12 +177,27 @@ def _free_space_check(package_id: str, needed: int, library: Path) -> None:
             f"Free some space (or choose a model library on a larger disk) and try again. Nothing was downloaded.")
 
 
+def _drive_name(drive: Path) -> str:
+    """`ATLAS` from `<volume>/1 Install Apps/Hub Studio KH/model-library`, for the run's source."""
+    for parent in Path(drive).parents:
+        if parent.name.startswith("KH-STUDIO-"):
+            return parent.name[len("KH-STUDIO-"):]
+    return Path(drive).parent.name
+
+
 def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
-          sources: dict | None, peer: str | None = None, peer_only: bool = False) -> dict:
+          sources: dict | None, peer: str | None = None, peer_only: bool = False,
+          drive: Path | None = None) -> dict:
     """Start (or rejoin) the download. ``peer`` is another Mac's LAN share URL
     (`model_packages.peer_base`), tried before the internet file by file. ``peer_only`` makes
-    failure of that share terminal without changing an already accepted non-strict run."""
+    failure of that share terminal without changing an already accepted non-strict run.
+    ``drive`` is a mounted kit drive's model library: the run copies from it and never uses the
+    internet."""
     from components import model_packages
+    if drive is not None:
+        # A drive run is one source and no fallthrough: the SSD either has the files or the run
+        # fails with the file named.
+        sources, peer, peer_only = None, None, False
     if not isinstance(peer_only, bool):
         raise ValueError("peer_only must be true or false")
     if peer_only and not peer:
@@ -231,6 +247,8 @@ def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
             child_command.extend(("--peer", str(peer_path)))
         if peer_only:
             child_command.append("--peer-only")
+        if drive is not None:
+            child_command.extend(("--drive", str(drive)))
         output = root / "output.log"
         stream = output.open("w", encoding="utf-8")
         output.chmod(0o600)
@@ -245,7 +263,8 @@ def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
         run = {"id": run_id, "package_id": package_id, "state": "running",
                "started_at": time.time(), "pid": process.pid,
                "total_bytes": total_bytes, "staging": staging,
-               "source": "lan" if peer else "internet", "peer_only": peer_only}
+               "source": (f"ssd:{_drive_name(drive)}" if drive is not None
+                          else "lan" if peer else "internet"), "peer_only": peer_only}
         value["runs"][run_id] = run
         _processes[run_id] = process
         _write(value)
