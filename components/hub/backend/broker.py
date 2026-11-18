@@ -495,6 +495,14 @@ def retry_class(modality: object) -> str:
 # (`registry.with_render_default`, to a non-empty order). `render_wins_next_free` applies the same
 # rank at the lease, so the two halves of arbitration cannot disagree.
 MAX_TRIES = 3
+#: How long an item may sit **queued with nothing happening** before the queue ends it instead of
+#: holding it for ever (owner rule, 2026-11-15: every wait is bounded by its own ceiling, and past
+#: the bound it fails retryable with the reason — never sits at `running` with a sentence under it).
+#: This is the wait that used to have no clock at all: a machine reservation another queue holds
+#: restores the item's tries on every refusal, so the MAX_TRIES ladder could not end it, and eleven
+#: jobs sat 137 minutes on studio-mac-1200 (2026-11-18). A wait parked on a scheduled retry is **not**
+#: counted — that ladder has its own tries. Adjustable, and the failure sentence names the number.
+QUEUE_WAIT_CEILING_S = float(os.environ.get("STUDIOHUB_QUEUE_CEILING_S") or 45 * 60)
 MAX_INFRA_TRIES = 8
 INFRA_RETRY_WINDOW_S = 30 * 60
 POLL_S = 2.0
@@ -6117,6 +6125,50 @@ async def _hand_back_queued(client: httpx.AsyncClient, b: dict) -> None:
         await _post_item_webhook(client, b, item, reserved=True)
 
 
+def expire_queue_wait(batch: dict, now: float, ceiling: float | None = None) -> tuple[int, bool]:
+    """End items that have waited in the queue with nothing happening.
+
+    Returns ``(ended, changed)``: ``ended`` items moved to a terminal, retryable ``error`` because
+    the wait passed its ceiling; ``changed`` also counts the first sight of an item, whose wait is
+    stamped so the clock starts when the queue first held it.
+
+    A wait parked on a scheduled retry is not counted: that ladder ends itself through
+    ``MAX_TRIES``. This is the other kind — the machine-reservation and capacity waits, where the
+    item's tries are restored on every refusal, so nothing else could ever end it.
+    """
+    limit = QUEUE_WAIT_CEILING_S if ceiling is None else float(ceiling)
+    ended = changed = 0
+    for item in batch.get("items") or []:
+        if item.get("state") != "queued":
+            continue
+        if (item.get("retry_at") or 0) > now:
+            continue
+        started = item.get("queue_wait_started_at")
+        if not isinstance(started, (int, float)):
+            item["queue_wait_started_at"] = now
+            changed += 1
+            continue
+        waited = float(now) - float(started)
+        if waited < limit:
+            continue
+        item.update(
+            state="error", retry_at=None, retryable=True, error_code="QUEUE_WAIT_EXCEEDED",
+            error=(f"waited {max(1, round(waited / 60))} minutes for a machine and nothing was sent; "
+                   f"the queue stops waiting after {round(limit / 60)} minutes. Retry when a Mac frees up."),
+            finished_at=now, last_progress_at=now,
+            runtime_s=round(waited, 1), duration_s=round(waited, 1),
+        )
+        for key in ("capacity_failures", "capacity_wait_started_at", "admission_wait_started_at",
+                    "avoid_machines", "_dispatch_generation"):
+            item.pop(key, None)
+        print(f"[hub] queue: item {item.get('id') or item.get('index')} waited "
+              f"{round(waited / 60)} min with no machine; ended retryable (QUEUE_WAIT_EXCEEDED)",
+              flush=True)
+        ended += 1
+        changed += 1
+    return ended, changed
+
+
 async def _dispatch_loop():
     """The scheduler: match queued items to free studios, forever."""
     client = httpx.AsyncClient(timeout=httpx.Timeout(connect=5, read=60, write=30, pool=5))
@@ -6154,6 +6206,14 @@ async def _dispatch_loop():
                     ledger.save_batch(b)
                     continue
                 if b["cancelled"]:
+                    continue
+                # The queue's own clock, before anything tries to dispatch: a wait that no
+                # refusal can end is ended here, with the number of minutes in its sentence.
+                ended, changed = expire_queue_wait(b, time.time())
+                if changed:
+                    ledger.save_batch(b)
+                if ended:
+                    await _maybe_finish(client, b)
                     continue
                 if every_capable_mac_paused(b["modality"], b.get("model"),
                                             b.get("routing", routing_rule.POOL)):

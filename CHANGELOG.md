@@ -2,6 +2,21 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.247 — 2026-11-18
+
+- **Set up this Mac now copies from your plugged SSD first, then from another Mac on the network, and only then from the internet.** The screen says which one it is using, by name — "Copying from ATLAS", "Copying from Mac mini" — and says why it moved on when it has to ("2 of 11 aren't on ATLAS — they'll come from Mac mini"). It never quietly chooses.
+- **Installing a set now answers, shows real progress, and can be watched.** The button stays busy until the copying actually finishes rather than until the request is accepted, the bar moves on real bytes, and a new **View downloads** button opens a list of the active copies with how far each has got and a Cancel. A copy that stops tells you where it stopped and how much arrived, with Resume.
+- **The drive is read only when you ask.** macOS asks once for permission to read a plugged kit drive; the screen says so in a sentence before it asks, a refusal is reported plainly and the install carries on from the network, and nothing is read at launch — the freeze that cost us before cannot come back.
+- **A job that can never get a machine no longer waits for ever.** Queued work that has had nothing happen for 45 minutes now ends with a plain sentence — "waited 45 minutes for a machine and nothing was sent" — and can be retried, instead of sitting in the queue indefinitely. Eleven jobs once waited 137 minutes for a Mac that never freed up.
+
+### Technical notes
+- **The source ladder** (`components/hub/backend/model_install_plan.py`): `SOURCE_SSD` ahead of `SOURCE_LAN` and `SOURCE_INTERNET`; every model row carries `sources` in that order plus `source_detail` (`{"ssd": "ATLAS", "lan": "Mac mini"}`); `snapshot()` gains `drives` and `drives_checked_at`.
+- **Detection that cannot freeze the Hub** (`components/hub/backend/kit_drives.py`, new): `os.listdir("/Volumes")` only on the plan route. Contents are read by `POST /api/hub/model-packages/drive-check` in a child process under a 60 s total / 10 s per-drive bound, cached 0600 in `hub/kit-drives.json`, keyed by drive path and refreshed when the kit folder is newer. Each drive answers `state: ok|refused|unknown` with its own `detail` — one unreadable drive never hides another's answer — and `409 NEEDS_PERMISSION` is kept for the case where every mounted drive refused. `checked: false` means unknown, never empty.
+- **Drive copies reuse the download runs**: `POST …/model-packages/{id}/download` takes `from_drive`, `model_downloads.start(drive=…)` records `source: "ssd:ATLAS"`, and `components/model_packages.py download --drive` copies and sha256-verifies every file, companions included, with no network source; staged bytes survive a failed run so Resume copies only what is missing.
+- **The queue clock** (`components/hub/backend/broker.py`): `QUEUE_WAIT_CEILING_S` (default 45 min, `STUDIOHUB_QUEUE_CEILING_S` to change it) and `expire_queue_wait()`, run at the top of each dispatcher pass. It counts only items queued with nothing scheduled — a wait parked on `retry_at` belongs to the MAX_TRIES ladder and is left alone. An expired item ends `error` / `QUEUE_WAIT_EXCEEDED` / `retryable: true` with the minutes in its sentence, and the batch is settled through the same `_maybe_finish` path a worker's failure uses.
+- **Native** (`native/StudioAPI.swift`, `native/StudioViews.swift`): `installBusy` is held by `settle()` until every started run is `done`/`cancelled`/`error`/`interrupted` (1.5 s poll, 4 h ceiling), `View downloads` is a sheet over `workspace.downloads` with progress from bytes, and the six ladder states use the approved words. The drive check runs only from a click.
+- Tests: `tests/test_queue_clock.py` (6), `tests/test_kit_drives.py`, `tests/test_model_install_plan.py` (19 together), plus the drive-read guard.
+
 ## 0.6.246 — 2026-11-18
 
 - **Remove and Connect in the Gateway now reach this Mac's group.** Removing a Mac there removes it here too: its row goes, the credential it was given is revoked, and whatever was queued for it is dropped. The Gateway is told *why* an answer came back, so "that Mac is already gone" and "this Hub is too old to do this" no longer look the same.
