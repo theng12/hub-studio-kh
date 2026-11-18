@@ -714,7 +714,7 @@ require(LaunchAgent.installedExecutablePath(at: agentPlist) == "/Applications/St
 require(LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/Hub Studio KH"),
         "an agent naming the pre-rename app must be repaired")
 let currentAgent = ["Label": LaunchAgent.label,
-                    "ProgramArguments": ["/Applications/Hub Studio KH.app/Contents/MacOS/StudioHub"]] as [String: Any]
+                    "ProgramArguments": ["/Applications/Hub Studio KH.app/Contents/MacOS/Hub Studio KH"]] as [String: Any]
 try PropertyListSerialization.data(fromPropertyList: currentAgent, format: .xml, options: 0).write(to: agentPlist)
 require(!LaunchAgent.needsRepair(at: agentPlist, currentExecutable: "/Applications/Hub Studio KH.app/Contents/MacOS/Hub Studio KH"),
         "an agent naming this app needs no repair")
