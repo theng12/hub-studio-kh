@@ -334,7 +334,7 @@ enum ViewChecks {
                                    purpose: "Does a thing.", quantization: "MLX 4-bit",
                                    bytes: 9_000_000_000, floorGB: 32, installed: false,
                                    reason: "Needs a Mac with at least 32 GB of memory; this one has 16 GB.",
-                                   sources: ["internet"])])],
+                                   sources: ["internet"], sourceDetail: [:])])],
             problems: [])
         check(emptyPlan.presets.first?.complete == false && emptyPlan.presets.first?.installedCount == 9,
               "9 of 10 is not complete")
