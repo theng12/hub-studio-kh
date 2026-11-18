@@ -112,6 +112,10 @@ find "$OUTPUT_DIR" -depth -type d -name __pycache__ -empty -delete
 # absolute build path — so without this the same runtime built at two paths has two digests.
 "$PYTHON" -I -B "$PROJECT_ROOT/packaging/video-runtime/normalize_records.py" "$OUTPUT_DIR"
 "$PYTHON" -I -B "$SCRIPT_DIR/smoke_imports.py" "$VENDOR"
+# The interpreter's generated sysconfig records the prefix it was built at, which is the build
+# user's home directory. Neutralise it before the digest is taken, so the shipped tree names nobody;
+# `sys.prefix` is derived from the executable's own location, not from this file.
+"$PYTHON" -I -B "$SCRIPT_DIR/neutralize_prefix.py" "$OUTPUT_DIR"
 "$PYTHON" -I -B -c "
 import sys
 sys.path.insert(0, '$PROJECT_ROOT/packaging')

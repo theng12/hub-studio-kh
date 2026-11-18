@@ -2,6 +2,16 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.248 — 2026-11-19
+
+- **The download no longer carries anyone’s name.** One file inside the music engine recorded the folder the engine was built in — the builder’s home folder, a person’s name in every copy. It is gone: the downloaded app names nobody and no machine. Nothing else about the music engine changed.
+
+### Technical notes
+- `runtimes/music-yue2/lib/python3.12/_sysconfigdata__darwin_darwin.py` held `/Users/<builder>` 21 times, carried down from the uv-provided Python the runtime is built on (present since at least 0.6.246; the published 0.6.247 DMG has it). CPython needs the file at import time, so it is rewritten rather than removed: `packaging/yue2-runtime/neutralize_prefix.py` replaces the recorded build prefix — and only that, as a prefix — with `/opt/studiohub-yue2-runtime`, restores the directory to write it, clears any stale `.pyc` beside it and puts the read-only modes back.
+- It runs in `packaging/yue2-runtime/build.sh` after the smoke imports and **before** the content digest, so the tree is clean from the moment it is built. The already-built canonical `.build/yue2-runtime` was neutralised in place (same packages, same processes) and `YUE2_RUNTIME_SHA256` re-pinned to `fd405f5c…6739c`; the previous pin is recorded beside it.
+- `sys.prefix` does not come from this file — it is derived from the interpreter’s own location — so a runtime inside the app still reports its real prefix. Proven by starting the neutralised tree: `get_config_var('prefix')` is the neutral root, `sys.prefix` is the tree’s real location, `mlx.core` and `mlx_lm` import, and `mlx` is still 0.32.2.
+- Tests: `tests/test_yue2_runtime_prefix.py` (5 — every home path replaced, a clean tree left byte-identical, no recorded prefix refused rather than guessed, a missing file not an error, and the real runtime starting, importing and reporting its own prefix after neutralising).
+
 ## 0.6.247 — 2026-11-18
 
 - **Set up this Mac now copies from your plugged SSD first, then from another Mac on the network, and only then from the internet.** The screen says which one it is using, by name — "Copying from ATLAS", "Copying from Mac mini" — and says why it moved on when it has to ("2 of 11 aren't on ATLAS — they'll come from Mac mini"). It never quietly chooses.
