@@ -729,7 +729,7 @@ let migrationHome = temporary.appendingPathComponent("migration-home", isDirecto
 let migrationAgents = migrationHome.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
 try FileManager.default.createDirectory(at: migrationAgents, withIntermediateDirectories: true)
 let oldAgentPlist = migrationAgents.appendingPathComponent("\(LaunchAgent.legacyLabel).plist")
-try PropertyListSerialization.data(from: staleAgent, format: .xml, options: 0).write(to: oldAgentPlist)
+try PropertyListSerialization.data(fromPropertyList: staleAgent, format: .xml, options: 0).write(to: oldAgentPlist)
 let fakeRoot = temporary.appendingPathComponent("migration-apps", isDirectory: true)
 let fakeApp = fakeRoot.appendingPathComponent("Hub Studio KH.app", isDirectory: true)
 try FileManager.default.createDirectory(at: fakeApp.appendingPathComponent("Contents/MacOS", isDirectory: true),
