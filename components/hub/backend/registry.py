@@ -878,7 +878,7 @@ def remove_machine(machine: str) -> int:
 
 
 def remove_studio(studio_id: str) -> int:
-    """Drop a single studios.json entry by id (e.g. 'music@macmini-m1-01') — for
+    """Drop a single studios.json entry by id (e.g. 'music@studio-a') — for
     pruning a studio type that isn't installed on that machine, without removing
     the rest. Local defaults live in code, not the file, so they're untouched."""
     global _flags_cache
