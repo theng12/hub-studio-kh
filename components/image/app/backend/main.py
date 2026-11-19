@@ -311,6 +311,16 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                                     'width': default_width, 'height': default_height},
             'guidance_ignored': model.guidance_ignored,
             'image_sizes': sizes,
+            # The engine's renderable geometry, beside the operator's offered list. min/max stay
+            # null: `model.limits` states steps, guidance, seed and prompt only, so the model
+            # publishes no canvas bounds for this worker to repeat.
+            'render_constraints': {
+                'multiple': model.dimension_multiple or 1,
+                'min': None,
+                'max': None,
+                'sizes': [{'width': width, 'height': height}
+                          for width, height in presets.values()],
+            },
             'generation_limits': {key: value for key, value in model.limits.items()
                                   if key != 'max_prompt'},
             'max_prompt_characters': model.limits['max_prompt'],

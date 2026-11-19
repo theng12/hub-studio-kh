@@ -769,13 +769,15 @@ class ImageStandaloneTests(unittest.TestCase):
         self.assertEqual(set(listed), set(MODELS))
         flux, z_image = listed[MODEL_ID], listed[Z_IMAGE_TURBO.repo]
 
-        # FLUX.2 Klein is unchanged: same label, family, defaults, limits and qualification.
+        # FLUX.2 Klein: same label, family, limits and qualification; its default moved from
+        # 1280x720 to 1024x576 in 0.6.253, when 1280x720 was retired — a row must not default to
+        # a size it no longer offers (owner, 2026-11-19).
         self.assertEqual(flux['label'], 'FLUX.2 Klein 4B MLX 4-bit')
         self.assertEqual(flux['family'], 'flux2-klein')
         self.assertEqual(flux['generation_defaults']['steps'], 4)
         self.assertEqual(flux['generation_defaults']['guidance'], 1.0)
         self.assertEqual((flux['generation_defaults']['width'],
-                          flux['generation_defaults']['height']), (1280, 720))
+                          flux['generation_defaults']['height']), (1024, 576))
         self.assertEqual(flux['generation_limits']['max_steps'], 100)
         # The qualification block is the model's own, published verbatim. This used to assert the
         # literal `'pending'` for `packaged_inference`, which was true when it was written and

@@ -2,6 +2,17 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.253 — 2026-11-19
+
+- **1280×720 is retired for the image model that offered it, and the app says so plainly.** A job asking for that size now gets a sentence, not an error: "The 1280x720 (16:9) size has been retired for FLUX.2 Klein; choose 1024x576 (16:9 small) or 1344x768 (7:4) instead." Pictures already made at 1280×720 are untouched and still open.
+- **New jobs start at 1024×576.** That model used to open at 1280×720; with that size retired, the default moved with it, so nothing starts at a size the app no longer offers. Every other shape it offered is unchanged.
+- **The catalogue now states what each model can actually render.** Beside the list of sizes offered, each model publishes its engine's own rule (a dimension multiple) and every size it can produce — so another app can answer "what can I pick instead?" from the app's own data rather than guessing.
+
+### Technical notes
+- `FLUX2_SIZE_PRESETS` = `SIZE_PRESETS` minus `16:9`, with a comment naming the 2026-11-19 retirement and the source table kept whole for Z-Image and for the way back; `FLUX2_KLEIN` now uses it with default `16:9 small` (1024×576). The retired key raises `The 1280x720 (16:9) size has been retired …`; a replay carrying explicit `width=1280,height=720` is accepted as `custom` so a previously qualified canvas still renders; genuinely unknown ratios keep `Choose a qualified 1K aspect ratio`.
+- The row publishes `render_constraints {multiple, min, max, sizes}` beside `image_sizes` (untouched). `multiple` is the model's `dimension_multiple` (32 for the qwen engines, 1 where none is declared); `sizes` is derived from `size_presets(model)` so it cannot drift; `min`/`max` are `null` because no model states canvas bounds — no number was invented.
+- Tests: `tests/test_retire_1280x720_0253.py` (7), `tests/test_renderable_sizes_0253.py` (2), plus `test_image_sizes_0252`, `test_image_standalone`, `test_image_qwen21` — green. One assertion changed on purpose: FLUX's published default is now (1024, 576).
+
 ## 0.6.252 — 2026-11-19
 
 - **One more size, and you can type your own.** Both image models now offer **1024×576** (unchanged default) and **1344×768**, a wider picture that suits 7:4 frames. You can also give a width and height yourself; the app accepts them only when both are multiples of 32, and says which number is wrong when they are not — it never quietly rounds or picks a different size for you.
