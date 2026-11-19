@@ -55,18 +55,22 @@ class RenderableSizesTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.entries = {entry['repo']: entry for entry in response.json()['models']}
 
-    def test_multiple_is_the_engine_bound_or_the_app_policy_and_bounds_are_not_invented(self):
-        # FLUX2 declares no engine multiple, but this app accepts custom sizes only on the 32 grid,
-        # so the row publishes 32 labelled as policy — the row says what is enforced, and a caller
-        # can tell the engine's rule from ours.
-        for model, expected_multiple, source in (
-                (FLUX2_KLEIN, 32, 'policy'), (QWEN_IMAGE_21_LOW_RAM, 32, 'engine')):
+    def test_multiple_is_scoped_to_custom_sizes_and_bounds_are_not_invented(self):
+        # The 32 grid applies to custom width/height only: several of FLUX2's own presets (1280x720,
+        # 1200x800) are not multiples of 32, so a model-wide claim would say the model cannot render
+        # sizes it offers. `source` still separates the engine's rule from this app's policy.
+        for model, source in ((FLUX2_KLEIN, 'policy'), (QWEN_IMAGE_21_LOW_RAM, 'engine')):
             constraints = self.entries[model.repo]['render_constraints']
-            self.assertEqual(constraints['multiple'], expected_multiple, model.repo)
-            self.assertEqual(constraints['multiple_source'], source, model.repo)
+            self.assertEqual(constraints['multiple'],
+                             {'value': 32, 'applies_to': 'custom', 'source': source}, model.repo)
             # ImageModel.limits carries no canvas bounds; null is the honest answer.
             self.assertIsNone(constraints['min'])
             self.assertIsNone(constraints['max'])
+            # The preset list is the authority and may name sizes the custom grid would refuse:
+            # FLUX2 keeps 1200x800 (not a multiple of 32), which is why `multiple` is scoped.
+            if model is FLUX2_KLEIN:
+                self.assertIn({'width': 1200, 'height': 800}, constraints['sizes'])
+                self.assertEqual(1200 % 32, 16)
 
     def test_sizes_are_the_offered_preset_pixels_and_image_sizes_is_untouched(self):
         for model in (FLUX2_KLEIN, QWEN_IMAGE_21_LOW_RAM):
