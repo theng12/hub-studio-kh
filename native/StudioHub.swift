@@ -948,11 +948,13 @@ final class StudioController: ObservableObject {
         let outcome = LoginMigration.run(alreadyRecorded: configuration.loginMigrationComplete,
                                          oldStatus: legacyLoginItemStatus,
                                          unregister: legacyLoginItemUnregister)
-        // Recorded only after the attempt: a crash mid-migration leaves the flag unset and the next
-        // launch tries again rather than leaving both login mechanisms live. A caught failure is
-        // still an attempt, so a broken registration is named once instead of on every launch.
-        configuration.loginMigrationComplete = true
-        do { try configuration.save() } catch { /* not startup-critical; retried next launch */ }
+        // Recorded only after a successful attempt: a crash mid-migration, or a removal that failed,
+        // leaves the flag unset, so the next launch tries once more instead of leaving two login
+        // paths for good. Repeating the notice is the price of a login that may start twice.
+        if LoginMigration.recordsCompletion(outcome) {
+            configuration.loginMigrationComplete = true
+            do { try configuration.save() } catch { /* not startup-critical; retried next launch */ }
+        }
         if let notice = LoginMigration.notice(for: outcome) { failure = notice }
     }
 
@@ -1179,7 +1181,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // agent's copy already did), then leave the evidence the next settle reads.
             _ = StopRecord.settle(directory: config.dataDirectory, relaunching: false)
             StopRecord.markRunning(directory: config.dataDirectory)
-            StopRecord.installSignalMarkers(directory: config.dataDirectory)
+            StopRecord.installSignalMarkers(directory: config.dataDirectory) { [weak self] in
+                self?.handleTerminationSignal()
+            }
             startStopEvidence(directory: config.dataDirectory)
             // One-time, before anything else can offer the login choice: remove the login item an
             // older build left behind so the launch agent is the only mechanism that can run.
@@ -1354,6 +1358,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let controller, !controller.existingInstanceDetected else { return }
         AgentStandby.markCleanQuit(directory: controller.configuration.dataDirectory)
     }
+    /// Ids of work a next start can follow, from the fresh workspace `activeWork` just refreshed.
+    /// Seam for the headless TERM test, which must name work without filing a real job.
+    lazy var inFlightIDs: () -> [String] = { [unowned self] in
+        let space = self.controller.workspace
+        let states: Set<String> = ["queued", "running", "cancel_requested", "cancelling", "paused",
+                                   "uncertain", "recovery_pending"]
+        let jobs = [space.audioJobs, space.imageJobs, space.musicJobs,
+                    space.videoJobs, space.subtitleJobs, space.chatJobs]
+        var ids = jobs.flatMap { $0 }.filter { states.contains($0.state) }.map(\.id)
+        ids += space.downloads.filter { states.contains($0.state) }.map(\.id)
+        ids += space.memoryInventory?.studios
+            .filter { $0.policy?.busy == true || $0.policy?.activeWork == true }.map(\.id) ?? []
+        if space.transcribing { ids.append("transcription") }
+        return ids
+    }
+
+    /// SIGTERM from an installer: the broker's maintenance hold is already set, so clearing this
+    /// app's readiness and stopping the engine is the rest of the hold. Exit 0 afterwards: launchd
+    /// only relaunches unsuccessful exits, so a stop can no longer trigger a fresh staging pass.
+    func handleTerminationSignal() {
+        Task { @MainActor [weak self] in
+            guard let self, !self.terminationStopping else { return }
+            self.terminationStopping = true
+            let began = Date()
+            let ceiling: TimeInterval = 25
+            let count = await self.activeWork()
+            let heldIDs = self.inFlightIDs()
+            self.controller.forceStopWithoutAsking = true
+            self.controller.stop()
+            while self.controller.running, Date().timeIntervalSince(began) < ceiling {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            let stuck = self.controller.running
+            let ids = stuck ? self.inFlightIDs() : heldIDs
+            let names = ids.isEmpty ? (count > 0 ? "\(count) unlisted job(s)" : "none") : ids.joined(separator: ", ")
+            let settled = min(Date().timeIntervalSince(began), ceiling)
+            FileHandle.standardError.write(Data((
+                "Hub Studio KH stop: held → settled \(String(format: "%.1f", settled))s "
+                    + "(\(stuck ? "still in flight: " : "")\(names)) → stopping\n").utf8))
+            exit(0)
+        }
+    }
+    private var terminationStopping = false
     /// The engine has stopped after a Quit that was waiting for it: finish that Quit.
     func engineStopped() {
         if quitPending { NSApp.reply(toApplicationShouldTerminate: true) }

@@ -54,6 +54,9 @@ _MANIFEST_ERROR = "_manifest_error"
 # updater-authored; in-memory and self-expiring, so an aborted install cannot latch it.
 _installer_hold_until = 0.0
 
+# One start stamp for this process: a health poll must never move it.
+_SERVER_STARTED_AT = time.time()
+
 # The deadline the Hub holds a proxied job to, and the number it publishes as
 # `deadline_seconds`. One owner — this process, which enforces it — but **not one number**: a
 # subtitle job finishes in seconds and a video job takes the better part of an hour, so a single
@@ -2181,12 +2184,20 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # `/api/hub/settings`: that route is owner-only and about output storage, so a controller
         # could not read it, and a controller is exactly who needs to know that a node came up
         # loopback-only instead of discovering it as a timeout.
+        # A 200 has to say which process answered: launchctl can report a service stopped while
+        # another copy of the Hub still owns the port. Reuse the broker's own per-batch counts.
+        summaries = [broker.batch_summary(batch)
+                     for batch in broker.activity_batches().values()]
         return {"ok": True, "workers": len(monitor.registry),
                 "role": control_plane.load_settings()["role"], "bind": _bind_facts(),
                 "update_draining": update_drain.draining(), "disk": disk_governor.snapshot(),
                 # Only a hold taken with the installer's 0600 token says a later quit is the
                 # updater's; an owner-token hold or an aborted install never claims authorship.
-                "update_hold_active": time.monotonic() < _installer_hold_until}
+                "update_hold_active": time.monotonic() < _installer_hold_until,
+                "pid": os.getpid(), "version": _app_version(), "build": _app_build(),
+                "started_at": _SERVER_STARTED_AT, "data_dir": str(data_root),
+                "queue": {key: sum(summary[key] for summary in summaries)
+                          for key in ("queued", "running", "uncertain")}}
 
     @app.get("/api/version")
     def version() -> dict[str, str]:

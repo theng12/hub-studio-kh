@@ -2,6 +2,20 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.251 — 2026-11-19
+
+- **Stopping the app now stops it.** An installer's stop used to look like a crash to macOS, so the app came straight back and a replacement could never finish. A stop now holds new work, lets what is running settle in up to 25 seconds, says what it did in one line, and exits cleanly — so macOS leaves it stopped. A real crash still restarts it.
+- **The app's health now says which app answered.** It reports its process id, version, build, when it started, its data folder and how much work is queued, running and uncertain. A reply from the wrong copy is now visible instead of looking healthy.
+- **Replacing the app has a supported procedure.** Stop the login service, swap the app, start it again, and verify it answers with the new process id — with a failure path that puts the original back and says so, so a Mac is never left with no start-at-login and no message.
+- **An old "start at login" entry that could not be removed is retried.** It used to be reported once and then forgotten, which could leave two login paths forever; now the next launch tries again and keeps saying what to remove.
+
+### Technical notes
+- `SIGTERM` no longer re-raises (`native/ShellCore.swift`): a main-queue dispatch source marks the intentional stop and hands off to `handleTerminationSignal()` in `native/StudioHub.swift`, which reads a fresh work count (3 s bound), holds the queue, uses the existing `controller.stop()`/`forceStopWithoutAsking` settle path with the 25 s ceiling (100 ms polls) and exits 0; the ceiling names anything still in flight by id. Crash signals and their markers are unchanged. The lifecycle suite's `term-busy` case exits 133 on the old re-raise and passes now.
+- `/api/health` adds `pid`, `version`, `build`, `started_at`, `data_dir` and `queue {queued,running,uncertain}` beside the seven existing keys (unchanged). Queue counts come from `broker.batch_summary()` over `broker.activity_batches()`.
+- `packaging/hub-service-lifecycle.sh` (stop/start/verify) and its selftest own a temp launchd label only; observed states: `state = SIGTERMed` → `Could not find service` after bootout; `state = running`, pid matching the health reply after bootstrap; a failed bootstrap (`exit=5 Input/output error`) reports "no service loaded" with the restore instruction and recovers with the original plist. `spawn failed` / `needs LWCR update` are reported verbatim if they occur and did not occur on the temp label.
+- `LoginMigration.recordsCompletion(_:)` ends the migration only on success; a caught failure stays unrecorded so the next launch inspects and tries once more (one check, one attempt, nothing on the startup path). Tested both branches in `tests/native/lifecycle_main.swift`.
+- Signing: this is the first Hub release under the adopted identity. The two-build `designated =>` comparison and the artifact certificate (read from the mounted DMG) are recorded in the release receipt; no trust setting is added, moved or removed by the build, gate or lifecycle scripts.
+
 ## 0.6.250 — 2026-11-19
 
 - **A Mac goes free when its job is done.** A job that had finished could still hold on to the Mac it ran on, so other work waited on a machine that was actually idle. A lease now follows its job: when the job ends, the lease goes with it, and a restarted Hub drops any lease it cannot point at unfinished work.

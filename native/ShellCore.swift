@@ -1069,6 +1069,14 @@ enum LoginMigration {
         }
     }
 
+    /// Whether this outcome ends the migration. A caught failure does not: the old entry may still
+    /// be live, so recording success would leave two login paths for good. The next launch then
+    /// inspects and tries once more — one check and one attempt, no loop, nothing on the startup path.
+    static func recordsCompletion(_ outcome: Outcome) -> Bool {
+        if case .failed = outcome { return false }
+        return true
+    }
+
     /// The one-line notice to show when the old entry could not be removed, or nil.
     static func notice(for outcome: Outcome) -> String? {
         guard case .failed(let detail) = outcome else { return nil }
@@ -1746,9 +1754,11 @@ enum StopRecord {
         }
     }
 
-    /// Mark a crash signal or SIGTERM in the data folder, then die of it as before. The handler
-    /// only calls open/write/close/signal/raise, which are async-signal-safe.
-    static func installSignalMarkers(directory: URL) {
+    /// Mark a crash signal in the data folder, then die of it as before. The handler only calls
+    /// open/write/close/signal/raise, which are async-signal-safe. SIGTERM is different: it is an
+    /// installer stop, so it marks the stop and hands it to the app to settle and exit 0 - dying
+    /// from it made launchd's `SuccessfulExit: false` relaunch every installer into a full staging.
+    static func installSignalMarkers(directory: URL, onTermination: @escaping () -> Void) {
         stopMarkerCrashedPath = strdup(directory.appendingPathComponent(crashedMarkerName).path)
         stopMarkerTerminatedPath = strdup(directory.appendingPathComponent(terminatedMarkerName).path)
         for number in crashSignals {
@@ -1757,11 +1767,17 @@ enum StopRecord {
                 signal(received, SIG_DFL); raise(received)
             }
         }
-        signal(SIGTERM) { received in
-            writeStopMarker(stopMarkerTerminatedPath, received)
-            signal(received, SIG_DFL); raise(received)
+        signal(SIGTERM, SIG_IGN)
+        let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        termination.setEventHandler {
+            writeStopMarker(stopMarkerTerminatedPath, SIGTERM)
+            onTermination()
         }
+        termination.resume()
+        terminationSource = termination
     }
+
+    private static var terminationSource: DispatchSourceSignal?
 }
 
 private var stopMarkerCrashedPath: UnsafeMutablePointer<CChar>?

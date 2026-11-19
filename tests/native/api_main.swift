@@ -7113,6 +7113,15 @@ struct NativeAPITests {
                 "an unavailable ServiceManagement must not call unregister and must be reported, got: \(unavailable)")
         require(LoginMigration.notice(for: unavailable)?.contains("Login Items") == true,
                 "an unavailable ServiceManagement must still tell the operator where to look")
+        // A failed removal must not end the migration: recording it as complete would leave the old
+        // SMAppService entry as a second login path for good. Success ends it and never retries.
+        require(LoginMigration.recordsCompletion(failed) == false
+                && LoginMigration.recordsCompletion(unavailable) == false,
+                "a failed migration must stay unrecorded so the next launch retries it")
+        require(LoginMigration.recordsCompletion(.removed)
+                && LoginMigration.recordsCompletion(.nothingToRemove)
+                && LoginMigration.recordsCompletion(.alreadyDone),
+                "a finished migration must be recorded and never retried")
 
         // The node re-join schedule: exactly 15, 30, 60, then five minutes.
         require(RejoinBackoff.delay(afterAttempt: 0) == 15

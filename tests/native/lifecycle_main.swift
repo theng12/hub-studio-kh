@@ -180,7 +180,7 @@ func makeController(root: URL, server: LocalHubFixture, now: @escaping () -> Dat
 
 /// The fixture service: it writes its readiness record and then sleeps until it is told to stop.
 /// `absent` leaves the executable out entirely, which is how a start fails before anything runs.
-func writeFixtureService(at service: URL, absent: Bool = false) throws {
+func writeFixtureService(at service: URL, absent: Bool = false, termDelay: Int = 0) throws {
     try? FileManager.default.removeItem(at: service)
     guard !absent else { return }
     let script = #"""
@@ -200,7 +200,7 @@ tmp="$ready.tmp.$$"
 printf '{"url":"http://127.0.0.1:%s","pid":%s,"version":"test","token":"abcdefghijklmnopqrstuvwxyz123456"}' "$port" "$$" > "$tmp"
 chmod 600 "$tmp"
 mv "$tmp" "$ready"
-trap 'exit 0' TERM INT
+trap '\#(termDelay > 0 ? "sleep \(termDelay); " : "")exit 0' TERM INT
 while :; do sleep 1; done
 """#
     try Data(script.utf8).write(to: service)
@@ -230,11 +230,46 @@ func lastStopReason(root: URL) -> String? {
     return json["reason"] as? String
 }
 
+/// The child the TERM test drives: a real app delegate with the same signal source the app
+/// installs, in its own process, so its exit status is the one launchd would see.
+@MainActor
+func runTerminationChild(busy: Bool, root: URL) async throws {
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let server = try LocalHubFixture(busy: busy)
+    let controller = try makeController(root: root, server: server, now: Date.init)
+    let delegate = AppDelegate()
+    delegate.controller = controller
+    delegate.activeWork = { busy ? 1 : 0 }
+    delegate.inFlightIDs = { busy ? ["job-0251"] : [] }
+    StopRecord.markRunning(directory: controller.configuration.dataDirectory)
+    StopRecord.installSignalMarkers(directory: controller.configuration.dataDirectory) {
+        delegate.handleTerminationSignal()
+    }
+    if busy {
+        try writeFixtureService(at: root.appendingPathComponent("StudioHubService"), termDelay: 1)
+        controller.start()
+        let started = await waitUntil { readyPID(controller) != nil && controller.running }
+        requireLifecycle(started, "term-busy: the service never started")
+    }
+    try Data("ready".utf8).write(to: root.appendingPathComponent("child-ready"))
+    while true {
+        withExtendedLifetime((server, delegate, controller)) {}
+        try? await Task.sleep(for: .seconds(60))
+    }
+}
+
 @main
 struct NativeLifecycleTests {
     @MainActor
     static func main() async throws {
-        let selected = Set(CommandLine.arguments.dropFirst())
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.first == "term-child-busy" || arguments.first == "term-child-idle",
+           arguments.count > 1 {
+            try await runTerminationChild(busy: arguments.first == "term-child-busy",
+                                          root: URL(fileURLWithPath: arguments[1]))
+            return
+        }
+        let selected = Set(arguments)
         func runs(_ name: String) -> Bool { selected.isEmpty || selected.contains(name) }
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent("studiohub-lifecycle-\(UUID().uuidString)")
@@ -465,8 +500,24 @@ struct NativeLifecycleTests {
             requireLifecycle(attempts == 1, "the failing unregister must have been attempted")
             requireLifecycle(failing.failure?.contains("Login Items") == true,
                              "a failed migration must keep the app running and say where to remove the old entry, got: \(failing.failure ?? "nil")")
-            requireLifecycle(failing.configuration.loginMigrationComplete,
-                             "a caught failure is still an attempt and must be recorded so it is reported once")
+            requireLifecycle(!failing.configuration.loginMigrationComplete,
+                             "a caught failure must not be recorded: the old entry may still be live")
+            // The next launch tries once more rather than leaving two login paths for good.
+            failing.migrateLegacyLoginItemIfNeeded()
+            requireLifecycle(attempts == 2,
+                             "a failed migration must be retried on the next launch, attempts=\(attempts)")
+            requireLifecycle(failing.failure?.contains("Login Items") == true,
+                             "the retry must show the same removal instruction again")
+            // A clean removal does end it: no second inspection, no second attempt.
+            let cleanData = root.appendingPathComponent("clean-state")
+            try FileManager.default.createDirectory(at: cleanData, withIntermediateDirectories: true)
+            var cleanAttempts = 0
+            let clean = try makeMigrationController(
+                data: cleanData, status: enabled, unregister: { cleanAttempts += 1 })
+            clean.migrateLegacyLoginItemIfNeeded()
+            clean.migrateLegacyLoginItemIfNeeded()
+            requireLifecycle(cleanAttempts == 1 && clean.configuration.loginMigrationComplete,
+                             "a successful migration must be recorded and never retried, attempts=\(cleanAttempts)")
         }
 
         // Quit asks only when work is in progress. An alert cannot be answered headless, so the
@@ -567,6 +618,55 @@ struct NativeLifecycleTests {
             requireLifecycle(controller.forceStopWithoutAsking,
                              "updater: a hung stop after the hold must be force-stopped")
             requireLifecycle(asked == 0, "updater: an alert was shown for an updater-sourced stop")
+        }
+
+        // An installer's TERM is a stop, not a crash: the app must hold, let work settle and exit 0
+        // so launchd leaves it stopped. A child process is used because the exit status and signal
+        // reason are the facts under test; the in-process delegate alone cannot prove them.
+        if runs("term-stop") {
+            for (name, busy) in [("term-busy", true), ("term-idle", false)] {
+                let root = temporary.appendingPathComponent(name)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+                process.arguments = [busy ? "term-child-busy" : "term-child-idle", root.path]
+                let output = Pipe()
+                process.standardOutput = output
+                process.standardError = output
+                try process.run()
+                let ready = await waitUntil(timeout: 10) {
+                    FileManager.default.fileExists(atPath: root.appendingPathComponent("child-ready").path)
+                }
+                requireLifecycle(ready, "\(name): the child never became ready")
+                let began = Date()
+                kill(process.processIdentifier, SIGTERM)
+                let deadline = began.addingTimeInterval(40)
+                while process.isRunning && Date() < deadline {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                if process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                    fatalError("\(name): TERM did not end the app inside 40 s")
+                }
+                process.waitUntilExit()
+                let elapsed = Date().timeIntervalSince(began)
+                let log = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                requireLifecycle(process.terminationReason == .exit && process.terminationStatus == 0,
+                    "\(name): a stop must exit 0, got \(process.terminationReason) status \(process.terminationStatus); \(log)")
+                requireLifecycle(log.contains("held → settled") && log.contains("→ stopping"),
+                    "\(name): the stop was silent: \(log)")
+                if busy {
+                    requireLifecycle(log.contains("job-0251") && !log.contains("still in flight"),
+                                     "\(name): work must settle, not hit the ceiling: \(log)")
+                    requireLifecycle(elapsed >= 0.8 && elapsed < 10,
+                                     "\(name): work did not settle promptly (\(elapsed)s)")
+                } else {
+                    requireLifecycle(elapsed < 5, "\(name): an idle stop took \(elapsed)s")
+                }
+                requireLifecycle(FileManager.default.fileExists(
+                    atPath: root.appendingPathComponent("state/terminated").path),
+                    "\(name): SIGTERM must still be recorded for the next start's stop reason")
+            }
         }
 
         // The prompt deadline must fire inside NSAlert.runModal's modal run loop. A watchdog
