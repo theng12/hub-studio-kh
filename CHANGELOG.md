@@ -2,6 +2,20 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.250 — 2026-11-19
+
+- **A Mac goes free when its job is done.** A job that had finished could still hold on to the Mac it ran on, so other work waited on a machine that was actually idle. A lease now follows its job: when the job ends, the lease goes with it, and a restarted Hub drops any lease it cannot point at unfinished work.
+- **A job with no answer now ends, and says why.** One job waited more than sixteen hours marked "uncertain" with nothing re-driving it. Every uncertain job now ends inside its own limit — failed, with the reason and the option to retry — and if the late answer still turns up it is kept beside the verdict rather than thrown away.
+- **A Mac that cannot take work says so on its row.** When the Hub refuses a job because a Mac lacks the memory, the sentence it recorded is shown on that Mac's row with how long ago it was said, and it disappears once the Mac takes work again.
+- **The installer's stop never asks a question.** The app used to ask "Quit and stop its engine?" based on whether someone appeared to be watching, which meant a screen-shared Mac stopped for a person while an untouched one sailed through. It now asks only when a person asked to quit: a stop that follows the installer's hold goes straight to holding, settling and quitting.
+
+### Technical notes
+- Leases: `broker.prune_stale_machine_leases()` at startup (`restore_batches`) and on the 60 s sweep drops a lease whose owning chat/transcription/developer-test row is absent, terminal or unnamed; a render/peer/relay lease that no local row can disprove is still bounded by `automatic_recovery.MAX_STALL_S` (the existing 6 h ceiling). An idle peer's `machine_lease_busy` refusal reads "peer says lease-busy while reporting 0 running" in `governor_note` and the item error instead of passing the bare 409 up (`peers.reports_zero_running()` reads the existing fresh snapshot only).
+- Uncertain: `expire_uncertain_items()` runs on the same sweep and fails an item retryable with `UNCERTAIN_BOUND_EXCEEDED` once its own bound passes — Image 3600 s and Voice 7200 s from `automatic_recovery`, raised by a worker's `deadline_s`, else the existing 21600 s ceiling. A late answer is recorded as `late_result` beside the unchanged verdict.
+- Refusals: `broker.note_refusal()` stores `{code, message, at}` in the per-machine protection state at both `INSUFFICIENT_MEMORY` hand-back points, cleared by `_mark_machine_success()`; `fleet_overview()` copies it onto the row as `refusal {code,message,age_s}` and the native row shows it as a caption only while that Mac has no current job.
+- Quit: `QuitDecision.shouldChallengeQuit(source:busy:attended:)` — a person's or unknown quit while busy and attended may still be challenged; an installer-sourced stop never is. The source is `/api/health`'s `update_hold_active`, set only by a `POST /api/maintenance/hold` authenticated with the installer's 0600 hold token (`auth.installer_hold_request`) and self-expiring after `dispatch_paused_s`.
+- Tests: `tests/test_terminal_lifecycle_0250.py` (7), `tests/test_fleet_refusal_reason_0250.py` (3), `tests/native/lifecycle_main.swift` (the updater-stop case fails without this change — exit 133 on the old attendance gate).
+
 ## 0.6.249 — 2026-11-19
 
 - **The app no longer names this estate.** A machine-naming scheme that included the estate's name had leaked into the app's own documents and audit records — a fleet name is personal even with no address behind it. Every occurrence is gone: the downloaded app names nobody and no site.

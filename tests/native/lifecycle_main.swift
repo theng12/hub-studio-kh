@@ -13,6 +13,7 @@ final class LocalHubFixture: @unchecked Sendable {
     private var stopped = false
     private var healthy = false
     private var healthReads = 0
+    private var holdActive = false
     let port: Int
     private let busy: Bool
 
@@ -52,6 +53,7 @@ final class LocalHubFixture: @unchecked Sendable {
     }
 
     func setHealthy(_ value: Bool) { lock.lock(); healthy = value; lock.unlock() }
+    func setHoldActive(_ value: Bool) { lock.lock(); holdActive = value; lock.unlock() }
     func healthReadCount() -> Int { lock.lock(); defer { lock.unlock() }; return healthReads }
     func resetHealthReadCount() { lock.lock(); healthReads = 0; lock.unlock() }
 
@@ -86,9 +88,9 @@ final class LocalHubFixture: @unchecked Sendable {
         case "/api/hub/model-packages":
             status = "200 OK"; body = #"{"models":[]}"#
         case "/api/health":
-            lock.lock(); healthReads += 1; let ok = healthy; lock.unlock()
+            lock.lock(); healthReads += 1; let ok = healthy; let hold = holdActive; lock.unlock()
             status = ok ? "200 OK" : "503 Service Unavailable"
-            body = ok ? "{\"ok\":true,\"busy\":\(busy)}" : #"{"ok":false}"#
+            body = ok ? "{\"ok\":true,\"busy\":\(busy),\"update_hold_active\":\(hold)}" : #"{"ok":false}"#
         default:
             status = "404 Not Found"; body = #"{"detail":"fixture route missing"}"#
         }
@@ -525,6 +527,46 @@ struct NativeLifecycleTests {
             requireLifecycle(unattendedGone, "unattended: Quit did not stop the engine")
             requireLifecycle(askedUnattended == 0,
                              "unattended: an alert was shown without a window or active app")
+        }
+
+        // Authorship, not attendance: the updater's 0600-token hold makes a busy, attended stop
+        // its own. It must hold the queue, settle the engine and quit without showing an alert.
+        if runs("quit-updater-source") {
+            let cases: [(QuitSource, Bool, Bool, Bool)] = [
+                (.updater, true, true, false), (.updater, true, false, false),
+                (.person, true, true, true), (.person, true, false, false),
+                (.unknown, true, true, true), (.person, false, true, false),
+            ]
+            for (source, busy, attended, expected) in cases {
+                let ask = QuitDecision.shouldChallengeQuit(source: source, busy: busy, attended: attended)
+                requireLifecycle(ask == expected,
+                                 "quit source \(source) busy=\(busy) attended=\(attended): expected \(expected), got \(ask)")
+            }
+            let server = try LocalHubFixture(busy: true)
+            defer { server.stop() }
+            server.setHealthy(true)
+            server.setHoldActive(true)
+            let root = temporary.appendingPathComponent("quit-updater-source")
+            let controller = try makeController(root: root, server: server, now: Date.init)
+            controller.start()
+            let started = await waitUntil { readyPID(controller) != nil && controller.running }
+            requireLifecycle(started, "updater: the service did not start")
+            let pid = readyPID(controller)!
+            let delegate = AppDelegate()
+            delegate.controller = controller
+            delegate.activeWork = { 2 }
+            delegate.quitIsAttended = { true }  // someone is watching: still must not ask
+            var asked = 0
+            delegate.confirmQuitWhileBusy = { asked += 1; return false }
+            let source = await delegate.quitSource()
+            requireLifecycle(source == .updater, "updater: the fresh hold was not read as the updater, got \(source)")
+            let reply = delegate.applicationShouldTerminate(NSApplication.shared)
+            requireLifecycle(reply == .terminateLater, "updater: Quit must answer later")
+            let gone = await waitUntil { !controller.running && kill(pid, 0) != 0 }
+            requireLifecycle(gone, "updater: the engine did not settle and stop")
+            requireLifecycle(controller.forceStopWithoutAsking,
+                             "updater: a hung stop after the hold must be force-stopped")
+            requireLifecycle(asked == 0, "updater: an alert was shown for an updater-sourced stop")
         }
 
         // The prompt deadline must fire inside NSAlert.runModal's modal run loop. A watchdog

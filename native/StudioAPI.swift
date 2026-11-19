@@ -2187,6 +2187,9 @@ struct NativeFleetMachine: Decodable, Equatable, Identifiable {
     let startup: NativeFleetStartup?
     /// The job that Mac is working on right now. Absent while it is idle and from an older Hub.
     let currentJob: NativeCurrentJob?
+    /// The refusal the Hub recorded for this Mac and how old it is. Absent for a Mac that never
+    /// refused and from a Hub older than that record.
+    let refusal: NativeFleetRefusal?
 
     var id: String { machine }
     var isLocal: Bool { machine == "local" }
@@ -2296,6 +2299,14 @@ struct NativeCurrentJob: Decodable, Equatable {
     let startedAt: Double?
 }
 
+/// The last refusal the Hub recorded on a fleet row: its code, the sentence it recorded and the
+/// age in seconds. The Hub owns the age; the app never re-decides why the Mac could not take work.
+struct NativeFleetRefusal: Decodable, Equatable {
+    let code: String?
+    let message: String
+    let ageS: Double
+}
+
 /// What one row of the Connections node table says about a Mac's state, in words.
 enum NativeFleetRowState: Equatable {
     case working, ready, attention, offline, refused, error, unknown
@@ -2330,6 +2341,15 @@ struct NativeFleetRow: Identifiable, Equatable {
     var version: String? { node?.version ?? machine?.version }
     var address: String? { isLocal ? nil : (node?.address ?? machine?.address) }
     var currentJob: NativeCurrentJob? { machine?.currentJob }
+
+    /// The Hub's recorded refusal in words, with its own age. A Mac on a job now has moved past it:
+    /// showing it as that Mac's current state would turn history into a fresh complaint.
+    var refusalText: String? {
+        guard currentJob == nil, let refusal = machine?.refusal, !refusal.message.isEmpty else { return nil }
+        let recordedAt = Date().timeIntervalSince1970 - refusal.ageS
+        guard let age = NativeWorkspaceStore.ago(recordedAt) else { return nil }
+        return "refused \(age): \(refusal.message)"
+    }
 
     func state(readiness: NativeMachineReadiness?) -> NativeFleetRowState {
         if let node {
@@ -9396,7 +9416,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Nil means the Hub published no stamp at all, which is a different fact from "a long time
     /// ago": a node that has never answered a probe has no `last_seen_at`, and the page says
     /// "never seen" rather than inventing a date.
-    static func ago(_ seconds: Double?, now: Date = Date()) -> String? {
+    nonisolated static func ago(_ seconds: Double?, now: Date = Date()) -> String? {
         guard let seconds, seconds > 0 else { return nil }
         let elapsed = now.timeIntervalSince1970 - seconds
         guard elapsed >= 0 else { return "just now" }

@@ -35,6 +35,20 @@ def stall_threshold_s(modality: object) -> float | None:
     return DEFAULT_STALL_S.get(str(modality or ""))
 
 
+def uncertainty_bound_s(modality: object, stated_deadline_s: object = None) -> float:
+    """The item's own ceiling for an unanswered attempt: Image 3600 s, Voice 7200 s.
+
+    A worker-published deadline raises that bound; an uncovered modality uses the existing
+    six-hour observation ceiling. These are the budgets already in this module, not a new
+    global wait: past the bound the item is failed, and a late answer is kept as evidence.
+    """
+    bound = stall_threshold_s(modality) or MAX_STALL_S
+    if isinstance(stated_deadline_s, (int, float)) and not isinstance(stated_deadline_s, bool) \
+            and math.isfinite(stated_deadline_s) and stated_deadline_s > 0:
+        bound = max(bound, float(stated_deadline_s))
+    return float(bound)
+
+
 # The (stage, total) pair each worker actually publishes while its job makes progress. Image
 # Studio reports its denoise step; Voice Studio reports its long-form section index. The names are
 # the workers' own — `components/image/app/backend/generation.py` writes `denoise_step`, and

@@ -1062,6 +1062,19 @@ enum QuitPrompt {
     }
 }
 
+/// Who asked the app to stop. The installer's 0600-token update hold is the only explicit
+/// updater signal; a quit from anywhere else is a person's or unknown, never inferred from
+/// attendance. Attendance only says whether anyone could answer an alert.
+enum QuitSource: Equatable {
+    case updater, person, unknown
+}
+
+enum QuitDecision {
+    static func shouldChallengeQuit(source: QuitSource, busy: Bool, attended: Bool) -> Bool {
+        busy && attended && source != .updater
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var controller: StudioController!
@@ -1086,8 +1099,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         alert.addButton(withTitle: "Quit and Stop")
         return QuitPrompt.run(alert) == .alertSecondButtonReturn
     }
-    /// A quit is attended only when the app is frontmost and its window is on screen. A login
-    /// launch has no window and is not active: an installer's quit must never wait on an alert.
+    /// Who asked for this stop, read from the Hub's fresh hold state. The route that set it is
+    /// authenticated by the updater's 0600 token; a read that fails is `.unknown`, never updater.
+    lazy var quitSource: () async -> QuitSource = { [unowned self] in
+        guard let data = readPrivateRegularFile(self.controller.configuration.readyFile),
+              let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let address = record["url"] as? String,
+              let health = URL(string: address)?.appendingPathComponent("api/health") else { return .unknown }
+        let request = URLRequest(url: health, timeoutInterval: 2)
+        guard let (body, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return .unknown }
+        return json["update_hold_active"] as? Bool == true ? .updater : .person
+    }
+    /// A quit is attended only when the app is frontmost and its window is on screen. This says
+    /// whether an alert can be answered, not whether a person asked for the stop.
     lazy var quitIsAttended: () -> Bool = { [weak self] in
         NSApp.isActive && self?.window?.isVisible == true
     }
@@ -1356,24 +1382,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if quitPending || quitAsking { return .terminateLater }
         // Nothing running: Quit just quits. Only work in progress is worth a question.
         quitAsking = true
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            guard let self else { NSApp.reply(toApplicationShouldTerminate: true); return }
             let busy = await activeWork() > 0
+            let source = await quitSource()
             quitAsking = false
-            // Only a person looking at the window can answer an alert. A login launch has no
-            // window and is not active, so an unattended installer quit goes straight to stop.
-            if busy, quitIsAttended(), !confirmQuitWhileBusy() {
+            // Authorship decides whether a question is fair; attendance only decides whether
+            // anyone could answer it. An updater stop holds, settles and quits without a dialog.
+            if QuitDecision.shouldChallengeQuit(source: source, busy: busy,
+                                                 attended: quitIsAttended()),
+               !confirmQuitWhileBusy() {
                 NSApp.reply(toApplicationShouldTerminate: false)
                 return
             }
             stopThenQuit()
             // One reply: when the engine stops, or after a bounded wait if it does not.
-            Task { @MainActor [weak self] in
-                let deadline = Date().addingTimeInterval(20)
-                while self?.controller?.running == true && Date() < deadline {
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
-                NSApp.reply(toApplicationShouldTerminate: true)
+            let deadline = Date().addingTimeInterval(20)
+            while controller?.running == true && Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(100))
             }
+            NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
     }

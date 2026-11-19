@@ -50,6 +50,10 @@ from .backend.monitor import StudioMonitor, is_cached
 # detail of `_model_catalog`, and no worker or manifest may set it.
 _MANIFEST_ERROR = "_manifest_error"
 
+# Who took the last update hold. Only the installer's 0600-token request makes a later quit
+# updater-authored; in-memory and self-expiring, so an aborted install cannot latch it.
+_installer_hold_until = 0.0
+
 # The deadline the Hub holds a proxied job to, and the number it publishes as
 # `deadline_seconds`. One owner — this process, which enforces it — but **not one number**: a
 # subtitle job finishes in seconds and a video job takes the better part of an hour, so a single
@@ -2179,7 +2183,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         # loopback-only instead of discovering it as a timeout.
         return {"ok": True, "workers": len(monitor.registry),
                 "role": control_plane.load_settings()["role"], "bind": _bind_facts(),
-                "update_draining": update_drain.draining(), "disk": disk_governor.snapshot()}
+                "update_draining": update_drain.draining(), "disk": disk_governor.snapshot(),
+                # Only a hold taken with the installer's 0600 token says a later quit is the
+                # updater's; an owner-token hold or an aborted install never claims authorship.
+                "update_hold_active": time.monotonic() < _installer_hold_until}
 
     @app.get("/api/version")
     def version() -> dict[str, str]:
@@ -2552,6 +2559,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         includes the controller and the Macs beside it - which this Mac can only know by reading
         the roster back from the controller it joined.
         """
+        from .backend import broker
         from .backend import fleet_nodes as fleet
         from .backend import ledger, peers
         from .backend import registry as registry_view
@@ -2575,6 +2583,21 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except Exception:
             working_on = {}
         pool = await fleet.pool()
+        # The recorded refusal is a fact about why a Mac could not take work, kept by the broker.
+        # It is not a threshold computed here: a machine without one has nothing to say on its row.
+        protection = broker.machine_protection_snapshot() or {}
+        now = time.time()
+
+        def refusal_of(machine: str) -> dict[str, Any]:
+            refusal = (protection.get(machine) or {}).get("refusal")
+            if not isinstance(refusal, dict) or not isinstance(refusal.get("at"), (int, float)):
+                return {}
+            return {"refusal": {
+                "code": refusal.get("code"),
+                "message": refusal.get("message"),
+                "age_s": round(now - refusal["at"]),
+            }}
+
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
 
@@ -2717,6 +2740,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 # Only this Mac: another machine's figure arrives on its own host snapshot.
                 **({"render_speed": local_render_speed}
                    if machine == "local" and local_render_speed is not None else {}),
+                **refusal_of(machine),
             })
 
         # A member this Mac runs no studio for. A node with no worker started, or a controller in a
@@ -2769,6 +2793,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 "jobs": (measured.get(machine) or {}).get("count", 0),
                 "average_seconds": (measured.get(machine) or {}).get("avg_s"),
                 "modalities": modalities,
+                **refusal_of(machine),
             })
 
         return {
@@ -3566,7 +3591,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return await update_drain.request(bool(body.get("want")))
 
     @app.post("/api/maintenance/hold")
-    def maintenance_hold(timeout_s: float = 20, pause_s: float = 120) -> dict[str, Any]:
+    def maintenance_hold(request: Request, timeout_s: float = 20, pause_s: float = 120) -> dict[str, Any]:
         """Update hold (``_orchestra/youtube-stack/update-hold/CONTRACT.md``, owner 2026-11-15):
         close the claim path first, wait up to ``timeout_s`` (ceiling 30) for stranding in-flight
         work to settle, and say whether a restart is safe now. Queued work stays queued and nothing
@@ -3575,6 +3600,9 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         timeout_s = min(max(timeout_s, 0.0), 30.0)
         pause_s = min(max(pause_s, 1.0), 900.0)
         left = broker.hold(timeout_s, pause_s)
+        global _installer_hold_until
+        if auth.installer_hold_request(request):
+            _installer_hold_until = time.monotonic() + pause_s
         return {"safe": not left, "unsettled": left, "dispatch_paused_s": pause_s,
                 "in_flight": broker.in_flight()}
 
@@ -3583,6 +3611,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         """Open the claim path at once. Never required — the pause expires by itself — and the
         reply keeps the contract's four keys: nothing is paused, so ``dispatch_paused_s`` is 0
         and `safe`/`unsettled` state what a restart would face right now."""
+        global _installer_hold_until
+        _installer_hold_until = 0.0
         broker.resume_dispatch()
         left = broker.unsettled_sends()
         return {"safe": not left, "unsettled": left, "dispatch_paused_s": 0,

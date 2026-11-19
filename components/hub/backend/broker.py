@@ -575,6 +575,9 @@ batches: dict[str, dict] = {}
 _busy: set[str] = set()  # studio ids currently running an item for us
 _maintenance: set[str] = set()  # drained by fleet maintenance/update operations
 _external_machine_leases: dict[str, str] = {}
+# machine -> when its lease was taken. A lease whose owner no local row can prove still has an
+# end (see `prune_stale_machine_leases`): the longest existing stall ceiling, not a new policy.
+_external_machine_lease_since: dict[str, float] = {}
 _render_executor = None
 # The auxiliary queues share the same physical-machine lease. The legacy turn
 # cache remains as a test/reset compatibility surface; ranked FIFO does not read
@@ -1704,6 +1707,18 @@ def mark_external_machine_success(studio: dict) -> None:
     _mark_machine_success(studio)
 
 
+def note_refusal(studio: dict, code: str, message: str) -> None:
+    """Record on the Mac itself why it could not take this work, with the time.
+
+    A job hand-back says why *that job* left, but the operator asking "why is this Mac idle" reads
+    the fleet row, so the same recorded sentence is kept per machine until it takes work again.
+    The sentence is the admission check's own words, never a threshold computed here.
+    """
+    state = _protection(studio.get("machine", "local"))
+    state["refusal"] = {"code": str(code)[:80], "message": str(message or "")[:500],
+                        "at": time.time()}
+
+
 def _mark_machine_failure(studio: dict, message: str) -> None:
     machine = studio.get("machine", "local")
     state = _protection(machine)
@@ -1777,6 +1792,7 @@ def _mark_machine_success(studio: dict) -> None:
         return
     had_cooldown = state.get("cooldown_until") is not None
     had_failures = bool(state.get("failures"))
+    state.pop("refusal", None)      # it took work again: the refusal is no longer why it is idle
     state.update(failures=0, cooldown_until=None, reason=None,
                  last_success_at=time.time())
     if had_cooldown:
@@ -2403,7 +2419,8 @@ def voice_recovery_item(batch_id: str, item_index: int) -> tuple[dict, dict]:
                  if row.get("index") == item_index), None)
     if item is None:
         raise ValueError("unknown job item")
-    if item.get("state") != "uncertain":
+    if (item.get("state") != "uncertain"
+            and item.get("error_code") != UNCERTAIN_BOUND_EXCEEDED):
         raise ValueError("Voice recovery requires an uncertain job")
     if not item.get("studio") or not item.get("studio_job_id"):
         _mark_voice_uncertain(
@@ -2501,6 +2518,9 @@ def restore_batches():
     # A Developer Mode test that may still own a child process keeps the Mac out of every queue
     # restored below; its hold is restored from the same durable attempt ledger.
     developer_test_admission.restore_before_production()
+    # A fresh Hub inherits no in-memory leases, but a restarted session still holds whatever
+    # its map kept: drop any owner that cannot name unfinished work before queues are restored.
+    prune_stale_machine_leases()
     for b in ledger.load_unfinished_batches():
         if _expire_genstudio_batch(b):
             batches[b["id"]] = b
@@ -3344,6 +3364,7 @@ def acquire_external_machine(machine: str, owner: str) -> bool:
         if render_wins_next_free(machine, lane):
             return False
         _external_machine_leases[machine] = owner
+        _external_machine_lease_since[machine] = time.time()
         _wakeup.set()
         return True
 
@@ -3360,6 +3381,7 @@ def restore_external_machine(machine: str, owner: str) -> None:
         if current is not None and current != owner:
             raise RuntimeError(f"physical machine {machine!r} is already held by {current!r}")
         _external_machine_leases[machine] = owner
+        _external_machine_lease_since[machine] = time.time()
         _wakeup.set()
 
 
@@ -3414,7 +3436,78 @@ def release_external_machine(machine: str, owner: str) -> None:
     with _machine_lease_lock:
         if _external_machine_leases.get(machine) == owner:
             del _external_machine_leases[machine]
+            _external_machine_lease_since.pop(machine, None)
             _wakeup.set()
+
+
+def _lease_owner_is_live(owner: object) -> bool:
+    """Whether a lease's owner still names work this Hub knows is unfinished.
+
+    The map is in memory, so a lease whose owner vanished in this session is as unjustifiable
+    as one inherited by a fresh Hub: an owner that is absent, terminal or unnamed cannot fence
+    a Mac. Lane shapes are the ones their callers already mint (see `lease_lane`).
+    """
+    text = str(owner or "")
+    if not text:
+        return False
+    if text.startswith(("render:", "peer:", "relay:chat:", "direct-chat:")):
+        # Their own Hub/caller releases these on terminal; no local row disproves them, so they
+        # are trusted only inside the longest existing stall ceiling (enforced by the prune).
+        return True
+    if text.startswith("developer-test:"):
+        from . import developer_test_admission
+        return developer_test_admission.active_attempt() == text.split(":", 1)[1]
+    if text.startswith(("chat:", "transcription:")):
+        lane, _, rest = text.partition(":")
+        batch_id, _, index = rest.rpartition(":")
+        try:
+            position = int(index)
+        except ValueError:
+            return False
+        from . import chat_jobs, transcription_jobs
+        store = chat_jobs.batches if lane == "chat" else transcription_jobs.batches
+        batch = store.get(batch_id) or {}
+        row = next((row for row in batch.get("packs", batch.get("items", []))
+                    if row.get("index") == position), None)
+        return bool(row and row.get("state") in {"queued", "running"})
+    return False  # an owner no lane can account for is not a justification
+
+
+def prune_stale_machine_leases(*, now: float | None = None) -> list[str]:
+    """Drop physical leases whose owning job is gone; return the freed machine names.
+
+    A lane whose owner cannot be disproved locally (render, peer, relay) is still bounded: no
+    lease fences a Mac past `automatic_recovery.MAX_STALL_S`, the longest ceiling this codebase
+    already uses for one attempt. That backstop is what a Hub whose caller died needs.
+    """
+    moment = time.time() if now is None else now
+    with _machine_lease_lock:
+        stale = []
+        for machine, owner in list(_external_machine_leases.items()):
+            if not _lease_owner_is_live(owner):
+                stale.append(machine)
+                continue
+            since = _external_machine_lease_since.get(machine)
+            if not isinstance(since, (int, float)) or moment - since >= automatic_recovery.MAX_STALL_S:
+                stale.append(machine)
+        for machine in stale:
+            del _external_machine_leases[machine]
+            _external_machine_lease_since.pop(machine, None)
+    if stale:
+        _wakeup.set()
+    return stale
+
+
+LEASE_BUSY_WHILE_IDLE_TEXT = "peer says lease-busy while reporting 0 running"
+
+
+def _lease_busy_while_idle_note(trace: list[dict]) -> str | None:
+    """Name the contradiction when a lease-busy refusal meets a peer that reports 0 running."""
+    for row in trace:
+        if row.get("gate") == "machine_lease_busy" and peers.reports_zero_running(
+                str(row.get("machine") or "")):
+            return LEASE_BUSY_WHILE_IDLE_TEXT
+    return None
 
 
 def set_maintenance(studio_id: str, enabled: bool):
@@ -4957,7 +5050,8 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
                  if row.get("index") == item_index), None)
     if item is None:
         raise ValueError(f"unknown {label} item")
-    if item.get("state") != "uncertain":
+    settled_uncertain = item.get("state") != "uncertain"
+    if item.get("state") != "uncertain" and item.get("error_code") != UNCERTAIN_BOUND_EXCEEDED:
         raise ValueError(f"{label} item is not uncertain")
     batches[batch_id] = batch
     # The exact accepted attempt this handler found; re-read against the canonical row
@@ -4993,6 +5087,8 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
                 "item": public_item(current, row) if row is not None else None}
 
     def pending(reason: str) -> dict:
+        if settled_uncertain:
+            return result(False)
         if not still_uncertain():
             # Lost during an await (explicit discard, newer attempt, another winner):
             # return the current state instead of stamping this call's reason on it.
@@ -5043,6 +5139,11 @@ async def _reconcile_async_item(batch_id: str, item_index: int, modality: str,
             return pending(f"The original {label} worker response was unavailable or malformed.")
         if not isinstance(job, dict):
             return pending(f"The original {label} worker response was malformed.")
+        if settled_uncertain:
+            if job.get("id") == job_id and job.get("state") == "done" and not job.get("error"):
+                _record_late_result(batch, item, studio, job,
+                                    logging.getLogger("studiohub.broker"))
+            return result(False)
         if not still_uncertain():
             # The attempt was discarded or superseded while the worker was read.
             return result(False)
@@ -5171,6 +5272,7 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
                                client: httpx.AsyncClient | None = None) -> dict:
     """Read and adopt only the original accepted Voice job after Hub recovery."""
     batch, item = voice_recovery_item(batch_id, item_index)
+    settled_uncertain = item.get("state") != "uncertain"
     # The exact accepted attempt this handler found; re-read against the canonical row
     # after every await, so a replaced, discarded or newer-won attempt is never mutated.
     owner = {key: item.get(key) for key in
@@ -5211,6 +5313,8 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
         }
 
     def pending(reason: str) -> dict:
+        if settled_uncertain:
+            return result(False)
         if not still_uncertain():
             # Lost during an await (explicit discard, newer attempt, another winner):
             # return the current state instead of stamping this call's reason on it.
@@ -5273,6 +5377,11 @@ async def reconcile_voice_item(batch_id: str, item_index: int,
             return pending(
                 "The original Voice worker status or artifact receipt was malformed."
             )
+        if settled_uncertain:
+            if job.get("id") == job_id and job.get("state") == "done" and not job.get("error"):
+                _record_late_result(batch, item, studio, job,
+                                    logging.getLogger("studiohub.broker"))
+            return result(False)
         if not still_uncertain():
             # The attempt was discarded or superseded while the worker was read.
             return result(False)
@@ -5546,6 +5655,54 @@ def release_stale_uncertain(*, now: float | None = None,
                     counts[str(machine)] = 0
                 released.append(f"{batch['id']}:{item['index']}")
     return released
+
+
+UNCERTAIN_BOUND_EXCEEDED = "UNCERTAIN_BOUND_EXCEEDED"
+
+
+def expire_uncertain_items(*, now: float | None = None) -> list[str]:
+    """Fail uncertain attempts whose own ceiling passed, keeping their recorded reason.
+
+    Image gets 3600 s and Voice 7200 s from `automatic_recovery`; a worker's own `deadline_s`
+    raises that bound, and an uncovered modality uses the existing 21600 s ceiling. Late
+    answers are still adopted beside the verdict, never over it.
+    """
+    moment = time.time() if now is None else now
+    ended: list[str] = []
+    for batch in list(batches.values()):
+        if batch.get("cancelled"):
+            continue
+        for item in batch.get("items") or []:
+            if item.get("state") != "uncertain":
+                continue
+            stamps = [item.get(key) for key in
+                      ("execution_started_at", "run_started", "last_progress_at",
+                       "finished_at", "created_at")]
+            started = max((value for value in stamps
+                           if isinstance(value, (int, float)) and not isinstance(value, bool)),
+                          default=batch.get("created_at"))
+            if not isinstance(started, (int, float)):
+                continue
+            bound = automatic_recovery.uncertainty_bound_s(
+                batch.get("modality"), item.get("deadline_s"))
+            if moment - float(started) < bound:
+                continue
+            reason = str((item.get("recovery") or {}).get("reason")
+                         or item.get("error")
+                         or "The worker's outcome was never reported")
+            recovery = dict(item.get("recovery") or {})
+            recovery.update(phase="reconciliation_timeout", reason=reason[:500],
+                            updated_at=moment)
+            item.update(
+                state="error", retryable=True, error_code=UNCERTAIN_BOUND_EXCEEDED,
+                error=f"{reason} No outcome was reported within {int(bound)} s; retry when a Mac is free.",
+                retry_at=None, finished_at=moment, last_progress_at=moment, recovery=recovery,
+            )
+            ledger.save_batch(batch)
+            ended.append(f"{batch['id']}:{item.get('index')}")
+    if ended:
+        _wakeup.set()
+    return ended
 
 
 async def _maybe_finish(client: httpx.AsyncClient, b: dict):
@@ -5869,6 +6026,9 @@ def _no_candidate_note(batch: dict, queued: list[dict], studio: dict) -> str:
                 "shared voice is synchronized")
     if any(_wait_for_faster_mac(batch, item, studio) for item in queued):
         return f"Waiting for a faster Mac: it should finish sooner than {studio['id']}"
+    if (studio.get("machine", "local") in busy_machines()
+            and peers.reports_zero_running(str(studio.get("machine") or ""))):
+        return LEASE_BUSY_WHILE_IDLE_TEXT
     return ("Waiting for a free machine: every eligible one is temporarily "
             "avoided (reserved by other work, or recently failed)")
 
@@ -6183,10 +6343,12 @@ async def _dispatch_loop():
             if sweep_now - last_sweep >= 60:
                 last_sweep = sweep_now
                 evict_finished_batches()
+                prune_stale_machine_leases()
                 # An uncertain attempt that nobody reconciles must not pin the Mac
                 # forever; release its reservation so later work can run. The attempt
                 # itself stays uncertain and reconcilable, see release_stale_uncertain.
                 release_stale_uncertain(now=sweep_now)
+                expire_uncertain_items(now=sweep_now)
             assigned = False
             if _render_executor is not None:
                 assigned = await _render_executor.dispatch_ready()
@@ -6256,6 +6418,8 @@ async def _dispatch_loop():
                     )
                 elif not eligible and (lite_wait := peers.lite_mode_wait(b.get("model"))):
                     b["governor_note"] = lite_wait   # this Mac in Lite Mode, and nobody else free
+                elif not eligible and (idle_note := _lease_busy_while_idle_note(trace_candidates)):
+                    b["governor_note"] = idle_note
                 batch_assigned = False
                 for studio in eligible:
                     if not queued:
@@ -6996,6 +7160,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
         if handback:
             # It waited ADMISSION_WAIT_HANDBACK_S for free memory this Mac does not have: nothing was
             # sent and no attempt is spent; the Gateway re-routes it (a pinned job fails with this sentence).
+            note_refusal(studio, INSUFFICIENT_MEMORY, handback)
             item.update(state="error", retry_at=None, error_code=INSUFFICIENT_MEMORY, error=handback)
             item["tries"] = max(0, int(item.get("tries") or 0) - 1)
             return
@@ -7489,8 +7654,10 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             if failures >= CAPACITY_HANDBACK_AFTER:
                 # Hand it back, typed: not retryable on this Mac, and not this Mac's failure either
                 # (no machine penalty) - the Gateway re-routes it to another eligible Mac.
+                refusal = _insufficient_memory_text(b, studio, message, failures)
+                note_refusal(studio, INSUFFICIENT_MEMORY, refusal)
                 item.update(state="error", retry_at=None, error_code=INSUFFICIENT_MEMORY,
-                            error=_insufficient_memory_text(b, studio, message, failures))
+                            error=refusal)
                 item["tries"] = max(0, int(item.get("tries") or 0) - 1)
                 return
             handoff = (await release_idle_siblings(client, studio)
@@ -7529,7 +7696,13 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             # assume otherwise.
             item["tries"] = max(0, int(item.get("tries") or 0) - 1)
             item["state"] = "queued"
-            item["error"] = f"waiting for a free machine: {message}"
+            if peers.reports_zero_running(str(studio.get("machine") or "local")):
+                # The peer's own snapshot says it is idle: the bare 409 would send the operator
+                # looking for work that is no longer there. Name the contradiction instead.
+                item["error"] = LEASE_BUSY_WHILE_IDLE_TEXT
+                b["governor_note"] = LEASE_BUSY_WHILE_IDLE_TEXT
+            else:
+                item["error"] = f"waiting for a free machine: {message}"
             # The Mac is busy, not broken, and the peer's 409 stays the authority on when it
             # is free: no parked retry (the dispatcher's 3 s heartbeat asks again) and a short
             # avoid window, recorded per machine so this one refusal covers every item aimed at it.

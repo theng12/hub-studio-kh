@@ -610,6 +610,23 @@ def fresh_snapshot(machine: str) -> dict | None:
     return snapshot
 
 
+def reports_zero_running(machine: str) -> bool:
+    """Whether this peer's current live snapshot says it has no running work.
+
+    The refusal text can only claim the contradiction when the peer has actually reported
+    idleness; a missing or stale snapshot proves nothing and must not clear a lease.
+    """
+    snapshot = fresh_snapshot(machine)
+    if snapshot is None or snapshot.get("current_job") is not None:
+        return False
+    studios = snapshot.get("studios")
+    if isinstance(studios, dict) and any(
+            isinstance(row, dict) and (row.get("running") or row.get("state") == "running")
+            for row in studios.values()):
+        return False
+    return True
+
+
 def dispatch_ready(studio: dict, generation=None) -> bool:
     """Whether a Studio has authority to receive newly dispatched work."""
     if is_local_studio(studio):

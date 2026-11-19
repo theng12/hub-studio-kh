@@ -8533,6 +8533,10 @@ struct StudioContent: View {
                 Text(detail).font(HubType.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let refusal = row.refusalText {
+                Text(refusal).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
             if let readiness = workspace.fleetReadiness[row.id], readiness.cannotRunAnything {
                 Text(readiness.summary).font(HubType.caption).foregroundStyle(HubStatus.warn.textColor)
             }
