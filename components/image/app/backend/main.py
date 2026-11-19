@@ -311,11 +311,14 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                                     'width': default_width, 'height': default_height},
             'guidance_ignored': model.guidance_ignored,
             'image_sizes': sizes,
-            # The engine's renderable geometry, beside the operator's offered list. min/max stay
-            # null: `model.limits` states steps, guidance, seed and prompt only, so the model
-            # publishes no canvas bounds for this worker to repeat.
+            # The renderable geometry, beside the operator's offered list. `multiple` is the
+            # engine's own where it declares one, and this app's canvas policy (32, the grid every
+            # offered size and every accepted custom size lands on) where it does not — labelled so
+            # a caller can tell the two apart. min/max stay null: `model.limits` states steps,
+            # guidance, seed and prompt only, so no canvas bounds are published to repeat.
             'render_constraints': {
-                'multiple': model.dimension_multiple or 1,
+                'multiple': model.dimension_multiple or 32,
+                'multiple_source': 'engine' if model.dimension_multiple else 'policy',
                 'min': None,
                 'max': None,
                 'sizes': [{'width': width, 'height': height}

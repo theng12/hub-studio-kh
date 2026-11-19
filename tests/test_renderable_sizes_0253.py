@@ -55,11 +55,15 @@ class RenderableSizesTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.entries = {entry['repo']: entry for entry in response.json()['models']}
 
-    def test_multiple_is_the_models_own_engine_bound_and_bounds_are_not_invented(self):
-        for model, expected_multiple in ((FLUX2_KLEIN, 1), (QWEN_IMAGE_21_LOW_RAM, 32)):
+    def test_multiple_is_the_engine_bound_or_the_app_policy_and_bounds_are_not_invented(self):
+        # FLUX2 declares no engine multiple, but this app accepts custom sizes only on the 32 grid,
+        # so the row publishes 32 labelled as policy — the row says what is enforced, and a caller
+        # can tell the engine's rule from ours.
+        for model, expected_multiple, source in (
+                (FLUX2_KLEIN, 32, 'policy'), (QWEN_IMAGE_21_LOW_RAM, 32, 'engine')):
             constraints = self.entries[model.repo]['render_constraints']
-            self.assertEqual(model.dimension_multiple or 1, expected_multiple, model.repo)
-            self.assertEqual(constraints['multiple'], model.dimension_multiple or 1)
+            self.assertEqual(constraints['multiple'], expected_multiple, model.repo)
+            self.assertEqual(constraints['multiple_source'], source, model.repo)
             # ImageModel.limits carries no canvas bounds; null is the honest answer.
             self.assertIsNone(constraints['min'])
             self.assertIsNone(constraints['max'])
