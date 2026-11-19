@@ -210,8 +210,14 @@ def app_config(home: Path, kit: Path) -> dict:
                 entry = known.get(identity)
                 if entry:
                     app, recipe = entry
+                    # **Hub's own row is automatic.** With it off, nothing ever started a second
+                    # Hub download: the agent's sweep only works apps it may update itself, and
+                    # the publisher's bulk path excludes Hub by design. Nine Macs then carried a
+                    # `download_failed` from 12.6 h to 3.2 days (2026-11-20). The transfer
+                    # resumes a `.part`; it only needs an attempt. The owner's Launcher setting
+                    # still governs installs, and Hub ships the hold/settle/resume contract.
                     apps.setdefault(app, {"bundlePath": str(bundle.resolve()), "recipe": recipe,
-                                          "automatic": False, "bundleID": identity})
+                                          "automatic": app == "hub", "bundleID": identity})
             except (OSError, ValueError, KeyError):
                 continue
     return apps

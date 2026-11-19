@@ -2,6 +2,16 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.255 — 2026-11-20
+
+- **A failed Hub update now gets another try.** Hub tells the Mac's updater which apps it may update on its own, and it listed itself as "ask first" — so when one Hub download failed on nine Macs, nothing ever asked again: the fleet's bulk update leaves Hub alone by design, and the partial file sat there for up to three days. Hub now lists itself as automatic, so its own updater retries on its normal check, resuming the part it already downloaded. The owner's automatic-install setting on the Mac still governs what actually installs.
+
+### Technical notes
+- `components/hub/backend/khu_agent.py:213` — `app_config()` writes the agent's app table with `"automatic": app == "hub"`; every other app keeps `False`. The table is written at enrolment, so Macs enrolled by this build get it; Macs already enrolled keep their old table until an attempt brings them onto this version (one fleet order, Fleet Ops), after which every later Hub update is self-driven. Measured origin: nine Macs carried a Hub `download_failed` for 12.6 h to 3.2 days (`20261120-141`); the transfer resumes a `.part` (`Agent.swift:159` Range request), the agent's sweep only works apps its table marks automatic (`:983-1027`), and the publisher's bulk path excludes Hub (`Server.swift:1424`).
+- `packaging/kit-khu/khu-install.py` and `tests/test_khu_kit.py`'s golden config carry the same default, so both writers of that table agree byte for byte.
+- Not in this release, by decision (V003, 2026-11-20): reconciling the table on every agent run is agent behaviour in `update-studio-kh` and belongs to Launcher 014; and the downloader's bytes÷rate deadline that sized each attempt to ~24.7 min for a 1.48 GB artifact is that repo's too. Nothing in Hub matches that shape — `transferDeadline` appears nowhere, no Hub download bound is sized from elapsed time, and `model_downloads.py:206-212` lets a new attempt clear an `error`/`interrupted` run.
+- The artifact-scan step (`scan-dmg::scan_artifact` in the gate) and the address/hardware-id scrub ship in 0.254 and are inherited here.
+
 ## 0.6.254 — 2026-11-20
 
 - **A job that has gone quiet says so.** Until now a job could sit at "running" for hours with nothing wrong reported, because the attention report only knew about health checks and recent errors. A job silent past its own kind's limit — one hour for pictures, two hours for voice — now appears as needing attention, naming the job and how long it has been quiet. Nothing is cancelled; the job is only reported.

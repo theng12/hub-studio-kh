@@ -558,8 +558,10 @@ class InstallerTests(unittest.TestCase):
         self.run_installer()
         root = self.home / "Library/KHUpdater"
         apps = {"updater": {"bundlePath": "", "recipe": "updater", "automatic": False},
+                # Hub's row is automatic: its own agent must be able to retry a failed download
+                # (nine Macs carried one for days, 2026-11-20). Both writers agree, not just Hub's.
                 "hub": {"bundlePath": str((self.home / "Applications/Hub Studio KH.app").resolve()),
-                        "recipe": "hub", "automatic": False,
+                        "recipe": "hub", "automatic": True,
                         "bundleID": "local.studiohub.standalone"}}
         expected = json.dumps({"feedURL": self.descriptor_value("feedURL"),
                                "publicKey": self.publisher.public_b64, "machine": "fixture-mac",

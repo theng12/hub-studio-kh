@@ -216,9 +216,12 @@ def app_config(home: Path, registry: dict) -> dict:
                 identity = info["CFBundleIdentifier"]
                 entry = registry.get(identity)
                 if entry:
+                    # Same default as the Hub's own writer: Hub's row is automatic so its agent
+                    # can retry a failed download (nine Macs carried one for days, 2026-11-20).
                     apps.setdefault(entry["app"], {"bundlePath": str(bundle.resolve()),
                                                    "recipe": entry["recipe"],
-                                                   "automatic": False, "bundleID": identity})
+                                                   "automatic": entry["app"] == "hub",
+                                                   "bundleID": identity})
             except (OSError, ValueError, KeyError):
                 continue
     return apps

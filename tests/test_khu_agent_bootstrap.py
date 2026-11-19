@@ -14,6 +14,7 @@ import base64
 import hashlib
 import json
 import os
+import plistlib
 import secrets
 import shutil
 import socket
@@ -598,6 +599,32 @@ class KhAgentBootstrapTests(unittest.TestCase):
             lowered = {name.lower() for name in headers}
             self.assertNotIn("origin", lowered)
             self.assertNotIn("referer", lowered)
+
+
+class TheAgentTableGivesHubItsOwnAttempts(unittest.TestCase):
+    """Hub's row is `automatic: true`, so a failed Hub download gets a second attempt.
+
+    Measured on the fleet 2026-11-20: nine Macs carried a Hub `download_failed` for 12.6 h to 3.2
+    days. The transfer resumes a `.part` (`Agent.swift:159`), but the agent's sweep only works apps
+    its table marks automatic, and the publisher's bulk path excludes Hub - with this row off,
+    nothing ever asked again. Bundles are plist fixtures in a temporary home; nothing is installed.
+    """
+
+    def test_hub_is_automatic_and_the_other_apps_keep_their_setting(self):
+        with tempfile.TemporaryDirectory(prefix="hub-agent-table-") as temp:
+            home = Path(temp)
+            for name, identity in (("Studio Hub", "local.studiohub.standalone"),
+                                   ("gateway-kh", "kh.gateway.menubar"),
+                                   ("Story Studio KH", "com.storystudio.kh")):
+                contents = home / "Applications" / f"{name}.app" / "Contents"
+                contents.mkdir(parents=True)
+                (contents / "Info.plist").write_bytes(
+                    plistlib.dumps({"CFBundleIdentifier": identity}))
+            table = khu_agent.app_config(home, home)
+            self.assertIs(table["hub"]["automatic"], True)
+            self.assertEqual(table["hub"]["recipe"], "hub")
+            for app in ("gateway", "story", "updater"):
+                self.assertIs(table[app]["automatic"], False, app)
 
 
 if __name__ == "__main__":
