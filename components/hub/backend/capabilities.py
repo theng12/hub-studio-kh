@@ -516,7 +516,11 @@ def _model_capability(model: dict, studio: dict, worker: dict,
     elif qualified_revision_match is False:
         reason = "runtime_revision_mismatch"
     elif execution_ready is False:
-        reason = "worker_execution_unready"
+        # A worker whose execution is not ready because the model is not on the Mac is a missing
+        # install, not a broken runtime — the Gateway's catalogue repeats this reason verbatim, so
+        # "execution unready" read as "cannot run here" when the Mac only lacked the files.
+        reason = ("model_not_installed" if model.get("hub_cached") is False
+                  else "worker_execution_unready")
     elif not runtime_compatible:
         reason = "runtime_incompatible"
     elif not subsystem_ready:
