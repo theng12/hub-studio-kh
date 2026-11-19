@@ -2190,6 +2190,10 @@ struct NativeFleetMachine: Decodable, Equatable, Identifiable {
     /// The refusal the Hub recorded for this Mac and how old it is. Absent for a Mac that never
     /// refused and from a Hub older than that record.
     let refusal: NativeFleetRefusal?
+    /// How old the peer snapshot behind this row is, and the sentence that says so once it has
+    /// outlived the Hub's peer TTL. Nil for this Mac and for a row built from a fresh probe.
+    let snapshotAgeS: Double?
+    let snapshotNote: String?
 
     var id: String { machine }
     var isLocal: Bool { machine == "local" }
@@ -2282,6 +2286,8 @@ struct NativeFleetStartup: Decodable, Equatable {
     let appReporting: Bool?
     /// True when the controller is repeating what that Mac last said rather than a fresh answer.
     let stale: Bool?
+    /// When that last answer was recorded; only meaningful while `stale` is true.
+    let observedAt: Double?
 }
 
 struct NativeFleetServices: Decodable, Equatable {
@@ -2366,8 +2372,15 @@ struct NativeFleetRow: Identifiable, Equatable {
     }
 
     /// "Services 4 of 4 up", "Won't start after restart", or nil when the Mac has not said.
+    /// A stale verdict says when it was last checked instead of claiming a current state.
     var startupText: String? {
         guard let startup = machine?.startup ?? nil else { return nil }
+        if startup.stale == true {
+            if let at = startup.observedAt, let age = NativeWorkspaceStore.ago(at) {
+                return "Startup last checked \(age)"
+            }
+            return "Startup not answering"
+        }
         if let running = startup.servicesRunning, running.total > 0, running.up < running.total {
             return "Services \(running.up) of \(running.total) up"
         }
@@ -2379,7 +2392,7 @@ struct NativeFleetRow: Identifiable, Equatable {
     }
     /// A startup state worth a second look: some Studio down, or services that will not come back.
     var startupNeedsAttention: Bool {
-        guard let startup = machine?.startup else { return false }
+        guard let startup = machine?.startup, startup.stale != true else { return false }
         if let running = startup.servicesRunning, running.total > 0, running.up < running.total { return true }
         return startup.startServicesOnLaunch == false
     }

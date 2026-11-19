@@ -12,7 +12,7 @@ import statistics
 import time
 from collections import defaultdict
 
-from . import control_plane, ledger, stall, vocabulary
+from . import automatic_recovery, control_plane, ledger, stall, vocabulary
 
 SCHEMA = "kh-studio.activity.v1"
 VALID_STATES = frozenset({"queued", "running", "cancel_requested", "uncertain", "done", "error", "cancelled"})
@@ -489,6 +489,56 @@ def _machine_groups(registry: list[dict]) -> dict[str, list[dict]]:
     return grouped
 
 
+def stalled_attention_reason(row: dict | None, now: float) -> dict | None:
+    """One existing attention reason for an active job silent past its modality's own ceiling.
+
+    ``automatic_recovery`` owns the measured budgets and leaves uncovered modalities at ``None``;
+    ``stall`` owns what silence means. This only reports — no job state is changed here.
+    """
+    from .. import attention
+
+    row = row or {}
+    ceiling = automatic_recovery.stall_threshold_s(row.get("modality"))
+    if ceiling is None:
+        return None
+    silent_for = stall.stall_seconds(
+        row.get("state"), row.get("activity_received_at"), now, threshold_s=ceiling,
+    )
+    if silent_for is None:
+        return None
+    code = attention.ACTIVITY_REASONS["needs_attention"][0]
+    modality = str(row.get("modality") or "job").capitalize()
+    state = str(row.get("state") or "running")
+    return {
+        "code": code,
+        "detail": (f"{modality} job {state} {automatic_recovery._duration(silent_for)} "
+                   "with no progress — check the Mac"),
+    }
+
+
+def first_stalled_attention_reason(rows: list[dict], now: float) -> dict | None:
+    for row in rows:
+        reason = stalled_attention_reason(row, now)
+        if reason is not None:
+            return reason
+    return None
+
+
+def attention_report(rows: list[dict], now: float, *, disk: dict | None = None) -> dict:
+    """A stalled job inside ``attention.measure()``'s own report, with no new reason code."""
+    from .. import attention
+
+    reason = first_stalled_attention_reason(rows, now)
+    report = attention.measure(
+        disk=disk, activity_state="needs_attention" if reason else "ready", now=now,
+    )
+    if reason is not None:
+        for existing in report["reasons"]:
+            if existing["code"] == reason["code"]:
+                existing["detail"] = reason["detail"]
+    return report
+
+
 def _state_at(machine: str, statuses: dict, studios: list[dict], live: list[dict],
               events: list[dict], now: float) -> tuple[str, float, dict | None, dict | None]:
     status_rows = [statuses.get(studio.get("id")) or {} for studio in studios]
@@ -499,6 +549,7 @@ def _state_at(machine: str, statuses: dict, studios: list[dict], live: list[dict
     )
     active = [row for row in live if row["machine"] == machine and row["state"] in ACTIVE_STATES]
     active.sort(key=lambda row: (row["state"] != "running", -(row.get("updated_at") or row.get("observed_at") or 0)))
+    stalled = first_stalled_attention_reason(active, now)
     terminal = [row for row in events if row["state"] in TERMINAL_STATES]
     terminal.sort(key=lambda row: -(row.get("finished_at") or row.get("observed_at") or 0))
     latest = terminal[0] if terminal else None
@@ -512,7 +563,7 @@ def _state_at(machine: str, statuses: dict, studios: list[dict], live: list[dict
         and latest.get("error_code") not in REFUSAL_CODES
         and now - latest_time < JUST_FINISHED_S
     ) else None
-    if health_problem or recent_error:
+    if health_problem or recent_error or stalled:
         return "needs_attention", now, active[0] if active else None, latest
     if all_down:
         # Every studio on the Mac is down by the fleet's own rule (`monitor` status), so a job it
@@ -719,6 +770,11 @@ def fleet_snapshot(registry: list[dict], statuses: dict, batches: dict,
         state, fallback_since, current, latest = _state_at(
             machine, statuses, studios, live, events, now,
         )
+        active_rows = [
+            row for row in live
+            if row["machine"] == machine and row["state"] in ACTIVE_STATES
+        ]
+        stalled = first_stalled_attention_reason(active_rows, now)
         status_rows = [statuses.get(studio.get("id")) or {} for studio in studios]
         support = {_reporter_support(row, now) for row in status_rows}
         limitation = None
@@ -785,6 +841,9 @@ def fleet_snapshot(registry: list[dict], statuses: dict, batches: dict,
             # destructive** — the Hub does not kill a merely-slow job, so this is what the
             # operator decides on. `stall.py` is the one place that decides what silence means.
             "stalled_seconds": (current or {}).get("stalled_seconds"),
+            # A job silent past its own modality's ceiling, in attention.measure()'s shape.
+            # Only a stalled row pays for a report; there is no second alert mechanism.
+            "attention_report": attention_report(active_rows, now) if stalled else None,
             "last_activity_at": ((current or latest or {}).get("updated_at")
                                  or (current or latest or {}).get("finished_at")
                                  or (current or latest or {}).get("observed_at")),

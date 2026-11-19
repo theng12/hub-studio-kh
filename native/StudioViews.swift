@@ -8581,7 +8581,14 @@ struct StudioContent: View {
         let resourceTrouble = row.machine?.memoryTier == .bad || row.machine?.diskTier == .bad
             || row.startupNeedsAttention || row.node?.hasCredential == false
         let shown: NativeFleetRowState = (state == .ready && resourceTrouble) ? .attention : state
-        return StatusBadge(text: shown.title, status: nodeStatus(shown), symbol: nodeSymbol(shown))
+        return VStack(alignment: .leading, spacing: 2) {
+            StatusBadge(text: shown.title, status: nodeStatus(shown), symbol: nodeSymbol(shown))
+            // A row built from an old peer snapshot carries the Hub's own age sentence: the badge
+            // alone would present that old state as the Mac's answer right now.
+            if let note = row.snapshotNote {
+                Text(note).font(HubType.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func nodeStatus(_ state: NativeFleetRowState) -> HubStatus {

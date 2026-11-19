@@ -2617,6 +2617,12 @@ async def relay_render_while_paused(node_id: str, method: str, body: object = No
 TRANSCRIBE_RELAY_TIMEOUT = httpx.Timeout(960.0, connect=4.0)
 #: A relayed picture analysis: four outlines on a slow 8 GB Mac stay well inside this.
 VISION_RELAY_TIMEOUT = httpx.Timeout(150.0, connect=4.0)
+#: A relayed encode probe waits for the node's own probe wall (600 s in
+#: `render_encode_probes._PROBE_MAX_WALL_SECONDS`) plus the "plus a minute for the hop"
+#: margin TRANSCRIBE_RELAY_TIMEOUT already gives the node's 900 s deadline above.
+#: Operations not listed here keep the existing 60 s render-relay bound.
+_RENDER_RELAY_TIMEOUT_S = {"encode_probe_post": 660.0}
+_RENDER_RELAY_QUICK_TIMEOUT_S = 60.0
 
 
 @dataclass(frozen=True)
@@ -2758,7 +2764,9 @@ async def relay_final_render(
         async with client.stream(
                 methods[operation], f"{node.get('address') or ''}{paths[operation]}",
                 content=body, headers=request_headers, params=params,
-                timeout=httpx.Timeout(60.0, connect=4.0)) as response:
+                timeout=httpx.Timeout(
+                    _RENDER_RELAY_TIMEOUT_S.get(operation, _RENDER_RELAY_QUICK_TIMEOUT_S),
+                    connect=4.0)) as response:
             response_headers = {
                 key.lower(): value for key, value in response.headers.items()
             }

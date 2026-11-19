@@ -910,6 +910,16 @@ def artifact_unavailable_reason(item: dict[str, Any], why: str) -> str:
     )
 
 
+def _peer_snapshot_freshness(now: float, observed_at: float | None,
+                             ttl_s: float) -> dict[str, Any]:
+    """A fleet row's snapshot age and its caveat once that snapshot outlives the peer TTL."""
+    age_s = (round(max(0.0, now - observed_at), 1)
+             if isinstance(observed_at, (int, float)) else None)
+    note = (f"as of {max(1, round(age_s / 60))} min ago"
+            if age_s is not None and age_s >= ttl_s else None)
+    return {"snapshot_age_s": age_s, "snapshot_note": note}
+
+
 def _summary(batch: dict[str, Any]) -> dict[str, Any]:
     return {**broker.batch_summary(batch), "items": [
         broker.public_item(batch, item) for item in batch["items"]
@@ -2668,6 +2678,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 row["assigned_image_model"] = registry_view.assigned_image_model("local")
             else:
                 snapshot = peers.cached(machine) or {}
+                entry = peers._cache.get(machine)
+                # The same observation clock `dispatch_ready`/`PEER_TTL_S` uses. A row built from a
+                # snapshot too old to dispatch on must say how old it is, not read as a live state.
+                observed_at = entry[0] if entry else None
                 # The roster's probe is the one read of this machine: it answers directly when no
                 # current snapshot exists and, when there is one, reuses the peer poll the dispatch
                 # path already trusts - so the page and the scheduler cannot disagree about a Mac.
@@ -2705,6 +2719,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     "startup": startup,
                     "last_stop": last_stop if isinstance(last_stop, dict) else None,
                     "workstation": workstation_row if isinstance(workstation_row, dict) else None,
+                    **_peer_snapshot_freshness(now, observed_at, peers.PEER_TTL_S),
                 }
                 policy_source = member if isinstance(member, dict) and (
                     "priority_order" in member or "chat_priority" in member) else snapshot

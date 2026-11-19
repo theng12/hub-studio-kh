@@ -485,8 +485,11 @@ class AudioBlockageTests(unittest.TestCase):
     def test_the_generate_button_is_disabled_by_one_named_reason(self):
         audio = self.VIEWS[self.VIEWS.index("private var audioWorkspace"):]
         audio = audio[:audio.index("private var modelsWorkspace")]
-        # No inline condition: the button and the message under it must read the same rule.
-        self.assertIn(".disabled(audioBlockedReason != nil)", audio)
+        # The button is disabled by two things that are both named on screen: the local services not
+        # running (the services banner, and `audioBlockedReason` returns nil for that case so the page
+        # does not say it twice) and a reason from `audioBlockedReason`. Pinning only the reason let
+        # this drift when the services banner took over that case — a stale assertion, not a defect.
+        self.assertIn(".disabled(servicePhase != .running || audioBlockedReason != nil)", audio)
         self.assertNotIn(".disabled(!connected || workspace.submittingAudio", audio)
 
     def test_the_reason_is_shown_next_to_the_button(self):
@@ -498,10 +501,13 @@ class AudioBlockageTests(unittest.TestCase):
     def test_every_way_to_be_blocked_is_named(self):
         body = self.VIEWS[self.VIEWS.index("private var audioBlockedReason"):]
         body = body[:body.index("private var voiceLibraryLoadKey")]
-        for covered in ("Start the local services", "Write the script", "Choose a model",
+        for covered in ("Write the script", "Choose a model",
                         "Download", "runtime is unavailable", "saved voice", "Voices page",
                         "voice modes", "Describe the voice"):
             self.assertIn(covered, body, f"the reason list does not cover: {covered}")
+        # A stopped local service is named by the services banner, not by a second line under the
+        # button — `audioBlockedReason` returns nil for it on purpose (see its first branch).
+        self.assertIn("Local services are stopped", self.VIEWS)
         # Cloning is library-only: the voice comes from the Voices page and nowhere else. A reason
         # that offers a loose clip is a next action the page no longer has, and one that names a
         # Prepare Voice step is pointing at a control that was removed with it.

@@ -36,7 +36,7 @@ from . import (artifact_metadata, automatic_recovery, cloud_guard, execution_ass
                execution_identity, ledger, model_ids, peers, shared_voices)
 from . import routing as routing_rule
 from .memory_control import FleetMemoryControl, SUPPORTED_MODALITIES
-from .peers import studio_request
+from .peers import studio_request, PEER_TTL_S
 from .monitor import is_cached, _local_node_id
 from .registry import DATA_DIR, assigned_image_model, base_url, label_for, machine_enabled, studio_enabled
 from .resources import host_stats
@@ -694,12 +694,40 @@ def _disk_gate(host: dict | None) -> tuple[str, str | None]:
     return ("run", None)
 
 
+def stamp_governor_note(b: dict, note: str | None) -> None:
+    """Write why a batch waits, with the moment that reason became true.
+
+    Every writer in this module goes through here, so the Jobs page can tell a current wait from
+    a reason left behind by a skip several dispatch passes ago.
+    """
+    b["governor_note"] = note
+    b["governor_note_at"] = time.time() if note else None
+
+
+def current_governor_note(b: dict, now: float) -> str | None:
+    """The note only while it is still current, never an old skip's reason read as today's wait."""
+    note = b.get("governor_note")
+    if not note:
+        return None
+    written = b.get("governor_note_at")
+    if not isinstance(written, (int, float)):
+        # A note written by another module has its own save clock; use that instead of inventing one.
+        written = b.get("updated_at")
+    if not isinstance(written, (int, float)) or now - written >= PEER_TTL_S:
+        return None
+    started = [i.get("run_started") for i in b.get("items") or []
+               if isinstance(i.get("run_started"), (int, float))]
+    if started and written < min(started):
+        return None
+    return note
+
+
 def _disk_allows(b: dict, studio: dict, trace: list | None) -> bool:
     """Offer this studio to the batch only when its published disk can take another job."""
     decision, note = _disk_gate(_host_for_studio(studio))
     if decision == "run":
         return True
-    b["governor_note"] = f"{studio['id']}: {note}"
+    stamp_governor_note(b, f"{studio['id']}: {note}")
     if trace is not None:
         _record_dispatch_gate(trace, studio, "disk_skip")
     return False
@@ -2252,7 +2280,7 @@ def _expire_genstudio_batch(batch: dict) -> bool:
     first_expiry = not batch.get("lease_expired")
     batch["cancelled"] = True
     batch["lease_expired"] = True
-    batch["governor_note"] = "GenStudio execution lease expired"
+    stamp_governor_note(batch, "GenStudio execution lease expired")
     now = time.time()
     for item in unfinished:
         if (batch.get("modality") == "voice"
@@ -3667,7 +3695,7 @@ def batch_summary(b: dict) -> dict:
         "capacity_refusals": max((int(i.get("capacity_failures") or 0) for i in items), default=0),
         # Same rule as the transcription summary: a note explains a job that is waiting, and a
         # finished job is not waiting for anything.
-        "governor_note": (b.get("governor_note")
+        "governor_note": (current_governor_note(b, now)
                           if any(state in ("queued", "running", "cancel_requested")
                                  for state in states) else None),
         "dispatch_trace": b.get("dispatch_trace"),
@@ -6391,7 +6419,7 @@ async def _dispatch_loop():
                     continue
                 refusal = admission_refusal(b)
                 if refusal:
-                    b["governor_note"] = str(refusal.get("detail") or "model is not ready")
+                    stamp_governor_note(b, str(refusal.get("detail") or "model is not ready"))
                     ledger.save_batch(b)
                     continue
                 trace_candidates: list[dict] = []
@@ -6407,19 +6435,19 @@ async def _dispatch_loop():
                             trace_candidates, studio, "revision_evidence_missing"
                         )
                 if eligible and not evidence_eligible:
-                    b["governor_note"] = (
+                    stamp_governor_note(b, (
                         "Waiting for Voice Studio 1.20.13 or newer so GenStudio "
                         "receives immutable model and voice revision evidence"
-                    )
+                    ))
                 eligible = evidence_eligible
                 if not eligible and b.get("routing") == "remote":
-                    b["governor_note"] = (
+                    stamp_governor_note(b, (
                         "Waiting for an online remote worker; this Hub Mac is intentionally excluded"
-                    )
+                    ))
                 elif not eligible and (lite_wait := peers.lite_mode_wait(b.get("model"))):
-                    b["governor_note"] = lite_wait   # this Mac in Lite Mode, and nobody else free
+                    stamp_governor_note(b, lite_wait)   # this Mac in Lite Mode, nobody else free
                 elif not eligible and (idle_note := _lease_busy_while_idle_note(trace_candidates)):
-                    b["governor_note"] = idle_note
+                    stamp_governor_note(b, idle_note)
                 batch_assigned = False
                 for studio in eligible:
                     if not queued:
