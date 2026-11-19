@@ -2348,6 +2348,10 @@ struct NativeFleetRow: Identifiable, Equatable {
     var address: String? { isLocal ? nil : (node?.address ?? machine?.address) }
     var currentJob: NativeCurrentJob? { machine?.currentJob }
 
+    /// The Hub's own age sentence for a row built from a cached peer snapshot, or nil for a fresh
+    /// one. The badge alone would present that old state as the Mac's answer right now.
+    var snapshotNote: String? { currentJob == nil ? machine?.snapshotNote : nil }
+
     /// The Hub's recorded refusal in words, with its own age. A Mac on a job now has moved past it:
     /// showing it as that Mac's current state would turn history into a fresh complaint.
     var refusalText: String? {
