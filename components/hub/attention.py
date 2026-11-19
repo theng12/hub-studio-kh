@@ -75,11 +75,14 @@ def set_interval(seconds: object) -> dict:
     return settings()
 
 
-def measure(*, disk: dict | None = None, activity_state: str | None = None, now: float | None = None) -> dict:
+def measure(*, disk: dict | None = None, activity_state: str | None = None, now: float | None = None,
+            activity_detail: str | None = None) -> dict:
     """This Mac's attention verdict now, with the time it was measured.
 
     `disk` is `disk_governor.snapshot()`'s object and `activity_state` is this Mac's own activity
     word (`backend.activity`), both injectable so the rule is testable without a real volume or fleet.
+    `activity_detail` lets the caller say *which* job and for how long, when it knows; the code and
+    the fallback sentence stay this module's.
     """
     from . import disk_governor
     moment = time.time() if now is None else now
@@ -91,7 +94,7 @@ def measure(*, disk: dict | None = None, activity_state: str | None = None, now:
         reasons.append({"code": code, "detail": detail})
     if activity_state in ACTIVITY_REASONS:
         code, detail = ACTIVITY_REASONS[activity_state]
-        reasons.append({"code": code, "detail": detail})
+        reasons.append({"code": code, "detail": activity_detail or detail})
     return {
         "state": "attention" if reasons else ("unknown" if storage == "unknown" else "ok"),
         "reasons": reasons,
@@ -112,9 +115,10 @@ def measure(*, disk: dict | None = None, activity_state: str | None = None, now:
 
 
 def refresh(*, disk: dict | None = None, activity_state: str | None = None,
-            now: float | None = None) -> dict:
+            now: float | None = None, activity_detail: str | None = None) -> dict:
     """Measure and keep it: what the background loop calls every interval."""
-    result = measure(disk=disk, activity_state=activity_state, now=now)
+    result = measure(disk=disk, activity_state=activity_state, now=now,
+                     activity_detail=activity_detail)
     _CACHE["result"] = result
     _CACHE["checked_in_at"] = time.time()
     return result

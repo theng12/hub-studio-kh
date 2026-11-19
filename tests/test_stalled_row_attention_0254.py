@@ -77,5 +77,32 @@ class StalledRowAttention(unittest.TestCase):
                          "Image job running 2 hours with no progress — check the Mac")
 
 
+class CachedEndpointCarriesTheSameSentence(unittest.TestCase):
+    """`/api/hub/attention` builds its word from `standalone._recent_job_state()`.
+
+    The measured report and the fleet row must not disagree about the same Mac, so the cached
+    endpoint gets the same sentence rather than only the generic one.
+    """
+
+    def test_the_measured_report_names_the_stalled_job(self):
+        from components.hub import standalone
+        stuck = row("image", 2 * 3600)
+        batch = {"id": "b" * 32, "modality": "image", "items": [dict(stuck, state="running",
+                                                                   last_progress_at=NOW - 7200)]}
+        with mock.patch.dict(standalone.broker.batches, {batch["id"]: batch}, clear=True), \
+                mock.patch("time.time", return_value=NOW):
+            state, detail = standalone._recent_job_state()
+        self.assertEqual(state, "needs_attention")
+        self.assertEqual(detail, "Image job running 2 hours with no progress — check the Mac")
+        report = attention.measure(disk=GREEN, activity_state=state, now=NOW, activity_detail=detail)
+        self.assertEqual(report["reasons"][0]["detail"], detail)
+
+    def test_a_healthy_mac_carries_no_sentence(self):
+        from components.hub import standalone
+        with mock.patch.dict(standalone.broker.batches, {}, clear=True), \
+                mock.patch("time.time", return_value=NOW):
+            self.assertEqual(standalone._recent_job_state(), (None, None))
+
+
 if __name__ == "__main__":
     unittest.main()

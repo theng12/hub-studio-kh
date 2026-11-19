@@ -915,7 +915,7 @@ def _peer_snapshot_freshness(now: float, observed_at: float | None,
     """A fleet row's snapshot age and its caveat once that snapshot outlives the peer TTL."""
     age_s = (round(max(0.0, now - observed_at), 1)
              if isinstance(observed_at, (int, float)) else None)
-    note = (f"as of {max(1, round(age_s / 60))} min ago"
+    note = (f"old snapshot, as of {max(1, round(age_s / 60))} min ago"
             if age_s is not None and age_s >= ttl_s else None)
     return {"snapshot_age_s": age_s, "snapshot_note": note}
 
@@ -931,11 +931,12 @@ def _summary(batch: dict[str, Any]) -> dict[str, Any]:
 _TRASH_AND_MEMORY_KEYS = ("hub_trash", "macos_trash", "wired_gb", "compressed_gb", "swap_used_gb", "top_processes")
 
 
-def _recent_job_state() -> str | None:
-    """This Mac's newest finished job, in `backend.activity`'s own words.
+def _recent_job_state() -> tuple[str | None, str | None]:
+    """This Mac's attention word and, when a job is stuck, the sentence naming it.
 
-    `needs_attention` only for an error inside the activity module's recent window: an error from
-    last night is history, not a reason to flag the Mac now (the rule `activity._state_at` uses).
+    `needs_attention` only for an error inside the activity module's recent window, or for a job
+    that has been active past its modality's own stall ceiling — the rule `activity._state_at`
+    uses, so the measured report and the fleet row cannot disagree about the same Mac.
     """
     from .backend import activity
     now, latest = time.time(), None
@@ -946,12 +947,19 @@ def _recent_job_state() -> str | None:
             when = item.get("finished_at") or 0
             if latest is None or when > latest[0]:
                 latest = (when, item)
+    stalled = activity.first_stalled_attention_reason(
+        [{"modality": batch.get("modality"), "state": item.get("state"),
+          "activity_received_at": item.get("last_progress_at") or item.get("run_started")}
+         for batch in broker.batches.values()
+         for item in batch.get("items") or []], now)
+    if stalled is not None:
+        return "needs_attention", stalled["detail"]
     if latest is None:
-        return None
+        return None, None
     when, item = latest
     if item.get("state") == "error" and now - when < activity.JUST_FINISHED_S:
-        return "needs_attention"
-    return "ready"
+        return "needs_attention", None
+    return "ready", None
 
 
 async def _attention_loop() -> None:
@@ -963,7 +971,9 @@ async def _attention_loop() -> None:
     from . import attention
     while True:
         try:
-            await run_in_threadpool(attention.refresh, activity_state=_recent_job_state())
+            state, detail = _recent_job_state()
+            await run_in_threadpool(attention.refresh, activity_state=state,
+                                    activity_detail=detail)
         except Exception:                                    # a failed measurement must not kill the loop
             log.exception("attention measurement failed; the last one stays with its own time")
         await _asyncio.sleep(max(60, attention.settings()["interval_s"]))
@@ -2682,6 +2692,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                 # The same observation clock `dispatch_ready`/`PEER_TTL_S` uses. A row built from a
                 # snapshot too old to dispatch on must say how old it is, not read as a live state.
                 observed_at = entry[0] if entry else None
+                freshness = _peer_snapshot_freshness(now, observed_at, peers.PEER_TTL_S)
                 # The roster's probe is the one read of this machine: it answers directly when no
                 # current snapshot exists and, when there is one, reuses the peer poll the dispatch
                 # path already trusts - so the page and the scheduler cannot disagree about a Mac.
@@ -2699,6 +2710,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     workstation_row = member.get("workstation")
                 else:
                     startup = snapshot.get("startup") if isinstance(snapshot.get("startup"), dict) else None
+                    if freshness["snapshot_note"] and startup is not None:
+                        # The snapshot's startup verdict is as old as the snapshot: use the same
+                        # `stale` word the roster uses, so the app cannot present it as a new answer.
+                        startup = {**startup, "stale": True, "observed_at": observed_at}
                     reachable = bool(snapshot.get("reachable") and snapshot.get("auth"))
                     health = ("up" if snapshot.get("status") == "connected"
                               else str(snapshot.get("status") or "unknown"))
@@ -2719,7 +2734,7 @@ def create_app(*, start_background: bool = True) -> FastAPI:
                     "startup": startup,
                     "last_stop": last_stop if isinstance(last_stop, dict) else None,
                     "workstation": workstation_row if isinstance(workstation_row, dict) else None,
-                    **_peer_snapshot_freshness(now, observed_at, peers.PEER_TTL_S),
+                    **freshness,
                 }
                 policy_source = member if isinstance(member, dict) and (
                     "priority_order" in member or "chat_priority" in member) else snapshot
@@ -4455,8 +4470,10 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if not fresh:
             return JSONResponse(attention.cached())
         try:
+            state, detail = _recent_job_state()
             result = await _asyncio.wait_for(
-                run_in_threadpool(attention.refresh, activity_state=_recent_job_state()), timeout=3.0)
+                run_in_threadpool(attention.refresh, activity_state=state,
+                                  activity_detail=detail), timeout=3.0)
         except _asyncio.TimeoutError:
             return JSONResponse({**attention.cached(), "state": "unknown", "source": "timeout",
                                  "reasons": [{"code": "MEASURE_TIMEOUT",

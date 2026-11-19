@@ -6460,7 +6460,7 @@ async def _dispatch_loop():
                         None,
                     )
                     if compatible_index is None:
-                        b["governor_note"] = _no_candidate_note(b, queued, studio)
+                        stamp_governor_note(b, _no_candidate_note(b, queued, studio))
                         first = queued[0]
                         if not _shared_voice_allows_studio(b, first, studio):
                             gate = "voice_not_synchronized"
@@ -6475,26 +6475,26 @@ async def _dispatch_loop():
                     # is what lets a 3-model Mac and a 1-model Mac share pools.
                     entry = await _catalog_entry(studio, b["model"])
                     if entry is None:
-                        b["governor_note"] = (
-                            f"'{b['model']}' not in {studio['id']}'s catalog")
+                        stamp_governor_note(b, (
+                            f"'{b['model']}' not in {studio['id']}'s catalog"))
                         _record_dispatch_gate(trace_candidates, studio, "catalog_missing")
                         continue
                     if not _catalog_matches_genstudio_revision(b, entry):
-                        b["governor_note"] = (
+                        stamp_governor_note(b, (
                             "Waiting for a worker with the exact immutable model "
                             "revision assigned by GenStudio"
-                        )
+                        ))
                         _record_dispatch_gate(trace_candidates, studio, "revision_mismatch")
                         continue
                     protection_note = _model_block_note(studio, b["model"], entry)
                     if protection_note:
-                        b["governor_note"] = f"{studio['id']}: {protection_note}"
+                        stamp_governor_note(b, f"{studio['id']}: {protection_note}")
                         _record_dispatch_gate(trace_candidates, studio, "model_protected")
                         continue
                     if not entry.get("is_cloud") and not is_cached(entry):
-                        b["governor_note"] = (
+                        stamp_governor_note(b, (
                             f"'{b['model']}' not downloaded on {studio['id']} "
-                            f"— download it on that Mac, or pin another")
+                            f"— download it on that Mac, or pin another"))
                         _record_dispatch_gate(trace_candidates, studio, "model_not_cached")
                         continue
                     # ── fleet memory governor ──
@@ -6527,7 +6527,7 @@ async def _dispatch_loop():
                             # it; wait → defer. NEVER errors the whole batch - except that an
                             # admission wait is bounded like three refusals (~4 min): the item is
                             # sent on to `_run_item`, which hands it back as INSUFFICIENT_MEMORY.
-                            b["governor_note"] = f"{studio['id']}: {note}"
+                            stamp_governor_note(b, f"{studio['id']}: {note}")
                             # The expiry reads the floor the gate itself used (a workstation's own
                             # start floor included), and the sentence the gate's own numbers.
                             if not (decision == "wait" and _admission_wait_expired(
@@ -6608,11 +6608,11 @@ async def _dispatch_loop():
                         continue
                     refusal = admission_refusal(b)
                     if refusal:
-                        b["governor_note"] = str(refusal.get("detail") or "model is not ready")
+                        stamp_governor_note(b, str(refusal.get("detail") or "model is not ready"))
                         _record_dispatch_gate(trace_candidates, studio, "admission_refused")
                         ledger.save_batch(b)
                         continue
-                    b["governor_note"] = None
+                    stamp_governor_note(b, None)
                     item = queued.pop(compatible_index)
                     _clear_worker_attempt_evidence(item)
                     item["state"] = "running"
@@ -7728,7 +7728,7 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
                 # The peer's own snapshot says it is idle: the bare 409 would send the operator
                 # looking for work that is no longer there. Name the contradiction instead.
                 item["error"] = LEASE_BUSY_WHILE_IDLE_TEXT
-                b["governor_note"] = LEASE_BUSY_WHILE_IDLE_TEXT
+                stamp_governor_note(b, LEASE_BUSY_WHILE_IDLE_TEXT)
             else:
                 item["error"] = f"waiting for a free machine: {message}"
             # The Mac is busy, not broken, and the peer's 409 stays the authority on when it
